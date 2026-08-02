@@ -224,6 +224,15 @@ def _tip(origin: Path, ref: str) -> str:
     ).stdout.strip()
 
 
+def _subject(repo: Path, ref: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "log", "-1", "--format=%s", ref],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+
+
 def _run_while_merge_turn_is_held(
     canonical: Path, operation: Callable[[], _T], *, should_wait: bool
 ) -> _T:
@@ -518,12 +527,12 @@ def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_step
             Step(
                 "prepare",
                 "engineer",
-                f"complete-after-13 write-change record-run={prepare_runs}",
+                f"complete-after-13 write-change\nrecord-run={prepare_runs}",
             ),
             Step(
                 "implement",
                 "engineer",
-                f"complete-now resume-after-cap write-change record-run={implement_runs}",
+                f"complete-now resume-after-cap write-change\nrecord-run={implement_runs}",
                 deps=["prepare"],
                 max_turns=1,
             ),
@@ -955,7 +964,8 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         "## Why\nPreserve structured context after empty drafting output.\n"
     )
 
-    invalid_task = "complete-now write-change drafting-invalid invalid fallback handoff"
+    # The first line names the change when no commit does, so it fits a subject.
+    invalid_task = "complete-now write-change drafting-invalid fallback"
     invalid = run_repo_task(
         "acme/widget",
         invalid_task,
@@ -976,7 +986,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert "nonempty malformed drafting output" not in github._prs[invalid.pr.number].body
 
     structured_invalid_task = (
-        "## What\ncomplete-now write-change drafting-invalid structured invalid fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-invalid structured fallback.\n\n"
         "## Why\nPreserve structured context after malformed drafting output.\n\n"
         "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
         "## Additional info\nThis orchestration detail must not appear."
@@ -998,7 +1008,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     )
     assert structured_invalid.outcome == "pr-open"
     assert github._prs[structured_invalid.pr.number].body == (
-        "## What\ncomplete-now write-change drafting-invalid structured invalid fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-invalid structured fallback.\n\n"
         "## Why\nPreserve structured context after malformed drafting output.\n"
     )
 
@@ -1022,7 +1032,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert error_task in github._prs[error.pr.number].body
 
     structured_error_task = (
-        "## What\ncomplete-now write-change drafting-errors structured error fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-errors structured fallback.\n\n"
         "## Why\nPreserve structured context after a drafting exception.\n\n"
         "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
         "## Additional info\nThis orchestration detail must not appear."
@@ -1044,7 +1054,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     )
     assert structured_error.outcome == "pr-open"
     assert github._prs[structured_error.pr.number].body == (
-        "## What\ncomplete-now write-change drafting-errors structured error fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-errors structured fallback.\n\n"
         "## Why\nPreserve structured context after a drafting exception.\n"
     )
 
@@ -2864,6 +2874,191 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert branch_commits.isdisjoint(base_commits)
 
 
+def _multi_commit_dispatch(*messages: str):
+    """A dispatch that lands one real commit per message in the worktree."""
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        worktree = Path(project_dir)
+        for index, message in enumerate(messages):
+            (worktree / f"change{index}.txt").write_text(f"{index}\n", encoding="utf-8")
+            gitops.add_all(worktree)
+            gitops.commit(worktree, message)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    return dispatch_fn
+
+
+def test_multi_commit_branch_publishes_a_subject_that_names_the_change(
+    tmp_path, bare_origin
+) -> None:
+    """One squash commit reaches the base, so its subject names the change it made.
+
+    Concatenating every description is what published `feat: ...; read the r…` — the
+    branch's steps do not fit in one subject, and its own history already records them.
+    """
+    origin = bare_origin()
+    named = "feat: expose the captured session output through a public reader"
+    result = run_repo_task(
+        str(origin),
+        "## What\nExpose captured session output.\n\n## Why\nOperators cannot read it.\n",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=_multi_commit_dispatch(
+            "docs: explain how a failed session's captured output is retained across a later retry",
+            named,
+            "fix: retain the captured output of a session that failed before its very first turn",
+        ),
+        recorded_gate=["true"],
+    )
+
+    assert result.ok, result.detail
+    assert result.outcome == "merged"
+    subject = _subject(origin, "main")
+    assert subject == named
+    assert "…" not in subject and "; " not in subject
+    assert "explain how" not in subject and "retain the captured" not in subject
+
+
+_OVERLONG_COMMITS = (
+    "feat: expose every captured session's output through a public reader API "
+    "that operators can call directly",
+    "fix: retain the captured output of a session that failed before it produced "
+    "its very first turn of work",
+)
+_FITTING_TASK = "## What\nExpose captured session output.\n\n## Why\nOperators cannot read it.\n"
+_OVERLONG_TASK = (
+    "## What\nExpose every captured session's output through a public reader API that "
+    "operators can call directly.\n\n## Why\nOperators cannot read it.\n"
+)
+
+
+@pytest.mark.parametrize(
+    "messages, task, expected",
+    [
+        # The type still carries the branch's release semantics; only the description moved.
+        (_OVERLONG_COMMITS, _FITTING_TASK, "feat: Expose captured session output."),
+        # A scope is a Conventional Commit guarantee, so it survives the fall-through
+        # rather than being traded for room the description would have fit into.
+        (
+            (f"fix(capture): {_OVERLONG_COMMITS[1].partition(': ')[2]}",),
+            _FITTING_TASK,
+            "fix(capture): Expose captured session output.",
+        ),
+        # The release-facing marker describes the branch, so it outlives the description.
+        (
+            (f"feat!: {_OVERLONG_COMMITS[0].partition(': ')[2]}",),
+            _FITTING_TASK,
+            "feat!: Expose captured session output.",
+        ),
+        # No usable commit subject at all: the non-releasing fallback names the task.
+        (("Update the reader",), _FITTING_TASK, "chore: Expose captured session output."),
+        # The same, with the branch's only breaking signal in a footer.
+        (
+            ("Update the reader\n\nBREAKING CHANGE: the old reader is gone",),
+            _FITTING_TASK,
+            "chore!: Expose captured session output.",
+        ),
+    ],
+    ids=[
+        "task-name",
+        "scope-preserved",
+        "breaking-preserved",
+        "no-usable-commit",
+        "breaking-footer-only",
+    ],
+)
+def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
+    tmp_path, bare_origin, messages: tuple[str, ...], task: str, expected: str
+) -> None:
+    """What reaches the base branch when a description cannot fit: never a cut one.
+
+    The task's own name for the change publishes instead, behind the type, scope, and
+    breaking marker the branch's commits carry — none of which is dropped to make room.
+    """
+    origin = bare_origin()
+    result = run_repo_task(
+        str(origin),
+        task,
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=_multi_commit_dispatch(*messages),
+        recorded_gate=["true"],
+    )
+
+    assert result.ok, result.detail
+    subject = _subject(origin, "main")
+    assert subject == expected
+    assert "…" not in subject and len(subject) <= lifecycle_module._SUBJECT_LIMIT
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        _OVERLONG_COMMITS,
+        ("Update the reader",),
+        ("Update the reader\n\nBREAKING CHANGE: the old reader is gone",),
+        # The description would fit without its scope — which is not room to take.
+        (f"fix({'session-capture-' * 2}reader): retain a failed session's output",),
+    ],
+    ids=["all-commits", "no-usable-commit", "breaking-footer-only", "scope-crowds-description"],
+)
+def test_a_branch_with_no_publishable_subject_refuses_instead_of_publishing_one(
+    tmp_path, bare_origin, messages: tuple[str, ...]
+) -> None:
+    """Nothing on the branch or in the prose names the change within the limit.
+
+    Publishing `chore: orchestrated change` here would be the same defect as a cut
+    subject in a different costume, so the run settles as an error naming the limit and
+    the ways out, and the base branch is left exactly as it was.
+    """
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    result = run_repo_task(
+        str(origin),
+        _OVERLONG_TASK,
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=_multi_commit_dispatch(*messages),
+        recorded_gate=["true"],
+    )
+
+    assert not result.ok and result.outcome == "error"
+    assert f"at most {lifecycle_module._SUBJECT_LIMIT} characters" in result.detail
+    assert "shorten a commit subject" in result.detail and "explicit title" in result.detail
+    assert _tip(origin, "main") == before
+    assert not _has_file(origin, "main", "change0.txt")
+
+
+def test_a_refused_publication_still_commits_the_agents_work_to_the_branch(
+    tmp_path, bare_origin
+) -> None:
+    """Refusal is publication's answer, never a branch commit's: that would lose work.
+
+    The agent leaves its change uncommitted and nothing on the branch or in the prose can
+    name it, so the step commit says only that a change happened. Publication declines to
+    borrow that filler as a subject and refuses, with the work safe on the branch.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    before = _tip(origin, "main")
+
+    result = run_repo_task(
+        str(origin),
+        _OVERLONG_TASK,
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="unnamed.txt"),
+        recorded_gate=["true"],
+    )
+
+    assert not result.ok and result.outcome == "error"
+    assert f"at most {lifecycle_module._SUBJECT_LIMIT} characters" in result.detail
+    assert _tip(origin, "main") == before
+    clone = workspace.clone_dir(normalize_repo(str(origin)))
+    assert _has_file(clone, result.branch, "unnamed.txt")
+    assert _subject(clone, result.branch) == "chore: orchestrated change"
+
+
 def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
     tmp_path, bare_origin
 ) -> None:
@@ -3189,6 +3384,48 @@ def test_recovery_publishes_a_branch_only_the_execution_checkout_has(tmp_path, b
     # Fetching the ref in is allowed; working in the publication checkout is not.
     assert gitops.current_branch(canonical) == "main"
     assert not gitops.is_dirty(canonical)
+
+
+def test_preserved_work_survives_task_prose_too_long_for_a_subject(tmp_path, bare_origin) -> None:
+    """A marker names the work from task prose, but must never fail on prose that overruns.
+
+    The marker keeps its `(incomplete step)` text through that fallback — a marker whose
+    trailer is missing is still recognized by it — and the recovery still publishes.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-long-prose")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    preserved = run_repo_task(
+        str(canonical),
+        _OVERLONG_TASK,
+        "engineer",
+        workspace=Workspace(tmp_path / "long-prose-worktrees"),
+        branch="feature/long-prose",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        recorded_gate=["true"],
+    )
+    assert preserved.outcome == "not-completed"
+    assert _subject(canonical, preserved.branch) == "chore: orchestrated change (incomplete step)"
+    assert incomplete_commits(canonical, "main", preserved.branch)
+
+    recovered = recover_repo(
+        canonical,
+        preserved.branch,
+        workspace_root=tmp_path / "long-prose-recovery",
+        recorded_gate=["true"],
+    )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    assert _has_file(origin, "main", "preserved.txt")
+    published = subprocess.run(
+        ["git", "-C", str(origin), "log", "-1", "--format=%B", "main"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert "…" not in published.splitlines()[0]
+    assert RECOVERY_TRAILER in published  # the incomplete step is still on the record
 
 
 def test_recovery_accepts_an_execution_checkout_the_identity_does_not_know(
@@ -6464,7 +6701,7 @@ def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, ba
 
     result = run_repo_task(
         "acme/widget",
-        "Add a feature despite a transient empty post-merge check response.",
+        "Add a feature despite an empty post-merge check response.",
         "engineer",
         workspace=_workspace(tmp_path, origin, workflow="remote"),
         merge=GitHubMergeStrategy(github),

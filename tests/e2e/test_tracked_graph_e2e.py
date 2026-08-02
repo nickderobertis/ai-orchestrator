@@ -2805,12 +2805,12 @@ def test_planner_context_reaches_every_agent_step_of_a_workstream(
                             {
                                 "id": "change",
                                 "persona": "engineer",
-                                "task": f"complete-now write-change record-task={prompts}",
+                                "task": f"complete-now write-change\nrecord-task={prompts}",
                             },
                             {
                                 "id": "polish",
                                 "persona": "engineer",
-                                "task": f"complete-now polish the change record-task={prompts}",
+                                "task": f"complete-now polish the change\nrecord-task={prompts}",
                                 "deps": ["change"],
                             },
                             {
@@ -2828,7 +2828,7 @@ def test_planner_context_reaches_every_agent_step_of_a_workstream(
                         "workflow": "local",
                         "repo_type": "single-owner",
                         "persona": "engineer",
-                        "task": f"complete-now write-change record-task={single_prompts}",
+                        "task": f"complete-now write-change\nrecord-task={single_prompts}",
                         "context": [single_note],
                     },
                 ],

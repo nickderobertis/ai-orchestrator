@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
+from .config import ConfigError
 from .coordination import git_lock_identity
 from .dispatch import Report, dispatch, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
@@ -53,6 +54,9 @@ from .verify import (
 from .workspace import IdentityKey, RepoRef, RepositoryType, Workspace, WorkspaceError
 
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# What a recovery publishes when no commit on the preserved branch names the change.
+# It is the body's `## What` line too, so the subject and the body cannot drift.
+_RECOVERY_DESCRIPTION = "Recover lifecycle-preserved work through its merge-path gate."
 
 
 @dataclass(frozen=True)
@@ -356,9 +360,12 @@ def recover_repo(
             queue_identity=git_lock_identity(gitops.common_dir(clone)),
             base=publication_base,
             branch=branch,
-            title=_default_title(worktree, remote_base, f"Recover preserved branch {branch}"),
+            # The branch's own commits name the change first; this stands in only when
+            # none of them can. It names the recovery rather than echoing the branch,
+            # which is not a name for a change and pushed the subject past its limit.
+            title=_default_title(worktree, remote_base, _RECOVERY_DESCRIPTION),
             body=(
-                "## What\nRecover lifecycle-preserved work through its merge-path gate.\n\n"
+                f"## What\n{_RECOVERY_DESCRIPTION}\n\n"
                 "## Why\nThe original dispatch did not complete; this branch now carries "
                 "a verified recovery attestation.\n"
                 + _attestation_body(worktree, remote_base, branch)
@@ -536,7 +543,16 @@ def main(argv: list[str] | None = None) -> int:
             repo_type=args.repo_type,
             merge_method=args.merge_method,
         )
-    except (RegistryError, gitops.GitError, GitHubError, WorkspaceError, ValueError) as exc:
+    except (
+        RegistryError,
+        gitops.GitError,
+        GitHubError,
+        WorkspaceError,
+        # A branch whose commits and recovery prose all overrun the subject limit has no
+        # publishable subject; that refusal is the operator's to act on, not a traceback.
+        ConfigError,
+        ValueError,
+    ) as exc:
         print(f"repo-recover: {exc}", file=sys.stderr)
         return 2
     if args.format == "json":

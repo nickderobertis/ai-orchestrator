@@ -831,6 +831,42 @@ def test_repo_recover_cli_requires_registration(tmp_path, bare_origin, capsys) -
     assert "not registered" in capsys.readouterr().err
 
 
+def test_repo_recover_refuses_a_branch_with_no_publishable_subject(tmp_path, bare_origin) -> None:
+    """No commit and no recovery prose fits the subject limit, so nothing is published.
+
+    The refusal reaches the operator through the installed command — exit status and
+    stderr, as they read it — and it lands before the attestation: the marker stays
+    unattested and the base branch is untouched, so the recovery runs again unchanged
+    once the branch carries a subject that fits.
+    """
+    origin = bare_origin()
+    repo = _clone(tmp_path, origin)
+    _allow_local(repo)
+    branch = "claude/scoped-recovery"
+    _branch(repo, branch, {"partial.txt": "partial\n"})
+    _git(repo, "checkout", branch)
+    # A scope this long leaves no room for the commit's own description, nor for the
+    # recovery's — and a scope is a guarantee, so it is not room the subject may take.
+    _git(repo, "commit", "--amend", "-m", f"fix({'session-capture-' * 2}reader): {'x' * 90}")
+    _git(
+        repo,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "wip: partial (incomplete step)\n\nOrchestrator-Status: incomplete",
+    )
+    _git(repo, "checkout", "main")
+    before = _git(origin, "rev-parse", "main")
+
+    refused = _recover_cli(repo, branch, tmp_path / "refused-recovery-worktrees")
+
+    assert refused.returncode == 2, refused.stdout
+    assert "repo-recover: no description fits" in refused.stderr
+    assert "shorten a commit subject" in refused.stderr and "explicit title" in refused.stderr
+    assert unattested_incomplete(repo, "main", branch)
+    assert _git(origin, "rev-parse", "main") == before
+
+
 def test_repo_recover_rejects_branch_without_incomplete_provenance(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
     _allow_local(repo)

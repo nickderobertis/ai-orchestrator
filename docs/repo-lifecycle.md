@@ -668,9 +668,11 @@ dependency failed is skipped. Cross-repository dependencies only schedule. A
 successful same-identity dependency not landed on the root base becomes a stack
 prerequisite:
 
-The default PR title is derived from Conventional Commit subjects on the branch,
-with a non-releasing `chore:` fallback when none is usable. An explicit `title`
-must itself be a Conventional Commit subject of at most 72 characters.
+The default PR title is derived from the most significant Conventional Commit
+subject on the branch, with a non-releasing `chore:` fallback when none is usable
+— see [A subject names the change, whole](#a-subject-names-the-change-whole). An
+explicit `title` must itself be a Conventional Commit subject of at most 72
+characters.
 
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command; a plan that explicitly combines
@@ -988,6 +990,55 @@ it and reports `already-merged` from finding no content to add rather than from
 ancestry; and a base advanced during the candidate's gate run is `not-ready` rather
 than silently reconciled, because the tree that would land is no longer the tree
 the gate judged.
+
+### A subject names the change, whole
+
+Publication squashes a branch, so one subject reaches the base branch for all of
+its commits. That subject **names the change**: the most significant commit (the
+breaking ones first, then by type priority) supplies the description, and the
+branch's own history keeps the remaining steps. Its type and breaking marker still
+describe the whole branch — they are its release semantics — and its scope is kept
+only when every usable commit shares one, since a narrower scope would misdescribe
+what landed.
+
+Synthesizing the subject by joining every description and cutting the result to 72
+characters is what published `feat: make orchestration-run ownership visible and
+enforced; read the r…` onto `main`. A cut description names nothing, breaks
+mid-word, and reads as corruption, so **a description is published whole or not at
+all**. One that does not fit is not shortened; the next candidate is offered
+instead:
+
+1. the most significant commit's description;
+2. the first line of task prose that carries content — the planner's own one-line
+   name for the whole change, which describes the branch at least as well as any
+   commit on it.
+
+There is no third candidate. **A subject that cannot be formed is refused**: the
+run settles as an `error` whose detail names the limit and the two ways out —
+shorten a commit subject on the branch, or publish with an explicit `title`. A
+generic `chore: orchestrated change` was the tempting alternative and is the same
+defect in a different costume, because the base branch's history is the durable
+record and a subject naming no change makes it a worse record than a refusal does.
+Task prose that carries no content line is that same non-name, so it is not offered
+as a candidate either. A task's first content line is therefore load-bearing: keep
+the `## What` line within the limit — or hand the node an explicit `title` — and a
+branch whose commits name nothing still publishes.
+
+Nothing is dropped to buy room. The type, an optional scope, and the breaking
+marker are published exactly as the branch's commits carry them, so a branch whose
+`feat:` description overflows still publishes a releasing `feat:`, and a valid
+common scope survives a fall-through instead of being traded for a description that
+fits without it.
+
+`repo-recover` refuses the same way and reports it as `repo-recover: no description
+fits …`. It refuses before it attests anything, so the preserved branch keeps its
+unattested marker and the base is untouched; the recovery runs again unchanged once
+the branch carries a subject that fits.
+
+The one commit exempt from all of this is the `(incomplete step)` marker, which
+keeps its suffix through a generic fall-through. It is branch state that no
+publication carries, and preserving partial work must never fail on long task
+prose; a marker missing its trailer is still recognized by that text.
 
 ### Complete branch after publication failure
 
