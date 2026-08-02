@@ -1012,6 +1012,10 @@ class StepRun:
     results: list[StepResult]
     detail: str = ""
     waiting: list[str] = field(default_factory=list)
+    #: True when the step that failed the workstream died without producing any
+    #: work — no commit, no dirty tree. That dispatch never reached the task, so
+    #: nothing about the work explains it and retrying it at once only repeats it.
+    launch_failed: bool = False
 
 
 # Lifecycle work commonly includes repository orientation, implementation, and a
@@ -1022,6 +1026,36 @@ class StepRun:
 DEFAULT_LIFECYCLE_STEP_MAX_TURNS = 24
 MAX_AUTOMATIC_STEP_RESUMES = 2
 MAX_MERGE_CONFLICT_RESOLUTIONS = 2
+#: How many extra times a workstream may relaunch a dispatch that died before it
+#: produced anything. Deliberately separate from ``MAX_AUTOMATIC_STEP_RESUMES``:
+#: that budget exists to carry *work* forward across a stop, and a provider outage
+#: spent all of it in thirty-four seconds without the work ever being attempted.
+#: Mirrors ``smoke.LAUNCH_ATTEMPTS`` — only the launch is retried.
+MAX_LAUNCH_RELAUNCHES = 2
+#: Seconds to wait before each relaunch, multiplied by the relaunch number, so a
+#: provider that is briefly refusing gets time to recover rather than being asked
+#: the same question three times inside a minute. Same scale as the smoke's own
+#: ``RETRY_BACKOFF_SECONDS``, for the same reason.
+LAUNCH_RELAUNCH_BACKOFF_SECONDS = 2.0
+
+
+def _await_relaunch(
+    seconds: float, cancel: threading.Event | None, sleep: Callable[[float], None]
+) -> None:
+    """Wait out a relaunch backoff, returning early when the round cancels.
+
+    Under a round, the cancellation event *is* the cancellation-aware sleep: a
+    cooperative cancel must not have to outlast a backoff, because the round is
+    already ending and the workstream owes it a prompt preservation of whatever
+    sits on the branch. Standing alone there is nothing to wake for, so the wait
+    goes through the workstream's own injected ``sleep`` — the same seam the
+    publication poll uses, which is what lets a journey prove the backoff without
+    spending it.
+    """
+    if cancel is None:
+        sleep(seconds)
+        return
+    cancel.wait(seconds)
 
 
 def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str) -> None:
@@ -1078,6 +1112,7 @@ def _run_steps(
     by_id = {s.id: s for s in steps}
     deps = {s.id: s.deps for s in steps}
     reports: dict[str, Report] = {}
+    launch_failures: set[str] = set()
 
     def run_step(sid: str) -> NodeRun:
         step = by_id[sid]
@@ -1130,6 +1165,14 @@ def _run_steps(
                 if report.outcome
                 else incomplete_detail(report)
             )
+            # Asked before anything below commits: a dispatch that died having left
+            # neither a dirty tree nor a commit produced nothing at all, and a death
+            # with nothing to show for it is a launch that never reached the task.
+            # The worktree is this dispatch's own, so "unchanged" is its own answer.
+            if report.outcome == "worker-died" and not (
+                gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head
+            ):
+                launch_failures.add(sid)
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -1201,6 +1244,7 @@ def _run_steps(
             results=results,
             detail=runs[bad.id].error or f"step {bad.id!r} {bad.status}",
             waiting=waiting,
+            launch_failed=bad.id in launch_failures,
         )
     if waiting:
         return StepRun(
@@ -1793,6 +1837,7 @@ def run_repo_task(
         completed_step_ids = set(resume.completed_steps) if resume else set()
         prior_step_results: dict[str, StepResult] = {}
         automatic_resumes = 0
+        relaunches = 0
         workstream_start_head = gitops.head_sha(worktree)
         while True:
             step_run = _run_steps(
@@ -1818,11 +1863,32 @@ def run_repo_task(
                 prior_step_results[step_result.id] = step_result
                 if step_result.status == "done":
                     completed_step_ids.add(step_result.id)
+            if step_run.status != "not-completed" or (cancel is not None and cancel.is_set()):
+                break
+            if step_run.launch_failed:
+                # The dispatch died before it produced anything, so nothing about
+                # this workstream's *work* is evidence for or against trying again;
+                # only the launch path is. Charging that to the resume budget turned
+                # a provider outage into a failed node in thirty-four seconds. Give
+                # it its own bounded relaunches, and wait between them so a provider
+                # that is briefly refusing is not asked three times at once.
+                if relaunches >= MAX_LAUNCH_RELAUNCHES:
+                    break
+                relaunches += 1
+                _await_relaunch(LAUNCH_RELAUNCH_BACKOFF_SECONDS * relaunches, cancel, sleep)
+                if cancel is not None and cancel.is_set():
+                    break
+                if result.retry_lineage is None and incomplete_commits(
+                    worktree, remote_base, "HEAD"
+                ):
+                    result.retry_lineage = RetryLineage(
+                        branch,
+                        gitops.head_sha(worktree),
+                        "reused",
+                    )
+                continue
             if (
-                step_run.status != "not-completed"
-                or cancel is not None
-                and cancel.is_set()
-                or not incomplete_commits(worktree, remote_base, "HEAD")
+                not incomplete_commits(worktree, remote_base, "HEAD")
                 or automatic_resumes >= MAX_AUTOMATIC_STEP_RESUMES
             ):
                 break
@@ -1846,6 +1912,15 @@ def run_repo_task(
                 if prefix is not None
                 else f"workstream did not complete: {step_run.detail}"
             )
+            if step_run.launch_failed:
+                # Named so the reader does not go looking for a fault in the task.
+                # `just smoke` is the cheap probe for the other explanation, and it
+                # is the one a planner can act on before redispatching this node.
+                result.detail += (
+                    f"; the dispatch died before producing any work and {relaunches} "
+                    "relaunch(es) did the same, so this is the launch path rather "
+                    "than the task — probe it with 'just smoke' before redispatching"
+                )
             if incomplete_commits(worktree, remote_base, "HEAD"):
                 result.resume = Resume(
                     branch=branch,

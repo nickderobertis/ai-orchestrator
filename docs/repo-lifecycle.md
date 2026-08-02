@@ -53,6 +53,35 @@ the dispatcher's account of the death — the watchdog pid, the agent child's ex
 status, and the tail of its stderr — because a worker that dies before its first
 turn leaves no report, transcript, or verdict to read instead.
 
+### A launch that never reached the work is not charged to the work
+
+`MAX_AUTOMATIC_STEP_RESUMES` exists to carry *work* forward across a stop, so a
+dispatch that never reached the work must not spend it. A dispatch that reports
+`worker-died` having left the worktree exactly as it found it — no commit, no
+dirty tree — produced nothing at all, and nothing about the task explains it:
+provider throttling, an out-of-quota harness, and an OOM kill all arrive in that
+shape. Charging those to the resume budget turned a transient provider outage
+into a failed node in thirty-four seconds, three deaths deep, with the task never
+attempted once.
+
+So the two are answered from separate budgets. A launch death is relaunched up to
+`MAX_LAUNCH_RELAUNCHES` times, waiting `LAUNCH_RELAUNCH_BACKOFF_SECONDS` times the
+relaunch number first so a provider that is briefly refusing is not asked the same
+question three times inside a minute — the same "only the launch is retried" shape
+`orchestrator/smoke.py` uses, for the same reason. A cooperative cancellation ends
+the wait immediately; the round is already closing and the branch is owed its
+preservation. Unlike the work path, a relaunch does not require the branch to
+carry committed work: a launch death on the first step of a fresh branch has
+nothing to preserve and is exactly the case that used to fail the node on its
+first death. When the relaunches are spent, the settlement says the dispatch died
+before producing any work and names `just smoke`, so the reader is sent to the
+launch path rather than to a fault in a task that was never attempted.
+
+The harness's *own* diagnosis still wins where it has one: the agent wrapper
+recognizes a quota refusal on the child's stdout and marks it `dispatch failure:`,
+which `dispatch` raises rather than returning, so an outage with a stated reset
+time settles as an infrastructure failure instead of being relaunched into.
+
 Each agent step names its conversation for the branch **and** the worktree it
 runs in (`dispatch.scoped_session`), and so does the PR-author dispatch. Steps and
 automatic continuations within one run share that worktree and therefore one
