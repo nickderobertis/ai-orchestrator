@@ -451,6 +451,11 @@ def test_a_transition_survives_a_journal_it_cannot_fold(
 
     # A stream the strict reader will not fold: the ledger and the launch record are
     # both intact, so only the journal-derived half of the transition is in question.
+    # llmlint: ignore[tests_mirror_real_usage] There is no operator command that
+    # damages a journal — that is the point of the state under test, a fail-closed
+    # boundary no public interface can produce. Only the corruption is written here;
+    # the round that produced the ledger and the transition being judged are the real
+    # `just run-plan` and `just next-round` above and below.
     journal = runs / "unfoldable" / "events.jsonl"
     assert journal.is_file()
     journal.write_text('{"not": "an event"}\n', encoding="utf-8")

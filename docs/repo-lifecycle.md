@@ -65,7 +65,9 @@ seconds, three deaths deep, with the task never attempted once. And because the
 work path only continued when the branch already carried commits, such a death on
 a fresh branch failed the node on its *first* death, with no retry at all.
 
-`StepRun.died_without_work` records that condition and the workstream answers it
+`StepRun.died_before_its_work` records that condition — every part of it, since a
+death that reports a turn or that a signal ended reached its work whatever the tree
+shows — and the workstream answers it
 from `MAX_EMPTY_DEATH_RELAUNCHES`, waiting `RELAUNCH_BACKOFF_SECONDS` times the
 relaunch number first — the "only the launch is retried" shape
 `orchestrator/smoke.py` already uses. Unlike the work path it does not require the

@@ -1127,6 +1127,28 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         "message": "discoverer: - Add a regression test for the adjacent edge case.",
         "blocking": False,
     }
+    # The queued record's *other* origin. A worker's proposal reaches the channel by
+    # a different path than a check-in and names the workstream that provoked it,
+    # where a check-in covers every active workstream at once and names none. Both
+    # halves of that vocabulary have to be journalled, or "sent but nobody read it"
+    # is only distinguishable from silence for whichever origin happened to run.
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract is about the
+    # journal a planner reads directly; no CLI renders a queued record's origin.
+    queued = [
+        event
+        for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(line))["kind"] == "planner-surface-queued"
+    ]
+    from_proposal = [event for event in queued if event["detail"]["source"] == "proposal"]
+    assert from_proposal, queued
+    assert from_proposal[-1]["detail"]["workstream"] == "discoverer", from_proposal[-1]
+    assert from_proposal[-1]["detail"]["message"] == proposal["surface"]["message"]
+    # And a check-in names no workstream, which is what tells the two apart.
+    assert all(
+        event["detail"]["workstream"] is None
+        for event in queued
+        if event["detail"]["source"] == "check-in"
+    ), queued
     wait_deadline = deadline(5)
     while True:
         after_proposal = json.loads(heartbeat_path.read_text(encoding="utf-8"))
