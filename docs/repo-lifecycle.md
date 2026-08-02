@@ -1011,19 +1011,34 @@ instead:
 1. the most significant commit's description;
 2. the first line of task prose that carries content — the planner's own one-line
    name for the whole change, which describes the branch at least as well as any
-   commit on it;
-3. `orchestrated change`, which fits by construction and claims nothing. Naming no
-   change is honest where naming half of one is not.
+   commit on it.
 
-The type and breaking marker are unchanged by that fall-through, so a branch whose
-`feat:` description overflows still publishes a releasing `feat:`. The scope is the
-one optional part, so a scope that is itself what crowds a description out is
-dropped before that description is: `fix(a-very-long-scope): <description>` becomes
-`fix: <description>`. Only a prefix so long that no description could follow it has
-nothing to publish, and that raises rather than emitting a subject without one. An
-`(incomplete step)` marker keeps its own suffix through the same fall-through:
-preserving partial work must never fail on long task prose, and a marker missing
-its trailer is still recognized by that text.
+There is no third candidate. **A subject that cannot be formed is refused**: the
+run settles as an `error` whose detail names the limit and the two ways out —
+shorten a commit subject on the branch, or publish with an explicit `title`. A
+generic `chore: orchestrated change` was the tempting alternative and is the same
+defect in a different costume, because the base branch's history is the durable
+record and a subject naming no change makes it a worse record than a refusal does.
+Task prose that carries no content line is that same non-name, so it is not offered
+as a candidate either. A task's first content line is therefore load-bearing: keep
+the `## What` line within the limit — or hand the node an explicit `title` — and a
+branch whose commits name nothing still publishes.
+
+Nothing is dropped to buy room. The type, an optional scope, and the breaking
+marker are published exactly as the branch's commits carry them, so a branch whose
+`feat:` description overflows still publishes a releasing `feat:`, and a valid
+common scope survives a fall-through instead of being traded for a description that
+fits without it.
+
+`repo-recover` refuses the same way and reports it as `repo-recover: no description
+fits …`. It refuses before it attests anything, so the preserved branch keeps its
+unattested marker and the base is untouched; the recovery runs again unchanged once
+the branch carries a subject that fits.
+
+The one commit exempt from all of this is the `(incomplete step)` marker, which
+keeps its suffix through a generic fall-through. It is branch state that no
+publication carries, and preserving partial work must never fail on long task
+prose; a marker missing its trailer is still recognized by that text.
 
 ### Complete branch after publication failure
 

@@ -107,7 +107,9 @@ def _publication_message(worktree: Path, remote_base: str, branch: str) -> str:
     excludes provenance; the attestation follows as trailers so squashing does not
     drop the record that a step was left incomplete and a green gate cleared it.
     """
-    title = _default_title(worktree, remote_base, f"Integrate {branch}")
+    # Task prose stands in only when no commit on the branch can name the change. A
+    # branch name is not such a name, and a long one leaves no room for a subject at all.
+    title = _default_title(worktree, remote_base, "Integrate a verified branch.")
     trailers = attestation_trailers(worktree, remote_base, "HEAD")
     if not trailers:
         return title

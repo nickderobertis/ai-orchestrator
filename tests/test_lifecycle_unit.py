@@ -263,7 +263,11 @@ def test_breaking_footer_on_invalid_subject_marks_mixed_history() -> None:
 
 
 def test_a_description_too_long_for_the_limit_falls_back_to_the_task_name() -> None:
-    """A description is published whole or not at all — never cut to fit."""
+    """A description is published whole or not at all — never cut to fit.
+
+    The scope is a Conventional Commit guarantee rather than room to trade away, so it
+    survives the fall-through with the type and the breaking marker.
+    """
     title = _subject_from_messages(
         _commit_messages(f"fix(capture): {'x' * 200}"), "## What\nRetain failed session output.\n"
     )
@@ -271,36 +275,34 @@ def test_a_description_too_long_for_the_limit_falls_back_to_the_task_name() -> N
     assert "x" * 20 not in title
 
 
-def test_an_overlong_scope_is_dropped_before_the_description_it_crowds_out() -> None:
-    """The scope is the optional part, so it goes first — the description names the change."""
-    title = _subject_from_messages(
-        _commit_messages(f"fix({'s' * 40}): retain the captured output of a failed session"),
-        "irrelevant task prose",
-    )
-    assert title == "fix: retain the captured output of a failed session"
-
-
-def test_a_branch_with_no_fitting_description_publishes_a_generic_subject() -> None:
-    """Neither the commit nor the task prose fits, so the subject says only that much."""
-    title = _subject_from_messages(
-        _commit_messages(f"fix(capture): {'x' * 200}"), f"## What\n{'y' * 200}\n"
-    )
-    assert title == "fix(capture): orchestrated change"
-
-
 @pytest.mark.parametrize(
     "messages, task",
     [
+        # Neither the commit descriptions nor the task prose fits behind the prefix.
         ((f"feat: {'x' * 200}", f"fix: {'y' * 200}"), f"## What\n{'z' * 200}\n"),
-        ((f"feat(scope): {'x' * 200}",), "## What\nA task line that comfortably fits.\n"),
+        ((f"fix(capture): {'x' * 200}",), f"## What\n{'y' * 200}\n"),
         ((), f"## What\n{'z' * 200}\n"),
+        # Prose that names nothing summarizes as the generic description, which is not a
+        # name for a change and so is not a candidate for one.
+        ((), "## What\n\n## Why\n"),
+        # A scope stays whole, so a description that would only fit without it does not.
+        ((f"fix({'s' * 40}): retain the captured output of a failed session",), "## What\n\n"),
     ],
+    ids=["all-commits", "scoped-commit", "no-commit", "unnamed-prose", "scope-crowds-description"],
 )
-def test_no_derived_subject_is_ever_elided(messages: tuple[str, ...], task: str) -> None:
-    title = _subject_from_messages(_commit_messages(*messages), task)
-    assert "…" not in title and "..." not in title
-    assert len(title) <= lc._SUBJECT_LIMIT
-    assert lc._parse_conventional_subject(title) is not None
+def test_a_subject_that_cannot_be_formed_is_refused(messages: tuple[str, ...], task: str) -> None:
+    # Publishing `chore: orchestrated change` names the change no better than a subject
+    # cut off mid-word does, so the caller hears the limit and the two ways out instead.
+    with pytest.raises(ConfigError, match=f"at most {lc._SUBJECT_LIMIT} characters"):
+        _subject_from_messages(_commit_messages(*messages), task)
+
+
+def test_a_refusal_names_the_prefix_and_the_ways_out() -> None:
+    with pytest.raises(ConfigError) as refusal:
+        _subject_from_messages(_commit_messages(f"feat(capture)!: {'x' * 200}"), "## What\n\n")
+    message = str(refusal.value)
+    assert "feat(capture)!:" in message
+    assert "shorten a commit subject" in message and "explicit title" in message
 
 
 def test_a_subject_the_limit_cannot_hold_at_all_is_rejected() -> None:

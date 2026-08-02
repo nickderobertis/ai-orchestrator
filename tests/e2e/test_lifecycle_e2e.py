@@ -527,12 +527,12 @@ def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_step
             Step(
                 "prepare",
                 "engineer",
-                f"complete-after-13 write-change record-run={prepare_runs}",
+                f"complete-after-13 write-change\nrecord-run={prepare_runs}",
             ),
             Step(
                 "implement",
                 "engineer",
-                f"complete-now resume-after-cap write-change record-run={implement_runs}",
+                f"complete-now resume-after-cap write-change\nrecord-run={implement_runs}",
                 deps=["prepare"],
                 max_turns=1,
             ),
@@ -964,7 +964,8 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         "## Why\nPreserve structured context after empty drafting output.\n"
     )
 
-    invalid_task = "complete-now write-change drafting-invalid invalid fallback handoff"
+    # The first line names the change when no commit does, so it fits a subject.
+    invalid_task = "complete-now write-change drafting-invalid fallback"
     invalid = run_repo_task(
         "acme/widget",
         invalid_task,
@@ -985,7 +986,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert "nonempty malformed drafting output" not in github._prs[invalid.pr.number].body
 
     structured_invalid_task = (
-        "## What\ncomplete-now write-change drafting-invalid structured invalid fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-invalid structured fallback.\n\n"
         "## Why\nPreserve structured context after malformed drafting output.\n\n"
         "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
         "## Additional info\nThis orchestration detail must not appear."
@@ -1007,7 +1008,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     )
     assert structured_invalid.outcome == "pr-open"
     assert github._prs[structured_invalid.pr.number].body == (
-        "## What\ncomplete-now write-change drafting-invalid structured invalid fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-invalid structured fallback.\n\n"
         "## Why\nPreserve structured context after malformed drafting output.\n"
     )
 
@@ -1031,7 +1032,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert error_task in github._prs[error.pr.number].body
 
     structured_error_task = (
-        "## What\ncomplete-now write-change drafting-errors structured error fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-errors structured fallback.\n\n"
         "## Why\nPreserve structured context after a drafting exception.\n\n"
         "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
         "## Additional info\nThis orchestration detail must not appear."
@@ -1053,7 +1054,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     )
     assert structured_error.outcome == "pr-open"
     assert github._prs[structured_error.pr.number].body == (
-        "## What\ncomplete-now write-change drafting-errors structured error fallback.\n\n"
+        "## What\ncomplete-now write-change drafting-errors structured fallback.\n\n"
         "## Why\nPreserve structured context after a drafting exception.\n"
     )
 
@@ -2936,11 +2937,12 @@ _OVERLONG_TASK = (
     [
         # The type still carries the branch's release semantics; only the description moved.
         (_OVERLONG_COMMITS, _FITTING_TASK, "feat: Expose captured session output."),
-        (_OVERLONG_COMMITS, _OVERLONG_TASK, "feat: orchestrated change"),
+        # A scope is a Conventional Commit guarantee, so it survives the fall-through
+        # rather than being traded for room the description would have fit into.
         (
-            (f"fix({'session-capture-' * 2}reader): retain a failed session's output",),
+            (f"fix(capture): {_OVERLONG_COMMITS[1].partition(': ')[2]}",),
             _FITTING_TASK,
-            "fix: retain a failed session's output",
+            "fix(capture): Expose captured session output.",
         ),
         # The release-facing marker describes the branch, so it outlives the description.
         (
@@ -2948,19 +2950,18 @@ _OVERLONG_TASK = (
             _FITTING_TASK,
             "feat!: Expose captured session output.",
         ),
-        # No usable commit subject at all, and task prose that cannot fit either.
-        (("Update the reader",), _OVERLONG_TASK, "chore: orchestrated change"),
-        # The same, with the branch's only breaking signal in a footer: it still lands.
+        # No usable commit subject at all: the non-releasing fallback names the task.
+        (("Update the reader",), _FITTING_TASK, "chore: Expose captured session output."),
+        # The same, with the branch's only breaking signal in a footer.
         (
             ("Update the reader\n\nBREAKING CHANGE: the old reader is gone",),
-            _OVERLONG_TASK,
-            "chore!: orchestrated change",
+            _FITTING_TASK,
+            "chore!: Expose captured session output.",
         ),
     ],
     ids=[
         "task-name",
-        "generic",
-        "scope-dropped",
+        "scope-preserved",
         "breaking-preserved",
         "no-usable-commit",
         "breaking-footer-only",
@@ -2971,8 +2972,8 @@ def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
 ) -> None:
     """What reaches the base branch when a description cannot fit: never a cut one.
 
-    A scope is optional, so it is dropped before a description that fits without it; a
-    description that cannot fit at all yields to the task's name, then to a generic one.
+    The task's own name for the change publishes instead, behind the type, scope, and
+    breaking marker the branch's commits carry — none of which is dropped to make room.
     """
     origin = bare_origin()
     result = run_repo_task(
@@ -2988,6 +2989,74 @@ def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
     subject = _subject(origin, "main")
     assert subject == expected
     assert "…" not in subject and len(subject) <= lifecycle_module._SUBJECT_LIMIT
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        _OVERLONG_COMMITS,
+        ("Update the reader",),
+        ("Update the reader\n\nBREAKING CHANGE: the old reader is gone",),
+        # The description would fit without its scope — which is not room to take.
+        (f"fix({'session-capture-' * 2}reader): retain a failed session's output",),
+    ],
+    ids=["all-commits", "no-usable-commit", "breaking-footer-only", "scope-crowds-description"],
+)
+def test_a_branch_with_no_publishable_subject_refuses_instead_of_publishing_one(
+    tmp_path, bare_origin, messages: tuple[str, ...]
+) -> None:
+    """Nothing on the branch or in the prose names the change within the limit.
+
+    Publishing `chore: orchestrated change` here would be the same defect as a cut
+    subject in a different costume, so the run settles as an error naming the limit and
+    the ways out, and the base branch is left exactly as it was.
+    """
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    result = run_repo_task(
+        str(origin),
+        _OVERLONG_TASK,
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=_multi_commit_dispatch(*messages),
+        recorded_gate=["true"],
+    )
+
+    assert not result.ok and result.outcome == "error"
+    assert f"at most {lifecycle_module._SUBJECT_LIMIT} characters" in result.detail
+    assert "shorten a commit subject" in result.detail and "explicit title" in result.detail
+    assert _tip(origin, "main") == before
+    assert not _has_file(origin, "main", "change0.txt")
+
+
+def test_a_refused_publication_still_commits_the_agents_work_to_the_branch(
+    tmp_path, bare_origin
+) -> None:
+    """Refusal is publication's answer, never a branch commit's: that would lose work.
+
+    The agent leaves its change uncommitted and nothing on the branch or in the prose can
+    name it, so the step commit says only that a change happened. Publication declines to
+    borrow that filler as a subject and refuses, with the work safe on the branch.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    before = _tip(origin, "main")
+
+    result = run_repo_task(
+        str(origin),
+        _OVERLONG_TASK,
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="unnamed.txt"),
+        recorded_gate=["true"],
+    )
+
+    assert not result.ok and result.outcome == "error"
+    assert f"at most {lifecycle_module._SUBJECT_LIMIT} characters" in result.detail
+    assert _tip(origin, "main") == before
+    clone = workspace.clone_dir(normalize_repo(str(origin)))
+    assert _has_file(clone, result.branch, "unnamed.txt")
+    assert _subject(clone, result.branch) == "chore: orchestrated change"
 
 
 def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
@@ -6632,7 +6701,7 @@ def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, ba
 
     result = run_repo_task(
         "acme/widget",
-        "Add a feature despite a transient empty post-merge check response.",
+        "Add a feature despite an empty post-merge check response.",
         "engineer",
         workspace=_workspace(tmp_path, origin, workflow="remote"),
         merge=GitHubMergeStrategy(github),

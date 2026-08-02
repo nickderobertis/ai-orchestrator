@@ -133,9 +133,9 @@ _CONVENTIONAL_SUBJECT = re.compile(
 )
 _BREAKING_FOOTER = re.compile(r"(?m)^BREAKING(?: |-)CHANGE:\s*\S")
 _TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
-# The description of last resort: what a subject says when neither the branch's commits
-# nor the task prose offers one that fits the limit whole. It names no change, which is
-# honest — the alternative was a real description cut off mid-word.
+# What task prose that names nothing is summarized as. It never becomes a published
+# subject: a subject that names no change is no better than one cut off mid-word, so
+# publication refuses instead. Only the branch-local incomplete marker uses it.
 _GENERIC_DESCRIPTION = "orchestrated change"
 
 # This is the executable PR-body contract. A unit drift gate reconciles it with
@@ -402,26 +402,25 @@ def _fit_conventional_subject(parsed: _ParsedSubject) -> str | None:
 
 
 def _format_conventional_subject(parsed: _ParsedSubject, *fallbacks: str) -> str:
-    """Format the first offered description that fits the limit whole.
+    """Format the first offered description that fits the limit whole, or refuse.
 
-    Each candidate is text someone actually wrote — a commit description, then the
-    caller's fallbacks (the task's own name for the change) — and the last is generic
-    but short enough to fit by construction, so a branch whose descriptions all
-    overflow still publishes a subject that reads as one rather than an elided one.
-
-    A scope is the one optional part, so a scope that is itself what crowds a real
-    description out is dropped before that description is given up: the type, the
-    breaking marker, and the description are what name the change.
+    Every candidate is text someone actually wrote — a commit description, then the
+    caller's fallbacks (the task's own name for the change). Nothing here invents one:
+    a subject reading `chore: orchestrated change` names the change no better than one
+    cut off mid-word does, and publishing either makes the base branch's history a
+    worse record than a refusal an operator can act on. Type, scope, and breaking
+    marker are all preserved as offered, so nothing is dropped to buy room either.
     """
-    scopes = (parsed.scope, None) if parsed.scope is not None else (None,)
-    for description in (parsed.description, *fallbacks, _GENERIC_DESCRIPTION):
-        for scope in scopes:
-            subject = _fit_conventional_subject(
-                replace(parsed, scope=scope, description=description)
-            )
-            if subject is not None:
-                return subject
-    raise ConfigError("cannot format a valid Conventional Commit subject")
+    for description in (parsed.description, *fallbacks):
+        subject = _fit_conventional_subject(replace(parsed, description=description))
+        if subject is not None:
+            return subject
+    scope = f"({parsed.scope})" if parsed.scope else ""
+    raise ConfigError(
+        f"no description fits a Conventional Commit subject of at most {_SUBJECT_LIMIT} "
+        f"characters behind {parsed.type}{scope}{'!' if parsed.breaking else ''}: — "
+        "shorten a commit subject on the branch, or publish with an explicit title"
+    )
 
 
 def _task_description(task: str) -> str:
@@ -438,11 +437,21 @@ def _task_description(task: str) -> str:
     return _GENERIC_DESCRIPTION
 
 
+def _publishable_task_description(task: str) -> str:
+    """The task's own one-line name for the change, empty when its prose names none.
+
+    Task prose that carries no content line summarizes as the generic description,
+    which is what a marker commit needs and what a published subject must never be.
+    """
+    description = _task_description(task)
+    return "" if description == _GENERIC_DESCRIPTION else description
+
+
 def _fallback_subject(task: str, *, breaking: bool = False) -> str:
     # Unknown work must not be guessed into a release-triggering feat/fix/perf type.
     # `chore` is deliberately conventional but non-releasing for those workflows.
     return _format_conventional_subject(
-        _ParsedSubject("chore", None, breaking, _task_description(task))
+        _ParsedSubject("chore", None, breaking, _publishable_task_description(task))
     )
 
 
@@ -465,6 +474,9 @@ def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> s
         subject
         for commit in authored
         if (subject := _parse_conventional_subject(commit.message)) is not None
+        # Branch-local filler: a step commit that could not name its own work says only
+        # that a change happened, which is not a name a publication may borrow.
+        and subject.description != _GENERIC_DESCRIPTION
     ]
     if not parsed:
         return _fallback_subject(task, breaking=breaking)
@@ -482,7 +494,7 @@ def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> s
         _ParsedSubject(primary.type, common_scope, breaking, primary.description),
         # The planner's own one-line name for the whole change, for a commit description
         # that cannot fit. It describes the branch at least as well as any commit on it.
-        _task_description(task),
+        _publishable_task_description(task),
     )
 
 
@@ -555,9 +567,25 @@ def _step_label(step: Step) -> str:
     return step.persona or step.kind
 
 
+def _branch_commit_subject(worktree: Path, base: str, task: str) -> str:
+    """A subject for a commit that stays on the branch, which must always be formable.
+
+    Publication refuses rather than publish a subject that names no change, but a commit
+    that puts an agent's work on the branch cannot refuse: the run settles as an error
+    and the worktree is cleaned up, so the work itself is what a refusal would lose.
+    `_subject_from_messages` filters this filler back out of what it may publish.
+    """
+    try:
+        return _default_title(worktree, base, task)
+    except ConfigError:
+        return _format_conventional_subject(
+            _ParsedSubject("chore", None, False, _GENERIC_DESCRIPTION)
+        )
+
+
 def _step_commit_message(step: Step, worktree: Path, dispatch_head: str) -> str:
     return (
-        f"{_default_title(worktree, dispatch_head, step.task)}\n\n"
+        f"{_branch_commit_subject(worktree, dispatch_head, step.task)}\n\n"
         f"Workstream step {step.id} (persona: {step.persona}), dispatched by ai-orchestrator."
     )
 
@@ -565,8 +593,10 @@ def _step_commit_message(step: Step, worktree: Path, dispatch_head: str) -> str:
 def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     subject = _format_conventional_subject(
         _ParsedSubject("chore", None, False, f"{_task_description(step.task)} (incomplete step)"),
-        # Preserving work must never fail on long task prose, and the marker text is what
-        # a message without the trailer is still recognized by, so it survives the fallback.
+        # A marker is branch state that no publication carries, so it may name the run
+        # generically where a published subject refuses to: preserving partial work must
+        # never fail on long task prose. The marker text survives because a message
+        # without the trailer is still recognized by it.
         f"{_GENERIC_DESCRIPTION} (incomplete step)",
     )
     return (
