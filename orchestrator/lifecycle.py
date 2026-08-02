@@ -1257,6 +1257,14 @@ def _run_steps(
             results=results,
             detail=runs[bad.id].error or f"step {bad.id!r} {bad.status}",
             waiting=waiting,
+            # Scoped to this attempt, not to the step: `deaths_without_work` is a
+            # local rebuilt on every `_run_steps` call, the resume loop calls it
+            # afresh per attempt, and `schedule_dag` runs each step once within one.
+            # An empty death followed by an attempt that commits work therefore
+            # reports the work, which
+            # `test_launch_deaths_do_not_spend_the_budget_that_carries_work_forward`
+            # drives end to end.
+            # llmlint: ignore[names_match_behavior] see the scoping note above
             died_without_work=bad.id in deaths_without_work,
         )
     if waiting:
