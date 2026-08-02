@@ -312,16 +312,12 @@ def release_heartbeat_claim(channel_dir: Path) -> None:
         atomic_json(_heartbeat_path(channel_dir), state)
 
 
-def finish_heartbeat_attempt(
-    channel_dir: Path, *, succeeded: bool, now: float | None = None
-) -> None:
+def finish_heartbeat_attempt(channel_dir: Path, *, now: float | None = None) -> None:
     """Hand back a dispatch lease and restart the interval from this attempt.
 
-    Both outcomes land here and both restart the clock, because both are a check-in
-    the harness has now spent: a queued update is one interval's worth of reporting
-    whether or not a planner reads it, and a failed synthesis has already cost its
-    turn. What separates them is only what the planner can see afterwards — the
-    queued update, and the growing staleness the views report against it.
+    A queued update and a failed synthesis land here identically, because each is a
+    check-in the harness has now spent. What separates them is only what the planner
+    can see afterwards — the queued update, and the staleness the views grow on it.
     """
     with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
         state = _load_heartbeat(channel_dir)
@@ -336,7 +332,7 @@ def finish_heartbeat_attempt(
 
 def fail_heartbeat_claim(channel_dir: Path, *, now: float | None = None) -> None:
     """Release a failed synthesis claim until its next retry interval."""
-    finish_heartbeat_attempt(channel_dir, succeeded=False, now=now)
+    finish_heartbeat_attempt(channel_dir, now=now)
 
 
 def apply_heartbeat_reply(channel_dir: Path, response: Mapping[str, Any]) -> None:
@@ -1233,7 +1229,7 @@ class ProposalPump:
             # The lease covers the dispatch, not the reading. Handing it back here is
             # what lets the next interval fall due; held to consumption, one check-in
             # nobody read was the last the run ever sent.
-            finish_heartbeat_attempt(self._channel_dir, succeeded=True)
+            finish_heartbeat_attempt(self._channel_dir)
         except Exception as exc:
             fail_heartbeat_claim(self._channel_dir)
             with (

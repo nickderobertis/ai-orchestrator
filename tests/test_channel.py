@@ -555,7 +555,7 @@ def test_heartbeat_claim_deduplicates_and_failure_retries_next_interval(tmp_path
     assert claim_heartbeat(channel) is False
     assert _heartbeat(channel)["in_flight"] is True
 
-    finish_heartbeat_attempt(channel, succeeded=False, now=due_at)
+    finish_heartbeat_attempt(channel, now=due_at)
     failed = _heartbeat(channel)
     assert failed["in_flight"] is False
     assert failed["due"] is False
@@ -1690,7 +1690,7 @@ def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
     mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
     assert claim_heartbeat(channel)
     assert main_surface(["outlived", "round one is verifying", "--runs-dir", str(runs)]) == 0
-    finish_heartbeat_attempt(channel, succeeded=True)
+    finish_heartbeat_attempt(channel)
     assert (channel / HEARTBEAT_SURFACE_FILE).is_file()
 
     # The transition the planner's retry caused: round 2 opens with round 1's update

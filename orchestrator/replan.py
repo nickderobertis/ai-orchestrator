@@ -23,16 +23,13 @@ replacement and its new id, an amended `task`, `done_when` or `max_turns`, a bra
 pin — is what the next round is derived from. Only edits the reconciler *rejected*
 are absent, and their submitter was told so synchronously.
 
-That replaces an earlier round-scoped rule, and the two guarantees above are why.
-Under it the transition re-read the launch file, so a `retry` replacement's new id
-never reached the next round: the merged replacement was not recognised as done and
-its superseded original was carried forward and re-run, and a retry pinned to a
-preserved branch was re-cut fresh from the base with its verified work orphaned.
-Neither is separable from the rule — both *are* the divergence between the launch
-file and the graph that ran. From a planner's side the rule was also indistinguishable
-from a dropped edit: `channel-reply` reported the edit applied, and it was, with a
-one-round expiry nothing surfaced. `round_supersessions` is the one place the new
-rule needs care — a live `retry` leaves the node it replaced in the executed graph,
+That replaces an earlier round-scoped rule, and the two guarantees above are why: a
+`retry` replacement's new id exists only in the executed graph, so re-reading the
+launch file could not recognise the merged replacement as done or keep the branch
+pin it carried. Neither guarantee is separable from the rule — both *are* the
+divergence between the launch file and the graph that ran. docs/orchestration.md
+has the planner-facing account. `round_supersessions` is the one place the new rule
+needs care: a live `retry` leaves the node it replaced in the executed graph,
 cancelled, and that node is removed here rather than carried forward twice.
 """
 

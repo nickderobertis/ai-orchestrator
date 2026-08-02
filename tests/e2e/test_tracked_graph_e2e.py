@@ -24,6 +24,12 @@ from telemetry_contract import clipped_share_seconds, journalled_seconds
 from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.channel import (
+    claim_heartbeat,
+    create_channel,
+    heartbeat_state,
+    mark_heartbeat_due,
+)
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
 from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
@@ -283,6 +289,93 @@ def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     assert terminal["blocked"]["turns"] == 1
     assert terminal["blocked"]["outcome"] == "reported-blocker"
     assert terminal["productive"]["turns"] == 3
+
+
+def test_a_transition_frees_a_check_in_its_round_left_unreadable(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """`just next-round` clears an update the finished round left queued.
+
+    `channel-next` validates a surface against the *active* round, so one still
+    queued when the round transitions can never be read — and while it sits there it
+    is the run's one pending update, which no later check-in can replace. The
+    transition is where an operator can act on that, so the transition is where it is
+    cleared: the surface goes, its lease is freed, and the next check-in queues and
+    reads normally.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "stranded-surface.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {"id": "settle", "persona": "engineer", "task": "complete-now: settle."},
+                    {
+                        "id": "iterate",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = (
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    paused = _just("run-plan", str(plan), "--run", "stranded", *common)
+    assert paused.returncode == 1, paused.stderr
+
+    # The pacemaker becoming due and claiming its dispatch, through its own functions
+    # rather than by waiting an interval out; the update below is then queued by the
+    # real `channel-surface` the check-in agent invokes, for a round 1 that has ended.
+    channel = create_channel(runs / "stranded", heartbeat_interval=10)
+    started = heartbeat_state(channel)
+    assert started is not None
+    mark_heartbeat_due(channel, now=float(started["last_surface_at"]) + 11)
+    assert claim_heartbeat(channel)
+    surfaced = _just(
+        "channel-surface", "stranded", "round one is verifying", "--runs-dir", str(runs)
+    )
+    assert surfaced.returncode == 0, surfaced.stderr
+    queued = runs / "stranded" / "channel" / "heartbeat-surface.json"
+    assert queued.is_file()
+    pending = _just("status", "--runs-dir", str(runs))
+    assert "1 planner update waiting" in pending.stdout, pending.stdout
+
+    resumed = _just("next-round", "stranded", "--plan-only", *common)
+    assert resumed.returncode == 0, resumed.stderr
+    assert (runs / "stranded" / "round-02" / "plan.json").is_file(), resumed.stdout
+
+    # Discarded rather than kept readable: it describes a round that has finished.
+    assert not queued.is_file()
+    cleared = _just("status", "--runs-dir", str(runs))
+    assert "planner update waiting" not in cleared.stdout, cleared.stdout
+
+    # The lease came back with the discard, so the next tick can claim a check-in at
+    # all — under the old behaviour this returned False for the life of the run.
+    freed = heartbeat_state(channel)
+    assert freed is not None and freed["in_flight"] is False
+    mark_heartbeat_due(channel, now=float(freed["last_attempt_at"]) + 11)
+    assert claim_heartbeat(channel)
+
+    # And the freed slot takes a round-2 update the planner can actually consume.
+    again = _just(
+        "channel-surface", "stranded", "round two is dispatching", "--runs-dir", str(runs)
+    )
+    assert again.returncode == 0, again.stderr
+    read = _just("channel-next", "stranded", "--runs-dir", str(runs), "--timeout", "5")
+    assert read.returncode == 0, read.stderr
+    assert json.loads(read.stdout)["surface"]["message"] == "round two is dispatching"
 
 
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(

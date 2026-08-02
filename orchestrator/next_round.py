@@ -77,12 +77,9 @@ def main(argv: list[str] | None = None) -> int:
         _validate_completions(run_dir, result, completed_refs)
         if completed_refs:
             edits = {**edits, "complete_human": completed_refs}
-        # The plan of record is the graph the round *executed*, not the file it was
-        # launched with. `round-NN/plan.json` is the launch record and the reconciler
-        # never rewrites it, so deriving the next round from it discarded every live
-        # edit the planner committed — and with a retry's replacement id gone, the
-        # merged replacement stopped being recognised as done and its superseded
-        # original was carried forward and dispatched again.
+        # The plan of record is the graph the round *executed*. `round-NN/plan.json`
+        # is only the launch record — the reconciler never rewrites it — so deriving
+        # the next round from it discards every live edit the planner committed.
         previous_plan = executed_plan(run_dir, number, load_mapping(round_dir / "plan.json"))
         plan = next_round(
             previous_plan,
@@ -131,10 +128,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     next_number, next_dir = write_next_plan(run_dir, plan)
-    # A check-in queued for the round that just ended names that round, and
-    # `channel-next` validates a surface against the active one — so left here it is
-    # both unconsumable and still the run's one pending update. Clearing it at the
-    # transition is what keeps the next check-in's slot free.
+    # `channel-next` validates a queued surface against the active round, so one the
+    # finished round left behind is unconsumable and still the run's one pending
+    # update. Cleared once the new round exists, which is what makes it stale.
     from .channel import ChannelError, discard_surface_from_a_finished_round
 
     with suppress(ChannelError, ConfigError, OSError):
