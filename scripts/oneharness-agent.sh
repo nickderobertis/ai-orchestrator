@@ -175,7 +175,7 @@ if [[ $caller_config == true ]]; then
     # checked against the caller's own config, the one this turn will run from.
     if [ -n "${ORCHESTRATOR_JUDGE_HARNESSES-}" ]; then
         apply_side_selection ORCHESTRATOR_JUDGE_HARNESSES \
-            "$ORCHESTRATOR_JUDGE_HARNESSES" "$caller_config_path" || exit $?
+            "$ORCHESTRATOR_JUDGE_HARNESSES" "$caller_config_path" || exit "$?"
     fi
     # Keep the portable indirection available while oneharness resolves config.
     # The judge's explicit primary variant does not consume it and masks
@@ -197,7 +197,7 @@ if [ -n "${ORCHESTRATOR_WORKER_HARNESSES-}" ]; then
     # dropping an identity an operator named would run a provider they did not ask
     # for. An unauthenticated one fails at the provider instead, loudly.
     apply_side_selection ORCHESTRATOR_WORKER_HARNESSES \
-        "$ORCHESTRATOR_WORKER_HARNESSES" "$agent_config" || exit $?
+        "$ORCHESTRATOR_WORKER_HARNESSES" "$agent_config" || exit "$?"
 elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
     # An alternate Claude subscription whose config directory does not exist is a
     # candidate this host has never set up. claude-code would still start, create

@@ -57,11 +57,15 @@ with open(os.environ["SELECTION_RECORD"], "a") as record:
         "judge_override": os.environ.get({judge_env!r}),
         "argv": sys.argv[1:],
     }}) + "\\n")
-JUDGING = {judge_marker!r} in " ".join(sys.argv[1:])
-if not JUDGING:
+PROMPT = " ".join(sys.argv[1:])
+JUDGING = {judge_marker!r} in PROMPT
+if {worker_marker!r} in PROMPT:
     # A worker turn does real work in its own cwd, which for a lifecycle node is the
     # isolated worktree: a step that changed nothing settles as `no-changes` and
-    # never reaches the gate or the merge this journey drives.
+    # never reaches the gate or the merge these journeys drive. Only a turn carrying
+    # the worker preamble writes, because every other turn — a supervisor's, an
+    # assessment — runs in the cwd of the command under test, which is this
+    # repository itself.
     with open("worked-on-by-{name}.txt", "a") as change:
         change.write("worked\\n")
 REPLY = (
@@ -98,6 +102,7 @@ def _fake_providers(bin_dir: Path) -> None:
             worker_env=WORKER_HARNESS_ENV,
             judge_env=JUDGE_HARNESS_ENV,
             judge_marker=JUDGE_MARKER,
+            worker_marker=WORKER_MARKER,
         )
         provider.write_text(f"#!/usr/bin/env python3\n{recorder}{source}", encoding="utf-8")
         provider.chmod(0o755)
@@ -154,11 +159,6 @@ def _registered_local_checkout(tmp_path: Path, origin: Path, onejudge_bin: str) 
     return checkout
 
 
-def _recorded_turns(record: Path, process: subprocess.CompletedProcess[str]) -> Dispatched:
-    turns = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
-    return Dispatched(process, turns)
-
-
 @dataclass(frozen=True)
 class Dispatched:
     """One dispatch's exit status and the provider turns it actually spawned."""
@@ -169,6 +169,11 @@ class Dispatched:
     def side(self, marker: str) -> list[dict[str, Any]]:
         """Every recorded turn whose prompt carries this side's marker."""
         return [turn for turn in self.turns if marker in " ".join(turn["argv"])]
+
+
+def _recorded_turns(record: Path, process: subprocess.CompletedProcess[str]) -> Dispatched:
+    turns = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    return Dispatched(process, turns)
 
 
 def _dispatch(
