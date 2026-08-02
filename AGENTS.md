@@ -292,14 +292,20 @@ exists to prevent. The primary Claude identity is last everywhere:
 - **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
   it prefers both alternate Claude subscriptions, in order, because the personas
   are tuned against that model tier, and only then falls back to codex. Every agent
-  turn also runs with **`--events`**, injected by `scripts/oneharness-agent.sh`
-  because it is a `run` flag with no config key: the planner-visible views already
-  build `just status`'s `Commands:` line and `just history-show`'s detail from each
-  record's `events`, and claude-code's default output format carries no tool
-  transcript at all, so those were empty for every claude-code dispatch. It is
-  injected only when the caller did not already pass it — oneharness refuses a
-  repeated `--events`. Deliberately not `--stream`, which is refused under
-  `run_mode = "fallback"`, and that chain is what keeps dispatching through a 429.
+  turn also carries the normalized tool transcript, selected by
+  `scripts/oneharness-agent.sh` because it is a `run` flag with no config key: the
+  planner-visible views already build `just status`'s `Commands:` line and `just
+  history-show`'s detail from each record's `events`, and claude-code's default
+  output format carries no tool transcript at all, so those were empty for every
+  claude-code dispatch. A dispatched turn takes **`--stream`**, which delivers those
+  same events *as they occur* and implies `--events`' format selection; `--events`
+  alone says only that the transcript is in the report at the end, which left a node
+  invisible for the 600-2000 seconds a turn runs here. Streaming a
+  `run_mode = "fallback"` chain has been allowed since oneharness 0.6.5, so nothing
+  is traded for it. See [Streaming the agent
+  side](docs/onejudge-integration.md#streaming-the-agent-side) for the filter that
+  reconciles a stream with onejudge's single-report contract, the probe that decides,
+  and why `--events` remains the degrade path.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
   as the base config's `provider.judge_config`; codex first, then the alternate
   Claude subscriptions. It keeps its cheaper-supervisor intent through `model`

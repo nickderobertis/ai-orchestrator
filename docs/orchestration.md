@@ -632,6 +632,13 @@ completed; a run whose journal really shows no dispatch still says so. It is
 computed only for a named run, because the unscoped view would have to read every
 recorded run's whole journal to answer the same question.
 
+That join is the guarantee, and a [streamed agent
+turn](onejudge-integration.md#streaming-the-agent-side) adds what only the turn
+itself can answer: each in-flight line also carries what the node is doing right
+now — `now Bash just gate (7 event(s), 4s ago)` — read from the events the harness
+is publishing as it works. A dispatch that is not streaming, or has published
+nothing yet, reads exactly as it did before.
+
 Each recorded schema-v4 node result carries its own `artifacts` paths. Lifecycle
 step payloads carry their step-specific raw onejudge report and stable
 oneharness-session pointer. Local gate failures surface from `git push`; the

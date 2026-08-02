@@ -429,6 +429,70 @@ adds only its network permission, avoiding the unsupported network namespace
 while retaining the OS-enforced read-only filesystem; `scripts/session-setup.sh`
 also persists that setting for interactive sessions.
 
+### Streaming the agent side
+
+A planner supervises through what the harness reports, and until oneharness 0.6.5
+the agent side reported nothing until a turn *ended*. `--events` is a **format**
+switch: it guarantees the single end-of-turn report carries the normalized
+tool-call transcript, upgrading claude-code to `stream-json` — and says nothing
+about *when* that arrives. Dispatches here routinely spend 600-2000 seconds on turn
+one, so `just status <run-id>` printed "No dispatched tasks recorded" for a
+lifecycle agent that had been working for half an hour, and a healthy node twice
+got reported as possibly dead.
+
+`--stream` delivers those same normalized events **as they occur**, then a final
+result line, and implies `--events`' format selection. Until [oneharness PR
+#1213](https://github.com/nickderobertis/oneharness/pull/1213) it was refused under
+`run_mode = "fallback"`, so adopting it would have meant giving up the chain that
+kept this host dispatching through an HTTP 429. That restriction is gone: a
+fallback chain streams, candidates run one at a time, and **a streamed chain
+selects the same candidate a buffered one would**. A candidate that falls through
+has published nothing a consumer could act on, and its transcript is still in
+`results`.
+
+Three pieces make it work here.
+
+**The filter.** onejudge parses its provider's stdout as exactly **one** JSON
+document, and a stream is many NDJSON lines wrapped in
+`{"type":…}` envelopes — it rejects them outright. So
+`scripts/oneharness-agent.sh` runs the child through
+`scripts/oneharness-stream.py` instead of `tee`. That filter appends every line to
+the same raw stdout record `tee` kept, republishes each event as a bounded
+`agent.activity` summary, and forwards the terminal line's `report` — cut out as
+the exact text oneharness wrote, not re-serialized — as the one document onejudge
+reads. Anything it does not recognize is forwarded verbatim, so a degraded run's
+bare report still arrives intact.
+
+**The probe.** Before each dispatched turn the wrapper runs
+`oneharness run --config <agent config> --stream --print-command <the caller's own
+arguments>`, with stdin closed so a `--prompt-file -` cannot consume the task. The
+real CLI renders what it would spawn and spawns nothing: it applies the same
+up-front validation a real run applies — `--stream` against this config's
+`run_mode` and chain, an `ONEHARNESS_HARNESSES`/`ONEHARNESS_MODELS` selection, a
+caller's `--schema` or batch prompts — writes no history record, and returns in
+single-digit milliseconds. A CLI too old to know `--stream` rejects the argument
+the same way, so one question covers every reason a dispatch might not be able to
+stream. **A no answer is never a dispatch failure**: `--events` stays selected and
+the turn runs exactly as it did before, transcript and all. A turn with no status
+directory — nothing is watching it — keeps `--events` for the same reason, since a
+stream would have nowhere to publish.
+
+**The reader.** `orchestrator/activity.py` reads those publications back out of the
+scratch root `orchestrator.scratch` sweeps, which is the only place a dispatch's
+watchdog directory is: the run directory never learns that path and the dispatch
+never learns the run directory, so each summary carries the graph locator it was
+dispatched with. It is a trust boundary — the files sit under a shared root and a
+subprocess writes them — so every field is validated, bounded, redacted, and scoped
+to the run that asked. `just status <run-id>` is the view that renders it, adding
+`now Bash just gate (7 event(s), 4s ago)` to the in-flight line. The journal join
+still supplies the guarantee that *dispatched, no completed turn* is not *no
+dispatch*; streaming only ever adds to it, and a node with no activity reads
+exactly as it did before.
+
+`tests/e2e/test_agent_stream_e2e.py` proves all of this against the real
+`oneharness` CLI over this repository's own chain, with a rejected candidate
+falling through on `auth`.
+
 ### Dispatch inactivity watchdog
 
 The July 22, 2026 `merge-queue-local` closeout exposed a failure mode distinct
