@@ -9,6 +9,14 @@
 # rejects ("cannot be used multiple times"). So force the agent config only when the
 # caller has not already chosen one — that is exactly the agent side; the judge side
 # passes through untouched, keeping its own config.
+#
+# That same branch is where each side's harness SELECTION is resolved. oneharness's
+# own ONEHARNESS_HARNESSES is process-wide and beats config, so one value set by the
+# parent would move both sides at once. ORCHESTRATOR_WORKER_HARNESSES and
+# ORCHESTRATOR_JUDGE_HARNESSES are per-side instead: each is applied to only its own
+# branch's `exec`, so a side carrying an explicit value never inherits the other
+# side's — nor an ambient process-wide one. See orchestrator/harnesses.py, which
+# validates both against the configs before a dispatch ever starts.
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -93,6 +101,12 @@ if [[ $caller_config == true ]]; then
         echo "oneharness-agent: caller config is not a readable regular file: $caller_config_path; correct the path and retry" >&2
         exit 2
     fi
+    # This is the judge / simulated-user side, so only its own override applies —
+    # and it applies over whatever ONEHARNESS_HARNESSES the parent exported, which
+    # is what keeps a worker-side selection from reaching this conversation.
+    if [ -n "${ORCHESTRATOR_JUDGE_HARNESSES-}" ]; then
+        export ONEHARNESS_HARNESSES="$ORCHESTRATOR_JUDGE_HARNESSES"
+    fi
     # Keep the portable indirection available while oneharness resolves config.
     # The judge's explicit primary variant does not consume it and masks
     # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project
@@ -104,7 +118,16 @@ if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
     echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
 fi
-if [ -z "${ONEHARNESS_HARNESSES-}" ]; then
+if [ -n "${ORCHESTRATOR_WORKER_HARNESSES-}" ]; then
+    # This is the agent side, so only its own override applies — over an ambient
+    # ONEHARNESS_HARNESSES as well, since a process-wide value the parent exported
+    # is exactly what an explicit per-side choice exists to displace.
+    #
+    # Taken verbatim: the filtering below narrows a chain nobody chose, whereas
+    # dropping an identity an operator named would run a provider they did not ask
+    # for. An unauthenticated one fails at the provider instead, loudly.
+    export ONEHARNESS_HARNESSES="$ORCHESTRATOR_WORKER_HARNESSES"
+elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
     # An alternate Claude subscription whose config directory does not exist is a
     # candidate this host has never set up. claude-code would still start, create
     # that directory, and report `auth` — so the chain recovers either way, but

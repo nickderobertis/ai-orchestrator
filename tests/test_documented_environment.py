@@ -24,6 +24,7 @@ from orchestrator.gitops import (
     GIT_TIMEOUT_ENV,
     HOOK_RUNNING_COMMANDS,
 )
+from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.provenance import INCOMPLETE_TRAILER, RECOVERY_TRAILER
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
 
@@ -36,6 +37,8 @@ DOCUMENTED_TUNABLES = (
     (MIN_FREE_BYTES_ENV, "docs/repo-lifecycle.md"),
     (GIT_TIMEOUT_ENV, "docs/repo-lifecycle.md"),
     (GIT_HOOK_TIMEOUT_ENV, "docs/repo-lifecycle.md"),
+    (WORKER_HARNESS_ENV, "docs/onejudge-integration.md"),
+    (JUDGE_HARNESS_ENV, "docs/onejudge-integration.md"),
 )
 
 

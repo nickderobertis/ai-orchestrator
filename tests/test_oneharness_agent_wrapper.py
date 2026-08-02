@@ -15,10 +15,12 @@ import stat
 import subprocess
 import time
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
+from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
@@ -33,6 +35,7 @@ def _run_wrapper(
     alternate2_config_dir: Path | None = None,
     codex_alt_home: Path | None = None,
     include_home: bool = True,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the wrapper with a stub ``oneharness`` on PATH; return (proc, recorded argv)."""
     bin_dir = tmp_path / "bin"
@@ -76,6 +79,7 @@ def _run_wrapper(
                 if codex_alt_home is not None
                 else {}
             ),
+            **(env or {}),
         },
     )
     recorded = args_file.read_text(encoding="utf-8").splitlines() if args_file.exists() else []
@@ -388,6 +392,109 @@ def test_agent_side_rejects_unsearchable_alternate_config_directory(tmp_path: Pa
     assert proc.returncode == 2
     assert "not an accessible directory" in proc.stderr
     assert argv == []
+
+
+def _judge_argv(tmp_path: Path) -> list[str]:
+    """The argv shape onejudge gives the judge turn: its own --config, chosen already."""
+    judge_config = tmp_path / "oneharness.judge.toml"
+    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    return ["run", "--compact", "--prompt-file", "-", "--config", str(judge_config)]
+
+
+def test_agent_side_runs_the_worker_selection_it_was_given(tmp_path: Path) -> None:
+    """An explicit worker choice reaches oneharness verbatim.
+
+    Verbatim matters: the absent-alternate substitution narrows a chain nobody
+    chose, but silently dropping an identity an operator named would run a
+    provider they did not ask for.
+    """
+    proc, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={WORKER_HARNESS_ENV: "claude-code:alternate2,codex"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert _selection(tmp_path) == "claude-code:alternate2,codex"
+
+
+def test_judge_side_runs_the_judge_selection_it_was_given(tmp_path: Path) -> None:
+    proc, argv = _run_wrapper(
+        tmp_path, _judge_argv(tmp_path), env={JUDGE_HARNESS_ENV: "claude-code:primary"}
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert _selection(tmp_path) == "claude-code:primary"
+    # Still exactly the caller's own config: choosing a side's harness must not
+    # change which config that side is judged from.
+    assert argv.count("--config") == 1
+    assert f"{REPO_ROOT}/oneharness.toml" not in argv
+
+
+def test_neither_side_leaks_its_selection_into_the_other(tmp_path: Path) -> None:
+    """The bug this seam exists for: one value moving both sides at once."""
+    both = {WORKER_HARNESS_ENV: "codex", JUDGE_HARNESS_ENV: "claude-code:primary"}
+
+    agent, _ = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"], env=both)
+    assert agent.returncode == 0, agent.stderr
+    assert _selection(tmp_path) == "codex"
+
+    judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=both)
+    assert judge.returncode == 0, judge.stderr
+    assert _selection(tmp_path) == "claude-code:primary"
+
+
+def test_a_side_with_its_own_selection_ignores_a_process_wide_one(tmp_path: Path) -> None:
+    """`ONEHARNESS_HARNESSES` is process-wide and beats config; a per-side value beats it."""
+    ambient = {"ONEHARNESS_HARNESSES": "codex:alternate"}
+
+    agent, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={**ambient, WORKER_HARNESS_ENV: "codex"},
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert _selection(tmp_path) == "codex"
+
+    judge, _ = _run_wrapper(
+        tmp_path, _judge_argv(tmp_path), env={**ambient, JUDGE_HARNESS_ENV: "claude-code:primary"}
+    )
+    assert judge.returncode == 0, judge.stderr
+    assert _selection(tmp_path) == "claude-code:primary"
+
+
+def test_a_side_without_its_own_selection_resolves_exactly_as_before(tmp_path: Path) -> None:
+    """Overriding one side must leave the other side's default path untouched."""
+    # The agent branch still substitutes a chain without the absent alternates...
+    agent, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={JUDGE_HARNESS_ENV: "claude-code:primary"},
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert _selection(tmp_path) == "codex,codex:alternate,claude-code:primary"
+
+    # ...and the judge branch still leaves the selection to its own config.
+    judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env={WORKER_HARNESS_ENV: "codex"})
+    assert judge.returncode == 0, judge.stderr
+    assert _selection(tmp_path) == ""
+
+
+def test_an_ambient_selection_still_reaches_a_side_that_was_given_none(tmp_path: Path) -> None:
+    """Nothing about oneharness's own override changes for a side nobody chose for."""
+    agent, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={"ONEHARNESS_HARNESSES": "codex:alternate"},
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert _selection(tmp_path) == "codex:alternate"
+
+    judge, _ = _run_wrapper(
+        tmp_path, _judge_argv(tmp_path), env={"ONEHARNESS_HARNESSES": "codex:alternate"}
+    )
+    assert judge.returncode == 0, judge.stderr
+    assert _selection(tmp_path) == "codex:alternate"
 
 
 def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> None:

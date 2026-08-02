@@ -454,6 +454,8 @@ def make_dispatch_runner(
     onejudge_bin: str,
     provider: str | None,
     oneharness_mode: str | None,
+    worker_harness: str | None = None,
+    judge_harness: str | None = None,
     timeout: float | None,
 ) -> AgentRunner:
     """Build the production runner that dispatches each node through onejudge."""
@@ -477,6 +479,8 @@ def make_dispatch_runner(
             onejudge_bin=onejudge_bin,
             provider=provider,
             oneharness_mode=oneharness_mode,
+            worker_harness=worker_harness,
+            judge_harness=judge_harness,
             labels=labels,
             timeout=timeout,
             cancel=cancel,

@@ -124,7 +124,14 @@ sync branch="" remote="origin":
 
 # --- orchestrator verbs ---------------------------------------------------
 
-# Dispatch one subtask: `just dispatch <persona> "<task>"`.
+# Dispatch one subtask: `just dispatch <persona> "<task>"`. `--worker-harness` and
+# `--judge-harness` name the identity each side of the conversation runs on; see
+# docs/onejudge-integration.md#choosing-a-harness-per-side.
+#
+# The summary is a `[doc]` attribute rather than the comment because `just --list`
+# renders only the LAST comment line — which is a wrapped fragment here, and on the
+# two recipes below is an llmlint directive that has to stay next to its recipe.
+[doc('Dispatch one subtask: `just dispatch <persona> "<task>"`; --worker-harness / --judge-harness pick the provider for each side of the conversation.')]
 dispatch *args:
     @uv run orchestrator-dispatch "$@"
 
@@ -134,7 +141,10 @@ run-plan *args:
     @uv run orchestrator-run-plan "$@"
 
 # Launch the dedicated orchestrator with a host-visible live planner channel.
+# `--worker-harness` / `--judge-harness` pick the provider each dispatch of the run
+# uses for its worker and its judge.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
+[doc('Launch the orchestrator on a live planner channel; --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes.')]
 orchestrate *args:
     @uv run orchestrator-orchestrate "$@"
 
@@ -162,6 +172,9 @@ channel-continue *args:
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
 # or a local path; direct base merge requires an explicit registered local workflow.
+# `--worker-harness` / `--judge-harness` name the identity each side of every step's
+# conversation runs on.
+[doc('Drive one subtask through a repo lifecycle (clone→gate→PR/merge); --worker-harness / --judge-harness pick the provider for each side of the conversation.')]
 repo-task *args:
     @uv run orchestrator-repo-task "$@"
 
