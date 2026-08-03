@@ -1,6 +1,6 @@
 import {
-  API_V1_PATHS,
-  API_V1_QUERY,
+  API_V2_PATHS,
+  API_V2_QUERY,
   apiErrorSchema,
   type DagConversation,
   dagConversationSchema,
@@ -77,8 +77,8 @@ export class TelemetryClient {
   }
 
   async listRuns(includeSettled = false): Promise<RunList> {
-    const url = this.#url(API_V1_PATHS.runs);
-    url.searchParams.set(API_V1_QUERY.includeSettled, String(includeSettled));
+    const url = this.#url(API_V2_PATHS.runs);
+    url.searchParams.set(API_V2_QUERY.includeSettled, String(includeSettled));
     return this.#request(url, runListSchema.parse);
   }
 
@@ -96,10 +96,10 @@ export class TelemetryClient {
     options: RunDetailOptions = {},
   ): Promise<RunDetail> {
     requireOpaqueId(runId, "run ID");
-    const url = this.#url(API_V1_PATHS.run(runId));
+    const url = this.#url(API_V2_PATHS.run(runId));
     if (options.includeConversations !== undefined) {
       url.searchParams.set(
-        API_V1_QUERY.includeConversations,
+        API_V2_QUERY.includeConversations,
         String(options.includeConversations),
       );
     }
@@ -110,7 +110,7 @@ export class TelemetryClient {
   async getTimeline(runId: string): Promise<RunTimeline> {
     requireOpaqueId(runId, "run ID");
     return this.#request(
-      this.#url(API_V1_PATHS.timeline(runId)),
+      this.#url(API_V2_PATHS.timeline(runId)),
       runTimelineSchema.parse,
     );
   }
@@ -122,7 +122,7 @@ export class TelemetryClient {
     requireOpaqueId(runId, "run ID");
     requireOpaqueId(conversationId, "conversation ID");
     return this.#request(
-      this.#url(API_V1_PATHS.conversation(runId, conversationId)),
+      this.#url(API_V2_PATHS.conversation(runId, conversationId)),
       dagConversationSchema.parse,
     );
   }
@@ -130,11 +130,11 @@ export class TelemetryClient {
   subscribe(options: SubscribeOptions): TelemetrySubscription {
     if (options.runId !== undefined) requireOpaqueId(options.runId, "run ID");
     if (options.after !== undefined) requireOpaqueId(options.after, "cursor");
-    const url = this.#url(API_V1_PATHS.events);
+    const url = this.#url(API_V2_PATHS.events);
     if (options.runId !== undefined)
-      url.searchParams.set(API_V1_QUERY.runId, options.runId);
+      url.searchParams.set(API_V2_QUERY.runId, options.runId);
     if (options.after !== undefined)
-      url.searchParams.set(API_V1_QUERY.after, options.after);
+      url.searchParams.set(API_V2_QUERY.after, options.after);
     const create =
       this.#eventSource ??
       ((sourceUrl: string) => {

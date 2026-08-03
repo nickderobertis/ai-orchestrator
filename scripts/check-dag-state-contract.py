@@ -661,6 +661,33 @@ def main() -> None:
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
 
+    # A required envelope field and its route prefix are one major-version contract.
+    # Reconcile every executable and documented copy so a future required-field
+    # change cannot update only the payload literal while leaving clients on an old
+    # route (or vice versa).
+    api_version = module_number(read_model, "API_VERSION")
+    for where, path, pattern in (
+        (
+            "orchestrator/server.py FastAPI version",
+            root / "orchestrator/server.py",
+            r'FastAPI\([^\n]+version="(\d+)"',
+        ),
+        ("orchestrator/server.py route prefix", root / "orchestrator/server.py", r"/api/v(\d+)"),
+        (
+            "packages/dag-model/src/index.ts envelope",
+            dag_model,
+            r"api_version: z\.literal\((\d+)\)",
+        ),
+        ("packages/dag-model/src/index.ts route prefix", dag_model, r"/api/v(\d+)"),
+        ("docs/dag-ui/design.md envelope", design, r"api_version:? (\d+)"),
+        ("docs/dag-ui/design.md route prefix", design, r"/api/v(\d+)"),
+    ):
+        reconcile_number(
+            "read API major version",
+            ("orchestrator/read_model.py API_VERSION", api_version),
+            (where, documented_number(path, "read API major version", pattern)),
+        )
+
     # The session links a node's telemetry serves. They are declared in Python by the
     # collector rather than by the read model, and the contract documents them beside
     # the rest of `RunTelemetry`, so this is where the two sides meet.

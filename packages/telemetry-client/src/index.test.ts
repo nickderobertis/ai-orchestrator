@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { TelemetryClient, TelemetryClientError } from "./index.js";
 
 const emptyList = {
-  api_version: 1,
+  api_version: 2,
   telemetry_schema_version: 9,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [],
@@ -88,16 +88,16 @@ describe("TelemetryClient fetch boundary", () => {
       },
     });
     const list = await client.listRuns(true);
-    expect(list.api_version).toBe(1);
+    expect(list.api_version).toBe(2);
     expect(list.runs).toEqual([]);
     expect(requested).toBe(
-      "http://127.0.0.1:8000/api/v1/runs?include_settled=true",
+      "http://127.0.0.1:8000/api/v2/runs?include_settled=true",
     );
   });
 
   test("rejects a successful response that violates the model", async () => {
     const client = new TelemetryClient("http://localhost", {
-      fetch: async () => Response.json({ ...emptyList, api_version: 2 }),
+      fetch: async () => Response.json({ ...emptyList, api_version: 3 }),
     });
     await expect(client.listRuns()).rejects.toBeInstanceOf(
       TelemetryClientError,
@@ -112,7 +112,7 @@ describe("TelemetryClient fetch boundary", () => {
         requested.push(url);
         if (url.endsWith("/timeline")) {
           return Response.json({
-            api_version: 1,
+            api_version: 2,
             observed_at: "2026-07-26T12:00:00Z",
             run_id: "run-1",
             spans: [
@@ -128,7 +128,7 @@ describe("TelemetryClient fetch boundary", () => {
           });
         }
         return Response.json({
-          api_version: 1,
+          api_version: 2,
           telemetry_schema_version: 9,
           observed_at: "2026-07-26T12:00:00Z",
           run: runTelemetry,
@@ -142,26 +142,26 @@ describe("TelemetryClient fetch boundary", () => {
     expect(lean.conversations).toEqual([]);
     // The opt-out travels as the documented query parameter, not a header or a path.
     expect(requested[0]).toBe(
-      "http://127.0.0.1:8000/api/v1/runs/run-1?include_conversations=false",
+      "http://127.0.0.1:8000/api/v2/runs/run-1?include_conversations=false",
     );
 
     const timeline = await client.getTimeline("run-1");
     // An in-flight node stays representable all the way to the consumer.
     expect(timeline.spans[0]?.ended_at).toBeNull();
     expect(requested[1]).toBe(
-      "http://127.0.0.1:8000/api/v1/runs/run-1/timeline",
+      "http://127.0.0.1:8000/api/v2/runs/run-1/timeline",
     );
 
     // Omitting the option leaves the request exactly as it was before.
     await client.getRun("run-1");
-    expect(requested[2]).toBe("http://127.0.0.1:8000/api/v1/runs/run-1");
+    expect(requested[2]).toBe("http://127.0.0.1:8000/api/v2/runs/run-1");
   });
 
   test("rejects a timeline response that violates the model", async () => {
     const client = new TelemetryClient("http://localhost", {
       fetch: async () =>
         Response.json({
-          api_version: 1,
+          api_version: 2,
           observed_at: "2026-07-26T12:00:00Z",
           run_id: "run-1",
           spans: [{ id: "x", kind: "guess", label: "x", events: [] }],

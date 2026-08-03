@@ -159,7 +159,7 @@ def create_app(
     ):
         if not interval > 0:
             raise ValueError(f"{label} must be a positive number of seconds, got {interval!r}")
-    app = FastAPI(title="ai-orchestrator DAG read API", version="1")
+    app = FastAPI(title="ai-orchestrator DAG read API", version="2")
     root = Path(runs_dir)
 
     @app.exception_handler(RequestValidationError)
@@ -194,7 +194,7 @@ def create_app(
     # These four are deliberately `def`, not `async def`: each is blocking storage
     # work, and FastAPI runs a non-async handler in its threadpool, so one slow read
     # occupies a worker rather than the loop every other request shares.
-    @app.get("/api/v1/runs")
+    @app.get("/api/v2/runs")
     def get_runs(include_settled: bool = False) -> Any:
         try:
             return list_runs(
@@ -207,7 +207,7 @@ def create_app(
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
 
-    @app.get("/api/v1/runs/{run_id}")
+    @app.get("/api/v2/runs/{run_id}")
     def get_run(run_id: str, include_conversations: bool = True) -> Any:
         """The run detail; ``include_conversations=false`` serves no transcripts.
 
@@ -227,7 +227,7 @@ def create_app(
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
 
-    @app.get("/api/v1/runs/{run_id}/timeline")
+    @app.get("/api/v2/runs/{run_id}/timeline")
     def get_timeline(run_id: str) -> Any:
         """The whole run's ordered spans and events; a consumer filters by node."""
         try:
@@ -236,7 +236,7 @@ def create_app(
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
 
-    @app.get("/api/v1/runs/{run_id}/conversations/{conversation_id}")
+    @app.get("/api/v2/runs/{run_id}/conversations/{conversation_id}")
     def get_conversation(run_id: str, conversation_id: str) -> Any:
         try:
             return run_conversation(root, run_id, conversation_id, oneharness_bin=oneharness_bin)
@@ -244,7 +244,7 @@ def create_app(
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
 
-    @app.get("/api/v1/events")
+    @app.get("/api/v2/events")
     async def events(
         request: Request,
         run_id: str | None = Query(default=None),

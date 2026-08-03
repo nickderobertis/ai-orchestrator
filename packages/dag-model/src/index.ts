@@ -23,16 +23,16 @@ const lastEvent = z.string().min(1).nullable();
 const openObject = <T extends z.ZodRawShape>(shape: T) =>
   z.object(shape).catchall(z.unknown());
 
-export const API_V1_PATHS = {
-  runs: "/api/v1/runs",
-  run: (runId: string) => `/api/v1/runs/${encodeURIComponent(runId)}`,
+export const API_V2_PATHS = {
+  runs: "/api/v2/runs",
+  run: (runId: string) => `/api/v2/runs/${encodeURIComponent(runId)}`,
   timeline: (runId: string) =>
-    `/api/v1/runs/${encodeURIComponent(runId)}/timeline`,
+    `/api/v2/runs/${encodeURIComponent(runId)}/timeline`,
   conversation: (runId: string, conversationId: string) =>
-    `/api/v1/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
-  events: "/api/v1/events",
+    `/api/v2/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
+  events: "/api/v2/events",
 } as const;
-export const API_V1_QUERY = {
+export const API_V2_QUERY = {
   includeSettled: "include_settled",
   /**
    * Opt out of run-detail transcripts. `false` serves `conversations` as an empty
@@ -235,7 +235,7 @@ export const runSummarySchema = openObject({
 });
 
 export const runListSchema = openObject({
-  api_version: z.literal(1),
+  api_version: z.literal(2),
   telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
@@ -475,7 +475,7 @@ export const runConversationsSchema = z.union([
 ]);
 
 export const runDetailSchema = openObject({
-  api_version: z.literal(1),
+  api_version: z.literal(2),
   telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   run: runTelemetrySchema,
@@ -551,7 +551,7 @@ export const timelineSpanSchema = openObject({
   reference: timelineReferenceSchema.optional(),
 });
 export const runTimelineSchema = openObject({
-  api_version: z.literal(1),
+  api_version: z.literal(2),
   observed_at: timestamp,
   run_id: z.string().min(1),
   spans: z.array(timelineSpanSchema),

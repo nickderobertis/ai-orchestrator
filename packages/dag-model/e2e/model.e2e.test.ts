@@ -50,7 +50,7 @@ const zeroTiming = {
 test("a package consumer validates an API response through the public export", () => {
   expect(
     parseRunList({
-      api_version: 1,
+      api_version: 2,
       telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
@@ -61,7 +61,7 @@ test("a package consumer validates an API response through the public export", (
 test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({
-      api_version: 2,
+      api_version: 3,
       telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
@@ -69,7 +69,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   ).toThrow();
   expect(
     runDetailSchema.safeParse({
-      api_version: 1,
+      api_version: 2,
       telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
@@ -136,7 +136,7 @@ function completeDetail(conversations: unknown[]) {
     },
   };
   return {
-    api_version: 1,
+    api_version: 2,
     telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     run: {
@@ -332,7 +332,7 @@ test("a package consumer validates populated telemetry and attribution", () => {
 
 test("a package consumer parses a served run timeline through the export", () => {
   const timeline = parseRunTimeline({
-    api_version: 1,
+    api_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: "run-1",
     spans: [

@@ -68,7 +68,7 @@ from .telemetry import (
     collect_run,
 )
 
-API_VERSION = 1
+API_VERSION = 2
 
 
 class ReadError(Exception):
@@ -150,7 +150,7 @@ class RunSummary(TypedDict):
 
 
 class RunList(TypedDict):
-    """The ``RunList`` envelope served by ``GET /api/v1/runs`` and the SSE snapshot."""
+    """The ``RunList`` envelope served by ``GET /api/v2/runs`` and the SSE snapshot."""
 
     api_version: int
     telemetry_schema_version: int
@@ -179,7 +179,7 @@ class Round(TypedDict):
 
 
 class RunDetail(TypedDict):
-    """The full ``RunDetail`` served by ``GET /api/v1/runs/{run_id}``."""
+    """The full ``RunDetail`` served by ``GET /api/v2/runs/{run_id}``."""
 
     api_version: int
     telemetry_schema_version: int

@@ -30,21 +30,26 @@ cannot change without a new API major version. Unknown fields must be ignored.
 Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
-The initial API base is `/api/v1`. Its telemetry payload embeds the existing
+The authoritative node-status contract is API v2 at `/api/v2`. Its telemetry payload embeds the existing
 telemetry index at `telemetry_schema_version: 9`, mirroring that index's own
 `schema_version`; this API version does not replace or renumber that contract.
 `scripts/check-dag-state-contract.py` reconciles every copy of that number here
 against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
 
+API v2 replaces v1 because `Round.node_status` and `Round.node_gated_by` are new
+required fields. The v1 routes are not aliases: consumers must move to `/api/v2`
+and validate `api_version: 2`, which prevents an old client from silently treating
+an absent authoritative status as a state it invents locally.
+
 ## Read model
 
 ### Run list and detail
 
-`GET /api/v1/runs?include_settled=false` returns:
+`GET /api/v2/runs?include_settled=false` returns:
 
 ```ts
 interface RunList {
-  api_version: 1;
+  api_version: 2;
   telemetry_schema_version: 9;
   observed_at: string;
   runs: RunSummary[];
@@ -80,11 +85,11 @@ Runs are ordered by most recent progress descending, then `run_id` ascending.
 `include_settled` defaults to false, matching `just telemetry`; true matches
 `just telemetry --all`.
 
-`GET /api/v1/runs/{run_id}` returns a `RunDetail`:
+`GET /api/v2/runs/{run_id}` returns a `RunDetail`:
 
 ```ts
 interface RunDetail {
-  api_version: 1;
+  api_version: 2;
   telemetry_schema_version: 9;
   observed_at: string;
   run: RunTelemetry;
@@ -109,11 +114,11 @@ interface DetailSnapshot {
 prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorded no
 `launch_id`.
 
-`GET /api/v1/runs/{run_id}?include_conversations=false` serves `conversations` as
+`GET /api/v2/runs/{run_id}?include_conversations=false` serves `conversations` as
 an empty array. Transcripts dominate this payload — a real run carries megabytes of
 them across hundreds of sessions, refetched on every live update — so a client that
 reads the run timeline instead asks for none of them. This is an opt-out, not a
-schema change: `api_version` stays `1`, `conversations` stays required and present,
+schema change: `api_version` stays `2`, `conversations` stays required and present,
 and the client simply asked for nothing in it. It defaults to `true`.
 
 `RunTelemetry` is exactly `RunTelemetry.record()` from
@@ -310,14 +315,14 @@ type FailureClass =
 
 ### Run timeline
 
-`GET /api/v1/runs/{run_id}/timeline` returns one `RunTimeline` for the whole run;
+`GET /api/v2/runs/{run_id}/timeline` returns one `RunTimeline` for the whole run;
 a consumer filters it by `node_id` rather than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
 
 ```ts
 interface RunTimeline {
-  api_version: 1;
+  api_version: 2;
   observed_at: string;
   run_id: string;
   spans: TimelineSpan[];
@@ -436,13 +441,13 @@ unrecognized one by status.
 The server exposes only:
 
 - `GET /healthz` → `{"status":"ok"}` without touching run storage.
-- `GET /api/v1/runs`.
-- `GET /api/v1/runs/{run_id}?include_conversations={optional}`.
-- `GET /api/v1/runs/{run_id}/timeline` for the whole run's ordered spans and
+- `GET /api/v2/runs`.
+- `GET /api/v2/runs/{run_id}?include_conversations={optional}`.
+- `GET /api/v2/runs/{run_id}/timeline` for the whole run's ordered spans and
   events.
-- `GET /api/v1/runs/{run_id}/conversations/{conversation_id}` for one complete
+- `GET /api/v2/runs/{run_id}/conversations/{conversation_id}` for one complete
   conversation when detail responses use summaries.
-- `GET /api/v1/events?run_id={optional}&after={optional}` as SSE.
+- `GET /api/v2/events?run_id={optional}&after={optional}` as SSE.
 
 There are no mutation routes, command execution, file paths, arbitrary history
 queries, or user-supplied globbing. Run, conversation, and cursor IDs are

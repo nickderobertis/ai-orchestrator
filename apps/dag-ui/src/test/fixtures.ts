@@ -62,7 +62,7 @@ const CODEX_SESSION = "5e551040".repeat(4);
 const CLAUDE_SESSION = "5e5510c1".repeat(4);
 
 export const runList = {
-  api_version: 1,
+  api_version: 2,
   telemetry_schema_version: 9,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [
@@ -172,7 +172,7 @@ export function runDetail(runId: string = LIVE_RUN) {
   const launcher = historical ? "claude-code" : "codex";
   const node = historical ? "archive" : "dashboard";
   return {
-    api_version: 1,
+    api_version: 2,
     telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     // The launching session is served on the run itself, and on every list row.
@@ -363,7 +363,7 @@ function stamp(seconds: number): string {
  */
 export function runTimeline(runId: string = LIVE_RUN) {
   return {
-    api_version: 1,
+    api_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: runId,
     spans: runId === HISTORY_RUN ? historySpans() : liveSpans(),
@@ -747,7 +747,7 @@ export function busyTimeline(sessions: number) {
     (span) => !span.id.startsWith("dispatch-worker"),
   );
   return {
-    api_version: 1,
+    api_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: LIVE_RUN,
     spans: [
