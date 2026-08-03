@@ -36,6 +36,8 @@ from orchestrator.scratch import (
     ORPHAN_FAMILY,
     ORPHAN_PROOF_SKIP_REASON,
     OWNER_LOCK_NAME,
+    RUN_WORKTREE_FAMILY,
+    RUN_WORKTREE_SKIP_REASON,
     UNREFERENCED_FAMILIES,
     WATCHDOG_PATTERN,
     sweep_scratch,
@@ -741,6 +743,7 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     for family in UNREFERENCED_FAMILIES:
         assert f"{family.name} (no live process could be proven done with it)" in skipped
     assert f"{ORPHAN_FAMILY} ({ORPHAN_PROOF_SKIP_REASON})" in skipped
+    assert f"{RUN_WORKTREE_FAMILY} ({RUN_WORKTREE_SKIP_REASON})" in skipped
 
 
 def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(

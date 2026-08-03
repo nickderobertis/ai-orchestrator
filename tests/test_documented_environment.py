@@ -27,6 +27,7 @@ from orchestrator.gitops import (
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.provenance import INCOMPLETE_TRAILER, RECOVERY_TRAILER
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
+from orchestrator.workspace import RETAINED_INCOMPLETE_RUNS
 
 #: Each variable the code names as a constant, and the document that tells an
 #: operator to set it. A tunable documented without such a constant is not listed:
@@ -128,4 +129,14 @@ def test_documentation_states_the_default_its_constant_declares(
     assert stated in prose, (
         f"{document} does not state {stated}; update it in the same change that "
         "moved the constant, or stop documenting the default"
+    )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("document", ("AGENTS.md", "docs/repo-lifecycle.md"))
+def test_documentation_states_the_retained_incomplete_run_count(document: str) -> None:
+    prose = (REPO_ROOT / document).read_text(encoding="utf-8")
+
+    assert re.search(rf"newest\s+\*\*{RETAINED_INCOMPLETE_RUNS}\*\*", prose), (
+        f"{document} must derive its retained-run count from RETAINED_INCOMPLETE_RUNS"
     )

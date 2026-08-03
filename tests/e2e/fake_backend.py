@@ -557,6 +557,9 @@ def main() -> int:
                 (Path.cwd() / f"CHANGE-{identity}.txt").write_text(
                     "change from fake agent\n", encoding="utf-8"
                 )
+            cwd_match = re.search(r"record-cwd=([^\s]+)", task)
+            if cwd_match is not None:
+                Path(cwd_match.group(1)).write_text(str(Path.cwd()), encoding="utf-8")
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.

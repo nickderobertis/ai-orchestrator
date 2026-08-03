@@ -473,28 +473,29 @@ def _channel(recipe: str, run_id: str, runs: Path, payload: str | None = None) -
     return result.stdout
 
 
-def _answer_until_the_run_is_over(run_id: str, runs: Path) -> None:
-    """Reply to every surface the orchestrator raises until it writes its report.
+def _answer_the_run_and_wait_for_its_report(run_id: str, runs: Path) -> None:
+    """Answer the run's supervisor question as a planner does, and let it complete.
 
-    The planner's own loop, run through the planner's own commands: this is how a
-    graph reaches `complete` here, and it is the only way to reach it without
-    manufacturing a ledger the executor should have written.
+    Both directions are a rendezvous rather than a poll, which is what makes this
+    hold by construction: the relay writes its surface and blocks until a planner
+    reads the frame, then blocks on `down.fifo` until the answer arrives. Neither
+    side can miss the other by being unlucky with timing.
     """
-    report = runs / run_id / "orchestrator" / "report.json"
     wait = deadline(240)
-    while time.monotonic() < wait:
-        if report.is_file() and report.stat().st_size:
-            return
-        surface = json.loads(_channel("channel-next", run_id, runs) or "{}")
-        if surface.get("surface") is None:
-            continue
-        _channel(
-            "channel-reply",
-            run_id,
-            runs,
-            json.dumps({"completion": True, "reason": "verified by the attach journey"}),
-        )
-    raise AssertionError(f"the orchestrator never finished {run_id}")
+    surface = None
+    while surface is None:
+        assert time.monotonic() < wait, f"{run_id} never asked the planner anything"
+        surface = json.loads(_channel("channel-next", run_id, runs) or "{}").get("surface")
+    _channel(
+        "channel-reply",
+        run_id,
+        runs,
+        json.dumps({"completion": True, "reason": "verified by the attach journey"}),
+    )
+    report = runs / run_id / "orchestrator" / "report.json"
+    while not (report.is_file() and report.stat().st_size):
+        assert time.monotonic() < wait, f"the orchestrator never finished {run_id}"
+        time.sleep(0.05)
 
 
 def test_monitor_until_settled_returns_on_a_graph_that_completed(
@@ -507,15 +508,24 @@ def test_monitor_until_settled_returns_on_a_graph_that_completed(
     attach is then asked about a run whose orchestrator has already written its
     report — the *already settled* case — and must recognise the completed graph
     rather than follow a stream nothing will add to, or call it abandoned.
+
+    It answers the one surface a planner is *asked* anything through. `no-assessment`
+    keeps the node from raising a second one as it settles: that proposal's reader
+    polls `down.fifo` on a 0.1s cycle instead of waiting there, so replying to one is
+    a race — ENXIO on open, or EPIPE mid-write — rather than a property to assert.
     """
     runs = tmp_path / "runs"
     launched = _orchestrate(
-        _plan(tmp_path, "completed"), runs, _base(tmp_path), onejudge_bin, "--detach"
+        _plan(tmp_path, "completed", task="complete-now attach no-assessment"),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        "--detach",
     )
     assert launched.returncode == 0, launched.stderr
     run_dir = _launched_run(runs)
     reaped.append(run_dir)
-    _answer_until_the_run_is_over(run_dir.name, runs)
+    _answer_the_run_and_wait_for_its_report(run_dir.name, runs)
 
     settled = _monitor(runs, run_dir.name, "--until-settled", "--format", "jsonl")
     assert settled.returncode == 0, settled.stdout + settled.stderr

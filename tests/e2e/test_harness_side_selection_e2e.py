@@ -309,8 +309,9 @@ def test_with_no_selection_at_all_both_sides_resolve_their_configured_chains(
 
     Neither alternate Claude config directory exists in this fixture, so the agent
     branch substitutes a chain without them and the worker lands on codex — the
-    first identity left. The judge's own chain leads with codex anyway. Nothing
-    carries a per-side variable.
+    first identity left. oneharness narrows its process-wide selection to that
+    candidate before spawning the provider. The judge's own chain leads with codex
+    anyway. Nothing carries a per-side variable.
     """
     dispatched = _dispatch(tmp_path, onejudge_bin, oneharness_bin)
 
@@ -320,11 +321,10 @@ def test_with_no_selection_at_all_both_sides_resolve_their_configured_chains(
     assert worker_turns, dispatched.turns
     assert judge_turns, dispatched.turns
     assert {turn["bin"] for turn in dispatched.turns} == {"codex"}
-    assert {turn["harnesses"] for turn in worker_turns} == {
-        "codex,codex:alternate,claude-code:primary"
-    }
-    # The judge side is left entirely to its config: no substitution, no variable.
-    assert {turn["harnesses"] for turn in judge_turns} == {None}
+    assert {turn["harnesses"] for turn in worker_turns} == {"codex"}
+    # The judge side is left entirely to its config; oneharness scopes the spawned
+    # provider to the candidate that config selected just as it does for the worker.
+    assert {turn["harnesses"] for turn in judge_turns} == {"codex"}
     assert {turn["worker_override"] for turn in dispatched.turns} == {None}
     assert {turn["judge_override"] for turn in dispatched.turns} == {None}
 

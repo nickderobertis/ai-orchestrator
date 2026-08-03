@@ -142,9 +142,11 @@ class SkippedFamily:
 WATCHDOG_FAMILY = "watchdog"
 THIRD_PARTY_FAMILY = "third-party"
 ORPHAN_FAMILY = "dispatch-orphans"
+RUN_WORKTREE_FAMILY = "retained-run-worktrees"
 THIRD_PARTY_SKIP_REASON = "lifecycle dispatch active"
 REFERENCE_PROOF_SKIP_REASON = "no live process could be proven done with it"
 ORPHAN_PROOF_SKIP_REASON = "no usable procfs to prove what a finished dispatch left running"
+RUN_WORKTREE_SKIP_REASON = "workspace occupancy lease owns reclamation"
 
 
 SCRATCH_LOCK_NAME = ".orchestrator-scratch.lock"
@@ -885,6 +887,11 @@ def sweep_scratch(
         swept_families.append(THIRD_PARTY_FAMILY)
     else:
         skipped_families.append(SkippedFamily(THIRD_PARTY_FAMILY, THIRD_PARTY_SKIP_REASON))
+    # A temp-root sweep cannot safely substitute procfs non-reference for the
+    # workspace run's free occupancy lease and dead-owner proof. Report that
+    # boundary explicitly; Workspace examines and reclaims this family when the
+    # next run for the repository identity opens.
+    skipped_families.append(SkippedFamily(RUN_WORKTREE_FAMILY, RUN_WORKTREE_SKIP_REASON))
     return SweepResult(
         tuple(removed),
         reclaimed,
