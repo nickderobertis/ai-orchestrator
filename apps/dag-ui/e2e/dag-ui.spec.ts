@@ -944,7 +944,10 @@ test("expands a node summary and opens its full timeline", async ({ page }) => {
   await expect(
     summary.getByRole("region", { name: "Node timeline" }),
   ).toBeVisible();
-  await summary.getByRole("button", { name: "Open timeline" }).click();
+  await summary
+    .getByRole("region", { name: "Node timeline" })
+    .getByRole("button", { name: /worker/ })
+    .click();
   await expect(page).toHaveURL(/node=dashboard/);
   await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
     "aria-selected",
