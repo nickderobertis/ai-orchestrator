@@ -22,9 +22,9 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
-import time
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -1187,8 +1187,8 @@ def serve(workspace: Path, port: int) -> int:
         )
 
 
-def stream_dashboard(workspace: Path) -> int:
-    """Publish one realistic mid-turn event into the live dispatch's scratch tree."""
+def publish_dashboard_activity_and_history(workspace: Path) -> int:
+    """Publish through the production stream filter used by a live dispatch."""
     path = (
         workspace
         / "dispatch-scratch"
@@ -1196,22 +1196,67 @@ def stream_dashboard(workspace: Path) -> int:
         / "agent"
         / "agent.activity"
     )
-    path.write_text(
-        json.dumps(
-            {
-                "run_id": LIVE_RUN,
-                "round": "1",
-                "node": "dashboard",
-                "persona": "engineer",
-                "at": time.time(),
-                "kind": "tool_call",
-                "name": "Read",
-                "detail": "orchestrator/server.py",
-                "events": 12,
-            }
+    source = path.with_name("agent.stdout")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
+            str(source),
+            str(path),
+        ],
+        input=(
+            json.dumps(
+                {
+                    "type": "event",
+                    "event": {
+                        "kind": "tool_call",
+                        "name": "Read",
+                        "input": {"path": "orchestrator/server.py"},
+                    },
+                }
+            )
+            + "\n"
         ),
-        encoding="utf-8",
+        text=True,
+        env={
+            **os.environ,
+            "ONEHARNESS_HISTORY_LABELS": (
+                f"run_id={LIVE_RUN},round=1,node=dashboard,persona=engineer"
+            ),
+        },
+        check=False,
     )
+    with (workspace / "worker-session.jsonl").open("a", encoding="utf-8") as record:
+        record.write(
+            json.dumps(
+                {
+                    "session": "worker-session",
+                    "name": "engineer-dashboard",
+                    "harness": "codex",
+                    "model": "gpt-5",
+                    "timestamp": "2026-07-26T09:31:00Z",
+                    "prompt": "Continue the streamed turn",
+                    "text": "Streaming the dashboard response now",
+                    "status": "ok",
+                    "session_id": "worker-session",
+                    "usage": {"input_tokens": 100, "output_tokens": 40},
+                    "events": [],
+                }
+            )
+            + "\n"
+        )
+    return completed.returncode
+
+
+def clear_dashboard_activity(workspace: Path) -> int:
+    """Model a streamed dispatch ending by removing its live-only publication."""
+    (
+        workspace
+        / "dispatch-scratch"
+        / "orchestrator-watchdog-fixture"
+        / "agent"
+        / "agent.activity"
+    ).unlink(missing_ok=True)
     return 0
 
 
@@ -1233,6 +1278,11 @@ def main(argv: list[str] | None = None) -> int:
         "--stream-dashboard",
         action="store_true",
         help="publish live dashboard activity into the serving process's scratch root",
+    )
+    parser.add_argument(
+        "--clear-dashboard-stream",
+        action="store_true",
+        help="remove the dashboard's live activity publication",
     )
     parser.add_argument(
         "--remove-run",
@@ -1269,7 +1319,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.settle_dashboard:
         return settle_dashboard(workspace)
     if args.stream_dashboard:
-        return stream_dashboard(workspace)
+        return publish_dashboard_activity_and_history(workspace)
+    if args.clear_dashboard_stream:
+        return clear_dashboard_activity(workspace)
     if args.remove_run is not None:
         return remove_run(workspace, args.remove_run)
     if args.remove_page_runs:

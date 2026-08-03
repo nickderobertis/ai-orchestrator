@@ -1332,11 +1332,32 @@ test("streams real progress the server observes on disk", async ({ page }) => {
 });
 
 test("shows mid-turn activity from a live dispatch", async ({ page }) => {
-  await openObservatory(page, `/?run=${runs().live}`);
+  await openObservatory(page, `/?run=${runs().live}&view=graph`);
+  await page
+    .getByRole("button", { name: /dashboard: (running|done)/ })
+    .press("Enter");
+  await page.getByRole("button", { name: /engineer-dashboard/ }).click();
+  await expect(page.getByText("Implementing the dashboard now")).toBeVisible();
   changeServedRuns(["--stream-dashboard"]);
   await expect(
     page.getByText("dashboard: Read orchestrator/server.py"),
   ).toBeVisible();
+  await expect(
+    page.getByText("Streaming the dashboard response now"),
+  ).toBeVisible();
+
+  // A newly opened run-scoped stream receives activity that was already live,
+  // rather than waiting for the next publication to change it.
+  await page.reload();
+  await expect(
+    page.getByText("dashboard: Read orchestrator/server.py"),
+  ).toBeVisible();
+
+  // Ending the publication emits an empty activity set and clears the live summary.
+  changeServedRuns(["--clear-dashboard-stream"]);
+  await expect(
+    page.getByText("dashboard: Read orchestrator/server.py"),
+  ).toHaveCount(0);
 });
 
 test("drops a run the server stops serving", async ({ page }) => {

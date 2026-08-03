@@ -1,4 +1,6 @@
 import {
+  type LiveActivity,
+  liveActivityListSchema,
   parseRunList,
   type RunDetail,
   type RunList,
@@ -54,16 +56,6 @@ export interface DagTelemetryState {
   readonly refresh: () => Promise<void>;
   readonly loadMore: () => Promise<void>;
   readonly hasMore: boolean;
-}
-
-export interface LiveActivity {
-  readonly round: string;
-  readonly node: string;
-  readonly at: number;
-  readonly kind: string;
-  readonly name: string;
-  readonly detail: string;
-  readonly events: number;
 }
 
 export function useDagTelemetry(
@@ -236,9 +228,7 @@ export function useDagTelemetry(
         if (event.event === "snapshot") return;
         if (event.event === "activity.changed") {
           const candidate = event.data.activity;
-          setActivity(
-            Array.isArray(candidate) ? (candidate as LiveActivity[]) : [],
-          );
+          setActivity(liveActivityListSchema.parse(candidate));
         }
         if (
           event.event === "conversation.changed" ||
@@ -300,7 +290,7 @@ function ignoreRemovedRun(caught: unknown): void {
 
 /** The run an invalidation event names, or `undefined` when it names none. */
 function invalidatedRunId(event: TelemetryEvent): string | undefined {
-  const runId = (event.data as Record<string, unknown>).run_id;
+  const runId = "run_id" in event.data ? event.data.run_id : undefined;
   return typeof runId === "string" && runId.length > 0 ? runId : undefined;
 }
 
