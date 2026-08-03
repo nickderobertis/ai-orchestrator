@@ -598,23 +598,37 @@ planner's own work gets interrupted by somebody else's cleanup — the incident
 `AGENTS.md` records under "never derive a process list from `ps` and signal it",
 reached by a different derivation.
 
-So the set is derived where it is used, from two proofs that are both about the
-present:
+Teardown therefore asks `owned_tree` what it can prove *right now*, and gets back
+three handles that are each either evidenced or withheld. The evidence is one
+snapshot of the environment stamp, taken before anything is signalled:
+`processes_stamped_for` asks the same question `orphaned_dispatch_processes` asks of
+a finished dispatch's leavings — which live processes carry
+`ORCHESTRATOR_AGENT_STATUS_DIR` naming this dispatch's own status directory — and the
+kernel fixes that environment at `exec`, so no process can shed it.
 
-- the **live tree** under the recorded root (`process_activity`), which covers
-  everything parentage can still reach; and
-- the **environment stamp**, which covers what it cannot. `processes_stamped_for`
-  asks the same question `orphaned_dispatch_processes` asks of a finished
-  dispatch's leavings — which live processes carry `ORCHESTRATOR_AGENT_STATUS_DIR`
-  naming this dispatch's own status directory — so a descendant whose parent
-  already exited, adopted by init and unreachable by any walk, is still claimed.
-  The kernel fixes that environment at `exec` and a process cannot shed it.
+- **The stamped processes** are always signalled: they *are* the evidence. This is
+  what reaches a descendant whose parent has already exited, adopted by init and
+  unreachable by any walk.
+- **Parentage** (`process_activity`, and `terminate_tree` behind it) is walked from
+  the recorded root only once that root is itself stamped. An unproven number may
+  name a recycled stranger, and walking it would select that stranger's whole
+  subtree. Nothing is given up by the gate: a live descendant of a proven root is
+  this dispatch's even if it carries no stamp of its own.
+- **The process group** (`terminate_process_group`) is signalled only while a stamped
+  process is still *in* that group. That is stronger than it looks — the kernel keeps
+  a pid allocated for as long as any live process names it as a group, so a group
+  still holding one of ours cannot have had its id handed to anybody else.
 
-The lock-based `_dispatch_is_finished` proof the sweep applies is deliberately not
-consulted here: a live dispatch asking about its own tree holds that lock and would
-find every one of its own processes retained by it. Naming its own directory is the
-stronger claim of the two — the sweep has to infer which dispatch a stamp belongs
-to, while this caller created the path it matches.
+`externally_waited` is not a substitute for any of this: it governs which pids this
+process may `waitpid` for, not which ones get signalled.
+
+Proving nothing signals nothing, which is the right failure direction — the cost is a
+leaked process the next scratch sweep reaps on this same stamp, against interrupting
+work that was never ours. The lock-based `_dispatch_is_finished` proof the sweep
+applies is deliberately not consulted here: a live dispatch asking about its own tree
+holds that lock and would find every one of its own processes retained by it. Naming
+its own directory is the stronger claim of the two — the sweep has to infer which
+dispatch a stamp belongs to, while this caller created the path it matches.
 
 ## Dispatching playbook
 

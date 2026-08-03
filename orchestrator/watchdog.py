@@ -90,6 +90,20 @@ def process_group_is_running(group_id: ProcessId) -> bool:
     )
 
 
+def process_group_of(pid: ProcessId) -> ProcessId | None:
+    """The process group ``pid`` currently belongs to, or ``None`` if it is gone.
+
+    Read rather than assumed, because a group id is only a signalling handle while
+    something is still in it: a caller holding a recorded pid can ask whether a
+    process it has *proven* is its own still sits in that group, which is what makes
+    the number safe to `killpg`. The kernel keeps a pid allocated for as long as any
+    live process names it as a group, so a group that still holds one of ours cannot
+    have had its id recycled underneath us.
+    """
+    record = _stat(pid)
+    return record.process_group if record is not None else None
+
+
 def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
     """Every live process below ``root_pid``, by parentage alone.
 

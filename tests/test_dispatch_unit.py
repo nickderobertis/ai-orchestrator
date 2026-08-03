@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -22,6 +24,7 @@ from orchestrator.dispatch import (
     REPORTED_BLOCKER_OUTCOME,
     REPORTED_BLOCKER_PREFIX,
     DispatchError,
+    OwnedTree,
     Report,
     _agent_run_context,
     _build_report,
@@ -32,6 +35,7 @@ from orchestrator.dispatch import (
     agent_failure_reason,
     dispatch,
     incomplete_detail,
+    owned_tree,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -40,6 +44,7 @@ from orchestrator.harnesses import JUDGE_HARNESS_ENV
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
+from orchestrator.scratch import AGENT_STATUS_DIR_ENV
 from orchestrator.watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     TERMINATION_GRACE,
@@ -561,6 +566,124 @@ print(json.dumps({"schema_version": 4, "transcript": {"messages": []}, "stopped_
 """
 
 
+def _record_teardown_handles(
+    monkeypatch: pytest.MonkeyPatch,
+    signalled: set[ProcessId],
+    already_exited: list[ProcessId],
+) -> dict[str, list[ProcessId]]:
+    """Watch all three teardown handles without replacing any of them.
+
+    Every wrapper here calls straight through, so the real signals go out and the real
+    processes die; what is added is a reading taken at the instant teardown decided on
+    each handle. That decision is where both defects live — a pid list assembled from
+    history, and a numeric root walked or grouped without proof — and neither is
+    observable from outside the process it happens in.
+    """
+    terminate = terminate_processes
+    tree = terminate_tree
+    group = terminate_process_group
+    handles: dict[str, list[ProcessId]] = {"terminate_tree": [], "terminate_process_group": []}
+
+    def observing_terminate(
+        pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
+    ) -> None:
+        signalled.update(pids)
+        already_exited.extend(pid for pid in pids if not is_running(pid))
+        terminate(pids, externally_waited=externally_waited)
+
+    def observing_tree(root_pid: ProcessId) -> None:
+        handles["terminate_tree"].append(root_pid)
+        tree(root_pid)
+
+    def observing_group(
+        group_id: ProcessId, *, externally_waited: tuple[ProcessId, ...] = ()
+    ) -> None:
+        handles["terminate_process_group"].append(group_id)
+        group(group_id, externally_waited=externally_waited)
+
+    monkeypatch.setattr(dispatch_module, "terminate_processes", observing_terminate)
+    monkeypatch.setattr(dispatch_module, "terminate_tree", observing_tree)
+    monkeypatch.setattr(dispatch_module, "terminate_process_group", observing_group)
+    return handles
+
+
+#: A process that leads a session of its own and spawns one child, exactly as a
+#: dispatch root does — so a recorded number pointing at it looks, to parentage and to
+#: `killpg`, like the real thing. Its child is started *without* the stamp, so a walk
+#: from a proven root is the only thing that can reach it.
+_SESSION_TREE = (
+    "import os, subprocess, sys, time\n"
+    "unstamped = {k: v for k, v in os.environ.items() if k != sys.argv[2]}\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],"
+    " env=unstamped)\n"
+    "open(sys.argv[1], 'w').write(str(child.pid))\n"
+    "time.sleep(30)\n"
+)
+
+
+def _session_tree(marker: Path, *, stamp: Path | None) -> subprocess.Popen[bytes]:
+    """Start one such tree, stamped for ``stamp`` or carrying no stamp at all."""
+    environment = {key: value for key, value in os.environ.items() if key != AGENT_STATUS_DIR_ENV}
+    if stamp is not None:
+        environment[AGENT_STATUS_DIR_ENV] = os.fspath(stamp)
+    return subprocess.Popen(
+        [sys.executable, "-c", _SESSION_TREE, os.fspath(marker), AGENT_STATUS_DIR_ENV],
+        env=environment,
+        start_new_session=True,
+    )
+
+
+def test_a_recorded_root_that_is_no_longer_ours_is_never_walked_grouped_or_signalled(
+    tmp_path,
+) -> None:
+    """The recycled root: the number is live, and none of it is this dispatch's.
+
+    A pid is a slot. This host's counter completes a full cycle in under a day and a
+    dispatch holds its recorded root for the length of a turn, so by teardown that
+    number can name a stranger — one that leads a process group of its own and has
+    children, which is exactly what the recorded number was for. Walking it, grouping
+    it, or signalling it would then reach into somebody else's work; on this host that
+    somebody is another planner's supervision.
+
+    Asked directly rather than through a dispatch, because a dispatch cannot be made
+    to recycle its own root on demand — and asked *before* anything is signalled, so a
+    wrong answer is only ever recorded here. The stranger and its child are left
+    running afterwards as the assertion that nothing acted on them.
+    """
+    status_dir = tmp_path / "agent"
+    status_dir.mkdir()
+    stranger_marker = tmp_path / "stranger-child"
+    mine_marker = tmp_path / "my-child"
+    stranger = _session_tree(stranger_marker, stamp=None)
+    mine = _session_tree(mine_marker, stamp=status_dir)
+    try:
+        stranger_child = ProcessId(await_recorded_pid(stranger_marker))
+        my_child = ProcessId(await_recorded_pid(mine_marker))
+
+        unowned = owned_tree(status_dir, ProcessId(stranger.pid))
+        owned = owned_tree(status_dir, ProcessId(mine.pid))
+
+        # The stranger's number proves nothing, so neither handle built on it is
+        # admitted and nothing under it is selected. What is left is the stamped half,
+        # which belongs to this status directory however the root reads.
+        assert unowned.root is None
+        assert unowned.group is None
+        assert unowned.processes == (ProcessId(mine.pid),)
+        assert is_running(ProcessId(stranger.pid)) and is_running(stranger_child)
+        # The same shape, one stamp different: every handle is admitted, and the walk
+        # from the proven root reaches a child that carries no stamp of its own.
+        assert owned.root == mine.pid
+        assert owned.group == mine.pid
+        assert set(owned.processes) == {ProcessId(mine.pid), my_child}
+        # A dispatch whose root is gone keeps the stamped half and withholds the rest.
+        assert owned_tree(status_dir, None) == OwnedTree((ProcessId(mine.pid),), None, None)
+    finally:
+        for started in (stranger, mine):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(os.getpgid(started.pid), signal.SIGKILL)
+            started.wait(timeout=10)
+
+
 def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -590,16 +713,7 @@ def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
 
     signalled: set[ProcessId] = set()
     already_exited: list[ProcessId] = []
-    terminate = terminate_processes
-
-    def observing_terminate(
-        pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
-    ) -> None:
-        signalled.update(pids)
-        already_exited.extend(pid for pid in pids if not is_running(pid))
-        terminate(pids, externally_waited=externally_waited)
-
-    monkeypatch.setattr(dispatch_module, "terminate_processes", observing_terminate)
+    handles = _record_teardown_handles(monkeypatch, signalled, already_exited)
 
     report = run_onejudge(
         {},
@@ -619,6 +733,59 @@ def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
     assert signalled.isdisjoint(churned)
     assert orphan in signalled
     assert await_reaped(orphan)
+    # The root exited with the report, so its recorded number proves nothing about
+    # what holds it now and neither handle built on it may be used. The orphan was
+    # still reaped, by its stamp — which is the point: withholding the two numeric
+    # handles costs this teardown nothing it could prove it owned.
+    assert handles == {"terminate_tree": [], "terminate_process_group": []}
+
+
+def test_a_stalled_dispatch_still_walks_and_groups_the_root_it_can_prove(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the gate: a proven root is still walked, grouped and killed.
+
+    A proof that never admits anything would close the stale-pid hazard by giving up
+    the cleanup, so this pins the case the two numeric handles exist for — a wedged
+    tree whose root is alive and stamped. The root is recorded by the fake onejudge
+    itself (`$$` survives the watchdog's `execvpe`, so it is the recorded root), which
+    is what lets this assert the handles were used on *that* identity rather than on
+    whatever teardown felt like.
+    """
+    root_record = tmp_path / "root"
+    child_record = tmp_path / "child"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        f'printf "%s\\n" "$$" >"{root_record}"\n'
+        "sleep 30 &\n"
+        f'printf "%s\\n" "$!" >"{child_record}"\n'
+        "sleep 30\n",
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    signalled: set[ProcessId] = set()
+    already_exited: list[ProcessId] = []
+    handles = _record_teardown_handles(monkeypatch, signalled, already_exited)
+
+    with pytest.raises(DispatchError, match="dispatch stalled"):
+        run_onejudge(
+            {},
+            "task",
+            onejudge_bin=os.fspath(onejudge),
+            cwd=tmp_path,
+            env={"ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "0.3"},
+        )
+
+    root = ProcessId(int(root_record.read_text(encoding="utf-8")))
+    child = ProcessId(int(child_record.read_text(encoding="utf-8")))
+
+    assert handles == {"terminate_tree": [root], "terminate_process_group": [root]}
+    assert {root, child} <= signalled
+    assert already_exited == []
+    assert await_reaped(root)
+    assert await_reaped(child)
 
 
 def test_run_onejudge_retries_transient_empty_watchdog_pid(

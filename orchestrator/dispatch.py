@@ -85,6 +85,7 @@ from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
     process_activity,
+    process_group_of,
     terminate_process_group,
     terminate_processes,
     terminate_tree,
@@ -285,7 +286,7 @@ class WatchdogSignal:
     """A typed liveness decision and the process identity needed for cleanup.
 
     Deliberately no list of processes: the tree is re-derived where it is torn down,
-    from what is alive then. See `run_onejudge`'s ``owned_processes``.
+    from what is alive then. See `owned_tree`.
     """
 
     reason: WatchdogReason
@@ -293,6 +294,62 @@ class WatchdogSignal:
     #: What was observable at the point of death. Four different failures reach
     #: this watchdog as one dead tree, so the reason has to be carried explicitly.
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class OwnedTree:
+    """The three handles a teardown may signal through, each one proven or withheld.
+
+    A recorded pid is a number, and this host recycles the whole range in under a
+    day while one dispatch holds its recorded numbers for the length of a turn. So
+    every handle here is either backed by present-tense evidence that it still names
+    this dispatch, or it is ``None`` and nothing is signalled through it.
+    """
+
+    #: Live processes proven to be this dispatch's, and the only ones signalled.
+    processes: tuple[ProcessId, ...]
+    #: The root, when parentage may be walked from it; ``None`` when it may not.
+    root: ProcessId | None
+    #: The process group, when it may be signalled; ``None`` when it may not.
+    group: ProcessId | None
+
+
+def owned_tree(status_dir: Path, root_pid: ProcessId | None) -> OwnedTree:
+    """What a dispatch can prove, at this instant, is still its own to terminate.
+
+    The evidence is the environment stamp: `processes_stamped_for` returns the live
+    processes whose ``ORCHESTRATOR_AGENT_STATUS_DIR`` names this dispatch's own
+    status directory, which the kernel fixed at ``exec`` and no process can shed.
+    Each of the three handles is then admitted only on that evidence:
+
+    * **Parentage** — walked from ``root_pid`` only once the root *itself* is
+      stamped. Otherwise the recorded number may name a recycled, unrelated process,
+      and walking it would select that stranger's whole subtree. A live descendant of
+      a proven root is this dispatch's even if it has shed the stamp, so nothing the
+      old walk reached is given up.
+    * **The process group** — admitted only while a stamped process is still *in* it.
+      That is stronger than it looks: the kernel keeps a pid allocated for as long as
+      any live process names it as a group, so a group still holding one of ours
+      cannot have had its id handed to anybody else.
+    * **The stamped processes themselves** — always, since they are the evidence.
+      This is what reaches a descendant whose parent has already exited, which init
+      has adopted and no walk from any root can find.
+
+    Proving nothing therefore signals nothing, which is the right failure direction:
+    the cost is a leaked process the next scratch sweep reaps on this same stamp,
+    against interrupting work that was never ours.
+    """
+    stamped = frozenset(processes_stamped_for(status_dir) or ())
+    owned = set(stamped)
+    root = root_pid if root_pid is not None and root_pid in stamped else None
+    if root is not None:
+        owned.update(process_activity(root).pids)
+    group = (
+        root_pid
+        if root_pid is not None and any(process_group_of(pid) == root_pid for pid in stamped)
+        else None
+    )
+    return OwnedTree(tuple(sorted(owned)), root, group)
 
 
 class OneJudgeProvenance(TypedDict):
@@ -751,28 +808,27 @@ def run_onejudge(
                 )
             )
 
-            def owned_processes(root_pid: ProcessId | None) -> tuple[ProcessId, ...]:
-                """Every process this dispatch owns *now*, proven rather than remembered.
+            def tear_down(root_pid: ProcessId | None) -> None:
+                """Terminate every handle `owned_tree` can prove, and only those.
 
                 Teardown used to signal a union of every pid ever sampled during the
                 dispatch — every `bunx nx`, every xdist worker, every git child — most
-                of which had exited by the time it ran. This host's pid counter wraps
-                in under a day and a turn can run for half an hour, so a remembered pid
-                is not an identity: it is a slot that something unrelated may already
-                have been given, and signalling it is how a planner's own work gets
-                interrupted by somebody else's cleanup.
-
-                So the set is derived where it is used, from two proofs that are both
-                about the present. The live tree under ``root_pid`` covers everything
-                parentage can still reach; the environment stamp
-                (`processes_stamped_for`) covers what it cannot — a descendant whose
-                parent already exited, which init has adopted and no walk can find.
-                The kernel fixes that environment at ``exec`` and a process cannot shed
-                it, so it names this dispatch's own status directory and nothing else's.
+                of which had exited by the time it ran, and it walked, grouped and
+                killed from the recorded root number whether or not that number still
+                named this dispatch. Both readings are re-derived here instead, from
+                one snapshot of the evidence taken before anything is signalled: the
+                proofs must not be recomputed after the first `SIGTERM` has begun
+                emptying the very tree they read.
                 """
-                owned = set(process_activity(root_pid).pids) if root_pid is not None else set()
-                owned.update(processes_stamped_for(agent_status_dir) or ())
-                return tuple(sorted(owned))
+                owned = owned_tree(agent_status_dir, root_pid)
+                terminate_processes(
+                    owned.processes,
+                    externally_waited=(root_pid,) if root_pid is not None else (),
+                )
+                if owned.group is not None:
+                    terminate_process_group(owned.group, externally_waited=(owned.group,))
+                if owned.root is not None:
+                    terminate_tree(owned.root)
 
             async def watch_liveness() -> WatchdogSignal | None:
                 pid_wait_started = time.monotonic()
@@ -926,21 +982,10 @@ def run_onejudge(
                 settled_pid = signal.root_pid if signal is not None else None
                 if settled_pid is None and pid_file.exists():
                     settled_pid = _read_watchdog_pid(pid_file)
-                if settled_pid is not None:
-                    terminate_processes(
-                        owned_processes(settled_pid), externally_waited=(settled_pid,)
-                    )
-                if pid_file.exists():
-                    completed_pid = _read_watchdog_pid(pid_file)
-                    terminate_process_group(completed_pid, externally_waited=(completed_pid,))
-                    terminate_tree(completed_pid)
+                tear_down(settled_pid)
                 return await run
             if watcher in done and (signal := await watcher):
-                terminate_processes(
-                    owned_processes(signal.root_pid), externally_waited=(signal.root_pid,)
-                )
-                terminate_process_group(signal.root_pid, externally_waited=(signal.root_pid,))
-                terminate_tree(signal.root_pid)
+                tear_down(signal.root_pid)
                 run.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
@@ -973,15 +1018,7 @@ def run_onejudge(
             run.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await run
-            cancelled_root = _read_watchdog_pid(pid_file) if pid_file.exists() else None
-            terminate_processes(
-                owned_processes(cancelled_root),
-                externally_waited=(cancelled_root,) if cancelled_root is not None else (),
-            )
-            if cancelled_root is not None:
-                cancelled_pid = cancelled_root
-                terminate_process_group(cancelled_pid, externally_waited=(cancelled_pid,))
-                terminate_tree(cancelled_pid)
+            tear_down(_read_watchdog_pid(pid_file) if pid_file.exists() else None)
             return None
 
     try:

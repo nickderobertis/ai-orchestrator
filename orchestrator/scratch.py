@@ -416,8 +416,11 @@ def _self_and_ancestors(root: Path) -> frozenset[ProcessId]:
     return frozenset(chain)
 
 
-def _stamped_environments() -> list[tuple[ProcessId, bytes]] | None:
+def _readable_process_environments() -> list[tuple[ProcessId, bytes]] | None:
     """Every live process this user can read, with the environment fixed at its ``exec``.
+
+    Unfiltered on purpose: each caller below decides what a stamp has to say for it,
+    so this returns the whole readable population and claims nothing about it.
 
     The one ``/proc`` walk behind both ownership questions below, so neither can drift
     from the other on what it excludes: this process and its ancestors are never
@@ -462,9 +465,9 @@ def orphaned_dispatch_processes(scratch_root: Path) -> tuple[ProcessId, ...] | N
     directory is ownership evidence, and the same directory's ownership lock is what
     says whether the dispatch behind it is over.
 
-    ``None`` means the question could not be asked; see `_stamped_environments`.
+    ``None`` means the question could not be asked; see `_readable_process_environments`.
     """
-    candidates = _stamped_environments()
+    candidates = _readable_process_environments()
     if candidates is None:
         return None
     finished: dict[Path, bool] = {}
@@ -497,9 +500,9 @@ def processes_stamped_for(status_dir: Path) -> tuple[ProcessId, ...] | None:
     of the two — the sweep has to infer which dispatch a stamp belongs to, while this
     caller created the path it is matching.
 
-    ``None`` means the question could not be asked; see `_stamped_environments`.
+    ``None`` means the question could not be asked; see `_readable_process_environments`.
     """
-    candidates = _stamped_environments()
+    candidates = _readable_process_environments()
     if candidates is None:  # pragma: no cover - a procfs that cannot show this process
         return None
     stamp = AGENT_STATUS_DIR_ENV.encode("utf-8") + b"=" + os.fspath(status_dir).encode("utf-8")
