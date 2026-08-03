@@ -186,7 +186,10 @@ def test_fold_brackets_recorded_work_and_leaves_a_running_node_open() -> None:
     # Verification carries the preserved gate log by path, never its contents.
     assert verification["label"] == "branch push feature/api"
     assert verification["status"] == "ok"
-    assert verification["reference"] == {"kind": "gate_log", "value": "/runs/demo/gate.log"}
+    assert verification["reference"] == {
+        "kind": "gate_log",
+        "value": "/runs/demo/gate.log",
+    }
     assert verification["parent_id"] == node_span["id"]
 
     # Publication has no recorded start, so the PR that opened it starts the span, and

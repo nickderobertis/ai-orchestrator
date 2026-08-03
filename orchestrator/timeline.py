@@ -23,8 +23,8 @@ Three properties make the result usable rather than merely complete:
   bounded by the graph rather than by contention.
 * **References, never bodies.** A transcript, a gate log, and a worker report are
   each larger than this whole payload. Every item points at its heavy content by
-  conversation id, recorded artifact path, or PR url, so a consumer fetches only
-  what it opens.
+  conversation id, opaque artifact id, or PR url, so a consumer fetches only what
+  it opens.
 
 The timeline is derived, never authoritative: nothing reads it to make a decision.
 """
@@ -54,6 +54,7 @@ from .read_model import (
     InvalidRunId,
     ProjectionFailed,
     RunNotFound,
+    _artifact_id,
     contained_run_dir,
 )
 from .runs import RunId, validate_run_id
@@ -159,6 +160,16 @@ class TimelineReference(TypedDict):
     value: str
 
 
+class VerificationDetail(TypedDict, total=False):
+    """Validated, bounded detail exposed for one verification span."""
+
+    ok: bool
+    output_tail: str
+    artifact_id: str
+    # Internal until `run_timeline` replaces it with the opaque artifact id.
+    log_path: str
+
+
 class TimelineEvent(TypedDict):
     """One instant recorded inside a span."""
 
@@ -199,6 +210,7 @@ class TimelineSpan(TypedDict):
     agent_role: NotRequired[str]
     transport_role: NotRequired[str]
     reference: NotRequired[TimelineReference]
+    detail: NotRequired[VerificationDetail]
 
 
 class RunTimeline(TypedDict):
@@ -263,6 +275,18 @@ def _event_reference(detail: Detail) -> TimelineReference | None:
     if (reference := _reference("gate_log", detail.get("log_path"))) is not None:
         return reference
     return _artifact_reference(detail)
+
+
+def _verification_detail(detail: Detail) -> VerificationDetail:
+    """Select and validate only verification fields in the public contract."""
+    result: VerificationDetail = {}
+    if isinstance(ok := detail.get("ok"), bool):
+        result["ok"] = ok
+    if isinstance(output := detail.get("output_tail"), str):
+        result["output_tail"] = output
+    if isinstance(path := detail.get("log_path"), str) and path:
+        result["log_path"] = path
+    return result
 
 
 def _status(detail: Detail) -> str | None:
@@ -380,6 +404,7 @@ class _Assembly:
         ended_at: str,
         status: str | None = None,
         reference: TimelineReference | None = None,
+        detail: VerificationDetail | None = None,
     ) -> str | None:
         """Close the span open at ``key`` and return its id; ``None`` if none is open.
 
@@ -396,6 +421,8 @@ class _Assembly:
             span["status"] = status
         if reference is not None:
             span["reference"] = reference
+        if detail is not None:
+            span["detail"] = detail.copy()
         return span_id
 
     def add_event(self, span_id: str, event: TimelineEvent) -> None:
@@ -561,7 +588,11 @@ class _Fold:
                 )
             case "verification-finished":
                 self._close_scoped(
-                    event, at, kind="verification", reference=_event_reference(detail)
+                    event,
+                    at,
+                    kind="verification",
+                    reference=_event_reference(detail),
+                    detail=_verification_detail(detail),
                 )
             case "pr-drafting-started":
                 self._open_scoped(event, index, at, kind="pr-drafting", label="pr drafting")
@@ -620,6 +651,7 @@ class _Fold:
         kind: TimelineSpanKind,
         status: str | None = None,
         reference: TimelineReference | None = None,
+        detail: VerificationDetail | None = None,
     ) -> None:
         key = _scoped_key(event, kind)
         self._leave(
@@ -629,6 +661,7 @@ class _Fold:
                 ended_at=at,
                 status=status or _status(event.detail) or "finished",
                 reference=reference,
+                detail=detail,
             ),
         )
 
@@ -969,11 +1002,31 @@ def run_timeline(
         events = read_strict_events(run_dir / JOURNAL_NAME, validated)
     except ProjectionError as exc:
         raise ProjectionFailed(str(exc)) from exc
+    spans = assemble(events, _conversations(validated, oneharness_bin), load_snapshot(run_dir))
+    by_path: dict[str, str] = {}
+    for event in events:
+        result = event.detail.get("result")
+        artifacts = result.get("artifacts") if isinstance(result, Mapping) else None
+        if isinstance(artifacts, Mapping):
+            for kind in _ARTIFACT_KINDS:
+                path = artifacts.get(kind)
+                if isinstance(path, str) and path:
+                    by_path[path] = _artifact_id(kind, path)
+    for span in spans:
+        candidates: list[TimelineSpan | TimelineEvent] = [span, *span["events"]]
+        for item in candidates:
+            reference = item.get("reference")
+            if reference and reference["kind"] in _ARTIFACT_KINDS:
+                path = reference["value"]
+                reference["value"] = by_path.get(path, _artifact_id(reference["kind"], path))
+        detail = span.get("detail")
+        if detail is not None:
+            log_path = detail.pop("log_path", None)
+            if isinstance(log_path, str):
+                detail["artifact_id"] = by_path.get(log_path, _artifact_id("gate_log", log_path))
     return {
         "api_version": API_VERSION,
         "observed_at": (now or datetime.now(UTC)).isoformat(),
         "run_id": validated,
-        "spans": assemble(
-            events, _conversations(validated, oneharness_bin), load_snapshot(run_dir)
-        ),
+        "spans": spans,
     }

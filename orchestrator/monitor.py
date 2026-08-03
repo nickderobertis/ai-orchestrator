@@ -356,7 +356,8 @@ def load_snapshot(run_dir: Path) -> DetailSnapshot:
         raw = load_mapping(path)
     except (ConfigError, OSError):
         return DetailSnapshot()
-    if raw.get("version") != SNAPSHOT_VERSION:
+    # v3 adds only the optional per-check URL; v2 remains readable.
+    if raw.get("version") not in {2, SNAPSHOT_VERSION}:
         return DetailSnapshot()
     return DetailSnapshot(
         commits=_detail_map(raw.get("commits"), CommitDetail.from_value),

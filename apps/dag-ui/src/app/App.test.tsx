@@ -1,3 +1,4 @@
+import { type NodeDetail, parseRunDetail } from "@ai-orchestrator/dag-model";
 import {
   cleanup,
   fireEvent,
@@ -265,11 +266,11 @@ describe("DAG application", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: /just gate/ }),
     );
-    expect(await within(detail()).findByText("Gate attestation")).toBeVisible();
-    expect(within(detail()).getByText("comparison_base")).toBeInTheDocument();
     expect(
-      within(detail()).getByText("round-01/foundation/gate.log"),
-    ).toBeInTheDocument();
+      await within(detail()).findByText("Verification record"),
+    ).toBeVisible();
+    expect(within(detail()).getByText("Full log")).toBeInTheDocument();
+    expect(within(detail()).queryByText(/round-01\/foundation/)).toBeNull();
 
     await userEvent.click(railRow(/local\/example/));
     expect(
@@ -340,15 +341,12 @@ describe("DAG application", () => {
       await screen.findByRole("button", { name: /branch push/ }),
     );
     expect(
-      await within(detail()).findByText(
-        "This verification recorded no gate attestation.",
-      ),
+      await within(detail()).findByText("No readable log was recorded."),
     ).toBeInTheDocument();
-    expect(within(detail()).getByText("No log was recorded.")).toBeVisible();
 
     await userEvent.click(railRow(/publication/));
     expect(
-      await within(detail()).findByText("No pull request was recorded."),
+      await within(detail()).findByText("No publication was recorded."),
     ).toBeInTheDocument();
     expect(
       within(detail()).getByText("No checks were observed on this node."),
@@ -549,7 +547,9 @@ describe("DAG application", () => {
       await screen.findByText("Users can inspect transcripts"),
     ).toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "Dependencies, PR and gate" }),
+      screen.getByRole("button", {
+        name: "Dependencies, publication and verification",
+      }),
     );
     expect(await screen.findByText("foundation")).toBeInTheDocument();
   });
@@ -559,9 +559,11 @@ describe("DAG application", () => {
     const { client } = telemetryHarness();
     const view = render(<App client={client} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
+      await screen.findByRole("button", {
+        name: "Dependencies, publication and verification",
+      }),
     );
-    const link = await screen.findByRole("link", { name: RegExp(PR_URL) });
+    const [link] = await screen.findAllByRole("link", { name: /Pull request/ });
     expect(link).toHaveAttribute("href", PR_URL);
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
@@ -570,13 +572,94 @@ describe("DAG application", () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     render(<App client={client} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
+      await screen.findByRole("button", {
+        name: "Dependencies, publication and verification",
+      }),
     );
     expect(
-      screen.getByText("Pull request").nextElementSibling,
+      screen.getByText("Publication").nextElementSibling,
     ).toHaveTextContent("Not recorded");
     expect(screen.queryByRole("link", { name: RegExp(PR_URL) })).toBeNull();
   });
+
+  test.each<{
+    name: string;
+    publication: NonNullable<NodeDetail["publication"]>;
+    expectedLinks: readonly string[];
+    absentLinks: readonly string[];
+  }>([
+    {
+      name: "local direct-merge",
+      publication: {
+        branch: "feature/local",
+        base_branch: "main",
+        merged: true,
+        commit: "abc12345",
+        commit_url: "https://github.com/example/repo/commit/abc12345",
+      },
+      expectedLinks: ["Commit abc12345"],
+      absentLinks: ["Pull request"],
+    },
+    {
+      name: "remote PR unmerged",
+      publication: {
+        pr_url: PR_URL,
+        branch: "feature/remote",
+        branch_url: "https://github.com/example/repo/tree/feature/remote",
+        base_branch: "main",
+        merged: false,
+      },
+      expectedLinks: ["Pull request", "feature/remote"],
+      absentLinks: ["Commit"],
+    },
+    {
+      name: "remote PR merged",
+      publication: {
+        pr_url: PR_URL,
+        branch: "feature/remote",
+        branch_url: "https://github.com/example/repo/tree/feature/remote",
+        base_branch: "main",
+        merged: true,
+        commit: "def67890",
+        commit_url: "https://github.com/example/repo/commit/def67890",
+      },
+      expectedLinks: ["Pull request", "Commit def67890"],
+      absentLinks: ["feature/remote"],
+    },
+  ])(
+    "renders the $name publication fixture",
+    async ({ publication, expectedLinks, absentLinks }) => {
+      window.history.replaceState(
+        null,
+        "",
+        `/?run=${LIVE_RUN}&node=foundation`,
+      );
+      const served = parseRunDetail(runDetail());
+      const foundation = served.node_details.foundation;
+      if (foundation === undefined)
+        throw new Error("fixture has no foundation detail");
+      foundation.publication = publication;
+      const { client } = telemetryHarness((url) =>
+        isRunDetail(url) ? Response.json(served) : defaultResponder(url),
+      );
+      render(<App client={client} />);
+      await userEvent.click(
+        await screen.findByRole("button", {
+          name: "Dependencies, publication and verification",
+        }),
+      );
+      for (const name of expectedLinks) {
+        expect(
+          screen.getAllByRole("link", { name: new RegExp(name) }).length,
+        ).toBeGreaterThan(0);
+      }
+      for (const name of absentLinks) {
+        expect(
+          screen.queryByRole("link", { name: new RegExp(name) }),
+        ).toBeNull();
+      }
+    },
+  );
 
   test("reads a recorded moment as words rather than as the stamp it was written as", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);

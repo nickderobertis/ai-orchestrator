@@ -2,6 +2,7 @@ import { DAG_NODE_STATES } from "@ai-orchestrator/dag-layout";
 import type {
   Failure,
   GraphResultItem,
+  NodeDetail,
   NodeStatus,
   NodeTelemetry,
   PlanTask,
@@ -30,6 +31,7 @@ export interface NodeView {
   readonly task: PlanTask;
   readonly telemetry?: NodeTelemetry;
   readonly result?: GraphResultItem;
+  readonly detail?: NodeDetail;
   /** How this node failed, when it did; served typed rather than parsed out of prose. */
   readonly failure?: Failure;
   /**
@@ -48,7 +50,7 @@ export function nodeViews(detail: RunDetail): NodeView[] {
   const round = latestRound(detail);
   if (!round) return [];
   const telemetry = new Map(detail.run.nodes.map((node) => [node.node, node]));
-  return round.plan.tasks.map((task) => {
+  return round.plan.tasks.flatMap((task) => {
     const rawKind = readString(task, "kind");
     const kind =
       rawKind === "human"
@@ -62,20 +64,28 @@ export function nodeViews(detail: RunDetail): NodeView[] {
     // record there is — the one that carries what blocked them.
     const result =
       round.node_results[task.id] ?? round.result?.results?.[task.id];
-    return {
-      id: task.id,
-      label: readString(task, "name") ?? task.id,
-      status: round.node_status[task.id]!,
-      kind,
-      task,
-      telemetry: telemetry.get(task.id),
-      result,
-      failure: telemetry.get(task.id)?.failure,
-      blockers: [
-        ...(round.node_gated_by[task.id] ?? []),
-        ...(result?.blocked_by ?? []),
-      ],
-    };
+    const status = round.node_status[task.id];
+    // The server excludes a run it cannot fold into authoritative node statuses.
+    // Stay defensive if an older server violates that invariant: omit the unusable
+    // task instead of inventing a state for it or taking down the remaining graph.
+    if (status === undefined) return [];
+    return [
+      {
+        id: task.id,
+        label: readString(task, "name") ?? task.id,
+        status,
+        kind,
+        task,
+        telemetry: telemetry.get(task.id),
+        result,
+        detail: detail.node_details[task.id],
+        failure: telemetry.get(task.id)?.failure,
+        blockers: [
+          ...(round.node_gated_by[task.id] ?? []),
+          ...(result?.blocked_by ?? []),
+        ],
+      },
+    ];
   });
 }
 

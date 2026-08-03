@@ -25,23 +25,26 @@ authoritative journal is `ProjectionFailed`; a malformed launch record degrades 
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
+from urllib.parse import quote, urlparse
 
 from .config import ConfigError
 from .conversations import DagConversation, run_conversations
 from .history import HistoryError, SessionScan
-from .journal import JOURNAL_NAME
+from .journal import JOURNAL_NAME, Event
 from .launch import (
     LAUNCH_RECORD_NAME,
     read_launch_link,
     read_provenance,
     resolve_launch_session,
 )
-from .monitor import load_snapshot, snapshot_path
+from .monitor import DetailSnapshot, load_snapshot, snapshot_path
 from .projection import (
     NodeState,
     NodeStatus,
@@ -94,6 +97,10 @@ class ConversationNotFound(ReadError):
     run has no transcript by that id" — the second is routine while a session is
     still being written, the first means the view should stop polling.
     """
+
+
+class ArtifactNotFound(ReadError):
+    """The run records no readable artifact with the requested opaque id (404)."""
 
 
 class ProjectionFailed(ReadError):
@@ -188,8 +195,18 @@ class RunDetail(TypedDict):
     rounds: list[Round]
     conversations: list[DagConversation]
     details: dict[str, Any]
+    node_details: dict[str, dict[str, Any]]
     logs: NotRequired[dict[str, str]]
     launch: NotRequired[RunLaunch]
+
+
+class ArtifactContent(TypedDict):
+    """The bounded public representation of one recorded artifact."""
+
+    id: str
+    kind: str
+    content: str
+    truncated: bool
 
 
 def _now(now: datetime | None) -> str:
@@ -269,10 +286,244 @@ _LOG_TAIL_BYTES = 64_000
 #: Logs that live *beneath the run directory* and are therefore safe to serve under
 #: the configured root. A node's own merge-path gate log is reached through the node
 #: result's artifact pointers instead, not through this run-level map.
-_RUN_LOGS = {
-    "orchestrator_stderr": ("orchestrator", "stderr.log"),
-    "gate_log": ("orchestrator", "gate.log"),
-}
+_RUN_LOGS = {"orchestrator_stderr": ("orchestrator", "stderr.log")}
+
+_ARTIFACT_KINDS = ("gate_log", "worker_report", "oneharness_session")
+
+
+def _artifact_id(kind: str, path: str) -> str:
+    """Stable opaque address for a recorded artifact, without exposing its path."""
+    digest = hashlib.sha256(f"{kind}\0{path}".encode()).hexdigest()[:24]
+    return f"{kind}-{digest}"
+
+
+def _artifact_paths(rounds: list[Round]) -> dict[str, tuple[str, str]]:
+    found: dict[str, tuple[str, str]] = {}
+    for round_record in rounds:
+        results = [*round_record["node_results"].values()]
+        graph_results = (round_record["result"] or {}).get("results", {})
+        if isinstance(graph_results, dict):
+            results.extend(graph_results.values())
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            steps = result.get("steps")
+            records = [
+                result,
+                *(steps if isinstance(steps, list) else []),
+            ]
+            for record in records:
+                artifacts = record.get("artifacts") if isinstance(record, dict) else None
+                if not isinstance(artifacts, dict):
+                    continue
+                for kind in _ARTIFACT_KINDS:
+                    path = artifacts.get(kind)
+                    if isinstance(path, str) and path:
+                        found[_artifact_id(kind, path)] = (kind, path)
+    return found
+
+
+def _replace_served_artifacts_with_ids(rounds: list[Round]) -> None:
+    """Expose supported result artifacts only, addressed by opaque API id."""
+    for round_record in rounds:
+        results = [*round_record["node_results"].values()]
+        graph_results = (round_record["result"] or {}).get("results", {})
+        if isinstance(graph_results, dict):
+            results.extend(graph_results.values())
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            steps = result.get("steps")
+            for record in [result, *(steps if isinstance(steps, list) else [])]:
+                artifacts = record.get("artifacts") if isinstance(record, dict) else None
+                if isinstance(artifacts, dict):
+                    record["artifacts"] = {
+                        kind: _artifact_id(kind, path)
+                        for kind, path in artifacts.items()
+                        if kind in _ARTIFACT_KINDS and isinstance(path, str) and path
+                    }
+
+
+def read_artifact(runs_dir: Path, run_id: str, artifact_id: str) -> ArtifactContent:
+    """Read one recorded node artifact through an opaque, contained, 64KB tail."""
+    try:
+        validated = validate_run_id(run_id)
+    except ConfigError as exc:
+        raise InvalidRunId(str(exc)) from exc
+    run_dir = contained_run_dir(runs_dir, validated)
+    if run_dir is None:
+        raise RunNotFound(f"no recorded run {validated!r}")
+    rounds = _rounds(run_dir, validated)
+    recorded = _artifact_paths(rounds).get(artifact_id)
+    if recorded is None:
+        raise ArtifactNotFound("no recorded artifact with that id")
+    kind, raw_path = recorded
+    candidate = Path(raw_path)
+    try:
+        root = run_dir.resolve(strict=True)
+        path = (candidate if candidate.is_absolute() else run_dir / candidate).resolve(strict=True)
+    except OSError as exc:
+        raise ArtifactNotFound("recorded artifact is unavailable") from exc
+    if not path.is_file() or not path.is_relative_to(root):
+        raise ArtifactNotFound("recorded artifact is unavailable")
+    tail = _tail(root, tuple(path.relative_to(root).parts), _LOG_TAIL_BYTES)
+    if tail is None:
+        raise ArtifactNotFound("recorded artifact is unavailable")
+    return {
+        "id": artifact_id,
+        "kind": kind,
+        "content": tail,
+        "truncated": path.stat().st_size > _LOG_TAIL_BYTES,
+    }
+
+
+def _github_root(identity: object) -> str | None:
+    if not isinstance(identity, str) or not identity:
+        return None
+    if identity.startswith("https://github.com/"):
+        parsed = urlparse(identity.removesuffix(".git").rstrip("/"))
+        parts = parsed.path.strip("/").split("/")
+        if parsed.netloc == "github.com" and len(parts) == 2 and all(parts):
+            return f"https://github.com/{quote(parts[0])}/{quote(parts[1])}"
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", identity):
+        owner, repo = identity.split("/", 1)
+        return f"https://github.com/{quote(owner)}/{quote(repo)}"
+    return None
+
+
+def _public_url(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
+def _branch(value: object) -> str:
+    if not isinstance(value, str) or not value or not value.isprintable():
+        return ""
+    return "" if value.startswith("/") or ".." in value.split("/") else value
+
+
+def _commit(value: object) -> str:
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", value) else ""
+
+
+def _detail_hook_present(detail: Mapping[str, object], key: str) -> bool:
+    value = detail.get(key)
+    if not isinstance(value, str):
+        raise ProjectionFailed(f"journal {key} must be a string path")
+    return bool(value)
+
+
+def _detail_bool(detail: Mapping[str, object], key: str) -> bool:
+    value = detail.get(key)
+    if not isinstance(value, bool):
+        raise ProjectionFailed(f"journal {key} must be boolean")
+    return value
+
+
+def _detail_text(detail: Mapping[str, object], key: str, *, fallback: str = "") -> str:
+    value = detail.get(key)
+    if value is None:
+        return fallback
+    if not isinstance(value, str):
+        raise ProjectionFailed(f"journal {key} must be a string")
+    return value
+
+
+def _detail_text_list(detail: Mapping[str, object], key: str) -> list[str]:
+    value = detail.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ProjectionFailed(f"journal {key} must be a string list")
+    return value
+
+
+def _node_details(
+    events: list[Event], rounds: list[Round], snapshot: DetailSnapshot
+) -> dict[str, dict[str, Any]]:
+    """Typed verification and publication facts, keyed by node id."""
+    # `Any` is confined to this open, heterogeneous API assembly: verification and
+    # publication have disjoint optional fields and are validated at each source
+    # boundary before being placed in the contract dictionary.
+    records: dict[str, dict[str, Any]] = {}
+    artifact_ids = _artifact_paths(rounds)
+    path_ids = {path: artifact_id for artifact_id, (_kind, path) in artifact_ids.items()}
+    for event in events:
+        if event.node is None:
+            continue
+        node = str(event.node)
+        detail = event.detail
+        record = records.setdefault(node, {"verification": {"records": []}})
+        verification = record["verification"]
+        match event.kind:
+            case "merge-gate-coverage":
+                verification.update(
+                    {
+                        "pre_push_hook": _detail_hook_present(detail, "pre_push_hook"),
+                        "required_checks": _detail_text_list(detail, "required_checks"),
+                        "required_checks_status": _detail_text(
+                            detail, "required_checks_status", fallback="unknown"
+                        ),
+                        "expected_gate": _detail_text_list(detail, "expected_gate"),
+                    }
+                )
+            case "verification-finished":
+                item: dict[str, Any] = {
+                    "ok": _detail_bool(detail, "ok"),
+                    "output_tail": _detail_text(detail, "output_tail"),
+                }
+                log_path = detail.get("log_path")
+                if isinstance(log_path, str) and log_path in path_ids:
+                    item["artifact_id"] = path_ids[log_path]
+                verification["records"].append(item)
+
+    for round_record in rounds:
+        results = dict(round_record["node_results"])
+        graph_results = (round_record["result"] or {}).get("results", {})
+        if isinstance(graph_results, dict):
+            results = {**graph_results, **results}
+        for node, result in results.items():
+            if not isinstance(result, dict):
+                continue
+            record = records.setdefault(node, {"verification": {"records": []}})
+            pr_url = _public_url(result.get("pr"))
+            pr = next(
+                (value for value in snapshot.prs.values() if value.get("url") == pr_url), None
+            )
+            checks = pr.get("checks", []) if isinstance(pr, dict) else []
+            record["verification"]["checks"] = checks
+            branch = _branch(result.get("branch"))
+            base = _branch(result.get("base_branch"))
+            identity = (pr or {}).get("identity") if isinstance(pr, dict) else result.get("repo")
+            root = _github_root(identity)
+            merged = (
+                bool((pr or {}).get("merged"))
+                if isinstance(pr, dict)
+                else result.get("outcome") == "merged"
+            )
+            publication: dict[str, Any] = {"merged": merged}
+            if pr_url:
+                publication["pr_url"] = pr_url
+            if branch:
+                publication["branch"] = branch
+                if root:
+                    publication["branch_url"] = f"{root}/tree/{quote(branch, safe='/')}"
+            if base:
+                publication["base_branch"] = base
+            commit = _commit(result.get("commit"))
+            if not commit:
+                matching = [
+                    value
+                    for value in snapshot.commits.values()
+                    if value.get("branch") in {branch, base} and isinstance(value.get("sha"), str)
+                ]
+                commit = _commit(matching[-1].get("sha")) if matching else ""
+            if publication["merged"] and commit:
+                publication["commit"] = commit
+                if root:
+                    publication["commit_url"] = f"{root}/commit/{commit}"
+            record["publication"] = publication
+    return records
 
 
 def _tail(run_dir: Path, parts: tuple[str, ...], max_bytes: int) -> str | None:
@@ -470,18 +721,27 @@ def run_detail(
         raise ProjectionFailed(str(exc)) from exc
     if telemetry is None:  # pragma: no cover - latest_round already proved a round exists
         raise RunNotFound(f"no recorded run {validated!r}")
+    rounds = _rounds(run_dir, validated)
+    snapshot = load_snapshot(run_dir)
+    try:
+        events = read_strict_events(run_dir / JOURNAL_NAME, validated)
+    except ProjectionError as exc:
+        raise ProjectionFailed(str(exc)) from exc
+    node_details = _node_details(events, rounds, snapshot)
+    _replace_served_artifacts_with_ids(rounds)
     detail: RunDetail = {
         "api_version": API_VERSION,
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
         "observed_at": _now(now),
         "run": telemetry.record(),
-        "rounds": _rounds(run_dir, validated),
+        "rounds": rounds,
         "conversations": (
             run_conversations(validated, oneharness_bin=oneharness_bin)
             if include_conversations
             else []
         ),
-        "details": load_snapshot(run_dir).to_record(),
+        "details": snapshot.to_record(),
+        "node_details": node_details,
     }
     if logs := read_logs(run_dir):
         detail["logs"] = logs

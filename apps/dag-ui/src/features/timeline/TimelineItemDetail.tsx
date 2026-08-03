@@ -18,7 +18,7 @@ import {
   TurnCard,
 } from "@oneharness/ui";
 import { ExternalLink, ListTree, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Timestamp } from "../../lib/Timestamp";
 import { formatDuration } from "../../lib/time";
 import type { NodeView } from "../runs/run-model";
@@ -30,8 +30,8 @@ import { useConversation } from "./useConversation";
  * The one timeline item the operator opened, expanded across the working area.
  *
  * Each recorded kind is shown as what it is: a conversation turn through the design
- * system's own `TurnCard`, a verification as the gate attestation it recorded and the
- * log it points at, a publication as the PR and the checks that were observed on it,
+ * system's own `TurnCard`, a verification as its result, bounded output, and readable
+ * log, a publication as the PR and the checks that were observed on it,
  * and anything else as the typed record the timeline served.
  */
 export function TimelineItemDetail({
@@ -82,6 +82,8 @@ export function TimelineItemDetail({
               </header>
               <Separator className="my-4" />
               <Body
+                client={client}
+                runId={runId}
                 node={node}
                 reference={reference}
                 row={row}
@@ -99,12 +101,16 @@ type Transcript = ReturnType<typeof useConversation>;
 type Turn = DagConversation["conversation"]["turns"][number];
 
 function Body({
+  client,
+  runId,
   row,
   node,
   reference,
   transcript,
 }: {
   readonly row: TimelineRow;
+  readonly client: TelemetryClient;
+  readonly runId: string;
   readonly node: NodeView;
   readonly reference?: TimelineReference;
   readonly transcript: Transcript;
@@ -112,7 +118,14 @@ function Body({
   if (reference?.kind === "conversation")
     return <Session row={row} transcript={transcript} />;
   if (isVerification(row))
-    return <Verification node={node} reference={reference} row={row} />;
+    return (
+      <Verification
+        client={client}
+        runId={runId}
+        reference={reference}
+        row={row}
+      />
+    );
   if (isPublication(row, reference))
     return <Publication node={node} reference={reference} />;
   return <Recorded reference={reference} row={row} />;
@@ -198,33 +211,86 @@ function Session({
 
 function Verification({
   row,
-  node,
+  client,
+  runId,
   reference,
 }: {
   readonly row: TimelineRow;
-  readonly node: NodeView;
+  readonly client: TelemetryClient;
+  readonly runId: string;
   readonly reference?: TimelineReference;
 }) {
-  const attestation = node.telemetry?.gate_attestation;
+  const detail = row.rowKind === "span" ? row.span.detail : undefined;
+  const artifactId =
+    detail?.artifact_id ??
+    (reference?.kind === "gate_log" ? reference.value : undefined);
+  const [content, setContent] = useState<string | null>();
+  const [artifactFailed, setArtifactFailed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setContent(undefined);
+    setArtifactFailed(false);
+    setExpanded(false);
+    if (artifactId === undefined || /[/?#]/u.test(artifactId)) return;
+    void client
+      .getArtifact(runId, artifactId)
+      .then((artifact) => {
+        if (active) setContent(artifact.content);
+      })
+      .catch(() => {
+        if (active) {
+          setArtifactFailed(true);
+          setContent(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [artifactId, client, runId]);
   return (
     <>
-      <h3 className="detail-heading">Gate attestation</h3>
-      {attestation === undefined ? (
-        <p className="detail-note">
-          This verification recorded no gate attestation.
-        </p>
-      ) : (
-        <dl className="facts">
-          {Object.entries(attestation).map(([key, value]) => (
-            <div key={key}>
-              <dt>{key}</dt>
-              <dd>{formatValue(value)}</dd>
-            </div>
-          ))}
-        </dl>
+      <h3 className="detail-heading">Verification record</h3>
+      <dl className="facts">
+        <div>
+          <dt>Result</dt>
+          <dd>
+            {detail?.ok === undefined
+              ? (row.status ?? "in progress")
+              : detail.ok
+                ? "passed"
+                : "failed"}
+          </dd>
+        </div>
+      </dl>
+      {detail?.output_tail && (
+        <>
+          <h3 className="detail-heading">Output</h3>
+          <pre>{detail.output_tail}</pre>
+        </>
       )}
-      <h3 className="detail-heading">Log</h3>
-      <Reference fallback="No log was recorded." reference={reference} />
+      <h3 className="detail-heading">Full log</h3>
+      {artifactId === undefined ? (
+        <p className="detail-note">No readable log was recorded.</p>
+      ) : content === undefined ? (
+        <p className="detail-note">Loading log…</p>
+      ) : artifactFailed || content === null ? (
+        <p className="detail-note">No readable log was recorded.</p>
+      ) : (
+        <>
+          <pre>{expanded ? content : content.slice(-4000)}</pre>
+          {content.length > 4000 && (
+            <Button
+              onClick={() => setExpanded(!expanded)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {expanded ? "Collapse log" : "Expand log"}
+            </Button>
+          )}
+        </>
+      )}
       <p className="detail-note">Verification {row.status ?? "in progress"}.</p>
     </>
   );
@@ -237,23 +303,55 @@ function Publication({
   readonly node: NodeView;
   readonly reference?: TimelineReference;
 }) {
-  const checks = observedChecks(node);
+  const checks = node.detail?.verification.checks ?? [];
+  const publication = node.detail?.publication;
   return (
     <>
-      <h3 className="detail-heading">Pull request</h3>
-      <Reference
-        fallback="No pull request was recorded."
-        reference={reference}
-      />
+      <h3 className="detail-heading">Publication</h3>
+      {publication?.pr_url && (
+        <Reference
+          fallback=""
+          reference={{ kind: "pr", value: publication.pr_url }}
+        />
+      )}
+      {publication?.merged && publication.commit_url ? (
+        <p className="detail-link">
+          <a href={publication.commit_url} rel="noreferrer" target="_blank">
+            Merged commit {publication.commit?.slice(0, 8)}{" "}
+            <ExternalLink size={13} />
+          </a>
+        </p>
+      ) : publication?.branch_url ? (
+        <p className="detail-link">
+          <a href={publication.branch_url} rel="noreferrer" target="_blank">
+            Branch {publication.branch} <ExternalLink size={13} />
+          </a>
+        </p>
+      ) : (
+        !publication?.pr_url && (
+          <Reference
+            fallback="No publication was recorded."
+            reference={reference}
+          />
+        )
+      )}
       <h3 className="detail-heading">Observed checks</h3>
       {checks.length === 0 ? (
         <p className="detail-note">No checks were observed on this node.</p>
       ) : (
         <dl className="facts">
-          {checks.map(([name, state]) => (
-            <div key={name}>
-              <dt>{name}</dt>
-              <dd>{state}</dd>
+          {checks.map((check) => (
+            <div key={check.name}>
+              <dt>{check.name}</dt>
+              <dd>
+                {check.url ? (
+                  <a href={check.url} rel="noreferrer" target="_blank">
+                    {check.state}
+                  </a>
+                ) : (
+                  check.state
+                )}
+              </dd>
             </div>
           ))}
         </dl>
@@ -381,17 +479,6 @@ function isPublication(
   );
 }
 
-/** The checks the node's own result recorded, as observed name/state pairs. */
-function observedChecks(node: NodeView): [string, string][] {
-  const checks = node.result?.telemetry?.checks;
-  if (typeof checks !== "object" || checks === null || Array.isArray(checks))
-    return [];
-  return Object.entries(checks).map(([name, state]) => [
-    name,
-    formatValue(state),
-  ]);
-}
-
 type Attribution = DagConversation["attribution"];
 type AgentRole = Attribution["agentRole"];
 
@@ -418,11 +505,4 @@ function roleLabel(
 ): string {
   // Nested lint work is grouped under its worker, so its transport is what names it.
   return transportRole === "llmlint" ? "Lint" : ROLE_LABELS[agentRole];
-}
-
-function formatValue(value: unknown): string {
-  if (value === undefined || value === null || value === "")
-    return "Not recorded";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value);
 }

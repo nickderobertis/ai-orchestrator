@@ -143,13 +143,15 @@ const itemDetail = (page: Page): Locator =>
 test("tracks every node state and kind of a live run", async ({ page }) => {
   await openObservatory(page);
 
-  await expect(page.locator(".dag-node.state-done")).toContainText(
-    "foundation",
-  );
+  await expect(
+    page.locator(".dag-node.state-done").filter({ hasText: "foundation" }),
+  ).toContainText("foundation");
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
-  await expect(page.locator(".dag-node.state-failed")).toContainText("publish");
+  await expect(
+    page.locator(".dag-node.state-failed").filter({ hasText: "publish" }),
+  ).toContainText("publish");
   await expect(page.locator(".dag-node.state-waiting")).toContainText(
     "approval",
   );
@@ -180,9 +182,9 @@ test("tracks every node state and kind of a live run", async ({ page }) => {
   await expect(page.locator(".dag-node.state-skipped")).toContainText(
     "blocked by publish",
   );
-  await expect(page.locator(".dag-node.state-failed")).toContainText(
-    "Deploy failed",
-  );
+  await expect(
+    page.locator(".dag-node.state-failed").filter({ hasText: "publish" }),
+  ).toContainText("Deploy failed");
   await expect(page.locator(".dag-node.state-cancelled")).toContainText(
     "cancelled cooperatively",
   );
@@ -445,14 +447,25 @@ test("shows a verification and a publication as the records they are", async ({
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=foundation`);
 
-  // The verification carries the gate attestation the node recorded, and points at
-  // the preserved log rather than inlining it.
+  // The verification carries this push's own verdict and bounded output, then loads
+  // the preserved log through its opaque artifact id without exposing a host path.
   await rail(page)
     .getByRole("button", { name: /branch push/ })
     .click();
-  await expect(itemDetail(page)).toContainText("Gate attestation");
-  await expect(itemDetail(page)).toContainText("comparison_base");
-  await expect(itemDetail(page)).toContainText("round-01/foundation/gate.log");
+  await expect(itemDetail(page)).toContainText("Verification record");
+  await expect(itemDetail(page)).toContainText("pre-push verification passed");
+  await expect(itemDetail(page)).toContainText("full verification output");
+  await expect(itemDetail(page)).not.toContainText(
+    "oldest verification output",
+  );
+  await itemDetail(page).getByRole("button", { name: "Expand log" }).click();
+  await expect(itemDetail(page)).toContainText("oldest verification output");
+  await expect(
+    itemDetail(page).getByRole("button", { name: "Collapse log" }),
+  ).toBeVisible();
+  await expect(itemDetail(page)).not.toContainText(
+    "round-01/foundation/gate.log",
+  );
 
   // The publication carries the PR and the checks that were observed on it.
   await rail(page)
@@ -465,6 +478,15 @@ test("shows a verification and a publication as the records they are", async ({
   ).toBeVisible();
   await expect(itemDetail(page)).toContainText("Observed checks");
   await expect(itemDetail(page)).toContainText("unit");
+  await expect(
+    itemDetail(page).getByRole("link", { name: "SUCCESS" }),
+  ).toHaveAttribute("href", "https://github.com/example/repo/actions/runs/12");
+  await expect(
+    itemDetail(page).getByRole("link", { name: /Merged commit/ }),
+  ).toHaveAttribute(
+    "href",
+    `https://github.com/example/repo/commit/${"4".repeat(40)}`,
+  );
 
   // Its own recorded events sit inside it, in the order they happened.
   const checks = rail(page).getByRole("button", {
@@ -475,7 +497,80 @@ test("shows a verification and a publication as the records they are", async ({
   await expect(itemDetail(page)).toContainText("Observed checks");
 });
 
-test("keeps a node's task, criteria, dependencies and gate reachable", async ({
+test("states when a verification artifact is unavailable", async ({ page }) => {
+  await openObservatory(page, `/?run=${runs().live}&node=missing-artifact`);
+  const factsDisclosure = page.getByRole("button", {
+    name: "Dependencies, publication and verification",
+  });
+  await factsDisclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.locator(".facts").filter({ hasText: "Verification coverage" }),
+  ).toContainText("PublicationNot recorded");
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.url().includes("/artifacts/") && response.status() === 404,
+  );
+  await rail(page)
+    .getByRole("button", { name: /missing verification log/ })
+    .click();
+  await rejected;
+  await expect(itemDetail(page)).toContainText("No readable log was recorded.");
+});
+
+for (const scenario of [
+  {
+    name: "local direct merge",
+    node: "local-direct",
+    expected: [`https://github.com/example/repo/commit/${"a".repeat(40)}`],
+    absent: [
+      fixture().foundation_pr,
+      "https://github.com/example/repo/tree/feature/local",
+    ],
+  },
+  {
+    name: "remote PR unmerged",
+    node: "remote-open",
+    expected: [
+      "https://github.com/example/repo/pull/13",
+      "https://github.com/example/repo/tree/feature/remote-open",
+    ],
+    absent: [`https://github.com/example/repo/commit/${"b".repeat(40)}`],
+  },
+  {
+    name: "remote PR merged",
+    node: "remote-merged",
+    expected: [
+      "https://github.com/example/repo/pull/14",
+      `https://github.com/example/repo/commit/${"c".repeat(40)}`,
+    ],
+    absent: ["https://github.com/example/repo/tree/feature/remote-merged"],
+  },
+] satisfies readonly {
+  name: string;
+  node: string;
+  expected: readonly string[];
+  absent: readonly string[];
+}[]) {
+  test(`renders the ${scenario.name} publication from the API`, async ({
+    page,
+  }) => {
+    await openObservatory(page, `/?run=${runs().live}&node=${scenario.node}`);
+    await rail(page)
+      .getByRole("button", { name: /example\/repo/ })
+      .click();
+    for (const href of scenario.expected) {
+      await expect(itemDetail(page).locator(`a[href="${href}"]`)).toBeVisible();
+    }
+    for (const href of scenario.absent) {
+      await expect(itemDetail(page).locator(`a[href="${href}"]`)).toHaveCount(
+        0,
+      );
+    }
+  });
+}
+
+test("keeps a node's task, criteria, dependencies and verification reachable", async ({
   page,
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
@@ -485,13 +580,21 @@ test("keeps a node's task, criteria, dependencies and gate reachable", async ({
   await page.getByRole("button", { name: "Completion criteria" }).click();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
 
-  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
+  await page
+    .getByRole("button", {
+      name: "Dependencies, publication and verification",
+    })
+    .click();
   await expect(page.locator(".facts")).toContainText("Not recorded");
   await expect(page.locator(".facts").getByRole("link")).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=foundation`);
-  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
-  const pr = page.locator(".facts").getByRole("link");
+  await page
+    .getByRole("button", {
+      name: "Dependencies, publication and verification",
+    })
+    .click();
+  const pr = page.locator(".facts").getByRole("link", { name: "Pull request" });
   await expect(pr).toHaveAttribute("href", fixture().foundation_pr);
   await expect(pr).toHaveAttribute("target", "_blank");
   await expect(pr).toHaveAttribute("rel", "noreferrer");
@@ -583,7 +686,11 @@ test("renders a graph whose node depends on another run", async ({ page }) => {
 
   // The prerequisite itself stays visible where the node's dependencies are listed.
   await page.locator(".dag-node.state-running").click();
-  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
+  await page
+    .getByRole("button", {
+      name: "Dependencies, publication and verification",
+    })
+    .click();
   await expect(page.locator(".facts")).toContainText(
     `run:${runs().history}#archive`,
   );
@@ -1054,7 +1161,7 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     { state: "failed", token: "--destructive" },
     { state: "running", token: "--info" },
   ]) {
-    await page.locator(`.dag-node.state-${state}`).click();
+    await page.locator(`.dag-node.state-${state}`).first().click();
     await expect(stateBadge).toHaveText(state);
     await expect(stateBadge).toHaveCSS("color", await tokenColor(page, token));
     await page.keyboard.press("Escape");
@@ -1114,7 +1221,7 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     { state: "blocked", token: "--warning-surface" },
     { state: "skipped", token: "--warning-surface" },
   ]) {
-    await expect(page.locator(`.dag-node.state-${state}`)).toHaveCSS(
+    await expect(page.locator(`.dag-node.state-${state}`).first()).toHaveCSS(
       "background-color",
       await tokenColor(page, token),
     );

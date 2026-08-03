@@ -93,6 +93,33 @@ _LIVE_TASKS: list[dict[str, Any]] = [
         "repo": "local/example",
     },
     {
+        "id": "local-direct",
+        "persona": "engineer",
+        "task": "Publish directly from a local-first workflow",
+        "done_when": "The commit reaches main",
+        "repo": "example/repo",
+    },
+    {
+        "id": "remote-open",
+        "persona": "engineer",
+        "task": "Publish an open pull request",
+        "done_when": "The branch and PR are visible",
+        "repo": "example/repo",
+    },
+    {
+        "id": "remote-merged",
+        "persona": "engineer",
+        "task": "Merge a remote pull request",
+        "done_when": "The merged commit is visible",
+        "repo": "example/repo",
+    },
+    {
+        "id": "missing-artifact",
+        "persona": "engineer",
+        "task": "Inspect a no-longer-readable verification artifact",
+        "done_when": "The missing artifact is stated honestly",
+    },
+    {
         "id": "dashboard",
         "persona": "engineer",
         # The second dependency is a cross-DAG reference: a prerequisite in another
@@ -216,7 +243,10 @@ def _record_launch(run_dir: Path, run_id: str, launch_id: str, session_id: str) 
 
 def _write_live_run(runs_dir: Path) -> None:
     """One in-flight run covering every renderable node state."""
+    from orchestrator.detail_snapshot import CommitDetail, PrDetail
+    from orchestrator.github import Check, PRStatus
     from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.monitor import DetailSnapshot, save_snapshot
     from orchestrator.runs import prepare_round
 
     run_dir = runs_dir / LIVE_RUN
@@ -230,6 +260,16 @@ def _write_live_run(runs_dir: Path) -> None:
     journal.append("round-started", detail={"plan": plan})
 
     journal.append("node-started", node=NodeId("foundation"), detail={"persona": "engineer"})
+    journal.append(
+        "merge-gate-coverage",
+        node=NodeId("foundation"),
+        detail={
+            "pre_push_hook": ".githooks/pre-push",
+            "required_checks": ["unit"],
+            "required_checks_status": "configured",
+            "expected_gate": ["pre-push", "unit"],
+        },
+    )
     # Bracketed exactly as the merge path records it, so the timeline folds one
     # verification span rather than a finish whose start it never saw.
     journal.append(
@@ -246,6 +286,7 @@ def _write_live_run(runs_dir: Path) -> None:
             "command": ["just", "gate"],
             "log_path": "round-01/foundation/gate.log",
             "reused": False,
+            "output_tail": "pre-push verification passed",
             "gate_attestation": {
                 "commit": "1" * 40,
                 "comparison_remote": "origin",
@@ -284,12 +325,151 @@ def _write_live_run(runs_dir: Path) -> None:
                 "task": "Prepare shared contracts",
                 "repo": "local/example",
                 "branch": "ai-orchestrator/engineer/foundation",
+                "base_branch": "main",
+                "commit": "4" * 40,
                 "pr": FOUNDATION_PR,
                 "detail": "Gate completed successfully",
                 "telemetry": {"checks": {"unit": "passed"}},
                 "artifacts": {"gate_log": "round-01/foundation/gate.log"},
             },
         },
+    )
+    publication_results = {
+        "local-direct": {
+            "status": "done",
+            "ok": True,
+            "repo": "example/repo",
+            "branch": "feature/local",
+            "base_branch": "main",
+            "commit": "a" * 40,
+            "outcome": "merged",
+        },
+        "remote-open": {
+            "status": "done",
+            "ok": True,
+            "repo": "example/repo",
+            "branch": "feature/remote-open",
+            "base_branch": "main",
+            "commit": "b" * 40,
+            "pr": "https://github.com/example/repo/pull/13",
+        },
+        "remote-merged": {
+            "status": "done",
+            "ok": True,
+            "repo": "example/repo",
+            "branch": "feature/remote-merged",
+            "base_branch": "main",
+            "commit": "c" * 40,
+            "pr": "https://github.com/example/repo/pull/14",
+        },
+    }
+    for node_name, result in publication_results.items():
+        publication_node = NodeId(node_name)
+        journal.append("node-started", node=publication_node, detail={"persona": "engineer"})
+        if pr := result.get("pr"):
+            journal.append(
+                "pr-created",
+                node=publication_node,
+                detail={"pr": pr, "repo": "example/repo"},
+            )
+        if node_name != "remote-open":
+            journal.append(
+                "publication-finished",
+                node=publication_node,
+                detail={"pr": result.get("pr", ""), "repo": "example/repo", "status": "merged"},
+            )
+        journal.append(
+            "node-settled",
+            node=publication_node,
+            detail={"status": "done", "result": result},
+        )
+    missing_node = NodeId("missing-artifact")
+    missing_path = "round-01/missing-artifact/gate.log"
+    journal.append("node-started", node=missing_node, detail={"persona": "engineer"})
+    journal.append(
+        "verification-started", node=missing_node, detail={"label": "missing verification log"}
+    )
+    journal.append(
+        "verification-finished",
+        node=missing_node,
+        detail={"ok": False, "output_tail": "log was removed", "log_path": missing_path},
+    )
+    journal.append(
+        "node-settled",
+        node=missing_node,
+        detail={
+            "status": "failed",
+            "result": {
+                "status": "failed",
+                "ok": False,
+                "repo": "/tmp/local-repository",
+                "branch": "feature/missing-log",
+                "artifacts": {"gate_log": missing_path},
+            },
+        },
+    )
+    gate_log = run_dir / "round-01" / "foundation" / "gate.log"
+    gate_log.parent.mkdir(parents=True, exist_ok=True)
+    gate_log.write_text(
+        "oldest verification output\n"
+        + "full verification output\n" * 220
+        + "pre-push verification passed\n",
+        encoding="utf-8",
+    )
+    save_snapshot(
+        run_dir,
+        DetailSnapshot(
+            commits={
+                "git:example/repo@merged": CommitDetail(
+                    sha="4" * 40,
+                    branch="main",
+                    base="main",
+                    identity="example/repo",
+                ).to_record(),
+                "git:example/repo@local": CommitDetail(
+                    sha="a" * 40,
+                    branch="main",
+                    base="main",
+                    identity="example/repo",
+                ).to_record(),
+                "git:example/repo@remote": CommitDetail(
+                    sha="c" * 40,
+                    branch="main",
+                    base="main",
+                    identity="example/repo",
+                ).to_record(),
+            },
+            prs={
+                "pr:example/repo#12": PrDetail.from_status(
+                    PRStatus(
+                        number=12,
+                        state="MERGED",
+                        merged=True,
+                        merge_state_status="CLEAN",
+                        checks=(
+                            Check(
+                                "unit",
+                                "SUCCESS",
+                                True,
+                                "https://github.com/example/repo/actions/runs/12",
+                            ),
+                        ),
+                    ),
+                    url=FOUNDATION_PR,
+                    identity="example/repo",
+                ).to_record(),
+                "pr:example/repo#13": PrDetail.from_status(
+                    PRStatus(13, "OPEN", False, "CLEAN", ()),
+                    url="https://github.com/example/repo/pull/13",
+                    identity="example/repo",
+                ).to_record(),
+                "pr:example/repo#14": PrDetail.from_status(
+                    PRStatus(14, "MERGED", True, "CLEAN", ()),
+                    url="https://github.com/example/repo/pull/14",
+                    identity="example/repo",
+                ).to_record(),
+            },
+        ),
     )
     journal.append("node-started", node=NodeId("dashboard"), detail={"persona": "engineer"})
     journal.append("node-started", node=NodeId("publish"), detail={"persona": "engineer"})

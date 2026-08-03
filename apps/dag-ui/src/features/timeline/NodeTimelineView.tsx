@@ -71,6 +71,10 @@ export function NodeTimelineView({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onBack]);
+  const prUrl =
+    node.detail?.publication === undefined
+      ? (node.result?.pr ?? undefined)
+      : node.detail.publication.pr_url;
 
   return (
     <section aria-label={`Timeline for ${node.label}`} className="node-view">
@@ -93,10 +97,10 @@ export function NodeTimelineView({
             {node.kind} node · {node.telemetry?.turns ?? 0} turns ·{" "}
             {node.telemetry?.lint ?? 0} lint turns
           </span>
-          {typeof node.result?.pr === "string" && (
+          {prUrl !== undefined && (
             <a
               className="node-view-pr"
-              href={node.result.pr}
+              href={prUrl}
               rel="noreferrer"
               target="_blank"
             >
@@ -126,7 +130,9 @@ export function NodeTimelineView({
           </AccordionContent>
         </AccordionItem>
         <AccordionItem value="context">
-          <AccordionTrigger>Dependencies, PR and gate</AccordionTrigger>
+          <AccordionTrigger>
+            Dependencies, publication and verification
+          </AccordionTrigger>
           <AccordionContent>
             <dl className="facts">
               <div>
@@ -134,14 +140,45 @@ export function NodeTimelineView({
                 <dd>{node.task.deps?.join(", ") || "None"}</dd>
               </div>
               <div>
-                <dt>Pull request</dt>
+                <dt>Publication</dt>
                 <dd>
-                  <PullRequest pr={node.result?.pr} />
+                  <Publication node={node} />
                 </dd>
               </div>
               <div>
-                <dt>Gate result</dt>
-                <dd>{formatValue(node.telemetry?.gate_attestation)}</dd>
+                <dt>Verification coverage</dt>
+                <dd>
+                  Hook:{" "}
+                  {node.detail?.verification.pre_push_hook
+                    ? "present"
+                    : "not recorded"}
+                  {" · "}Required checks:{" "}
+                  {node.detail?.verification.required_checks?.join(", ") ||
+                    "none configured"}
+                </dd>
+              </div>
+              <div>
+                <dt>Observed checks</dt>
+                <dd>
+                  {(node.detail?.verification.checks ?? []).length === 0
+                    ? "No checks observed"
+                    : node.detail?.verification.checks?.map((check, index) => (
+                        <span key={check.name}>
+                          {index > 0 && " · "}
+                          {check.url ? (
+                            <a
+                              href={check.url}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              {check.name}: {check.state}
+                            </a>
+                          ) : (
+                            `${check.name}: ${check.state}`
+                          )}
+                        </span>
+                      ))}
+                </dd>
               </div>
               <div>
                 <dt>Outcome</dt>
@@ -193,12 +230,52 @@ export function NodeTimelineView({
   );
 }
 
-function PullRequest({ pr }: { readonly pr?: string | null }) {
-  if (typeof pr !== "string" || pr === "") return <>{formatValue(pr)}</>;
+function Publication({ node }: { readonly node: NodeView }) {
+  const publication = node.detail?.publication;
+  if (publication === undefined) {
+    return typeof node.result?.pr === "string" && node.result.pr ? (
+      <a
+        className="node-view-pr"
+        href={node.result.pr}
+        rel="noreferrer"
+        target="_blank"
+      >
+        Pull request <ExternalLink size={12} />
+      </a>
+    ) : (
+      <>Not recorded</>
+    );
+  }
+  const links = publication.merged
+    ? [
+        [publication.pr_url, "Pull request"],
+        [
+          publication.commit_url,
+          `Commit ${publication.commit?.slice(0, 8) ?? ""}`,
+        ],
+      ]
+    : [
+        [publication.pr_url, "Pull request"],
+        [publication.branch_url, publication.branch ?? "Branch"],
+      ];
+  const renderedLinks = links.filter(([url]) => url);
+  if (renderedLinks.length === 0) return <>Not recorded</>;
   return (
-    <a className="node-view-pr" href={pr} rel="noreferrer" target="_blank">
-      {pr} <ExternalLink size={12} />
-    </a>
+    <>
+      {renderedLinks.map(([url, label], index) => (
+        <span key={url}>
+          {index > 0 && " · "}
+          <a
+            className="node-view-pr"
+            href={url}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {label} <ExternalLink size={12} />
+          </a>
+        </span>
+      ))}
+    </>
   );
 }
 

@@ -2598,6 +2598,31 @@ def test_cli_github_adopts_only_exact_merged_head_via_all_state_lookup(
     ]
 
 
+def test_cli_github_rejects_malformed_check_link_from_real_cli_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' "
+        '\'{"number":17,"state":"OPEN","isDraft":false,'
+        '"mergeStateStatus":"CLEAN","statusCheckRollup":[{'
+        '"__typename":"CheckRun","name":"ci",'
+        '"status":"COMPLETED","conclusion":"SUCCESS",'
+        '"detailsUrl":"file:///tmp/check"}]}\'\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(GitHubError, match="invalid detailsUrl"):
+        CliGitHubBackend().status(
+            PullRequest("o/r", 17, "https://github.test/o/r/pull/17", "feature", "main")
+        )
+
+
 @pytest.mark.parametrize("existing_state", ["open", "merged", "stale-merged"])
 def test_remote_closeout_adopts_adoptable_pr_without_duplicate(
     tmp_path, bare_origin, existing_state

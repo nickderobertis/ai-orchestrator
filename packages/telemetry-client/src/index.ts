@@ -1,7 +1,9 @@
 import {
   API_V2_PATHS,
   API_V2_QUERY,
+  type ArtifactContent,
   apiErrorSchema,
+  artifactContentSchema,
   type DagConversation,
   dagConversationSchema,
   type RunDetail,
@@ -127,6 +129,18 @@ export class TelemetryClient {
     );
   }
 
+  async getArtifact(
+    runId: string,
+    artifactId: string,
+  ): Promise<ArtifactContent> {
+    requireOpaqueId(runId, "run ID");
+    requireOpaqueId(artifactId, "artifact ID");
+    return this.#request(
+      this.#url(API_V2_PATHS.artifact(runId, artifactId)),
+      artifactContentSchema.parse,
+    );
+  }
+
   subscribe(options: SubscribeOptions): TelemetrySubscription {
     if (options.runId !== undefined) requireOpaqueId(options.runId, "run ID");
     if (options.after !== undefined) requireOpaqueId(options.after, "cursor");
@@ -149,6 +163,8 @@ export class TelemetryClient {
     for (const eventName of sseEventNameSchema.options) {
       source.addEventListener(eventName, (rawEvent) => {
         try {
+          // DOM's EventListener callback erases the MessageEvent subtype even though
+          // EventSource listeners for named server events always receive one.
           const event = rawEvent as MessageEvent<string>;
           const decoded: unknown = JSON.parse(event.data);
           const data =

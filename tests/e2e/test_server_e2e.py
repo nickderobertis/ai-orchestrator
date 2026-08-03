@@ -56,7 +56,7 @@ from orchestrator.launch import (
     session_key,
     write_provenance,
 )
-from orchestrator.monitor import DetailSnapshot, save_snapshot
+from orchestrator.monitor import DetailSnapshot, save_snapshot, snapshot_path
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
 
@@ -424,7 +424,9 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
 
             # And so does a log the run appends outside the event stream.
             (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
-            (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
+            (run_dir / "orchestrator" / "stderr.log").write_text(
+                "orchestrator: active\n", encoding="utf-8"
+            )
             from_log = _read_frames(lines, until="run.changed")
             assert json.loads(from_log[-1]["data"])["run_id"] == "demo"
 
@@ -521,8 +523,15 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
             prs={"api": PrDetail(number=7, state="OPEN", url="https://x/pull/7").to_record()}
         ),
     )
+    # A corrupt external check link must degrade at the real persisted/HTTP boundary,
+    # including an unhashable value that once raised before validation ran.
+    raw_snapshot = json.loads(snapshot_path(run_dir).read_text(encoding="utf-8"))
+    raw_snapshot["version"] = 2
+    raw_snapshot["prs"]["api"]["checks"] = [
+        {"name": "ci", "state": "SUCCESS", "required": True, "url": ["invalid"]}
+    ]
+    snapshot_path(run_dir).write_text(json.dumps(raw_snapshot), encoding="utf-8")
     (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
-    (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
     # Larger than the served tail: a log is a scan aid, never an unbounded download.
     (run_dir / "orchestrator" / "stderr.log").write_text(
         "head-that-must-be-dropped\n" + "z" * 200_000, encoding="utf-8"
@@ -541,7 +550,8 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
 
         detail = client.get("/api/v2/runs/demo").json()
         assert detail["details"]["prs"]["api"]["number"] == 7
-        assert detail["logs"]["gate_log"] == "gate: passed\n"
+        assert detail["details"]["prs"]["api"]["checks"] == []
+        assert "gate_log" not in detail["logs"]
         tail = detail["logs"]["orchestrator_stderr"]
         assert len(tail.encode()) == 64_000  # bounded to the tail, not the whole file
         assert "head-that-must-be-dropped" not in tail  # and it is the *end* of the log
@@ -1394,7 +1404,10 @@ def _lifecycle_run(runs_dir: Path, run_id: str) -> Path:
             "status": "done",
             "result": {
                 "status": "done",
-                "artifacts": {"worker_report": "runs/demo/round-01/docs/report.json"},
+                "artifacts": {
+                    "worker_report": "runs/demo/round-01/docs/report.json",
+                    "oneharness_session": "runs/demo/round-01/docs/session.json",
+                },
                 # onejudge's own linkage for this dispatch. It names the judge
                 # session, whose history carries no `node` label — which is the
                 # ordinary shape of a real dispatch and is exactly what a node-label
@@ -1574,6 +1587,12 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
     run_dir = _lifecycle_run(runs, "demo")
     store = _lifecycle_history(tmp_path, "demo", datetime.now(UTC))
     monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    report = run_dir / "runs" / "demo" / "round-01" / "docs" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("x" * 70_000 + "worker report\n", encoding="utf-8")
+    outside = tmp_path / "outside-session.json"
+    outside.write_text("must not be served\n", encoding="utf-8")
+    (report.parent / "session.json").symlink_to(outside)
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
     before = _tree(runs)
 
@@ -1622,10 +1641,26 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         settled = nodes["docs"]
         assert settled["ended_at"] is not None
         assert settled["status"] == "done"
-        assert settled["reference"] == {
-            "kind": "worker_report",
-            "value": "runs/demo/round-01/docs/report.json",
-        }
+        assert settled["reference"]["kind"] == "worker_report"
+        assert settled["reference"]["value"].startswith("worker_report-")
+        artifact_id = settled["reference"]["value"]
+        artifact = client.get(f"/api/v2/runs/demo/artifacts/{artifact_id}")
+        assert artifact.status_code == 200
+        assert artifact.json()["content"].endswith("worker report\n")
+        assert len(artifact.json()["content"].encode()) <= 64 * 1024
+        assert artifact.json()["truncated"] is True
+        missing = client.get("/api/v2/runs/demo/artifacts/worker_report-not-recorded")
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "artifact_not_found"
+        served_detail = client.get(
+            "/api/v2/runs/demo", params={"include_conversations": "false"}
+        ).json()
+        session_id = served_detail["rounds"][0]["node_results"]["docs"]["artifacts"][
+            "oneharness_session"
+        ]
+        escaped = client.get(f"/api/v2/runs/demo/artifacts/{session_id}")
+        assert escaped.status_code == 404
+        assert escaped.json()["error"]["code"] == "artifact_not_found"
         drafting = by_kind["pr-drafting"][0]
         assert drafting["parent_id"] == settled["id"]
         # Drafting failure must never block publication, so it settles not-completed —
@@ -1655,6 +1690,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         assert dispatches["check-in-native"]["parent_id"] == by_kind["round"][0]["id"]
         turns = dispatches["worker-native"]["events"]
         assert [event["kind"] for event in turns] == ["conversation-turn"] * 2
+
         # A session whose recorded start cannot be placed in time is omitted rather
         # than given an invented one — every other transcript still reaches the view.
         assert set(dispatches) == {
@@ -1679,12 +1715,11 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
             "docs-lint": ("worker", "llmlint"),
         }
 
-        # Heavy content is addressed, never inlined — and each address resolves.
+        # Artifact content is addressed rather than inlined, while the deliberately
+        # bounded verification tail remains available on its own timeline record.
         verification = by_kind["verification"][0]
-        assert verification["reference"] == {
-            "kind": "gate_log",
-            "value": "runs/demo/round-01/api/gate.log",
-        }
+        assert verification["reference"]["kind"] == "gate_log"
+        assert verification["reference"]["value"].startswith("gate_log-")
         publication = next(span for span in by_kind["publication"] if span["node_id"] == "api")
         assert publication["reference"] == {"kind": "pr", "value": "https://x/pull/7"}
         # The publication has not closed, so it shows the state the monitor observed.
@@ -1695,7 +1730,8 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         ]
         rendered = json.dumps(timeline)
         assert "a transcript body that must never reach the timeline payload" not in rendered
-        assert "a secret token in the tail" not in rendered
+        assert "a secret token in the tail" in rendered
+        assert "runs/demo/round-01/api/gate.log" not in rendered
 
         # Ordering and normalization hold across the whole payload.
         assert [span["started_at"] for span in spans] == sorted(
@@ -1773,6 +1809,59 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
 
     # Serving the timeline is a read: the run directory it folded is byte-identical.
     assert _tree(runs) == before
+
+
+@pytest.mark.parametrize(
+    ("kind", "detail"),
+    [
+        (
+            "merge-gate-coverage",
+            {"pre_push_hook": False, "required_checks": [], "expected_gate": []},
+        ),
+        ("verification-finished", {"ok": "yes"}),
+        ("verification-finished", {"ok": True, "output_tail": 42}),
+        (
+            "merge-gate-coverage",
+            {
+                "pre_push_hook": ".githooks/pre-push",
+                "required_checks": [],
+                "required_checks_status": 42,
+                "expected_gate": [],
+            },
+        ),
+        (
+            "merge-gate-coverage",
+            {
+                "pre_push_hook": ".githooks/pre-push",
+                "required_checks": [7],
+                "expected_gate": [],
+            },
+        ),
+    ],
+)
+def test_malformed_verification_records_fail_at_the_http_projection_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    detail: dict[str, object],
+) -> None:
+    """Journal trust-boundary failures reach clients as the API's stable error envelope."""
+    runs = tmp_path / "runs"
+    run_id = "malformed-verification"
+    run_dir = _active_run(runs, run_id)
+    open_journal(run_dir, RunId(run_id), 1).append(kind, node=NodeId("api"), detail=detail)
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, run_id)))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        response = httpx.get(
+            f"{base}/api/v2/runs/{run_id}",
+            params={"include_conversations": "false"},
+            timeout=30,
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "projection_error"
 
 
 def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: Path) -> None:

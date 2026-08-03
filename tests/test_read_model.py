@@ -24,6 +24,7 @@ from orchestrator.read_model import (
     ProjectionFailed,
     RunNotFound,
     list_runs,
+    read_artifact,
     read_launch_id,
     read_logs,
     resolve_launch,
@@ -276,19 +277,96 @@ def test_read_logs_returns_bounded_tails_and_omits_missing(tmp_path: Path) -> No
     orchestrator_dir = run_dir / "orchestrator"
     orchestrator_dir.mkdir(exist_ok=True)
     (orchestrator_dir / "stderr.log").write_bytes(b"x" * 100_000 + b"TAIL")
-    (orchestrator_dir / "gate.log").write_text("", encoding="utf-8")  # empty log omitted
-
     assert set(read_logs(run_dir)) == {"orchestrator_stderr"}
-    (orchestrator_dir / "gate.log").write_text("gate ok\n", encoding="utf-8")
 
     logs = read_logs(run_dir)
-    assert set(logs) == {"orchestrator_stderr", "gate_log"}
+    assert set(logs) == {"orchestrator_stderr"}
     assert logs["orchestrator_stderr"].endswith("TAIL")
     assert len(logs["orchestrator_stderr"].encode("utf-8")) <= 64_000  # bounded tail
-    assert logs["gate_log"] == "gate ok\n"
+
+
+def test_node_artifact_is_opaque_bounded_and_verification_uses_pr_checks(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = _build_run(runs, "demo", settle=False)
+    relative = "round-01/api/gate.log"
+    log = run_dir / relative
+    log.parent.mkdir(parents=True)
+    log.write_bytes(b"x" * 70_000 + b"TAIL")
+    journal = open_journal(run_dir, RunId("demo"), 1)
+    journal.append(
+        "merge-gate-coverage",
+        node=NodeId("api"),
+        detail={
+            "pre_push_hook": ".githooks/pre-push",
+            "required_checks": ["ci"],
+            "required_checks_status": "configured",
+            "expected_gate": ["pre-push", "ci"],
+        },
+    )
+    journal.append("verification-started", node=NodeId("api"), detail={"label": "push"})
+    journal.append(
+        "verification-finished",
+        node=NodeId("api"),
+        detail={"ok": True, "output_tail": "push ok", "log_path": relative},
+    )
+    result = {
+        "status": "done",
+        "task": "ship",
+        "repo": "acme/app",
+        "branch": "feature/api",
+        "base_branch": "main",
+        "pr": "https://github.com/acme/app/pull/3",
+        "artifacts": {"gate_log": relative},
+    }
+    journal.append("node-settled", node=NodeId("api"), detail={"status": "done", "result": result})
+    payload = {
+        "ok": True,
+        "state": "complete",
+        "started_order": ["api"],
+        "results": {"api": result},
+    }
+    journal.append("round-finished", detail={"result": payload})
+    (snapshot_path(run_dir)).parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path(run_dir).write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "commits": {},
+                "prs": {
+                    "pr:3": {
+                        "number": 3,
+                        "url": result["pr"],
+                        "identity": "acme/app",
+                        "checks": [
+                            {
+                                "name": "ci",
+                                "state": "SUCCESS",
+                                "required": True,
+                                "url": "https://github.com/acme/app/actions/runs/9",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     detail = run_detail(runs, "demo", oneharness_bin=ABSENT)
-    assert detail["logs"]["gate_log"] == "gate ok\n"
+    artifact_id = detail["rounds"][0]["node_results"]["api"]["artifacts"]["gate_log"]
+    assert relative not in json.dumps(detail)
+    assert detail["node_details"]["api"]["verification"]["checks"][0]["url"].endswith("/9")
+    assert detail["node_details"]["api"]["verification"]["records"][0] == {
+        "ok": True,
+        "output_tail": "push ok",
+        "artifact_id": artifact_id,
+    }
+    artifact = read_artifact(runs, "demo", artifact_id)
+    assert artifact["truncated"] is True
+    assert artifact["content"].endswith("TAIL")
+    assert len(artifact["content"].encode()) == 64_000
 
 
 def test_round_record_serializes_projection(tmp_path: Path) -> None:
@@ -502,7 +580,7 @@ def test_run_signature_advances_on_writes_outside_the_journal(tmp_path: Path) ->
     after_snapshot = run_signature(run_dir)
     assert after_snapshot != journal_only
 
-    log = run_dir / "orchestrator" / "gate.log"
+    log = run_dir / "orchestrator" / "stderr.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text("gate: all deterministic checks passed\n", encoding="utf-8")
+    log.write_text("orchestrator warning\n", encoding="utf-8")
     assert run_signature(run_dir) != after_snapshot
