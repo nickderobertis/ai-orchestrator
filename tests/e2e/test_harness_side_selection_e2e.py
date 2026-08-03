@@ -34,13 +34,30 @@ import pytest
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
-from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
+from orchestrator.harnesses import (
+    JUDGE_HARNESS_ENV,
+    PROCESS_WIDE_HARNESS_ENV,
+    WORKER_HARNESS_ENV,
+)
 
 #: onejudge's own framing of a supervisor turn — how a recorded turn says which
 #: side of the conversation it belongs to.
 JUDGE_MARKER = "evaluator"
 #: The shared preamble every dispatched worker is framed with.
 WORKER_MARKER = "You are one worker in a larger orchestrated effort"
+
+#: The identity each side is told to run, so the sentinel below can be asserted
+#: against them rather than merely chosen to differ by inspection.
+WORKER_CHOICE = "codex"
+JUDGE_CHOICE = "claude-code:primary"
+#: The process-wide value the two journeys below state for themselves: a third
+#: identity, which is what makes "the side ignored its own selection" observable.
+#: It is only a sentinel while it is a value nobody else could have supplied, so
+#: `_provider_environment` drops whatever the *enclosing* process exported before
+#: either journey states this — otherwise a dispatch that happened to be routed to
+#: the same identity would make the control and the treatment one value, and the
+#: journey that states no process-wide selection at all would not be stating one.
+AMBIENT_SENTINEL = "claude-code:alternate2"
 
 #: Record the turn, then answer it as whichever side handed it over: onejudge
 #: requires a JSON object from a supervisor turn ("judge did not return a JSON
@@ -132,6 +149,11 @@ def _provider_environment(tmp_path: Path, oneharness_bin: str) -> tuple[Path, di
         "XDG_STATE_HOME": str(tmp_path / "state"),
     }
     environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+    # Whatever process-wide selection reached this process is not part of any
+    # journey's claim, so no journey inherits one: each states its own value, and a
+    # journey that states none genuinely runs with none. Dropped here, before the
+    # per-journey `env` is layered on, so a stated value is the only one there is.
+    environment.pop(PROCESS_WIDE_HARNESS_ENV, None)
     return record, environment
 
 
@@ -185,28 +207,10 @@ def _dispatch(
     env: Mapping[str, str] | None = None,
 ) -> Dispatched:
     """Run one real dispatch with both paid providers replaced on PATH."""
-    bin_dir = tmp_path / "bin"
-    _fake_providers(bin_dir)
     target = tmp_path / "target"
     target.mkdir(exist_ok=True)
-    record = tmp_path / "selection.jsonl"
-    record.touch()
-
-    environment = {
-        **os.environ,
-        "PATH": _provider_path(bin_dir, oneharness_bin),
-        "SELECTION_RECORD": str(record),
-        # Pinned rather than derived from the real $HOME: an authenticated
-        # alternate subscription on this host would otherwise change which
-        # candidate the default chain reaches.
-        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-alternate"),
-        "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "absent-alternate2"),
-        "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alternate"),
-        "ONEHARNESS_HISTORY": "false",
-        "XDG_STATE_HOME": str(tmp_path / "state"),
-        **(env or {}),
-    }
-    environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+    record, environment = _provider_environment(tmp_path, oneharness_bin)
+    environment.update(env or {})
     process = subprocess.run(
         [
             str(Path(onejudge_bin).with_name("orchestrator-dispatch")),
@@ -241,17 +245,20 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
 ) -> None:
     """The pairing this seam exists for: one author, a different reviewer.
 
-    `ONEHARNESS_HARNESSES` is set here to a third identity — the one both sides
-    would otherwise land on — so a side that ignored its own value would be caught
-    running claude-code's *alternate2* identity, which carries a config directory
-    the primary variant masks away.
+    The process-wide selection is stated here as a third identity — the one both
+    sides would otherwise land on — so a side that ignored its own value would be
+    caught running claude-code's *alternate2* identity, which carries a config
+    directory the primary variant masks away. The sentinel only says that while it
+    is neither side's own choice, so the journey asserts that here rather than
+    leaving it to whoever next edits the three constants.
     """
+    assert AMBIENT_SENTINEL not in {WORKER_CHOICE, JUDGE_CHOICE}
     dispatched = _dispatch(
         tmp_path,
         onejudge_bin,
         oneharness_bin,
-        extra_args=("--worker-harness", "codex", "--judge-harness", "claude-code:primary"),
-        env={"ONEHARNESS_HARNESSES": "claude-code:alternate2"},
+        extra_args=("--worker-harness", WORKER_CHOICE, "--judge-harness", JUDGE_CHOICE),
+        env={PROCESS_WIDE_HARNESS_ENV: AMBIENT_SENTINEL},
     )
 
     assert dispatched.process.returncode == 0, dispatched.process.stderr
@@ -260,9 +267,9 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
     assert worker_turns, dispatched.turns
     assert judge_turns, dispatched.turns
     assert {turn["bin"] for turn in worker_turns} == {"codex"}
-    assert {turn["harnesses"] for turn in worker_turns} == {"codex"}
+    assert {turn["harnesses"] for turn in worker_turns} == {WORKER_CHOICE}
     assert {turn["bin"] for turn in judge_turns} == {"claude"}
-    assert {turn["harnesses"] for turn in judge_turns} == {"claude-code:primary"}
+    assert {turn["harnesses"] for turn in judge_turns} == {JUDGE_CHOICE}
     # A masked CLAUDE_CONFIG_DIR is what distinguishes the primary account from the
     # alternate2 one the ambient value named; both run the same binary.
     assert {turn["claude_config_dir"] for turn in judge_turns} == {None}
@@ -273,7 +280,7 @@ def test_without_either_flag_a_process_wide_selection_still_moves_both_sides(
 ) -> None:
     """The behaviour the flags displace, proven rather than assumed.
 
-    Same ambient value as the journey above and no flags: both sides land on
+    Same stated value as the journey above and no flags: both sides land on
     `claude-code:alternate2`, each carrying that subscription's own config
     directory. That is what "the judge followed the worker" looks like.
     """
@@ -281,7 +288,7 @@ def test_without_either_flag_a_process_wide_selection_still_moves_both_sides(
         tmp_path,
         onejudge_bin,
         oneharness_bin,
-        env={"ONEHARNESS_HARNESSES": "claude-code:alternate2"},
+        env={PROCESS_WIDE_HARNESS_ENV: AMBIENT_SENTINEL},
     )
 
     assert dispatched.process.returncode == 0, dispatched.process.stderr
