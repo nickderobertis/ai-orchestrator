@@ -363,6 +363,42 @@ def reconcile_number(
         )
 
 
+def function_parameters(path: Path, names: set[str]) -> set[str]:
+    """Parameter names from the uniquely named functions in one Python module."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        fail(f"read {path.name} HTTP query parameters: {exc}")
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in names
+    }
+    if set(functions) != names:
+        fail(f"{path.name} must declare HTTP handlers {sorted(names)!r}")
+    parameters: set[str] = set()
+    for name, function in functions.items():
+        path_parameters = {"run_id"} if name in {"get_run", "get_timeline"} else set()
+        parameters.update(
+            argument.arg
+            for argument in [*function.args.args, *function.args.kwonlyargs]
+            if argument.arg not in {"request", *path_parameters}
+        )
+    return parameters
+
+
+def typescript_string_object(path: Path, name: str) -> set[str]:
+    """String values from one exported TypeScript const object."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read {path.name} {name}: {exc}")
+    matches = re.findall(rf"export const {name} = \{{(.*?)\}} as const;", source, flags=re.DOTALL)
+    if len(matches) != 1:
+        fail(f"{path.name} must declare exactly one {name}")
+    return set(re.findall(r'\w+:\s*"([^"]+)"', matches[0]))
+
+
 def frozenset_members(path: Path, name: str) -> list[str]:
     """The string members of a module-level ``name: frozenset[str] = frozenset({...})``."""
     try:
@@ -866,6 +902,15 @@ def main() -> None:
                 restatement.where,
                 documented_number(restatement.path, "runs page limit", restatement.pattern),
             ),
+        )
+    server_queries = function_parameters(server, {"get_runs", "get_run", "get_timeline", "events"})
+    model_queries = typescript_string_object(
+        root / "packages/dag-model/src/index.ts", "API_V2_QUERY"
+    )
+    if server_queries != model_queries:
+        fail(
+            "HTTP query names disagree: "
+            f"server={sorted(server_queries)!r}, dag-model={sorted(model_queries)!r}"
         )
     # The browser app reaches that same port through its dev proxy, and its operator
     # documentation restates both addresses. A silent disagreement would leave

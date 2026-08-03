@@ -771,17 +771,9 @@ describe("DAG application", () => {
       screen.queryByRole("button", { name: RegExp(HISTORY_RUN) }),
     ).toBeNull();
 
-    const viewport = document.querySelector<HTMLElement>(
-      "[data-radix-scroll-area-viewport]",
+    await userEvent.click(
+      screen.getByRole("button", { name: "Load more runs" }),
     );
-    expect(viewport).not.toBeNull();
-    Object.defineProperties(viewport, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 200 },
-      scrollTop: { configurable: true, value: 100 },
-    });
-    if (viewport === null) throw new Error("scroll viewport was not rendered");
-    fireEvent.scroll(viewport);
 
     expect(
       await screen.findByRole("button", { name: RegExp(HISTORY_RUN) }),
