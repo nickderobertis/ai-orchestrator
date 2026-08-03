@@ -29,6 +29,7 @@ const fixtureSchema = z.object({
     live: z.string().min(1),
     history: z.string().min(1),
     outcomes: z.string().min(1),
+    legacy: z.string().min(1),
     sibling: z.string().min(1),
     unattributed: z.string().min(1),
     eventless: z.string().min(1),
@@ -260,6 +261,24 @@ test("renders the outcomes only a settled round records", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText(
     "No reason was recorded for this outcome.",
   );
+
+  // And a failure whose only recorded explanation is its outcome word still puts
+  // that word on the card, rather than saying nothing the run did not already know.
+  await openObservatory(page, `/?run=${runs().outcomes}`);
+  await expect(
+    page.locator(".dag-node.state-failed").filter({ hasText: "rollback" }),
+  ).toContainText("gate-failed");
+});
+
+test("counts a run the strict fold cannot read at all", async ({ page }) => {
+  await openObservatory(page);
+  // The served run recorded a result with no authoritative journal behind it, which
+  // is what every `repo-plan` run looks like. The per-node derivation cannot run, so
+  // the row is counted from the tolerant telemetry index instead — whose statuses are
+  // an open string, and whose words the navigation still has to show rather than drop.
+  await expect(
+    page.getByRole("button", { name: RegExp(runs().legacy) }),
+  ).toContainText("1 improvised");
 });
 
 test("counts a run's own nodes on the row that opens it", async ({ page }) => {
@@ -1134,6 +1153,7 @@ test("falls back to the empty state once no run is left", async ({ page }) => {
   for (const runId of [
     runs().live,
     runs().outcomes,
+    runs().legacy,
     runs().unattributed,
     runs().eventless,
     runs().busy,

@@ -51,6 +51,9 @@ HISTORY_RUN = "dag-ui-history"
 #: node that failed without recording any reason at all. None of the three can be
 #: journalled as a node settlement, so a live round cannot produce them.
 OUTCOMES_RUN = "dag-ui-outcomes"
+#: A run whose result was recorded with no authoritative journal behind it, as every
+#: `repo-plan` run is. Its statuses can only be counted from the telemetry index.
+LEGACY_RUN = "dag-ui-legacy"
 #: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
 #: several graphs, and the navigation has to gather them under that one session.
 SIBLING_RUN = "dag-ui-sibling"
@@ -355,6 +358,7 @@ _OUTCOMES_TASKS: list[dict[str, Any]] = [
     {"id": "migrate", "persona": "engineer", "task": "Migrate the store"},
     {"id": "backfill", "persona": "engineer", "task": "Backfill the store"},
     {"id": "verify", "persona": "engineer", "task": "Verify the migration"},
+    {"id": "rollback", "persona": "engineer", "task": "Roll the migration back"},
 ]
 
 
@@ -391,11 +395,45 @@ def _write_outcomes_run(runs_dir: Path) -> None:
             "migrate": {"status": "failed", "ok": False},
             "backfill": {"status": "not-completed", "ok": False, "detail": "step 'load' timed out"},
             "verify": {"status": "improvised", "ok": False},
+            # A failure whose only recorded explanation is its outcome word: a real
+            # lifecycle shape, and the one where a card with nothing but "failed" on
+            # it tells an operator less than the run actually knows.
+            "rollback": {"status": "failed", "ok": False, "outcome": "gate-failed"},
         },
     }
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
     _record_launch(run_dir, OUTCOMES_RUN, CLAUDE_LAUNCH)
+
+
+#: Plan-file JSON, typed as every task list here is and for the same reason.
+_LEGACY_TASKS: list[dict[str, Any]] = [
+    {"id": "convert", "persona": "engineer", "task": "Convert the legacy store"}
+]
+
+
+def _write_legacy_run(runs_dir: Path) -> None:
+    """A recorded result with no authoritative journal behind it at all.
+
+    This is what every ``repo-plan`` run on an operator's machine looks like
+    permanently, and what a run predating the journal looks like forever. The strict
+    fold has nothing to fold, so the per-node status derivation cannot run and the
+    run list falls back to counting the tolerant telemetry index — whose statuses are
+    an open string, and whose words the navigation therefore has to be able to show.
+    """
+    from orchestrator.runs import prepare_round, write_result
+
+    run_dir = runs_dir / LEGACY_RUN
+    _, round_dir = prepare_round(run_dir, {"tasks": _LEGACY_TASKS})
+    write_result(
+        round_dir,
+        {
+            "ok": True,
+            "started_order": ["convert"],
+            "results": {"convert": {"status": "improvised", "task": "Convert the legacy store"}},
+        },
+    )
+    _record_launch(run_dir, LEGACY_RUN, CLAUDE_LAUNCH)
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
@@ -738,6 +776,7 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
     _write_outcomes_run(runs_dir)
+    _write_legacy_run(runs_dir)
     _write_sibling_run(runs_dir)
     _write_live_run(runs_dir)
     os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))
@@ -851,6 +890,7 @@ def serve(workspace: Path, port: int) -> int:
                     "live": LIVE_RUN,
                     "history": HISTORY_RUN,
                     "outcomes": OUTCOMES_RUN,
+                    "legacy": LEGACY_RUN,
                     "sibling": SIBLING_RUN,
                     "unattributed": UNATTRIBUTED_RUN,
                     "eventless": EVENTLESS_RUN,

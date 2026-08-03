@@ -63,9 +63,11 @@ export function nodeViews(detail: RunDetail): NodeView[] {
     return {
       id: task.id,
       label: readString(task, "name") ?? task.id,
-      // The contract holds one entry per plan task, so this lookup cannot miss. The
-      // fallback is the parser's own vocabulary rather than a state of our own: a
-      // payload that omitted the node would have failed `parseRunDetail` first.
+      // The server populates one entry per plan task, so this normally cannot miss.
+      // The fallback is the contract's own word for a status it cannot represent —
+      // `node_status` is a record, so a payload that dropped a key would parse — and
+      // never a state invented here: reporting "unknown" is what stops a surface
+      // quietly disagreeing with the one beside it, which is the defect this replaced.
       status: round.node_status[task.id] ?? "unknown",
       kind,
       task,
@@ -87,10 +89,10 @@ export function nodeViews(detail: RunDetail): NodeView[] {
  * and the headline of the view it opens cannot say different things.
  */
 export function nodeReason(node: NodeView): string | undefined {
-  if (node.blockers.length > 0 && GATED.has(node.status)) {
+  if (node.blockers.length > 0 && DECIDED_BY_DEPENDENCIES.has(node.status)) {
     return `blocked by ${node.blockers.join(", ")}`;
   }
-  if (!FAILED.has(node.status)) return undefined;
+  if (!OWN_WORK_LOST.has(node.status)) return undefined;
   const recorded =
     node.failure?.detail ||
     node.result?.detail ||
@@ -100,14 +102,21 @@ export function nodeReason(node: NodeView): string | undefined {
   return recorded?.trim() || `${node.status}, with no reason recorded`;
 }
 
-/** Statuses that mean the node is held rather than lost — something else must move. */
-const GATED: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
+/**
+ * Statuses a node holds because of *other* nodes, never because of its own run.
+ *
+ * These three are not one condition: `waiting` and `blocked` move when a person acts,
+ * while `skipped` is terminal — its prerequisite did not complete, so it will never
+ * run. What they share, and all this set decides, is that the reason lives somewhere
+ * else and is named in `blockers`, so one sentence reads all three.
+ */
+const DECIDED_BY_DEPENDENCIES: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
   "blocked",
   "skipped",
   "waiting",
 ]);
-/** Statuses that mean the node ran, or was meant to, and did not come back done. */
-const FAILED: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
+/** Statuses that mean this node's own work ran, or was cut short, without finishing. */
+const OWN_WORK_LOST: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
   "failed",
   "not-completed",
   "cancelled",
@@ -140,7 +149,9 @@ export function nodeCountSummary(
 
 /** Whether a node's status is one an operator has to act on, banner and all. */
 export function isUnhealthy(status: NodeStatus): boolean {
-  return FAILED.has(status) || status === "blocked" || status === "skipped";
+  return (
+    OWN_WORK_LOST.has(status) || status === "blocked" || status === "skipped"
+  );
 }
 
 /**

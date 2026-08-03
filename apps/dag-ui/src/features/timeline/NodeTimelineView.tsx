@@ -211,12 +211,18 @@ function PullRequest({ pr }: { readonly pr?: string | null }) {
  * they did not. That row stays — a node that settled well still records an outcome
  * worth reading — but a node that did not gets its reason up here, unprompted.
  *
- * Nothing here is derived: the status, the classification, the recorded text, the exit
- * code and the blockers are each a served field, rendered when the server populated it.
+ * Every *fact* it states is a served field: the status, the failure classification,
+ * the recorded detail and error, the exit code, and the blockers. What this component
+ * decides is only how to say them — which heading, which tone, which recorded text to
+ * lead with, and what to print when the run recorded none.
  */
 function NodeProblemBanner({ node }: { readonly node: NodeView }) {
   if (!isUnhealthy(node.status)) return null;
-  const held = node.status === "blocked" || node.status === "skipped";
+  // Not one condition: `blocked` moves when a person acts and `skipped` never will.
+  // They share a banner because neither is this node's own failure — the heading
+  // below states which of the two it is, and the term list names the difference.
+  const dependencyDecided =
+    node.status === "blocked" || node.status === "skipped";
   const detail = node.failure?.detail || node.result?.detail || "";
   const error = node.result?.error ?? undefined;
   const exitCode = node.result?.exit_code;
@@ -228,13 +234,13 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
     <Alert
       className={cn(
         "m-5 w-auto",
-        held && "border-warning bg-warning-surface text-warning",
+        dependencyDecided && "border-warning bg-warning-surface text-warning",
       )}
-      variant={held ? "default" : "destructive"}
+      variant={dependencyDecided ? "default" : "destructive"}
     >
-      {held ? <OctagonPause /> : <TriangleAlert />}
+      {dependencyDecided ? <OctagonPause /> : <TriangleAlert />}
       <AlertTitle>
-        {held
+        {dependencyDecided
           ? `This node is ${node.status}`
           : `This node ${node.status === "cancelled" ? "was cancelled" : node.status === "not-completed" ? "did not complete" : "failed"}${
               node.failure ? `: ${node.failure.class}` : ""
@@ -242,7 +248,7 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
       </AlertTitle>
       <AlertDescription>
         <dl className="facts">
-          {held && (
+          {dependencyDecided && (
             <div>
               <dt>{node.status === "skipped" ? "Unmet" : "Blocked by"}</dt>
               <dd>
@@ -273,7 +279,7 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
               <dd>{exitCode}</dd>
             </div>
           )}
-          {detail === "" && error === undefined && !held && (
+          {detail === "" && error === undefined && !dependencyDecided && (
             <div>
               <dt>Detail</dt>
               <dd>No reason was recorded for this outcome.</dd>
