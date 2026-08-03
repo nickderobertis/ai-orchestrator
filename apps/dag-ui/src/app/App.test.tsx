@@ -1,3 +1,4 @@
+import { type NodeDetail, parseRunDetail } from "@ai-orchestrator/dag-model";
 import {
   cleanup,
   fireEvent,
@@ -580,6 +581,85 @@ describe("DAG application", () => {
     ).toHaveTextContent("Not recorded");
     expect(screen.queryByRole("link", { name: RegExp(PR_URL) })).toBeNull();
   });
+
+  test.each<{
+    name: string;
+    publication: NonNullable<NodeDetail["publication"]>;
+    expectedLinks: readonly string[];
+    absentLinks: readonly string[];
+  }>([
+    {
+      name: "local direct-merge",
+      publication: {
+        branch: "feature/local",
+        base_branch: "main",
+        merged: true,
+        commit: "abc12345",
+        commit_url: "https://github.com/example/repo/commit/abc12345",
+      },
+      expectedLinks: ["Commit abc12345"],
+      absentLinks: ["Pull request"],
+    },
+    {
+      name: "remote PR unmerged",
+      publication: {
+        pr_url: PR_URL,
+        branch: "feature/remote",
+        branch_url: "https://github.com/example/repo/tree/feature/remote",
+        base_branch: "main",
+        merged: false,
+      },
+      expectedLinks: ["Pull request", "feature/remote"],
+      absentLinks: ["Commit"],
+    },
+    {
+      name: "remote PR merged",
+      publication: {
+        pr_url: PR_URL,
+        branch: "feature/remote",
+        branch_url: "https://github.com/example/repo/tree/feature/remote",
+        base_branch: "main",
+        merged: true,
+        commit: "def67890",
+        commit_url: "https://github.com/example/repo/commit/def67890",
+      },
+      expectedLinks: ["Pull request", "Commit def67890"],
+      absentLinks: ["feature/remote"],
+    },
+  ])(
+    "renders the $name publication fixture",
+    async ({ publication, expectedLinks, absentLinks }) => {
+      window.history.replaceState(
+        null,
+        "",
+        `/?run=${LIVE_RUN}&node=foundation`,
+      );
+      const served = parseRunDetail(runDetail());
+      const foundation = served.node_details.foundation;
+      if (foundation === undefined)
+        throw new Error("fixture has no foundation detail");
+      foundation.publication = publication;
+      const { client } = telemetryHarness((url) =>
+        isRunDetail(url) ? Response.json(served) : defaultResponder(url),
+      );
+      render(<App client={client} />);
+      await userEvent.click(
+        await screen.findByRole("button", {
+          name: "Dependencies, publication and verification",
+        }),
+      );
+      for (const name of expectedLinks) {
+        expect(
+          screen.getAllByRole("link", { name: new RegExp(name) }).length,
+        ).toBeGreaterThan(0);
+      }
+      for (const name of absentLinks) {
+        expect(
+          screen.queryByRole("link", { name: new RegExp(name) }),
+        ).toBeNull();
+      }
+    },
+  );
 
   test("reads a recorded moment as words rather than as the stamp it was written as", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);

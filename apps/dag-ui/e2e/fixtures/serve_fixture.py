@@ -217,6 +217,9 @@ def _record_launch(run_dir: Path, run_id: str, launch_id: str, session_id: str) 
 def _write_live_run(runs_dir: Path) -> None:
     """One in-flight run covering every renderable node state."""
     from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.detail_snapshot import CommitDetail, PrDetail
+    from orchestrator.github import Check, PRStatus
+    from orchestrator.monitor import DetailSnapshot, save_snapshot
     from orchestrator.runs import prepare_round
 
     run_dir = runs_dir / LIVE_RUN
@@ -230,6 +233,16 @@ def _write_live_run(runs_dir: Path) -> None:
     journal.append("round-started", detail={"plan": plan})
 
     journal.append("node-started", node=NodeId("foundation"), detail={"persona": "engineer"})
+    journal.append(
+        "merge-gate-coverage",
+        node=NodeId("foundation"),
+        detail={
+            "pre_push_hook": True,
+            "required_checks": ["unit"],
+            "required_checks_status": "configured",
+            "expected_gate": ["pre-push", "unit"],
+        },
+    )
     # Bracketed exactly as the merge path records it, so the timeline folds one
     # verification span rather than a finish whose start it never saw.
     journal.append(
@@ -246,6 +259,7 @@ def _write_live_run(runs_dir: Path) -> None:
             "command": ["just", "gate"],
             "log_path": "round-01/foundation/gate.log",
             "reused": False,
+            "output_tail": "pre-push verification passed",
             "gate_attestation": {
                 "commit": "1" * 40,
                 "comparison_remote": "origin",
@@ -284,12 +298,52 @@ def _write_live_run(runs_dir: Path) -> None:
                 "task": "Prepare shared contracts",
                 "repo": "local/example",
                 "branch": "ai-orchestrator/engineer/foundation",
+                "base_branch": "main",
+                "commit": "4" * 40,
                 "pr": FOUNDATION_PR,
                 "detail": "Gate completed successfully",
                 "telemetry": {"checks": {"unit": "passed"}},
                 "artifacts": {"gate_log": "round-01/foundation/gate.log"},
             },
         },
+    )
+    gate_log = run_dir / "round-01" / "foundation" / "gate.log"
+    gate_log.parent.mkdir(parents=True, exist_ok=True)
+    gate_log.write_text(
+        "pre-push verification passed\nfull verification output\n", encoding="utf-8"
+    )
+    save_snapshot(
+        run_dir,
+        DetailSnapshot(
+            commits={
+                "git:example/repo@merged": CommitDetail(
+                    sha="4" * 40,
+                    branch="main",
+                    base="main",
+                    identity="example/repo",
+                ).to_record()
+            },
+            prs={
+                "pr:example/repo#12": PrDetail.from_status(
+                    PRStatus(
+                        number=12,
+                        state="MERGED",
+                        merged=True,
+                        merge_state_status="CLEAN",
+                        checks=(
+                            Check(
+                                "unit",
+                                "SUCCESS",
+                                True,
+                                "https://github.com/example/repo/actions/runs/12",
+                            ),
+                        ),
+                    ),
+                    url=FOUNDATION_PR,
+                    identity="example/repo",
+                ).to_record()
+            },
+        ),
     )
     journal.append("node-started", node=NodeId("dashboard"), detail={"persona": "engineer"})
     journal.append("node-started", node=NodeId("publish"), detail={"persona": "engineer"})

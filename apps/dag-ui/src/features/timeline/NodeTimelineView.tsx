@@ -71,6 +71,10 @@ export function NodeTimelineView({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onBack]);
+  const prUrl =
+    node.detail?.publication === undefined
+      ? node.result?.pr
+      : node.detail.publication.pr_url;
 
   return (
     <section aria-label={`Timeline for ${node.label}`} className="node-view">
@@ -93,13 +97,10 @@ export function NodeTimelineView({
             {node.kind} node · {node.telemetry?.turns ?? 0} turns ·{" "}
             {node.telemetry?.lint ?? 0} lint turns
           </span>
-          {(node.detail?.publication?.pr_url ?? node.result?.pr) !==
-            undefined && (
+          {prUrl !== undefined && (
             <a
               className="node-view-pr"
-              href={
-                node.detail?.publication?.pr_url ?? node.result?.pr ?? undefined
-              }
+              href={prUrl}
               rel="noreferrer"
               target="_blank"
             >

@@ -445,14 +445,17 @@ test("shows a verification and a publication as the records they are", async ({
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=foundation`);
 
-  // The verification carries the gate attestation the node recorded, and points at
-  // the preserved log rather than inlining it.
+  // The verification carries this push's own verdict and bounded output, then loads
+  // the preserved log through its opaque artifact id without exposing a host path.
   await rail(page)
     .getByRole("button", { name: /branch push/ })
     .click();
-  await expect(itemDetail(page)).toContainText("Gate attestation");
-  await expect(itemDetail(page)).toContainText("comparison_base");
-  await expect(itemDetail(page)).toContainText("round-01/foundation/gate.log");
+  await expect(itemDetail(page)).toContainText("Verification record");
+  await expect(itemDetail(page)).toContainText("pre-push verification passed");
+  await expect(itemDetail(page)).toContainText("full verification output");
+  await expect(itemDetail(page)).not.toContainText(
+    "round-01/foundation/gate.log",
+  );
 
   // The publication carries the PR and the checks that were observed on it.
   await rail(page)
@@ -475,7 +478,7 @@ test("shows a verification and a publication as the records they are", async ({
   await expect(itemDetail(page)).toContainText("Observed checks");
 });
 
-test("keeps a node's task, criteria, dependencies and gate reachable", async ({
+test("keeps a node's task, criteria, dependencies and verification reachable", async ({
   page,
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
@@ -485,13 +488,21 @@ test("keeps a node's task, criteria, dependencies and gate reachable", async ({
   await page.getByRole("button", { name: "Completion criteria" }).click();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
 
-  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
+  await page
+    .getByRole("button", {
+      name: "Dependencies, publication and verification",
+    })
+    .click();
   await expect(page.locator(".facts")).toContainText("Not recorded");
   await expect(page.locator(".facts").getByRole("link")).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=foundation`);
-  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
-  const pr = page.locator(".facts").getByRole("link");
+  await page
+    .getByRole("button", {
+      name: "Dependencies, publication and verification",
+    })
+    .click();
+  const pr = page.locator(".facts").getByRole("link", { name: "Pull request" });
   await expect(pr).toHaveAttribute("href", fixture().foundation_pr);
   await expect(pr).toHaveAttribute("target", "_blank");
   await expect(pr).toHaveAttribute("rel", "noreferrer");
@@ -583,7 +594,11 @@ test("renders a graph whose node depends on another run", async ({ page }) => {
 
   // The prerequisite itself stays visible where the node's dependencies are listed.
   await page.locator(".dag-node.state-running").click();
-  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
+  await page
+    .getByRole("button", {
+      name: "Dependencies, publication and verification",
+    })
+    .click();
   await expect(page.locator(".facts")).toContainText(
     `run:${runs().history}#archive`,
   );
