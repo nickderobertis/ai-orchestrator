@@ -37,6 +37,7 @@ import os
 import signal
 import sys
 import traceback
+import warnings
 from typing import NoReturn, Protocol
 
 CRASHED = 70
@@ -56,6 +57,15 @@ class Entry(Protocol):
     def __call__(self, argv: list[str] | None = None, /) -> int: ...
 
 
+#: The interpreter's own warning about forking a process that has threads, matched
+#: exactly so that suppressing it can suppress nothing else. Anchored at the start
+#: because `warnings` matches a filter's message with `re.match`, and stopping at the
+#: fixed prefix because the rest of the text carries the forking process's pid.
+_MULTI_THREADED_FORK_WARNING = (
+    r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks"
+)
+
+
 def run_detached(entry: Entry, argv: list[str] | None, label: str) -> int:
     """Run a round-owning CLI entry point outside the launching turn's reach.
 
@@ -66,7 +76,19 @@ def run_detached(entry: Entry, argv: list[str] | None, label: str) -> int:
     # Anything buffered here would otherwise be flushed twice, once per process.
     sys.stdout.flush()
     sys.stderr.flush()
-    child = os.fork()
+    # The child's whole program is `_own_round`, which waits on no state a thread of
+    # this process could hold a lock on, so the interpreter's threaded-fork warning
+    # does not apply here. Suppressed at this call alone, so the same warning about
+    # any other fork still reaches a reader; a child that grew a dependency on an
+    # inherited lock would make the warning right again.
+    # llmlint: ignore[changed_behavior_has_e2e] a round-owning entry point forks
+    # single-threaded, so the interpreter never issues this warning in a real round and
+    # no journey can observe it; tests/test_detach.py starts a thread to provoke it.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message=_MULTI_THREADED_FORK_WARNING, category=DeprecationWarning
+        )
+        child = os.fork()
     # llmlint: ignore[changed_behavior_has_e2e] the round side of the fork is proven by
     # tests/e2e/test_round_ownership_e2e.py; a process that ends in `os._exit` cannot
     # report its own coverage, so it is excluded rather than left looking untested.

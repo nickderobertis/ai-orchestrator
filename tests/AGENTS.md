@@ -31,6 +31,12 @@ Conventions for this repo's tests.
   that only holds when the box was quick. Wait for an observable state transition,
   preserve production ordering in protocol doubles, and correlate fields from the
   same event rather than independent log-wide matches.
+- **Only a surface that waits may be replied to.** `just channel-next` delivers
+  every planner surface, but `just channel-reply` lands only where a reader is
+  parked for it — the supervisor question an orchestrator turn ends with. The
+  proposal a node raises as it settles is read by a poller instead, so a reply to
+  one is a race rather than a property, and holding the round open does not change
+  that. Keep such a proposal out of a journey with `no-assessment`.
 - **Nothing a test starts may outlive it.** `leak_guard.py` is a pytest plugin that
   reaps a test's process trees and fails the test on what it could not. Build a
   realistic tree with `process_tree.write_orphaning_tree`, and ask

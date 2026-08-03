@@ -229,6 +229,73 @@ def _await_parked_worker(launch: Launch, name: str, tmp_path: Path) -> tuple[Rec
     raise AssertionError(f"the run never reached its worker barrier: {detail}")
 
 
+def _reclaiming(
+    launch: Launch, base: Path, env: dict[str, str], tmp_path: Path
+) -> subprocess.Popen[str]:
+    """Start the reclaim `just runs` printed, and leave it running.
+
+    Started rather than awaited because the round it reclaims has to be *watched*:
+    its node parks at a barrier this test has not opened yet, so a call that waited
+    for the command to return would wait for a release it is holding. Output goes to
+    files for the reason the recorded launches use them — nothing drains a pipe while
+    the test is doing something else.
+    """
+    streams = _reclaim_streams(tmp_path)
+    with streams[0].open("wb") as out, streams[1].open("wb") as err:
+        return subprocess.Popen(
+            [
+                "just",
+                "run-plan",
+                str(launch.run_dir / "round-01" / "plan.json"),
+                "--run",
+                launch.run_id,
+                "--runs-dir",
+                str(launch.runs),
+                "--base",
+                str(base),
+                "--provider",
+                "command",
+                "--recover",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+        )
+
+
+def _reclaim_streams(tmp_path: Path) -> tuple[Path, Path]:
+    return tmp_path / "reclaim.out", tmp_path / "reclaim.err"
+
+
+def _await_the_interrupted_node_running_again(
+    held: Rendezvous, reclaiming: subprocess.Popen[str], tmp_path: Path
+) -> None:
+    """Block until the reclaimed round has the interrupted node parked at `held`.
+
+    There is no second outcome to be timed into: either the node reaches the barrier,
+    or the reclaim ends without it and says why. A reclaim that refused the abandoned
+    round, or replayed its recorded result, takes the second branch — it exits without
+    ever dispatching the node — so neither can be mistaken for a re-execution.
+    """
+    wait = deadline(240)
+    while not held.arrived():
+        if reclaiming.poll() is not None:
+            out, err = (path.read_text(encoding="utf-8") for path in _reclaim_streams(tmp_path))
+            raise AssertionError(f"the reclaim never re-ran the interrupted node: {out}{err}")
+        assert time.monotonic() < wait, "the reclaimed round never reached the node's barrier"
+        time.sleep(0.02)
+
+
+def _claimed_owner(launch: Launch) -> ProcessId:
+    """The pid recorded for the round that is executing now."""
+    status = json.loads((launch.run_dir / "round-01" / "status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "running", status
+    return ProcessId(int(status["pid"]))
+
+
 def _await_gone(pids: set[ProcessId]) -> set[ProcessId]:
     wait = deadline(60)
     while time.monotonic() < wait:
@@ -458,33 +525,26 @@ def test_stopping_a_run_leaves_no_worker_behind_and_the_round_reclaimable(
     assert "ABANDONED" in view
     assert "--recover" in view
 
-    # And the reclaim is real: released from its barrier, the same round finishes.
-    Rendezvous.at(tmp_path, "reclaimed").let_go()
-    reclaimed = subprocess.run(
-        [
-            "just",
-            "run-plan",
-            str(mine.run_dir / "round-01" / "plan.json"),
-            "--run",
-            mine.run_id,
-            "--runs-dir",
-            str(runs),
-            "--base",
-            str(_base(tmp_path)),
-            "--provider",
-            "command",
-            "--recover",
-        ],
-        cwd=REPO_ROOT,
-        env=planner,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=e2e_timeout(600),
-    )
-    assert reclaimed.returncode == 0, reclaimed.stdout + reclaimed.stderr
-    result = json.loads((mine.run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
-    assert result["results"]["worker"]["status"] == "done"
+    # And the reclaim is real. What a stop decides is that the round it abandoned is
+    # one `--recover` re-executes — not one it refuses, and not one whose recorded
+    # result it replays — so that is what this proves, and it proves it where the
+    # round says so itself rather than through a second dispatch's exit status. The
+    # reclaim is started with the barrier still closed, so the interrupted node has
+    # to be dispatched a second time to reach it, and it blocks there until this test
+    # lets it go. Both halves are the round's own signals: the claim it writes before
+    # any node runs, and the arrival, which a replayed result could not produce.
+    held = Rendezvous.at(tmp_path, "reclaimed")
+    held.ready.unlink()
+    reclaiming = _reclaiming(mine, _base(tmp_path), planner, tmp_path)
+    try:
+        _await_the_interrupted_node_running_again(held, reclaiming, tmp_path)
+        assert _claimed_owner(mine) not in {owner.pid for owner in owners}
+    finally:
+        held.let_go()
+        # Reaped, not asserted on: what a released dispatch then does is dispatch's
+        # own contract, and tests/e2e/test_round_ownership_e2e.py carries a reclaimed
+        # round through to `complete` without a killed tree's teardown beside it.
+        reclaiming.wait(timeout=e2e_timeout(600))
 
 
 def test_stop_answers_for_a_run_it_cannot_address_or_has_nothing_left_to_stop(
