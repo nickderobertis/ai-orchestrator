@@ -780,7 +780,8 @@ describe("DAG application", () => {
       scrollHeight: { configurable: true, value: 200 },
       scrollTop: { configurable: true, value: 100 },
     });
-    fireEvent.scroll(viewport as HTMLElement);
+    if (viewport === null) throw new Error("scroll viewport was not rendered");
+    fireEvent.scroll(viewport);
 
     expect(
       await screen.findByRole("button", { name: RegExp(HISTORY_RUN) }),

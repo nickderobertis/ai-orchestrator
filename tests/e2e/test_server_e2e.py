@@ -346,6 +346,26 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         assert exposed["launch"]["launcher_session_id"] == "top-session"
 
 
+def test_runs_endpoint_pages_by_opaque_cursor_and_rejects_invalid_bounds(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    for run_id in ("alpha", "beta", "gamma"):
+        _active_run(runs, run_id)
+    app = create_app(runs, oneharness_bin=str(tmp_path / "absent-oneharness"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+        first = client.get("/api/v2/runs", params={"limit": 2}).json()
+        assert len(first["runs"]) == 2
+        second = client.get(
+            "/api/v2/runs", params={"limit": 2, "cursor": first["next_cursor"]}
+        ).json()
+        assert len({row["run_id"] for row in [*first["runs"], *second["runs"]]}) == 3
+        assert "next_cursor" not in second
+        for params in ({"limit": 0}, {"limit": 201}, {"cursor": "not-a-cursor"}):
+            response = client.get("/api/v2/runs", params=params)
+            assert response.status_code == 422
+
+
 def test_malformed_durable_attribution_degrades_over_http_and_for_ownership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

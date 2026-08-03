@@ -997,6 +997,12 @@ def run_timeline(
         raise InvalidRunId("timeline accepts node_id or scope=run, not both")
     if scope not in (None, "run"):
         raise InvalidRunId("timeline scope must be run")
+    if node_id is not None and (
+        not node_id
+        or any(ord(character) < 32 for character in node_id)
+        or any(c in node_id for c in "/?#")
+    ):
+        raise InvalidRunId("invalid node_id")
     try:
         validated = validate_run_id(run_id)
     except ConfigError as exc:

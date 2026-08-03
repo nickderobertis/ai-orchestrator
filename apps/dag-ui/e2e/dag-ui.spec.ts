@@ -733,6 +733,38 @@ test("navigates historical DAGs grouped by their launching session", async ({
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
 });
 
+test("loads another run-list page when navigation reaches the end", async ({
+  page,
+}) => {
+  let fullList: Record<string, unknown> | undefined;
+  let totalRuns = 0;
+  await page.route("**/api/v2/runs?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (fullList === undefined)
+      fullList = (await (await route.fetch()).json()) as Record<
+        string,
+        unknown
+      >;
+    const runs = fullList.runs as unknown[];
+    totalRuns = runs.length;
+    await route.fulfill({
+      json: url.searchParams.has("cursor")
+        ? { ...fullList, runs: runs.slice(1) }
+        : { ...fullList, runs: runs.slice(0, 1), next_cursor: "page-2" },
+    });
+  });
+  await page.goto("/?view=graph");
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  await expect(navigation.locator(".run-link")).toHaveCount(1);
+  await navigation
+    .locator("[data-radix-scroll-area-viewport]")
+    .evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+  await expect(navigation.locator(".run-link")).toHaveCount(totalRuns);
+});
+
 test("restores a bookmarked view and refreshes through the read API", async ({
   page,
 }) => {
@@ -748,6 +780,7 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   );
   await expect(metric("Turns")).toContainText(/\d+/);
   await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Observe the live DAG safely")).toBeVisible();
   await expect(
     page.getByText("Coordinating the execution frontier"),
   ).toBeVisible();

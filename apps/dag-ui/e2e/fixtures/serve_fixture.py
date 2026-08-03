@@ -251,7 +251,11 @@ def _write_live_run(runs_dir: Path) -> None:
 
     run_dir = runs_dir / LIVE_RUN
     # Schema 5 is the first that admits the cross-DAG dependency this plan declares.
-    plan = {"schema_version": 5, "concurrency": 3}
+    plan = {
+        "schema_version": 5,
+        "concurrency": 3,
+        "goal": {"id": "observe-live-run", "text": "Observe the live DAG safely"},
+    }
     prepare_round(run_dir, {**plan, "tasks": _LIVE_TASKS})
     journal = open_journal(run_dir, RunId(LIVE_RUN), 1)
     for task in _LIVE_TASKS:

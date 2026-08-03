@@ -29,6 +29,8 @@ export function RunNavigation({
       aria-label="DAG runs"
       className="run-nav"
       onScrollCapture={(event) => {
+        // React exposes EventTarget here although this handler can only receive a
+        // scroll event from an HTMLElement inside the navigation subtree.
         const target = event.target as HTMLElement;
         if (
           hasMore &&

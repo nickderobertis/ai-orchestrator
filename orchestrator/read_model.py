@@ -29,6 +29,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import re
 from collections import Counter
 from collections.abc import Iterator, Mapping
@@ -660,7 +661,15 @@ def list_runs(
             decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
             if not isinstance(decoded, list) or len(decoded) != 2:
                 raise ValueError
-            cursor_key = (-float(decoded[0]), str(decoded[1]))
+            progress, cursor_run_id = decoded
+            if (
+                not isinstance(progress, (int, float))
+                or isinstance(progress, bool)
+                or not math.isfinite(progress)
+                or not isinstance(cursor_run_id, str)
+            ):
+                raise ValueError
+            cursor_key = (-float(progress), str(validate_run_id(cursor_run_id)))
         except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
             raise InvalidRunId("invalid runs cursor") from exc
         summaries = [
