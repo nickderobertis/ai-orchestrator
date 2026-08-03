@@ -64,10 +64,13 @@ export function nodeViews(detail: RunDetail): NodeView[] {
     // record there is — the one that carries what blocked them.
     const result =
       round.node_results[task.id] ?? round.result?.results?.[task.id];
+    const status = round.node_status[task.id];
+    if (status === undefined)
+      throw new Error(`round omitted status for task ${task.id}`);
     return {
       id: task.id,
       label: readString(task, "name") ?? task.id,
-      status: round.node_status[task.id]!,
+      status,
       kind,
       task,
       telemetry: telemetry.get(task.id),

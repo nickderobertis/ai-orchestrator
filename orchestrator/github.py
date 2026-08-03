@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 __all__ = [
     "AutoMergeUnavailable",
@@ -153,33 +153,52 @@ class GitHubBackend(Protocol):
 
 def _normalize_check(raw: dict[str, object]) -> Check:
     """Fold a gh ``statusCheckRollup`` entry into a normalized `Check`."""
-    required = bool(raw.get("isRequired"))
+    required = _optional_bool(raw, "isRequired")
     typename = raw.get("__typename")
-    if typename == "CheckRun":
-        name = str(raw.get("name") or "check")
-        status = str(raw.get("status") or "").upper()
-        if status != "COMPLETED":
+    match typename:
+        case "CheckRun":
+            name = _optional_text(raw, "name", fallback="check")
+            status = _optional_text(raw, "status").upper()
+            url = _optional_url(raw, "detailsUrl")
+            match status:
+                case "COMPLETED":
+                    state = _optional_text(raw, "conclusion").upper() or "PENDING"
+                case _:
+                    state = "PENDING"
             return Check(
                 name=name,
-                state="PENDING",
+                state=state,
                 required=required,
-                url=str(raw.get("detailsUrl") or ""),
+                url=url,
             )
-        conclusion = str(raw.get("conclusion") or "").upper()
-        return Check(
-            name=name,
-            state=conclusion or "PENDING",
-            required=required,
-            url=str(raw.get("detailsUrl") or ""),
-        )
-    # StatusContext (a commit status) or anything else with a ``state``.
-    name = str(raw.get("context") or raw.get("name") or "status")
-    return Check(
-        name=name,
-        state=str(raw.get("state") or "PENDING").upper(),
-        required=required,
-        url=str(raw.get("targetUrl") or ""),
-    )
+        case _:
+            # StatusContext (a commit status) or anything else with a ``state``.
+            name = _optional_text(raw, "context") or _optional_text(raw, "name", fallback="status")
+            return Check(
+                name=name,
+                state=_optional_text(raw, "state", fallback="PENDING").upper(),
+                required=required,
+                url=_optional_url(raw, "targetUrl"),
+            )
+
+
+def _optional_text(data: dict[str, object], key: str, *, fallback: str = "") -> str:
+    value = data.get(key)
+    if value is None:
+        return fallback
+    if not isinstance(value, str):
+        raise GitHubError(f"gh pr view returned non-string {key}")
+    return value or fallback
+
+
+def _optional_url(data: dict[str, object], key: str) -> str:
+    value = _optional_text(data, key)
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise GitHubError(f"gh pr view returned invalid {key}")
+    return value
 
 
 def _optional_bool(data: dict[str, object], key: str) -> bool:

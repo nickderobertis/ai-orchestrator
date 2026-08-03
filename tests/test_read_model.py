@@ -299,7 +299,7 @@ def test_node_artifact_is_opaque_bounded_and_verification_uses_pr_checks(
         "merge-gate-coverage",
         node=NodeId("api"),
         detail={
-            "pre_push_hook": True,
+            "pre_push_hook": ".githooks/pre-push",
             "required_checks": ["ci"],
             "required_checks_status": "configured",
             "expected_gate": ["pre-push", "ci"],

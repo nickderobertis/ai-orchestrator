@@ -56,7 +56,7 @@ from orchestrator.launch import (
     session_key,
     write_provenance,
 )
-from orchestrator.monitor import DetailSnapshot, save_snapshot
+from orchestrator.monitor import DetailSnapshot, save_snapshot, snapshot_path
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
 
@@ -523,6 +523,14 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
             prs={"api": PrDetail(number=7, state="OPEN", url="https://x/pull/7").to_record()}
         ),
     )
+    # A corrupt external check link must degrade at the real persisted/HTTP boundary,
+    # including an unhashable value that once raised before validation ran.
+    raw_snapshot = json.loads(snapshot_path(run_dir).read_text(encoding="utf-8"))
+    raw_snapshot["version"] = 2
+    raw_snapshot["prs"]["api"]["checks"] = [
+        {"name": "ci", "state": "SUCCESS", "required": True, "url": ["invalid"]}
+    ]
+    snapshot_path(run_dir).write_text(json.dumps(raw_snapshot), encoding="utf-8")
     (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
     # Larger than the served tail: a log is a scan aid, never an unbounded download.
     (run_dir / "orchestrator" / "stderr.log").write_text(
@@ -542,6 +550,7 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
 
         detail = client.get("/api/v2/runs/demo").json()
         assert detail["details"]["prs"]["api"]["number"] == 7
+        assert detail["details"]["prs"]["api"]["checks"] == []
         assert "gate_log" not in detail["logs"]
         tail = detail["logs"]["orchestrator_stderr"]
         assert len(tail.encode()) == 64_000  # bounded to the tail, not the whole file
@@ -1395,7 +1404,10 @@ def _lifecycle_run(runs_dir: Path, run_id: str) -> Path:
             "status": "done",
             "result": {
                 "status": "done",
-                "artifacts": {"worker_report": "runs/demo/round-01/docs/report.json"},
+                "artifacts": {
+                    "worker_report": "runs/demo/round-01/docs/report.json",
+                    "oneharness_session": "runs/demo/round-01/docs/session.json",
+                },
                 # onejudge's own linkage for this dispatch. It names the judge
                 # session, whose history carries no `node` label — which is the
                 # ordinary shape of a real dispatch and is exactly what a node-label
@@ -1575,6 +1587,12 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
     run_dir = _lifecycle_run(runs, "demo")
     store = _lifecycle_history(tmp_path, "demo", datetime.now(UTC))
     monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    report = run_dir / "runs" / "demo" / "round-01" / "docs" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("worker report\n", encoding="utf-8")
+    outside = tmp_path / "outside-session.json"
+    outside.write_text("must not be served\n", encoding="utf-8")
+    (report.parent / "session.json").symlink_to(outside)
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
     before = _tree(runs)
 
@@ -1625,6 +1643,22 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         assert settled["status"] == "done"
         assert settled["reference"]["kind"] == "worker_report"
         assert settled["reference"]["value"].startswith("worker_report-")
+        artifact_id = settled["reference"]["value"]
+        artifact = client.get(f"/api/v2/runs/demo/artifacts/{artifact_id}")
+        assert artifact.status_code == 200
+        assert artifact.json()["content"] == "worker report\n"
+        missing = client.get("/api/v2/runs/demo/artifacts/worker_report-not-recorded")
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "artifact_not_found"
+        served_detail = client.get(
+            "/api/v2/runs/demo", params={"include_conversations": "false"}
+        ).json()
+        session_id = served_detail["rounds"][0]["node_results"]["docs"]["artifacts"][
+            "oneharness_session"
+        ]
+        escaped = client.get(f"/api/v2/runs/demo/artifacts/{session_id}")
+        assert escaped.status_code == 404
+        assert escaped.json()["error"]["code"] == "artifact_not_found"
         drafting = by_kind["pr-drafting"][0]
         assert drafting["parent_id"] == settled["id"]
         # Drafting failure must never block publication, so it settles not-completed —

@@ -30,8 +30,8 @@ import { useConversation } from "./useConversation";
  * The one timeline item the operator opened, expanded across the working area.
  *
  * Each recorded kind is shown as what it is: a conversation turn through the design
- * system's own `TurnCard`, a verification as the gate attestation it recorded and the
- * log it points at, a publication as the PR and the checks that were observed on it,
+ * system's own `TurnCard`, a verification as its result, bounded output, and readable
+ * log, a publication as the PR and the checks that were observed on it,
  * and anything else as the typed record the timeline served.
  */
 export function TimelineItemDetail({
@@ -224,14 +224,21 @@ function Verification({
   const artifactId =
     detail?.artifact_id ??
     (reference?.kind === "gate_log" ? reference.value : undefined);
-  const [content, setContent] = useState<string>();
+  const [content, setContent] = useState<string | null>();
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     let active = true;
+    setContent(undefined);
+    setExpanded(false);
     if (artifactId === undefined || /[/?#]/u.test(artifactId)) return;
-    void client.getArtifact(runId, artifactId).then((artifact) => {
-      if (active) setContent(artifact.content);
-    });
+    void client
+      .getArtifact(runId, artifactId)
+      .then((artifact) => {
+        if (active) setContent(artifact.content);
+      })
+      .catch(() => {
+        if (active) setContent(null);
+      });
     return () => {
       active = false;
     };
@@ -258,7 +265,7 @@ function Verification({
         </>
       )}
       <h3 className="detail-heading">Full log</h3>
-      {content === undefined ? (
+      {content == null ? (
         <p className="detail-note">No readable log was recorded.</p>
       ) : (
         <>

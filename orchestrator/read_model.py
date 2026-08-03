@@ -26,23 +26,25 @@ authoritative journal is `ProjectionFailed`; a malformed launch record degrades 
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
+from urllib.parse import quote, urlparse
 
 from .config import ConfigError
 from .conversations import DagConversation, run_conversations
 from .history import HistoryError, SessionScan
-from .journal import JOURNAL_NAME
+from .journal import JOURNAL_NAME, Event
 from .launch import (
     LAUNCH_RECORD_NAME,
     read_launch_link,
     read_provenance,
     resolve_launch_session,
 )
-from .monitor import load_snapshot, snapshot_path
+from .monitor import DetailSnapshot, load_snapshot, snapshot_path
 from .projection import (
     NodeState,
     NodeStatus,
@@ -198,6 +200,15 @@ class RunDetail(TypedDict):
     launch: NotRequired[RunLaunch]
 
 
+class ArtifactContent(TypedDict):
+    """The bounded public representation of one recorded artifact."""
+
+    id: str
+    kind: str
+    content: str
+    truncated: bool
+
+
 def _now(now: datetime | None) -> str:
     return (now or datetime.now(UTC)).isoformat()
 
@@ -296,7 +307,11 @@ def _artifact_paths(rounds: list[Round]) -> dict[str, tuple[str, str]]:
         for result in results:
             if not isinstance(result, dict):
                 continue
-            records = [result, *(result.get("steps") or [])]
+            steps = result.get("steps")
+            records = [
+                result,
+                *(steps if isinstance(steps, list) else []),
+            ]
             for record in records:
                 artifacts = record.get("artifacts") if isinstance(record, dict) else None
                 if not isinstance(artifacts, dict):
@@ -308,8 +323,8 @@ def _artifact_paths(rounds: list[Round]) -> dict[str, tuple[str, str]]:
     return found
 
 
-def _hide_artifact_paths(rounds: list[Round]) -> None:
-    """Replace every result artifact host path with its opaque API id in place."""
+def _replace_served_artifacts_with_ids(rounds: list[Round]) -> None:
+    """Expose supported result artifacts only, addressed by opaque API id."""
     for round_record in rounds:
         results = [*round_record["node_results"].values()]
         graph_results = (round_record["result"] or {}).get("results", {})
@@ -318,7 +333,8 @@ def _hide_artifact_paths(rounds: list[Round]) -> None:
         for result in results:
             if not isinstance(result, dict):
                 continue
-            for record in [result, *(result.get("steps") or [])]:
+            steps = result.get("steps")
+            for record in [result, *(steps if isinstance(steps, list) else [])]:
                 artifacts = record.get("artifacts") if isinstance(record, dict) else None
                 if isinstance(artifacts, dict):
                     record["artifacts"] = {
@@ -328,7 +344,7 @@ def _hide_artifact_paths(rounds: list[Round]) -> None:
                     }
 
 
-def read_artifact(runs_dir: Path, run_id: str, artifact_id: str) -> dict[str, Any]:
+def read_artifact(runs_dir: Path, run_id: str, artifact_id: str) -> ArtifactContent:
     """Read one recorded node artifact through an opaque, contained, 64KB tail."""
     try:
         validated = validate_run_id(run_id)
@@ -365,16 +381,70 @@ def _github_root(identity: object) -> str | None:
     if not isinstance(identity, str) or not identity:
         return None
     if identity.startswith("https://github.com/"):
-        return identity.removesuffix(".git").rstrip("/")
-    if identity.count("/") == 1 and not identity.startswith("/"):
-        return f"https://github.com/{identity}"
+        parsed = urlparse(identity.removesuffix(".git").rstrip("/"))
+        parts = parsed.path.strip("/").split("/")
+        if parsed.netloc == "github.com" and len(parts) == 2 and all(parts):
+            return f"https://github.com/{quote(parts[0])}/{quote(parts[1])}"
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", identity):
+        owner, repo = identity.split("/", 1)
+        return f"https://github.com/{quote(owner)}/{quote(repo)}"
     return None
 
 
+def _public_url(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
+def _branch(value: object) -> str:
+    if not isinstance(value, str) or not value or not value.isprintable():
+        return ""
+    return "" if value.startswith("/") or ".." in value.split("/") else value
+
+
+def _commit(value: object) -> str:
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", value) else ""
+
+
+def _detail_hook_present(detail: Mapping[str, object], key: str) -> bool:
+    value = detail.get(key)
+    if not isinstance(value, str):
+        raise ProjectionFailed(f"journal {key} must be a string path")
+    return bool(value)
+
+
+def _detail_bool(detail: Mapping[str, object], key: str) -> bool:
+    value = detail.get(key)
+    if not isinstance(value, bool):
+        raise ProjectionFailed(f"journal {key} must be boolean")
+    return value
+
+
+def _detail_text(detail: Mapping[str, object], key: str, *, fallback: str = "") -> str:
+    value = detail.get(key)
+    if value is None:
+        return fallback
+    if not isinstance(value, str):
+        raise ProjectionFailed(f"journal {key} must be a string")
+    return value
+
+
+def _detail_text_list(detail: Mapping[str, object], key: str) -> list[str]:
+    value = detail.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ProjectionFailed(f"journal {key} must be a string list")
+    return value
+
+
 def _node_details(
-    events: list[Any], rounds: list[Round], snapshot: Any
+    events: list[Event], rounds: list[Round], snapshot: DetailSnapshot
 ) -> dict[str, dict[str, Any]]:
     """Typed verification and publication facts, keyed by node id."""
+    # `Any` is confined to this open, heterogeneous API assembly: verification and
+    # publication have disjoint optional fields and are validated at each source
+    # boundary before being placed in the contract dictionary.
     records: dict[str, dict[str, Any]] = {}
     artifact_ids = _artifact_paths(rounds)
     path_ids = {path: artifact_id for artifact_id, (_kind, path) in artifact_ids.items()}
@@ -385,24 +455,27 @@ def _node_details(
         detail = event.detail
         record = records.setdefault(node, {"verification": {"records": []}})
         verification = record["verification"]
-        if event.kind == "merge-gate-coverage":
-            verification.update(
-                {
-                    "pre_push_hook": bool(detail.get("pre_push_hook")),
-                    "required_checks": detail.get("required_checks", []),
-                    "required_checks_status": detail.get("required_checks_status", "unknown"),
-                    "expected_gate": detail.get("expected_gate", []),
+        match event.kind:
+            case "merge-gate-coverage":
+                verification.update(
+                    {
+                        "pre_push_hook": _detail_hook_present(detail, "pre_push_hook"),
+                        "required_checks": _detail_text_list(detail, "required_checks"),
+                        "required_checks_status": _detail_text(
+                            detail, "required_checks_status", fallback="unknown"
+                        ),
+                        "expected_gate": _detail_text_list(detail, "expected_gate"),
+                    }
+                )
+            case "verification-finished":
+                item: dict[str, Any] = {
+                    "ok": _detail_bool(detail, "ok"),
+                    "output_tail": _detail_text(detail, "output_tail"),
                 }
-            )
-        elif event.kind == "verification-finished":
-            item: dict[str, Any] = {
-                "ok": detail.get("ok") is True,
-                "output_tail": detail.get("output_tail", ""),
-            }
-            log_path = detail.get("log_path")
-            if isinstance(log_path, str) and log_path in path_ids:
-                item["artifact_id"] = path_ids[log_path]
-            verification["records"].append(item)
+                log_path = detail.get("log_path")
+                if isinstance(log_path, str) and log_path in path_ids:
+                    item["artifact_id"] = path_ids[log_path]
+                verification["records"].append(item)
 
     for round_record in rounds:
         results = dict(round_record["node_results"])
@@ -413,14 +486,14 @@ def _node_details(
             if not isinstance(result, dict):
                 continue
             record = records.setdefault(node, {"verification": {"records": []}})
-            pr_url = result.get("pr") if isinstance(result.get("pr"), str) else ""
+            pr_url = _public_url(result.get("pr"))
             pr = next(
                 (value for value in snapshot.prs.values() if value.get("url") == pr_url), None
             )
             checks = pr.get("checks", []) if isinstance(pr, dict) else []
             record["verification"]["checks"] = checks
-            branch = result.get("branch") if isinstance(result.get("branch"), str) else ""
-            base = result.get("base_branch") if isinstance(result.get("base_branch"), str) else ""
+            branch = _branch(result.get("branch"))
+            base = _branch(result.get("base_branch"))
             identity = (pr or {}).get("identity") if isinstance(pr, dict) else result.get("repo")
             root = _github_root(identity)
             merged = (
@@ -434,17 +507,17 @@ def _node_details(
             if branch:
                 publication["branch"] = branch
                 if root:
-                    publication["branch_url"] = f"{root}/tree/{branch}"
+                    publication["branch_url"] = f"{root}/tree/{quote(branch, safe='/')}"
             if base:
                 publication["base_branch"] = base
-            commit = result.get("commit")
-            if not isinstance(commit, str) or not commit:
+            commit = _commit(result.get("commit"))
+            if not commit:
                 matching = [
                     value
                     for value in snapshot.commits.values()
                     if value.get("branch") in {branch, base} and isinstance(value.get("sha"), str)
                 ]
-                commit = matching[-1].get("sha") if matching else ""
+                commit = _commit(matching[-1].get("sha")) if matching else ""
             if publication["merged"] and commit:
                 publication["commit"] = commit
                 if root:
@@ -655,7 +728,7 @@ def run_detail(
     except ProjectionError as exc:
         raise ProjectionFailed(str(exc)) from exc
     node_details = _node_details(events, rounds, snapshot)
-    _hide_artifact_paths(rounds)
+    _replace_served_artifacts_with_ids(rounds)
     detail: RunDetail = {
         "api_version": API_VERSION,
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,

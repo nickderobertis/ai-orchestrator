@@ -163,6 +163,8 @@ export class TelemetryClient {
     for (const eventName of sseEventNameSchema.options) {
       source.addEventListener(eventName, (rawEvent) => {
         try {
+          // DOM's EventListener callback erases the MessageEvent subtype even though
+          // EventSource listeners for named server events always receive one.
           const event = rawEvent as MessageEvent<string>;
           const decoded: unknown = JSON.parse(event.data);
           const data =

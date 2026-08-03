@@ -2,9 +2,8 @@ import { z } from "zod";
 
 // llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] docs/dag-ui/design.md is the
 // authoritative API contract and explicitly assigns these exported schemas to this package; the
-// Python read server is a sibling implementation that has not landed yet, so there is no second
-// executable API declaration to generate from or drift-check against. Server work must consume
-// this package's JSON contract/goldens when that second side exists.
+// Python read server emits the same contract from TypedDicts that cannot consume Zod directly;
+// scripts/check-dag-state-contract.py therefore reconciles their fields and closed vocabularies.
 // llmlint: ignore-file[changed_behavior_has_e2e] model.e2e.test.ts exercises every top-level API
 // parser plus populated telemetry, projection, provenance, timeline, and conversation attribution
 // through the package export. Nested Zod records compose those same tested boundaries; exhaustively
@@ -23,6 +22,8 @@ const lastEvent = z.string().min(1).nullable();
 const openObject = <T extends z.ZodRawShape>(shape: T) =>
   z.object(shape).catchall(z.unknown());
 
+// Const assertions preserve route/query literals for consumers; widening these
+// shared constants to `string` would discard the closed transport vocabulary.
 export const API_V2_PATHS = {
   runs: "/api/v2/runs",
   run: (runId: string) => `/api/v2/runs/${encodeURIComponent(runId)}`,

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from urllib.parse import urlparse
 
 from .github import Check, PRStatus
 from .journal import DetailValue
@@ -38,8 +39,17 @@ class CheckRollup:
         return record
 
 
-def _optional_strings(value: dict[str, Any], names: tuple[str, ...]) -> bool:
+def _optional_strings(value: Mapping[object, object], names: tuple[str, ...]) -> bool:
     return all(name not in value or isinstance(value[name], str) for name in names)
+
+
+def _persisted_url(value: object) -> str | None:
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return None
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else None
 
 
 @dataclass(frozen=True)
@@ -116,13 +126,14 @@ class PrDetail:
                 name=item["name"],
                 state=item["state"],
                 required=item["required"],
-                url=item.get("url", "") if isinstance(item.get("url", ""), str) else "",
+                url=url,
             )
             for item in raw_checks
             if isinstance(item, dict)
             and isinstance(item.get("name"), str)
             and isinstance(item.get("state"), str)
             and isinstance(item.get("required"), bool)
+            and (url := _persisted_url(item.get("url"))) is not None
         )
         return cls(
             number=number,

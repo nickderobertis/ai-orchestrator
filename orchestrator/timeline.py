@@ -23,8 +23,8 @@ Three properties make the result usable rather than merely complete:
   bounded by the graph rather than by contention.
 * **References, never bodies.** A transcript, a gate log, and a worker report are
   each larger than this whole payload. Every item points at its heavy content by
-  conversation id, recorded artifact path, or PR url, so a consumer fetches only
-  what it opens.
+  conversation id, opaque artifact id, or PR url, so a consumer fetches only what
+  it opens.
 
 The timeline is derived, never authoritative: nothing reads it to make a decision.
 """
@@ -160,6 +160,16 @@ class TimelineReference(TypedDict):
     value: str
 
 
+class VerificationDetail(TypedDict, total=False):
+    """Validated, bounded detail exposed for one verification span."""
+
+    ok: bool
+    output_tail: str
+    artifact_id: str
+    # Internal until `run_timeline` replaces it with the opaque artifact id.
+    log_path: str
+
+
 class TimelineEvent(TypedDict):
     """One instant recorded inside a span."""
 
@@ -200,7 +210,7 @@ class TimelineSpan(TypedDict):
     agent_role: NotRequired[str]
     transport_role: NotRequired[str]
     reference: NotRequired[TimelineReference]
-    detail: NotRequired[dict[str, object]]
+    detail: NotRequired[VerificationDetail]
 
 
 class RunTimeline(TypedDict):
@@ -265,6 +275,18 @@ def _event_reference(detail: Detail) -> TimelineReference | None:
     if (reference := _reference("gate_log", detail.get("log_path"))) is not None:
         return reference
     return _artifact_reference(detail)
+
+
+def _verification_detail(detail: Detail) -> VerificationDetail:
+    """Select and validate only verification fields in the public contract."""
+    result: VerificationDetail = {}
+    if isinstance(ok := detail.get("ok"), bool):
+        result["ok"] = ok
+    if isinstance(output := detail.get("output_tail"), str):
+        result["output_tail"] = output
+    if isinstance(path := detail.get("log_path"), str) and path:
+        result["log_path"] = path
+    return result
 
 
 def _status(detail: Detail) -> str | None:
@@ -382,7 +404,7 @@ class _Assembly:
         ended_at: str,
         status: str | None = None,
         reference: TimelineReference | None = None,
-        detail: Mapping[str, object] | None = None,
+        detail: VerificationDetail | None = None,
     ) -> str | None:
         """Close the span open at ``key`` and return its id; ``None`` if none is open.
 
@@ -400,7 +422,7 @@ class _Assembly:
         if reference is not None:
             span["reference"] = reference
         if detail is not None:
-            span["detail"] = dict(detail)
+            span["detail"] = detail.copy()
         return span_id
 
     def add_event(self, span_id: str, event: TimelineEvent) -> None:
@@ -570,7 +592,7 @@ class _Fold:
                     at,
                     kind="verification",
                     reference=_event_reference(detail),
-                    detail=detail,
+                    detail=_verification_detail(detail),
                 )
             case "pr-drafting-started":
                 self._open_scoped(event, index, at, kind="pr-drafting", label="pr drafting")
@@ -629,7 +651,7 @@ class _Fold:
         kind: TimelineSpanKind,
         status: str | None = None,
         reference: TimelineReference | None = None,
-        detail: Mapping[str, object] | None = None,
+        detail: VerificationDetail | None = None,
     ) -> None:
         key = _scoped_key(event, kind)
         self._leave(

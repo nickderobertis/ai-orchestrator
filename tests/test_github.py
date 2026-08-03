@@ -383,6 +383,19 @@ def test_normalize_check_variants() -> None:
     assert ctx.name == "x" and ctx.state == "SUCCESS" and ctx.green
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("detailsUrl", 7), ("detailsUrl", "file:///tmp/check"), ("targetUrl", ["bad"])],
+)
+def test_normalize_check_rejects_malformed_external_links(field: str, value: object) -> None:
+    raw: dict[str, object] = {"__typename": "CheckRun", "status": "COMPLETED"}
+    if field == "targetUrl":
+        raw = {"__typename": "StatusContext"}
+    raw[field] = value
+    with pytest.raises(GitHubError, match=field):
+        _normalize_check(raw)
+
+
 def test_check_green_red_helpers() -> None:
     assert Check("a", "SUCCESS", True).green
     assert Check("a", "ERROR", True).red

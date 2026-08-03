@@ -38,6 +38,7 @@ from .config import ConfigError
 from .conversations import run_conversations
 from .history import HistoryError
 from .read_model import (
+    ArtifactContent,
     ArtifactNotFound,
     ConversationNotFound,
     InvalidConversationId,
@@ -248,8 +249,8 @@ def create_app(
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
 
-    @app.get("/api/v2/runs/{run_id}/artifacts/{artifact_id}")
-    def get_artifact(run_id: str, artifact_id: str) -> Any:
+    @app.get("/api/v2/runs/{run_id}/artifacts/{artifact_id}", response_model=None)
+    def get_artifact(run_id: str, artifact_id: str) -> ArtifactContent | JSONResponse:
         """A bounded tail of one recorded node artifact, addressed opaquely."""
         try:
             return read_artifact(root, run_id, artifact_id)
