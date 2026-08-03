@@ -408,6 +408,13 @@ def round_record(events: list[Any], run_id: RunId, round_number: int) -> Round:
     """Serialize one strict ``RoundProjection`` as the contract's ``Round``."""
     projection = project_round(events, run_id, round_number)
     statuses = node_statuses(projection)
+    plan_ids = {task["id"] for task in projection.plan["tasks"]}
+    if set(statuses.status) != plan_ids:
+        raise ProjectionFailed("authoritative node status does not cover exactly the round plan")
+    gated_ids = set(statuses.gated_by)
+    blocker_ids = {blocker for blockers in statuses.gated_by.values() for blocker in blockers}
+    if not gated_ids | blocker_ids <= plan_ids:
+        raise ProjectionFailed("node gates name a node outside the round plan")
     return {
         "run_id": projection.run_id,
         "round": projection.round,

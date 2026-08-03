@@ -242,7 +242,7 @@ describe("boundary failures", () => {
       plan: { tasks: [{ id: "build", task: "Build it" }] },
       node_states: {},
       node_status: { build: "skipped" },
-      node_gated_by: { build: ["setup"] },
+      node_gated_by: {},
       node_results: {},
       attestations: [],
       result: null,
@@ -259,6 +259,32 @@ describe("boundary failures", () => {
     // inventing the status for every node, which is the defect this replaced.
     expect(
       roundSchema.safeParse({ ...round, node_status: undefined }).success,
+    ).toBe(false);
+    expect(roundSchema.safeParse({ ...round, node_status: {} }).success).toBe(
+      false,
+    );
+    expect(
+      roundSchema.safeParse({
+        ...round,
+        node_status: { build: "skipped", extra: "pending" },
+      }).success,
+    ).toBe(false);
+    expect(
+      roundSchema.safeParse({
+        ...round,
+        plan: {
+          tasks: [
+            { id: "build", task: "Build it" },
+            { id: "build", task: "Build it again" },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      roundSchema.safeParse({
+        ...round,
+        node_gated_by: { build: ["missing"] },
+      }).success,
     ).toBe(false);
   });
 

@@ -679,6 +679,11 @@ def main() -> None:
             r"api_version: z\.literal\((\d+)\)",
         ),
         ("packages/dag-model/src/index.ts route prefix", dag_model, r"/api/v(\d+)"),
+        (
+            "tests/golden/run-detail-v2.json envelope",
+            root / "tests/golden/run-detail-v2.json",
+            r'"api_version": (\d+)',
+        ),
         ("docs/dag-ui/design.md envelope", design, r"api_version:? (\d+)"),
         ("docs/dag-ui/design.md route prefix", design, r"/api/v(\d+)"),
     ):

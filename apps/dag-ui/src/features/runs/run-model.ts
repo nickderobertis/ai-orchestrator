@@ -65,12 +65,7 @@ export function nodeViews(detail: RunDetail): NodeView[] {
     return {
       id: task.id,
       label: readString(task, "name") ?? task.id,
-      // The server populates one entry per plan task, so this normally cannot miss.
-      // The fallback is the contract's own word for a status it cannot represent —
-      // `node_status` is a record, so a payload that dropped a key would parse — and
-      // never a state invented here: reporting "unknown" is what stops a surface
-      // quietly disagreeing with the one beside it, which is the defect this replaced.
-      status: round.node_status[task.id] ?? "unknown",
+      status: round.node_status[task.id]!,
       kind,
       task,
       telemetry: telemetry.get(task.id),

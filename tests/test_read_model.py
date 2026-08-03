@@ -16,7 +16,7 @@ from orchestrator.launch import (
     write_provenance,
 )
 from orchestrator.monitor import snapshot_path
-from orchestrator.projection import read_strict_events
+from orchestrator.projection import RoundNodeStatuses, read_strict_events
 from orchestrator.read_model import (
     API_VERSION,
     ConversationNotFound,
@@ -368,6 +368,40 @@ def test_detail_and_summary_report_one_status_for_every_node(tmp_path: Path) -> 
     )
     counts: Counter[str] = Counter(served["node_status"].values())
     assert row["node_counts"] == dict(counts)
+
+
+def test_v2_run_detail_golden_matches_the_python_round_serializer(tmp_path: Path) -> None:
+    golden = json.loads((Path(__file__).parent / "golden" / "run-detail-v2.json").read_text())
+    runs = tmp_path / "runs"
+    _gated_run(runs, "gated")
+
+    detail = run_detail(runs, "gated", oneharness_bin=ABSENT)
+
+    assert detail["api_version"] == golden["api_version"] == 2
+    assert detail["telemetry_schema_version"] == golden["telemetry_schema_version"]
+    assert detail["rounds"] == golden["rounds"]
+    assert json.loads(json.dumps(detail))["rounds"] == golden["rounds"]
+
+
+@pytest.mark.parametrize(
+    "statuses",
+    [
+        RoundNodeStatuses({}, {}),
+        RoundNodeStatuses({"api": "done"}, {"api": ["outside"]}),
+    ],
+)
+def test_round_serializer_refuses_incomplete_or_foreign_statuses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: RoundNodeStatuses,
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = _build_run(runs, "demo", settle=True)
+    events = read_strict_events(run_dir / "events.jsonl", RunId("demo"))
+    monkeypatch.setattr("orchestrator.read_model.node_statuses", lambda _projection: statuses)
+
+    with pytest.raises(ProjectionFailed):
+        round_record(events, RunId("demo"), 1)
 
 
 def test_node_counts_degrade_to_telemetry_when_the_journal_will_not_fold(

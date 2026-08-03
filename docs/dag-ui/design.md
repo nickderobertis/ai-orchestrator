@@ -40,6 +40,9 @@ API v2 replaces v1 because `Round.node_status` and `Round.node_gated_by` are new
 required fields. The v1 routes are not aliases: consumers must move to `/api/v2`
 and validate `api_version: 2`, which prevents an old client from silently treating
 an absent authoritative status as a state it invents locally.
+`tests/golden/run-detail-v2.json` is the checked-in cross-language example: Python
+serialization and the public `dag-model` parser both validate it, including the
+required per-task status coverage.
 
 ## Read model
 

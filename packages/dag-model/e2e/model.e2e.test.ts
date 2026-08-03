@@ -58,6 +58,16 @@ test("a package consumer validates an API response through the public export", (
   ).toEqual([]);
 });
 
+test("the checked-in v2 run-detail contract parses and v1 is rejected", async () => {
+  const golden = await Bun.file(
+    new URL("../../../tests/golden/run-detail-v2.json", import.meta.url),
+  ).json();
+  const parsed = parseRunDetail(golden);
+  expect(parsed.rounds[0]?.node_status.release).toBe("blocked");
+  expect(parsed.rounds[0]?.node_gated_by.release).toEqual(["approve"]);
+  expect(() => parseRunDetail({ ...golden, api_version: 1 })).toThrow();
+});
+
 test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({

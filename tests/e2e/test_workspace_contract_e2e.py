@@ -232,6 +232,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
         "packages/dag-model/src/index.ts",
+        "tests/golden/run-detail-v2.json",
         "apps/dag-ui/vite.config.ts",
         "docs/dag-ui.md",
         "docs/dag-ui/design.md",

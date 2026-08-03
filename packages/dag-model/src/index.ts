@@ -394,6 +394,31 @@ export const roundSchema = openObject({
   attestations: z.array(z.string()),
   result: graphPayloadSchema.nullable(),
   last_seq: counter,
+}).superRefine((round, context) => {
+  const taskIds = new Set(round.plan.tasks.map((task) => task.id));
+  const statusIds = new Set(Object.keys(round.node_status));
+  if (
+    taskIds.size !== round.plan.tasks.length ||
+    taskIds.size !== statusIds.size ||
+    [...taskIds].some((taskId) => !statusIds.has(taskId))
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["node_status"],
+      message: "must contain exactly one entry for every plan task",
+    });
+  }
+  const invalidGate = Object.entries(round.node_gated_by).find(
+    ([nodeId, blockers]) =>
+      !taskIds.has(nodeId) || blockers.some((blocker) => !taskIds.has(blocker)),
+  );
+  if (invalidGate) {
+    context.addIssue({
+      code: "custom",
+      path: ["node_gated_by"],
+      message: "must name only nodes in this round's plan",
+    });
+  }
 });
 
 export const conversationUsageSchema = openObject({
