@@ -33,22 +33,19 @@ export interface UrlSelection {
   readonly selectNodeTab: (tab: NodeTab) => void;
 }
 
-export type NodeTab =
-  | "timeline"
-  | "task"
-  | "criteria"
-  | "dependencies"
-  | "pr"
-  | "checks";
-
-const NODE_TABS: readonly NodeTab[] = [
+const NODE_TABS = [
   "timeline",
   "task",
   "criteria",
   "dependencies",
   "pr",
   "checks",
-];
+] as const;
+export type NodeTab = (typeof NODE_TABS)[number];
+
+export function isNodeTab(value: string | null): value is NodeTab {
+  return value !== null && NODE_TABS.some((tab) => tab === value);
+}
 
 export function useUrlSelection(): UrlSelection {
   const query = useSyncExternalStore(subscribe, currentQuery, currentQuery);
@@ -58,9 +55,7 @@ export function useUrlSelection(): UrlSelection {
   const itemId = params.get("event") ?? undefined;
   const named = params.get("view");
   const namedTab = params.get("tab");
-  const nodeTab = NODE_TABS.includes(namedTab as NodeTab)
-    ? (namedTab as NodeTab)
-    : "timeline";
+  const nodeTab = isNodeTab(namedTab) ? namedTab : "timeline";
   const view: UrlSelection["view"] =
     named === "graph" || named === "overall"
       ? named

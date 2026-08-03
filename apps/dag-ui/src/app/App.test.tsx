@@ -992,6 +992,29 @@ describe("DAG application", () => {
     expect(screen.getAllByText(/^Codex session · /)).not.toHaveLength(0);
   });
 
+  test("states when a node summary has no recorded activity", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    const scoped = runTimeline(LIVE_RUN);
+    const { client } = telemetryHarness((url) =>
+      isTimeline(url)
+        ? Response.json({
+            ...scoped,
+            spans: scoped.spans.filter((span) => !("node_id" in span)),
+          })
+        : defaultResponder(url),
+    );
+    render(<App client={client} />);
+    const summary = await screen.findByText("dashboard", {
+      selector: ".overall-node-summary .session-name",
+    });
+    const trigger = summary.closest("button");
+    if (trigger === null) throw new Error("node summary has no trigger");
+    await userEvent.click(trigger);
+    expect(
+      await screen.findByText("No activity summary recorded."),
+    ).toBeInTheDocument();
+  });
+
   test("opens a run-level session other than the one shown on arrival", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
     const { client, fetch } = telemetryHarness();

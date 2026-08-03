@@ -21,7 +21,7 @@ import {
 import { useEffect, useMemo } from "react";
 import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
-import type { NodeTab } from "../runs/useUrlSelection";
+import { isNodeTab, type NodeTab } from "../runs/useUrlSelection";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import { TimelineRail } from "./TimelineRail";
 import { findRow, nodeTimeline } from "./timeline-model";
@@ -121,7 +121,9 @@ export function NodeTimelineView({
 
       <Tabs
         className="node-tabs"
-        onValueChange={(value) => onSelectTab(value as NodeTab)}
+        onValueChange={(value) => {
+          if (isNodeTab(value)) onSelectTab(value);
+        }}
         value={selectedTab}
       >
         <TabsList aria-label="Node details" variant="line">
