@@ -629,6 +629,13 @@ test("keeps a node's task, criteria, dependencies and verification reachable", a
     "aria-selected",
     "true",
   );
+  await page.getByRole("tab", { name: "Overall" }).click();
+  const reopened = page
+    .locator(".overall-node-summary")
+    .filter({ hasText: "dashboard" });
+  await reopened.getByRole("button", { name: /dashboard/ }).click();
+  await reopened.getByRole("button", { name: "Open timeline" }).click();
+  await expect(page).toHaveURL(/node=dashboard/);
   await page.getByRole("tab", { name: "Task" }).click();
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
   await page.getByRole("tab", { name: "Completion criteria" }).click();
@@ -995,7 +1002,7 @@ test("restores node tabs and moves between them from the keyboard", async ({
   await expect(
     page.locator(".facts").getByRole("link", { name: "unit: SUCCESS" }),
   ).toHaveAttribute("href", "https://github.com/example/repo/actions/runs/12");
-  await page.getByRole("tab", { name: "PR" }).click();
+  await page.getByRole("tab", { name: "Task" }).click();
   await expect(page.locator(".facts")).toContainText(
     "Gate completed successfully",
   );

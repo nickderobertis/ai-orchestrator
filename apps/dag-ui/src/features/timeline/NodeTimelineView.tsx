@@ -139,6 +139,12 @@ export function NodeTimelineView({
         </TabsList>
         <TabsContent className="node-tab-panel" value="task">
           <pre>{node.task.task}</pre>
+          <dl className="facts">
+            <div>
+              <dt>Outcome</dt>
+              <dd>{formatValue(node.result?.detail)}</dd>
+            </div>
+          </dl>
         </TabsContent>
         <TabsContent className="node-tab-panel" value="criteria">
           <pre>{node.task.done_when ?? "No completion criteria recorded."}</pre>
@@ -158,10 +164,6 @@ export function NodeTimelineView({
               <dd>
                 <Publication node={node} />
               </dd>
-            </div>
-            <div>
-              <dt>Outcome</dt>
-              <dd>{formatValue(node.result?.detail)}</dd>
             </div>
           </dl>
         </TabsContent>
