@@ -1158,7 +1158,7 @@ def test_a_slow_history_read_stalls_neither_other_requests_nor_a_live_stream(
             for path in (
                 "/api/v2/runs?include_settled=true",
                 "/api/v2/runs/demo",
-                "/api/v2/runs/demo/timeline",
+                "/api/v2/runs/demo/timeline?scope=run",
                 f"/api/v2/runs/demo/conversations/{conversation_id}",
             ):
                 served, latencies = _while_in_flight(base, path)
@@ -1599,12 +1599,18 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        body = client.get("/api/v2/runs/demo/timeline")
+        body = client.get("/api/v2/runs/demo/timeline?node_id=api")
         assert body.status_code == 200
         timeline = body.json()
         assert timeline["api_version"] == 2
         assert timeline["run_id"] == "demo"
-        spans = timeline["spans"]
+        spans = [
+            *client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"],
+            *timeline["spans"],
+            *client.get("/api/v2/runs/demo/timeline?node_id=docs").json()["spans"],
+            *client.get("/api/v2/runs/demo/timeline?node_id=signoff").json()["spans"],
+        ]
+        spans.sort(key=lambda span: (span["started_at"], span["id"]))
         by_id = {span["id"]: span for span in spans}
         by_kind: dict[str, list[dict[str, object]]] = {}
         for span in spans:
@@ -1791,8 +1797,8 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         assert malformed.json()["error"]["code"] == "invalid_request"
 
         # Every trust boundary behaves like the rest of this read model.
-        assert client.get("/api/v2/runs/bad!id/timeline").status_code == 422
-        absent = client.get("/api/v2/runs/absent/timeline")
+        assert client.get("/api/v2/runs/bad!id/timeline?scope=run").status_code == 422
+        absent = client.get("/api/v2/runs/absent/timeline?scope=run")
         assert absent.status_code == 404
         assert absent.json()["error"]["code"] == "run_not_found"
 
@@ -1800,7 +1806,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         journal.write_text(
             journal.read_text(encoding="utf-8") + '{"kind":"bogus"}\n', encoding="utf-8"
         )
-        corrupt = client.get("/api/v2/runs/demo/timeline")
+        corrupt = client.get("/api/v2/runs/demo/timeline?scope=run")
         assert corrupt.status_code == 409
         assert corrupt.json()["error"]["code"] == "projection_error"
         journal.write_text(
@@ -1879,7 +1885,15 @@ def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: 
     app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
 
     with _serve(app) as base:
-        timeline = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo/timeline").json()
+        client = httpx.Client(base_url=base, timeout=30)
+        timeline = client.get("/api/v2/runs/demo/timeline?node_id=api").json()
+        timeline["spans"].extend(
+            client.get("/api/v2/runs/demo/timeline?node_id=docs").json()["spans"]
+        )
+        timeline["spans"].extend(client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"])
+        timeline["spans"].extend(
+            client.get("/api/v2/runs/demo/timeline?node_id=signoff").json()["spans"]
+        )
 
     open_publication = next(
         span
@@ -2029,10 +2043,12 @@ def test_timeline_survives_a_skewed_clock_a_half_pair_and_a_session_still_speaki
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
-        response = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/skewed/timeline")
+        client = httpx.Client(base_url=base, timeout=30)
+        response = client.get("/api/v2/runs/skewed/timeline?node_id=api")
+        run_spans = client.get("/api/v2/runs/skewed/timeline?scope=run").json()["spans"]
 
     assert response.status_code == 200
-    spans = response.json()["spans"]
+    spans = [*run_spans, *response.json()["spans"]]
     by_kind: dict[str, list[dict[str, object]]] = {}
     for span in spans:
         by_kind.setdefault(str(span["kind"]), []).append(span)

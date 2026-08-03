@@ -78,9 +78,15 @@ export class TelemetryClient {
     this.#eventSource = options.eventSource;
   }
 
-  async listRuns(includeSettled = false): Promise<RunList> {
+  async listRuns(
+    includeSettled = false,
+    cursor?: string,
+    limit = 50,
+  ): Promise<RunList> {
     const url = this.#url(API_V2_PATHS.runs);
     url.searchParams.set(API_V2_QUERY.includeSettled, String(includeSettled));
+    url.searchParams.set(API_V2_QUERY.limit, String(limit));
+    if (cursor !== undefined) url.searchParams.set(API_V2_QUERY.cursor, cursor);
     return this.#request(url, runListSchema.parse);
   }
 
@@ -108,13 +114,13 @@ export class TelemetryClient {
     return this.#request(url, runDetailSchema.parse);
   }
 
-  /** The whole run's ordered spans and events; filter by `node_id` client-side. */
-  async getTimeline(runId: string): Promise<RunTimeline> {
+  /** One node's timeline, or the run-level timeline when nodeId is omitted. */
+  async getTimeline(runId: string, nodeId?: string): Promise<RunTimeline> {
     requireOpaqueId(runId, "run ID");
-    return this.#request(
-      this.#url(API_V2_PATHS.timeline(runId)),
-      runTimelineSchema.parse,
-    );
+    const url = this.#url(API_V2_PATHS.timeline(runId));
+    if (nodeId === undefined) url.searchParams.set(API_V2_QUERY.scope, "run");
+    else url.searchParams.set(API_V2_QUERY.nodeId, nodeId);
+    return this.#request(url, runTimelineSchema.parse);
   }
 
   async getConversation(

@@ -660,6 +660,12 @@ def main() -> None:
     )
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
+    reconcile_shape(
+        root / "orchestrator/projection.py",
+        "ProjectedPlan",
+        design,
+        interface_fields(design, "ProjectedPlan"),
+    )
 
     # A required envelope field and its route prefix are one major-version contract.
     # Reconcile every executable and documented copy so a future required-field

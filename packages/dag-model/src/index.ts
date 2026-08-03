@@ -46,6 +46,10 @@ export const API_V2_QUERY = {
   includeConversations: "include_conversations",
   runId: "run_id",
   after: "after",
+  cursor: "cursor",
+  limit: "limit",
+  nodeId: "node_id",
+  scope: "scope",
 } as const;
 
 export const timingQualitySchema = z.enum(["complete", "partial", "legacy"]);
@@ -242,6 +246,7 @@ export const runListSchema = openObject({
   telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
+  next_cursor: z.string().min(1).optional(),
 });
 
 const planStepSchema = openObject({
@@ -384,6 +389,10 @@ export const roundSchema = openObject({
     schema_version: counter.optional(),
     concurrency: counter.positive().optional(),
     name: z.string().min(1).optional(),
+    goal: openObject({
+      id: z.string().min(1),
+      text: z.string().min(1),
+    }).optional(),
   }),
   node_states: z.record(z.string(), nodeStateSchema),
   /** One entry per plan task, so a client never invents a status for a node. */

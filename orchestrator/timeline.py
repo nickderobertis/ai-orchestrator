@@ -989,8 +989,14 @@ def run_timeline(
     *,
     oneharness_bin: str = "oneharness",
     now: datetime | None = None,
+    node_id: str | None = None,
+    scope: str | None = None,
 ) -> RunTimeline:
-    """The ``RunTimeline`` for one run: every span and event, oldest first."""
+    """A scoped ``RunTimeline``: one node, or only run-level items."""
+    if node_id is not None and scope is not None:
+        raise InvalidRunId("timeline accepts node_id or scope=run, not both")
+    if scope not in (None, "run"):
+        raise InvalidRunId("timeline scope must be run")
     try:
         validated = validate_run_id(run_id)
     except ConfigError as exc:
@@ -1003,6 +1009,10 @@ def run_timeline(
     except ProjectionError as exc:
         raise ProjectionFailed(str(exc)) from exc
     spans = assemble(events, _conversations(validated, oneharness_bin), load_snapshot(run_dir))
+    if node_id is not None:
+        spans = [span for span in spans if span.get("node_id") == node_id]
+    elif scope == "run":
+        spans = [span for span in spans if span.get("node_id") is None]
     by_path: dict[str, str] = {}
     for event in events:
         result = event.detail.get("result")

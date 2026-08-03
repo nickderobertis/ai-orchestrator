@@ -37,7 +37,16 @@ export function App({
   readonly client?: TelemetryClient;
 }) {
   const selection = useUrlSelection();
-  const telemetry = useDagTelemetry(client, selection.runId);
+  const timelineScope = useMemo(
+    () =>
+      selection.view === "overall"
+        ? {}
+        : selection.nodeId === undefined
+          ? undefined
+          : { nodeId: selection.nodeId },
+    [selection.view, selection.nodeId],
+  );
+  const telemetry = useDagTelemetry(client, selection.runId, timelineScope);
   const groups = useMemo(
     () => groupRuns(telemetry.list?.runs ?? []),
     [telemetry.list],
@@ -84,6 +93,8 @@ export function App({
           groups={groups}
           selectedRunId={selectedRunId}
           liveRunIds={liveRunIds}
+          hasMore={telemetry.hasMore}
+          onLoadMore={telemetry.loadMore}
           onSelect={selection.selectRun}
         />
         <main className="workspace">

@@ -200,13 +200,15 @@ def create_app(
     # work, and FastAPI runs a non-async handler in its threadpool, so one slow read
     # occupies a worker rather than the loop every other request shares.
     @app.get("/api/v2/runs")
-    def get_runs(include_settled: bool = False) -> Any:
+    def get_runs(include_settled: bool = False, limit: int = 50, cursor: str | None = None) -> Any:
         try:
             return list_runs(
                 root,
                 include_settled=include_settled,
                 oneharness_bin=oneharness_bin,
                 expose_launcher_session_id=expose_launcher_session_id,
+                limit=limit,
+                cursor=cursor,
             )
         except ReadError as exc:  # pragma: no cover - list degrades rather than raising
             status, code = _status_for(exc)
@@ -233,10 +235,14 @@ def create_app(
             return _error(status, code, str(exc))
 
     @app.get("/api/v2/runs/{run_id}/timeline")
-    def get_timeline(run_id: str) -> Any:
-        """The whole run's ordered spans and events; a consumer filters by node."""
+    def get_timeline(run_id: str, node_id: str | None = None, scope: str | None = None) -> Any:
+        """A node timeline, or run-level items when ``scope=run``."""
         try:
-            return run_timeline(root, run_id, oneharness_bin=oneharness_bin)
+            if node_id is None and scope is None:
+                raise InvalidRunId("timeline requires node_id or scope=run")
+            return run_timeline(
+                root, run_id, node_id=node_id, scope=scope, oneharness_bin=oneharness_bin
+            )
         except ReadError as exc:
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
@@ -386,7 +392,13 @@ async def _event_stream(
         cursor,
         SseEvent.SNAPSHOT,
         await _off_loop(
-            partial(list_runs, runs_dir, include_settled=True, oneharness_bin=oneharness_bin)
+            partial(
+                list_runs,
+                runs_dir,
+                include_settled=True,
+                oneharness_bin=oneharness_bin,
+                limit=50,
+            )
         ),
     )
     last_emit = loop.time()
