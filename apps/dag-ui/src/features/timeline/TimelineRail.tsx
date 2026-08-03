@@ -9,12 +9,9 @@ import {
 } from "@oneharness/ui";
 import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
-import {
-  formatDuration,
-  formatTime,
-  pathTo,
-  type TimelineRow,
-} from "./timeline-model";
+import { Timestamp } from "../../lib/Timestamp";
+import { formatDuration } from "../../lib/time";
+import { pathTo, type TimelineRow } from "./timeline-model";
 
 /** How many siblings one expanded row shows before the rest are asked for. */
 export const PAGE_SIZE = 25;
@@ -154,7 +151,7 @@ function RailRow({
       {row.rowKind === "span" && row.span.count !== undefined && (
         <span className="rail-count">×{row.span.count}</span>
       )}
-      <span className="rail-time">{formatTime(row.startedAt)}</span>
+      <Timestamp at={row.startedAt} className="rail-time" />
       {row.status && (
         <Badge className="rail-status" variant="outline">
           {row.status}

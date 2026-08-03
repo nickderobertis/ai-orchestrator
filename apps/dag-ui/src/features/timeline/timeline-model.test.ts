@@ -3,8 +3,6 @@ import { describe, expect, test } from "vitest";
 import { busyTimeline, LIVE_RUN, runTimeline } from "../../test/fixtures";
 import {
   findRow,
-  formatDuration,
-  formatTime,
   GROUP_THRESHOLD,
   nodeTimeline,
   pathTo,
@@ -79,17 +77,5 @@ describe("one node's slice of the run timeline", () => {
     expect(group?.children).toHaveLength(204);
     expect(busy.rows.length).toBeLessThan(GROUP_THRESHOLD);
     expect(busy.total).toBeGreaterThan(200);
-  });
-});
-
-describe("reading a recorded moment", () => {
-  test("formats a stamp and a duration the same way everywhere", () => {
-    expect(formatTime("2026-07-26T11:02:03Z")).toBe("11:02:03");
-    // A stamp the timeline could not place is shown as recorded, not as "Invalid".
-    expect(formatTime("not-a-time")).toBe("not-a-time");
-    expect(formatDuration(420)).toBe("420ms");
-    expect(formatDuration(4200)).toBe("4.2s");
-    expect(formatDuration(125_000)).toBe("2m 5s");
-    expect(formatDuration(7_500_000)).toBe("2h 5m");
   });
 });

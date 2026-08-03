@@ -604,7 +604,7 @@ function runLevelDispatch(
   };
 }
 
-const PR_URL = "https://github.com/example/repo/pull/12";
+export const PR_URL = "https://github.com/example/repo/pull/12";
 
 function dispatch(
   conversationId: string,

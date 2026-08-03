@@ -16,6 +16,14 @@ export interface UrlSelection {
    * query key stays `event` because that is the shared address already in use.
    */
   readonly itemId?: string;
+  /**
+   * Which reading of the run is open.
+   *
+   * An address that names neither a view nor a node lands on `overall`: a run is
+   * read as a whole first, and the graph is where a reader goes to open one node of
+   * it. A link that does name a node is already asking for that node, so it opens
+   * where the node view lives.
+   */
   readonly view: "graph" | "overall";
   readonly selectRun: (runId: string) => void;
   readonly selectNode: (nodeId?: string) => void;
@@ -29,7 +37,13 @@ export function useUrlSelection(): UrlSelection {
   const runId = params.get("run") ?? undefined;
   const nodeId = params.get("node") ?? undefined;
   const itemId = params.get("event") ?? undefined;
-  const view = params.get("view") === "overall" ? "overall" : "graph";
+  const named = params.get("view");
+  const view: UrlSelection["view"] =
+    named === "graph" || named === "overall"
+      ? named
+      : nodeId === undefined
+        ? "overall"
+        : "graph";
 
   const update = useCallback((change: (next: URLSearchParams) => void) => {
     const next = new URLSearchParams(window.location.search);
@@ -43,21 +57,24 @@ export function useUrlSelection(): UrlSelection {
     nodeId,
     itemId,
     view,
+    // The reading stays where it was: an operator comparing two runs on the overall
+    // view is not asking to be moved to the graph by picking the second one.
     selectRun: (id) =>
       update((next) => {
         next.set("run", id);
         next.delete("node");
         next.delete("event");
-        next.delete("view");
       }),
     // A different node has different recorded work, so the moment selected inside the
-    // one being left cannot survive the move.
+    // one being left cannot survive the move. Both a node and the way back out of one
+    // live in the graph view, so this names it rather than falling back to the
+    // landing view.
     selectNode: (id) =>
       update((next) => {
         if (id) next.set("node", id);
         else next.delete("node");
         next.delete("event");
-        next.delete("view");
+        next.set("view", "graph");
       }),
     selectItem: (id) =>
       update((next) => {

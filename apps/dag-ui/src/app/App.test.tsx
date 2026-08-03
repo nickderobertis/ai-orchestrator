@@ -14,6 +14,7 @@ import {
   LIVE_RUN,
   LONG_SESSION,
   longConversation,
+  PR_URL,
   ROUND_CHECK_IN_SESSION,
   runDetail,
   runList,
@@ -41,8 +42,11 @@ const detail = () =>
   screen.getByRole("region", { name: "Timeline item detail" });
 
 describe("DAG application", () => {
+  // The graph is one reading of a run and no longer the one an empty address lands
+  // on, so the journeys that are about it say so — exactly as an operator's own
+  // bookmark of the graph does. The landing view has a journey of its own below.
   beforeEach(() => {
-    window.history.replaceState(null, "", "/");
+    window.history.replaceState(null, "", "/?view=graph");
   });
 
   afterEach(cleanup);
@@ -69,9 +73,15 @@ describe("DAG application", () => {
     // Every row states what happened, when, how it ended, and how long it took.
     const worker = railRow(/engineer-dashboard/);
     expect(worker).toHaveTextContent("dispatch");
+    // The whole instant is one hover away and the recorded ISO string is machine
+    // readable on the element itself, so neither has to be on screen to be reachable.
     expect(worker).toHaveTextContent("11:00:12");
+    expect(
+      within(worker).getByTitle("Jul 26, 2026, 11:00:12 AM GMT+00:00"),
+    ).toHaveAttribute("datetime", "2026-07-26T11:00:12.000Z");
     expect(worker).toHaveTextContent("completed");
-    expect(worker).toHaveTextContent("48.0s");
+    expect(worker).toHaveTextContent("48s");
+    expect(worker.textContent).not.toMatch(/\d{4}-\d\d-\d\dT/);
     expect(railRow(/lock-wait/)).toHaveTextContent("×1240");
 
     await userEvent.click(worker);
@@ -161,6 +171,13 @@ describe("DAG application", () => {
       await within(detail()).findByText("1240 records"),
     ).toBeInTheDocument();
     expect(within(detail()).getByText("Reference")).toBeInTheDocument();
+    // This is the one rendering that shows a record the run closed, so both of its
+    // stamps are read as ages — and the moment itself stays on the element rather
+    // than reaching the reader as the ISO string the journal wrote.
+    const ages = within(detail()).getAllByText(/ ago$/);
+    expect(ages).toHaveLength(2);
+    expect(ages[0]).toHaveAttribute("datetime", "2026-07-26T11:00:15.000Z");
+    expect(ages[1]).toHaveAttribute("datetime", "2026-07-26T11:02:35.000Z");
   });
 
   test("keeps a node whose recorded work is hundreds of sessions scannable", async () => {
@@ -416,6 +433,47 @@ describe("DAG application", () => {
     expect(await screen.findByText("foundation")).toBeInTheDocument();
   });
 
+  test("hands the node's recorded pull request over as a link", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=foundation`);
+    const { client } = telemetryHarness();
+    const view = render(<App client={client} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
+    );
+    const link = await screen.findByRole("link", { name: RegExp(PR_URL) });
+    expect(link).toHaveAttribute("href", PR_URL);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+    view.unmount();
+
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    render(<App client={client} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
+    );
+    expect(
+      screen.getByText("Pull request").nextElementSibling,
+    ).toHaveTextContent("Not recorded");
+    expect(screen.queryByRole("link", { name: RegExp(PR_URL) })).toBeNull();
+  });
+
+  test("reads a recorded moment as words rather than as the stamp it was written as", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    // The lock-wait rollup has no dedicated rendering, so it is the item whose every
+    // recorded field reaches the reader — including the two stamps the detail used to
+    // print straight out of the journal.
+    await userEvent.click(
+      await screen.findByRole("button", { name: /lock-wait/ }),
+    );
+    expect(await within(detail()).findByText("Recorded at")).toBeVisible();
+    expect(within(detail()).getByText("Duration")).toBeVisible();
+    // Not one ISO stamp and not one raw second count anywhere in the pane.
+    expect(detail().textContent).not.toMatch(/\d{4}-\d\d-\d\dT/);
+    expect(detail().textContent).not.toMatch(/\d+\.\d+s/);
+  });
+
   test("reads only the selected run, and a transcript only when one is opened", async () => {
     const { client, fetch } = telemetryHarness();
     render(<App client={client} />);
@@ -468,6 +526,27 @@ describe("DAG application", () => {
     await waitFor(() =>
       expect(fetch.mock.calls.length).toBeGreaterThan(before),
     );
+  });
+
+  test("opens on the run as a whole when the address names no view", async () => {
+    window.history.replaceState(null, "", "/");
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    // The overall reading of the run is what an operator arrives for; the graph is
+    // one tab away, and every deep link into it still opens where it points.
+    expect(await screen.findByText("Run-level sessions")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("list", { name: "DAG nodes" })).toBeNull();
+    // The wall time it reports is a duration, not a second count to do sums on.
+    expect(screen.getByText("Wall time").closest(".metric")).toHaveTextContent(
+      "5s",
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
   });
 
   test("shows the run-level sessions in the overall view", async () => {
@@ -545,7 +624,7 @@ describe("DAG application", () => {
       expect(fetch.mock.calls.length).toBeGreaterThan(before),
     );
 
-    window.history.replaceState(null, "", `/?run=${LIVE_RUN}`);
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=graph`);
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
   });
