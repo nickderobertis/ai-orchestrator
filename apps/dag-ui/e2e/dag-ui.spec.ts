@@ -195,8 +195,6 @@ test("tracks every node state and kind of a live run", async ({ page }) => {
 test("leads a node that is not moving with the reason it is not", async ({
   page,
 }) => {
-  // The reason used to sit behind an accordion entry called "Outcome", beside four
-  // facts the reader had not opened the node for.
   await openObservatory(page, `/?run=${runs().live}&node=publish`);
   const banner = page.getByRole("alert");
   await expect(banner).toContainText("This node failed: agent");

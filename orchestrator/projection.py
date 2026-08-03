@@ -61,17 +61,7 @@ TERMINAL_NODE_STATES: frozenset[str] = frozenset(get_args(NodeState)) - {"runnin
 # `dag-layout` renderer states, the `dag-model` zod enum, and the documented union in
 # `docs/dag-ui/design.md` — against this Literal, and holds `NodeState` inside it.
 #: The one authoritative per-node status the read API serves, and the only node
-#: vocabulary a renderer may switch on. `node_statuses` below decides every node's,
-#: once, on the server.
-#:
-#: `NodeState` above is the strict fold's own answer and is deliberately narrower: the
-#: journal records a node *starting* and *settling*, so it can say nothing about a node
-#: the scheduler never dispatched — which is where `pending`, `blocked` and `skipped`
-#: live, and what a client used to invent for itself.
-#:
-#: `docs/dag-ui/design.md` is the durable contract: what each member means, how this
-#: relates to `node_states` and to `RunTelemetry.nodes[].status`, and why a run's own
-#: `state` uses the word `blocked` for something else entirely.
+#: vocabulary a renderer may switch on. See `docs/dag-ui/design.md` for semantics.
 NodeStatus = Literal[
     "pending",
     "running",

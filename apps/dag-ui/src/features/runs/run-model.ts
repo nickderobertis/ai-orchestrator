@@ -21,14 +21,7 @@ export interface NodeView {
   readonly id: string;
   readonly label: string;
   readonly kind: "agent" | "human" | "lifecycle";
-  /**
-   * The served `Round.node_status`, unmodified.
-   *
-   * Every surface — the graph card, the accessible list, the node detail badge —
-   * reads this one field. Nothing here derives, defaults, or renames it: the server
-   * decides a node's status once, and a client that filled in a gap of its own is
-   * how the sidebar came to call a node blocked while its detail said running.
-   */
+  /** The authoritative `Round.node_status`, rendered without client-side defaults. */
   readonly status: NodeStatus;
   readonly task: PlanTask;
   readonly telemetry?: NodeTelemetry;

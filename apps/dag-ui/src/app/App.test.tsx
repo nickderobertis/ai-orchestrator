@@ -108,11 +108,6 @@ describe("DAG application", () => {
   });
 
   test("states one status per node on every surface that shows one", async () => {
-    // The defect this replaced: the sidebar and the node view derived a node's state
-    // from different vocabularies, so one called a node blocked while the other
-    // called it running. The served run has a blocked node and a skipped one — two
-    // statuses the journal never records — and every surface has to say the same
-    // word for each of them.
     const { client } = telemetryHarness();
     render(<App client={client} />);
     expect(await screen.findByText("dashboard")).toBeInTheDocument();

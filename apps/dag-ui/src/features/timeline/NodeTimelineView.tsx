@@ -202,20 +202,7 @@ function PullRequest({ pr }: { readonly pr?: string | null }) {
   );
 }
 
-/**
- * Why a node is failed, blocked or skipped — first thing in the view, before the
- * disclosures.
- *
- * A node in trouble used to say so only through the accordion's "Outcome" row, which
- * put the one fact a reader opened the node for behind a click and beside four facts
- * they did not. That row stays — a node that settled well still records an outcome
- * worth reading — but a node that did not gets its reason up here, unprompted.
- *
- * Every *fact* it states is a served field: the status, the failure classification,
- * the recorded detail and error, the exit code, and the blockers. What this component
- * decides is only how to say them — which heading, which tone, which recorded text to
- * lead with, and what to print when the run recorded none.
- */
+/** Leads an unhealthy node's detail view with its server-recorded reason. */
 function NodeProblemBanner({ node }: { readonly node: NodeView }) {
   if (!isUnhealthy(node.status)) return null;
   // Not one condition: `blocked` moves when a person acts and `skipped` never will.
