@@ -400,6 +400,8 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
 ) -> None:
     runs = tmp_path / "runs"
     run_dir = _active_run(runs, "demo")
+    for index in range(50):
+        _active_run(runs, f"page-{index:02d}")
     monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
     app = create_app(
         runs,
@@ -419,8 +421,15 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             frames = _read_frames(lines, until="snapshot")
             snapshot = frames[-1]
             assert snapshot["event"] == "snapshot"
-            snapshot_runs = json.loads(snapshot["data"])["runs"]
-            assert snapshot_runs[0]["run_id"] == "demo"
+            snapshot_body = json.loads(snapshot["data"])
+            assert len(snapshot_body["runs"]) == 50
+            assert snapshot_body["next_cursor"]
+            continuation = client.get(
+                "/api/v2/runs",
+                params={"include_settled": True, "cursor": snapshot_body["next_cursor"]},
+            )
+            assert continuation.status_code == 200
+            assert len(continuation.json()["runs"]) == 1
 
             # An idle stream heartbeats at least once before anything changes.
             idle = _read_frames(lines, until="comment")
@@ -1599,10 +1608,10 @@ def _lifecycle_history(tmp_path: Path, run_id: str, base: datetime) -> Path:
     return store
 
 
-def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
+def test_scoped_timeline_endpoints_reconstruct_one_ordered_run_history_over_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The whole journey a viewer takes: one timeline fetch, and detail without transcripts."""
+    """Viewer scopes reconstruct one timeline while detail omits transcripts."""
     runs = tmp_path / "runs"
     run_dir = _lifecycle_run(runs, "demo")
     store = _lifecycle_history(tmp_path, "demo", datetime.now(UTC))

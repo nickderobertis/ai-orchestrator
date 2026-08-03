@@ -87,21 +87,26 @@ export function useDagTelemetry(
   }, [client]);
   const loadMore = useCallback(async () => {
     if (list?.next_cursor === undefined) return;
-    const next = await client.listRuns(true, list.next_cursor);
-    setList((current) =>
-      current === undefined
-        ? next
-        : {
-            ...next,
-            runs: [
-              ...current.runs,
-              ...next.runs.filter(
-                ({ run_id }) =>
-                  !current.runs.some((run) => run.run_id === run_id),
-              ),
-            ],
-          },
-    );
+    try {
+      const next = await client.listRuns(true, list.next_cursor);
+      setList((current) =>
+        current === undefined
+          ? next
+          : {
+              ...next,
+              runs: [
+                ...current.runs,
+                ...next.runs.filter(
+                  ({ run_id }) =>
+                    !current.runs.some((run) => run.run_id === run_id),
+                ),
+              ],
+            },
+      );
+      setError(undefined);
+    } catch (caught) {
+      setError(asError(caught));
+    }
   }, [client, list]);
 
   const refresh = useCallback(async () => {

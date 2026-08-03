@@ -793,6 +793,44 @@ describe("DAG application", () => {
     ).toBe(true);
   });
 
+  test("reports a failed next page and can load it on a later scroll", async () => {
+    let continuationAttempts = 0;
+    const { client } = telemetryHarness((url) => {
+      if (!isRunList(url)) return defaultResponder(url);
+      if (!url.searchParams.has("cursor"))
+        return Response.json({
+          ...runList,
+          runs: [runList.runs[0]],
+          next_cursor: "page-2",
+        });
+      continuationAttempts += 1;
+      if (continuationAttempts === 1) throw new Error("next page unavailable");
+      return Response.json({ ...runList, runs: [runList.runs[1]] });
+    });
+    render(<App client={client} />);
+    await screen.findByRole("button", { name: RegExp(LIVE_RUN) });
+
+    const viewport = document.querySelector<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (viewport === null) throw new Error("scroll viewport was not rendered");
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, value: 100 },
+    });
+    fireEvent.scroll(viewport);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Telemetry request failed",
+    );
+
+    fireEvent.scroll(viewport);
+    expect(
+      await screen.findByRole("button", { name: RegExp(HISTORY_RUN) }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
   test("opens on the run as a whole when the address names no view", async () => {
     window.history.replaceState(null, "", "/");
     const { client } = telemetryHarness();

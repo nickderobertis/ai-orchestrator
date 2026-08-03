@@ -402,7 +402,7 @@ async def _event_stream(
                 runs_dir,
                 include_settled=True,
                 oneharness_bin=oneharness_bin,
-                limit=50,
+                limit=RUNS_PAGE_LIMIT,
             )
         ),
     )

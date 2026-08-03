@@ -997,11 +997,7 @@ def run_timeline(
         raise InvalidRunId("timeline accepts node_id or scope=run, not both")
     if scope not in (None, "run"):
         raise InvalidRunId("timeline scope must be run")
-    if node_id is not None and (
-        not node_id
-        or any(ord(character) < 32 for character in node_id)
-        or any(c in node_id for c in "/?#")
-    ):
+    if node_id == "":
         raise InvalidRunId("invalid node_id")
     try:
         validated = validate_run_id(run_id)
@@ -1014,6 +1010,15 @@ def run_timeline(
         events = read_strict_events(run_dir / JOURNAL_NAME, validated)
     except ProjectionError as exc:
         raise ProjectionFailed(str(exc)) from exc
+    known_node_ids = {str(event.node) for event in events if event.node is not None}
+    for event in events:
+        definition = event.detail.get("definition")
+        if isinstance(definition, Mapping):
+            definition_id = definition.get("id")
+            if isinstance(definition_id, str):
+                known_node_ids.add(definition_id)
+    if node_id is not None and node_id not in known_node_ids:
+        raise InvalidRunId("node_id does not name a node in this run")
     spans = assemble(events, _conversations(validated, oneharness_bin), load_snapshot(run_dir))
     if node_id is not None:
         spans = [span for span in spans if span.get("node_id") == node_id]
