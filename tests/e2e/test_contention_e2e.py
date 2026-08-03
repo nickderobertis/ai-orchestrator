@@ -118,6 +118,16 @@ def _orphan_worktree_process(
     ready.put(str(workspace.worktree(repo, branch, base="origin/main")))
 
 
+def _dirty_orphan_worktree_process(
+    canonical: str, root: str, branch: str, ready: multiprocessing.Queue[str]
+) -> None:
+    repo = normalize_repo(canonical)
+    workspace = _open_workspace(canonical, root)
+    worktree = workspace.worktree(repo, branch, base="origin/main")
+    (worktree / "interrupted.txt").write_text("survived the killed dispatch\n", encoding="utf-8")
+    ready.put(str(worktree))
+
+
 def _committing_run_process(
     canonical: str, root: str, branch: str, publish: bool, ready: multiprocessing.Queue[str]
 ) -> None:
@@ -321,6 +331,70 @@ def test_sibling_run_can_neither_remove_a_live_worktree_nor_delete_its_branch(
         _join(process)
 
     assert not live.exists()
+
+
+def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """A retry takes ownership of the only tree containing a killed worker's edits."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-adopt-dead")
+    root = tmp_path / "worktrees-adopt-dead"
+    branch = "feature/adopt-dead"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
+        target=_dirty_orphan_worktree_process,
+        args=(str(canonical), str(root), branch, ready),
+    )
+    process.start()
+    original = Path(ready.get(timeout=e2e_timeout(10)))
+    _join(process)
+
+    retry = _open_workspace(str(canonical), str(root))
+    adopted = retry.worktree(normalize_repo(str(canonical)), branch, base="origin/main")
+
+    assert adopted == original
+    assert retry.adopted_worktree(adopted)
+    assert (adopted / "interrupted.txt").read_text(encoding="utf-8") == (
+        "survived the killed dispatch\n"
+    )
+    retry.remove_worktree(normalize_repo(str(canonical)), adopted)
+
+
+def test_live_dispatch_worktree_is_not_adopted_and_retry_uses_fresh_path(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """A free ownership lease is mandatory even when the desired branch matches."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-adopt-live")
+    root = tmp_path / "worktrees-adopt-live"
+    branch = "feature/adopt-live"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    release = MP.Event()
+    owner = MP.Process(
+        target=_held_worktree_process,
+        args=(
+            str(canonical),
+            str(root),
+            branch,
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            "live-owner",
+            ready,
+            release,
+        ),
+    )
+    owner.start()
+    held = Path(ready.get(timeout=e2e_timeout(10)))
+    try:
+        retry = _open_workspace(str(canonical), str(root))
+        fresh = retry.worktree(normalize_repo(str(canonical)), branch, base="origin/main")
+        assert fresh != held
+        assert not retry.adopted_worktree(fresh)
+        assert held.exists()
+        retry.remove_worktree(normalize_repo(str(canonical)), fresh)
+    finally:
+        release.set()
+        _join(owner)
 
 
 def _same_branch_lifecycle_process(
