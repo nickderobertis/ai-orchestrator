@@ -745,7 +745,7 @@ def stall(port: int) -> int:
 #: Published beside the runs root so the browser spec names what this module wrote —
 #: its runs, and the pull request one of them published — rather than keeping its own
 #: copy of them.
-RUN_IDS_NAME = "run-ids.json"
+FIXTURE_FACTS_NAME = "fixture-facts.json"
 
 
 def serve(workspace: Path, port: int) -> int:
@@ -753,7 +753,7 @@ def serve(workspace: Path, port: int) -> int:
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
     runs_dir, oneharness_bin = build_fixture(workspace)
-    (workspace / RUN_IDS_NAME).write_text(
+    (workspace / FIXTURE_FACTS_NAME).write_text(
         json.dumps(
             {
                 "runs": {

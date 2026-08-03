@@ -58,15 +58,11 @@ export function parseTimestamp(at: string): Date | undefined {
 export function formatTimestamp(at: string): string {
   const parsed = parseTimestamp(at);
   if (parsed === undefined) return at;
-  // llmlint: ignore[changed_behavior_has_e2e] the browser fixture's journal is written
-  // by the run that serves it, so every stamp a journey can reach is today's: the
-  // dated branches are only reachable by moving the clock, which a live server tier
-  // cannot do. The e2e journey asserts the shapes this returns across a whole rail,
-  // and `time.test.ts` pins each branch against a fixed instant.
   if (isToday(parsed)) return format(parsed, "HH:mm:ss");
-  return isThisYear(parsed)
-    ? format(parsed, "MMM d, HH:mm:ss")
-    : format(parsed, "MMM d yyyy, HH:mm:ss");
+  // llmlint: ignore[changed_behavior_has_e2e] the browser fixture's journal is written by the run that serves it, so every stamp a journey can reach is today's and the dated branches are reachable only by moving the clock, which a live server tier cannot do; the e2e journey asserts every shape this returns across a whole rail, and `time.test.ts` pins this branch against a fixed instant.
+  if (isThisYear(parsed)) return format(parsed, "MMM d, HH:mm:ss");
+  // llmlint: ignore[changed_behavior_has_e2e] same reason: no served run can carry a stamp from another year, so `time.test.ts` pins this branch against a fixed instant instead.
+  return format(parsed, "MMM d yyyy, HH:mm:ss");
 }
 
 /** The whole instant, zone included: what a compact reading is backed by on hover. */

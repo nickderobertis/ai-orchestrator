@@ -171,6 +171,13 @@ describe("DAG application", () => {
       await within(detail()).findByText("1240 records"),
     ).toBeInTheDocument();
     expect(within(detail()).getByText("Reference")).toBeInTheDocument();
+    // This is the one rendering that shows a record the run closed, so both of its
+    // stamps are read as ages — and the moment itself stays on the element rather
+    // than reaching the reader as the ISO string the journal wrote.
+    const ages = within(detail()).getAllByText(/ ago$/);
+    expect(ages).toHaveLength(2);
+    expect(ages[0]).toHaveAttribute("datetime", "2026-07-26T11:00:15.000Z");
+    expect(ages[1]).toHaveAttribute("datetime", "2026-07-26T11:02:35.000Z");
   });
 
   test("keeps a node whose recorded work is hundreds of sessions scannable", async () => {

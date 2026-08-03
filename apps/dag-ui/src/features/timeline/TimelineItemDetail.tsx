@@ -290,11 +290,6 @@ function Recorded({
         <div>
           <dt>Ended</dt>
           <dd>
-            {/* llmlint: ignore[changed_behavior_has_e2e] every closed span the browser
-                fixture records is a dispatch, a verification or a publication, each of
-                which has a rendering of its own, so no journey can open this list on
-                one that ended; the reading itself is the same `Timestamp` the entry
-                above it uses, which that journey asserts. */}
             {row.endedAt === null ? (
               "Still running"
             ) : (

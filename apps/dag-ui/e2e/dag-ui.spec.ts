@@ -38,7 +38,9 @@ const fixtureSchema = z.object({
 let cachedFixture: z.infer<typeof fixtureSchema> | undefined;
 const fixture = (): z.infer<typeof fixtureSchema> =>
   (cachedFixture ??= fixtureSchema.parse(
-    JSON.parse(readFileSync(join(FIXTURE_WORKSPACE, "run-ids.json"), "utf8")),
+    JSON.parse(
+      readFileSync(join(FIXTURE_WORKSPACE, "fixture-facts.json"), "utf8"),
+    ),
   ));
 /** Every run the fixture wrote, and nothing else: journeys iterate this. */
 const runs = (): z.infer<typeof fixtureSchema>["runs"] => fixture().runs;
@@ -531,6 +533,19 @@ test("lands on the run as a whole, with every deep link still opening", async ({
   await expect(
     page.getByRole("region", { name: "Timeline for dashboard" }),
   ).toBeVisible();
+
+  // The node cannot survive a move to a run that never recorded it, so leaving one
+  // this way lands on the run as a whole — the reading a bare address gets — rather
+  // than on the graph the node bookmark was being read through.
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
+  await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
+  ).toHaveCount(0);
+
   await openObservatory(page);
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
