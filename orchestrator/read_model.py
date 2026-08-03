@@ -44,8 +44,10 @@ from .launch import (
 from .monitor import load_snapshot, snapshot_path
 from .projection import (
     NodeState,
+    NodeStatus,
     ProjectedPlan,
     ProjectionError,
+    node_statuses,
     project_round,
     read_strict_events,
 )
@@ -66,7 +68,7 @@ from .telemetry import (
     collect_run,
 )
 
-API_VERSION = 1
+API_VERSION = 2
 
 
 class ReadError(Exception):
@@ -148,7 +150,7 @@ class RunSummary(TypedDict):
 
 
 class RunList(TypedDict):
-    """The ``RunList`` envelope served by ``GET /api/v1/runs`` and the SSE snapshot."""
+    """The ``RunList`` envelope served by ``GET /api/v2/runs`` and the SSE snapshot."""
 
     api_version: int
     telemetry_schema_version: int
@@ -157,12 +159,19 @@ class RunList(TypedDict):
 
 
 class Round(TypedDict):
-    """One strict ``RoundProjection`` serialized as the contract's ``Round``."""
+    """One strict ``RoundProjection`` serialized as the contract's ``Round``.
+
+    ``node_status`` is the authoritative per-node vocabulary every renderer reads;
+    ``node_states`` is the strict fold it is derived from and is retained unchanged.
+    See ``orchestrator.projection.NodeStatus`` for how the two relate.
+    """
 
     run_id: str
     round: int
     plan: ProjectedPlan
     node_states: dict[str, NodeState]
+    node_status: dict[str, NodeStatus]
+    node_gated_by: dict[str, list[str]]
     node_results: dict[str, GraphResultItem]
     attestations: list[str]
     result: GraphPayload | None
@@ -170,7 +179,7 @@ class Round(TypedDict):
 
 
 class RunDetail(TypedDict):
-    """The full ``RunDetail`` served by ``GET /api/v1/runs/{run_id}``."""
+    """The full ``RunDetail`` served by ``GET /api/v2/runs/{run_id}``."""
 
     api_version: int
     telemetry_schema_version: int
@@ -297,7 +306,27 @@ def read_logs(run_dir: Path) -> dict[str, str]:
     return logs
 
 
-def _node_counts(telemetry: RunTelemetry) -> dict[str, int]:
+def _node_counts(run_dir: Path, telemetry: RunTelemetry) -> dict[str, int]:
+    """How many nodes of the newest round hold each authoritative ``NodeStatus``.
+
+    Counted over the same derivation the run detail serves as ``Round.node_status``,
+    so a list row and the graph it opens cannot report different graphs. The telemetry
+    index alone cannot supply this: it holds one entry per node the journal recorded,
+    which omits every node the scheduler gated or has yet to start.
+
+    A run whose authoritative stream will not fold degrades to the recorded telemetry
+    statuses rather than dropping the row — this view exists to show an operator a run
+    that is going wrong, and a corrupt journal is exactly that.
+    """
+    latest = latest_round(run_dir)
+    if latest is not None:
+        try:
+            events = read_strict_events(run_dir / JOURNAL_NAME, RunId(telemetry.run_id))
+            projected = project_round(events, RunId(telemetry.run_id), latest[0])
+        except ProjectionError:
+            pass
+        else:
+            return dict(Counter(node_statuses(projected).status.values()))
     return dict(Counter(node.status for node in telemetry.nodes))
 
 
@@ -317,7 +346,7 @@ def run_summary(
         "timing_quality": telemetry.timing_quality,
         "linkage_quality": telemetry.linkage_quality,
         "timing": telemetry.timing,
-        "node_counts": _node_counts(telemetry),
+        "node_counts": _node_counts(run_dir, telemetry),
     }
     if telemetry.last_progress_at is not None:
         summary["last_progress_at"] = telemetry.last_progress_at
@@ -378,11 +407,21 @@ def list_runs(
 def round_record(events: list[Any], run_id: RunId, round_number: int) -> Round:
     """Serialize one strict ``RoundProjection`` as the contract's ``Round``."""
     projection = project_round(events, run_id, round_number)
+    statuses = node_statuses(projection)
+    plan_ids = {task["id"] for task in projection.plan["tasks"]}
+    if set(statuses.status) != plan_ids:
+        raise ProjectionFailed("authoritative node status does not cover exactly the round plan")
+    gated_ids = set(statuses.gated_by)
+    blocker_ids = {blocker for blockers in statuses.gated_by.values() for blocker in blockers}
+    if not gated_ids | blocker_ids <= plan_ids:
+        raise ProjectionFailed("node gates name a node outside the round plan")
     return {
         "run_id": projection.run_id,
         "round": projection.round,
         "plan": projection.plan,
         "node_states": projection.node_states,
+        "node_status": statuses.status,
+        "node_gated_by": statuses.gated_by,
         "node_results": projection.node_results,
         "attestations": list(projection.attestations),
         "result": projection.result,

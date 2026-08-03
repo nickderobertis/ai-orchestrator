@@ -1,4 +1,4 @@
-import { API_V1_PATHS, API_V1_QUERY } from "@ai-orchestrator/dag-model";
+import { API_V2_PATHS, API_V2_QUERY } from "@ai-orchestrator/dag-model";
 import { TelemetryClient } from "@ai-orchestrator/telemetry-client";
 import { vi } from "vitest";
 import {
@@ -52,7 +52,7 @@ type Responder = (url: URL) => Response | Promise<Response>;
 
 /** True for the run-list path the packages publish, whatever it is. */
 export const isRunList = (url: URL): boolean =>
-  url.pathname === API_V1_PATHS.runs;
+  url.pathname === API_V2_PATHS.runs;
 
 /**
  * True for a single run's detail path, whatever run it names — the run route itself
@@ -60,8 +60,8 @@ export const isRunList = (url: URL): boolean =>
  * the detail read.
  */
 export const isRunDetail = (url: URL): boolean =>
-  url.pathname.startsWith(`${API_V1_PATHS.runs}/`) &&
-  !url.pathname.slice(API_V1_PATHS.runs.length + 1).includes("/");
+  url.pathname.startsWith(`${API_V2_PATHS.runs}/`) &&
+  !url.pathname.slice(API_V2_PATHS.runs.length + 1).includes("/");
 
 /** True for a run's timeline path, whatever run it names. */
 export const isTimeline = (url: URL): boolean =>
@@ -72,7 +72,7 @@ export const isConversation = (url: URL): boolean =>
   url.pathname.includes("/conversations/");
 
 /**
- * The recorded run whose payloads stand in for the run a `/api/v1/runs/...` path
+ * The recorded run whose payloads stand in for the run a `/api/v2/runs/...` path
  * names. Two runs are recorded, and any other identifier — including one the app
  * asks for from a stale bookmark — is answered with the live run's shape, exactly
  * as a server that still holds that run would.
@@ -107,7 +107,7 @@ export function defaultResponder(url: URL): Response {
   }
   const detail = runDetail(runId);
   return Response.json(
-    url.searchParams.get(API_V1_QUERY.includeConversations) === "false"
+    url.searchParams.get(API_V2_QUERY.includeConversations) === "false"
       ? { ...detail, conversations: [] }
       : detail,
   );

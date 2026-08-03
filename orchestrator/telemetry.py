@@ -286,6 +286,12 @@ class NodeTelemetry:
     commit: str = ""
     retry_lineage: RetryLineageTelemetry | None = None
     gate_attestation: GateAttestation | None = None
+    #: How this node's own recorded outcome failed, classified exactly as the run-level
+    #: `RunTelemetry.failure` is. `None` for a node that did not fail. It is the same
+    #: fact the recorded item already carried in untyped `outcome`/`detail` prose; a
+    #: reader that has to classify one itself is a reader that will classify it
+    #: differently from the run summary beside it.
+    failure: Failure | None = None
     timing: TimingRecord | None = None
     usage: UsageRecord | None = None
     sessions: list[SessionLink] = field(default_factory=list)
@@ -314,6 +320,8 @@ class NodeTelemetry:
             result["retry_lineage"] = self.retry_lineage.record()
         if self.gate_attestation:
             result["gate_attestation"] = self.gate_attestation.to_record()
+        if self.failure is not None:
+            result["failure"] = self.failure.record()
         if self.timing is not None:
             result["timing"] = self.timing
         if self.usage is not None:
@@ -1486,6 +1494,7 @@ def _node_record(
         commit=commits[-1] if commits else "",
         retry_lineage=RetryLineageTelemetry.from_value(item.get("retry_lineage")),
         gate_attestation=attestation,
+        failure=_failure(item),
         timing=_timing(
             wall_ms,
             linked,

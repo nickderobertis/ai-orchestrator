@@ -162,6 +162,17 @@ p {
   white-space: nowrap;
 }
 
+/* The run's own nodes, counted over the same statuses the graph paints. It spans the
+   whole row so the run id above it keeps its width. */
+.run-link-counts {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .live-dot {
   flex: 0 0 auto;
   width: 7px;
@@ -281,6 +292,16 @@ p {
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+/* One line, clipped: the card is a fixed 200×72, and the node view carries the rest. */
+.node-reason {
+  display: block;
+  overflow: hidden;
+  font-size: 9px;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dag-node strong {

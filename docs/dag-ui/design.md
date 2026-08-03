@@ -30,21 +30,29 @@ cannot change without a new API major version. Unknown fields must be ignored.
 Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
-The initial API base is `/api/v1`. Its telemetry payload embeds the existing
+The authoritative node-status contract is API v2 at `/api/v2`. Its telemetry payload embeds the existing
 telemetry index at `telemetry_schema_version: 9`, mirroring that index's own
 `schema_version`; this API version does not replace or renumber that contract.
 `scripts/check-dag-state-contract.py` reconciles every copy of that number here
 against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
 
+API v2 replaces v1 because `Round.node_status` and `Round.node_gated_by` are new
+required fields. The v1 routes are not aliases: consumers must move to `/api/v2`
+and validate `api_version: 2`, which prevents an old client from silently treating
+an absent authoritative status as a state it invents locally.
+`tests/golden/run-detail-v2.json` is the checked-in cross-language example: Python
+serialization and the public `dag-model` parser both validate it, including the
+required per-task status coverage.
+
 ## Read model
 
 ### Run list and detail
 
-`GET /api/v1/runs?include_settled=false` returns:
+`GET /api/v2/runs?include_settled=false` returns:
 
 ```ts
 interface RunList {
-  api_version: 1;
+  api_version: 2;
   telemetry_schema_version: 9;
   observed_at: string;
   runs: RunSummary[];
@@ -80,11 +88,11 @@ Runs are ordered by most recent progress descending, then `run_id` ascending.
 `include_settled` defaults to false, matching `just telemetry`; true matches
 `just telemetry --all`.
 
-`GET /api/v1/runs/{run_id}` returns a `RunDetail`:
+`GET /api/v2/runs/{run_id}` returns a `RunDetail`:
 
 ```ts
 interface RunDetail {
-  api_version: 1;
+  api_version: 2;
   telemetry_schema_version: 9;
   observed_at: string;
   run: RunTelemetry;
@@ -109,11 +117,11 @@ interface DetailSnapshot {
 prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorded no
 `launch_id`.
 
-`GET /api/v1/runs/{run_id}?include_conversations=false` serves `conversations` as
+`GET /api/v2/runs/{run_id}?include_conversations=false` serves `conversations` as
 an empty array. Transcripts dominate this payload — a real run carries megabytes of
 them across hundreds of sessions, refetched on every live update — so a client that
 reads the run timeline instead asks for none of them. This is an opt-out, not a
-schema change: `api_version` stays `1`, `conversations` stays required and present,
+schema change: `api_version` stays `2`, `conversations` stays required and present,
 and the client simply asked for nothing in it. It defaults to `true`.
 
 `RunTelemetry` is exactly `RunTelemetry.record()` from
@@ -124,7 +132,8 @@ and the client simply asked for nothing in it. It defaults to `true`.
 `check_rollup`. A `NodeTelemetry` is exactly `NodeTelemetry.record()`: required
 `node`, `status`, `sessions`, `turns`, and `lint`; optional `outcome`, `branch`,
 `comparison_remote`, `comparison_base`, `checkpoint`, `commit`,
-`retry_lineage`, `gate_attestation`, `timing`, `usage`, and `tool_commands`.
+`retry_lineage`, `gate_attestation`, `failure`, `timing`, `usage`, and
+`tool_commands`.
 `last_event` is required but nullable in both payloads: a run that has recorded no
 journal event yet — a run that has only just launched — serves it as `null` rather
 than as an empty string, so its absence is representable instead of degenerate.
@@ -215,30 +224,108 @@ interface Round {
     string,
     "running" | "done" | "failed" | "waiting" | "cancelled"
   >;
+  node_status: Record<string, NodeStatus>;
+  node_gated_by: Record<string, string[]>;
   node_results: Record<string, GraphResultItem>;
   attestations: string[];
   result: GraphPayload | null;
   last_seq: number;
 }
+
+type NodeStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "blocked"
+  | "skipped"
+  | "done"
+  | "not-completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
 ```
 
 `PlanTask`, `GraphResultItem`, and `GraphPayload` retain their validated plan and
 result JSON shapes rather than being flattened. The server obtains this object
 only through `read_strict_events()` and `project_round()`. An inconsistent
 authoritative stream fails the detail request with `409 projection_error`; it is
-never rendered as a plausible graph. Pending nodes are plan tasks absent from
-`node_states`.
+never rendered as a plausible graph.
+
+#### One authoritative node status
+
+`node_status` is the **only** node vocabulary a renderer may switch on. It holds
+one entry for every task in `plan.tasks`, so a client never has to invent a status
+for a node it cannot find, and it is owned by
+`orchestrator.projection.NodeStatus` — `scripts/check-dag-state-contract.py`
+reconciles the union above, the `dag-model` `nodeStatusSchema`, and
+`@ai-orchestrator/dag-layout`'s `DAG_NODE_STATES` against that Literal.
+
+The other two node vocabularies remain, and relate to it like this:
+
+- `node_states` is the strict fold itself: what the journal recorded, and only for
+  nodes it recorded something about. Its five members are a subset of `NodeStatus`
+  and win wherever it has an entry. It stays served because it is the audit answer —
+  what was *journalled*, with nothing derived on top.
+- `RunTelemetry.nodes[]` is the timing and usage index, keyed by node. Its `status`
+  is folded from the same journal and agrees with `node_status` for every node it
+  holds; it simply holds no entry for a node the journal never recorded.
+- `blocked`, `skipped` and `pending` exist only in `node_status`. The scheduler
+  derives them and journals nothing, so the server re-derives them from the plan's
+  own dependency edges using the scheduler's rule (`plan.UNMET_DEP_STATUSES` /
+  `plan.GATED_DEP_STATUSES`) — otherwise every held node reads as `pending` for as
+  long as the run is live. A node gated only by a cross-DAG prerequisite reads as
+  `pending`: that status lives in another run's journal and this round cannot
+  evidence it.
+- `unknown` is the honest report of a recorded status outside the vocabulary, never
+  a silent fallback onto a neighbouring meaning.
+
+`node_gated_by` names, for each `blocked` or `skipped` node, the **plan node ids**
+whose status gates it, in plan order; it omits every other node. It is not
+`GraphResultItem.blocked_by`, which names *human action refs* (`node` or
+`node/step`) on a settled result — a node view showing what holds a node reads both.
+
+A run's own `state` also uses the word `blocked`, and means something else: the run
+is waiting on a **planner** reply (`orchestrator.monitor.run_state`). The two never
+share a field — a run's is `state`, a node's is `node_status` — and no renderer may
+map one through the other's table.
+
+`RunSummary.node_counts` counts this same derivation over the run's newest round, so
+a list row and the graph it opens cannot describe different graphs. A run whose
+authoritative stream will not fold degrades to the recorded telemetry statuses.
+
+#### Typed failure and blocker facts
+
+A failed or held node's reason is served typed, not left to be parsed out of prose:
+
+- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string}` —
+  the same classification `RunTelemetry.failure` carries for the run, applied to that
+  node's own recorded item, and omitted for a node that did not fail.
+- `GraphResultItem` carries `error`, `detail`, `exit_code`, `blocked_by`,
+  `waiting_steps`, and `human_actions` for the node it describes. They are optional
+  because a node that neither failed nor waited records none of them.
+
+```ts
+type FailureClass =
+  | "agent"
+  | "gate"
+  | "checks"
+  | "publication"
+  | "timeout"
+  | "provider"
+  | "configuration"
+  | "unknown";
+```
 
 ### Run timeline
 
-`GET /api/v1/runs/{run_id}/timeline` returns one `RunTimeline` for the whole run;
+`GET /api/v2/runs/{run_id}/timeline` returns one `RunTimeline` for the whole run;
 a consumer filters it by `node_id` rather than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
 
 ```ts
 interface RunTimeline {
-  api_version: 1;
+  api_version: 2;
   observed_at: string;
   run_id: string;
   spans: TimelineSpan[];
@@ -357,13 +444,13 @@ unrecognized one by status.
 The server exposes only:
 
 - `GET /healthz` → `{"status":"ok"}` without touching run storage.
-- `GET /api/v1/runs`.
-- `GET /api/v1/runs/{run_id}?include_conversations={optional}`.
-- `GET /api/v1/runs/{run_id}/timeline` for the whole run's ordered spans and
+- `GET /api/v2/runs`.
+- `GET /api/v2/runs/{run_id}?include_conversations={optional}`.
+- `GET /api/v2/runs/{run_id}/timeline` for the whole run's ordered spans and
   events.
-- `GET /api/v1/runs/{run_id}/conversations/{conversation_id}` for one complete
+- `GET /api/v2/runs/{run_id}/conversations/{conversation_id}` for one complete
   conversation when detail responses use summaries.
-- `GET /api/v1/events?run_id={optional}&after={optional}` as SSE.
+- `GET /api/v2/events?run_id={optional}&after={optional}` as SSE.
 
 There are no mutation routes, command execution, file paths, arbitrary history
 queries, or user-supplied globbing. Run, conversation, and cursor IDs are

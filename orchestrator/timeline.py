@@ -202,7 +202,7 @@ class TimelineSpan(TypedDict):
 
 
 class RunTimeline(TypedDict):
-    """The ``RunTimeline`` served by ``GET /api/v1/runs/{run_id}/timeline``."""
+    """The ``RunTimeline`` served by ``GET /api/v2/runs/{run_id}/timeline``."""
 
     api_version: int
     observed_at: str

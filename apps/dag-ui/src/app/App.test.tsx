@@ -41,6 +41,14 @@ const railRow = (name: RegExp) =>
 const detail = () =>
   screen.getByRole("region", { name: "Timeline item detail" });
 
+/** Nodes of the live fixture whose status every surface has to agree on. */
+const SERVED_STATUSES: readonly { node: string; status: string }[] = [
+  { node: "queued", status: "blocked" },
+  { node: "abandoned", status: "skipped" },
+  { node: "followup", status: "pending" },
+  { node: "publish", status: "failed" },
+];
+
 describe("DAG application", () => {
   // The graph is one reading of a run and no longer the one an empty address lands
   // on, so the journeys that are about it say so — exactly as an operator's own
@@ -101,6 +109,115 @@ describe("DAG application", () => {
     await userEvent.keyboard("{Escape}");
     expect(await screen.findByText("queued")).toBeInTheDocument();
     expect(window.location.search).not.toContain("node=");
+  });
+
+  test("states one status per node on every surface that shows one", async () => {
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
+
+    const nodeList = screen.getByRole("list", { name: "DAG nodes" });
+    for (const { node, status } of SERVED_STATUSES) {
+      // The card the pointer reads.
+      expect(screen.getByText(node).closest(".dag-node")).toHaveClass(
+        `state-${status}`,
+      );
+      // The list the keyboard reads.
+      expect(
+        within(nodeList).getByRole("button", {
+          name: new RegExp(`^${node}: ${status}\\b`),
+        }),
+      ).toBeInTheDocument();
+    }
+
+    // The run row above them, counted on the server over that same derivation.
+    expect(
+      screen.getByRole("button", { name: new RegExp(LIVE_RUN) }),
+    ).toHaveTextContent("1 pending · 1 running · 1 waiting · 1 blocked");
+
+    // And the node view each card opens.
+    for (const { node, status } of SERVED_STATUSES) {
+      // Re-queried per node: leaving the node view unmounts and remounts the list.
+      fireEvent.click(
+        within(screen.getByRole("list", { name: "DAG nodes" })).getByRole(
+          "button",
+          { name: new RegExp(`^${node}: ${status}\\b`) },
+        ),
+      );
+      const view = await screen.findByRole("region", {
+        name: `Timeline for ${node}`,
+      });
+      expect(view.querySelector(".node-view-facts")).toHaveTextContent(status);
+      fireEvent.click(screen.getByRole("button", { name: /Graph/ }));
+    }
+  });
+
+  test("still counts a run whose statuses the server could not fold", async () => {
+    // When a run's authoritative journal will not fold, the server counts its nodes
+    // from the tolerant telemetry index instead, whose statuses are an open string.
+    // The row has to show those words too — a run going wrong is exactly the one an
+    // operator is looking at — after the vocabulary it does know, not instead of it.
+    const degraded = {
+      ...runList,
+      runs: runList.runs.map((run) =>
+        run.run_id === LIVE_RUN
+          ? { ...run, node_counts: { improvised: 2, running: 1, absent: 0 } }
+          : run,
+      ),
+    };
+    const { client } = telemetryHarness((url) =>
+      isRunList(url) ? Response.json(degraded) : defaultResponder(url),
+    );
+    render(<App client={client} />);
+
+    const row = await screen.findByRole("button", {
+      name: new RegExp(LIVE_RUN),
+    });
+    expect(row).toHaveTextContent("1 running · 2 improvised");
+    // A status counted zero times is not a status this run has.
+    expect(row).not.toHaveTextContent("absent");
+  });
+
+  test("leads a failed node's view with why it failed", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=publish`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+
+    // The reason is the first thing in the view and announces itself, rather than
+    // sitting behind an accordion entry called "Outcome" beside four other facts.
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("This node failed: agent");
+    expect(banner).toHaveTextContent("Deploy failed");
+    expect(banner).toHaveTextContent("publication exited non-zero");
+    expect(banner).toHaveTextContent("2");
+    expect(
+      banner.compareDocumentPosition(
+        screen.getByRole("button", { name: "Task" }),
+      ),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  test("leads a blocked node's view with what is holding it", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=queued`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("This node is blocked");
+    expect(banner).toHaveTextContent("Blocked by");
+    expect(banner).toHaveTextContent("approval");
+  });
+
+  test("says nothing extra about a node that is making progress", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=followup`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    // Work that has not started has no problem to report, and a banner over it
+    // would read as one.
+    expect(
+      await screen.findByRole("region", { name: "Timeline for followup" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   test("walks back to the graph from the breadcrumb button", async () => {

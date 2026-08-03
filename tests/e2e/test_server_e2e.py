@@ -287,8 +287,10 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         client = httpx.Client(base_url=base, timeout=10)
 
         assert client.get("/healthz").json() == {"status": "ok"}
+        assert client.get("/api/v1/runs").status_code == 404
 
-        runs_body = client.get("/api/v1/runs").json()
+        runs_body = client.get("/api/v2/runs").json()
+        assert runs_body["api_version"] == 2
         assert [row["run_id"] for row in runs_body["runs"]] == ["demo"]
         assert runs_body["runs"][0]["launch"] == {
             "launch_id": LAUNCH_ID,
@@ -296,7 +298,8 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
             "session_key": session_key("top-session"),
         }
 
-        detail = client.get("/api/v1/runs/demo").json()
+        detail = client.get("/api/v2/runs/demo").json()
+        assert detail["api_version"] == 2
         assert detail["rounds"][0]["node_states"] == {"api": "running"}
         assert detail["run"]["run_id"] == "demo"
         assert detail["launch"] == {
@@ -313,20 +316,20 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         assert worker["conversation"]["turns"][0]["user"] == "agent prompt"
         conversation_id = worker["conversation"]["id"]
 
-        one = client.get(f"/api/v1/runs/demo/conversations/{conversation_id}").json()
+        one = client.get(f"/api/v2/runs/demo/conversations/{conversation_id}").json()
         assert one["conversation"]["id"] == conversation_id
         assert one["attribution"]["transportRole"] == "agent"
 
-        assert client.get("/api/v1/runs/bad!id").status_code == 422
-        assert client.get("/api/v1/runs/absent").status_code == 404
+        assert client.get("/api/v2/runs/bad!id").status_code == 422
+        assert client.get("/api/v2/runs/absent").status_code == 404
         # A present run with no such transcript is distinct from a missing run, so a
         # viewer can tell "still being written" from "stop polling".
-        missing = client.get("/api/v1/runs/demo/conversations/nope")
+        missing = client.get("/api/v2/runs/demo/conversations/nope")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "conversation_not_found"
 
         # A malformed query parameter uses the same error envelope, not FastAPI's.
-        bad_query = client.get("/api/v1/runs", params={"include_settled": "maybe"})
+        bad_query = client.get("/api/v2/runs", params={"include_settled": "maybe"})
         assert bad_query.status_code == 422
         assert bad_query.json()["error"]["code"] == "invalid_request"
 
@@ -339,7 +342,7 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         runs, oneharness_bin=str(_oneharness_bin(tmp_path)), expose_launcher_session_id=True
     )
     with _serve(exposed_app) as base:
-        exposed = httpx.Client(base_url=base, timeout=10).get("/api/v1/runs/demo").json()
+        exposed = httpx.Client(base_url=base, timeout=10).get("/api/v2/runs/demo").json()
         assert exposed["launch"]["launcher_session_id"] == "top-session"
 
 
@@ -364,7 +367,7 @@ def test_malformed_durable_attribution_degrades_over_http_and_for_ownership(
             launch_path.write_text(json.dumps(record), encoding="utf-8")
 
             assert read_run_owner(run_dir) == UNKNOWN_OWNER
-            detail = client.get("/api/v1/runs/demo")
+            detail = client.get("/api/v2/runs/demo")
             assert detail.status_code == 200
             assert detail.json()["launch"] == {
                 "launch_id": LAUNCH_ID,
@@ -389,7 +392,7 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
         client = httpx.Client(base_url=base, timeout=10)
 
         # Fresh connection opens with a snapshot of the current run list.
-        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+        with client.stream("GET", "/api/v2/events?run_id=demo") as response:
             assert response.status_code == 200
             assert response.headers["cache-control"] == "no-cache"
             lines = response.iter_lines()
@@ -436,7 +439,7 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
 
         # A reconnect gets a snapshot too — nothing replays what it missed — but its
         # cursor continues from the one it supplied.
-        with client.stream("GET", "/api/v1/events", headers={"Last-Event-ID": "5"}) as response:
+        with client.stream("GET", "/api/v2/events", headers={"Last-Event-ID": "5"}) as response:
             lines = response.iter_lines()
             resumed = _read_frames(lines, until="snapshot")
             assert resumed[-1]["event"] == "snapshot"
@@ -447,7 +450,7 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             assert removed[-1]["event"] == "run.removed"
             assert json.loads(removed[-1]["data"]) == {"run_id": "demo"}
 
-        assert client.get("/api/v1/events?run_id=bad!id").status_code == 422
+        assert client.get("/api/v2/events?run_id=bad!id").status_code == 422
 
 
 def test_events_stream_survives_a_malformed_last_event_id(
@@ -475,7 +478,7 @@ def test_events_stream_survives_a_malformed_last_event_id(
 
         for crafted in ("--5", "5-", "abc", ""):
             with client.stream(
-                "GET", "/api/v1/events", headers={"Last-Event-ID": crafted}
+                "GET", "/api/v2/events", headers={"Last-Event-ID": crafted}
             ) as response:
                 assert response.status_code == 200, crafted
                 frames = _read_frames(response.iter_lines(), until="snapshot")
@@ -536,7 +539,7 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=10)
 
-        detail = client.get("/api/v1/runs/demo").json()
+        detail = client.get("/api/v2/runs/demo").json()
         assert detail["details"]["prs"]["api"]["number"] == 7
         assert detail["logs"]["gate_log"] == "gate: passed\n"
         tail = detail["logs"]["orchestrator_stderr"]
@@ -544,8 +547,8 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         assert "head-that-must-be-dropped" not in tail  # and it is the *end* of the log
 
         # This run has settled, so it appears only when the caller asks for settled runs.
-        assert client.get("/api/v1/runs").json()["runs"] == []
-        settled = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        assert client.get("/api/v2/runs").json()["runs"] == []
+        settled = client.get("/api/v2/runs", params={"include_settled": "true"}).json()
         assert [row["run_id"] for row in settled["runs"]] == ["demo"]
         # Expired: the launcher falls back and the session id is withheld even though
         # this deployment opted into exposing it.
@@ -558,7 +561,7 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         tampered["launcher_session_id"] = "smuggled\nsecond-line"
         tampered["started_at"] = datetime.now(UTC).isoformat()
         record.write_text(json.dumps(tampered), encoding="utf-8")
-        replaced = client.get("/api/v1/runs/demo").json()
+        replaced = client.get("/api/v2/runs/demo").json()
         assert replaced["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
 
         # So is a far-future record, which no expiry check could ever retire. It is a
@@ -567,24 +570,24 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         future["launcher_session_id"] = "future-session"
         future["started_at"] = (datetime.now(UTC) + timedelta(days=365)).isoformat()
         record.write_text(json.dumps(future), encoding="utf-8")
-        dated = client.get("/api/v1/runs/demo").json()
+        dated = client.get("/api/v2/runs/demo").json()
         assert dated["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
         assert "future-session" not in json.dumps(dated)
 
         # `after` is the query-parameter form of a resume cursor: like a valid
         # Last-Event-ID it continues the numbering, and still gets a snapshot.
-        with client.stream("GET", "/api/v1/events?after=3") as response:
+        with client.stream("GET", "/api/v2/events?after=3") as response:
             assert response.status_code == 200
             frames = _read_frames(response.iter_lines(), until="snapshot")
             assert frames[-1]["id"] == "4"  # numbering continues from the supplied cursor
 
         # A negative cursor is not one this process could have issued.
-        rejected = client.get("/api/v1/events?after=-1")
+        rejected = client.get("/api/v2/events?after=-1")
         assert rejected.status_code == 422
         assert rejected.json()["error"]["code"] == "invalid_request"
 
         # An unusable conversation id is refused at the boundary, not scanned for.
-        bad_conversation = client.get(f"/api/v1/runs/demo/conversations/{'x' * 300}")
+        bad_conversation = client.get(f"/api/v2/runs/demo/conversations/{'x' * 300}")
         assert bad_conversation.status_code == 422
         assert bad_conversation.json()["error"]["code"] == "invalid_conversation_id"
 
@@ -593,7 +596,7 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         journal.write_text(
             journal.read_text(encoding="utf-8") + '{"kind":"bogus"}\n', encoding="utf-8"
         )
-        corrupt = client.get("/api/v1/runs/demo")
+        corrupt = client.get("/api/v2/runs/demo")
         assert corrupt.status_code == 409
         assert corrupt.json()["error"]["code"] == "projection_error"
 
@@ -641,9 +644,9 @@ def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(
         str(_oneharness_bin(tmp_path)),
         "--expose-launcher-session-id",
     ) as base:
-        listed = httpx.get(f"{base}/api/v1/runs", timeout=30).json()
+        listed = httpx.get(f"{base}/api/v2/runs", timeout=30).json()
         assert [row["run_id"] for row in listed["runs"]] == ["demo"]
-        detail = httpx.get(f"{base}/api/v1/runs/demo", timeout=30).json()
+        detail = httpx.get(f"{base}/api/v2/runs/demo", timeout=30).json()
         assert detail["launch"]["launcher_session_id"] == "cli-session"
         assert {c["attribution"]["agentRole"] for c in detail["conversations"]} == {
             "worker",
@@ -678,7 +681,7 @@ def test_events_stream_invalidates_conversations_for_a_watched_run(
 
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=15)
-        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+        with client.stream("GET", "/api/v2/events?run_id=demo") as response:
             lines = response.iter_lines()
             assert _read_frames(lines, until="snapshot")[-1]["event"] == "snapshot"
 
@@ -732,13 +735,13 @@ def test_detail_degrades_to_no_conversations_when_history_is_absent(tmp_path: Pa
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        detail = client.get("/api/v1/runs/demo").json()
+        detail = client.get("/api/v2/runs/demo").json()
         assert detail["run"]["run_id"] == "demo"
         assert detail["rounds"][0]["node_states"] == {"api": "running"}
         assert detail["conversations"] == []
 
         # Addressing a conversation is then an ordinary 404, not a crash.
-        missing = client.get("/api/v1/runs/demo/conversations/agent-native")
+        missing = client.get("/api/v2/runs/demo/conversations/agent-native")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "conversation_not_found"
 
@@ -766,7 +769,7 @@ def test_detail_skips_an_unreadable_session_and_serves_the_rest(
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
-        detail = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo").json()
+        detail = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo").json()
 
     ids = {item["conversation"]["id"] for item in detail["conversations"]}
     assert ids == {"agent-native", "judge-native"}  # the unreadable session is skipped
@@ -785,10 +788,10 @@ def test_a_symlinked_run_id_cannot_read_outside_the_configured_root(tmp_path: Pa
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        assert client.get("/api/v1/runs/escape").status_code == 404
-        assert client.get("/api/v1/runs/escape/conversations/any").status_code == 404
+        assert client.get("/api/v2/runs/escape").status_code == 404
+        assert client.get("/api/v2/runs/escape/conversations/any").status_code == 404
         # And it is absent from the list the UI enumerates.
-        listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        listed = client.get("/api/v2/runs", params={"include_settled": "true"}).json()
         assert [row["run_id"] for row in listed["runs"]] == ["demo"]
 
 
@@ -804,7 +807,7 @@ def test_run_list_serves_healthy_runs_beside_a_corrupt_one(tmp_path: Path) -> No
     with _serve(app) as base:
         listed = (
             httpx.Client(base_url=base, timeout=30)
-            .get("/api/v1/runs", params={"include_settled": "true"})
+            .get("/api/v2/runs", params={"include_settled": "true"})
             .json()
         )
 
@@ -828,8 +831,8 @@ def test_run_that_recorded_no_event_serves_a_null_last_event(tmp_path: Path) -> 
 
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
-        listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
-        detail = client.get("/api/v1/runs/eventless").json()
+        listed = client.get("/api/v2/runs", params={"include_settled": "true"}).json()
+        detail = client.get("/api/v2/runs/eventless").json()
 
     rows = {row["run_id"]: row for row in listed["runs"]}
     # The mixed set is served whole: the eventless run is listed beside the one that
@@ -891,7 +894,7 @@ def test_detail_maps_transcript_edge_cases_to_the_ui_shape(
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
-        detail = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo").json()
+        detail = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo").json()
 
     served = detail["conversations"][0]
     turn = served["conversation"]["turns"][0]
@@ -927,7 +930,7 @@ def test_a_symlinked_log_cannot_stream_a_file_outside_the_run(tmp_path: Path) ->
     app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
 
     with _serve(app) as base:
-        detail = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo").json()
+        detail = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo").json()
 
     assert detail["logs"] == {"orchestrator_stderr": "real tail\n"}
     assert "credentials" not in json.dumps(detail)
@@ -952,7 +955,7 @@ def test_an_unexpected_read_failure_keeps_the_error_envelope(tmp_path: Path) -> 
     app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
     try:
         with _serve(app) as base:
-            response = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo")
+            response = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo")
     finally:
         journal.chmod(0o644)
 
@@ -984,7 +987,7 @@ def test_conversation_polling_survives_a_failing_history_subprocess(tmp_path: Pa
 
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=15)
-        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+        with client.stream("GET", "/api/v2/events?run_id=demo") as response:
             assert response.status_code == 200
             lines = response.iter_lines()
             assert _read_frames(lines, until="snapshot")[-1]["event"] == "snapshot"
@@ -1018,7 +1021,7 @@ def test_a_run_list_reads_history_once_however_many_runs_it_serves(
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
-        listed = httpx.get(f"{base}/api/v1/runs", timeout=60).json()
+        listed = httpx.get(f"{base}/api/v2/runs", timeout=60).json()
 
     assert {row["run_id"] for row in listed["runs"]} == set(served)
     assert invocations.read_text(encoding="utf-8").splitlines() == [
@@ -1052,7 +1055,7 @@ def test_a_failing_history_read_is_not_retried_once_per_run(
     app = create_app(runs, oneharness_bin=str(broken))
 
     with _serve(app) as base:
-        listed = httpx.get(f"{base}/api/v1/runs", timeout=60).json()
+        listed = httpx.get(f"{base}/api/v2/runs", timeout=60).json()
 
     assert listed["runs"] == []
     assert invocations.read_text(encoding="utf-8").splitlines() == [
@@ -1123,11 +1126,11 @@ def test_a_slow_history_read_stalls_neither_other_requests_nor_a_live_stream(
     )
 
     with _serve(app) as base:
-        conversation_id = httpx.get(f"{base}/api/v1/runs/demo", timeout=60).json()["conversations"][
+        conversation_id = httpx.get(f"{base}/api/v2/runs/demo", timeout=60).json()["conversations"][
             0
         ]["conversation"]["id"]
         client = httpx.Client(base_url=base, timeout=60)
-        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+        with client.stream("GET", "/api/v2/events?run_id=demo") as response:
             lines = response.iter_lines()
             opened: list[dict[str, str]] = []
             opener = threading.Thread(
@@ -1143,10 +1146,10 @@ def test_a_slow_history_read_stalls_neither_other_requests_nor_a_live_stream(
             assert opened[-1]["event"] == "snapshot"
 
             for path in (
-                "/api/v1/runs?include_settled=true",
-                "/api/v1/runs/demo",
-                "/api/v1/runs/demo/timeline",
-                f"/api/v1/runs/demo/conversations/{conversation_id}",
+                "/api/v2/runs?include_settled=true",
+                "/api/v2/runs/demo",
+                "/api/v2/runs/demo/timeline",
+                f"/api/v2/runs/demo/conversations/{conversation_id}",
             ):
                 served, latencies = _while_in_flight(base, path)
                 assert served.status_code == 200, path
@@ -1208,7 +1211,7 @@ def test_a_live_stream_invalidates_before_a_scan_in_flight_is_answered(
 
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=60)
-        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+        with client.stream("GET", "/api/v2/events?run_id=demo") as response:
             lines = response.iter_lines()
             assert _read_frames(lines, until="snapshot")[-1]["event"] == "snapshot"
 
@@ -1217,7 +1220,7 @@ def test_a_live_stream_invalidates_before_a_scan_in_flight_is_answered(
             scanner = threading.Thread(
                 target=lambda: answered.append(
                     httpx.get(
-                        f"{base}/api/v1/runs", params={"include_settled": "true"}, timeout=60
+                        f"{base}/api/v2/runs", params={"include_settled": "true"}, timeout=60
                     ).status_code
                 )
             )
@@ -1246,13 +1249,13 @@ def test_a_directory_with_no_recorded_round_is_not_a_run(tmp_path: Path) -> None
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        for path in ("/api/v1/runs/scratch", "/api/v1/runs/scratch/conversations/any"):
+        for path in ("/api/v2/runs/scratch", "/api/v2/runs/scratch/conversations/any"):
             response = client.get(path)
             assert response.status_code == 404, path
             # Not conversation_not_found: there is no run to have conversations in.
             assert response.json()["error"]["code"] == "run_not_found", path
 
-        listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        listed = client.get("/api/v2/runs", params={"include_settled": "true"}).json()
         assert [row["run_id"] for row in listed["runs"]] == ["demo"]
 
 
@@ -1577,10 +1580,10 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        body = client.get("/api/v1/runs/demo/timeline")
+        body = client.get("/api/v2/runs/demo/timeline")
         assert body.status_code == 200
         timeline = body.json()
-        assert timeline["api_version"] == 1
+        assert timeline["api_version"] == 2
         assert timeline["run_id"] == "demo"
         spans = timeline["spans"]
         by_id = {span["id"]: span for span in spans}
@@ -1703,9 +1706,9 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
             assert span.get("parent_id") in {None, *by_id}
 
         # Detail without transcripts: same api_version, same required fields, no bodies.
-        lean = client.get("/api/v1/runs/demo", params={"include_conversations": "false"}).json()
+        lean = client.get("/api/v2/runs/demo", params={"include_conversations": "false"}).json()
         assert lean["conversations"] == []
-        assert lean["api_version"] == 1
+        assert lean["api_version"] == 2
         assert lean["run"]["run_id"] == "demo"
         assert lean["rounds"][0]["node_states"] == {
             "api": "running",
@@ -1732,7 +1735,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
             "docs-lint": ("llmlint", "worker"),
         }
         # The default is unchanged: a client that asks for nothing still gets them.
-        full = client.get("/api/v1/runs/demo").json()
+        full = client.get("/api/v2/runs/demo").json()
         # The detail view still serves the undatable transcript: only its *position in
         # time* is unknown, and this payload does not order by it.
         assert {item["conversation"]["id"] for item in full["conversations"]} == {
@@ -1747,13 +1750,13 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
 
         # A malformed opt-out is refused in the same envelope as any other bad query,
         # rather than being read as "false" and quietly serving a smaller payload.
-        malformed = client.get("/api/v1/runs/demo", params={"include_conversations": "sometimes"})
+        malformed = client.get("/api/v2/runs/demo", params={"include_conversations": "sometimes"})
         assert malformed.status_code == 422
         assert malformed.json()["error"]["code"] == "invalid_request"
 
         # Every trust boundary behaves like the rest of this read model.
-        assert client.get("/api/v1/runs/bad!id/timeline").status_code == 422
-        absent = client.get("/api/v1/runs/absent/timeline")
+        assert client.get("/api/v2/runs/bad!id/timeline").status_code == 422
+        absent = client.get("/api/v2/runs/absent/timeline")
         assert absent.status_code == 404
         assert absent.json()["error"]["code"] == "run_not_found"
 
@@ -1761,7 +1764,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         journal.write_text(
             journal.read_text(encoding="utf-8") + '{"kind":"bogus"}\n', encoding="utf-8"
         )
-        corrupt = client.get("/api/v1/runs/demo/timeline")
+        corrupt = client.get("/api/v2/runs/demo/timeline")
         assert corrupt.status_code == 409
         assert corrupt.json()["error"]["code"] == "projection_error"
         journal.write_text(
@@ -1787,7 +1790,7 @@ def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: 
     app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
 
     with _serve(app) as base:
-        timeline = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo/timeline").json()
+        timeline = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo/timeline").json()
 
     open_publication = next(
         span
@@ -1937,7 +1940,7 @@ def test_timeline_survives_a_skewed_clock_a_half_pair_and_a_session_still_speaki
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
-        response = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/skewed/timeline")
+        response = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/skewed/timeline")
 
     assert response.status_code == 200
     spans = response.json()["spans"]

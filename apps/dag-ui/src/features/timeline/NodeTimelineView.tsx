@@ -10,10 +10,16 @@ import {
   AlertTitle,
   Button,
   Card,
+  cn,
 } from "@oneharness/ui";
-import { ArrowLeft, ExternalLink, TriangleAlert } from "lucide-react";
+import {
+  ArrowLeft,
+  ExternalLink,
+  OctagonPause,
+  TriangleAlert,
+} from "lucide-react";
 import { useEffect, useMemo } from "react";
-import type { NodeView } from "../runs/run-model";
+import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import { TimelineRail } from "./TimelineRail";
@@ -82,7 +88,7 @@ export function NodeTimelineView({
           </ol>
         </nav>
         <div className="node-view-facts">
-          <StateBadge state={node.state} />
+          <StateBadge state={node.status} />
           <span className="node-view-meta">
             {node.kind} node · {node.telemetry?.turns ?? 0} turns ·{" "}
             {node.telemetry?.lint ?? 0} lint turns
@@ -99,6 +105,8 @@ export function NodeTimelineView({
           )}
         </div>
       </header>
+
+      <NodeProblemBanner node={node} />
 
       <Accordion className="node-summary" collapsible type="single">
         <AccordionItem value="task">
@@ -191,6 +199,81 @@ function PullRequest({ pr }: { readonly pr?: string | null }) {
     <a className="node-view-pr" href={pr} rel="noreferrer" target="_blank">
       {pr} <ExternalLink size={12} />
     </a>
+  );
+}
+
+/** Leads an unhealthy node's detail view with its server-recorded reason. */
+function NodeProblemBanner({ node }: { readonly node: NodeView }) {
+  if (!isUnhealthy(node.status)) return null;
+  // Not one condition: `blocked` moves when a person acts and `skipped` never will.
+  // They share a banner because neither is this node's own failure — the heading
+  // below states which of the two it is, and the term list names the difference.
+  const dependencyDecided =
+    node.status === "blocked" || node.status === "skipped";
+  // The same chain the graph card's line reads, so the card and the view it opens
+  // cannot explain one failure two ways.
+  const detail = recordedReason(node);
+  // `|| undefined`, not `?? undefined`: a recorded empty string is a field the run
+  // wrote nothing into, and treating it as a reason would head a term with no value.
+  const error = node.result?.error || undefined;
+  const exitCode = node.result?.exit_code;
+  return (
+    // `Alert` carries `role="alert"` itself, so opening a node that is in trouble
+    // announces what is wrong rather than leaving it to be noticed.
+    // Held work takes the warning tone its badge and card already carry, not the
+    // failure's red: it has not gone wrong, it is waiting on something that has.
+    <Alert
+      className={cn(
+        "m-5 w-auto",
+        dependencyDecided && "border-warning bg-warning-surface text-warning",
+      )}
+      variant={dependencyDecided ? "default" : "destructive"}
+    >
+      {dependencyDecided ? <OctagonPause /> : <TriangleAlert />}
+      <AlertTitle>
+        {dependencyDecided
+          ? `This node is ${node.status}`
+          : `This node ${node.status === "cancelled" ? "was cancelled" : node.status === "not-completed" ? "did not complete" : "failed"}${
+              node.failure ? `: ${node.failure.class}` : ""
+            }`}
+      </AlertTitle>
+      <AlertDescription>
+        <dl className="facts">
+          {dependencyDecided && (
+            <div>
+              <dt>{node.status === "skipped" ? "Unmet" : "Blocked by"}</dt>
+              <dd>
+                {node.blockers.length > 0
+                  ? node.blockers.join(", ")
+                  : "Nothing recorded; the run has not written what holds it."}
+              </dd>
+            </div>
+          )}
+          {!dependencyDecided && (
+            <div>
+              <dt>Detail</dt>
+              <dd>{detail ?? "No reason was recorded for this outcome."}</dd>
+            </div>
+          )}
+          {/* The recorded error is shown beside the detail rather than instead of
+              it: a lifecycle records prose in `detail` and the scheduler records the
+              exception text in `error`, and they are usually not the same sentence.
+              When they are, the chain above already led with it. */}
+          {error !== undefined && error !== detail && (
+            <div>
+              <dt>Error</dt>
+              <dd>{error}</dd>
+            </div>
+          )}
+          {typeof exitCode === "number" && (
+            <div>
+              <dt>Exit code</dt>
+              <dd>{exitCode}</dd>
+            </div>
+          )}
+        </dl>
+      </AlertDescription>
+    </Alert>
   );
 }
 

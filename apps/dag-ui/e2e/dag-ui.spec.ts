@@ -28,6 +28,8 @@ const fixtureSchema = z.object({
   runs: z.object({
     live: z.string().min(1),
     history: z.string().min(1),
+    outcomes: z.string().min(1),
+    legacy: z.string().min(1),
     sibling: z.string().min(1),
     unattributed: z.string().min(1),
     eventless: z.string().min(1),
@@ -151,15 +153,164 @@ test("tracks every node state and kind of a live run", async ({ page }) => {
   await expect(page.locator(".dag-node.state-waiting")).toContainText(
     "approval",
   );
-  await expect(page.locator(".dag-node.state-pending")).toContainText("queued");
+  await expect(page.locator(".dag-node.state-pending")).toContainText(
+    "followup",
+  );
   await expect(page.locator(".dag-node.state-cancelled")).toContainText(
     "obsolete",
+  );
+  // The two statuses the scheduler derives and journals nothing about. The served
+  // graph re-derives them, so they reach the canvas as themselves rather than as the
+  // "pending" a client used to invent for every node the journal never mentioned.
+  await expect(page.locator(".dag-node.state-blocked")).toContainText("queued");
+  await expect(page.locator(".dag-node.state-skipped")).toContainText(
+    "abandoned",
   );
 
   // Each card names the kind of work it stands for, so an operator can tell the two
   // apart without opening either: agent work runs itself, a human action does not.
   await expect(page.locator(".dag-node.state-running")).toContainText("agent");
   await expect(page.locator(".dag-node.state-waiting")).toContainText("human");
+
+  // And a card that is not moving says why in one line, so a graph of red and amber
+  // is a diagnosis rather than an invitation to open every node in it.
+  await expect(page.locator(".dag-node.state-blocked")).toContainText(
+    "blocked by approval",
+  );
+  await expect(page.locator(".dag-node.state-skipped")).toContainText(
+    "blocked by publish",
+  );
+  await expect(page.locator(".dag-node.state-failed")).toContainText(
+    "Deploy failed",
+  );
+  await expect(page.locator(".dag-node.state-cancelled")).toContainText(
+    "cancelled cooperatively",
+  );
+  // Work that is fine gets no such line at all.
+  await expect(page.locator(".dag-node.state-done .node-reason")).toHaveCount(
+    0,
+  );
+});
+
+test("leads a node that is not moving with the reason it is not", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=publish`);
+  const banner = page.getByRole("alert");
+  await expect(banner).toContainText("This node failed: agent");
+  await expect(banner).toContainText("Deploy failed");
+  await expect(banner).toContainText("publication exited non-zero");
+  await expect(banner).toContainText("2");
+  // It is the first thing in the view: above the disclosures, not inside one.
+  const bannerBox = await banner.boundingBox();
+  const taskBox = await page
+    .getByRole("button", { name: "Task" })
+    .boundingBox();
+  expect(bannerBox?.y ?? 0).toBeLessThan(taskBox?.y ?? 0);
+
+  // A held node states what holds it, by the plan node the server named.
+  await openObservatory(page, `/?run=${runs().live}&node=queued`);
+  await expect(page.getByRole("alert")).toContainText("This node is blocked");
+  await expect(page.getByRole("alert")).toContainText("approval");
+
+  // The same for the node its failed prerequisite made unreachable.
+  await openObservatory(page, `/?run=${runs().live}&node=abandoned`);
+  await expect(page.getByRole("alert")).toContainText("This node is skipped");
+  await expect(page.getByRole("alert")).toContainText("publish");
+
+  // Abandoned work is lost work: it reads with the failures rather than with the
+  // held nodes, and the scheduler's own words for it are what the banner shows.
+  await openObservatory(page, `/?run=${runs().live}&node=obsolete`);
+  await expect(page.getByRole("alert")).toContainText(
+    "This node was cancelled",
+  );
+  await expect(page.getByRole("alert")).toContainText(
+    "cancelled cooperatively",
+  );
+});
+
+test("renders the outcomes only a settled round records", async ({ page }) => {
+  // A finished round records statuses a live one cannot journal. Each has to reach
+  // the canvas as itself and read as the kind of outcome it is.
+  await openObservatory(page, `/?run=${runs().outcomes}&view=graph`);
+  await expect(page.locator(".dag-node.state-not-completed")).toContainText(
+    "backfill",
+  );
+  await expect(page.locator(".dag-node.state-unknown")).toContainText("verify");
+
+  // Unfinished work is lost work, not held work; a status the vocabulary does not
+  // hold has no outcome to claim and must not borrow one.
+  await expect(page.locator(".dag-node.state-not-completed")).toHaveCSS(
+    "background-color",
+    await tokenColor(page, "--destructive-surface"),
+  );
+  await expect(page.locator(".dag-node.state-unknown")).toHaveCSS(
+    "background-color",
+    await tokenColor(page, "--card"),
+  );
+
+  await page.locator(".dag-node.state-not-completed").click();
+  await expect(page.getByRole("alert")).toContainText("did not complete");
+  await expect(page.getByRole("alert")).toContainText("step 'load' timed out");
+
+  // And a node that failed with nothing recorded about why says exactly that,
+  // rather than leaving a banner with an empty body under a heading.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=migrate`);
+  await expect(page.getByRole("alert")).toContainText(
+    "No reason was recorded for this outcome.",
+  );
+
+  // And a failure whose only recorded explanation is its outcome word still puts
+  // that word on the card, rather than saying nothing the run did not already know.
+  await openObservatory(page, `/?run=${runs().outcomes}&view=graph`);
+  await expect(
+    page.locator(".dag-node.state-failed").filter({ hasText: "rollback" }),
+  ).toContainText("gate-failed");
+  // The banner reads the same chain, so the card and the view it opens cannot
+  // explain one failure two ways.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=rollback`);
+  await expect(page.getByRole("alert")).toContainText("This node failed: gate");
+  await expect(page.getByRole("alert")).toContainText("gate-failed");
+
+  // A blocked node names the human action refs its own result recorded, not only
+  // the plan nodes the server derived — the two are different locators.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=stalled`);
+  await expect(page.getByRole("alert")).toContainText("migrate/sign-off");
+
+  // And one recorded blocked with nothing recorded about what blocks it — a legacy
+  // result, or one whose gate has since settled — says exactly that.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=orphaned`);
+  await expect(page.getByRole("alert")).toContainText(
+    "Nothing recorded; the run has not written what holds it.",
+  );
+
+  // The lifecycle's prose and the dispatch's error are separate fields that are
+  // sometimes the same sentence; the banner states it once, under one heading.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=retry`);
+  const once = page.getByRole("alert");
+  await expect(once).toContainText("gate rejected the push");
+  await expect(once).not.toContainText("Error");
+});
+
+test("counts a run the strict fold cannot read at all", async ({ page }) => {
+  await openObservatory(page);
+  // The served run recorded a result with no authoritative journal behind it, which
+  // is what every `repo-plan` run looks like. The per-node derivation cannot run, so
+  // the row is counted from the tolerant telemetry index instead — whose statuses are
+  // an open string, and whose words the navigation still has to show rather than drop.
+  await expect(
+    page.getByRole("button", { name: RegExp(runs().legacy) }),
+  ).toContainText("1 improvised");
+});
+
+test("counts a run's own nodes on the row that opens it", async ({ page }) => {
+  await openObservatory(page);
+  // The row and the graph it opens are counted from one derivation on the server, so
+  // a run whose row says only "running" can no longer hide a node already blocked.
+  const liveRow = page.getByRole("button", { name: RegExp(runs().live) });
+  await expect(liveRow).toContainText("1 blocked");
+  await expect(liveRow).toContainText("1 skipped");
+  await expect(liveRow).toContainText("1 pending");
 });
 
 test("opens a node's timeline, reads one recorded moment, and returns", async ({
@@ -388,10 +539,10 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
 test("reports a node whose recorded work the run has not written yet", async ({
   page,
 }) => {
-  // `queued` never started, so the run recorded no span or event for it at all.
+  // `followup` never started, so the run recorded no span or event for it at all.
   // That is a real state of a live graph, and it has to be said rather than shown
   // as an empty pane that reads like a broken view.
-  await openObservatory(page, `/?run=${runs().live}&node=queued`);
+  await openObservatory(page, `/?run=${runs().live}&node=followup`);
   await expect(
     page.getByText("This node has no recorded timeline yet."),
   ).toBeVisible();
@@ -909,6 +1060,18 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     await page.keyboard.press("Escape");
   }
 
+  // Held work is neither settled nor lost: it needs something outside it to move, and
+  // painting it neutral would say there is nothing to report about a node that is
+  // going nowhere. `waiting` keeps its neutral badge beside its amber card — a human
+  // action is the graph's own normal shape, and the card is where that is said.
+  const held = await tokenColor(page, "--warning");
+  for (const state of ["blocked", "skipped"]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", held);
+    await page.keyboard.press("Escape");
+  }
+
   // Work that has not started has no outcome to report, so it must not borrow one of
   // those meanings — which is also what stops the assertions above from passing on a
   // mapping that simply paints everything.
@@ -948,6 +1111,8 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     { state: "failed", token: "--destructive-surface" },
     { state: "running", token: "--info-surface" },
     { state: "waiting", token: "--warning-surface" },
+    { state: "blocked", token: "--warning-surface" },
+    { state: "skipped", token: "--warning-surface" },
   ]) {
     await expect(page.locator(`.dag-node.state-${state}`)).toHaveCSS(
       "background-color",
@@ -1035,6 +1200,8 @@ test("falls back to the empty state once no run is left", async ({ page }) => {
   // any run is still there to show, whatever shape that run is.
   for (const runId of [
     runs().live,
+    runs().outcomes,
+    runs().legacy,
     runs().unattributed,
     runs().eventless,
     runs().busy,

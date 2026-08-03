@@ -1,13 +1,19 @@
 import { parseRunDetail, parseRunList } from "@ai-orchestrator/dag-model";
 import { describe, expect, test } from "vitest";
 import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "../../test/fixtures";
-import { groupRuns, latestRound, nodeViews } from "./run-model";
+import {
+  groupRuns,
+  isUnhealthy,
+  latestRound,
+  nodeReason,
+  nodeViews,
+} from "./run-model";
 
 const live = parseRunDetail(runDetail(LIVE_RUN));
 const summaries = parseRunList(runList).runs;
 
 describe("node views", () => {
-  test("classifies kind, projects state, and carries each node's own record", () => {
+  test("classifies kind, reads the served status, and carries each node's record", () => {
     const views = nodeViews(live);
     expect(views.map(({ id }) => id)).toEqual([
       "foundation",
@@ -15,18 +21,96 @@ describe("node views", () => {
       "publish",
       "approval",
       "queued",
+      "abandoned",
+      "followup",
       "obsolete",
     ]);
     const byId = new Map(views.map((view) => [view.id, view]));
     expect(byId.get("foundation")?.kind).toBe("lifecycle");
     expect(byId.get("approval")?.kind).toBe("human");
     expect(byId.get("dashboard")?.kind).toBe("agent");
-    expect(byId.get("dashboard")?.state).toBe("running");
-    expect(byId.get("approval")?.state).toBe("waiting");
-    // A node the round never started carries no projected state at all.
-    expect(byId.get("queued")?.state).toBe("pending");
     expect(byId.get("dashboard")?.telemetry?.turns).toBe(2);
     expect(byId.get("publish")?.result?.detail).toBe("Deploy failed");
+
+    // Every status is the one the server served, including the three the journal
+    // never recorded and a client used to have to invent as "pending".
+    expect(
+      Object.fromEntries(views.map((view) => [view.id, view.status])),
+    ).toEqual({
+      foundation: "done",
+      dashboard: "running",
+      publish: "failed",
+      approval: "waiting",
+      queued: "blocked",
+      abandoned: "skipped",
+      followup: "pending",
+      obsolete: "cancelled",
+    });
+  });
+
+  test("carries the served blockers and failure of the nodes that have them", () => {
+    const byId = new Map(nodeViews(live).map((view) => [view.id, view]));
+    expect(byId.get("queued")?.blockers).toEqual(["approval"]);
+    expect(byId.get("abandoned")?.blockers).toEqual(["publish"]);
+    expect(byId.get("dashboard")?.blockers).toEqual([]);
+    expect(byId.get("publish")?.failure).toEqual({
+      class: "agent",
+      detail: "Deploy failed",
+    });
+    expect(byId.get("dashboard")?.failure).toBeUndefined();
+  });
+
+  test("states one reason per node that is not making progress, and none otherwise", () => {
+    const byId = new Map(nodeViews(live).map((view) => [view.id, view]));
+    const reason = (id: string) => {
+      const view = byId.get(id);
+      if (view === undefined) throw new Error(`fixture has no ${id}`);
+      return nodeReason(view);
+    };
+    expect(reason("queued")).toBe("blocked by approval");
+    expect(reason("abandoned")).toBe("blocked by publish");
+    expect(reason("publish")).toBe("Deploy failed");
+    // Healthy work has nothing to report, and must not be given a line that reads
+    // as though it does.
+    expect(reason("dashboard")).toBeUndefined();
+    expect(reason("foundation")).toBeUndefined();
+    expect(reason("followup")).toBeUndefined();
+
+    expect(
+      ["queued", "abandoned", "publish", "obsolete"].map((id) =>
+        isUnhealthy(byId.get(id)?.status ?? "unknown"),
+      ),
+    ).toEqual([true, true, true, true]);
+    expect(
+      ["foundation", "dashboard", "followup", "approval"].map((id) =>
+        isUnhealthy(byId.get(id)?.status ?? "unknown"),
+      ),
+    ).toEqual([false, false, false, false]);
+  });
+
+  test("says a node failed with no recorded reason rather than showing nothing", () => {
+    const payload = runDetail(LIVE_RUN);
+    const round = payload.rounds[0];
+    if (round === undefined) throw new Error("fixture has no round");
+    const bare = parseRunDetail({
+      ...payload,
+      run: {
+        ...payload.run,
+        nodes: payload.run.nodes.filter(({ node }) => node !== "publish"),
+      },
+      rounds: [
+        {
+          ...round,
+          node_results: {
+            ...round.node_results,
+            publish: { status: "failed" },
+          },
+        },
+      ],
+    });
+    const publish = nodeViews(bare).find(({ id }) => id === "publish");
+    if (publish === undefined) throw new Error("fixture has no publish node");
+    expect(nodeReason(publish)).toBe("failed, with no reason recorded");
   });
 
   test("renders nothing for a detail with no projected round", () => {

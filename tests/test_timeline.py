@@ -480,7 +480,7 @@ def test_run_timeline_serves_a_recorded_run_and_rejects_what_it_cannot_read(
     run_dir = _run(runs, "demo")
 
     served = run_timeline(runs, "demo", oneharness_bin=ABSENT)
-    assert served["api_version"] == 1
+    assert served["api_version"] == 2
     assert served["run_id"] == "demo"
     assert [span["kind"] for span in served["spans"]] == ["round", "node"]
     # A missing history store and an absent snapshot degrade to nothing, not a failure.

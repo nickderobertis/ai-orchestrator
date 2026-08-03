@@ -1,6 +1,8 @@
-import type { DagNodeState } from "@ai-orchestrator/dag-layout";
+import { DAG_NODE_STATES } from "@ai-orchestrator/dag-layout";
 import type {
+  Failure,
   GraphResultItem,
+  NodeStatus,
   NodeTelemetry,
   PlanTask,
   Round,
@@ -23,10 +25,19 @@ export interface NodeView {
   readonly id: string;
   readonly label: string;
   readonly kind: "agent" | "human" | "lifecycle";
-  readonly state: DagNodeState;
+  /** The authoritative `Round.node_status`, rendered without client-side defaults. */
+  readonly status: NodeStatus;
   readonly task: PlanTask;
   readonly telemetry?: NodeTelemetry;
   readonly result?: GraphResultItem;
+  /** How this node failed, when it did; served typed rather than parsed out of prose. */
+  readonly failure?: Failure;
+  /**
+   * Everything holding this node up, in the order a reader should be told it: the
+   * plan nodes gating it, then the human action refs its settled result named.
+   * Empty for a node nothing is holding.
+   */
+  readonly blockers: readonly string[];
 }
 
 export function latestRound(detail: RunDetail): Round | undefined {
@@ -45,15 +56,25 @@ export function nodeViews(detail: RunDetail): NodeView[] {
         : hasLifecycleShape(task)
           ? "lifecycle"
           : "agent";
+    // `node_results` holds only what a *terminal journal event* carried, so it is
+    // empty for every node the scheduler settled without dispatching. A round that
+    // finished also recorded a whole-graph result, and for those nodes it is the only
+    // record there is — the one that carries what blocked them.
+    const result =
+      round.node_results[task.id] ?? round.result?.results?.[task.id];
     return {
       id: task.id,
       label: readString(task, "name") ?? task.id,
-      // A node the round never started has no projected state; it is still pending.
-      state: round.node_states[task.id] ?? "pending",
+      status: round.node_status[task.id]!,
       kind,
       task,
       telemetry: telemetry.get(task.id),
-      result: round.node_results[task.id],
+      result,
+      failure: telemetry.get(task.id)?.failure,
+      blockers: [
+        ...(round.node_gated_by[task.id] ?? []),
+        ...(result?.blocked_by ?? []),
+      ],
     };
   });
 }
@@ -89,6 +110,92 @@ export function launchLabel(launch?: RunLaunch): string {
   return launch === undefined
     ? "Unattributed"
     : `${name} launch · ${shortId(launch.launch_id)}`;
+}
+
+/**
+ * The one-line reason a node is not making progress, or `undefined` when it is.
+ *
+ * Shared by the graph card and the node detail banner so the short line under a card
+ * and the headline of the view it opens cannot say different things.
+ */
+export function nodeReason(node: NodeView): string | undefined {
+  if (node.blockers.length > 0 && REASON_IS_A_BLOCKER.has(node.status)) {
+    return `blocked by ${node.blockers.join(", ")}`;
+  }
+  if (!OWN_WORK_LOST.has(node.status)) return undefined;
+  return recordedReason(node) ?? `${node.status}, with no reason recorded`;
+}
+
+/**
+ * What the run itself recorded about a lost outcome, or `undefined` when it recorded
+ * nothing — the classified failure detail first, then the lifecycle's own prose, the
+ * dispatch's error, and last the outcome word, which is a classification rather than
+ * a sentence and so is the least it can say.
+ *
+ * One chain, read by the card's line and the node view's banner alike: two orders
+ * would let a card and the view it opens explain the same failure differently.
+ */
+export function recordedReason(node: NodeView): string | undefined {
+  const recorded =
+    node.failure?.detail ||
+    node.result?.detail ||
+    node.result?.error ||
+    node.telemetry?.outcome ||
+    node.result?.outcome;
+  return recorded?.trim() || undefined;
+}
+
+/**
+ * Statuses whose reason is named in `blockers` rather than in the node's own record.
+ *
+ * They are three different conditions: `blocked` is held behind a dependency,
+ * `skipped` is terminal because a prerequisite did not complete, and `waiting` is
+ * journaled on the node itself. All this set decides is where the sentence comes
+ * from — a waiting node's own result names the human action it waits for, exactly as
+ * a blocked node's names what holds it, so one line reads all three.
+ */
+const REASON_IS_A_BLOCKER: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
+  "blocked",
+  "skipped",
+  "waiting",
+]);
+/** Statuses that mean this node's own work ran, or was cut short, without finishing. */
+const OWN_WORK_LOST: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
+  "failed",
+  "not-completed",
+  "cancelled",
+]);
+
+/**
+ * A run row's own nodes, counted by status: `2 done · 1 blocked`.
+ *
+ * `RunSummary.node_counts` is counted on the server over the same derivation the
+ * graph renders, so this line and the cards it opens cannot describe different
+ * graphs — which is the disagreement an operator saw between the two. Ordered by the
+ * contract's own vocabulary so the words hold their places between polls; a count the
+ * vocabulary does not know is still shown, after them, rather than dropped.
+ */
+export function nodeCountSummary(
+  counts: Readonly<Record<string, number>>,
+): string {
+  const known: readonly string[] = DAG_NODE_STATES;
+  const positive = (name: string) => (counts[name] ?? 0) > 0;
+  return [
+    ...known.filter(positive),
+    ...Object.keys(counts)
+      .filter((name) => !known.includes(name))
+      .sort()
+      .filter(positive),
+  ]
+    .map((name) => `${counts[name]} ${name}`)
+    .join(" · ");
+}
+
+/** Whether a node's status is one an operator has to act on, banner and all. */
+export function isUnhealthy(status: NodeStatus): boolean {
+  return (
+    OWN_WORK_LOST.has(status) || status === "blocked" || status === "skipped"
+  );
 }
 
 /**

@@ -9,11 +9,11 @@ test("a package consumer reads a validated response from a real HTTP server", as
     fetch(request) {
       const url = new URL(request.url);
       if (
-        url.pathname === "/api/v1/runs" &&
+        url.pathname === "/api/v2/runs" &&
         url.searchParams.get("include_settled") === "false"
       ) {
         return Response.json({
-          api_version: 1,
+          api_version: 2,
           telemetry_schema_version: 9,
           observed_at: "2026-07-26T12:00:00Z",
           runs: [],
@@ -40,7 +40,7 @@ test("a package consumer receives typed HTTP and response-contract failures", as
       const path = new URL(request.url).pathname;
       if (path.endsWith("/invalid")) {
         return Response.json({
-          api_version: 1,
+          api_version: 2,
           telemetry_schema_version: 9,
           observed_at: "2026-07-26T12:00:00Z",
           run: {},
@@ -131,9 +131,9 @@ test("a package consumer fetches a run timeline over a real HTTP boundary", asyn
     fetch(request) {
       const url = new URL(request.url);
       seen = url.pathname + url.search;
-      if (url.pathname === "/api/v1/runs/demo/timeline") {
+      if (url.pathname === "/api/v2/runs/demo/timeline") {
         return Response.json({
-          api_version: 1,
+          api_version: 2,
           observed_at: "2026-07-26T12:00:00Z",
           run_id: "demo",
           spans: [
@@ -169,7 +169,7 @@ test("a package consumer fetches a run timeline over a real HTTP boundary", asyn
   try {
     const client = new TelemetryClient(`http://127.0.0.1:${server.port}`);
     const timeline = await client.getTimeline("demo");
-    expect(seen).toBe("/api/v1/runs/demo/timeline");
+    expect(seen).toBe("/api/v2/runs/demo/timeline");
     // The node is still running, and a thousand lock waits arrived as one rollup.
     expect(timeline.spans[0]?.ended_at).toBeNull();
     expect(timeline.spans[1]?.count).toBe(1722);

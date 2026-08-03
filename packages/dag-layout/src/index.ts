@@ -13,13 +13,23 @@ export interface DagNode {
   readonly state: DagNodeState;
 }
 
+/**
+ * Every node status the read API serves, and the only vocabulary a renderer switches
+ * on. It mirrors `orchestrator.projection.NodeStatus`, which owns it;
+ * `scripts/check-dag-state-contract.py` fails the gate when the two disagree, so a
+ * status added there reaches every renderer rather than arriving as a layout error.
+ */
 export const DAG_NODE_STATES = [
   "pending",
   "running",
   "waiting",
+  "blocked",
+  "skipped",
   "done",
+  "not-completed",
   "failed",
   "cancelled",
+  "unknown",
 ] as const;
 export type DagNodeState = (typeof DAG_NODE_STATES)[number];
 
@@ -69,13 +79,29 @@ const NODE_HEIGHT = 72;
 const COLUMN_GAP = 80;
 const ROW_GAP = 32;
 const NODE_STATES: ReadonlySet<string> = new Set(DAG_NODE_STATES);
+/**
+ * What each status means to a renderer, in semantic tokens rather than colours.
+ *
+ * `blocked` covers every status a dependency decided rather than the node's own run —
+ * a human action it holds for, a dependency holding it, a prerequisite whose failure
+ * made it unreachable. The first two will move and the third never will, but in each
+ * case what an operator has to look at is another node, so one token reads them all.
+ * `danger` is reserved for work that ran and did not come back with its job done, so
+ * a graph full of the consequences of one failure still reads as one failure.
+ * `neutral` is only for work with nothing to report yet, and for a status this
+ * vocabulary does not recognize.
+ */
 const STATUS_STYLE: Readonly<Record<DagNodeState, StatusStyleToken>> = {
   pending: "neutral",
   running: "active",
   waiting: "blocked",
+  blocked: "blocked",
+  skipped: "blocked",
   done: "success",
+  "not-completed": "danger",
   failed: "danger",
   cancelled: "muted",
+  unknown: "neutral",
 };
 const compareOrdinal = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;

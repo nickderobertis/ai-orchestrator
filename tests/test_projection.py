@@ -28,7 +28,14 @@ from orchestrator.journal import (
     RunId,
     open_journal,
 )
-from orchestrator.projection import ProjectionError, project_round, project_run, read_strict_events
+from orchestrator.projection import (
+    NODE_STATUSES,
+    ProjectionError,
+    node_statuses,
+    project_round,
+    project_run,
+    read_strict_events,
+)
 from orchestrator.runs import prepare_round
 
 
@@ -1108,3 +1115,125 @@ def test_committed_context_refuses_a_node_whose_context_is_not_a_list() -> None:
     ]
     with pytest.raises(ProjectionError, match="'context' is a list"):
         project_round(events, RunId("r"), 1)
+
+
+def _gated_round(tmp_path: Path) -> Path:
+    """A live round holding every derived gate: waiting, blocked, skipped, pending.
+
+    Written with the executor's own journal writer, so the statuses the read model
+    derives are derived from the records a real round leaves behind — including the
+    fact that it leaves *none* for a node it gated.
+    """
+    run_id = RunId("gates")
+    journal = open_journal(tmp_path, run_id, 1)
+    for definition in (
+        {"id": "build", "persona": "engineer", "task": "Build"},
+        {"id": "approve", "kind": "human", "task": "Approve", "deps": ["build"]},
+        {"id": "release", "persona": "engineer", "task": "Release", "deps": ["approve"]},
+        {"id": "announce", "persona": "engineer", "task": "Announce", "deps": ["release"]},
+        {"id": "publish", "persona": "engineer", "task": "Publish"},
+        {"id": "cleanup", "persona": "engineer", "task": "Clean up", "deps": ["publish"]},
+        {"id": "later", "persona": "engineer", "task": "Later", "deps": ["build"]},
+    ):
+        journal.append("node-added", detail={"definition": definition})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 2}})
+    journal.append("node-started", node=NodeId("build"), detail={"persona": "engineer"})
+    journal.append(
+        "human-waiting",
+        node=NodeId("approve"),
+        detail={"task": "Approve", "result": {"status": "waiting"}},
+    )
+    journal.append("node-started", node=NodeId("publish"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed",
+        node=NodeId("publish"),
+        detail={"detail": "push rejected", "result": {"status": "failed"}},
+    )
+    return tmp_path / "events.jsonl"
+
+
+def test_node_statuses_cover_every_plan_task_of_a_live_round(tmp_path: Path) -> None:
+    statuses = node_statuses(project_run(_gated_round(tmp_path), RunId("gates"), 1))
+
+    # Every task, not only the ones the journal recorded. `release` and `announce`
+    # are blocked behind the human action (transitively), `cleanup` is unreachable
+    # behind the failed publish, and `later` is simply not eligible yet.
+    assert statuses.status == {
+        "build": "running",
+        "approve": "waiting",
+        "release": "blocked",
+        "announce": "blocked",
+        "publish": "failed",
+        "cleanup": "skipped",
+        "later": "pending",
+    }
+    # Everything served is in the one vocabulary, so no renderer can meet a word the
+    # contract does not hold.
+    assert set(statuses.status.values()) <= NODE_STATUSES
+    # Why each gated node is gated, by plan node id and only for the gated nodes.
+    assert statuses.gated_by == {
+        "release": ["approve"],
+        "announce": ["release"],
+        "cleanup": ["publish"],
+    }
+
+
+def test_node_statuses_prefer_the_journal_then_the_recorded_result(tmp_path: Path) -> None:
+    run_id = RunId("settled")
+    journal = open_journal(tmp_path, run_id, 1)
+    for definition in (
+        {"id": "build", "persona": "engineer", "task": "Build"},
+        {"id": "ship", "persona": "engineer", "task": "Ship", "deps": ["build"]},
+        {"id": "odd", "persona": "engineer", "task": "Odd"},
+    ):
+        journal.append("node-added", detail={"definition": definition})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=NodeId("build"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed", node=NodeId("build"), detail={"detail": "no", "result": {"status": "failed"}}
+    )
+    journal.append(
+        "round-finished",
+        detail={
+            "result": {
+                "ok": False,
+                "state": "failed",
+                "started_order": ["build"],
+                "results": {
+                    "build": {"status": "failed"},
+                    # Derived by the scheduler and written only here.
+                    "ship": {"status": "skipped"},
+                    # A status this vocabulary does not hold must be reported as
+                    # unknown rather than mapped onto a neighbouring meaning.
+                    "odd": {"status": "improvised"},
+                },
+            }
+        },
+    )
+
+    statuses = node_statuses(project_run(tmp_path / "events.jsonl", run_id, 1))
+    assert statuses.status == {"build": "failed", "ship": "skipped", "odd": "unknown"}
+    assert statuses.gated_by == {"ship": ["build"]}
+
+
+def test_node_statuses_do_not_gate_on_a_prerequisite_in_another_run(tmp_path: Path) -> None:
+    run_id = RunId("crossdag")
+    journal = open_journal(tmp_path, run_id, 1)
+    journal.append(
+        "node-added",
+        detail={
+            "definition": {
+                "id": "consume",
+                "persona": "engineer",
+                "task": "Consume",
+                "deps": ["run:other#produce"],
+            }
+        },
+    )
+    journal.append("round-started", detail={"plan": {"schema_version": 5, "concurrency": 1}})
+
+    statuses = node_statuses(project_run(tmp_path / "events.jsonl", run_id, 1))
+    # The prerequisite's status lives in another run's journal; this round cannot
+    # evidence a gate, so it reports the node as not started rather than inventing one.
+    assert statuses.status == {"consume": "pending"}
+    assert statuses.gated_by == {}

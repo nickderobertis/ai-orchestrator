@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { layoutDag } from "./index.js";
+import { DAG_NODE_STATES, type DagNode, layoutDag } from "./index.js";
 
 describe("layoutDag", () => {
   test("returns stable dependency-ranked geometry through the public API", () => {
@@ -32,6 +32,31 @@ describe("layoutDag", () => {
       { x: 240, y: 36 },
       { x: 280, y: 36 },
     ]);
+  });
+
+  test("gives every served node status a token, and none of them neutral by accident", () => {
+    const layout = layoutDag({
+      nodes: DAG_NODE_STATES.map(
+        (state): DagNode => ({ id: state, label: state, kind: "agent", state }),
+      ),
+      edges: [],
+    });
+    expect(
+      Object.fromEntries(layout.nodes.map(({ id, style }) => [id, style])),
+    ).toEqual({
+      pending: "neutral",
+      running: "active",
+      waiting: "blocked",
+      // Held work, not lost work: something outside it has to move. Neutral would
+      // read as "nothing to report" about a node that is going nowhere.
+      blocked: "blocked",
+      skipped: "blocked",
+      done: "success",
+      "not-completed": "danger",
+      failed: "danger",
+      cancelled: "muted",
+      unknown: "neutral",
+    });
   });
 
   test("rejects cycles at the package boundary", () => {

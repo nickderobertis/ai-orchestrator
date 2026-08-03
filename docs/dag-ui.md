@@ -114,7 +114,7 @@ with a fresh snapshot.
 
 Opening a node replaces the graph with a view over the whole working area — the
 graph stays one breadcrumb away, reachable by pointer, by Tab, and under the
-Escape key. It is master and detail over `GET /api/v1/runs/{run_id}/timeline`:
+Escape key. It is master and detail over `GET /api/v2/runs/{run_id}/timeline`:
 
 - the **rail** lists what the node recorded, in order. Each row states its kind,
   its time, its status and its duration; a span discloses the events and spans

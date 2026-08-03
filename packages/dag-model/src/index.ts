@@ -23,16 +23,16 @@ const lastEvent = z.string().min(1).nullable();
 const openObject = <T extends z.ZodRawShape>(shape: T) =>
   z.object(shape).catchall(z.unknown());
 
-export const API_V1_PATHS = {
-  runs: "/api/v1/runs",
-  run: (runId: string) => `/api/v1/runs/${encodeURIComponent(runId)}`,
+export const API_V2_PATHS = {
+  runs: "/api/v2/runs",
+  run: (runId: string) => `/api/v2/runs/${encodeURIComponent(runId)}`,
   timeline: (runId: string) =>
-    `/api/v1/runs/${encodeURIComponent(runId)}/timeline`,
+    `/api/v2/runs/${encodeURIComponent(runId)}/timeline`,
   conversation: (runId: string, conversationId: string) =>
-    `/api/v1/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
-  events: "/api/v1/events",
+    `/api/v2/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
+  events: "/api/v2/events",
 } as const;
-export const API_V1_QUERY = {
+export const API_V2_QUERY = {
   includeSettled: "include_settled",
   /**
    * Opt out of run-detail transcripts. `false` serves `conversations` as an empty
@@ -129,6 +129,29 @@ export const sessionLinkSchema = openObject({
 });
 
 const arbitraryRecord = z.record(z.string(), z.unknown());
+
+/**
+ * How a recorded outcome failed, classified once on the server.
+ *
+ * `orchestrator/telemetry.py`'s `FailureClass` owns this vocabulary and
+ * `scripts/check-dag-state-contract.py` reconciles the three copies of it. It is
+ * `class`, not `kind`, because that is the key the Python `Failure.record()` writes.
+ */
+export const failureClassSchema = z.enum([
+  "agent",
+  "gate",
+  "checks",
+  "publication",
+  "timeout",
+  "provider",
+  "configuration",
+  "unknown",
+]);
+export const failureSchema = openObject({
+  class: failureClassSchema,
+  detail: z.string().optional(),
+});
+
 export const nodeTelemetrySchema = openObject({
   node: z.string().min(1),
   status: z.string().min(1),
@@ -140,6 +163,8 @@ export const nodeTelemetrySchema = openObject({
   commit: z.string().min(1).optional(),
   retry_lineage: arbitraryRecord.optional(),
   gate_attestation: arbitraryRecord.optional(),
+  /** How this node's own outcome failed; omitted for a node that did not fail. */
+  failure: failureSchema.optional(),
   timing: timingSchema.optional(),
   usage: usageSchema.optional(),
   sessions: z.array(sessionLinkSchema),
@@ -160,7 +185,7 @@ export const runTelemetrySchema = openObject({
   timing: timingSchema,
   nodes: z.array(nodeTelemetrySchema),
   providers: z.array(arbitraryRecord).optional(),
-  failure: arbitraryRecord.optional(),
+  failure: failureSchema.optional(),
   check_rollup: arbitraryRecord.optional(),
   usage: usageSchema,
   timing_quality: timingQualitySchema,
@@ -210,7 +235,7 @@ export const runSummarySchema = openObject({
 });
 
 export const runListSchema = openObject({
-  api_version: z.literal(1),
+  api_version: z.literal(2),
   telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
@@ -324,6 +349,29 @@ export const nodeStateSchema = z.enum([
   "waiting",
   "cancelled",
 ]);
+/**
+ * The one authoritative per-node status, owned by `orchestrator.projection.NodeStatus`
+ * and reconciled with it, `@ai-orchestrator/dag-layout`, and `docs/dag-ui/design.md`
+ * by `scripts/check-dag-state-contract.py`.
+ *
+ * `nodeStateSchema` above is the strict journal fold and is a subset of this: it can
+ * only speak for nodes the journal recorded something about, so `pending`, `blocked`
+ * and `skipped` appear only here. A consumer renders from `Round.node_status` and
+ * never from an absent `node_states` entry — inferring one is how the sidebar and the
+ * detail view came to disagree about the same node.
+ */
+export const nodeStatusSchema = z.enum([
+  "pending",
+  "running",
+  "waiting",
+  "blocked",
+  "skipped",
+  "done",
+  "not-completed",
+  "failed",
+  "cancelled",
+  "unknown",
+]);
 export const roundSchema = openObject({
   run_id: z.string().min(1),
   round: counter,
@@ -334,10 +382,43 @@ export const roundSchema = openObject({
     name: z.string().min(1).optional(),
   }),
   node_states: z.record(z.string(), nodeStateSchema),
+  /** One entry per plan task, so a client never invents a status for a node. */
+  node_status: z.record(z.string(), nodeStatusSchema),
+  /**
+   * The plan node ids gating each `blocked` or `skipped` node, in plan order; every
+   * other node is absent. Not `GraphResultItem.blocked_by`, which names human action
+   * refs on a settled result.
+   */
+  node_gated_by: z.record(z.string(), z.array(z.string().min(1))),
   node_results: z.record(z.string(), graphResultItemSchema),
   attestations: z.array(z.string()),
   result: graphPayloadSchema.nullable(),
   last_seq: counter,
+}).superRefine((round, context) => {
+  const taskIds = new Set(round.plan.tasks.map((task) => task.id));
+  const statusIds = new Set(Object.keys(round.node_status));
+  if (
+    taskIds.size !== round.plan.tasks.length ||
+    taskIds.size !== statusIds.size ||
+    [...taskIds].some((taskId) => !statusIds.has(taskId))
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["node_status"],
+      message: "must contain exactly one entry for every plan task",
+    });
+  }
+  const invalidGate = Object.entries(round.node_gated_by).find(
+    ([nodeId, blockers]) =>
+      !taskIds.has(nodeId) || blockers.some((blocker) => !taskIds.has(blocker)),
+  );
+  if (invalidGate) {
+    context.addIssue({
+      code: "custom",
+      path: ["node_gated_by"],
+      message: "must name only nodes in this round's plan",
+    });
+  }
 });
 
 export const conversationUsageSchema = openObject({
@@ -419,7 +500,7 @@ export const runConversationsSchema = z.union([
 ]);
 
 export const runDetailSchema = openObject({
-  api_version: z.literal(1),
+  api_version: z.literal(2),
   telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   run: runTelemetrySchema,
@@ -495,7 +576,7 @@ export const timelineSpanSchema = openObject({
   reference: timelineReferenceSchema.optional(),
 });
 export const runTimelineSchema = openObject({
-  api_version: z.literal(1),
+  api_version: z.literal(2),
   observed_at: timestamp,
   run_id: z.string().min(1),
   spans: z.array(timelineSpanSchema),
@@ -523,6 +604,10 @@ export const sseEventNameSchema = z.enum([
 export const sseEventDataSchema = arbitraryRecord;
 
 export type Timing = z.infer<typeof timingSchema>;
+export type FailureClass = z.infer<typeof failureClassSchema>;
+export type Failure = z.infer<typeof failureSchema>;
+export type NodeState = z.infer<typeof nodeStateSchema>;
+export type NodeStatus = z.infer<typeof nodeStatusSchema>;
 export type UsageParty = z.infer<typeof usagePartySchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type SessionLink = z.infer<typeof sessionLinkSchema>;

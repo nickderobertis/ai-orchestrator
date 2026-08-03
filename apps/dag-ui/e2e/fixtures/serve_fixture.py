@@ -55,6 +55,14 @@ FOUNDATION_PR = "https://github.com/example/repo/pull/12"
 
 LIVE_RUN = "dag-ui-live"
 HISTORY_RUN = "dag-ui-history"
+#: A settled run whose recorded result carries the outcomes only a finished round can
+#: hold: a step-derived `not-completed`, a status outside the served vocabulary, and a
+#: node that failed without recording any reason at all. None of the three can be
+#: journalled as a node settlement, so a live round cannot produce them.
+OUTCOMES_RUN = "dag-ui-outcomes"
+#: A run whose result was recorded with no authoritative journal behind it, as every
+#: `repo-plan` run is. Its statuses can only be counted from the telemetry index.
+LEGACY_RUN = "dag-ui-legacy"
 #: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
 #: several graphs, and the navigation has to gather them under that one session.
 SIBLING_RUN = "dag-ui-sibling"
@@ -106,12 +114,32 @@ _LIVE_TASKS: list[dict[str, Any]] = [
         "deps": ["publish"],
         "task": "Wait for release approval",
     },
+    # Held behind the human action, which the scheduler derives and journals nothing
+    # about: the read model has to re-derive it or this node reads as `pending` for
+    # as long as the run is live.
     {
         "id": "queued",
         "persona": "engineer",
         "deps": ["approval"],
         "task": "Start queued follow-up",
         "done_when": "Follow-up starts",
+    },
+    # The other derived gate: unreachable because its prerequisite failed.
+    {
+        "id": "abandoned",
+        "persona": "engineer",
+        "deps": ["publish"],
+        "task": "Clean up after the publish",
+        "done_when": "Cleanup runs",
+    },
+    # And the one node here that really is only waiting its turn: its dependency is
+    # still running, so nothing gates it and it has nothing to report.
+    {
+        "id": "followup",
+        "persona": "engineer",
+        "deps": ["dashboard"],
+        "task": "Follow the dashboard up",
+        "done_when": "The follow-up lands",
     },
     {
         "id": "obsolete",
@@ -273,8 +301,12 @@ def _write_live_run(runs_dir: Path) -> None:
             "result": {
                 "status": "failed",
                 "ok": False,
-                "error": "Deploy failed",
+                # Two different sentences on purpose: the lifecycle records prose in
+                # `detail` and the scheduler records what the dispatch reported in
+                # `error`, and a reader needs both to tell what actually happened.
+                "error": "publication exited non-zero",
                 "detail": "Deploy failed",
+                "exit_code": 2,
             },
         },
     )
@@ -295,7 +327,17 @@ def _write_live_run(runs_dir: Path) -> None:
     journal.append(
         "node-settled",
         node=NodeId("obsolete"),
-        detail={"status": "cancelled", "result": {"status": "cancelled", "ok": False}},
+        detail={
+            "status": "cancelled",
+            # What the executor records when a live drop or retry cancels a node
+            # cooperatively: the scheduler's own words, in `error` rather than in a
+            # lifecycle's `detail`.
+            "result": {
+                "status": "cancelled",
+                "ok": False,
+                "error": "cancelled cooperatively",
+            },
+        },
     )
     _record_launch(run_dir, LIVE_RUN, CODEX_LAUNCH, CODEX_SESSION_ID)
 
@@ -324,6 +366,114 @@ def _write_history_run(runs_dir: Path) -> None:
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
     _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH, CLAUDE_SESSION_ID)
+
+
+#: Plan-file JSON like every task list above, typed the same way and for the same
+#: reason: `orchestrator` owns and validates this shape at the boundary this fixture
+#: feeds, per this module's `modern_domain_modeling` note, and a narrower local model
+#: would be a second declaration that drifts from the one under test.
+_OUTCOMES_TASKS: list[dict[str, Any]] = [
+    {"id": "migrate", "persona": "engineer", "task": "Migrate the store"},
+    {"id": "backfill", "persona": "engineer", "task": "Backfill the store"},
+    {"id": "verify", "persona": "engineer", "task": "Verify the migration"},
+    {"id": "rollback", "persona": "engineer", "task": "Roll the migration back"},
+    {"id": "stalled", "persona": "engineer", "task": "Resume the migration"},
+    {"id": "orphaned", "persona": "engineer", "task": "Finish the migration"},
+    {"id": "retry", "persona": "engineer", "task": "Retry the migration"},
+]
+
+
+def _write_outcomes_run(runs_dir: Path) -> None:
+    """One settled round holding the outcomes a live round cannot journal.
+
+    ``migrate`` ran and failed with nothing recorded about why — a real shape, and
+    the one where a view that only echoes a recorded reason shows an empty banner.
+    ``backfill`` settled ``not-completed``, the status a workstream step ends with
+    when its work is unfinished. ``verify`` carries a status the served vocabulary
+    does not hold, which must be reported as ``unknown`` rather than mapped onto a
+    neighbouring meaning. The strict fold only checks a recorded status against
+    nodes it saw *start*, so these three reach the read model exactly as a recorded
+    result carries them.
+    """
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round, write_result
+
+    run_dir = runs_dir / OUTCOMES_RUN
+    _, round_dir = prepare_round(run_dir, {"tasks": _OUTCOMES_TASKS})
+    journal = open_journal(run_dir, RunId(OUTCOMES_RUN), 1)
+    for task in _OUTCOMES_TASKS:
+        journal.append("node-added", detail={"definition": task})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 3}})
+    journal.append("node-started", node=NodeId("migrate"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed", node=NodeId("migrate"), detail={"result": {"status": "failed", "ok": False}}
+    )
+    result = {
+        "ok": False,
+        "state": "failed",
+        "started_order": ["migrate"],
+        "results": {
+            "migrate": {"status": "failed", "ok": False},
+            "backfill": {"status": "not-completed", "ok": False, "detail": "step 'load' timed out"},
+            "verify": {"status": "improvised", "ok": False},
+            # A failure whose only recorded explanation is its outcome word: a real
+            # lifecycle shape, and the one where a card with nothing but "failed" on
+            # it tells an operator less than the run actually knows.
+            "rollback": {"status": "failed", "ok": False, "outcome": "gate-failed"},
+            # What the executor really records for a blocked node: the *human action*
+            # refs holding it, which are `node/step` locators rather than plan nodes.
+            "stalled": {
+                "status": "blocked",
+                "ok": False,
+                "blocked_by": ["migrate/sign-off"],
+            },
+            # And one recorded blocked with nothing recorded about what blocks it — a
+            # legacy result, or one whose gating dependency has since settled. The view
+            # has to say that rather than head a term list with an empty value.
+            "orphaned": {"status": "blocked", "ok": False},
+            # A node whose two recorded texts are the same sentence: showing it twice
+            # under two headings reads as two findings rather than one.
+            "retry": {
+                "status": "failed",
+                "ok": False,
+                "detail": "gate rejected the push",
+                "error": "gate rejected the push",
+            },
+        },
+    }
+    journal.append("round-finished", detail={"result": result})
+    write_result(round_dir, result)
+    _record_launch(run_dir, OUTCOMES_RUN, CLAUDE_LAUNCH, CLAUDE_SESSION_ID)
+
+
+#: Plan-file JSON, typed as every task list here is and for the same reason.
+_LEGACY_TASKS: list[dict[str, Any]] = [
+    {"id": "convert", "persona": "engineer", "task": "Convert the legacy store"}
+]
+
+
+def _write_legacy_run(runs_dir: Path) -> None:
+    """A recorded result with no authoritative journal behind it at all.
+
+    This is what every ``repo-plan`` run on an operator's machine looks like
+    permanently, and what a run predating the journal looks like forever. The strict
+    fold has nothing to fold, so the per-node status derivation cannot run and the
+    run list falls back to counting the tolerant telemetry index — whose statuses are
+    an open string, and whose words the navigation therefore has to be able to show.
+    """
+    from orchestrator.runs import prepare_round, write_result
+
+    run_dir = runs_dir / LEGACY_RUN
+    _, round_dir = prepare_round(run_dir, {"tasks": _LEGACY_TASKS})
+    write_result(
+        round_dir,
+        {
+            "ok": True,
+            "started_order": ["convert"],
+            "results": {"convert": {"status": "improvised", "task": "Convert the legacy store"}},
+        },
+    )
+    _record_launch(run_dir, LEGACY_RUN, CLAUDE_LAUNCH, CLAUDE_SESSION_ID)
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
@@ -684,6 +834,8 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     _write_busy_run(runs_dir)
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
+    _write_outcomes_run(runs_dir)
+    _write_legacy_run(runs_dir)
     _write_sibling_run(runs_dir)
     _write_live_run(runs_dir)
     os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))
@@ -799,6 +951,8 @@ def serve(workspace: Path, port: int) -> int:
                 "runs": {
                     "live": LIVE_RUN,
                     "history": HISTORY_RUN,
+                    "outcomes": OUTCOMES_RUN,
+                    "legacy": LEGACY_RUN,
                     "sibling": SIBLING_RUN,
                     "unattributed": UNATTRIBUTED_RUN,
                     "eventless": EVENTLESS_RUN,

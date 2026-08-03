@@ -50,7 +50,7 @@ const zeroTiming = {
 test("a package consumer validates an API response through the public export", () => {
   expect(
     parseRunList({
-      api_version: 1,
+      api_version: 2,
       telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
@@ -58,10 +58,20 @@ test("a package consumer validates an API response through the public export", (
   ).toEqual([]);
 });
 
+test("the checked-in v2 run-detail contract parses and v1 is rejected", async () => {
+  const golden = await Bun.file(
+    new URL("../../../tests/golden/run-detail-v2.json", import.meta.url),
+  ).json();
+  const parsed = parseRunDetail(golden);
+  expect(parsed.rounds[0]?.node_status.release).toBe("blocked");
+  expect(parsed.rounds[0]?.node_gated_by.release).toEqual(["approve"]);
+  expect(() => parseRunDetail({ ...golden, api_version: 1 })).toThrow();
+});
+
 test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({
-      api_version: 2,
+      api_version: 3,
       telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
@@ -69,7 +79,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   ).toThrow();
   expect(
     runDetailSchema.safeParse({
-      api_version: 1,
+      api_version: 2,
       telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
@@ -136,7 +146,7 @@ function completeDetail(conversations: unknown[]) {
     },
   };
   return {
-    api_version: 1,
+    api_version: 2,
     telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     run: {
@@ -238,21 +248,29 @@ test("a package consumer validates provenance, SSE names, and counters", () => {
 });
 
 test("a package consumer validates rounds and conversations", () => {
-  expect(
-    roundSchema.parse({
-      run_id: "run-1",
-      round: 1,
-      plan: {
-        tasks: [{ id: "build", task: "Build it" }],
-        schema_version: 5,
-      },
-      node_states: { build: "done" },
-      node_results: { build: { status: "done" } },
-      attestations: [],
-      result: null,
-      last_seq: 3,
-    }).node_states.build,
-  ).toBe("done");
+  const round = roundSchema.parse({
+    run_id: "run-1",
+    round: 1,
+    plan: {
+      tasks: [
+        { id: "build", task: "Build it" },
+        { id: "ship", task: "Ship it", deps: ["build"] },
+        { id: "announce", task: "Announce it", deps: ["ship"] },
+      ],
+      schema_version: 5,
+    },
+    node_states: { build: "done", ship: "waiting" },
+    // Served for every plan task, including the one the journal never recorded.
+    node_status: { build: "done", ship: "waiting", announce: "blocked" },
+    node_gated_by: { announce: ["ship"] },
+    node_results: { build: { status: "done" } },
+    attestations: [],
+    result: null,
+    last_seq: 3,
+  });
+  expect(round.node_states.build).toBe("done");
+  expect(round.node_status.announce).toBe("blocked");
+  expect(round.node_gated_by.announce).toEqual(["ship"]);
   const conversation = {
     canContinue: false,
     harnesses: ["codex"],
@@ -324,7 +342,7 @@ test("a package consumer validates populated telemetry and attribution", () => {
 
 test("a package consumer parses a served run timeline through the export", () => {
   const timeline = parseRunTimeline({
-    api_version: 1,
+    api_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: "run-1",
     spans: [

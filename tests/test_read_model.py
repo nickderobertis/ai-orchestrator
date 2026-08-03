@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from orchestrator.launch import (
     write_provenance,
 )
 from orchestrator.monitor import snapshot_path
-from orchestrator.projection import read_strict_events
+from orchestrator.projection import RoundNodeStatuses, read_strict_events
 from orchestrator.read_model import (
     API_VERSION,
     ConversationNotFound,
@@ -299,7 +300,141 @@ def test_round_record_serializes_projection(tmp_path: Path) -> None:
     assert record["round"] == 1
     assert record["attestations"] == []
     assert record["result"]["state"] == "complete"
+    assert record["node_status"] == {"api": "done"}
+    assert record["node_gated_by"] == {}
     assert json.loads(json.dumps(record))  # fully JSON-serializable
+
+
+def _gated_run(runs_dir: Path, run_id: str) -> Path:
+    """A live round whose graph holds a waiting node, one blocked, and one skipped."""
+    run_dir = runs_dir / run_id
+    tasks = [
+        {"id": "build", "persona": "engineer", "task": "Build"},
+        {"id": "approve", "kind": "human", "task": "Approve", "deps": ["build"]},
+        {"id": "release", "persona": "engineer", "task": "Release", "deps": ["approve"]},
+        {"id": "publish", "persona": "engineer", "task": "Publish"},
+        {"id": "cleanup", "persona": "engineer", "task": "Clean up", "deps": ["publish"]},
+    ]
+    prepare_round(run_dir, {"schema_version": 3, "tasks": tasks})
+    journal = open_journal(run_dir, RunId(run_id), 1)
+    for definition in tasks:
+        journal.append("node-added", detail={"definition": definition})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 2}})
+    journal.append("node-started", node=NodeId("build"), detail={"persona": "engineer"})
+    journal.append(
+        "human-waiting",
+        node=NodeId("approve"),
+        detail={"task": "Approve", "result": {"status": "waiting"}},
+    )
+    journal.append("node-started", node=NodeId("publish"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed",
+        node=NodeId("publish"),
+        detail={
+            "detail": "push rejected",
+            "result": {"status": "failed", "detail": "push rejected", "exit_code": 2},
+        },
+    )
+    return run_dir
+
+
+def test_detail_and_summary_report_one_status_for_every_node(tmp_path: Path) -> None:
+    """The list row and the graph it opens describe the same graph, gates included."""
+    runs = tmp_path / "runs"
+    _gated_run(runs, "gated")
+
+    detail = run_detail(runs, "gated", oneharness_bin=ABSENT)
+    served = detail["rounds"][-1]
+    assert served["node_status"] == {
+        "build": "running",
+        "approve": "waiting",
+        "release": "blocked",
+        "publish": "failed",
+        "cleanup": "skipped",
+    }
+    assert served["node_gated_by"] == {"release": ["approve"], "cleanup": ["publish"]}
+    # The strict fold stays exactly what it was, and is a subset of the above: it is
+    # the audit answer, and the two derived gates are not in it.
+    assert served["node_states"] == {
+        "build": "running",
+        "approve": "waiting",
+        "publish": "failed",
+    }
+
+    row = next(
+        row
+        for row in list_runs(runs, include_settled=True, oneharness_bin=ABSENT)["runs"]
+        if row["run_id"] == "gated"
+    )
+    counts: Counter[str] = Counter(served["node_status"].values())
+    assert row["node_counts"] == dict(counts)
+
+
+def test_v2_run_detail_golden_matches_the_python_round_serializer(tmp_path: Path) -> None:
+    golden = json.loads((Path(__file__).parent / "golden" / "run-detail-v2.json").read_text())
+    runs = tmp_path / "runs"
+    _gated_run(runs, "gated")
+
+    detail = run_detail(runs, "gated", oneharness_bin=ABSENT)
+
+    assert detail["api_version"] == golden["api_version"] == 2
+    assert detail["telemetry_schema_version"] == golden["telemetry_schema_version"]
+    assert detail["rounds"] == golden["rounds"]
+    assert json.loads(json.dumps(detail))["rounds"] == golden["rounds"]
+
+
+@pytest.mark.parametrize(
+    "statuses",
+    [
+        RoundNodeStatuses({}, {}),
+        RoundNodeStatuses({"api": "done"}, {"api": ["outside"]}),
+    ],
+)
+def test_round_serializer_refuses_incomplete_or_foreign_statuses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: RoundNodeStatuses,
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = _build_run(runs, "demo", settle=True)
+    events = read_strict_events(run_dir / "events.jsonl", RunId("demo"))
+    monkeypatch.setattr("orchestrator.read_model.node_statuses", lambda _projection: statuses)
+
+    with pytest.raises(ProjectionFailed):
+        round_record(events, RunId("demo"), 1)
+
+
+def test_node_counts_degrade_to_telemetry_when_the_journal_will_not_fold(
+    tmp_path: Path,
+) -> None:
+    """A run going wrong stays in the list, counted from what could still be read."""
+    runs = tmp_path / "runs"
+    run_dir = _build_run(runs, "corrupt", settle=False)
+    journal = run_dir / "events.jsonl"
+    journal.write_text(
+        journal.read_text(encoding="utf-8") + '{"kind": "not-an-event"}\n', encoding="utf-8"
+    )
+
+    row = next(
+        row
+        for row in list_runs(runs, include_settled=True, oneharness_bin=ABSENT)["runs"]
+        if row["run_id"] == "corrupt"
+    )
+    # The tolerant telemetry reader still knows the node started; the strict fold
+    # refuses the stream, and the row reports what it has rather than disappearing.
+    assert row["node_counts"] == {"running": 1}
+
+
+def test_a_failed_node_carries_its_own_typed_failure(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _gated_run(runs, "gated")
+
+    detail = run_detail(runs, "gated", oneharness_bin=ABSENT)
+    nodes = {node["node"]: node for node in detail["run"]["nodes"]}
+    assert nodes["publish"]["failure"] == {"class": "agent", "detail": "push rejected"}
+    # A node that did not fail carries no failure at all, rather than an empty one a
+    # client would have to test for emptiness.
+    assert "failure" not in nodes["build"]
 
 
 def test_run_conversation_missing_run_and_conversation(tmp_path: Path) -> None:
