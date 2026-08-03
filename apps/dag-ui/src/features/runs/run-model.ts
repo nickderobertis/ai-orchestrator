@@ -2,6 +2,7 @@ import { DAG_NODE_STATES } from "@ai-orchestrator/dag-layout";
 import type {
   Failure,
   GraphResultItem,
+  NodeDetail,
   NodeStatus,
   NodeTelemetry,
   PlanTask,
@@ -30,6 +31,7 @@ export interface NodeView {
   readonly task: PlanTask;
   readonly telemetry?: NodeTelemetry;
   readonly result?: GraphResultItem;
+  readonly detail?: NodeDetail;
   /** How this node failed, when it did; served typed rather than parsed out of prose. */
   readonly failure?: Failure;
   /**
@@ -70,6 +72,7 @@ export function nodeViews(detail: RunDetail): NodeView[] {
       task,
       telemetry: telemetry.get(task.id),
       result,
+      detail: detail.node_details[task.id],
       failure: telemetry.get(task.id)?.failure,
       blockers: [
         ...(round.node_gated_by[task.id] ?? []),

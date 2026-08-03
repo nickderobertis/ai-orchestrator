@@ -8,7 +8,7 @@ from typing import Any
 from .github import Check, PRStatus
 from .journal import DetailValue
 
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,12 @@ class PrDetail:
         ):
             return None
         checks = tuple(
-            Check(name=item["name"], state=item["state"], required=item["required"])
+            Check(
+                name=item["name"],
+                state=item["state"],
+                required=item["required"],
+                url=item.get("url", "") if isinstance(item.get("url", ""), str) else "",
+            )
             for item in raw_checks
             if isinstance(item, dict)
             and isinstance(item.get("name"), str)
@@ -167,7 +172,12 @@ class PrDetail:
             "merge_state_status": self.merge_state_status,
             "draft": self.draft,
             "checks": [
-                {"name": check.name, "state": check.state, "required": check.required}
+                {
+                    "name": check.name,
+                    "state": check.state,
+                    "required": check.required,
+                    **({"url": check.url} if check.url else {}),
+                }
                 for check in self.checks
             ],
             "revision": self.revision,

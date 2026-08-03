@@ -25,6 +25,7 @@ authoritative journal is `ProjectionFailed`; a malformed launch record degrades 
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -94,6 +95,10 @@ class ConversationNotFound(ReadError):
     run has no transcript by that id" — the second is routine while a session is
     still being written, the first means the view should stop polling.
     """
+
+
+class ArtifactNotFound(ReadError):
+    """The run records no readable artifact with the requested opaque id (404)."""
 
 
 class ProjectionFailed(ReadError):
@@ -188,6 +193,7 @@ class RunDetail(TypedDict):
     rounds: list[Round]
     conversations: list[DagConversation]
     details: dict[str, Any]
+    node_details: dict[str, dict[str, Any]]
     logs: NotRequired[dict[str, str]]
     launch: NotRequired[RunLaunch]
 
@@ -269,10 +275,182 @@ _LOG_TAIL_BYTES = 64_000
 #: Logs that live *beneath the run directory* and are therefore safe to serve under
 #: the configured root. A node's own merge-path gate log is reached through the node
 #: result's artifact pointers instead, not through this run-level map.
-_RUN_LOGS = {
-    "orchestrator_stderr": ("orchestrator", "stderr.log"),
-    "gate_log": ("orchestrator", "gate.log"),
-}
+_RUN_LOGS = {"orchestrator_stderr": ("orchestrator", "stderr.log")}
+
+_ARTIFACT_KINDS = ("gate_log", "worker_report", "oneharness_session")
+
+
+def _artifact_id(kind: str, path: str) -> str:
+    """Stable opaque address for a recorded artifact, without exposing its path."""
+    digest = hashlib.sha256(f"{kind}\0{path}".encode()).hexdigest()[:24]
+    return f"{kind}-{digest}"
+
+
+def _artifact_paths(rounds: list[Round]) -> dict[str, tuple[str, str]]:
+    found: dict[str, tuple[str, str]] = {}
+    for round_record in rounds:
+        results = [*round_record["node_results"].values()]
+        graph_results = (round_record["result"] or {}).get("results", {})
+        if isinstance(graph_results, dict):
+            results.extend(graph_results.values())
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            records = [result, *(result.get("steps") or [])]
+            for record in records:
+                artifacts = record.get("artifacts") if isinstance(record, dict) else None
+                if not isinstance(artifacts, dict):
+                    continue
+                for kind in _ARTIFACT_KINDS:
+                    path = artifacts.get(kind)
+                    if isinstance(path, str) and path:
+                        found[_artifact_id(kind, path)] = (kind, path)
+    return found
+
+
+def _hide_artifact_paths(rounds: list[Round]) -> None:
+    """Replace every result artifact host path with its opaque API id in place."""
+    for round_record in rounds:
+        results = [*round_record["node_results"].values()]
+        graph_results = (round_record["result"] or {}).get("results", {})
+        if isinstance(graph_results, dict):
+            results.extend(graph_results.values())
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            for record in [result, *(result.get("steps") or [])]:
+                artifacts = record.get("artifacts") if isinstance(record, dict) else None
+                if isinstance(artifacts, dict):
+                    record["artifacts"] = {
+                        kind: _artifact_id(kind, path)
+                        for kind, path in artifacts.items()
+                        if kind in _ARTIFACT_KINDS and isinstance(path, str) and path
+                    }
+
+
+def read_artifact(runs_dir: Path, run_id: str, artifact_id: str) -> dict[str, Any]:
+    """Read one recorded node artifact through an opaque, contained, 64KB tail."""
+    try:
+        validated = validate_run_id(run_id)
+    except ConfigError as exc:
+        raise InvalidRunId(str(exc)) from exc
+    run_dir = contained_run_dir(runs_dir, validated)
+    if run_dir is None:
+        raise RunNotFound(f"no recorded run {validated!r}")
+    rounds = _rounds(run_dir, validated)
+    recorded = _artifact_paths(rounds).get(artifact_id)
+    if recorded is None:
+        raise ArtifactNotFound("no recorded artifact with that id")
+    kind, raw_path = recorded
+    candidate = Path(raw_path)
+    try:
+        root = run_dir.resolve(strict=True)
+        path = (candidate if candidate.is_absolute() else run_dir / candidate).resolve(strict=True)
+    except OSError as exc:
+        raise ArtifactNotFound("recorded artifact is unavailable") from exc
+    if not path.is_file() or not path.is_relative_to(root):
+        raise ArtifactNotFound("recorded artifact is unavailable")
+    tail = _tail(root, tuple(path.relative_to(root).parts), _LOG_TAIL_BYTES)
+    if tail is None:
+        raise ArtifactNotFound("recorded artifact is unavailable")
+    return {
+        "id": artifact_id,
+        "kind": kind,
+        "content": tail,
+        "truncated": path.stat().st_size > _LOG_TAIL_BYTES,
+    }
+
+
+def _github_root(identity: object) -> str | None:
+    if not isinstance(identity, str) or not identity:
+        return None
+    if identity.startswith("https://github.com/"):
+        return identity.removesuffix(".git").rstrip("/")
+    if identity.count("/") == 1 and not identity.startswith("/"):
+        return f"https://github.com/{identity}"
+    return None
+
+
+def _node_details(
+    events: list[Any], rounds: list[Round], snapshot: Any
+) -> dict[str, dict[str, Any]]:
+    """Typed verification and publication facts, keyed by node id."""
+    records: dict[str, dict[str, Any]] = {}
+    artifact_ids = _artifact_paths(rounds)
+    path_ids = {path: artifact_id for artifact_id, (_kind, path) in artifact_ids.items()}
+    for event in events:
+        if event.node is None:
+            continue
+        node = str(event.node)
+        detail = event.detail
+        record = records.setdefault(node, {"verification": {"records": []}})
+        verification = record["verification"]
+        if event.kind == "merge-gate-coverage":
+            verification.update(
+                {
+                    "pre_push_hook": bool(detail.get("pre_push_hook")),
+                    "required_checks": detail.get("required_checks", []),
+                    "required_checks_status": detail.get("required_checks_status", "unknown"),
+                    "expected_gate": detail.get("expected_gate", []),
+                }
+            )
+        elif event.kind == "verification-finished":
+            item: dict[str, Any] = {
+                "ok": detail.get("ok") is True,
+                "output_tail": detail.get("output_tail", ""),
+            }
+            log_path = detail.get("log_path")
+            if isinstance(log_path, str) and log_path in path_ids:
+                item["artifact_id"] = path_ids[log_path]
+            verification["records"].append(item)
+
+    for round_record in rounds:
+        results = dict(round_record["node_results"])
+        graph_results = (round_record["result"] or {}).get("results", {})
+        if isinstance(graph_results, dict):
+            results = {**graph_results, **results}
+        for node, result in results.items():
+            if not isinstance(result, dict):
+                continue
+            record = records.setdefault(node, {"verification": {"records": []}})
+            pr_url = result.get("pr") if isinstance(result.get("pr"), str) else ""
+            pr = next(
+                (value for value in snapshot.prs.values() if value.get("url") == pr_url), None
+            )
+            checks = pr.get("checks", []) if isinstance(pr, dict) else []
+            record["verification"]["checks"] = checks
+            branch = result.get("branch") if isinstance(result.get("branch"), str) else ""
+            base = result.get("base_branch") if isinstance(result.get("base_branch"), str) else ""
+            identity = (pr or {}).get("identity") if isinstance(pr, dict) else result.get("repo")
+            root = _github_root(identity)
+            merged = (
+                bool((pr or {}).get("merged"))
+                if isinstance(pr, dict)
+                else result.get("outcome") == "merged"
+            )
+            publication: dict[str, Any] = {"merged": merged}
+            if pr_url:
+                publication["pr_url"] = pr_url
+            if branch:
+                publication["branch"] = branch
+                if root:
+                    publication["branch_url"] = f"{root}/tree/{branch}"
+            if base:
+                publication["base_branch"] = base
+            commit = result.get("commit")
+            if not isinstance(commit, str) or not commit:
+                matching = [
+                    value
+                    for value in snapshot.commits.values()
+                    if value.get("branch") in {branch, base} and isinstance(value.get("sha"), str)
+                ]
+                commit = matching[-1].get("sha") if matching else ""
+            if publication["merged"] and commit:
+                publication["commit"] = commit
+                if root:
+                    publication["commit_url"] = f"{root}/commit/{commit}"
+            record["publication"] = publication
+    return records
 
 
 def _tail(run_dir: Path, parts: tuple[str, ...], max_bytes: int) -> str | None:
@@ -470,18 +648,27 @@ def run_detail(
         raise ProjectionFailed(str(exc)) from exc
     if telemetry is None:  # pragma: no cover - latest_round already proved a round exists
         raise RunNotFound(f"no recorded run {validated!r}")
+    rounds = _rounds(run_dir, validated)
+    snapshot = load_snapshot(run_dir)
+    try:
+        events = read_strict_events(run_dir / JOURNAL_NAME, validated)
+    except ProjectionError as exc:
+        raise ProjectionFailed(str(exc)) from exc
+    node_details = _node_details(events, rounds, snapshot)
+    _hide_artifact_paths(rounds)
     detail: RunDetail = {
         "api_version": API_VERSION,
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
         "observed_at": _now(now),
         "run": telemetry.record(),
-        "rounds": _rounds(run_dir, validated),
+        "rounds": rounds,
         "conversations": (
             run_conversations(validated, oneharness_bin=oneharness_bin)
             if include_conversations
             else []
         ),
-        "details": load_snapshot(run_dir).to_record(),
+        "details": snapshot.to_record(),
+        "node_details": node_details,
     }
     if logs := read_logs(run_dir):
         detail["logs"] = logs

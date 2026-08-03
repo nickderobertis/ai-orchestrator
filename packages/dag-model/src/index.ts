@@ -30,6 +30,8 @@ export const API_V2_PATHS = {
     `/api/v2/runs/${encodeURIComponent(runId)}/timeline`,
   conversation: (runId: string, conversationId: string) =>
     `/api/v2/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
+  artifact: (runId: string, artifactId: string) =>
+    `/api/v2/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`,
   events: "/api/v2/events",
 } as const;
 export const API_V2_QUERY = {
@@ -312,6 +314,7 @@ export const graphResultItemSchema = openObject({
   telemetry: arbitraryRecord.optional(),
   repo: z.string().optional(),
   branch: z.string().optional(),
+  commit: z.string().optional(),
   base_branch: z.string().optional(),
   pr_base: z.string().optional(),
   synthetic_stack_base: z.string().nullable().optional(),
@@ -499,6 +502,36 @@ export const runConversationsSchema = z.union([
     .transform((groups) => groups.flatMap((group) => group.conversations)),
 ]);
 
+const verificationCheckSchema = openObject({
+  name: z.string(),
+  state: z.string(),
+  required: z.boolean(),
+  url: z.string().url().optional(),
+});
+const verificationRecordSchema = openObject({
+  ok: z.boolean(),
+  output_tail: z.string(),
+  artifact_id: z.string().min(1).optional(),
+});
+export const nodeDetailSchema = openObject({
+  verification: openObject({
+    pre_push_hook: z.boolean().optional(),
+    required_checks: z.array(z.string()).optional(),
+    required_checks_status: z.string().optional(),
+    expected_gate: z.array(z.string()).optional(),
+    checks: z.array(verificationCheckSchema).optional(),
+    records: z.array(verificationRecordSchema),
+  }),
+  publication: openObject({
+    pr_url: z.string().url().optional(),
+    branch: z.string().optional(),
+    branch_url: z.string().url().optional(),
+    merged: z.boolean(),
+    base_branch: z.string().optional(),
+    commit: z.string().optional(),
+    commit_url: z.string().url().optional(),
+  }).optional(),
+});
 export const runDetailSchema = openObject({
   api_version: z.literal(2),
   telemetry_schema_version: z.literal(9),
@@ -506,6 +539,7 @@ export const runDetailSchema = openObject({
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),
   conversations: runConversationsSchema,
+  node_details: z.record(z.string(), nodeDetailSchema).optional().default({}),
   launch: runLaunchSchema.optional(),
 });
 
@@ -574,6 +608,17 @@ export const timelineSpanSchema = openObject({
   agent_role: agentRoleSchema.optional(),
   transport_role: transportRoleSchema.optional(),
   reference: timelineReferenceSchema.optional(),
+  detail: openObject({
+    ok: z.boolean().optional(),
+    output_tail: z.string().optional(),
+    artifact_id: z.string().optional(),
+  }).optional(),
+});
+export const artifactContentSchema = openObject({
+  id: z.string().min(1),
+  kind: timelineReferenceKindSchema,
+  content: z.string(),
+  truncated: z.boolean(),
 });
 export const runTimelineSchema = openObject({
   api_version: z.literal(2),
@@ -624,6 +669,8 @@ export type DagConversation = z.infer<typeof dagConversationSchema>;
 export type NodeConversations = z.infer<typeof nodeConversationsSchema>;
 export type RunConversations = z.infer<typeof runConversationsSchema>;
 export type RunDetail = z.infer<typeof runDetailSchema>;
+export type NodeDetail = z.infer<typeof nodeDetailSchema>;
+export type ArtifactContent = z.infer<typeof artifactContentSchema>;
 export type TimelineReferenceKind = z.infer<typeof timelineReferenceKindSchema>;
 export type TimelineSpanKind = z.infer<typeof timelineSpanKindSchema>;
 export type TimelineReference = z.infer<typeof timelineReferenceSchema>;

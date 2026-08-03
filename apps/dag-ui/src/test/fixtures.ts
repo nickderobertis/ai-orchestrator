@@ -258,6 +258,31 @@ export function runDetail(runId: string = LIVE_RUN) {
         last_seq: 7,
       },
     ],
+    node_details: historical
+      ? {}
+      : {
+          foundation: {
+            verification: {
+              pre_push_hook: true,
+              required_checks: ["unit", "lint"],
+              required_checks_status: "configured",
+              expected_gate: ["pre-push", "unit", "lint"],
+              checks: [
+                { name: "unit", state: "SUCCESS", required: true },
+                { name: "lint", state: "SUCCESS", required: true },
+              ],
+              records: [],
+            },
+            publication: {
+              pr_url: PR_URL,
+              branch: "feature/foundation",
+              branch_url:
+                "https://github.com/example/repo/tree/feature/foundation",
+              merged: false,
+              base_branch: "main",
+            },
+          },
+        },
     conversations: [
       conversation(
         "worker-session",

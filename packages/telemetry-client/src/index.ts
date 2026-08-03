@@ -1,7 +1,9 @@
 import {
   API_V2_PATHS,
   API_V2_QUERY,
+  type ArtifactContent,
   apiErrorSchema,
+  artifactContentSchema,
   type DagConversation,
   dagConversationSchema,
   type RunDetail,
@@ -124,6 +126,18 @@ export class TelemetryClient {
     return this.#request(
       this.#url(API_V2_PATHS.conversation(runId, conversationId)),
       dagConversationSchema.parse,
+    );
+  }
+
+  async getArtifact(
+    runId: string,
+    artifactId: string,
+  ): Promise<ArtifactContent> {
+    requireOpaqueId(runId, "run ID");
+    requireOpaqueId(artifactId, "artifact ID");
+    return this.#request(
+      this.#url(API_V2_PATHS.artifact(runId, artifactId)),
+      artifactContentSchema.parse,
     );
   }
 

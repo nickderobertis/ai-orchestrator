@@ -83,6 +83,7 @@ class Check:
     name: str
     state: str  # SUCCESS | FAILURE | PENDING | ERROR | SKIPPED | NEUTRAL | ...
     required: bool
+    url: str = ""
 
     @property
     def green(self) -> bool:
@@ -158,12 +159,27 @@ def _normalize_check(raw: dict[str, object]) -> Check:
         name = str(raw.get("name") or "check")
         status = str(raw.get("status") or "").upper()
         if status != "COMPLETED":
-            return Check(name=name, state="PENDING", required=required)
+            return Check(
+                name=name,
+                state="PENDING",
+                required=required,
+                url=str(raw.get("detailsUrl") or ""),
+            )
         conclusion = str(raw.get("conclusion") or "").upper()
-        return Check(name=name, state=conclusion or "PENDING", required=required)
+        return Check(
+            name=name,
+            state=conclusion or "PENDING",
+            required=required,
+            url=str(raw.get("detailsUrl") or ""),
+        )
     # StatusContext (a commit status) or anything else with a ``state``.
     name = str(raw.get("context") or raw.get("name") or "status")
-    return Check(name=name, state=str(raw.get("state") or "PENDING").upper(), required=required)
+    return Check(
+        name=name,
+        state=str(raw.get("state") or "PENDING").upper(),
+        required=required,
+        url=str(raw.get("targetUrl") or ""),
+    )
 
 
 def _optional_bool(data: dict[str, object], key: str) -> bool:

@@ -265,11 +265,11 @@ describe("DAG application", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: /just gate/ }),
     );
-    expect(await within(detail()).findByText("Gate attestation")).toBeVisible();
-    expect(within(detail()).getByText("comparison_base")).toBeInTheDocument();
     expect(
-      within(detail()).getByText("round-01/foundation/gate.log"),
-    ).toBeInTheDocument();
+      await within(detail()).findByText("Verification record"),
+    ).toBeVisible();
+    expect(within(detail()).getByText("Full log")).toBeInTheDocument();
+    expect(within(detail()).queryByText(/round-01\/foundation/)).toBeNull();
 
     await userEvent.click(railRow(/local\/example/));
     expect(
@@ -340,15 +340,12 @@ describe("DAG application", () => {
       await screen.findByRole("button", { name: /branch push/ }),
     );
     expect(
-      await within(detail()).findByText(
-        "This verification recorded no gate attestation.",
-      ),
+      await within(detail()).findByText("No readable log was recorded."),
     ).toBeInTheDocument();
-    expect(within(detail()).getByText("No log was recorded.")).toBeVisible();
 
     await userEvent.click(railRow(/publication/));
     expect(
-      await within(detail()).findByText("No pull request was recorded."),
+      await within(detail()).findByText("No publication was recorded."),
     ).toBeInTheDocument();
     expect(
       within(detail()).getByText("No checks were observed on this node."),
@@ -549,7 +546,9 @@ describe("DAG application", () => {
       await screen.findByText("Users can inspect transcripts"),
     ).toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "Dependencies, PR and gate" }),
+      screen.getByRole("button", {
+        name: "Dependencies, publication and verification",
+      }),
     );
     expect(await screen.findByText("foundation")).toBeInTheDocument();
   });
@@ -559,9 +558,11 @@ describe("DAG application", () => {
     const { client } = telemetryHarness();
     const view = render(<App client={client} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
+      await screen.findByRole("button", {
+        name: "Dependencies, publication and verification",
+      }),
     );
-    const link = await screen.findByRole("link", { name: RegExp(PR_URL) });
+    const [link] = await screen.findAllByRole("link", { name: /Pull request/ });
     expect(link).toHaveAttribute("href", PR_URL);
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
@@ -570,10 +571,12 @@ describe("DAG application", () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     render(<App client={client} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
+      await screen.findByRole("button", {
+        name: "Dependencies, publication and verification",
+      }),
     );
     expect(
-      screen.getByText("Pull request").nextElementSibling,
+      screen.getByText("Publication").nextElementSibling,
     ).toHaveTextContent("Not recorded");
     expect(screen.queryByRole("link", { name: RegExp(PR_URL) })).toBeNull();
   });

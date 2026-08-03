@@ -99,8 +99,29 @@ interface RunDetail {
   rounds: Round[];
   conversations: DagConversation[];
   details: DetailSnapshot; // persisted PR/commit/check detail from monitor/details.json
+  node_details: Record<string, NodeDetail>; // verification + publication rendering facts
   logs?: Record<string, string>; // bounded, path-free tails of the run's own logs
   launch?: RunLaunch; // same run-level launch join as RunSummary
+}
+
+interface NodeDetail {
+  verification: {
+    pre_push_hook?: boolean;
+    required_checks?: string[];
+    required_checks_status?: string;
+    expected_gate?: string[];
+    checks?: Array<{ name: string; state: string; required: boolean; url?: string }>;
+    records: Array<{ ok: boolean; output_tail: string; artifact_id?: string }>;
+  };
+  publication?: {
+    pr_url?: string;
+    branch?: string;
+    branch_url?: string;
+    merged: boolean;
+    base_branch?: string;
+    commit?: string;
+    commit_url?: string;
+  };
 }
 
 // The persisted PR/commit/check observations, exactly as
@@ -355,6 +376,7 @@ interface TimelineSpan {
   agent_role?: AgentRole;
   transport_role?: "agent" | "judge" | "llmlint";
   reference?: TimelineReference;
+  detail?: { ok?: boolean; output_tail?: string; artifact_id?: string };
 }
 
 // One instant recorded inside a span. `kind` is the journal event kind that

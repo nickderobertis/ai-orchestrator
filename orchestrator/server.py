@@ -38,6 +38,7 @@ from .config import ConfigError
 from .conversations import run_conversations
 from .history import HistoryError
 from .read_model import (
+    ArtifactNotFound,
     ConversationNotFound,
     InvalidConversationId,
     InvalidRunId,
@@ -46,6 +47,7 @@ from .read_model import (
     RunNotFound,
     contained_run_dir,
     list_runs,
+    read_artifact,
     run_conversation,
     run_detail,
     run_signature,
@@ -90,6 +92,8 @@ def _status_for(exc: ReadError) -> tuple[int, str]:
             return 404, "run_not_found"
         case ConversationNotFound():
             return 404, "conversation_not_found"
+        case ArtifactNotFound():
+            return 404, "artifact_not_found"
         case ProjectionFailed():
             return 409, "projection_error"
         case _:  # pragma: no cover - exhaustive over ReadError subclasses
@@ -240,6 +244,15 @@ def create_app(
     def get_conversation(run_id: str, conversation_id: str) -> Any:
         try:
             return run_conversation(root, run_id, conversation_id, oneharness_bin=oneharness_bin)
+        except ReadError as exc:
+            status, code = _status_for(exc)
+            return _error(status, code, str(exc))
+
+    @app.get("/api/v2/runs/{run_id}/artifacts/{artifact_id}")
+    def get_artifact(run_id: str, artifact_id: str) -> Any:
+        """A bounded tail of one recorded node artifact, addressed opaquely."""
+        try:
+            return read_artifact(root, run_id, artifact_id)
         except ReadError as exc:
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
