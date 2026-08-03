@@ -232,7 +232,7 @@ test("leads a node that is not moving with the reason it is not", async ({
 test("renders the outcomes only a settled round records", async ({ page }) => {
   // A finished round records statuses a live one cannot journal. Each has to reach
   // the canvas as itself and read as the kind of outcome it is.
-  await openObservatory(page, `/?run=${runs().outcomes}`);
+  await openObservatory(page, `/?run=${runs().outcomes}&view=graph`);
   await expect(page.locator(".dag-node.state-not-completed")).toContainText(
     "backfill",
   );
@@ -262,7 +262,7 @@ test("renders the outcomes only a settled round records", async ({ page }) => {
 
   // And a failure whose only recorded explanation is its outcome word still puts
   // that word on the card, rather than saying nothing the run did not already know.
-  await openObservatory(page, `/?run=${runs().outcomes}`);
+  await openObservatory(page, `/?run=${runs().outcomes}&view=graph`);
   await expect(
     page.locator(".dag-node.state-failed").filter({ hasText: "rollback" }),
   ).toContainText("gate-failed");
