@@ -371,12 +371,19 @@ def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
     bare_origin: Callable[..., Path],
     command_base: Callable[..., Path],
     personas_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real dispatch path takes ownership of a killed worker's exact tree."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-adopt-dead")
     root = tmp_path / "worktrees-adopt-dead"
     branch = "feature/adopt-dead"
+    alternate_configs = (tmp_path / "alternate", tmp_path / "alternate2")
+    for config_dir in alternate_configs:
+        config_dir.mkdir()
+        (config_dir / ".claude.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", str(alternate_configs[0]))
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR", str(alternate_configs[1]))
     ready: multiprocessing.Queue[str] = MP.Queue()
     process = MP.Process(
         target=_dirty_orphan_worktree_process,
@@ -385,6 +392,10 @@ def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
     process.start()
     original = Path(ready.get(timeout=e2e_timeout(10)))
     _join(process)
+    # Remove the creator's entries so only the retry's adoption path can restore
+    # trust for the preserved clone and worktree.
+    for config_dir in alternate_configs:
+        (config_dir / ".claude.json").write_text("{}", encoding="utf-8")
 
     observed = tmp_path / "retry-cwd"
     result = run_repo_task(
@@ -400,6 +411,11 @@ def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
 
     assert Path(observed.read_text(encoding="utf-8")) == original
     assert result.ok and result.outcome == "merged", result.detail
+    clone = original.parent / ".clone"
+    for config_dir in alternate_configs:
+        projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))["projects"]
+        assert projects[str(clone.resolve())] == {"hasTrustDialogAccepted": True}
+        assert projects[str(original.resolve())] == {"hasTrustDialogAccepted": True}
     assert (
         subprocess.run(
             ["git", "-C", str(origin), "show", "main:interrupted.txt"], capture_output=True

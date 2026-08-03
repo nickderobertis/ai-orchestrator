@@ -152,6 +152,14 @@ def test_workspace_lifecycle_continues_when_trust_marking_fails(
     assert "not valid JSON" in capfd.readouterr().err
 
 
+def test_alternate_claude_trust_launch_failure_is_nonfatal(tmp_path, monkeypatch, capfd) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path / "missing-tools"))
+
+    Workspace._mark_alternate_claude_trust(tmp_path / "worktree")
+
+    assert "trust setup failed; continuing" in capfd.readouterr().err
+
+
 def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")

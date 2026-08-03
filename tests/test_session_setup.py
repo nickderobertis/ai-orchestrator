@@ -102,8 +102,8 @@ def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.Complet
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (test_repo / "scripts" / "claude-workspace-trust.sh").write_text(
-        (REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_text(encoding="utf-8"),
+    (test_repo / "scripts" / "alternate-claude-workspace-trust.sh").write_text(
+        (REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     (test_repo / "config" / "onejudge.version").write_text(
@@ -232,7 +232,7 @@ def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
 def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
-    script = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
+    script = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
     command = 'source "$1"; mark_alternate_claude_trust "$2" "$3"'
     processes = [
         subprocess.Popen(
@@ -274,6 +274,33 @@ def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "jq is unavailable" in result.stderr
+
+
+def test_alternate_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "jq").symlink_to("/usr/bin/jq")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; PATH="$3"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(config),
+            str(tools),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "flock is unavailable" in result.stderr
+    assert "install util-linux" in result.stderr
 
 
 @pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])
@@ -516,8 +543,8 @@ def _run_full_setup_without_bun(
         (REPO_ROOT / "scripts" / "claude-alt-config-dir.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (scripts / "claude-workspace-trust.sh").write_text(
-        (REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_text(encoding="utf-8"),
+    (scripts / "alternate-claude-workspace-trust.sh").write_text(
+        (REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")

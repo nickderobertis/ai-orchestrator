@@ -40,8 +40,8 @@ readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 # shellcheck source=scripts/claude-alt-config-dir.sh
 source "$SCRIPT_DIR/claude-alt-config-dir.sh"
-# shellcheck source=scripts/claude-workspace-trust.sh
-source "$SCRIPT_DIR/claude-workspace-trust.sh"
+# shellcheck source=scripts/alternate-claude-workspace-trust.sh
+source "$SCRIPT_DIR/alternate-claude-workspace-trust.sh"
 # The shared resolver is also used by fail-fast wrappers and enables `set -e`;
 # session setup deliberately continues after optional setup failures.
 set +e
