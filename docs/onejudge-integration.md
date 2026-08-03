@@ -454,8 +454,9 @@ no-unprivileged-userns host, dispatch codex with
 The same constraint applies inside a worker's gate: llmlint normally requests a
 read-only oneharness judge, which makes codex create a bubblewrap network
 namespace and can fail at loopback setup with `RTM_NEWADDR`. llmlint still has no
-mode override at the 0.3.29 floor, so dispatches point `LLMLINT_ONEHARNESS_BIN`
-at `scripts/llmlint-oneharness.sh`. The wrapper keeps Codex in `read-only` mode and
+mode override at the `LLMLINT_MIN` floor `scripts/setup-llmlint.sh` declares, so
+dispatches point `LLMLINT_ONEHARNESS_BIN` at
+`scripts/llmlint-oneharness.sh`. The wrapper keeps Codex in `read-only` mode and
 adds only its network permission, avoiding the unsupported network namespace
 while retaining the OS-enforced read-only filesystem; `scripts/session-setup.sh`
 also persists that setting for interactive sessions.
