@@ -353,6 +353,13 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(
     rail(page).getByRole("button", { name: /^Judge/ }),
   ).toBeVisible();
+  await expect(rail(page).getByRole("button", { name: /^Lint/ })).toBeVisible();
+  await expect(
+    rail(page).getByRole("button", { name: /^Check-in/ }),
+  ).toBeVisible();
+  await expect(
+    rail(page).getByRole("button", { name: /^PR author/ }),
+  ).toBeVisible();
   await expect(worker).toHaveAttribute("data-timeline-shape", "point");
   await expect(
     page.getByRole("list", { name: "Timeline legend" }),
@@ -682,6 +689,13 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
   await rail(page)
     .getByRole("button", { name: /engineer-sweep-7\b/ })
     .click();
+  await expect(itemDetail(page)).toContainText("Swept batch 7 (0)");
+  const groupedBookmark = new URL(page.url());
+  await openObservatory(page, "/?view=graph");
+  await openObservatory(
+    page,
+    `${groupedBookmark.pathname}${groupedBookmark.search}`,
+  );
   await expect(itemDetail(page)).toContainText("Swept batch 7 (0)");
   await expect(itemDetail(page)).not.toContainText("Swept batch 7 (29)");
   await itemDetail(page)
