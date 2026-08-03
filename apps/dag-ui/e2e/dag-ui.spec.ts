@@ -19,23 +19,29 @@ import {
  */
 
 /**
- * The runs the fixture wrote, read from the file it publishes beside them. The
- * Python module that records them is their one source; naming them again here would
- * be a second one that drifts the moment the fixture changes.
+ * What the fixture wrote — its runs, and the pull request one of them published —
+ * read from the file it publishes beside them. The Python module that records them is
+ * their one source; naming them again here would be a second one that drifts the
+ * moment the fixture changes.
  */
-const runIdsSchema = z.object({
-  live: z.string().min(1),
-  history: z.string().min(1),
-  sibling: z.string().min(1),
-  unattributed: z.string().min(1),
-  eventless: z.string().min(1),
-  busy: z.string().min(1),
+const fixtureSchema = z.object({
+  runs: z.object({
+    live: z.string().min(1),
+    history: z.string().min(1),
+    sibling: z.string().min(1),
+    unattributed: z.string().min(1),
+    eventless: z.string().min(1),
+    busy: z.string().min(1),
+  }),
+  foundation_pr: z.string().min(1),
 });
-let cachedRunIds: z.infer<typeof runIdsSchema> | undefined;
-const runs = (): z.infer<typeof runIdsSchema> =>
-  (cachedRunIds ??= runIdsSchema.parse(
+let cachedFixture: z.infer<typeof fixtureSchema> | undefined;
+const fixture = (): z.infer<typeof fixtureSchema> =>
+  (cachedFixture ??= fixtureSchema.parse(
     JSON.parse(readFileSync(join(FIXTURE_WORKSPACE, "run-ids.json"), "utf8")),
   ));
+/** Every run the fixture wrote, and nothing else: journeys iterate this. */
+const runs = (): z.infer<typeof fixtureSchema>["runs"] => fixture().runs;
 
 /**
  * Open the app and wait for it to have mounted; each journey then asserts its own state.
@@ -316,20 +322,14 @@ test("keeps a node's task, criteria, dependencies and gate reachable", async ({
   await page.getByRole("button", { name: "Completion criteria" }).click();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
 
-  // A node that published nothing says so where its pull request would be.
   await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
   await expect(page.locator(".facts")).toContainText("Not recorded");
   await expect(page.locator(".facts").getByRole("link")).toHaveCount(0);
 
-  // The node that did publish one hands the url over as a link to follow, which is
-  // the whole of what an operator wants from that row.
   await openObservatory(page, `/?run=${runs().live}&node=foundation`);
   await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
   const pr = page.locator(".facts").getByRole("link");
-  await expect(pr).toHaveAttribute(
-    "href",
-    /^https:\/\/github\.com\/example\/repo\/pull\/12$/,
-  );
+  await expect(pr).toHaveAttribute("href", fixture().foundation_pr);
   await expect(pr).toHaveAttribute("target", "_blank");
   await expect(pr).toHaveAttribute("rel", "noreferrer");
 
@@ -450,6 +450,11 @@ test("navigates historical DAGs grouped by their launching session", async ({
 
   await page.getByRole("button", { name: RegExp(runs().history) }).click();
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
+  // The graph is what this reader is in, so the address keeps saying so as they move
+  // between runs — the same way it keeps saying `overall` for a reader in that.
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("view"))
+    .toBe("graph");
   await page.getByRole("button", { name: RegExp(runs().live) }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
@@ -469,7 +474,7 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   // A duration in the units it is read in, never the raw second count the contract
   // serves: `58000.0s` is arithmetic homework, `16h 6m 40s` is an answer.
   await expect(metric("Wall time").locator("strong")).toHaveText(
-    /^(\d+ms|\d+s|\d+m \d+s|\d+h \d+m \d+s)$/,
+    /^(\d{1,3}ms|[1-5]?\ds|\d+m [1-5]?\ds|\d+h [1-5]?\dm [1-5]?\ds)$/,
   );
   await expect(metric("Turns")).toContainText(/\d+/);
   await expect(page.getByText("Run-level sessions")).toBeVisible();
@@ -506,6 +511,21 @@ test("lands on the run as a whole, with every deep link still opening", async ({
   await expect(page.getByText("Run-level sessions")).toBeVisible();
   await expect(page.locator(".dag-node")).toHaveCount(0);
 
+  // Picking a second run is an operator comparing the two, so the reading they are
+  // comparing them in survives the move — only the run under it changes.
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run"))
+    .toBe(runs().history);
+  await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.getByText("No run-level conversation is available."),
+  ).toBeVisible();
+  await expect(page.locator(".dag-node")).toHaveCount(0);
+
   // Every address that does name where it is going still opens there.
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(
@@ -515,6 +535,16 @@ test("lands on the run as a whole, with every deep link still opening", async ({
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
+
+  // An address naming a view this app does not have is an address naming none: a
+  // stale bookmark lands where a bare one does rather than on an empty pane.
+  await openObservatory(page, `/?run=${runs().live}&view=timeline`);
+  await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.locator(".dag-node")).toHaveCount(0);
 });
 
 test("reads every recorded moment as words rather than as its stamp", async ({
@@ -534,9 +564,36 @@ test("reads every recorded moment as words rather than as its stamp", async ({
   await expect(itemDetail(page)).not.toContainText(/\d+\.\d+s/);
   // The whole instant stays reachable: it is the reading's own tooltip, and the
   // recorded stamp is on the element the browser can read it off.
-  const recorded = itemDetail(page).locator("time").first();
+  // What a fact list is asked is how recent the record is, so it is read as an age —
+  // the run wrote this journal moments ago, and that is what it says.
+  const recorded = itemDetail(page).locator(".facts time").first();
+  await expect(recorded).toHaveText(/^\d+ (second|minute|hour|day)s? ago$/);
   await expect(recorded).toHaveAttribute("datetime", /^\d{4}-\d\d-\d\dT/);
   await expect(recorded).toHaveAttribute("title", /\d{4}/);
+
+  // And across a node whose rail is a column of them, every reading the browser
+  // rendered is one of the shapes the formatters produce — not the one row this
+  // journey happened to open. A tier that slipped through as a bare number or an
+  // ISO string would be a row that matches none of them.
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await rail(page).getByRole("button").first().waitFor();
+  const times = await rail(page).locator(".rail-time").allInnerTexts();
+  expect(times.length).toBeGreaterThan(0);
+  for (const reading of times) {
+    expect(reading).toMatch(
+      /^(\d\d:\d\d:\d\d|[A-Z][a-z]{2} \d+(?: \d{4})?, \d\d:\d\d:\d\d)$/,
+    );
+  }
+  // Each tier is bounded by the one above it, so a reading that carried a whole
+  // duration in the unit below — the `58000.0s` an operator was doing arithmetic on —
+  // matches none of these.
+  const durations = await rail(page).locator(".rail-duration").allInnerTexts();
+  expect(durations.length).toBeGreaterThan(0);
+  for (const reading of durations) {
+    expect(reading).toMatch(
+      /^(—|running|\d{1,3}ms|[1-5]?\ds|\d+m [1-5]?\ds|\d+h [1-5]?\dm [1-5]?\ds)$/,
+    );
+  }
 });
 
 test("gathers every run of one launching session under it", async ({
@@ -667,6 +724,18 @@ test("recovers the selection when a bookmarked run is not being served", async (
   // rewrites the address rather than stranding the operator on an empty graph.
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
+  );
+  await expect
+    .poll(() => new URL(page.url()).search)
+    .toContain(`run=${runs().live}`);
+
+  // The same fallback from the overall reading keeps the operator in it: only the
+  // run under the view is rewritten, so a stale bookmark never also moves them.
+  await openObservatory(page, "/?run=absent-run");
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
+    "aria-selected",
+    "true",
   );
   await expect
     .poll(() => new URL(page.url()).search)

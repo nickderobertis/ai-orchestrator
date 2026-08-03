@@ -185,15 +185,8 @@ export function NodeTimelineView({
   );
 }
 
-/**
- * The recorded pull request, as the link it is.
- *
- * A node that published one recorded somewhere to go; rendering that url as text was
- * the one place in this view an operator had to copy an address by hand.
- */
 function PullRequest({ pr }: { readonly pr?: string | null }) {
-  if (typeof pr !== "string" || !pr.startsWith("http"))
-    return <>{formatValue(pr)}</>;
+  if (typeof pr !== "string" || pr === "") return <>{formatValue(pr)}</>;
   return (
     <a className="node-view-pr" href={pr} rel="noreferrer" target="_blank">
       {pr} <ExternalLink size={12} />

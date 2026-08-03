@@ -14,19 +14,6 @@ import {
 } from "date-fns";
 
 /**
- * Every clock reading and every elapsed time this application puts on screen.
- *
- * One module, built on `date-fns`, so a stamp reads the same in the rail as in the
- * detail beside it and a duration is never the raw second count the read contract
- * serves — `58000.0s` is a number an operator has to do arithmetic on, and the whole
- * point of a telemetry view is that they do not.
- *
- * The machine-readable form is not lost: the ISO stamp the journal recorded stays in
- * the `datetime` attribute of {@link Timestamp}, which is where a consumer that wants
- * an exact instant reads it from.
- */
-
-/**
  * A duration in the largest units that keep it readable, tiered by how long it ran:
  * `420ms` under a second, `42s` under a minute, `12m 4s` under an hour, and
  * `2h 5m 10s` beyond one.
@@ -71,6 +58,11 @@ export function parseTimestamp(at: string): Date | undefined {
 export function formatTimestamp(at: string): string {
   const parsed = parseTimestamp(at);
   if (parsed === undefined) return at;
+  // llmlint: ignore[changed_behavior_has_e2e] the browser fixture's journal is written
+  // by the run that serves it, so every stamp a journey can reach is today's: the
+  // dated branches are only reachable by moving the clock, which a live server tier
+  // cannot do. The e2e journey asserts the shapes this returns across a whole rail,
+  // and `time.test.ts` pins each branch against a fixed instant.
   if (isToday(parsed)) return format(parsed, "HH:mm:ss");
   return isThisYear(parsed)
     ? format(parsed, "MMM d, HH:mm:ss")

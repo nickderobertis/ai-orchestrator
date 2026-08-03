@@ -433,15 +433,12 @@ describe("DAG application", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Dependencies, PR and gate" }),
     );
-    // The url is where the operator is going next, so it is followable rather than
-    // an address they have to select and copy out of a definition list.
     const link = await screen.findByRole("link", { name: RegExp(PR_URL) });
     expect(link).toHaveAttribute("href", PR_URL);
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
     view.unmount();
 
-    // A node that published nothing still says so rather than offering a dead link.
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     render(<App client={client} />);
     await userEvent.click(

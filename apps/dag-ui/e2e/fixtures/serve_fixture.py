@@ -742,8 +742,9 @@ def stall(port: int) -> int:
         held.append(connection)
 
 
-#: Published beside the runs root so the browser spec names the runs this module
-#: wrote rather than keeping its own copy of them.
+#: Published beside the runs root so the browser spec names what this module wrote —
+#: its runs, and the pull request one of them published — rather than keeping its own
+#: copy of them.
 RUN_IDS_NAME = "run-ids.json"
 
 
@@ -755,12 +756,15 @@ def serve(workspace: Path, port: int) -> int:
     (workspace / RUN_IDS_NAME).write_text(
         json.dumps(
             {
-                "live": LIVE_RUN,
-                "history": HISTORY_RUN,
-                "sibling": SIBLING_RUN,
-                "unattributed": UNATTRIBUTED_RUN,
-                "eventless": EVENTLESS_RUN,
-                "busy": BUSY_RUN,
+                "runs": {
+                    "live": LIVE_RUN,
+                    "history": HISTORY_RUN,
+                    "sibling": SIBLING_RUN,
+                    "unattributed": UNATTRIBUTED_RUN,
+                    "eventless": EVENTLESS_RUN,
+                    "busy": BUSY_RUN,
+                },
+                "foundation_pr": FOUNDATION_PR,
             }
         ),
         encoding="utf-8",

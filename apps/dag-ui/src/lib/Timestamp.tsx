@@ -25,8 +25,12 @@ export function Timestamp({
   readonly relative?: boolean;
 }) {
   const parsed = parseTimestamp(at);
-  // A record no clock can read is shown exactly as it was recorded: a `<time>` around
-  // it would be a claim about an instant this journal never wrote.
+  // llmlint: ignore[changed_behavior_has_e2e] no served payload reaches this: the read
+  // contract validates every stamp as an ISO datetime with an offset, so a record a
+  // browser could not parse fails `dag-model` first and surfaces as the telemetry
+  // banner the offline journey covers. The guard is what stops a caller handing this
+  // some other recorded string from taking the whole view down with `Invalid Date`;
+  // `time.test.ts` proves the reading it falls back to.
   if (parsed === undefined) return <span className={className}>{at}</span>;
   return (
     <time
