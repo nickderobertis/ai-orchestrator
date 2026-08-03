@@ -359,6 +359,8 @@ _OUTCOMES_TASKS: list[dict[str, Any]] = [
     {"id": "backfill", "persona": "engineer", "task": "Backfill the store"},
     {"id": "verify", "persona": "engineer", "task": "Verify the migration"},
     {"id": "rollback", "persona": "engineer", "task": "Roll the migration back"},
+    {"id": "stalled", "persona": "engineer", "task": "Resume the migration"},
+    {"id": "retry", "persona": "engineer", "task": "Retry the migration"},
 ]
 
 
@@ -399,6 +401,18 @@ def _write_outcomes_run(runs_dir: Path) -> None:
             # lifecycle shape, and the one where a card with nothing but "failed" on
             # it tells an operator less than the run actually knows.
             "rollback": {"status": "failed", "ok": False, "outcome": "gate-failed"},
+            # Recorded blocked with nothing recorded about what blocked it — a legacy
+            # result, or one whose gating dependency has since settled. The view has
+            # to say that rather than head a term list with an empty value.
+            "stalled": {"status": "blocked", "ok": False},
+            # A node whose two recorded texts are the same sentence: showing it twice
+            # under two headings reads as two findings rather than one.
+            "retry": {
+                "status": "failed",
+                "ok": False,
+                "detail": "gate rejected the push",
+                "error": "gate rejected the push",
+            },
         },
     }
     journal.append("round-finished", detail={"result": result})

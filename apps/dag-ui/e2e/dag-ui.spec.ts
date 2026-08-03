@@ -268,6 +268,20 @@ test("renders the outcomes only a settled round records", async ({ page }) => {
   await expect(
     page.locator(".dag-node.state-failed").filter({ hasText: "rollback" }),
   ).toContainText("gate-failed");
+
+  // A node recorded blocked with nothing recorded about what blocks it — a legacy
+  // result, or one whose gate has since settled — says exactly that.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=stalled`);
+  await expect(page.getByRole("alert")).toContainText(
+    "Nothing recorded; the run has not written what holds it.",
+  );
+
+  // The lifecycle's prose and the dispatch's error are separate fields that are
+  // sometimes the same sentence; the banner states it once, under one heading.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=retry`);
+  const once = page.getByRole("alert");
+  await expect(once).toContainText("gate rejected the push");
+  await expect(once).not.toContainText("Error");
 });
 
 test("counts a run the strict fold cannot read at all", async ({ page }) => {
