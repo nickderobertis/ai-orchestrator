@@ -659,16 +659,13 @@ def list_runs(
     if cursor is not None:
         try:
             decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-            if not isinstance(decoded, list) or len(decoded) != 2:
-                raise ValueError
-            progress, cursor_run_id = decoded
-            if (
-                not isinstance(progress, (int, float))
-                or isinstance(progress, bool)
-                or not math.isfinite(progress)
-                or not isinstance(cursor_run_id, str)
-            ):
-                raise ValueError
+            match decoded:
+                case [int() | float() as progress, str() as cursor_run_id] if not isinstance(
+                    progress, bool
+                ) and math.isfinite(progress):
+                    pass
+                case _:
+                    raise ValueError
             cursor_key = (-float(progress), str(validate_run_id(cursor_run_id)))
         except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
             raise InvalidRunId("invalid runs cursor") from exc

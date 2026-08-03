@@ -67,6 +67,10 @@ export interface TelemetryClientOptions {
   readonly eventSource?: EventSourceFactory;
 }
 
+// Owned by orchestrator.server.RUNS_PAGE_LIMIT and held in sync by the DAG contract
+// check. Sending it explicitly keeps continuation pages the same size.
+const RUNS_PAGE_LIMIT = 50;
+
 export class TelemetryClient {
   readonly #baseUrl: URL;
   readonly #fetch: Fetch;
@@ -81,7 +85,7 @@ export class TelemetryClient {
   async listRuns(
     includeSettled = false,
     cursor?: string,
-    limit = 50,
+    limit = RUNS_PAGE_LIMIT,
   ): Promise<RunList> {
     const url = this.#url(API_V2_PATHS.runs);
     url.searchParams.set(API_V2_QUERY.includeSettled, String(includeSettled));

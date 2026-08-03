@@ -62,6 +62,7 @@ DEFAULT_HEARTBEAT_INTERVAL = 15.0
 #: `oneharness history` subprocess, which is affordable per detail view, not per poll.
 DEFAULT_CONVERSATION_INTERVAL = 5.0
 DEFAULT_PORT = 8787
+RUNS_PAGE_LIMIT = 50
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
@@ -200,7 +201,11 @@ def create_app(
     # work, and FastAPI runs a non-async handler in its threadpool, so one slow read
     # occupies a worker rather than the loop every other request shares.
     @app.get("/api/v2/runs")
-    def get_runs(include_settled: bool = False, limit: int = 50, cursor: str | None = None) -> Any:
+    def get_runs(
+        include_settled: bool = False,
+        limit: int = RUNS_PAGE_LIMIT,
+        cursor: str | None = None,
+    ) -> Any:
         try:
             return list_runs(
                 root,

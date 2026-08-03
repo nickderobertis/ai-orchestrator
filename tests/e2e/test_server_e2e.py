@@ -1818,6 +1818,15 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
 
         # Every trust boundary behaves like the rest of this read model.
         assert client.get("/api/v2/runs/bad!id/timeline?scope=run").status_code == 422
+        for params in (
+            {},
+            {"node_id": "worker", "scope": "run"},
+            {"scope": "node"},
+            {"node_id": "bad/node"},
+        ):
+            rejected = client.get("/api/v2/runs/demo/timeline", params=params)
+            assert rejected.status_code == 422
+            assert rejected.json()["error"]["code"] == "invalid_run_id"
         absent = client.get("/api/v2/runs/absent/timeline?scope=run")
         assert absent.status_code == 404
         assert absent.json()["error"]["code"] == "run_not_found"

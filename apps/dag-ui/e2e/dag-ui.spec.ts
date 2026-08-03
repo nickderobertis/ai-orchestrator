@@ -736,33 +736,12 @@ test("navigates historical DAGs grouped by their launching session", async ({
 test("loads another run-list page when navigation reaches the end", async ({
   page,
 }) => {
-  let fullList: Record<string, unknown> | undefined;
-  let totalRuns = 0;
-  await page.route("**/api/v2/runs?*", async (route) => {
-    const url = new URL(route.request().url());
-    if (fullList === undefined)
-      fullList = (await (await route.fetch()).json()) as Record<
-        string,
-        unknown
-      >;
-    const runs = fullList.runs as unknown[];
-    totalRuns = runs.length;
-    await route.fulfill({
-      json: url.searchParams.has("cursor")
-        ? { ...fullList, runs: runs.slice(1) }
-        : { ...fullList, runs: runs.slice(0, 1), next_cursor: "page-2" },
-    });
-  });
   await page.goto("/?view=graph");
   const navigation = page.getByRole("navigation", { name: "DAG runs" });
-  await expect(navigation.locator(".run-link")).toHaveCount(1);
-  await navigation
-    .locator("[data-radix-scroll-area-viewport]")
-    .evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-      element.dispatchEvent(new Event("scroll"));
-    });
-  await expect(navigation.locator(".run-link")).toHaveCount(totalRuns);
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
+  await navigation.locator("[data-radix-scroll-area-viewport]").hover();
+  await page.mouse.wheel(0, 10_000);
+  await expect(navigation.locator(".run-link")).toHaveCount(52);
 });
 
 test("restores a bookmarked view and refreshes through the read API", async ({
@@ -1334,6 +1313,7 @@ test("drops a run the server stops serving", async ({ page }) => {
 
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
+  changeServedRuns(["--remove-page-runs"]);
 
   // Every remaining run except one — the journey before this removed the historical
   // one. The empty state means the server serves none, so it must not appear while

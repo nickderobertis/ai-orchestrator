@@ -844,6 +844,29 @@ def main() -> None:
             documented_number(design, "default port", r"127\.0\.0\.1:(\d+)"),
         ),
     )
+    for restatement in (
+        Restatement(
+            "packages/telemetry-client/src/index.ts",
+            root / "packages/telemetry-client/src/index.ts",
+            r"const RUNS_PAGE_LIMIT = (\d+);",
+        ),
+        Restatement(
+            "docs/dag-ui/design.md",
+            design,
+            r"`limit` defaults to (\d+)",
+        ),
+    ):
+        reconcile_number(
+            "runs page limit",
+            (
+                "orchestrator/server.py RUNS_PAGE_LIMIT",
+                module_number(server, "RUNS_PAGE_LIMIT"),
+            ),
+            (
+                restatement.where,
+                documented_number(restatement.path, "runs page limit", restatement.pattern),
+            ),
+        )
     # The browser app reaches that same port through its dev proxy, and its operator
     # documentation restates both addresses. A silent disagreement would leave
     # `just dag-ui` proxying to nothing, so all four copies are reconciled here.

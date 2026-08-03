@@ -701,7 +701,9 @@ def _write_unattributed_run(runs_dir: Path) -> None:
     journal.append("node-started", node=NodeId("orphan"), detail={"persona": "engineer"})
 
 
-def _write_eventless_run(runs_dir: Path) -> None:
+def _write_eventless_run(
+    runs_dir: Path, run_id: str = EVENTLESS_RUN, *, record_legacy_launch: bool = True
+) -> None:
     """One run whose round is prepared and whose journal is still empty.
 
     The read API serves it with a null ``last_event`` and no rounds at all. It has to
@@ -716,8 +718,10 @@ def _write_eventless_run(runs_dir: Path) -> None:
     """
     from orchestrator.runs import prepare_round
 
-    run_dir = runs_dir / EVENTLESS_RUN
+    run_dir = runs_dir / run_id
     prepare_round(run_dir, {"tasks": _EVENTLESS_TASKS})
+    if not record_legacy_launch:
+        return
     (run_dir / "launch.json").write_text(
         json.dumps(
             {
@@ -1015,6 +1019,10 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     # Written oldest first: the list view orders by most recent progress, so the live
     # run ends up at the top and is what an operator sees on arrival.
     _write_eventless_run(runs_dir)
+    # More than one API page of cheap eventless records makes the browser exercise
+    # the real cursor boundary instead of substituting a network response.
+    for index in range(44):
+        _write_eventless_run(runs_dir, f"dag-ui-page-{index:02d}", record_legacy_launch=False)
     _write_busy_run(runs_dir)
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
@@ -1082,6 +1090,15 @@ def remove_run(workspace: Path, run_id: str) -> int:
         print(f"serve-fixture: no run {validated!r} beneath {runs_dir}", file=sys.stderr)
         return 2
     shutil.rmtree(target)
+    return 0
+
+
+def remove_page_runs(workspace: Path) -> int:
+    """Remove the synthetic pagination rows while leaving the named journeys intact."""
+    runs_dir = workspace / "runs"
+    for target in runs_dir.glob("dag-ui-page-*"):
+        if target.is_dir() and target.parent == runs_dir:
+            shutil.rmtree(target)
     return 0
 
 
@@ -1180,6 +1197,11 @@ def main(argv: list[str] | None = None) -> int:
         help="take one run out of an already-served fixture instead of serving",
     )
     parser.add_argument(
+        "--remove-page-runs",
+        action="store_true",
+        help="remove the synthetic pagination runs from an already-served fixture",
+    )
+    parser.add_argument(
         "--stall",
         action="store_true",
         help="accept connections and never answer, so a read stays in flight",
@@ -1206,6 +1228,8 @@ def main(argv: list[str] | None = None) -> int:
         return settle_dashboard(workspace)
     if args.remove_run is not None:
         return remove_run(workspace, args.remove_run)
+    if args.remove_page_runs:
+        return remove_page_runs(workspace)
     try:
         return serve(workspace, args.port)
     finally:
