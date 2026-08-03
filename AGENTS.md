@@ -78,7 +78,17 @@ dispatch onejudge.
    work is orchestration-worthy, present the plan in this tracked-DAG structure
    and offer to capture it as `plan.json` and run it with `just orchestrate`.
    Continue to apply [the granularity rule](#the-granularity-rule-the-core-judgment)
-   and the [direct-tweak exception](#your-loop-as-planner). Nodes have unique IDs;
+   and the [direct-tweak exception](#your-loop-as-planner). When a split follows a
+   contract seam, propose the concrete contract before dispatch — the route plus
+   request and response fields and types, the exact signature, or the field name,
+   type, and default — and get **explicit user approval on that contract**. Read far
+   enough into **both** the producer and the consumer side to state it; a contract
+   chosen without reading the consumer is the failure this exists to prevent, and
+   that reading is direct planning work under the research boundary below. The
+   approved contract is then fixed for the run: workers implement against it and
+   never unilaterally change a shared interface, and a departure one of them wants
+   arrives as a proposal for the planner to amend by live edit or defer. Nodes
+   have unique IDs;
    agent nodes carry `persona` + concrete `task` prose (and optionally
    `repo`/`steps` for a lifecycle that runs several steps on one branch);
    `kind: human` nodes carry only the action prose; `deps` names real
@@ -244,13 +254,27 @@ many micro-tasks that each re-pay the setup tax. When unsure, err toward fewer,
 larger subtasks and split further only if one proves too big. See
 `docs/orchestration.md`.
 
+The rule above answers how big a node is; **where to cut is a contract**. The seam
+that makes two nodes genuinely independent is an interface — an HTTP route, a method
+signature, a CLI command or flag schema, a data schema or event payload. Cutting by
+component, or merely into smaller slices, usually leaves both nodes rewriting the
+same surface. Cut there and land the contract **first and non-breaking**: the first
+node establishes the interface without changing existing behavior, so its callers
+are unaffected and the gate stays green. It then unblocks the real implementation
+and every consumer to proceed in parallel, each upgrading as the implementation
+lands rather than needing a synchronized cutover. This licenses no over-splitting:
+a contract seam earns a split only where it buys real parallelism, and when one
+agent can hold producer and consumer together that is still the better dispatch.
+
 An implementation dispatch owns the tests that prove its change. Keep
 implementation and those tests in the same node or lifecycle step so the unit
 settles fully proven; never split them into separate nodes or steps. A separate
 test-focused dispatch is appropriate only to close a pre-existing coverage gap
 or add a regression suite for code the planner is not otherwise changing. Use
-`engineer` for that work; there is no test-only persona. Operational guidance
-lives under [Decomposition and scheduling](docs/orchestration.md#decomposition-and-scheduling).
+`engineer` for that work; there is no test-only persona. A contract node is no
+exception to any of this: it proves the new surface exists and that existing
+behavior is unchanged. Operational guidance lives under
+[Decomposition and scheduling](docs/orchestration.md#decomposition-and-scheduling).
 
 ## Personas and the base config
 
