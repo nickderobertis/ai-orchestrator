@@ -73,7 +73,7 @@ export function NodeTimelineView({
   }, [onBack]);
   const prUrl =
     node.detail?.publication === undefined
-      ? node.result?.pr
+      ? (node.result?.pr ?? undefined)
       : node.detail.publication.pr_url;
 
   return (
