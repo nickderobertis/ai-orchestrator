@@ -368,7 +368,10 @@ def function_parameters(path: Path, names: set[str]) -> set[str]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError) as exc:
-        fail(f"read {path.name} HTTP query parameters: {exc}")
+        fail(
+            f"read {path.name} HTTP query parameters: {exc}; restore valid server handler "
+            "source, then rerun 'just check'"
+        )
     functions = {
         node.name: node
         for node in ast.walk(tree)
@@ -392,7 +395,10 @@ def typescript_string_object(path: Path, name: str) -> set[str]:
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as exc:
-        fail(f"read {path.name} {name}: {exc}")
+        fail(
+            f"read {path.name} {name}: {exc}; restore the TypeScript contract source, "
+            "then rerun 'just check'"
+        )
     matches = re.findall(rf"export const {name} = \{{(.*?)\}} as const;", source, flags=re.DOTALL)
     if len(matches) != 1:
         fail(f"{path.name} must declare exactly one {name}")
@@ -910,7 +916,9 @@ def main() -> None:
     if server_queries != model_queries:
         fail(
             "HTTP query names disagree: "
-            f"server={sorted(server_queries)!r}, dag-model={sorted(model_queries)!r}"
+            f"server={sorted(server_queries)!r}, dag-model={sorted(model_queries)!r}; "
+            "reconcile the server handler parameters with API_V2_QUERY, then rerun "
+            "'just check'"
         )
     # The browser app reaches that same port through its dev proxy, and its operator
     # documentation restates both addresses. A silent disagreement would leave
