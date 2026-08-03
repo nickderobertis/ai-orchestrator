@@ -1688,6 +1688,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         assert dispatches["check-in-native"]["parent_id"] == by_kind["round"][0]["id"]
         turns = dispatches["worker-native"]["events"]
         assert [event["kind"] for event in turns] == ["conversation-turn"] * 2
+
         # A session whose recorded start cannot be placed in time is omitted rather
         # than given an invented one — every other transcript still reaches the view.
         assert set(dispatches) == {
@@ -1806,6 +1807,59 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
 
     # Serving the timeline is a read: the run directory it folded is byte-identical.
     assert _tree(runs) == before
+
+
+@pytest.mark.parametrize(
+    ("kind", "detail"),
+    [
+        (
+            "merge-gate-coverage",
+            {"pre_push_hook": False, "required_checks": [], "expected_gate": []},
+        ),
+        ("verification-finished", {"ok": "yes"}),
+        ("verification-finished", {"ok": True, "output_tail": 42}),
+        (
+            "merge-gate-coverage",
+            {
+                "pre_push_hook": ".githooks/pre-push",
+                "required_checks": [],
+                "required_checks_status": 42,
+                "expected_gate": [],
+            },
+        ),
+        (
+            "merge-gate-coverage",
+            {
+                "pre_push_hook": ".githooks/pre-push",
+                "required_checks": [7],
+                "expected_gate": [],
+            },
+        ),
+    ],
+)
+def test_malformed_verification_records_fail_at_the_http_projection_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    detail: dict[str, object],
+) -> None:
+    """Journal trust-boundary failures reach clients as the API's stable error envelope."""
+    runs = tmp_path / "runs"
+    run_id = "malformed-verification"
+    run_dir = _active_run(runs, run_id)
+    open_journal(run_dir, RunId(run_id), 1).append(kind, node=NodeId("api"), detail=detail)
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, run_id)))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        response = httpx.get(
+            f"{base}/api/v2/runs/{run_id}",
+            params={"include_conversations": "false"},
+            timeout=30,
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "projection_error"
 
 
 def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: Path) -> None:
