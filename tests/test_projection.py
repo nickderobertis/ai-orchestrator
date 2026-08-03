@@ -84,7 +84,16 @@ def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: P
         "node-added", detail={"definition": {"id": "ship", "persona": "engineer", "task": "Ship"}}
     )
     journal.append("edge-added", detail={"from": "approve", "to": "ship"})
-    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append(
+        "round-started",
+        detail={
+            "plan": {
+                "schema_version": 4,
+                "concurrency": 1,
+                "goal": {"id": "safe-ship", "text": "Ship safely"},
+            }
+        },
+    )
     journal.append(
         "human-waiting",
         node=NodeId("approve"),
@@ -100,6 +109,7 @@ def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: P
     journal.append("round-finished", detail={"result": result})
 
     projection = project_run(tmp_path / "events.jsonl", run_id, 1)
+    assert projection.plan["goal"] == {"id": "safe-ship", "text": "Ship safely"}
     assert projection.plan["tasks"][1]["deps"] == ["approve"]
     assert projection.attestations == ("approve",)
     assert projection.result == result

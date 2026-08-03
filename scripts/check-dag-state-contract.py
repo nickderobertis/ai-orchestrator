@@ -363,6 +363,54 @@ def reconcile_number(
         )
 
 
+def function_parameters(path: Path, names: set[str]) -> set[str]:
+    """Parameter names from the uniquely named functions in one Python module."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        fail(
+            f"read {path.name} HTTP query parameters: {exc}; restore valid server handler "
+            "source, then rerun 'just check'"
+        )
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in names
+    }
+    if set(functions) != names:
+        fail(
+            f"{path.name} must declare HTTP handlers {sorted(names)!r}; restore the missing "
+            "handler or update the checked query contract, then rerun 'just check'"
+        )
+    parameters: set[str] = set()
+    for name, function in functions.items():
+        path_parameters = {"run_id"} if name in {"get_run", "get_timeline"} else set()
+        parameters.update(
+            argument.arg
+            for argument in [*function.args.args, *function.args.kwonlyargs]
+            if argument.arg not in {"request", *path_parameters}
+        )
+    return parameters
+
+
+def typescript_string_object(path: Path, name: str) -> set[str]:
+    """String values from one exported TypeScript const object."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(
+            f"read {path.name} {name}: {exc}; restore the TypeScript contract source, "
+            "then rerun 'just check'"
+        )
+    matches = re.findall(rf"export const {name} = \{{(.*?)\}} as const;", source, flags=re.DOTALL)
+    if len(matches) != 1:
+        fail(
+            f"{path.name} must declare exactly one {name}; restore one exported const object "
+            "and remove duplicates, then rerun 'just check'"
+        )
+    return set(re.findall(r'\w+:\s*"([^"]+)"', matches[0]))
+
+
 def frozenset_members(path: Path, name: str) -> list[str]:
     """The string members of a module-level ``name: frozenset[str] = frozenset({...})``."""
     try:
@@ -504,7 +552,9 @@ def literal_values(path: Path, name: str) -> list[str]:
             f"{path.name} {name} must remain a string Literal; replace its value "
             f'with `{name} = Literal["role", ...]`'
         )
-    elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else []
+    elements = (
+        annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else [annotation.slice]
+    )
     values = [
         item.value
         for item in elements
@@ -660,6 +710,12 @@ def main() -> None:
     )
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
+    reconcile_shape(
+        root / "orchestrator/projection.py",
+        "ProjectedPlan",
+        design,
+        interface_fields(design, "ProjectedPlan"),
+    )
 
     # A required envelope field and its route prefix are one major-version contract.
     # Reconcile every executable and documented copy so a future required-field
@@ -836,6 +892,51 @@ def main() -> None:
         (
             "docs/dag-ui/design.md",
             documented_number(design, "default port", r"127\.0\.0\.1:(\d+)"),
+        ),
+    )
+    for restatement in (
+        Restatement(
+            "packages/telemetry-client/src/index.ts",
+            root / "packages/telemetry-client/src/index.ts",
+            r"const RUNS_PAGE_LIMIT = (\d+);",
+        ),
+        Restatement(
+            "docs/dag-ui/design.md",
+            design,
+            r"`limit` defaults to (\d+)",
+        ),
+    ):
+        reconcile_number(
+            "runs page limit",
+            (
+                "orchestrator/server.py RUNS_PAGE_LIMIT",
+                module_number(server, "RUNS_PAGE_LIMIT"),
+            ),
+            (
+                restatement.where,
+                documented_number(restatement.path, "runs page limit", restatement.pattern),
+            ),
+        )
+    server_queries = function_parameters(server, {"get_runs", "get_run", "get_timeline", "events"})
+    model_queries = typescript_string_object(
+        root / "packages/dag-model/src/index.ts", "API_V2_QUERY"
+    )
+    if server_queries != model_queries:
+        fail(
+            "HTTP query names disagree: "
+            f"server={sorted(server_queries)!r}, dag-model={sorted(model_queries)!r}; "
+            "reconcile the server handler parameters with API_V2_QUERY, then rerun "
+            "'just check'"
+        )
+    reconcile(
+        "timeline scope vocabulary",
+        (
+            "orchestrator/timeline.py TimelineScope",
+            literal_values(timeline, "TimelineScope"),
+        ),
+        (
+            "packages/dag-model/src/index.ts API_V2_TIMELINE_SCOPES",
+            sorted(typescript_string_object(dag_model, "API_V2_TIMELINE_SCOPES")),
         ),
     )
     # The browser app reaches that same port through its dev proxy, and its operator

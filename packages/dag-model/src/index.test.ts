@@ -239,7 +239,10 @@ describe("boundary failures", () => {
     const round = {
       run_id: "run-1",
       round: 1,
-      plan: { tasks: [{ id: "build", task: "Build it" }] },
+      plan: {
+        tasks: [{ id: "build", task: "Build it" }],
+        goal: { id: "ship-it", text: "Ship it safely" },
+      },
       node_states: {},
       node_status: { build: "skipped" },
       node_gated_by: {},
@@ -249,6 +252,13 @@ describe("boundary failures", () => {
       last_seq: 2,
     };
     expect(roundSchema.parse(round).node_status.build).toBe("skipped");
+    expect(roundSchema.parse(round).plan.goal?.text).toBe("Ship it safely");
+    expect(
+      roundSchema.safeParse({
+        ...round,
+        plan: { ...round.plan, goal: { id: "ship-it" } },
+      }).success,
+    ).toBe(false);
     // A status the vocabulary does not hold is refused at the parse rather than
     // reaching a renderer that has no meaning for it.
     expect(

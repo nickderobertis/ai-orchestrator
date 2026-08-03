@@ -346,6 +346,61 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         assert exposed["launch"]["launcher_session_id"] == "top-session"
 
 
+def test_runs_endpoint_pages_by_opaque_cursor_and_rejects_invalid_bounds(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    for run_id in ("alpha", "beta", "gamma"):
+        _active_run(runs, run_id)
+    app = create_app(runs, oneharness_bin=str(tmp_path / "absent-oneharness"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+        first = client.get("/api/v2/runs", params={"limit": 2}).json()
+        assert len(first["runs"]) == 2
+        second = client.get(
+            "/api/v2/runs", params={"limit": 2, "cursor": first["next_cursor"]}
+        ).json()
+        assert len({row["run_id"] for row in [*first["runs"], *second["runs"]]}) == 3
+        assert "next_cursor" not in second
+        for params in (
+            {"limit": 0},
+            {"limit": 201},
+            {"cursor": "not-a-cursor"},
+            {"cursor": "_w"},  # urlsafe base64 for the invalid UTF-8 byte 0xff
+        ):
+            response = client.get("/api/v2/runs", params=params)
+            assert response.status_code == 422
+
+
+def test_runs_endpoint_skips_a_run_removed_during_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    _active_run(runs, "alpha")
+    vanishing = _active_run(runs, "beta")
+    invocation = tmp_path / "history-invoked"
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "alpha")))
+    monkeypatch.setenv("FAKE_ONEHARNESS_INVOCATION_LOG", str(invocation))
+    monkeypatch.setenv("FAKE_ONEHARNESS_DELAY_SECONDS", "1.5")
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        responses: list[httpx.Response] = []
+        request = threading.Thread(
+            target=lambda: responses.append(httpx.get(f"{base}/api/v2/runs", timeout=10))
+        )
+        request.start()
+        deadline = time.monotonic() + 5
+        while not invocation.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert invocation.exists(), "history collection did not reach its real subprocess boundary"
+        shutil.rmtree(vanishing)
+        request.join(timeout=10)
+
+    assert not request.is_alive()
+    assert responses[0].status_code == 200
+    assert [run["run_id"] for run in responses[0].json()["runs"]] == ["alpha"]
+
+
 def test_malformed_durable_attribution_degrades_over_http_and_for_ownership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -380,6 +435,8 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
 ) -> None:
     runs = tmp_path / "runs"
     run_dir = _active_run(runs, "demo")
+    for index in range(50):
+        _active_run(runs, f"page-{index:02d}")
     monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
     app = create_app(
         runs,
@@ -399,8 +456,15 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             frames = _read_frames(lines, until="snapshot")
             snapshot = frames[-1]
             assert snapshot["event"] == "snapshot"
-            snapshot_runs = json.loads(snapshot["data"])["runs"]
-            assert snapshot_runs[0]["run_id"] == "demo"
+            snapshot_body = json.loads(snapshot["data"])
+            assert len(snapshot_body["runs"]) == 50
+            assert snapshot_body["next_cursor"]
+            continuation = client.get(
+                "/api/v2/runs",
+                params={"include_settled": True, "cursor": snapshot_body["next_cursor"]},
+            )
+            assert continuation.status_code == 200
+            assert len(continuation.json()["runs"]) == 1
 
             # An idle stream heartbeats at least once before anything changes.
             idle = _read_frames(lines, until="comment")
@@ -1158,7 +1222,7 @@ def test_a_slow_history_read_stalls_neither_other_requests_nor_a_live_stream(
             for path in (
                 "/api/v2/runs?include_settled=true",
                 "/api/v2/runs/demo",
-                "/api/v2/runs/demo/timeline",
+                "/api/v2/runs/demo/timeline?scope=run",
                 f"/api/v2/runs/demo/conversations/{conversation_id}",
             ):
                 served, latencies = _while_in_flight(base, path)
@@ -1579,10 +1643,10 @@ def _lifecycle_history(tmp_path: Path, run_id: str, base: datetime) -> Path:
     return store
 
 
-def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
+def test_scoped_timeline_endpoints_reconstruct_one_ordered_run_history_over_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The whole journey a viewer takes: one timeline fetch, and detail without transcripts."""
+    """Viewer scopes reconstruct one timeline while detail omits transcripts."""
     runs = tmp_path / "runs"
     run_dir = _lifecycle_run(runs, "demo")
     store = _lifecycle_history(tmp_path, "demo", datetime.now(UTC))
@@ -1599,12 +1663,18 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        body = client.get("/api/v2/runs/demo/timeline")
+        body = client.get("/api/v2/runs/demo/timeline?node_id=api")
         assert body.status_code == 200
         timeline = body.json()
         assert timeline["api_version"] == 2
         assert timeline["run_id"] == "demo"
-        spans = timeline["spans"]
+        spans = [
+            *client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"],
+            *timeline["spans"],
+            *client.get("/api/v2/runs/demo/timeline?node_id=docs").json()["spans"],
+            *client.get("/api/v2/runs/demo/timeline?node_id=signoff").json()["spans"],
+        ]
+        spans.sort(key=lambda span: (span["started_at"], span["id"]))
         by_id = {span["id"]: span for span in spans}
         by_kind: dict[str, list[dict[str, object]]] = {}
         for span in spans:
@@ -1791,8 +1861,17 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         assert malformed.json()["error"]["code"] == "invalid_request"
 
         # Every trust boundary behaves like the rest of this read model.
-        assert client.get("/api/v2/runs/bad!id/timeline").status_code == 422
-        absent = client.get("/api/v2/runs/absent/timeline")
+        assert client.get("/api/v2/runs/bad!id/timeline?scope=run").status_code == 422
+        for params in (
+            {},
+            {"node_id": "worker", "scope": "run"},
+            {"scope": "node"},
+            {"node_id": "bad/node"},
+        ):
+            rejected = client.get("/api/v2/runs/demo/timeline", params=params)
+            assert rejected.status_code == 422
+            assert rejected.json()["error"]["code"] == "invalid_run_id"
+        absent = client.get("/api/v2/runs/absent/timeline?scope=run")
         assert absent.status_code == 404
         assert absent.json()["error"]["code"] == "run_not_found"
 
@@ -1800,7 +1879,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         journal.write_text(
             journal.read_text(encoding="utf-8") + '{"kind":"bogus"}\n', encoding="utf-8"
         )
-        corrupt = client.get("/api/v2/runs/demo/timeline")
+        corrupt = client.get("/api/v2/runs/demo/timeline?scope=run")
         assert corrupt.status_code == 409
         assert corrupt.json()["error"]["code"] == "projection_error"
         journal.write_text(
@@ -1879,7 +1958,15 @@ def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: 
     app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
 
     with _serve(app) as base:
-        timeline = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/demo/timeline").json()
+        client = httpx.Client(base_url=base, timeout=30)
+        timeline = client.get("/api/v2/runs/demo/timeline?node_id=api").json()
+        timeline["spans"].extend(
+            client.get("/api/v2/runs/demo/timeline?node_id=docs").json()["spans"]
+        )
+        timeline["spans"].extend(client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"])
+        timeline["spans"].extend(
+            client.get("/api/v2/runs/demo/timeline?node_id=signoff").json()["spans"]
+        )
 
     open_publication = next(
         span
@@ -2029,10 +2116,12 @@ def test_timeline_survives_a_skewed_clock_a_half_pair_and_a_session_still_speaki
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
-        response = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/skewed/timeline")
+        client = httpx.Client(base_url=base, timeout=30)
+        response = client.get("/api/v2/runs/skewed/timeline?node_id=api")
+        run_spans = client.get("/api/v2/runs/skewed/timeline?scope=run").json()["spans"]
 
     assert response.status_code == 200
-    spans = response.json()["spans"]
+    spans = [*run_spans, *response.json()["spans"]]
     by_kind: dict[str, list[dict[str, object]]] = {}
     for span in spans:
         by_kind.setdefault(str(span["kind"]), []).append(span)

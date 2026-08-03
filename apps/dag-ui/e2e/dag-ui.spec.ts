@@ -15,7 +15,9 @@ import {
  * by `playwright.config.ts`). Nothing between the browser and the read model is
  * doubled: the app's own telemetry client makes the HTTP and SSE requests, and the
  * server projects them from journal files the executor's own writers produced. Live
- * updates are provoked by changing that run directory, never by faking an event.
+ * updates are provoked by changing that run directory, never by faking an event. The
+ * pagination recovery journey takes the browser offline; its online retry still
+ * reaches this real server and renders its next recorded page.
  */
 
 /**
@@ -733,6 +735,51 @@ test("navigates historical DAGs grouped by their launching session", async ({
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
 });
 
+test("loads another run-list page when navigation reaches the end", async ({
+  page,
+}) => {
+  await page.goto("/?view=graph");
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
+  await navigation.locator("[data-radix-scroll-area-viewport]").hover();
+  await page.mouse.wheel(0, 10_000);
+  await expect(navigation.locator(".run-link")).toHaveCount(52);
+});
+
+test("loads another run-list page from the keyboard", async ({ page }) => {
+  await page.goto("/?view=graph");
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  const loadMore = page.getByRole("button", { name: "Load more runs" });
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
+
+  expect(await tabTo(page, loadMore, 70)).toBe(true);
+  await page.keyboard.press("Enter");
+  await expect(navigation.locator(".run-link")).toHaveCount(52);
+});
+
+test("recovers when loading another run-list page fails", async ({
+  context,
+  page,
+}) => {
+  await page.goto("/?view=graph");
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  const viewport = navigation.locator("[data-radix-scroll-area-viewport]");
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
+
+  await context.setOffline(true);
+  await viewport.hover();
+  await page.mouse.wheel(0, 10_000);
+  await expect(page.getByRole("alert")).toContainText(
+    "Telemetry request failed",
+  );
+
+  await context.setOffline(false);
+  await page.mouse.wheel(0, -200);
+  await page.mouse.wheel(0, 10_000);
+  await expect(navigation.locator(".run-link")).toHaveCount(52);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("restores a bookmarked view and refreshes through the read API", async ({
   page,
 }) => {
@@ -748,6 +795,7 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   );
   await expect(metric("Turns")).toContainText(/\d+/);
   await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Observe the live DAG safely")).toBeVisible();
   await expect(
     page.getByText("Coordinating the execution frontier"),
   ).toBeVisible();
@@ -1301,6 +1349,7 @@ test("drops a run the server stops serving", async ({ page }) => {
 
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
+  changeServedRuns(["--remove-page-runs"]);
 
   // Every remaining run except one — the journey before this removed the historical
   // one. The empty state means the server serves none, so it must not appear while

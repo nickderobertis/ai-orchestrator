@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
  */
 interface RunRecord {
   readonly runId: string;
+  readonly timelineScope?: string;
   readonly detail?: RunDetail;
   readonly timeline?: RunTimeline;
   readonly timelineError?: Error;
@@ -49,11 +50,14 @@ export interface DagTelemetryState {
   readonly hasUpdates: boolean;
   readonly error?: Error;
   readonly refresh: () => Promise<void>;
+  readonly loadMore: () => Promise<void>;
+  readonly hasMore: boolean;
 }
 
 export function useDagTelemetry(
   client: TelemetryClient,
   requestedRunId?: string,
+  timelineScope?: { readonly nodeId?: string },
 ): DagTelemetryState {
   const [list, setList] = useState<RunList>();
   const [record, setRecord] = useState<RunRecord>();
@@ -69,6 +73,8 @@ export function useDagTelemetry(
       : list.runs.some(({ run_id }) => run_id === requestedRunId)
         ? requestedRunId
         : list.runs.at(0)?.run_id;
+  const timelineScopeKey =
+    timelineScope === undefined ? undefined : (timelineScope.nodeId ?? "run");
   // Read by the event stream, which must not be torn down and reopened every time
   // the operator selects a different run.
   const selected = useRef(runId);
@@ -79,6 +85,29 @@ export function useDagTelemetry(
   const loadList = useCallback(async () => {
     setList(await client.listRuns(true));
   }, [client]);
+  const loadMore = useCallback(async () => {
+    if (list?.next_cursor === undefined) return;
+    try {
+      const next = await client.listRuns(true, list.next_cursor);
+      setList((current) =>
+        current === undefined
+          ? next
+          : {
+              ...next,
+              runs: [
+                ...current.runs,
+                ...next.runs.filter(
+                  ({ run_id }) =>
+                    !current.runs.some((run) => run.run_id === run_id),
+                ),
+              ],
+            },
+      );
+      setError(undefined);
+    } catch (caught) {
+      setError(asError(caught));
+    }
+  }, [client, list]);
 
   const refresh = useCallback(async () => {
     try {
@@ -103,12 +132,22 @@ export function useDagTelemetry(
     // moment a different run is selected, so no view renders one run's detail
     // under another's name.
     setRecord((current) =>
-      current?.runId === runId ? current : { runId: runId },
+      current?.runId === runId && current.timelineScope === timelineScopeKey
+        ? current
+        : {
+            runId: runId,
+            timelineScope: timelineScopeKey,
+            ...(current?.runId === runId && current.detail !== undefined
+              ? { detail: current.detail }
+              : {}),
+          },
     );
     const amend = (change: (current: RunRecord) => RunRecord) => {
       if (!active) return;
       setRecord((current) =>
-        current?.runId === runId ? change(current) : current,
+        current?.runId === runId && current.timelineScope === timelineScopeKey
+          ? change(current)
+          : current,
       );
     };
     void client
@@ -121,23 +160,24 @@ export function useDagTelemetry(
       .catch((caught: unknown) => {
         if (active) setError(asError(caught));
       });
-    void client
-      .getTimeline(runId)
-      .then((timeline) =>
-        amend((current) => ({
-          ...current,
-          timeline,
-          timelineError: undefined,
-        })),
-      )
-      .catch(ignoreRemovedRun)
-      .catch((caught: unknown) =>
-        amend((current) => ({ ...current, timelineError: asError(caught) })),
-      );
+    if (timelineScope !== undefined)
+      void client
+        .getTimeline(runId, timelineScope.nodeId)
+        .then((timeline) =>
+          amend((current) => ({
+            ...current,
+            timeline,
+            timelineError: undefined,
+          })),
+        )
+        .catch(ignoreRemovedRun)
+        .catch((caught: unknown) =>
+          amend((current) => ({ ...current, timelineError: asError(caught) })),
+        );
     return () => {
       active = false;
     };
-  }, [client, runId, revision]);
+  }, [client, runId, revision, timelineScope?.nodeId, timelineScopeKey]);
 
   useEffect(() => {
     void refresh();
@@ -181,8 +221,10 @@ export function useDagTelemetry(
       hasUpdates,
       error,
       refresh,
+      loadMore,
+      hasMore: list?.next_cursor !== undefined,
     }),
-    [list, runId, current, loading, hasUpdates, error, refresh],
+    [list, runId, current, loading, hasUpdates, error, refresh, loadMore],
   );
 }
 

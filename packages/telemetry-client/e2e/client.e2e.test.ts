@@ -169,7 +169,7 @@ test("a package consumer fetches a run timeline over a real HTTP boundary", asyn
   try {
     const client = new TelemetryClient(`http://127.0.0.1:${server.port}`);
     const timeline = await client.getTimeline("demo");
-    expect(seen).toBe("/api/v2/runs/demo/timeline");
+    expect(seen).toBe("/api/v2/runs/demo/timeline?scope=run");
     // The node is still running, and a thousand lock waits arrived as one rollup.
     expect(timeline.spans[0]?.ended_at).toBeNull();
     expect(timeline.spans[1]?.count).toBe(1722);
