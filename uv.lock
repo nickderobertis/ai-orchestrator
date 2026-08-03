@@ -32,7 +32,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "oneharness-cli", specifier = "==0.6.5" },
+    { name = "oneharness-cli", specifier = "==0.6.6" },
     { name = "onejudge", specifier = "==0.3.4" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "uvicorn", specifier = ">=0.30" },
@@ -494,14 +494,14 @@ wheels = [
 
 [[package]]
 name = "oneharness-cli"
-version = "0.6.5"
+version = "0.6.6"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/d3/e1ae635a718898a090fe0ed28d604bc8bd20cb12eb5c0b733003904d5493/oneharness_cli-0.6.5-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:195c53d3cd3b1bed778037a6b08aff8c137e3110717995b6897f75c104223d65", size = 3137689, upload-time = "2026-08-02T18:36:51.969Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/f2/51d04fad25565312a63f78df61a834d916a1911df07d19545bfed5a5a408/oneharness_cli-0.6.5-py3-none-macosx_11_0_arm64.whl", hash = "sha256:baccda275be92642a1a98306ee6aabe666b3e5af6bccbcef0a70566bed01d79e", size = 2975026, upload-time = "2026-08-02T18:36:53.811Z" },
-    { url = "https://files.pythonhosted.org/packages/d4/35/0bcd0cae1ad75d8065365f5105b37a270f18efaeb66ab09285f22487c4f9/oneharness_cli-0.6.5-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9556e3f34fb807fed6b7b6e7d65fba842bbd45be77610ef9bed074b085eddcf2", size = 3024121, upload-time = "2026-08-02T18:36:55.223Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/ea/b2bb49c77687b336021b984eab128395ae83429bf0c02d25a6746925020d/oneharness_cli-0.6.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0607d0f8aed17362f4ea45096a54f5b9e9305684ae96e2a60f54b1e447c76d91", size = 3259425, upload-time = "2026-08-02T18:36:56.692Z" },
-    { url = "https://files.pythonhosted.org/packages/7b/0f/5ce77129a4633fc309d159ae0c01f051739b19a4c630606c8297f6280b81/oneharness_cli-0.6.5-py3-none-win_amd64.whl", hash = "sha256:3914646cdc62768d986a976031b6f92c45ce7af6e8fae1587242e3a059c4ed1f", size = 3246905, upload-time = "2026-08-02T18:36:58.061Z" },
+    { url = "https://files.pythonhosted.org/packages/df/86/b5a76fb84f963d254cb3f9e0c6e481cd1de340fef3129f2441aa1d7391c8/oneharness_cli-0.6.6-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:02bf6441686443f81e8f9ebae2269b02b4b42a0e4485da27ac6691449bff6b56", size = 3130891, upload-time = "2026-08-03T00:47:15.377Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/9a/d571aacce30ece6fa8e7a86033b6c4b23815b15d981ef8f2448120a7cd8c/oneharness_cli-0.6.6-py3-none-macosx_11_0_arm64.whl", hash = "sha256:a3972006fec6b8147830e6dc2d998c39d10336dbbf7863254363c94b322e055c", size = 2975967, upload-time = "2026-08-03T00:47:17.55Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/c3/6d7f1aab378b4b37ef530e2a4d466b10dbaa3eb279f844580fd1e16bfaf4/oneharness_cli-0.6.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6e9865b3fb66494b553f56cae56e916507a35a74982ae751c859257c0165e9cc", size = 3021266, upload-time = "2026-08-03T00:47:19.003Z" },
+    { url = "https://files.pythonhosted.org/packages/97/63/1e1646d0643587303f68084e134938ce18f922e450977d644d3297707c7a/oneharness_cli-0.6.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6e2ff3a60ccb0a73bcbb49a2d619bfc9752a6053a34109315298b3879534d311", size = 3252210, upload-time = "2026-08-03T00:47:20.43Z" },
+    { url = "https://files.pythonhosted.org/packages/21/80/ac811bf13cddc8413d46785cb2b6806fa836a8649b9dabb4b2600b51cb39/oneharness_cli-0.6.6-py3-none-win_amd64.whl", hash = "sha256:b5b8f4a8d30814bd4c11f803ebc729e2c8b0140f45e2beaa8c1ae539e3d14030", size = 3228807, upload-time = "2026-08-03T00:47:22.309Z" },
 ]
 
 [[package]]
