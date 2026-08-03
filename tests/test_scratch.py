@@ -33,6 +33,7 @@ from orchestrator.scratch import (
     main,
     orphaned_dispatch_processes,
     owned_scratch_directory,
+    processes_stamped_for,
     require_scratch_capacity,
     sweep_scratch,
 )
@@ -867,6 +868,36 @@ def test_only_a_stamp_naming_a_finished_dispatch_claims_a_reparented_process(
     _fabricate_proc_process(proc_root, 4250, environ=(f"NOTES=see {AGENT_STATUS_DIR_ENV}=x",))
 
     assert orphaned_dispatch_processes(root) == (4242, 4243)
+
+
+def test_only_this_dispatchs_own_stamp_claims_a_process_for_its_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ownership a dispatch tears down on: its own status directory, exactly.
+
+    Classified rather than signalled, for the reason the sibling above gives — these
+    pid numbers belong to whatever holds them on this host. What must not be claimed is
+    everything a neighbouring dispatch, or a passer-by, can put in an environment: a
+    sibling dispatch's directory under the same scratch root, a longer path that starts
+    with this one, and a value that merely mentions the variable's name.
+    """
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    mine = root / "orchestrator-watchdog-mine" / "agent"
+    mine.mkdir(parents=True)
+    sibling = root / "orchestrator-watchdog-sibling" / "agent"
+    sibling.mkdir(parents=True)
+
+    _fabricate_stamped_process(proc_root, 4260, mine)
+    _fabricate_stamped_process(proc_root, 4261, mine)
+    _fabricate_stamped_process(proc_root, 4262, sibling)
+    _fabricate_stamped_process(proc_root, 4263, None)
+    _fabricate_stamped_process(proc_root, 4264, mine / "deeper")
+    _fabricate_stamped_process(proc_root, 4265, mine.parent)
+    _fabricate_proc_process(proc_root, 4266, environ=(f"NOTES=see {AGENT_STATUS_DIR_ENV}={mine}",))
+
+    assert processes_stamped_for(mine) == (4260, 4261)
+    assert processes_stamped_for(sibling) == (4262,)
 
 
 def test_the_sweeping_process_and_its_own_ancestry_are_never_candidates(

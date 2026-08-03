@@ -30,6 +30,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, cast
 
@@ -79,14 +80,17 @@ from .scratch import (
     AGENT_STATUS_DIR_ENV,
     AGENT_STATUS_DIR_NAME,
     owned_scratch_directory,
+    processes_stamped_for,
 )
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
+    ProcessIdentity,
+    identify,
     process_activity,
-    terminate_process_group,
-    terminate_processes,
-    terminate_tree,
+    process_group_of,
+    terminate_identified_processes,
+    terminate_proven_process_group,
 )
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
@@ -281,14 +285,95 @@ class Report:
 
 @dataclass(frozen=True)
 class WatchdogSignal:
-    """A typed liveness decision and the process identities needed for cleanup."""
+    """A typed liveness decision and the process identity needed for cleanup.
+
+    Deliberately no list of processes: the tree is re-derived where it is torn down,
+    from what is alive then. See `owned_tree`.
+    """
 
     reason: WatchdogReason
     root_pid: ProcessId
-    observed_pids: tuple[ProcessId, ...]
     #: What was observable at the point of death. Four different failures reach
     #: this watchdog as one dead tree, so the reason has to be carried explicitly.
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class OwnedTree:
+    """What one dispatch could prove was its own at a single instant.
+
+    A recorded pid is a number, and this host recycles the whole range in under a day
+    while one dispatch holds its recorded numbers for the length of a turn. So each
+    field here is either backed by evidence read at that instant or it is ``None``,
+    and nothing is signalled through a ``None``.
+    """
+
+    #: The proven processes the *group* handle covers, terminated through it and
+    #: never signalled by pid. Empty when no group was proven.
+    grouped: tuple[ProcessId, ...]
+    #: The proven processes the group cannot reach — a stamped orphan reparented to
+    #: init, a descendant that put itself in a session of its own — and therefore the
+    #: exact set the pid phase signals. Disjoint from ``grouped`` by construction:
+    #: a process signalled through the group must not also be signalled by a number
+    #: the group operation may already have released. Carried as identities rather
+    #: than numbers, so every later signal can ask whether it still addresses the
+    #: process this proof was about.
+    ungrouped: tuple[ProcessIdentity, ...]
+    #: The root, when parentage was admitted and walked; ``None`` when it was not.
+    #: A record of that decision — the walk's result is in the two sets above — never
+    #: a handle to walk again later.
+    root: ProcessId | None
+    #: The process group, when it may be signalled; ``None`` when it may not. The one
+    #: handle teardown still dereferences, and only as its *first* act.
+    group: ProcessId | None
+
+
+def group_holds_stamped_process(status_dir: Path, group_id: ProcessId) -> bool:
+    """Whether a process stamped for ``status_dir`` is in ``group_id`` right now.
+
+    The proof behind every `killpg` this module sends, which is why
+    `terminate_proven_process_group` asks it again between its own two signals.
+    """
+    return any(process_group_of(pid) == group_id for pid in processes_stamped_for(status_dir) or ())
+
+
+def owned_tree(status_dir: Path, root_pid: ProcessId | None) -> OwnedTree:
+    """What a dispatch can prove, at this instant, is still its own to terminate.
+
+    One evidence source, the environment stamp `processes_stamped_for` reads, and one
+    admission rule per handle: parentage is walked only from a root that is itself
+    stamped, the group is admitted only while a stamped process is still in it, and
+    the stamped processes stand on their own. The proven set is then split by the
+    mechanism that will signal it — everything must be signalled through exactly one —
+    and the pid half is paired with `identify`'s start token *before* group membership
+    is read, so a number that changes hands between the two reads matches nothing
+    rather than matching its new occupant.
+
+    Why each of those is the rule, and what breaks without it, is in
+    docs/onejudge-integration.md, "What teardown is allowed to signal".
+    """
+    stamped = frozenset(processes_stamped_for(status_dir) or ())
+    owned = set(stamped)
+    root = root_pid if root_pid is not None and root_pid in stamped else None
+    if root is not None:
+        owned.update(process_activity(root).pids)
+    group = (
+        root_pid
+        if root_pid is not None and group_holds_stamped_process(status_dir, root_pid)
+        else None
+    )
+    identities = {pid: identify(pid) for pid in owned}
+    membership = {pid: process_group_of(pid) for pid in owned}
+    grouped = {pid for pid, pgid in membership.items() if group is not None and pgid == group}
+    # A pid this could not identify, or whose group could not be read, has exited since
+    # the scan above; it belongs to neither phase, because both would only be
+    # signalling a number nobody holds any more.
+    ungrouped = tuple(
+        identity
+        for pid, identity in sorted(identities.items())
+        if identity is not None and membership[pid] is not None and pid not in grouped
+    )
+    return OwnedTree(tuple(sorted(grouped)), ungrouped, root, group)
 
 
 class OneJudgeProvenance(TypedDict):
@@ -746,10 +831,29 @@ def run_onejudge(
                     timeout=timeout,
                 )
             )
-            observed_tree: tuple[ProcessId, ...] = ()
+
+            def tear_down(root_pid: ProcessId | None) -> None:
+                """Stop this dispatch's work, broad handle first and exact pids after.
+
+                The order is what is local to this call site, and it is load-bearing:
+                the group goes first, while its proof is live and before anything here
+                has signalled at all, because the pid phase would otherwise kill the
+                very members whose existence reserves that number. `owned_tree`
+                decides everything else and `terminate_identified_processes` owns the
+                revalidation behind each of its own signals.
+                """
+                owned = owned_tree(agent_status_dir, root_pid)
+                if owned.group is not None:
+                    terminate_proven_process_group(
+                        owned.group,
+                        still_ours=partial(group_holds_stamped_process, agent_status_dir),
+                    )
+                terminate_identified_processes(
+                    owned.ungrouped,
+                    externally_waited=(root_pid,) if root_pid is not None else (),
+                )
 
             async def watch_liveness() -> WatchdogSignal | None:
-                nonlocal observed_tree
                 pid_wait_started = time.monotonic()
                 while True:
                     if run.done():
@@ -766,8 +870,6 @@ def run_onejudge(
                             break
                     await asyncio.sleep(min(0.05, stall_timeout / 4))
                 activity = process_activity(pid)
-                observed = activity.pids
-                observed_tree = observed
                 previous = (activity, _file_progress(Path(cwd) / ".git"))
                 last_progress = time.monotonic()
                 agent_identity: str | None = None
@@ -777,10 +879,7 @@ def run_onejudge(
                 while not run.done():
                     await asyncio.sleep(min(0.25, stall_timeout / 4, heartbeat_timeout / 4))
                     activity = process_activity(pid)
-                    if activity.pids:
-                        observed = tuple(dict.fromkeys((*observed, *activity.pids)))
-                        observed_tree = observed
-                    else:
+                    if not activity.pids:
                         # Normal process exit precedes SDK report parsing by a tiny
                         # interval. Give that handoff one bounded grace period;
                         # leaked pipe holders keep the awaitable pending beyond it.
@@ -790,7 +889,6 @@ def run_onejudge(
                         return WatchdogSignal(  # pragma: no cover - real killed-worker e2e
                             "worker-died",
                             pid,
-                            observed,
                             detail=(
                                 agent_failure_reason(agent_status_dir)
                                 or "the tracked worker process tree exited without a report"
@@ -812,7 +910,6 @@ def run_onejudge(
                             return WatchdogSignal(
                                 "worker-died",
                                 pid,
-                                observed,
                                 detail=(
                                     agent_failure_reason(agent_status_dir)
                                     or "the agent harness reported a failed turn"
@@ -826,9 +923,6 @@ def run_onejudge(
                                 # before it exits: only a pid missing from the newer
                                 # tree and still unmarked has actually died.
                                 activity = process_activity(pid)
-                                if activity.pids:
-                                    observed = tuple(dict.fromkeys((*observed, *activity.pids)))
-                                    observed_tree = observed
                                 latest_agent = _agent_status(agent_status_dir, "agent.pid")
                                 if (
                                     agent_pid not in activity.pids
@@ -847,7 +941,6 @@ def run_onejudge(
                                         return WatchdogSignal(
                                             "worker-died",
                                             pid,
-                                            observed,
                                             detail=(
                                                 agent_failure_reason(agent_status_dir)
                                                 or "the agent harness process vanished mid-turn "
@@ -859,20 +952,6 @@ def run_onejudge(
                                     missing_agent_identity = None
                             else:
                                 missing_agent_identity = None
-                            child_pid_file = agent_status_dir / "agent.child.pid"
-                            if child_pid_file.exists():
-                                try:
-                                    child_pid = ProcessId(
-                                        int(child_pid_file.read_text(encoding="utf-8"))
-                                    )
-                                except (OSError, ValueError):
-                                    pass
-                                else:
-                                    if child_pid in activity.pids:
-                                        observed = tuple(
-                                            dict.fromkeys((*observed, agent_pid, child_pid))
-                                        )
-                                        observed_tree = observed
                             if agent_identity != current_agent:
                                 agent_identity = current_agent
                                 last_agent_heartbeat_ns = None
@@ -890,7 +969,6 @@ def run_onejudge(
                                 return WatchdogSignal(
                                     "worker-died",
                                     pid,
-                                    observed,
                                     detail=(
                                         agent_failure_reason(agent_status_dir)
                                         or "the agent harness stopped heartbeating for "
@@ -904,7 +982,7 @@ def run_onejudge(
                         previous = current
                         last_progress = time.monotonic()
                     elif time.monotonic() - last_progress >= stall_timeout:
-                        return WatchdogSignal("stalled", pid, observed)
+                        return WatchdogSignal("stalled", pid)
                 return None  # pragma: no cover - watcher/run completion scheduling race
 
             watcher = asyncio.create_task(watch_liveness())
@@ -924,22 +1002,13 @@ def run_onejudge(
                 signal = await watcher if watcher in done else None
                 for pending_task in pending:
                     pending_task.cancel()
-                if signal is not None:
-                    terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
-                elif pid_file.exists():
-                    terminate_processes(
-                        observed_tree,
-                        externally_waited=(_read_watchdog_pid(pid_file),),
-                    )
-                if pid_file.exists():
-                    completed_pid = _read_watchdog_pid(pid_file)
-                    terminate_process_group(completed_pid, externally_waited=(completed_pid,))
-                    terminate_tree(completed_pid)
+                settled_pid = signal.root_pid if signal is not None else None
+                if settled_pid is None and pid_file.exists():
+                    settled_pid = _read_watchdog_pid(pid_file)
+                tear_down(settled_pid)
                 return await run
             if watcher in done and (signal := await watcher):
-                terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
-                terminate_process_group(signal.root_pid, externally_waited=(signal.root_pid,))
-                terminate_tree(signal.root_pid)
+                tear_down(signal.root_pid)
                 run.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
@@ -972,14 +1041,7 @@ def run_onejudge(
             run.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await run
-            terminate_processes(
-                observed_tree,
-                externally_waited=(_read_watchdog_pid(pid_file),) if pid_file.exists() else (),
-            )
-            if pid_file.exists():
-                cancelled_pid = _read_watchdog_pid(pid_file)
-                terminate_process_group(cancelled_pid, externally_waited=(cancelled_pid,))
-                terminate_tree(cancelled_pid)
+            tear_down(_read_watchdog_pid(pid_file) if pid_file.exists() else None)
             return None
 
     try:

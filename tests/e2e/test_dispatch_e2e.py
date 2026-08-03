@@ -1206,7 +1206,7 @@ print(json.dumps({
         ],
         cwd=REPO_ROOT,
         env={
-            **{k: v for k, v in os.environ.items() if k != "ONEHARNESS_HARNESSES"},
+            **os.environ,
             "ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt),
             "EXPECTED_CODEX_HOME": str(codex_alt),
             # The value the variant's `unset_env` must strip from the child.
@@ -1299,7 +1299,7 @@ print(json.dumps({
     codex_alt = tmp_path / "codex-alt"
     codex_alt.mkdir()
     environment = {
-        **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
+        **os.environ,
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-claude-alt"),
         "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "absent-claude-alt2"),
         # Invoked without a wrapper, so nothing else exports the indirections that
@@ -1412,7 +1412,7 @@ print(json.dumps({
         ],
         cwd=REPO_ROOT,
         env={
-            **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
+            **os.environ,
             "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / ".claude-alt"),
             "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / ".claude-alt2"),
             # No wrapper here, so this invocation must export the alternate-Codex

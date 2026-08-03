@@ -9,20 +9,28 @@ either of them.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
+from orchestrator import REPO_ROOT
 from orchestrator.config import ConfigError
 from orchestrator.harnesses import (
+    HARNESS_SELECTION_ENV,
     JUDGE_HARNESS_ENV,
     JUDGE_SIDE,
+    PROCESS_WIDE_HARNESS_ENV,
     WORKER_HARNESS_ENV,
     WORKER_SIDE,
     configured_harnesses,
     harness_option_help,
     harness_override_env,
 )
+
+#: The wrapper both variables above are resolved by, and the only place in this
+#: repository that exports a harness selection into a process's environment.
+AGENT_WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 
 def test_no_override_leaves_the_environment_exactly_as_it_was() -> None:
@@ -93,6 +101,29 @@ def test_a_config_without_a_chain_says_so_rather_than_selecting_nothing(tmp_path
 def test_an_unreadable_config_is_reported_at_the_boundary(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="cannot read harness config"):
         configured_harnesses(tmp_path / "absent.toml")
+
+
+def test_the_selection_seam_names_every_variable_the_wrapper_reads_or_exports() -> None:
+    """The drift gate behind the suite's own isolation from an enclosing dispatch.
+
+    A reader that scrubs a harness selection has to scrub *every* name one can arrive
+    under, and the pair of per-side variables was not that set: the wrapper resolves
+    each of them into oneharness's process-wide variable and exports that, so the value
+    reaching a worker's own gate was the one nothing dropped. Assert the relationship
+    rather than restating the list — a wrapper that starts carrying a selection under a
+    fourth name fails here, where `HARNESS_SELECTION_ENV` is defined, instead of in a
+    journey that mysteriously reads someone else's choice.
+    """
+    wrapper = AGENT_WRAPPER.read_text(encoding="utf-8")
+    exported = set(re.findall(r"^\s*export ([A-Za-z_][A-Za-z0-9_]*)=", wrapper, re.MULTILINE))
+
+    assert exported == {PROCESS_WIDE_HARNESS_ENV}
+    for variable in HARNESS_SELECTION_ENV:
+        assert variable in wrapper
+    # Every selection variable is distinct and the pair is a subset of the whole, so a
+    # site that isolates itself by iterating the tuple cannot silently cover two names.
+    assert len(set(HARNESS_SELECTION_ENV)) == len(HARNESS_SELECTION_ENV)
+    assert {WORKER_HARNESS_ENV, JUDGE_HARNESS_ENV} < set(HARNESS_SELECTION_ENV)
 
 
 def test_option_help_names_the_side_its_variable_and_its_config() -> None:

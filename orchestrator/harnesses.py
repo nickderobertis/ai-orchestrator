@@ -33,6 +33,16 @@ from .config import ConfigError
 WORKER_HARNESS_ENV = "ORCHESTRATOR_WORKER_HARNESSES"
 #: The judge / simulated-user side's selection, read by the wrapper's judge branch.
 JUDGE_HARNESS_ENV = "ORCHESTRATOR_JUDGE_HARNESSES"
+#: oneharness's own process-wide selection — the one the two above exist to displace.
+#: The wrapper *exports* it, so it is how a per-side choice actually reaches oneharness
+#: and how it leaves a dispatch: everything that dispatch runs, its own gate included,
+#: inherits it.
+PROCESS_WIDE_HARNESS_ENV = "ONEHARNESS_HARNESSES"
+#: Every variable that decides which harness a process selects, named once. A reader
+#: isolating itself from an enclosing dispatch's choice — the test suite a worker's own
+#: gate runs — has to drop all three: scrubbing only the per-side pair leaves the
+#: variable they are resolved *into* in place, which is the value oneharness reads.
+HARNESS_SELECTION_ENV = (WORKER_HARNESS_ENV, JUDGE_HARNESS_ENV, PROCESS_WIDE_HARNESS_ENV)
 
 
 @dataclass(frozen=True)

@@ -328,6 +328,37 @@ identity. The other two roles are out of scope — `oneharness.orchestrator.toml
 `oneharness.llmlint.toml` keep resolving through their own wrappers, untouched by
 either variable.
 
+#### What a spawned provider inherits, and what that is not
+
+oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
+sets nothing when nothing selected one. It does *not* narrow the variable to the
+candidate it ended up running — through 0.6.6, confirmed against the binary:
+
+```
+$ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
+  the child saw ONEHARNESS_HARNESSES='codex,claude-code'
+$ oneharness run --config <chain.toml> --prompt hi                    # chain from config
+  the child saw no ONEHARNESS_HARNESSES at all
+```
+
+That is why a dispatch leaks its selection: the wrapper exports the variable, so the
+provider *and everything that provider then runs* — a worker's own `just gate`, and
+therefore this suite — inherit it. `HARNESS_SELECTION_ENV` and the fixtures over it
+exist for exactly that inheritance.
+
+The two are told apart by **provenance, not by value**. Every selection is dropped at
+each process boundary the suite owns (`tests/conftest.py` for its own environment,
+`_provider_environment` for the environment a dispatch under test is launched with),
+and each journey then states the value it wants; so a selection a recorded turn
+observes is one that journey put there, and an inherited one reaches nothing.
+
+Do not "adapt" a selection journey to a value you did not state. Reading the single
+identity a run happened to be routed to — `codex` on *both* sides of the default path,
+where the worker should record its whole substituted chain and the judge none — means a
+selection leaked in, not that oneharness narrowed one. That misreading has landed here
+once already, and adapting the assertions is what removed the gate that would have
+caught it.
+
 To address an identity explicitly in a diagnostic run, use the composed id:
 
 ```sh
@@ -512,8 +543,10 @@ Dispatch wraps the SDK-owned `onejudge` process with a stable pid and additional
 wraps the agent-side oneharness process with its own pid, completion marker, and
 monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
 distinct incomplete `worker-died` outcome promptly, independent of CPU/I/O
-from leaked descendants or `.git` churn. The last observed process tree is reaped
-even after its root has vanished, so those descendants cannot pollute a retry.
+from leaked descendants or `.git` churn. Descendants left behind after the root has
+vanished are reaped too, so they cannot pollute a retry — see
+[What teardown is allowed to signal](#what-teardown-is-allowed-to-signal) for how a
+dispatch decides which processes are still its own.
 
 `worker-died` also carries **why**, because provider throttling, quota
 exhaustion, an OOM kill, and a genuine crash otherwise all reach the supervisor
@@ -581,6 +614,98 @@ live dispatch. Directories predating the lock keep the pid-only judgment, now
 made through the same start-token identity, and a lock that cannot be opened on
 its own terms — symlinked, unreadable — never authorizes removal. Everything the
 proof does not clear is reported as retained rather than silently kept.
+
+### What teardown is allowed to signal
+
+The same "recorded pids are not identities" rule governs the end of every dispatch,
+and for a while it did not. Teardown signalled the union of every pid the liveness
+watcher had ever sampled — each `bunx nx`, each pytest worker, each `git` and
+`uv run` child — and nothing was ever removed from that union, so a traced run
+measured 28% of the signalled pids already exited. This host's `pid_max` is
+4,194,304 and its counter demonstrably completes a full cycle in under a day, while
+one dispatch holds recorded pids for the length of a turn and often far longer. A
+remembered pid is therefore a slot, not a process, and signalling one is how a
+planner's own work gets interrupted by somebody else's cleanup — the incident
+`AGENTS.md` records under "never derive a process list from `ps` and signal it",
+reached by a different derivation.
+
+Teardown therefore asks `owned_tree` what it can prove *right now*. The evidence is
+the environment stamp: `processes_stamped_for` asks the same question
+`orphaned_dispatch_processes` asks of a finished dispatch's leavings — which live
+processes carry `ORCHESTRATOR_AGENT_STATUS_DIR` naming this dispatch's own status
+directory — and the kernel fixes that environment at `exec`, so no process can shed
+it.
+
+- **The stamped processes** are always selected: they *are* the evidence. This is
+  what reaches a descendant whose parent has already exited, adopted by init and
+  unreachable by any walk.
+- **Parentage** is walked from the recorded root only once that root is itself
+  stamped. An unproven number may name a recycled stranger, and walking it would
+  select that stranger's whole subtree. Nothing is given up by the gate: a live
+  descendant of a proven root is this dispatch's even if it carries no stamp of its
+  own — including one in a process group of its own, which no `killpg` reaches.
+- **The process group** is signalled only while a stamped process is still *in* that
+  group. That is stronger than it looks — the kernel keeps a pid allocated for as
+  long as any live process names it as a group, so a group still holding one of ours
+  cannot have had its id handed to anybody else.
+
+**Order is part of the proof, not a detail of it.** A pid is a capability its holder
+can destroy: the members whose existence reserves a group id are the same ones
+teardown is about to kill, so signalling the proven processes first would release the
+number and every later `killpg` would be aimed at one the kernel was free to reuse. A
+single snapshot does not make three handles safe — it makes them safe *until the
+first signal*. So `tear_down` runs exactly one broad operation, first, before it has
+signalled anything: `terminate_proven_process_group` on the proven group, which is
+also the only handle that reaches work spawned into this dispatch since the snapshot.
+Nothing is walked, enumerated, or grouped from a number afterwards, and
+`terminate_tree` is not used on this path at all — the walk it would repeat already
+happened, while the root was proven alive.
+
+**Each process is signalled through one mechanism, never two.** `owned_tree`
+partitions its proven set by process group while that membership can still be read,
+so a member the group covers is terminated *by the group*, `SIGKILL` included, and is
+never passed to the pid phase. Handing it on would mean signalling, one grace period
+later, a number this teardown had itself just released — the same defect the group
+ordering fixes, arriving through the other door. What remains for the pid phase is
+exactly what `killpg` cannot reach: a stamped orphan reparented to init, and a
+descendant that put itself in a session of its own.
+
+**A pid is revalidated before every signal, not once per phase.** The pid phase has
+the same `SIGTERM`-then-`SIGKILL` shape as the group one, and the same problem inside
+it: the ordinary outcome of the first signal is that the process exits, which frees
+its number during the grace period the second signal waits out. So that remainder is
+carried as `ProcessIdentity` — the pid paired with the kernel's start token for the
+process holding it — captured in `owned_tree` while ownership is proven, and
+`terminate_identified_processes` re-checks it immediately before the `SIGTERM` and
+again before the `SIGKILL`. A worker that shut itself down on the first signal is
+never sent a second; one that ignored it is still itself, and is killed. The start
+token rather than the environment stamp, because the stamp cannot answer for a
+parentage-proven descendant that has since `exec`ed something which never carried it,
+while every process has a start time. `terminate_processes` keeps its pid-tuple
+signature for callers that hold only numbers and takes that identity at the moment of
+the call — the best such a caller can do, and still better than not asking.
+
+`terminate_proven_process_group` applies the same rule to its own two signals: it
+re-asks for the proof before the `SIGKILL`, because its own `SIGTERM` can be what
+released the number. Refusing that second signal costs nothing — a group the
+`SIGTERM` emptied has nothing left to kill — while insisting on it would mean
+signalling a reservation the caller had just given up. It also does no reaping pass,
+because enumerating a group's members after killing them is that same mistake once
+more; callers that must reap hold an exact pid set for it.
+`orchestrator.watchdog.terminate_process_group` keeps the enumerating behaviour for
+`gitops` and `verify`, which hold their group leader as a live child of their own for
+the whole call.
+
+`externally_waited` is not a substitute for any of this: it governs which pids this
+process may `waitpid` for, not which ones get signalled.
+
+Proving nothing signals nothing, which is the right failure direction — the cost is a
+leaked process the next scratch sweep reaps on this same stamp, against interrupting
+work that was never ours. The lock-based `_dispatch_is_finished` proof the sweep
+applies is deliberately not consulted here: a live dispatch asking about its own tree
+holds that lock and would find every one of its own processes retained by it. Naming
+its own directory is the stronger claim of the two — the sweep has to infer which
+dispatch a stamp belongs to, while this caller created the path it matches.
 
 ## Dispatching playbook
 

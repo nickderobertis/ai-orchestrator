@@ -9,10 +9,13 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NewType
+
+from .coordination import ProcessStart, process_start_identity
 
 ProcessId = NewType("ProcessId", int)
 
@@ -90,6 +93,12 @@ def process_group_is_running(group_id: ProcessId) -> bool:
     )
 
 
+def process_group_of(pid: ProcessId) -> ProcessId | None:
+    """The process group ``pid`` currently belongs to, or ``None`` if it is gone."""
+    record = _stat(pid)
+    return record.process_group if record is not None else None
+
+
 def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
     """Every live process below ``root_pid``, by parentage alone.
 
@@ -157,13 +166,62 @@ TERMINATION_GRACE = 0.05
 _TERMINATION_POLL = 0.005
 
 
-def _still_running(pids: tuple[ProcessId, ...]) -> tuple[ProcessId, ...]:
-    """Which of ``pids`` are still executing, ignoring the ones already reduced to zombies."""
-    return tuple(pid for pid in pids if (record := _stat(pid)) is not None and record.state != "Z")
+@dataclass(frozen=True)
+class ProcessIdentity:
+    """A pid paired with the kernel start token that makes it more than a number.
+
+    A bare pid names a slot. Between one signal and the next its process can exit and
+    the number can be handed to something unrelated, so anything that signals twice —
+    every ``SIGTERM``-then-``SIGKILL`` pair here — has to be able to ask whether it is
+    still addressing the same process. The start time the kernel stamped at ``exec``
+    answers that, and unlike the dispatch environment stamp it is there for *every*
+    process: a parentage-proven descendant that has since ``exec``ed something without
+    the stamp still has this.
+    """
+
+    pid: ProcessId
+    start: ProcessStart
 
 
-def _await_shutdown(pids: tuple[ProcessId, ...]) -> None:
-    """Give every signalled process in ``pids`` its grace period, and not a moment more.
+def identify(pid: ProcessId) -> ProcessIdentity | None:
+    """Name a live process in a way its successor cannot inherit; ``None`` if it is gone."""
+    start = process_start_identity(pid)
+    return None if start is None else ProcessIdentity(pid, start)
+
+
+def _still_itself(identities: tuple[ProcessIdentity, ...]) -> tuple[ProcessIdentity, ...]:
+    """Which of ``identities`` still name the very process they were taken from.
+
+    A pid whose process has exited is dropped, and so is one whose number is now held
+    by a successor — the two are indistinguishable from the number alone, which is the
+    whole point. Zombies drop out here too, as they did when this asked only about
+    liveness: they are exit statuses waiting to be collected, not processes to signal.
+    """
+    return tuple(
+        identity
+        for identity in identities
+        if process_start_identity(identity.pid) == identity.start
+    )
+
+
+def _signal_the_same_processes(
+    identities: tuple[ProcessIdentity, ...], sig: int
+) -> tuple[ProcessIdentity, ...]:
+    """Signal each identity that still names its own process; return those signalled.
+
+    The check is per signal rather than per call, because the caller's *previous*
+    signal is the most likely reason an identity has stopped matching.
+    """
+    delivered = []
+    for identity in reversed(_still_itself(identities)):
+        with suppress(PermissionError, ProcessLookupError):
+            os.kill(identity.pid, sig)
+            delivered.append(identity)
+    return tuple(reversed(delivered))
+
+
+def _await_identity_shutdown(identities: tuple[ProcessIdentity, ...]) -> None:
+    """Give every signalled process its grace period, and not a moment more.
 
     ``kill`` returns as soon as the signal is queued, so the ``SIGKILL`` behind it has
     to be held back long enough for a harness that installs a shutdown handler to use
@@ -171,27 +229,40 @@ def _await_shutdown(pids: tuple[ProcessId, ...]) -> None:
     common case instead: a dispatch that finished on its own has no process left to be
     graceful toward, and every teardown on that path paid the full grace anyway. The
     ceiling is unchanged for anything actually still running — this only stops waiting
-    once there is nothing left to wait for. Zombies are excluded because they are not
-    running: they are exit statuses waiting to be collected, which the reaping loops
-    below do.
+    once there is nothing left to wait for.
     """
     deadline = time.monotonic() + TERMINATION_GRACE
-    remaining = _still_running(pids)
+    remaining = _still_itself(identities)
     while remaining and time.monotonic() < deadline:
         time.sleep(_TERMINATION_POLL)
-        remaining = _still_running(remaining)
+        remaining = _still_itself(remaining)
 
 
 def terminate_tree(root_pid: ProcessId) -> None:
     """Best-effort termination of a stalled dispatch and all its descendants."""
-    pids = tuple(reversed(process_activity(root_pid).pids))
-    for pid in pids:
-        with suppress(PermissionError, ProcessLookupError):
-            os.kill(pid, signal.SIGTERM)
-    _await_shutdown(pids)
-    for pid in pids:
-        with suppress(PermissionError, ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+    terminate_processes(tuple(process_activity(root_pid).pids))
+
+
+def terminate_identified_processes(
+    identities: tuple[ProcessIdentity, ...], *, externally_waited: tuple[ProcessId, ...] = ()
+) -> tuple[ProcessIdentity, ...]:
+    """Terminate exactly the processes these identities still name; return those killed.
+
+    For a caller that proved ownership of a set some moments ago and must not have that
+    proof quietly decay into a set of numbers: each identity is revalidated immediately
+    before the ``SIGTERM`` and again before the ``SIGKILL``, so a process that exited on
+    the first signal — the ordinary case for anything with a shutdown handler — is never
+    sent a second one, and a successor that inherited its number is never sent a first.
+
+    The returned identities are the ones that had to be escalated: still themselves
+    after their grace period, and killed outright.
+    """
+    _signal_the_same_processes(identities, signal.SIGTERM)
+    _await_identity_shutdown(identities)
+    escalated = _signal_the_same_processes(identities, signal.SIGKILL)
+    pids = tuple(identity.pid for identity in identities)
+    _reap(pids, externally_waited)
+    return escalated
 
 
 def terminate_processes(
@@ -202,14 +273,24 @@ def terminate_processes(
     Descendants are reparented as soon as their worker exits, so walking from the
     vanished root can no longer find them.  Callers retain the last affirmative
     tree sample and use it here to reap those now-orphaned processes.
+
+    Identity is taken here, at the moment of the call, which is the best a caller
+    holding only numbers can do. One that proved its set earlier should carry the
+    identities from that proof and use `terminate_identified_processes`.
     """
-    for pid in reversed(pids):
-        with suppress(PermissionError, ProcessLookupError):
-            os.kill(pid, signal.SIGTERM)
-    _await_shutdown(pids)
-    for pid in reversed(pids):
-        with suppress(PermissionError, ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+    terminate_identified_processes(
+        tuple(identity for pid in pids if (identity := identify(pid)) is not None),
+        externally_waited=externally_waited,
+    )
+
+
+def _reap(pids: tuple[ProcessId, ...], externally_waited: tuple[ProcessId, ...]) -> None:
+    """Collect the exit statuses of any of ``pids`` this process is entitled to.
+
+    Unlike signalling, this needs no identity check: the kernel only lets a process
+    wait for its own children, so a number that has moved on to a stranger answers
+    ``ChildProcessError`` rather than touching them.
+    """
     deadline = time.monotonic() + 1.5
     # asyncio's child watcher owns the direct subprocess it created. Calling
     # waitpid for that process here races the watcher and makes it fabricate
@@ -231,20 +312,61 @@ def terminate_processes(
             time.sleep(0.01)
 
 
+def _signal_process_group(group_id: ProcessId, sig: int) -> None:
+    """Deliver one signal to whatever is in ``group_id`` at this instant."""
+    with suppress(PermissionError, ProcessLookupError):
+        os.killpg(group_id, sig)
+
+
+def _await_group_shutdown(group_id: ProcessId) -> None:
+    """The grace `_await_identity_shutdown` gives a set of identities, asked of a group.
+
+    Its membership is the thing being terminated, so nothing here has a list to poll
+    and `process_group_is_running` is the whole answer.
+    """
+    deadline = time.monotonic() + TERMINATION_GRACE
+    while process_group_is_running(group_id) and time.monotonic() < deadline:
+        time.sleep(_TERMINATION_POLL)
+
+
+def terminate_proven_process_group(
+    group_id: ProcessId, *, still_ours: Callable[[ProcessId], bool]
+) -> None:
+    """`SIGTERM` a group, and `SIGKILL` it only while the caller can still prove it.
+
+    A group id is the pid of its leader, and the kernel reserves that number only for
+    as long as some live process names the group — so a proof taken before the
+    ``SIGTERM`` says nothing about the instant after it, when the members that
+    reserved the number may all have exited. The second signal therefore asks again.
+
+    Nothing is lost by refusing it: a group emptied by the ``SIGTERM`` has nothing
+    left for a ``SIGKILL`` to reach, and a group that still holds a process the caller
+    can prove is its own is still that caller's to kill. What is avoided is the
+    reverse — insisting on a number whose reservation this caller has just released.
+
+    Deliberately no reaping pass: enumerating a group's members *after* killing them
+    re-derives a pid list from the same released number. A caller that must reap owns
+    an exact set of pids for that, taken while its proof was live.
+    """
+    _signal_process_group(group_id, signal.SIGTERM)
+    _await_group_shutdown(group_id)
+    if still_ours(group_id):
+        _signal_process_group(group_id, signal.SIGKILL)
+
+
 def terminate_process_group(
     group_id: ProcessId, *, externally_waited: tuple[ProcessId, ...] = ()
 ) -> None:
-    """Terminate and reap every process in a dispatch-owned process group."""
-    with suppress(PermissionError, ProcessLookupError):
-        os.killpg(group_id, signal.SIGTERM)
-    # The same grace `_await_shutdown` gives a known pid tuple, asked of the group:
-    # its membership is the thing being terminated, so nothing here has a list to
-    # poll and `process_group_is_running` is the whole answer.
-    group_deadline = time.monotonic() + TERMINATION_GRACE
-    while process_group_is_running(group_id) and time.monotonic() < group_deadline:
-        time.sleep(_TERMINATION_POLL)
-    with suppress(PermissionError, ProcessLookupError):
-        os.killpg(group_id, signal.SIGKILL)
+    """Terminate and reap every process in a caller-owned process group.
+
+    For a caller whose ownership of the number is not in question for the length of
+    the call — `gitops` and `verify` each hold the group leader as their own live
+    child throughout. A caller whose evidence its own signals can destroy wants
+    `terminate_proven_process_group` instead.
+    """
+    _signal_process_group(group_id, signal.SIGTERM)
+    _await_group_shutdown(group_id)
+    _signal_process_group(group_id, signal.SIGKILL)
     members = [
         pid
         for pid in _process_ids()
