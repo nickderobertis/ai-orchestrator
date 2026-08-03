@@ -46,6 +46,7 @@ from .read_model import (
     ProjectionFailed,
     ReadError,
     RunNotFound,
+    RunsCursor,
     contained_run_dir,
     list_runs,
     read_artifact,
@@ -204,7 +205,7 @@ def create_app(
     def get_runs(
         include_settled: bool = False,
         limit: int = RUNS_PAGE_LIMIT,
-        cursor: str | None = None,
+        cursor: RunsCursor | None = None,
     ) -> Any:
         try:
             return list_runs(

@@ -35,7 +35,7 @@ from collections import Counter
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NewType, NotRequired, TypedDict
 from urllib.parse import quote, urlparse
 
 from .config import ConfigError
@@ -144,6 +144,9 @@ class RunLaunch(TypedDict):
     launcher_session_id: NotRequired[str]
 
 
+RunsCursor = NewType("RunsCursor", str)
+
+
 class RunSummary(TypedDict):
     """One ``RunSummary`` row of the run-list view."""
 
@@ -167,7 +170,7 @@ class RunList(TypedDict):
     telemetry_schema_version: int
     observed_at: str
     runs: list[RunSummary]
-    next_cursor: NotRequired[str]
+    next_cursor: NotRequired[RunsCursor]
 
 
 class Round(TypedDict):
@@ -620,7 +623,7 @@ def list_runs(
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
     limit: int = 50,
-    cursor: str | None = None,
+    cursor: RunsCursor | None = None,
 ) -> RunList:
     """The ``RunList``: every watchable run, most recent progress first.
 
@@ -639,7 +642,7 @@ def list_runs(
     for run_dir in _run_dirs(runs_dir):
         try:
             telemetry = collect_run(run_dir, scan=scan)
-        except (ConfigError, HistoryError):
+        except (ConfigError, HistoryError, FileNotFoundError):
             continue
         if telemetry is None:
             continue
@@ -692,7 +695,9 @@ def list_runs(
         raw = json.dumps(
             [last.get("last_progress_at") or 0.0, last["run_id"]], separators=(",", ":")
         )
-        result["next_cursor"] = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+        result["next_cursor"] = RunsCursor(
+            base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+        )
     return result
 
 

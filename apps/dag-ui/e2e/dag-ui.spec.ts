@@ -15,7 +15,9 @@ import {
  * by `playwright.config.ts`). Nothing between the browser and the read model is
  * doubled: the app's own telemetry client makes the HTTP and SSE requests, and the
  * server projects them from journal files the executor's own writers produced. Live
- * updates are provoked by changing that run directory, never by faking an event.
+ * updates are provoked by changing that run directory, never by faking an event. The
+ * pagination recovery journey takes the browser offline; its online retry still
+ * reaches this real server and renders its next recorded page.
  */
 
 /**
@@ -742,6 +744,40 @@ test("loads another run-list page when navigation reaches the end", async ({
   await navigation.locator("[data-radix-scroll-area-viewport]").hover();
   await page.mouse.wheel(0, 10_000);
   await expect(navigation.locator(".run-link")).toHaveCount(52);
+});
+
+test("loads another run-list page from the keyboard", async ({ page }) => {
+  await page.goto("/?view=graph");
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  const loadMore = page.getByRole("button", { name: "Load more runs" });
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
+
+  expect(await tabTo(page, loadMore, 70)).toBe(true);
+  await page.keyboard.press("Enter");
+  await expect(navigation.locator(".run-link")).toHaveCount(52);
+});
+
+test("recovers when loading another run-list page fails", async ({
+  context,
+  page,
+}) => {
+  await page.goto("/?view=graph");
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  const viewport = navigation.locator("[data-radix-scroll-area-viewport]");
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
+
+  await context.setOffline(true);
+  await viewport.hover();
+  await page.mouse.wheel(0, 10_000);
+  await expect(page.getByRole("alert")).toContainText(
+    "Telemetry request failed",
+  );
+
+  await context.setOffline(false);
+  await page.mouse.wheel(0, -200);
+  await page.mouse.wheel(0, 10_000);
+  await expect(navigation.locator(".run-link")).toHaveCount(52);
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("restores a bookmarked view and refreshes through the read API", async ({
