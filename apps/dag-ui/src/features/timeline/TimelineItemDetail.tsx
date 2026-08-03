@@ -225,10 +225,12 @@ function Verification({
     detail?.artifact_id ??
     (reference?.kind === "gate_log" ? reference.value : undefined);
   const [content, setContent] = useState<string | null>();
+  const [artifactFailed, setArtifactFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     let active = true;
     setContent(undefined);
+    setArtifactFailed(false);
     setExpanded(false);
     if (artifactId === undefined || /[/?#]/u.test(artifactId)) return;
     void client
@@ -237,7 +239,10 @@ function Verification({
         if (active) setContent(artifact.content);
       })
       .catch(() => {
-        if (active) setContent(null);
+        if (active) {
+          setArtifactFailed(true);
+          setContent(null);
+        }
       });
     return () => {
       active = false;
@@ -265,7 +270,11 @@ function Verification({
         </>
       )}
       <h3 className="detail-heading">Full log</h3>
-      {content == null ? (
+      {artifactId === undefined ? (
+        <p className="detail-note">No readable log was recorded.</p>
+      ) : content === undefined ? (
+        <p className="detail-note">Loading log…</p>
+      ) : artifactFailed || content === null ? (
         <p className="detail-note">No readable log was recorded.</p>
       ) : (
         <>

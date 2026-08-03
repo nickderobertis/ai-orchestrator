@@ -1589,7 +1589,7 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
     monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
     report = run_dir / "runs" / "demo" / "round-01" / "docs" / "report.json"
     report.parent.mkdir(parents=True)
-    report.write_text("worker report\n", encoding="utf-8")
+    report.write_text("x" * 70_000 + "worker report\n", encoding="utf-8")
     outside = tmp_path / "outside-session.json"
     outside.write_text("must not be served\n", encoding="utf-8")
     (report.parent / "session.json").symlink_to(outside)
@@ -1646,7 +1646,9 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         artifact_id = settled["reference"]["value"]
         artifact = client.get(f"/api/v2/runs/demo/artifacts/{artifact_id}")
         assert artifact.status_code == 200
-        assert artifact.json()["content"] == "worker report\n"
+        assert artifact.json()["content"].endswith("worker report\n")
+        assert len(artifact.json()["content"].encode()) <= 64 * 1024
+        assert artifact.json()["truncated"] is True
         missing = client.get("/api/v2/runs/demo/artifacts/worker_report-not-recorded")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "artifact_not_found"

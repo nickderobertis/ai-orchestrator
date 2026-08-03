@@ -499,9 +499,22 @@ test("shows a verification and a publication as the records they are", async ({
 
 test("states when a verification artifact is unavailable", async ({ page }) => {
   await openObservatory(page, `/?run=${runs().live}&node=missing-artifact`);
+  const factsDisclosure = page.getByRole("button", {
+    name: "Dependencies, publication and verification",
+  });
+  await factsDisclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.locator(".facts").filter({ hasText: "Verification coverage" }),
+  ).toContainText("PublicationNot recorded");
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.url().includes("/artifacts/") && response.status() === 404,
+  );
   await rail(page)
     .getByRole("button", { name: /missing verification log/ })
     .click();
+  await rejected;
   await expect(itemDetail(page)).toContainText("No readable log was recorded.");
 });
 

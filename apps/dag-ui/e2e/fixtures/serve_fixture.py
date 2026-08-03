@@ -402,6 +402,8 @@ def _write_live_run(runs_dir: Path) -> None:
             "result": {
                 "status": "failed",
                 "ok": False,
+                "repo": "/tmp/local-repository",
+                "branch": "feature/missing-log",
                 "artifacts": {"gate_log": missing_path},
             },
         },

@@ -258,23 +258,23 @@ function Publication({ node }: { readonly node: NodeView }) {
         [publication.pr_url, "Pull request"],
         [publication.branch_url, publication.branch ?? "Branch"],
       ];
+  const renderedLinks = links.filter(([url]) => url);
+  if (renderedLinks.length === 0) return <>Not recorded</>;
   return (
     <>
-      {links
-        .filter(([url]) => url)
-        .map(([url, label], index) => (
-          <span key={url}>
-            {index > 0 && " · "}
-            <a
-              className="node-view-pr"
-              href={url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {label} <ExternalLink size={12} />
-            </a>
-          </span>
-        ))}
+      {renderedLinks.map(([url, label], index) => (
+        <span key={url}>
+          {index > 0 && " · "}
+          <a
+            className="node-view-pr"
+            href={url}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {label} <ExternalLink size={12} />
+          </a>
+        </span>
+      ))}
     </>
   );
 }
