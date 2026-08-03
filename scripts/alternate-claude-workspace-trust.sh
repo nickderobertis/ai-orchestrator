@@ -3,6 +3,10 @@
 set -euo pipefail
 
 mark_alternate_claude_trust() (
+  if (( $# < 1 )); then
+    echo "alternate-claude-workspace-trust: configuration path argument is required" >&2
+    return 2
+  fi
   local config_path=$1
   shift
   [ -f "$config_path" ] || return 0
@@ -40,6 +44,7 @@ mark_alternate_claude_trust() (
     return 1
   fi
   for root in "$@"; do
+    # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] hasTrustDialogAccepted mirrors an external vendor configuration format with no importable source, so a drift gate is not constructible here.
     if ! jq --arg root "$root" \
       '.projects = (.projects // {}) | .projects[$root] = ((.projects[$root] // {}) + {hasTrustDialogAccepted: true})' \
       "$updated" >"${updated}.next"; then
@@ -53,9 +58,16 @@ mark_alternate_claude_trust() (
       return 1
     fi
   done
+  local comparison_status
   if cmp -s "$config_path" "$updated"; then
     rm -f "$updated"
   else
+    comparison_status=$?
+    if (( comparison_status != 1 )); then
+      echo "alternate-claude-workspace-trust: cannot compare $config_path with its updated configuration; verify both files are readable, then retry" >&2
+      rm -f "$updated"
+      return 1
+    fi
     if ! chmod --reference="$config_path" "$updated"; then
       echo "alternate-claude-workspace-trust: cannot preserve permissions for $config_path; fix file ownership, then retry" >&2
       rm -f "$updated"
@@ -70,6 +82,10 @@ mark_alternate_claude_trust() (
 )
 
 mark_alternate_claude_workspaces() {
+  if (( $# < 1 )); then
+    echo "alternate-claude-workspace-trust: caller name argument is required" >&2
+    return 2
+  fi
   local caller=$1
   shift
   if ! resolve_claude_alt_config_dir "$caller"; then

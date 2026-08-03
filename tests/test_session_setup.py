@@ -381,6 +381,82 @@ def test_alternate_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("function", "message"),
+    [
+        ("mark_alternate_claude_trust", "configuration path argument is required"),
+        ("mark_alternate_claude_workspaces", "caller name argument is required"),
+    ],
+)
+def test_alternate_claude_trust_requires_function_arguments(
+    tmp_path: Path, function: str, message: str
+) -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; "$2"',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            function,
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+def test_alternate_claude_trust_standalone_resolves_configs_and_marks_roots(
+    tmp_path: Path,
+) -> None:
+    configs = (tmp_path / ".claude-alt", tmp_path / ".claude-alt2")
+    for config_dir in configs:
+        config_dir.mkdir()
+        (config_dir / ".claude.json").write_text("{}", encoding="utf-8")
+    roots = (tmp_path / "clone", tmp_path / "worktree")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            *(str(root) for root in roots),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    for config_dir in configs:
+        projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))[
+            "projects"
+        ]
+        for root in roots:
+            assert projects[str(root)]["hasTrustDialogAccepted"] is True
+
+
+def test_alternate_claude_trust_standalone_resolution_failure_is_nonfatal(
+    tmp_path: Path,
+) -> None:
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"), "/root"],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin:/bin",
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "relative",
+        },
+    )
+
+    assert result.returncode == 0
+    assert "alternate Claude config resolution failed" in result.stderr
+    assert "continuing" in result.stderr
+
+
+@pytest.mark.parametrize(
     ("failure", "message"),
     [
         ("lock-open", "cannot open the lock"),
@@ -475,6 +551,34 @@ def test_alternate_claude_trust_reports_jq_update_failure(tmp_path: Path) -> Non
 
     assert result.returncode == 1
     assert "cannot add /checkout" in result.stderr
+
+
+def test_alternate_claude_trust_reports_comparison_read_failure(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    _write_executable(tools / "cmp", "#!/bin/sh\nexit 2\n")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert (
+        result.stderr
+        == f"alternate-claude-workspace-trust: cannot compare {config} with its updated configuration; verify both files are readable, then retry\n"
+    )
+    assert config.read_text(encoding="utf-8") == "{}"
 
 
 @pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])
