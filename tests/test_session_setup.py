@@ -342,12 +342,13 @@ def test_alternate_claude_trust_reports_filesystem_failures(
     config.write_text("{}", encoding="utf-8")
     tools = tmp_path / "tools"
     tools.mkdir()
-    if failure == "lock-open":
-        (tmp_path / ".claude.json.trust.lock").mkdir()
-    elif failure == "lock-acquire":
-        _write_executable(tools / "flock", "#!/bin/sh\nexit 23\n")
-    else:
-        _write_executable(tools / "mktemp", "#!/bin/sh\nexit 24\n")
+    match failure:
+        case "lock-open":
+            (tmp_path / ".claude.json.trust.lock").mkdir()
+        case "lock-acquire":
+            _write_executable(tools / "flock", "#!/bin/sh\nexit 23\n")
+        case "temporary-file":
+            _write_executable(tools / "mktemp", "#!/bin/sh\nexit 24\n")
 
     result = subprocess.run(
         [
@@ -366,6 +367,61 @@ def test_alternate_claude_trust_reports_filesystem_failures(
     assert result.returncode == 1
     assert message in result.stderr
     assert config.read_text(encoding="utf-8") == "{}"
+
+
+def test_alternate_claude_trust_tolerates_config_removed_under_lock(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    _write_executable(tools / "flock", '#!/bin/sh\nrm -f "$TEST_CONFIG"\n')
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "TEST_CONFIG": str(config),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not config.exists()
+
+
+def test_alternate_claude_trust_reports_jq_update_failure(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    _write_executable(
+        tools / "jq",
+        '#!/bin/sh\n[ "$1" = --arg ] && exit 25\nexec /usr/bin/jq "$@"\n',
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "cannot add /checkout" in result.stderr
 
 
 @pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])
@@ -416,7 +472,33 @@ exec /usr/bin/chmod "$@"
 
     assert result.returncode == 1
     assert config.read_bytes() == original
+    expected_diagnostic = {
+        "intermediate-mv": "cannot advance the temporary config",
+        "chmod": "cannot preserve permissions",
+        "final-mv": "cannot atomically replace",
+    }[failure]
+    assert expected_diagnostic in result.stderr
     assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"] == []
+
+
+def test_legacy_claude_trust_source_loads_helper_and_reports_when_missing(
+    tmp_path: Path,
+) -> None:
+    legacy = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
+    success = subprocess.run(
+        ["bash", "-c", 'source "$1"; type mark_alternate_claude_trust', "test", str(legacy)],
+        text=True,
+        capture_output=True,
+    )
+    assert success.returncode == 0, success.stderr
+
+    isolated = tmp_path / "scripts"
+    isolated.mkdir()
+    copied = isolated / legacy.name
+    copied.write_bytes(legacy.read_bytes())
+    failure = subprocess.run(["bash", str(copied)], text=True, capture_output=True)
+    assert failure.returncode != 0
+    assert "restore scripts/alternate-claude-workspace-trust.sh" in failure.stderr
 
 
 def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(

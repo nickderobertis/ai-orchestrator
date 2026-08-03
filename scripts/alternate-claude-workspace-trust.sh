@@ -88,6 +88,7 @@ mark_alternate_claude_workspaces() {
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   # shellcheck source=scripts/claude-alt-config-dir.sh
-  source "$SCRIPT_DIR/claude-alt-config-dir.sh"
+  source "$SCRIPT_DIR/claude-alt-config-dir.sh" \
+    || { echo "alternate-claude-workspace-trust: cannot load the alternate config resolver; restore scripts/claude-alt-config-dir.sh, then retry" >&2; false; }
   mark_alternate_claude_workspaces alternate-claude-workspace-trust "$@"
 fi
