@@ -172,8 +172,15 @@ TERMINATION_GRACE = 0.05
 _TERMINATION_POLL = 0.005
 
 
-def _still_running(pids: tuple[ProcessId, ...]) -> tuple[ProcessId, ...]:
-    """Which of ``pids`` are still executing, ignoring the ones already reduced to zombies."""
+def still_running(pids: tuple[ProcessId, ...]) -> tuple[ProcessId, ...]:
+    """Which of ``pids`` are still executing, ignoring the ones already reduced to zombies.
+
+    Public because it is also the last thing a caller should ask before signalling a
+    pid it proved some moments ago: a number whose process has exited is a number the
+    kernel may already have handed to somebody else, and nothing is gained by sending
+    it a signal. The instant between this answer and the signal is irreducible; the
+    interval between proving a pid and using it is not, and this closes it.
+    """
     return tuple(pid for pid in pids if (record := _stat(pid)) is not None and record.state != "Z")
 
 
@@ -191,10 +198,10 @@ def _await_shutdown(pids: tuple[ProcessId, ...]) -> None:
     below do.
     """
     deadline = time.monotonic() + TERMINATION_GRACE
-    remaining = _still_running(pids)
+    remaining = still_running(pids)
     while remaining and time.monotonic() < deadline:
         time.sleep(_TERMINATION_POLL)
-        remaining = _still_running(remaining)
+        remaining = still_running(remaining)
 
 
 def terminate_tree(root_pid: ProcessId) -> None:

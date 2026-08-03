@@ -626,10 +626,20 @@ single snapshot does not make three handles safe — it makes them safe *until t
 first signal*. So `tear_down` runs exactly one broad operation, first, before it has
 signalled anything: `terminate_proven_process_group` on the proven group, which is
 also the only handle that reaches work spawned into this dispatch since the snapshot.
-Everything after it is the exact pid set `owned_tree` took while that same proof held.
 Nothing is walked, enumerated, or grouped from a number afterwards, and
 `terminate_tree` is not used on this path at all — the walk it would repeat already
 happened, while the root was proven alive.
+
+**Each process is signalled through one mechanism, never two.** `owned_tree`
+partitions its proven set by process group while that membership can still be read,
+so a member the group covers is terminated *by the group*, `SIGKILL` included, and is
+never passed to the pid phase. Handing it on would mean signalling, one grace period
+later, a number this teardown had itself just released — the same defect the group
+ordering fixes, arriving through the other door. What remains for the pid phase is
+exactly what `killpg` cannot reach: a stamped orphan reparented to init, and a
+descendant that put itself in a session of its own. That remainder passes through
+`still_running` immediately before it is signalled, so nothing is sent a signal this
+process can already see it does not need.
 
 `terminate_proven_process_group` applies the same rule to its own two signals: it
 re-asks for the proof before the `SIGKILL`, because its own `SIGTERM` can be what
