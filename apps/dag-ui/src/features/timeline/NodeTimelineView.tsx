@@ -21,7 +21,11 @@ import {
 import { useEffect, useMemo } from "react";
 import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
-import { isNodeTab, type NodeTab } from "../runs/useUrlSelection";
+import {
+  isNodeTab,
+  NODE_TAB_LABELS,
+  type NodeTab,
+} from "../runs/useUrlSelection";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import { TimelineRail } from "./TimelineRail";
 import { findRow, nodeTimeline } from "./timeline-model";
@@ -127,12 +131,11 @@ export function NodeTimelineView({
         value={selectedTab}
       >
         <TabsList aria-label="Node details" variant="line">
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-          <TabsTrigger value="task">Task</TabsTrigger>
-          <TabsTrigger value="criteria">Completion criteria</TabsTrigger>
-          <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
-          <TabsTrigger value="pr">PR</TabsTrigger>
-          <TabsTrigger value="checks">Checks</TabsTrigger>
+          {Object.entries(NODE_TAB_LABELS).map(([value, label]) => (
+            <TabsTrigger key={value} value={value}>
+              {label}
+            </TabsTrigger>
+          ))}
         </TabsList>
         <TabsContent className="node-tab-panel" value="task">
           <pre>{node.task.task}</pre>

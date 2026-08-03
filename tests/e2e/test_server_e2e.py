@@ -1670,6 +1670,12 @@ def test_scoped_timeline_endpoints_reconstruct_one_ordered_run_history_over_http
         assert timeline["run_id"] == "demo"
         run_scope = client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"]
         assert any(span.get("node_id") == "api" for span in run_scope)
+        summaries = [span for span in run_scope if span["kind"] == "rollup"]
+        assert len({span["label"] for span in summaries}) > 1
+        assert all(span["count"] >= 1 for span in summaries)
+        assert all(span["total_duration_ms"] >= 0 for span in summaries)
+        assert all(span["events"] == [] for span in summaries)
+        assert all("reference" not in span for span in summaries)
         spans = [
             *(span for span in run_scope if span.get("node_id") is None),
             *timeline["spans"],

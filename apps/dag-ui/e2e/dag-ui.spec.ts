@@ -546,8 +546,8 @@ test("shows a verification and a publication as the records they are", async ({
 
 test("states when a verification artifact is unavailable", async ({ page }) => {
   await openObservatory(page, `/?run=${runs().live}&node=missing-artifact`);
-  const factsDisclosure = page.getByRole("tab", { name: "Checks" });
-  await factsDisclosure.focus();
+  const checksTab = page.getByRole("tab", { name: "Checks" });
+  await checksTab.focus();
   await page.keyboard.press("Enter");
   await expect(
     page.locator(".facts").filter({ hasText: "Verification coverage" }),
@@ -950,6 +950,37 @@ test("expands a node summary and opens its full timeline", async ({ page }) => {
     "aria-selected",
     "true",
   );
+});
+
+test("restores node tabs and moves between them from the keyboard", async ({
+  page,
+}) => {
+  await openObservatory(
+    page,
+    `/?run=${runs().live}&node=dashboard&tab=criteria`,
+  );
+  const criteria = page.getByRole("tab", { name: "Completion criteria" });
+  await expect(criteria).toHaveAttribute("aria-selected", "true");
+  await criteria.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Dependencies" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page).toHaveURL(/tab=dependencies/);
+});
+
+test("names a node whose run summary has no recorded activity", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  const summary = page
+    .locator(".overall-node-summary")
+    .filter({ hasText: "queued" });
+  await summary.getByRole("button", { name: /queued/ }).click();
+  await expect(
+    summary.getByText("No activity summary recorded."),
+  ).toBeVisible();
 });
 
 test("reads every recorded moment as words rather than as its stamp", async ({

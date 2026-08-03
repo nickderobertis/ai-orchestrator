@@ -33,18 +33,18 @@ export interface UrlSelection {
   readonly selectNodeTab: (tab: NodeTab) => void;
 }
 
-const NODE_TABS = [
-  "timeline",
-  "task",
-  "criteria",
-  "dependencies",
-  "pr",
-  "checks",
-] as const;
-export type NodeTab = (typeof NODE_TABS)[number];
+export const NODE_TAB_LABELS = {
+  timeline: "Timeline",
+  task: "Task",
+  criteria: "Completion criteria",
+  dependencies: "Dependencies",
+  pr: "PR",
+  checks: "Checks",
+};
+export type NodeTab = keyof typeof NODE_TAB_LABELS;
 
 export function isNodeTab(value: string | null): value is NodeTab {
-  return value !== null && NODE_TABS.some((tab) => tab === value);
+  return value !== null && Object.hasOwn(NODE_TAB_LABELS, value);
 }
 
 export function useUrlSelection(): UrlSelection {
