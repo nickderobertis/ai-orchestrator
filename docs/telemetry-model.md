@@ -147,6 +147,12 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
+Index version 9 adds an optional `agent_role` to each `nodes[].sessions` entry:
+`role` remains the transport party oneharness recorded, and `agent_role` names
+what the dispatch was for, so a reader can tell a node's worker from its judge
+without opening a transcript. It is additive — omitted only for a natively linked
+session no readable history record backs — so a version-8 reader loses only that
+distinction.
 Index version 8 makes `last_event` nullable: a run that has recorded no journal
 event yet serves `null` instead of an empty string, so a reader can tell absence
 from a real event kind. It is a widening of a required field, so readers pinned to
@@ -174,7 +180,7 @@ Its checked-in golden moves in the same change. `RunTelemetry` includes:
   `cache_write_tokens`, and `cost_usd`.
 - `nodes[].timing` and `nodes[].usage` with the same shapes.
 - `nodes[].sessions`, containing the linked `session_id`, `history_id`, `role`,
-  and `turn_index` for drill-down.
+  `agent_role`, and `turn_index` for drill-down.
 - `timing_quality` (`complete`, `partial`, or `legacy`) and `linkage_quality`
   (`native`, `labelled`, or `inferred`), plus `sources`, the
   ordered set of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`
@@ -295,7 +301,7 @@ as `?` in `--breakdown` and remain JSON `null` in the machine view.
 
 | Consumer field | Preferred source | Exact legacy fallback and emitted value |
 | --- | --- | --- |
-| `nodes[].sessions` | onejudge `telemetry.sessions` records linked to the node | Build entries from oneharness sessions matching `labels.run_id` and `labels.node`; use `labels.role`, then the legacy name-prefix classification. Preserve the native `session_id`; set `history_id` to the history record identity when present, otherwise `null`; set `turn_index` to `null` because record order is not a native turn identity. Emit `[]` when no session can be linked. |
+| `nodes[].sessions` | onejudge `telemetry.sessions` records linked to the node | Build entries from oneharness sessions matching `labels.run_id` and `labels.node`, plus any session onejudge's own linkage names for this node — a natively linked session is the node's work whether or not the label join found it, and its turns count. Use `labels.role`, then the legacy name-prefix classification; set `agent_role` from `labels.agent_role`, then the same legacy classification, and omit it only when no history session backs the link. Preserve the native `session_id`; set `history_id` to the history record identity when present, otherwise `null`; set `turn_index` to `null` because record order is not a native turn identity. Emit `[]` when no session can be linked. |
 | `timing_quality` | Completeness of measured oneharness timing | `complete` means every linked history session has valid provider-native timing fields; `partial` means at least one timing measurement exists but the set is incomplete or schema-1.2 `observed_tool_ms`/`timing_source: stdout_observed` contributed; `legacy` means none does. History schemas `1.1` and `1.2` are recognized. Observed intervals remain visible but never count as provider-native timing. Available measurements are never suppressed by this classification. |
 | `linkage_quality` | Authority of role and node association | `native` means valid onejudge session linkage covers every linked history summary and supplies authoritative role, node/step association, and per-role `turn_index`; `labelled` means at least one association trusts history labels and every history role has a valid `labels.role`; `inferred` means at least one role uses a legacy name fallback or cannot be associated. |
 | `timing_presence` | Presence of each measured timing category | Emit one boolean for each of `agent_model_ms`, `judge_model_ms`, `llmlint_model_ms`, and `tool_ms`. `false` means the corresponding numeric zero is only an internal aggregation identity and renders `?`; `true` preserves measured zero as `0`. |

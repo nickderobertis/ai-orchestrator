@@ -341,6 +341,16 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(worker).toContainText("completed");
   await expect(worker).toContainText(/\d\d:\d\d:\d\d/);
   await expect(rail(page).getByRole("button")).not.toHaveCount(0);
+  // And it says which session it was, served on the row rather than read out of a
+  // transcript: every dispatch on this node read "dispatch" and nothing else, so
+  // the worker, the judge that supervised it, and the lint run under it were three
+  // rows a reader could not tell apart. Neither name contains its own role.
+  await expect(worker).toContainText("worker");
+  await expect(
+    rail(page).getByRole("button", {
+      name: /you-are-a-strict-careful-evaluator/,
+    }),
+  ).toContainText("judge");
 
   await worker.click();
   await expect
@@ -634,6 +644,10 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(
     page.getByText("Coordinating the execution frontier"),
   ).toBeVisible();
+  // Each run-level row names its own role, and the run's launch is named with the
+  // same phrase the navigation heads its group with rather than a raw enum.
+  await expect(page.getByText("Run-level · orchestrator")).toBeVisible();
+  await expect(page.getByText(/^Codex session · /).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("Run-level sessions")).toBeVisible();
@@ -786,23 +800,35 @@ test("gathers every run of one launching session under it", async ({
   );
 });
 
-test("groups a run with no recorded launch under an unknown session", async ({
+test("groups a run with no recorded launch as unattributed", async ({
   page,
 }) => {
   await openObservatory(page);
   // Wait for the attributed groups first: until a run's detail arrives it has no
-  // transcript to attribute, so every group reads as unknown for that moment.
+  // transcript to attribute, so every group reads as unattributed for that moment.
   await expect(page.getByText(/Codex session/)).toBeVisible();
+  // The claude launch has no protected provenance record at all — the state every
+  // launch reaches once that short-lived record expires — and its run is still
+  // named by the session that launched it, from what the run directory recorded.
   await expect(page.getByText(/Claude session/)).toBeVisible();
   // The server serves this run with no launch join and no transcripts at all; it
   // still has to be reachable rather than dropped from the navigation. Every
-  // unattributed run gets its own unknown group, so name this run's group rather
-  // than the only one.
+  // unattributed run gets its own group, so name this run's group rather than the
+  // only one — and it reads as honestly unattributed, not as an unknown session.
   await expect(
     sessionGroup(page, runs().unattributed).getByRole("heading", {
-      name: /Unknown session/,
+      name: /Unattributed/,
     }),
   ).toBeVisible();
+  // A run recorded before attribution reached the run directory, whose protected
+  // record is gone too: nothing can name its session, so it is named by the launch
+  // it did record rather than pooled with the runs that recorded nothing at all.
+  await expect(
+    sessionGroup(page, runs().eventless).getByRole("heading", {
+      name: /Unattributed launch · 1e6a1e6a…/,
+    }),
+  ).toBeVisible();
+
   await page.getByRole("button", { name: RegExp(runs().unattributed) }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText("orphan");
   await expect(page.getByText("Continue unattributed work")).toHaveCount(0);

@@ -31,7 +31,7 @@ Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
 The initial API base is `/api/v1`. Its telemetry payload embeds the existing
-telemetry index at `telemetry_schema_version: 8`, mirroring that index's own
+telemetry index at `telemetry_schema_version: 9`, mirroring that index's own
 `schema_version`; this API version does not replace or renumber that contract.
 `scripts/check-dag-state-contract.py` reconciles every copy of that number here
 against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
@@ -45,7 +45,7 @@ against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
 ```ts
 interface RunList {
   api_version: 1;
-  telemetry_schema_version: 8;
+  telemetry_schema_version: 9;
   observed_at: string;
   runs: RunSummary[];
 }
@@ -63,12 +63,15 @@ interface RunSummary {
   launch?: RunLaunch; // omitted when the run recorded no launch_id
 }
 
-// The run-level join of the recorded launch_id to its provenance record. See
-// "Launch and session provenance"; launcher_session_id appears only when the
+// The run-level attribution of a run to the session that launched it. See
+// "Launch and session provenance". session_key is the opaque, stable, irreversible
+// name of that session and is served by default — it is what a client groups runs
+// by; launcher_session_id is the raw id behind it and appears only when the
 // server's redaction policy is configured to expose it.
 interface RunLaunch {
   launch_id: string;
   launcher: "claude-code" | "codex" | "unknown";
+  session_key?: string;
   launcher_session_id?: string;
 }
 ```
@@ -82,7 +85,7 @@ Runs are ordered by most recent progress descending, then `run_id` ascending.
 ```ts
 interface RunDetail {
   api_version: 1;
-  telemetry_schema_version: 8;
+  telemetry_schema_version: 9;
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
@@ -174,10 +177,16 @@ interface Usage {
   llmlint: UsageParty;
   total: UsageParty;
 }
+// One session that did a node's work. `role` is the transport party and
+// `agent_role` its semantic role, the same pair a dispatch span carries. The
+// semantic half comes from the session's own `agent_role` label, or the legacy
+// classification the transcript adapter uses; it is omitted only for a link
+// onejudge recorded that no readable history session backs.
 interface SessionLink {
   session_id: string;
   history_id?: string | null;
   role: "agent" | "judge" | "llmlint";
+  agent_role?: AgentRole;
   turn_index?: number | null;
   started_at?: string;
   finished_at?: string | null;
@@ -317,7 +326,10 @@ interface RunTimeline {
 // One interval of recorded work. ended_at is null for work the recorded stream
 // never closed, which is what an in-flight run looks like rather than an error.
 // parent_id links spans into a tree; a span with no parent is run-level.
-// count and total_duration_ms appear only on a "rollup" span.
+// count and total_duration_ms appear only on a "rollup" span; agent_role and
+// transport_role only on a "dispatch" one, where they are the DagConversation
+// attribution's own values so a row can be labelled and grouped without
+// fetching the transcript behind it.
 interface TimelineSpan {
   id: string;
   kind: TimelineSpanKind;
@@ -332,6 +344,8 @@ interface TimelineSpan {
   status?: string;
   count?: number;
   total_duration_ms?: number;
+  agent_role?: AgentRole;
+  transport_role?: "agent" | "judge" | "llmlint";
   reference?: TimelineReference;
 }
 
@@ -512,10 +526,22 @@ labels `run_id`, `round`, `node`, and optional `step`. `launcher_session_id` is
 kept in the protected provenance record rather than history labels because it
 may be sensitive. The server joins on `launch_id`, exposes launcher and
 `launch_id`, and exposes the launcher session ID only when its configured
-redaction policy permits it. Missing/expired provenance yields
-`launcher: "unknown"` without changing graph attribution. Nested processes
+redaction policy permits it. Nested processes
 inherit labels through `orchestrator.labels.merge_labels`; the more-specific
 dispatch owns graph locator and semantic-role values.
+
+Attribution does not depend on that join surviving. The provenance record is
+short-lived and lives outside the runs root, so a run also records its own
+`session_key` — `sha256(launcher_session_id)` truncated to 128 bits — beside the
+`launch_id`, and that is what the server resolves first. The key is
+non-reversible and carries no session content, so it is served by default and is
+the grouping key a client uses: two runs launched from one planner session share
+one `session_key`, and its first 8 characters are exactly the fingerprint
+`just runs` prints, so the terminal and the browser name a session the same way.
+A run recorded before the key existed still resolves through provenance while
+that record lasts and degrades to `launcher: "unknown"` with no `session_key`
+afterwards; a run launched from a plain shell records no session at all. Neither
+degradation changes graph attribution.
 
 As landed here, `just orchestrate` (`orchestrator.launch` +
 `dispatch.launch_orchestrator`) mints the `launch_id`, writes the
@@ -524,13 +550,17 @@ As landed here, `just orchestrate` (`orchestrator.launch` +
 (plus `run_id`) onto the orchestrator's `ONEHARNESS_HISTORY_LABELS`. Every nested
 `run_onejudge` dispatch merges those inherited labels under its own graph locators,
 so each worker/judge/orchestrator conversation carries the join labels. The run
-directory records only the non-sensitive `launch_id` (in `launch.json` under a
-`launch: {launch_id}` object); the sensitive session id never enters the repository.
-The server resolves a run's `RunLaunch` by reading that `launch_id` and joining it to
-the provenance record — reporting `launcher: "unknown"` when the record is missing,
-malformed, or older than its short-lived max age — and includes
-`launcher_session_id` only when started with `--expose-launcher-session-id`
-(`create_app(expose_launcher_session_id=True)`), which is off by default.
+directory records only non-sensitive values (in `launch.json` under a
+`launch: {launch_id, launcher?, session_key?}` object, schema version 3); the
+sensitive session id never enters the repository.
+The server resolves a run's `RunLaunch` from that object — the recorded `launcher`
+and `session_key` when it has them, otherwise by joining `launch_id` to the
+provenance record, reporting `launcher: "unknown"` when neither answers — and
+includes `launcher_session_id` only when started with
+`--expose-launcher-session-id` (`create_app(expose_launcher_session_id=True)`),
+which is off by default. `orchestrator.launch.read_run_owner` resolves run
+ownership through the same two sources, so `just runs` and `just stop` keep
+naming a run's owner after its provenance record has aged out.
 
 `role` in current oneharness history is a transport-party role:
 `agent`, `judge`, or `llmlint`. It remains untouched for telemetry

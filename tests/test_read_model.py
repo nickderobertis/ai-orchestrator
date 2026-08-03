@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from orchestrator.journal import NodeId, RunId, open_journal
-from orchestrator.launch import write_provenance
+from orchestrator.launch import (
+    launch_info,
+    session_key,
+    validate_launch_id,
+    write_provenance,
+)
 from orchestrator.monitor import snapshot_path
 from orchestrator.projection import read_strict_events
 from orchestrator.read_model import (
@@ -89,6 +94,20 @@ def _build_run(
     return run_dir
 
 
+def _record_launching_session(run_dir: Path, *, launcher: str, session_id: str) -> None:
+    """Upgrade a run's recorded launch to the durable shape a real launch writes.
+
+    The link is built by the production builder rather than by hand, so this fixture
+    cannot record a shape the reader would refuse.
+    """
+    record = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))
+    launch_id = validate_launch_id(record["launch"]["launch_id"])
+    assert launch_id is not None
+    record["schema_version"] = 3
+    record["launch"] = launch_info(launch_id=launch_id, launcher=launcher, session_id=session_id)
+    (run_dir / "launch.json").write_text(json.dumps(record), encoding="utf-8")
+
+
 def test_list_runs_orders_by_progress_and_hides_settled(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _build_run(runs, "settled", settle=True)
@@ -139,26 +158,62 @@ def test_run_detail_joins_launch_provenance_with_redaction(tmp_path: Path) -> No
         repository_identity="local/app",
     )
 
-    # Redacted by default: launcher + launch_id, but no session id.
+    # Redacted by default: launcher, launch_id, and the opaque grouping key a client
+    # gathers runs by — but never the session id itself.
     detail = run_detail(runs, "demo", oneharness_bin=ABSENT)
     assert detail["run"]["run_id"] == "demo"
-    assert detail["launch"] == {"launch_id": launch_id, "launcher": "codex"}
+    assert detail["launch"] == {
+        "launch_id": launch_id,
+        "launcher": "codex",
+        "session_key": session_key("sess-9"),
+    }
 
     # Exposed only when the caller opts in.
     exposed = run_detail(runs, "demo", oneharness_bin=ABSENT, expose_launcher_session_id=True)
     assert exposed["launch"] == {
         "launch_id": launch_id,
         "launcher": "codex",
+        "session_key": session_key("sess-9"),
         "launcher_session_id": "sess-9",
     }
 
 
-def test_run_detail_reports_unknown_launcher_when_provenance_missing(tmp_path: Path) -> None:
+def test_run_detail_reports_unknown_launcher_when_nothing_names_the_session(
+    tmp_path: Path,
+) -> None:
+    """A run recorded before the durable key, whose provenance record is gone too.
+
+    This is every run launched before attribution was recorded in the run directory.
+    Neither source can name the session, so the launcher degrades to unknown and the
+    key is omitted rather than invented — the run still reads, it is simply nobody's.
+    """
     runs = tmp_path / "runs"
     launch_id = "b" * 32
     _build_run(runs, "demo", settle=True, launch_id=launch_id)  # no provenance record written
     detail = run_detail(runs, "demo", oneharness_bin=ABSENT, expose_launcher_session_id=True)
     assert detail["launch"] == {"launch_id": launch_id, "launcher": "unknown"}
+
+
+def test_run_detail_attributes_a_run_whose_provenance_record_is_gone(tmp_path: Path) -> None:
+    """The run's own record outlives the protected one, so grouping never decays."""
+    runs = tmp_path / "runs"
+    launch_id = "d" * 32
+    _build_run(runs, "demo", settle=True, launch_id=launch_id)
+    _record_launching_session(runs / "demo", launcher="claude-code", session_id="sess-durable")
+
+    # No provenance record was ever written; expiry looks exactly like this to a reader.
+    detail = run_detail(runs, "demo", oneharness_bin=ABSENT, expose_launcher_session_id=True)
+    assert detail["launch"] == {
+        "launch_id": launch_id,
+        "launcher": "claude-code",
+        "session_key": session_key("sess-durable"),
+    }
+    # Two runs of one session share the key, which is what makes them one group.
+    _build_run(runs, "sibling", settle=True, launch_id="e" * 32)
+    _record_launching_session(runs / "sibling", launcher="claude-code", session_id="sess-durable")
+    listed = list_runs(runs, include_settled=True, oneharness_bin=ABSENT)
+    keys = {row["run_id"]: row["launch"]["session_key"] for row in listed["runs"]}
+    assert keys == {"demo": session_key("sess-durable"), "sibling": session_key("sess-durable")}
 
 
 def test_run_detail_projection_telemetry(tmp_path: Path) -> None:

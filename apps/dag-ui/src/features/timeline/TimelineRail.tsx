@@ -146,6 +146,7 @@ function RailRow({
     <span className="rail-summary">
       {/* A group's own label already names the kind it stands for. */}
       {row.rowKind !== "group" && <span className="rail-kind">{row.kind}</span>}
+      {row.role !== undefined && <span className="rail-role">{row.role}</span>}
       {row.label && <span className="rail-label">{row.label}</span>}
       {/* An aggregate stands in for records it does not list, so it says how many. */}
       {row.rowKind === "span" && row.span.count !== undefined && (

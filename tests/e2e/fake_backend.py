@@ -210,9 +210,25 @@ def _onejudge_report_proxy(argv: list[str]) -> int:
     return process.returncode
 
 
+def _record_history_labels() -> None:
+    """Append this invocation's history labels when a journey asked to see them.
+
+    The labels a dispatch stamps are an environment variable oneharness reads when it
+    records the session, so the provider process is where a journey can observe what
+    the session it is about to become will be labelled with. Nothing else in this
+    backend depends on it, and journeys that do not set the path see no change.
+    """
+    destination = os.environ.get("FAKE_BACKEND_LABELS")
+    if not destination:
+        return
+    with open(destination, "a", encoding="utf-8") as stream:
+        stream.write(os.environ.get("ONEHARNESS_HISTORY_LABELS", "") + "\n")
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "onejudge-report-proxy":
         return _onejudge_report_proxy(sys.argv[2:])
+    _record_history_labels()
     req = json.loads(sys.stdin.read())
     if not isinstance(req, dict):
         sys.stderr.write("fake_backend: request must be a JSON object\n")

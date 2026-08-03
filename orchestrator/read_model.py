@@ -35,7 +35,12 @@ from .config import ConfigError
 from .conversations import DagConversation, run_conversations
 from .history import HistoryError, SessionScan
 from .journal import JOURNAL_NAME
-from .launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
+from .launch import (
+    LAUNCH_RECORD_NAME,
+    read_launch_link,
+    read_provenance,
+    resolve_launch_session,
+)
 from .monitor import load_snapshot, snapshot_path
 from .projection import (
     NodeState,
@@ -113,12 +118,18 @@ def validate_conversation_id(value: str) -> str:
 class RunLaunch(TypedDict):
     """A run's join to its launching session, per ``docs/dag-ui/design.md``.
 
-    ``launcher_session_id`` is present only when the server's redaction policy is
-    configured to expose it, so it is omitted rather than nulled by default.
+    ``session_key`` is the opaque, stable, irreversible name of that session, served
+    by default because grouping a list of runs by the planner that launched them is
+    what a viewer needs and no part of it is sensitive. It is omitted for a run that
+    named no session — one launched from a plain shell, or recorded before the key
+    existed. ``launcher_session_id`` is the raw id behind it and is present only when
+    the server's redaction policy is configured to expose it, so it is omitted rather
+    than nulled by default.
     """
 
     launch_id: str
     launcher: str
+    session_key: NotRequired[str]
     launcher_session_id: NotRequired[str]
 
 
@@ -216,7 +227,8 @@ def _run_dirs(runs_dir: Path) -> Iterator[Path]:
 
 def read_launch_id(run_dir: Path) -> str | None:
     """The non-sensitive ``launch_id`` the run recorded, or ``None`` when absent."""
-    return read_launch_info(run_dir)
+    link = read_launch_link(run_dir)
+    return None if link is None else link.launch_id
 
 
 def resolve_launch(
@@ -225,23 +237,28 @@ def resolve_launch(
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
 ) -> RunLaunch | None:
-    """Join a run to its launching session via ``launch_id``.
+    """Resolve a run's launching session from what it recorded at launch.
 
-    Returns the ``launch_id`` and the ``launcher`` resolved from the out-of-repo
-    provenance record — ``"unknown"`` when that record is missing, expired, or
-    invalid, without disturbing the graph. The launcher session id is included only
-    when the caller's redaction policy permits it, since it may be sensitive.
+    Attribution comes from the run's own record first and last: the ``launcher`` and
+    the opaque ``session_key`` it wrote survive the out-of-repo provenance record
+    expiring or being deleted, so a viewer groups runs by their launching planner
+    however old they are. The provenance record is still consulted, because it is the
+    only source of the raw session id — served only when the caller's redaction
+    policy permits it — and because a run recorded before the durable key existed has
+    nothing else to resolve. A run neither can name reads as ``"unknown"``, without
+    disturbing the graph.
     """
-    launch_id = read_launch_id(run_dir)
-    if launch_id is None:
+    link = read_launch_link(run_dir)
+    if link is None:
         return None
-    provenance = read_provenance(launch_id, now=now)
-    result: RunLaunch = {
-        "launch_id": launch_id,
-        "launcher": provenance["launcher"] if provenance is not None else "unknown",
-    }
-    if expose_launcher_session_id and provenance is not None:
-        result["launcher_session_id"] = provenance["launcher_session_id"]
+    launcher, session = resolve_launch_session(link, now=now)
+    result: RunLaunch = {"launch_id": link.launch_id, "launcher": launcher}
+    if session is not None:
+        result["session_key"] = session.key
+    if expose_launcher_session_id:
+        provenance = read_provenance(link.launch_id, now=now)
+        if provenance is not None:
+            result["launcher_session_id"] = provenance["launcher_session_id"]
     return result
 
 

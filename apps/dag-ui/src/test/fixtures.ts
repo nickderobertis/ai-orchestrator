@@ -56,10 +56,14 @@ const timingPresence = {
 
 const CODEX_LAUNCH = "c0de".repeat(8);
 const CLAUDE_LAUNCH = "c1a0".repeat(8);
+// The opaque, stable name of the session each launch came from. Two runs of one
+// session share theirs, which is what makes them one group in the navigation.
+const CODEX_SESSION = "5e551040".repeat(4);
+const CLAUDE_SESSION = "5e5510c1".repeat(4);
 
 export const runList = {
   api_version: 1,
-  telemetry_schema_version: 8,
+  telemetry_schema_version: 9,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [
     // Counted over the same authoritative vocabulary the run detail serves, which is
@@ -169,10 +173,14 @@ export function runDetail(runId: string = LIVE_RUN) {
   const node = historical ? "archive" : "dashboard";
   return {
     api_version: 1,
-    telemetry_schema_version: 8,
+    telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     // The launching session is served on the run itself, and on every list row.
-    launch: { launch_id: launchId, launcher },
+    launch: {
+      launch_id: launchId,
+      launcher,
+      session_key: historical ? CLAUDE_SESSION : CODEX_SESSION,
+    },
     run: {
       run_id: runId,
       state: historical ? "complete" : "running",
@@ -336,6 +344,7 @@ function summary(
     launch: {
       launch_id: historical ? CLAUDE_LAUNCH : CODEX_LAUNCH,
       launcher: historical ? "claude-code" : "codex",
+      session_key: historical ? CLAUDE_SESSION : CODEX_SESSION,
     },
   };
 }
@@ -534,10 +543,17 @@ function liveSpans() {
       62,
       90,
       ["judge-session-0"],
+      { agent_role: "judge", transport_role: "judge" },
     ),
-    dispatch("check-in-session", "check-in-dashboard", "dashboard", 92, 110, [
-      "check-in-session-0",
-    ]),
+    dispatch(
+      "check-in-session",
+      "check-in-dashboard",
+      "dashboard",
+      92,
+      110,
+      ["check-in-session-0"],
+      { agent_role: "check-in", transport_role: "agent" },
+    ),
     dispatch(
       "pr-author-session",
       "pr-author-dashboard",
@@ -545,10 +561,19 @@ function liveSpans() {
       112,
       130,
       ["pr-author-session-0"],
+      { agent_role: "pr-author", transport_role: "agent" },
     ),
-    dispatch("llmlint-session", "llmlint-dashboard", "dashboard", 132, 150, [
-      "llmlint-session-0",
-    ]),
+    dispatch(
+      "llmlint-session",
+      "llmlint-dashboard",
+      "dashboard",
+      132,
+      150,
+      ["llmlint-session-0"],
+      // Lint is verification inside the worker dispatch, so it keeps the worker's
+      // semantic role and is told apart by its transport role alone.
+      { agent_role: "worker", transport_role: "llmlint" },
+    ),
     {
       id: "rollup-lock-wait-11",
       kind: "rollup",
@@ -619,13 +644,30 @@ function liveSpans() {
       "orchestrator-dag-ui-live",
       1,
       200,
+      {
+        agent_role: "orchestrator",
+        transport_role: "agent",
+      },
     ),
-    runLevelDispatch(ROUND_CHECK_IN_SESSION, "check-in-round-1", 160, 170),
+    runLevelDispatch(ROUND_CHECK_IN_SESSION, "check-in-round-1", 160, 170, {
+      agent_role: "check-in",
+      transport_role: "agent",
+    }),
   ];
 }
 
 /** The second run-level session: the per-round check-in, recorded at no node. */
 export const ROUND_CHECK_IN_SESSION = "round-check-in-session";
+
+/**
+ * Both roles a dispatch span carries: the party oneharness recorded, and what the
+ * dispatch was for. Defaulted to an ordinary worker, which is what most are.
+ */
+interface DispatchRoles {
+  readonly agent_role: string;
+  readonly transport_role: string;
+}
+const WORKER: DispatchRoles = { agent_role: "worker", transport_role: "agent" };
 
 /** One dispatched session the graph placed at the run rather than at any node. */
 function runLevelDispatch(
@@ -633,6 +675,7 @@ function runLevelDispatch(
   label: string,
   from: number,
   to: number,
+  roles: DispatchRoles = WORKER,
 ) {
   const reference = { kind: "conversation", value: conversationId };
   return {
@@ -644,6 +687,7 @@ function runLevelDispatch(
     started_at: stamp(from),
     ended_at: stamp(to),
     status: "completed",
+    ...roles,
     reference,
     events: [
       {
@@ -667,6 +711,7 @@ function dispatch(
   from: number,
   to: number,
   turnIds: readonly string[],
+  roles: DispatchRoles = WORKER,
 ) {
   const reference = { kind: "conversation", value: conversationId };
   return {
@@ -679,6 +724,7 @@ function dispatch(
     started_at: stamp(from),
     ended_at: stamp(to),
     status: "completed",
+    ...roles,
     reference,
     events: turnIds.map((id, index) => ({
       id,
