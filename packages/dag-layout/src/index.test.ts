@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { DAG_NODE_STATES, layoutDag } from "./index.js";
+import { DAG_NODE_STATES, type DagNode, layoutDag } from "./index.js";
 
 describe("layoutDag", () => {
   test("returns stable dependency-ranked geometry through the public API", () => {
@@ -36,12 +36,9 @@ describe("layoutDag", () => {
 
   test("gives every served node status a token, and none of them neutral by accident", () => {
     const layout = layoutDag({
-      nodes: DAG_NODE_STATES.map((state) => ({
-        id: state,
-        label: state,
-        kind: "agent" as const,
-        state,
-      })),
+      nodes: DAG_NODE_STATES.map(
+        (state): DagNode => ({ id: state, label: state, kind: "agent", state }),
+      ),
       edges: [],
     });
     expect(

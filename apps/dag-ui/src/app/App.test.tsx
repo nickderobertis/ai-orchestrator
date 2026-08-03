@@ -41,6 +41,14 @@ const railRow = (name: RegExp) =>
 const detail = () =>
   screen.getByRole("region", { name: "Timeline item detail" });
 
+/** Nodes of the live fixture whose status every surface has to agree on. */
+const SERVED_STATUSES: readonly { node: string; status: string }[] = [
+  { node: "queued", status: "blocked" },
+  { node: "abandoned", status: "skipped" },
+  { node: "followup", status: "pending" },
+  { node: "publish", status: "failed" },
+];
+
 describe("DAG application", () => {
   // The graph is one reading of a run and no longer the one an empty address lands
   // on, so the journeys that are about it say so — exactly as an operator's own
@@ -110,12 +118,7 @@ describe("DAG application", () => {
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
 
     const nodeList = screen.getByRole("list", { name: "DAG nodes" });
-    for (const [node, status] of [
-      ["queued", "blocked"],
-      ["abandoned", "skipped"],
-      ["followup", "pending"],
-      ["publish", "failed"],
-    ] as const) {
+    for (const { node, status } of SERVED_STATUSES) {
       // The card the pointer reads.
       expect(screen.getByText(node).closest(".dag-node")).toHaveClass(
         `state-${status}`,
@@ -134,11 +137,7 @@ describe("DAG application", () => {
     ).toHaveTextContent("1 pending · 1 running · 1 waiting · 1 blocked");
 
     // And the node view each card opens.
-    for (const [node, status] of [
-      ["queued", "blocked"],
-      ["abandoned", "skipped"],
-      ["followup", "pending"],
-    ] as const) {
+    for (const { node, status } of SERVED_STATUSES) {
       // Re-queried per node: leaving the node view unmounts and remounts the list.
       fireEvent.click(
         within(screen.getByRole("list", { name: "DAG nodes" })).getByRole(

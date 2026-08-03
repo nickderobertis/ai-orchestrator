@@ -28,6 +28,7 @@ const fixtureSchema = z.object({
   runs: z.object({
     live: z.string().min(1),
     history: z.string().min(1),
+    outcomes: z.string().min(1),
     sibling: z.string().min(1),
     unattributed: z.string().min(1),
     eventless: z.string().min(1),
@@ -214,6 +215,38 @@ test("leads a node that is not moving with the reason it is not", async ({
   await openObservatory(page, `/?run=${runs().live}&node=abandoned`);
   await expect(page.getByRole("alert")).toContainText("This node is skipped");
   await expect(page.getByRole("alert")).toContainText("publish");
+});
+
+test("renders the outcomes only a settled round records", async ({ page }) => {
+  // A finished round records statuses a live one cannot journal. Each has to reach
+  // the canvas as itself and read as the kind of outcome it is.
+  await openObservatory(page, `/?run=${runs().outcomes}`);
+  await expect(page.locator(".dag-node.state-not-completed")).toContainText(
+    "backfill",
+  );
+  await expect(page.locator(".dag-node.state-unknown")).toContainText("verify");
+
+  // Unfinished work is lost work, not held work; a status the vocabulary does not
+  // hold has no outcome to claim and must not borrow one.
+  await expect(page.locator(".dag-node.state-not-completed")).toHaveCSS(
+    "background-color",
+    await tokenColor(page, "--destructive-surface"),
+  );
+  await expect(page.locator(".dag-node.state-unknown")).toHaveCSS(
+    "background-color",
+    await tokenColor(page, "--card"),
+  );
+
+  await page.locator(".dag-node.state-not-completed").click();
+  await expect(page.getByRole("alert")).toContainText("did not complete");
+  await expect(page.getByRole("alert")).toContainText("step 'load' timed out");
+
+  // And a node that failed with nothing recorded about why says exactly that,
+  // rather than leaving a banner with an empty body under a heading.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=migrate`);
+  await expect(page.getByRole("alert")).toContainText(
+    "No reason was recorded for this outcome.",
+  );
 });
 
 test("counts a run's own nodes on the row that opens it", async ({ page }) => {
@@ -1087,6 +1120,7 @@ test("falls back to the empty state once no run is left", async ({ page }) => {
   // any run is still there to show, whatever shape that run is.
   for (const runId of [
     runs().live,
+    runs().outcomes,
     runs().unattributed,
     runs().eventless,
     runs().busy,

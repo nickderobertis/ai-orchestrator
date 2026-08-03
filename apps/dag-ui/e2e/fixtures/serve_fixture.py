@@ -46,6 +46,11 @@ FOUNDATION_PR = "https://github.com/example/repo/pull/12"
 
 LIVE_RUN = "dag-ui-live"
 HISTORY_RUN = "dag-ui-history"
+#: A settled run whose recorded result carries the outcomes only a finished round can
+#: hold: a step-derived `not-completed`, a status outside the served vocabulary, and a
+#: node that failed without recording any reason at all. None of the three can be
+#: journalled as a node settlement, so a live round cannot produce them.
+OUTCOMES_RUN = "dag-ui-outcomes"
 #: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
 #: several graphs, and the navigation has to gather them under that one session.
 SIBLING_RUN = "dag-ui-sibling"
@@ -330,6 +335,53 @@ def _write_history_run(runs_dir: Path) -> None:
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
     _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH)
+
+
+_OUTCOMES_TASKS: list[dict[str, Any]] = [
+    {"id": "migrate", "persona": "engineer", "task": "Migrate the store"},
+    {"id": "backfill", "persona": "engineer", "task": "Backfill the store"},
+    {"id": "verify", "persona": "engineer", "task": "Verify the migration"},
+]
+
+
+def _write_outcomes_run(runs_dir: Path) -> None:
+    """One settled round holding the outcomes a live round cannot journal.
+
+    ``migrate`` ran and failed with nothing recorded about why — a real shape, and
+    the one where a view that only echoes a recorded reason shows an empty banner.
+    ``backfill`` settled ``not-completed``, the status a workstream step ends with
+    when its work is unfinished. ``verify`` carries a status the served vocabulary
+    does not hold, which must be reported as ``unknown`` rather than mapped onto a
+    neighbouring meaning. The strict fold only checks a recorded status against
+    nodes it saw *start*, so these three reach the read model exactly as a recorded
+    result carries them.
+    """
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round, write_result
+
+    run_dir = runs_dir / OUTCOMES_RUN
+    _, round_dir = prepare_round(run_dir, {"tasks": _OUTCOMES_TASKS})
+    journal = open_journal(run_dir, RunId(OUTCOMES_RUN), 1)
+    for task in _OUTCOMES_TASKS:
+        journal.append("node-added", detail={"definition": task})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 3}})
+    journal.append("node-started", node=NodeId("migrate"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed", node=NodeId("migrate"), detail={"result": {"status": "failed", "ok": False}}
+    )
+    result = {
+        "ok": False,
+        "state": "failed",
+        "started_order": ["migrate"],
+        "results": {
+            "migrate": {"status": "failed", "ok": False},
+            "backfill": {"status": "not-completed", "ok": False, "detail": "step 'load' timed out"},
+            "verify": {"status": "improvised", "ok": False},
+        },
+    }
+    journal.append("round-finished", detail={"result": result})
+    write_result(round_dir, result)
+    _record_launch(run_dir, OUTCOMES_RUN, CLAUDE_LAUNCH)
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
@@ -671,6 +723,7 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     _write_busy_run(runs_dir)
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
+    _write_outcomes_run(runs_dir)
     _write_sibling_run(runs_dir)
     _write_live_run(runs_dir)
     os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))
@@ -783,6 +836,7 @@ def serve(workspace: Path, port: int) -> int:
                 "runs": {
                     "live": LIVE_RUN,
                     "history": HISTORY_RUN,
+                    "outcomes": OUTCOMES_RUN,
                     "sibling": SIBLING_RUN,
                     "unattributed": UNATTRIBUTED_RUN,
                     "eventless": EVENTLESS_RUN,
