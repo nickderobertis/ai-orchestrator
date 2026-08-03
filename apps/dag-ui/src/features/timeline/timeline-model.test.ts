@@ -20,19 +20,28 @@ describe("one node's slice of the run timeline", () => {
       "dispatch-worker-session",
       "rollup-lock-wait-11",
       "event-9",
-      "dispatch-judge-session",
       "dispatch-check-in-session",
       "dispatch-pr-author-session",
-      "dispatch-llmlint-session",
     ]);
     const worker = dashboard.rows[0];
     expect(worker?.kind).toBe("dispatch");
     expect(worker?.status).toBe("completed");
     // 11:00:12 to 11:01:00 is the interval the stream recorded for it.
     expect(worker?.durationMs).toBe(48_000);
-    expect(worker?.children.map(({ kind }) => kind)).toEqual([
+    expect(worker?.displayLabel).toBe(
+      "Worker (engineer-dashboard) · conversation 1",
+    );
+    expect(worker?.children.map(({ displayLabel }) => displayLabel)).toEqual([
       "conversation-turn",
+      "Judge · conversation 1",
+      "Lint · conversation 1",
     ]);
+    expect(dashboard.rows.map(({ displayLabel }) => displayLabel)).toContain(
+      "Check-in",
+    );
+    expect(dashboard.rows.map(({ displayLabel }) => displayLabel)).toContain(
+      "PR author",
+    );
     // A rollup stands in for thousands of records and carries their total itself.
     expect(dashboard.rows[1]?.durationMs).toBe(4200);
   });
@@ -77,5 +86,59 @@ describe("one node's slice of the run timeline", () => {
     expect(group?.children).toHaveLength(204);
     expect(busy.rows.length).toBeLessThan(GROUP_THRESHOLD);
     expect(busy.total).toBeGreaterThan(200);
+  });
+
+  test("names lifecycle phases and distinguishes a retried worker dispatch", () => {
+    const fixture = parseRunTimeline(runTimeline(LIVE_RUN));
+    const node = fixture.spans.find(({ id }) => id === "node-1-dashboard");
+    const worker = fixture.spans.find(
+      ({ id }) => id === "dispatch-worker-session",
+    );
+    if (node === undefined || worker === undefined)
+      throw new Error("fixture lost dashboard work");
+    node.events.push({
+      id: "retry-1",
+      kind: "retry-requested",
+      at: "2026-07-26T11:02:35.000Z",
+      node_id: "dashboard",
+      round: 1,
+    });
+    fixture.spans.push(
+      {
+        ...worker,
+        id: "dispatch-worker-retry",
+        label: "engineer-dashboard-retry",
+        started_at: "2026-07-26T11:02:40.000Z",
+        ended_at: "2026-07-26T11:03:00.000Z",
+      },
+      {
+        id: "step-build",
+        kind: "step",
+        label: "Build and verify",
+        parent_id: "node-1-dashboard",
+        node_id: "dashboard",
+        step_id: "build",
+        round: 1,
+        started_at: "2026-07-26T11:03:01.000Z",
+        ended_at: "2026-07-26T11:03:20.000Z",
+        status: "done",
+        events: [],
+      },
+    );
+
+    const projected = nodeTimeline(fixture, "dashboard");
+    expect(
+      findRow(projected.rows, "dispatch-worker-session")?.displayLabel,
+    ).toContain("conversation 1");
+    expect(findRow(projected.rows, "dispatch-worker-retry")?.displayLabel).toBe(
+      "Worker (engineer-dashboard-retry) · retry 1 · conversation 2",
+    );
+    expect(findRow(projected.rows, "step-build")).toMatchObject({
+      displayKind: "Phase",
+      displayLabel: "Phase: Build and verify",
+    });
+    expect(projected.rows.some(({ id }) => id === "node-1-dashboard")).toBe(
+      false,
+    );
   });
 });

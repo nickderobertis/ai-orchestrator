@@ -247,7 +247,7 @@ def _write_live_run(runs_dir: Path) -> None:
     """One in-flight run covering every renderable node state."""
     from orchestrator.detail_snapshot import CommitDetail, PrDetail
     from orchestrator.github import Check, PRStatus
-    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.journal import NodeId, RunId, StepId, open_journal
     from orchestrator.monitor import DetailSnapshot, save_snapshot
     from orchestrator.runs import prepare_round
 
@@ -478,6 +478,18 @@ def _write_live_run(runs_dir: Path) -> None:
         ),
     )
     journal.append("node-started", node=NodeId("dashboard"), detail={"persona": "engineer"})
+    journal.append(
+        "step-started",
+        node=NodeId("dashboard"),
+        step=StepId("build"),
+        detail={"step_kind": "agent", "persona": "engineer", "label": "Build and verify"},
+    )
+    journal.append(
+        "step-settled",
+        node=NodeId("dashboard"),
+        step=StepId("build"),
+        detail={"status": "done", "label": "Build and verify"},
+    )
     journal.append("node-started", node=NodeId("publish"), detail={"persona": "engineer"})
     journal.append(
         "node-failed",
@@ -812,7 +824,15 @@ def _session(
                             "kind": "tool_call",
                             "name": "command_execution",
                             "input": {"command": "just gate"},
-                        }
+                            "tool_call_id": "gate-call",
+                            "duration_ms": 240,
+                            "status": "completed",
+                        },
+                        {
+                            "kind": "tool_result",
+                            "output": '{"exit_code":0}',
+                            "tool_call_id": "gate-call",
+                        },
                     ],
                 }
             )

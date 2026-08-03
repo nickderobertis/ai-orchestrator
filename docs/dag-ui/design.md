@@ -614,10 +614,13 @@ prevents a pr-author worker from disappearing from worker timing.
 ## Agent and subagent conversations
 
 Every labeled oneharness session maps to one
-`@oneharness/ui` `Conversation`. The authoritative version is `0.1.0` at immutable
-commit `5a2b48908ef84900a47eaccd7f616327b2997b6c`; the exact exported transcript
+`@oneharness/ui` `Conversation`. The authoritative version is `0.10.0` at immutable
+commit `4385f6e4c77273b5646e808fedda83a6ae7f290f`; the exact exported transcript
 types are checked in at `oneharness-ui-contract.d.ts` and their pin is validated
 by `scripts/check-oneharness-ui-contract.sh`. Consumers import the package type.
+The upstream `conversationLabelLimits` uses `as const` deliberately so consumers
+receive its literal maximums rather than widened `number` fields; the declaration
+is byte-for-byte pinned here and therefore retains that assertion unchanged.
 Because that type has no metadata or parent field, the API uses this envelope:
 
 ```ts
