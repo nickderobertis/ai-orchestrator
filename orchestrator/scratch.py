@@ -146,6 +146,7 @@ RUN_WORKTREE_FAMILY = "retained-run-worktrees"
 THIRD_PARTY_SKIP_REASON = "lifecycle dispatch active"
 REFERENCE_PROOF_SKIP_REASON = "no live process could be proven done with it"
 ORPHAN_PROOF_SKIP_REASON = "no usable procfs to prove what a finished dispatch left running"
+RUN_WORKTREE_SKIP_REASON = "workspace occupancy lease owns reclamation"
 
 
 SCRATCH_LOCK_NAME = ".orchestrator-scratch.lock"
@@ -583,20 +584,6 @@ def _onejudge_scratch_candidates(root: Path) -> Iterator[Path]:
             yield path
 
 
-def _retained_run_worktree_candidates(root: Path) -> Iterator[Path]:
-    """Examine retained run roots without bypassing Workspace's ownership lease.
-
-    This family is reported by every sweep, but Workspace is its sole reclaimer:
-    procfs non-reference cannot replace the free occupancy lock and dead-owner proof.
-    Iterating the producer's layout makes the examination explicit while yielding no
-    generically removable candidate.
-    """
-    for _path in root.glob("*/runs/*"):
-        pass
-    return
-    yield  # pragma: no cover - establishes the finder protocol's iterator shape
-
-
 #: The authoritative family list and extension point for scratch that an active
 #: dispatch keeps producing. Unlike `THIRD_PARTY_PATTERNS`, these are reclaimed while
 #: dispatches run, so a family is a candidate *finder* rather than a name glob: each
@@ -609,7 +596,6 @@ UNREFERENCED_FAMILIES: tuple[ScratchFamily, ...] = (
     ScratchFamily("nx-native-file-cache", _nx_native_cache_candidates),
     ScratchFamily("pytest-runs", _pytest_run_candidates),
     ScratchFamily("onejudge-scratch", _onejudge_scratch_candidates),
-    ScratchFamily(RUN_WORKTREE_FAMILY, _retained_run_worktree_candidates),
 )
 
 
@@ -857,6 +843,11 @@ def sweep_scratch(
         swept_families.append(THIRD_PARTY_FAMILY)
     else:
         skipped_families.append(SkippedFamily(THIRD_PARTY_FAMILY, THIRD_PARTY_SKIP_REASON))
+    # A temp-root sweep cannot safely substitute procfs non-reference for the
+    # workspace run's free occupancy lease and dead-owner proof. Report that
+    # boundary explicitly; Workspace examines and reclaims this family when the
+    # next run for the repository identity opens.
+    skipped_families.append(SkippedFamily(RUN_WORKTREE_FAMILY, RUN_WORKTREE_SKIP_REASON))
     return SweepResult(
         tuple(removed),
         reclaimed,

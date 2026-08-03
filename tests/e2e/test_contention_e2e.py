@@ -2,6 +2,8 @@
 
 llmlint: ignore-file[tests_mirror_real_usage] A crashed run and a sibling's
 destructive reach have no public entry point that produces them on demand.
+llmlint: ignore-file[e2e_not_mocked] Real onejudge drives the dispatch journeys;
+only its paid provider is replaced by the repository's command backend.
 """
 
 from __future__ import annotations
@@ -153,6 +155,7 @@ def _held_identity_worktree_process(
     )
     workspace.ensure_clone(repo)
     worktree = workspace.worktree(repo, branch, base="origin/main")
+    (worktree / "live-incomplete.txt").write_text("still being edited\n", encoding="utf-8")
     ready.put(str(worktree))
     release.wait(e2e_timeout(30))
     workspace.remove_worktree(repo, worktree)
@@ -492,6 +495,143 @@ def test_dirty_retained_recovery_is_marked_and_gate_rejection_cannot_advance_bas
     assert "(incomplete step)" in gitops.log_messages(canonical, "origin/main", branch)[0].message
 
 
+def test_dirty_retained_recovery_passes_the_gate_and_publishes_one_squash(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """A green real merge-path gate can publish adopted crash work exactly once."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-dirty-recovery-green")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    root = tmp_path / "worktrees-dirty-recovery-green"
+    branch = "feature/dirty-recovery-green"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
+        target=_dirty_orphan_worktree_process,
+        args=(str(canonical), str(canonical), str(root), branch, ready),
+    )
+    process.start()
+    original = Path(ready.get(timeout=e2e_timeout(10)))
+    _join(process)
+    before = gitops.ref_sha(canonical, "main")
+    gate_cwd = tmp_path / "green-recovery-gate-cwd"
+    install_pre_push_hook(canonical, f"pwd >> {gate_cwd}\nexit 0")
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=root,
+        recorded_gate=["true"],
+    )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    gated_paths = [Path(line) for line in gate_cwd.read_text(encoding="utf-8").splitlines()]
+    assert gated_paths[0] == original
+    assert gitops.ref_sha(canonical, "main") != before
+    assert (
+        subprocess.run(
+            ["git", "-C", str(canonical), "show", "main:interrupted.txt"], capture_output=True
+        ).returncode
+        == 0
+    )
+    assert len(gitops.log_messages(canonical, before, "main")) == 1
+
+
+def test_recovery_default_root_finds_the_lifecycle_retained_worktree(
+    tmp_path: Path, bare_origin: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public default joins lifecycle's root without an operator override."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-default-recovery-root")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    fake_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(fake_home))
+    root = fake_home / ".ai-orchestrator" / "worktrees"
+    branch = "feature/default-recovery-root"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
+        target=_dirty_orphan_worktree_process,
+        args=(str(canonical), str(canonical), str(root), branch, ready),
+    )
+    process.start()
+    original = Path(ready.get(timeout=e2e_timeout(10)))
+    _join(process)
+    gate_cwd = tmp_path / "default-recovery-gate-cwd"
+    install_pre_push_hook(canonical, f"pwd >> {gate_cwd}\nexit 0")
+
+    recovered = recover_repo(canonical, branch, recorded_gate=["true"])
+
+    assert recovered.ok, recovered.detail
+    assert Path(gate_cwd.read_text(encoding="utf-8").splitlines()[0]) == original
+
+
+def test_recovery_falls_back_from_a_live_matching_tree_to_the_preserved_branch(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """A held crash-tree candidate never displaces the durable recovery branch."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-live-recovery-fallback")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    branch = "feature/live-recovery-fallback"
+    repo = normalize_repo(str(canonical))
+    seed = _open_workspace(str(canonical), str(tmp_path / "seed-recovery-worktrees"))
+    seeded = seed.worktree(repo, branch, base="origin/main")
+    (seeded / "preserved.txt").write_text("durable recovery work\n", encoding="utf-8")
+    gitops.add_all(seeded)
+    gitops.commit(
+        seeded,
+        "chore: durable recovery (incomplete step)\n\nOrchestrator-Status: incomplete",
+    )
+    seed.remove_worktree(repo, seeded)
+
+    root = tmp_path / "live-recovery-worktrees"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    release = MP.Event()
+    owner = MP.Process(
+        target=_held_identity_worktree_process,
+        args=(
+            str(canonical),
+            str(canonical),
+            str(root),
+            branch,
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            "held-recovery-owner",
+            ready,
+            release,
+        ),
+    )
+    owner.start()
+    held = Path(ready.get(timeout=e2e_timeout(10)))
+    gate_cwd = tmp_path / "fallback-recovery-gate-cwd"
+    install_pre_push_hook(canonical, f"pwd >> {gate_cwd}\nexit 0")
+    try:
+        recovered = recover_repo(
+            canonical,
+            branch,
+            workspace_root=root,
+            recorded_gate=["true"],
+        )
+        first_gate = Path(gate_cwd.read_text(encoding="utf-8").splitlines()[0])
+        assert recovered.ok, recovered.detail
+        assert first_gate != held
+        assert held.exists()
+        assert (
+            subprocess.run(
+                ["git", "-C", str(canonical), "show", "main:preserved.txt"], capture_output=True
+            ).returncode
+            == 0
+        )
+        assert (
+            subprocess.run(
+                ["git", "-C", str(canonical), "show", "main:live-incomplete.txt"],
+                capture_output=True,
+            ).returncode
+            != 0
+        )
+    finally:
+        release.set()
+        _join(owner)
+
+
 def test_only_the_three_newest_incomplete_run_worktrees_are_retained(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
@@ -502,29 +642,71 @@ def test_only_the_three_newest_incomplete_run_worktrees_are_retained(
     run_roots: list[Path] = []
     for number in range(5):
         ready: multiprocessing.Queue[str] = MP.Queue()
-        process = MP.Process(
-            target=_dirty_orphan_worktree_process,
+        if number % 2:
+            process = MP.Process(
+                target=_committing_run_process,
+                args=(
+                    str(canonical),
+                    str(root),
+                    f"feature/incomplete-{number}",
+                    False,
+                    ready,
+                ),
+            )
+        else:
+            process = MP.Process(
+                target=_dirty_orphan_worktree_process,
+                args=(
+                    str(canonical),
+                    str(canonical),
+                    str(root),
+                    f"feature/incomplete-{number}",
+                    ready,
+                ),
+            )
+        process.start()
+        reported = Path(ready.get(timeout=e2e_timeout(10)))
+        _join(process)
+        run_roots.append(reported if number % 2 else reported.parent)
+        # Retention order is the run-root mtime, so make the intended ordering
+        # explicit instead of depending on filesystem timestamp resolution.
+        stamp = time.time() + number
+        os.utime(run_roots[-1], (stamp, stamp))
+
+    releases: list[MPEvent] = []
+    owners: list[multiprocessing.Process] = []
+    live_paths: list[Path] = []
+    for number in range(2):
+        ready = MP.Queue()
+        release = MP.Event()
+        owner = MP.Process(
+            target=_held_identity_worktree_process,
             args=(
                 str(canonical),
                 str(canonical),
                 str(root),
-                f"feature/incomplete-{number}",
+                f"feature/live-incomplete-{number}",
+                os.environ["AI_ORCHESTRATOR_HOME"],
+                f"live-incomplete-{number}",
                 ready,
+                release,
             ),
         )
-        process.start()
-        worktree = Path(ready.get(timeout=e2e_timeout(10)))
-        _join(process)
-        run_roots.append(worktree.parent)
-        # Retention order is the run-root mtime, so make the intended ordering
-        # explicit instead of depending on filesystem timestamp resolution.
-        stamp = time.time() + number
-        os.utime(worktree.parent, (stamp, stamp))
+        owner.start()
+        live_paths.append(Path(ready.get(timeout=e2e_timeout(10))))
+        owners.append(owner)
+        releases.append(release)
+    try:
+        _open_workspace(str(canonical), str(root))
 
-    _open_workspace(str(canonical), str(root))
-
-    assert all(not path.exists() for path in run_roots[:2])
-    assert all(path.exists() for path in run_roots[2:])
+        assert all(not path.exists() for path in run_roots[:2])
+        assert all(path.exists() for path in run_roots[2:])
+        assert all(path.exists() for path in live_paths)
+    finally:
+        for release in releases:
+            release.set()
+        for owner in owners:
+            _join(owner)
     for path in run_roots[2:]:
         shutil.rmtree(path)
 

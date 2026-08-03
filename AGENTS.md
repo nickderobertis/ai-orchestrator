@@ -460,7 +460,7 @@ sweep names the families it examined and the families it could not, so `reclaime
 0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
 Dead lifecycle runs form a separate bounded recovery history: retain the newest
-three run roots with unpublished work. A retry or `repo-recover` adopts the exact
+**3** run roots with unpublished work. A retry or `repo-recover` adopts the exact
 worktree only after claiming its free occupancy lease and rejecting a live
 recorded owner; dirty adopted work becomes an incomplete-step commit and must
 pass the ordinary merge-path gate before publication.

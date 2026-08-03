@@ -538,7 +538,9 @@ def test_report_names_every_family_it_swept_and_every_one_it_skipped(
     assert "reclaimed 0 bytes" in quiescent
     for family in ("watchdog", "third-party", *(family.name for family in UNREFERENCED_FAMILIES)):
         assert family in quiescent.split("swept families: ", 1)[1]
-    assert "skipped families" not in quiescent
+    assert (
+        f"skipped families: {scratch.RUN_WORKTREE_FAMILY} ({scratch.RUN_WORKTREE_SKIP_REASON})"
+    ) in quiescent
 
     with scratch._scratch_lock(root, exclusive=False):
         assert main(["--root", str(root)]) == 0
@@ -546,6 +548,7 @@ def test_report_names_every_family_it_swept_and_every_one_it_skipped(
     swept, _, skipped = during_dispatch.partition("; skipped families: ")
     assert "nx-native-file-cache" in swept
     assert skipped.startswith("third-party (lifecycle dispatch active)")
+    assert f"{scratch.RUN_WORKTREE_FAMILY} ({scratch.RUN_WORKTREE_SKIP_REASON})" in skipped
 
     blind = tmp_path / "not-procfs"
     blind.mkdir()
@@ -555,6 +558,9 @@ def test_report_names_every_family_it_swept_and_every_one_it_skipped(
     _, _, unprovable_skipped = unprovable.partition("; skipped families: ")
     for family in UNREFERENCED_FAMILIES:
         assert f"{family.name} (no live process could be proven done with it)" in unprovable_skipped
+    assert (
+        f"{scratch.RUN_WORKTREE_FAMILY} ({scratch.RUN_WORKTREE_SKIP_REASON})" in unprovable_skipped
+    )
 
 
 def test_pytest_runs_are_swept_below_pytest_s_own_retention_and_live_lock(

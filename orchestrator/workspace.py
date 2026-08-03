@@ -329,14 +329,17 @@ def _run_has_unpublished_work(run_root: Path, checkout: Path | None = None) -> b
 
 def _run_has_dirty_worktree(run_root: Path) -> bool:
     clone = run_root / CLONE_DIR_NAME
-    return (
-        clone.is_dir()
-        and gitops.is_repo(clone)
-        and any(
+    if not clone.is_dir() or not gitops.is_repo(clone):
+        return False
+    try:
+        return any(
             path.resolve() != clone.resolve() and path.exists() and gitops.is_dirty(path)
             for path in gitops.worktrees(clone).values()
         )
-    )
+    except gitops.GitError:
+        # A sibling can finish removing its worktree after discovery. Conservatively
+        # keep this run for the current pass; the next pass sees the settled shape.
+        return True
 
 
 def _run_work_is_superseded(run_root: Path, checkout: Path) -> bool:
@@ -352,6 +355,14 @@ def _run_work_is_superseded(run_root: Path, checkout: Path) -> bool:
         )
         for branch in branches
     )
+
+
+def _path_mtime(path: Path) -> float:
+    """Return a stable oldest-first fallback when a discovered path races removal."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("-inf")
 
 
 class Workspace:
@@ -470,7 +481,7 @@ class Workspace:
         atomic_json(run_root / OWNER_RECORD_NAME, RunOwner.current(self.run_token).record())
 
     def _reap_abandoned_runs(self, repo: RepoRef) -> None:
-        """Reclaim run roots whose owner is gone and whose work all reached origin."""
+        """Retain recent dead-run work and reclaim safe or aged run roots."""
         if repo.dir_key in self._reaped:
             return
         self._reaped.add(repo.dir_key)
@@ -481,20 +492,23 @@ class Workspace:
             for candidate in runs.glob("*")
             if candidate.is_dir() and not candidate.is_symlink() and candidate.resolve() != mine
         ]
-        incomplete = sorted(
+        incomplete_dead = sorted(
             (
                 candidate
                 for candidate in candidates
-                if _run_has_dirty_worktree(candidate)
-                or (
-                    not _abandoned_run_is_reclaimable(candidate)
-                    and _run_has_unpublished_work(candidate, self.execution_checkout(repo))
+                if not ((owner := RunOwner.read(candidate)) is not None and owner.is_live())
+                and (
+                    _run_has_dirty_worktree(candidate)
+                    or (
+                        not _abandoned_run_is_reclaimable(candidate)
+                        and _run_has_unpublished_work(candidate, self.execution_checkout(repo))
+                    )
                 )
             ),
-            key=lambda path: path.stat().st_mtime,
+            key=_path_mtime,
             reverse=True,
         )
-        retained = set(incomplete[:RETAINED_INCOMPLETE_RUNS])
+        retained = set(incomplete_dead[:RETAINED_INCOMPLETE_RUNS])
         superseded = {
             candidate
             for candidate in candidates
@@ -503,16 +517,16 @@ class Workspace:
         for candidate in sorted(candidates):
             if candidate in retained:
                 continue
-            # Every reason to keep a candidate — a live lease, a live owner, an
-            # unpublished commit, an unreadable tree — has to win, so anything that
-            # fails to prove reclaimability leaves the tree exactly as it is.
+            # The nonblocking lease claim is the final ownership proof. A live or
+            # unreadable candidate therefore stays intact even when it was not one
+            # of the three dead incomplete roots selected above.
             with (
                 suppress(LockTimeout, OSError, gitops.GitError),
                 advisory_lock(_run_lease_identity(candidate), timeout=0),
             ):
                 if (
                     _abandoned_run_is_reclaimable(candidate)
-                    or candidate in incomplete
+                    or candidate in incomplete_dead
                     or candidate in superseded
                 ):
                     shutil.rmtree(candidate)
@@ -521,9 +535,10 @@ class Workspace:
         """Claim a dead earlier run's exact worktree, including uncommitted edits."""
         runs = self.root / repo.dir_key / RUNS_DIR_NAME
         mine = self.run_root(repo).resolve()
-        candidates = sorted(runs.glob("*"), key=lambda path: path.stat().st_mtime, reverse=True)
+        candidates = [path for path in runs.glob("*") if path.is_dir() and not path.is_symlink()]
+        candidates.sort(key=_path_mtime, reverse=True)
         for run_root in candidates:
-            if not run_root.is_dir() or run_root.is_symlink() or run_root.resolve() == mine:
+            if run_root.resolve() == mine:
                 continue
             clone = run_root / CLONE_DIR_NAME
             if not clone.is_dir() or not gitops.is_repo(clone):
@@ -788,10 +803,11 @@ class Workspace:
         )
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
-        """Add a fresh worktree for ``branch`` cut off ``base`` (e.g. ``origin/main``).
+        """Return a retained dead-run tree or add one off ``base``.
 
-        Any stale worktree at the target path is removed first so a re-dispatch
-        starts clean.
+        Adoption deliberately preserves dirt and the exact prior path. Without a
+        provably free retained tree, stale state at this run's target is removed
+        before a fresh worktree is added.
         """
         adopted = self._adopt_retained_worktree(repo, branch)
         if adopted is not None:
