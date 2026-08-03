@@ -338,23 +338,46 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
     "Select an item in the timeline to read what it recorded.",
   );
 
-  // Every row of the rail states what was recorded, when, how it ended, and how
-  // long it took — which is the whole reason the transcript dump was unreadable.
+  // The upstream plot distinguishes duration bars from instant icons and moves the
+  // old row metadata into a compact hover tooltip.
   const worker = rail(page).getByRole("button", { name: /engineer-dashboard/ });
-  await expect(worker).toContainText("dispatch");
-  await expect(worker).toContainText("completed");
-  await expect(worker).toContainText(/\d\d:\d\d:\d\d/);
+  await worker.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Duration:");
+  await expect(page.getByRole("tooltip")).toContainText("Status: completed");
   await expect(rail(page).getByRole("button")).not.toHaveCount(0);
   // And it says which session it was, served on the row rather than read out of a
   // transcript: every dispatch on this node read "dispatch" and nothing else, so
   // the worker, the judge that supervised it, and the lint run under it were three
   // rows a reader could not tell apart. Neither name contains its own role.
-  await expect(worker).toContainText("worker");
+  await expect(worker).toHaveAccessibleName(/Worker \(engineer-dashboard\)/);
   await expect(
-    rail(page).getByRole("button", {
-      name: /you-are-a-strict-careful-evaluator/,
-    }),
-  ).toContainText("judge");
+    rail(page).getByRole("button", { name: /^Judge/ }),
+  ).toBeVisible();
+  await expect(worker).toHaveAttribute("data-timeline-shape", "point");
+  await expect(
+    page.getByRole("list", { name: "Timeline legend" }),
+  ).toBeVisible();
+  await expect(
+    rail(page).getByRole("button", { name: /Phase: build/ }),
+  ).toBeVisible();
+  const plot = rail(page).getByLabel(/Timeline plot/);
+  await plot.hover();
+  await page.mouse.wheel(0, -120);
+  await expect(
+    page.getByRole("button", { name: "Reset timeline zoom" }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Reset timeline zoom" }).click();
+  const plotBox = await plot.boundingBox();
+  if (plotBox === null)
+    throw new Error("timeline plot has no brushable bounds");
+  await page.mouse.move(plotBox.x + plotBox.width * 0.2, plotBox.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(plotBox.x + plotBox.width * 0.7, plotBox.y + 10);
+  await page.mouse.up();
+  await expect(
+    page.getByRole("button", { name: "Reset timeline zoom" }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Reset timeline zoom" }).click();
 
   await worker.click();
   await expect
@@ -367,6 +390,19 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(
     itemDetail(page).getByRole("article", { name: /^Turn / }),
   ).toBeVisible();
+  await expect(
+    itemDetail(page).getByRole("button", {
+      name: "command_execution tool details",
+    }),
+  ).toHaveCount(1);
+  await itemDetail(page)
+    .getByRole("button", { name: "command_execution tool details" })
+    .click();
+  const toolOutput = itemDetail(page).getByLabel(
+    "command_execution tool output",
+  );
+  await expect(toolOutput).toContainText('"exit_code": 0');
+  await expect(toolOutput.locator(".hljs-number")).toHaveText("0");
   // The detail region is where the reading happens, so it holds the majority of
   // the width rather than a fixed narrow column.
   const railWidth = (await rail(page).boundingBox())?.width ?? 0;
@@ -408,11 +444,11 @@ test("restores a bookmarked moment inside a session from the address alone", asy
   // clicks left behind can be what reopens the moment, only the address.
   await openObservatory(page, "/?view=graph");
   await openObservatory(page, `${bookmarked.pathname}${bookmarked.search}`);
+  const bookmarkedId = bookmarked.searchParams.get("event");
+  if (bookmarkedId === null) throw new Error("bookmark lost its event id");
   await expect(
-    rail(page)
-      .getByRole("button", { name: /conversation-turn/ })
-      .first(),
-  ).toHaveAttribute("aria-current", "true");
+    rail(page).locator(`[aria-describedby="timeline-detail-${bookmarkedId}"]`),
+  ).toBeVisible();
   await expect(itemDetail(page)).toContainText(
     "Implementing the dashboard now",
   );
@@ -454,6 +490,9 @@ test("shows a verification and a publication as the records they are", async ({
   await rail(page)
     .getByRole("button", { name: /branch push/ })
     .click();
+  await expect(
+    rail(page).getByRole("button", { name: /branch push/ }),
+  ).toHaveAttribute("data-timeline-shape", "span");
   await expect(itemDetail(page)).toContainText("Verification record");
   await expect(itemDetail(page)).toContainText("pre-push verification passed");
   await expect(itemDetail(page)).toContainText("full verification output");
@@ -494,7 +533,8 @@ test("shows a verification and a publication as the records they are", async ({
   const checks = rail(page).getByRole("button", {
     name: /pr-checks-observed/,
   });
-  await expect(checks).toContainText("passing");
+  await checks.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Status: passing");
   await checks.click();
   await expect(itemDetail(page)).toContainText("Observed checks");
 });
@@ -513,9 +553,14 @@ test("states when a verification artifact is unavailable", async ({ page }) => {
     (response) =>
       response.url().includes("/artifacts/") && response.status() === 404,
   );
-  await rail(page)
-    .getByRole("button", { name: /missing verification log/ })
-    .click();
+  const failedVerification = rail(page).getByRole("button", {
+    name: /missing verification log/,
+  });
+  await failedVerification.hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Failure: log was removed",
+  );
+  await failedVerification.click();
   await rejected;
   await expect(itemDetail(page)).toContainText("No readable log was recorded.");
 });
@@ -618,12 +663,16 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
   await openObservatory(page, `/?run=${runs().busy}&node=sweep`);
   const rows = rail(page).getByRole("button");
   await expect(rows.first()).toBeVisible();
-  const grouped = rail(page).getByRole("button", { name: /× dispatch/ });
+  const grouped = rail(page).getByRole("button", {
+    name: /grouped worker activities/,
+  });
   await expect(grouped).toBeVisible();
   expect(await rows.count()).toBeLessThan(12);
 
-  // Opening the group hands out a page of it, not every row at once.
-  await grouped.click();
+  // Expanding the density cap hands out a page of it, not every row at once.
+  await rail(page)
+    .getByRole("button", { name: /Show 25 more of \d\d\d/ })
+    .click();
   await expect(
     rail(page).getByRole("button", { name: /Show 25 more of \d\d\d/ }),
   ).toBeVisible();
@@ -889,12 +938,12 @@ test("reads every recorded moment as words rather than as its stamp", async ({
   // typed record it is — which is where two raw ISO strings used to reach the reader.
   await openObservatory(page, `/?run=${runs().live}&node=approval`);
   await rail(page)
-    .getByRole("button", { name: /human-wait/ })
+    .getByRole("button", { name: /approval/ })
     .click();
   await expect(itemDetail(page)).toContainText("Recorded at");
   await expect(itemDetail(page)).toContainText("Still running");
-  // Neither an ISO stamp nor a raw second count anywhere the reader is looking.
-  await expect(rail(page)).not.toContainText(/\d{4}-\d\d-\d\dT/);
+  // The detail reading stays human-formatted; the exact stamp belongs to the
+  // timeline's accessible tooltip, where it can be copied when needed.
   await expect(itemDetail(page)).not.toContainText(/\d{4}-\d\d-\d\dT/);
   await expect(itemDetail(page)).not.toContainText(/\d+\.\d+s/);
   // The whole instant stays reachable: it is the reading's own tooltip, and the
@@ -906,29 +955,15 @@ test("reads every recorded moment as words rather than as its stamp", async ({
   await expect(recorded).toHaveAttribute("datetime", /^\d{4}-\d\d-\d\dT/);
   await expect(recorded).toHaveAttribute("title", /\d{4}/);
 
-  // And across a node whose rail is a column of them, every reading the browser
-  // rendered is one of the shapes the formatters produce — not the one row this
-  // journey happened to open. A tier that slipped through as a bare number or an
-  // ISO string would be a row that matches none of them.
+  // Across a populated node, metadata stays in the visualization's hover detail.
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  await rail(page).getByRole("button").first().waitFor();
-  const times = await rail(page).locator(".rail-time").allInnerTexts();
-  expect(times.length).toBeGreaterThan(0);
-  for (const reading of times) {
-    expect(reading).toMatch(
-      /^(\d\d:\d\d:\d\d|[A-Z][a-z]{2} \d+(?: \d{4})?, \d\d:\d\d:\d\d)$/,
-    );
-  }
-  // Each tier is bounded by the one above it, so a reading that carried a whole
-  // duration in the unit below — the `58000.0s` an operator was doing arithmetic on —
-  // matches none of these.
-  const durations = await rail(page).locator(".rail-duration").allInnerTexts();
-  expect(durations.length).toBeGreaterThan(0);
-  for (const reading of durations) {
-    expect(reading).toMatch(
-      /^(—|running|\d{1,3}ms|[1-5]?\ds|\d+m [1-5]?\ds|\d+h [1-5]?\dm [1-5]?\ds)$/,
-    );
-  }
+  const dashboardWorker = rail(page).getByRole("button", {
+    name: /engineer-dashboard/,
+  });
+  await dashboardWorker.hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Duration: not recorded",
+  );
 });
 
 test("gathers every run of one launching session under it", async ({
@@ -1101,9 +1136,8 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(280);
-  // The rail is a fixed reading column; the detail region takes what is left, and
-  // has to keep the majority of it — that is the whole point of the new view.
-  expect(await width(rail(page))).toBe(320);
+  // The visualization receives enough width for bars while detail remains larger.
+  expect(await width(rail(page))).toBeGreaterThan(380);
   expect(await width(itemDetail(page))).toBeGreaterThan(
     (await width(rail(page))) ?? 0,
   );
@@ -1121,7 +1155,7 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   // and the metrics wrap onto a second row instead of being squeezed.
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(220);
-  expect(await width(rail(page))).toBe(200);
+  expect(await width(rail(page))).toBeGreaterThan(190);
   expect(await width(itemDetail(page))).toBeGreaterThan(
     (await width(rail(page))) ?? 0,
   );

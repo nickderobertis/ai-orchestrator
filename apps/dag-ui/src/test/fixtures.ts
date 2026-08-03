@@ -800,6 +800,26 @@ function conversation(
   launcher: string,
   text: string,
 ) {
+  const tools =
+    agentRole === "worker" && transportRole === "agent"
+      ? [
+          {
+            durationMs: 240,
+            index: 0,
+            input: { command: "rg timeline" },
+            kind: "tool_call",
+            name: "Bash",
+            status: "completed",
+            toolCallId: "call-1",
+          },
+          {
+            index: 1,
+            kind: "tool_result",
+            output: '{"matches":1}',
+            toolCallId: "call-1",
+          },
+        ]
+      : [];
   return {
     conversation: {
       canContinue: false,
@@ -819,7 +839,7 @@ function conversation(
           reasoning: null,
           status: "completed",
           timestamp: "2026-07-26T11:00:00Z",
-          tools: [],
+          tools,
           unknown: {},
           usage: {},
           user: `Act as ${agentRole}`,

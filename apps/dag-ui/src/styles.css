@@ -435,14 +435,23 @@ p {
 
 .node-view-body {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(380px, 44%) minmax(0, 1fr);
   min-height: 0;
 }
 
 .timeline-rail {
+  overflow: auto;
   min-height: 0;
+  padding: 12px;
   border-right: 1px solid var(--border);
   background: var(--sidebar);
+}
+
+.timeline-more {
+  width: 100%;
+  margin-top: 6px;
+  justify-content: flex-start;
+  font-size: 11px;
 }
 
 .timeline-detail {

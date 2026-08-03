@@ -34,6 +34,10 @@ interface RowBase {
   readonly status?: string;
   readonly durationMs: number | null;
   readonly children: readonly TimelineRow[];
+  /** Operator-facing identity; never the free-text transport/session label. */
+  readonly displayLabel: string;
+  /** Legend vocabulary, with lifecycle wrappers presented as named phases. */
+  readonly displayKind: string;
 }
 
 export type TimelineRow =
@@ -84,7 +88,9 @@ export function nodeTimeline(
       .map((span) => spanRow(span, children)),
     ...orphanEvents(timeline.spans, ids, nodeId),
   ].sort(byStart);
-  const rows = group(top);
+  // Pairing makes alternating worker/judge streams consecutive worker groups; run
+  // the density cap again so hundreds of full conversations remain bounded.
+  const rows = group(pairConversations(labelWorkerRetries(group(top))));
   return { span: own, rows, total: count(rows) };
 }
 
@@ -123,12 +129,13 @@ function spanRow(
   span: TimelineSpan,
   children: Map<string, TimelineSpan[]>,
 ): TimelineRow {
+  const role = dispatchRole(span);
   return {
     rowKind: "span",
     span,
     id: span.id,
     kind: span.kind,
-    role: dispatchRole(span),
+    role,
     label: span.label,
     startedAt: span.started_at,
     endedAt: span.ended_at,
@@ -138,6 +145,8 @@ function spanRow(
     durationMs:
       span.total_duration_ms ?? elapsed(span.started_at, span.ended_at),
     children: group(spanRows(span, children)),
+    displayLabel: spanLabel(span, role),
+    displayKind: span.kind === "step" ? "Phase" : roleKind(role, span.kind),
   };
 }
 
@@ -162,6 +171,11 @@ function eventRow(event: TimelineEvent): TimelineRow {
     status: event.status,
     durationMs: null,
     children: [],
+    displayLabel:
+      event.kind === "retry-requested"
+        ? "Retry requested"
+        : (event.step_id ?? event.kind),
+    displayKind: "Event",
   };
 }
 
@@ -194,11 +208,104 @@ function group(rows: readonly TimelineRow[]): TimelineRow[] {
         status: undefined,
         durationMs: elapsed(first.startedAt, last.endedAt),
         children: run,
+        displayLabel: `${run.length} grouped ${first.displayKind.toLowerCase()} activities`,
+        displayKind: first.displayKind,
       });
     }
     index = end;
   }
   return grouped;
+}
+
+function roleKind(role: string | undefined, fallback: string): string {
+  switch (role) {
+    case "worker":
+      return "Worker";
+    case "judge":
+      return "Judge";
+    case "llmlint":
+      return "Lint";
+    case "orchestrator":
+      return "Orchestrator";
+    case "check-in":
+      return "Check-in";
+    case "pr-author":
+      return "PR author";
+    default:
+      return fallback;
+  }
+}
+
+function spanLabel(span: TimelineSpan, role: string | undefined): string {
+  if (span.kind === "step")
+    return span.label ? `Phase: ${span.label}` : "Lifecycle phase";
+  switch (role) {
+    case "worker":
+      return `Worker (${span.label || "worker"})`;
+    case "judge":
+      return "Judge";
+    case "llmlint":
+      return "Lint";
+    case "orchestrator":
+      return "Orchestrator";
+    case "check-in":
+      return "Check-in";
+    case "pr-author":
+      return "PR author";
+    default:
+      return span.label || span.kind;
+  }
+}
+
+/** Label each worker attempt from retry-requested records without renaming sessions. */
+function labelWorkerRetries(rows: readonly TimelineRow[]): TimelineRow[] {
+  let retry = 0;
+  return rows.map((row) => {
+    if (row.rowKind === "event" && row.event.kind === "retry-requested")
+      retry += 1;
+    const children = labelWorkerRetries(row.children);
+    if (row.role !== "worker" || retry === 0) return { ...row, children };
+    return {
+      ...row,
+      children,
+      displayLabel: `${row.displayLabel} · retry ${retry}`,
+    };
+  });
+}
+
+function pairConversations(rows: readonly TimelineRow[]): TimelineRow[] {
+  const paired: TimelineRow[] = [];
+  let workerIndex = -1;
+  let conversation = 0;
+  for (const row of rows) {
+    if (row.role === "worker") {
+      conversation += 1;
+      workerIndex = paired.length;
+      paired.push({
+        ...row,
+        displayLabel: `${row.displayLabel} · conversation ${conversation}`,
+      });
+      continue;
+    }
+    if ((row.role === "judge" || row.role === "llmlint") && workerIndex >= 0) {
+      const worker = paired[workerIndex];
+      if (worker !== undefined) {
+        paired[workerIndex] = {
+          ...worker,
+          children: [
+            ...worker.children,
+            {
+              ...row,
+              displayLabel: `${row.displayLabel} · conversation ${conversation}`,
+            },
+          ],
+        };
+        continue;
+      }
+    }
+    paired.push(row);
+  }
+  return paired;
 }
 
 function sameKindSpan(

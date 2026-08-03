@@ -8,7 +8,7 @@ expected="$(tr -d '[:space:]' <"$root/config/oneharness-ui.types.sha256")" || { 
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "oneharness-ui contract: repair invalid SHA-256 pin" >&2; exit 1; }
 temp="$(mktemp)" || { echo "oneharness-ui contract: make temporary storage available and retry" >&2; exit 1; }
 trap 'rm -f "$temp"' EXIT
-source_url="${ONEHARNESS_UI_TYPES_URL:-https://raw.githubusercontent.com/nickderobertis/oneharness-ui/$commit/packages/ui/src/types.ts}"
+source_url="${ONEHARNESS_UI_TYPES_URL:-https://raw.githubusercontent.com/nickderobertis/oneharness-ui/$commit/apps/conversation-ui/src/features/conversations/presentational-types.ts}"
 [[ "$source_url" =~ ^(https|file):// ]] || { echo "oneharness-ui contract: source URL must use https:// or file://" >&2; exit 1; }
 curl_log="$(mktemp)" || { echo "oneharness-ui contract: make temporary storage available and retry" >&2; exit 1; }
 trap 'rm -f "$temp" "$curl_log"' EXIT

@@ -1,3 +1,8 @@
+export const conversationLabelLimits = {
+  maxCount: 20,
+  maxLength: 64,
+} as const;
+
 export interface ConversationUsage {
   cacheReadTokens?: number | null | undefined;
   cacheWriteTokens?: number | null | undefined;
@@ -7,22 +12,34 @@ export interface ConversationUsage {
 }
 
 export interface ConversationToolEvent {
+  durationMs?: number | null | undefined;
+  finishedAt?: string | null | undefined;
   index: number;
   input?: unknown | undefined;
   kind: string;
   name?: string | null | undefined;
   output?: string | null | undefined;
+  startedAt?: string | null | undefined;
+  status?: string | null | undefined;
+  timingSource?: string | null | undefined;
+  toolCallId?: string | null | undefined;
 }
 
 export interface ConversationTurn {
   assistant: string | null;
+  durationMs?: number | null | undefined;
   failureKind: string | null;
+  finishedAt?: string | null | undefined;
   harness: string;
   id: string;
   model: string | null;
+  modelMs?: number | null | undefined;
   reasoning: string | null;
   status: string;
+  startedAt?: string | null | undefined;
   timestamp: string;
+  timeToFirstTokenMs?: number | null | undefined;
+  toolMs?: number | null | undefined;
   tools: ConversationToolEvent[];
   unknown: Record<string, unknown>;
   usage: ConversationUsage;
@@ -32,6 +49,7 @@ export interface ConversationTurn {
 export interface Conversation {
   canContinue: boolean;
   harnesses: string[];
+  historyLabels?: Record<string, string> | undefined;
   id: string;
   name: string;
   project: string;
@@ -42,6 +60,7 @@ export interface Conversation {
 
 export interface ConversationSummary {
   harnesses: string[];
+  historyLabels?: Record<string, string> | undefined;
   id: string;
   labels?: string[] | undefined;
   name: string;
@@ -49,5 +68,3 @@ export interface ConversationSummary {
   startedAt: string;
   turnCount: number;
 }
-export const conversationLabelMaxLength = 64;
-export const conversationLabelsMaxCount = 20;

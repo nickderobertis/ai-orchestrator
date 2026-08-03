@@ -1,4 +1,8 @@
-import { type NodeDetail, parseRunDetail } from "@ai-orchestrator/dag-model";
+import {
+  type NodeDetail,
+  parseRunDetail,
+  parseRunTimeline,
+} from "@ai-orchestrator/dag-model";
 import {
   cleanup,
   fireEvent,
@@ -79,23 +83,18 @@ describe("DAG application", () => {
       screen.getByRole("navigation", { name: "Breadcrumb" }),
     ).toHaveTextContent("dashboard");
 
-    // Every row states what happened, when, how it ended, and how long it took.
+    // The upstream visualization identifies each activity and keeps timing details
+    // in its hover/focus tooltip rather than printing metadata beside every row.
     const worker = railRow(/engineer-dashboard/);
-    expect(worker).toHaveTextContent("dispatch");
-    // The whole instant is one hover away and the recorded ISO string is machine
-    // readable on the element itself, so neither has to be on screen to be reachable.
-    expect(worker).toHaveTextContent("11:00:12");
-    expect(
-      within(worker).getByTitle("Jul 26, 2026, 11:00:12 AM GMT+00:00"),
-    ).toHaveAttribute("datetime", "2026-07-26T11:00:12.000Z");
-    expect(worker).toHaveTextContent("completed");
-    expect(worker).toHaveTextContent("48s");
-    expect(worker).toHaveTextContent(/dispatch\s*worker/);
-    expect(railRow(/you-are-a-strict-careful-evaluator/)).toHaveTextContent(
-      /dispatch\s*judge/,
-    );
-    expect(worker.textContent).not.toMatch(/\d{4}-\d\d-\d\dT/);
-    expect(railRow(/lock-wait/)).toHaveTextContent("×1240");
+    fireEvent.mouseEnter(worker);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Duration: 48.0 s");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Status: completed");
+    expect(railRow(/^Judge/)).toBeInTheDocument();
+    expect(railRow(/^Lint/)).toBeInTheDocument();
+    expect(railRow(/^Check-in/)).toBeInTheDocument();
+    expect(railRow(/^PR author/)).toBeInTheDocument();
+    expect(railRow(/lock-wait/)).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Timeline legend" })).toBeVisible();
 
     await userEvent.click(worker);
     await waitFor(() =>
@@ -105,6 +104,20 @@ describe("DAG application", () => {
       await within(detail()).findByText("Implementing the dashboard now"),
     ).toBeInTheDocument();
     expect(within(detail()).getByText("Worker · engineer")).toBeInTheDocument();
+    expect(
+      within(detail()).getAllByRole("button", { name: "Bash tool details" }),
+    ).toHaveLength(1);
+    await userEvent.click(
+      within(detail()).getByRole("button", { name: "Bash tool details" }),
+    );
+    expect(
+      within(detail()).getByLabelText("Bash tool output"),
+    ).toHaveTextContent('"matches": 1');
+    expect(
+      within(detail())
+        .getByLabelText("Bash tool output")
+        .querySelector(".hljs-number"),
+    ).toHaveTextContent("1");
 
     // Escape is the keyboard way back to the graph.
     await userEvent.keyboard("{Escape}");
@@ -251,8 +264,12 @@ describe("DAG application", () => {
     render(<App client={client} />);
     // The rail reveals the row the address names, however deep it sits.
     expect(
-      await screen.findByRole("button", { name: /conversation-turn/ }),
-    ).toHaveAttribute("aria-current", "true");
+      (
+        await screen.findAllByRole("button", { name: /conversation-turn/ })
+      ).some((button) =>
+        button.getAttribute("aria-describedby")?.includes("worker-session-0"),
+      ),
+    ).toBe(true);
     expect(
       await within(detail()).findByText("Implementing the dashboard now"),
     ).toBeInTheDocument();
@@ -303,30 +320,87 @@ describe("DAG application", () => {
   });
 
   test("keeps a node whose recorded work is hundreds of sessions scannable", async () => {
+    const dense = parseRunTimeline(busyTimeline(200));
+    dense.spans.push({
+      id: "step-dense",
+      kind: "step",
+      label: "Supervised conversations",
+      parent_id: "node-1-dashboard",
+      node_id: "dashboard",
+      step_id: "supervision",
+      round: 1,
+      started_at: "2026-07-26T11:01:01.000Z",
+      ended_at: "2026-07-26T11:10:00.000Z",
+      status: "done",
+      events: [],
+    });
+    for (const span of dense.spans) {
+      if (span.kind === "dispatch") span.parent_id = "step-dense";
+    }
     const { client } = telemetryHarness((url) =>
-      isTimeline(url)
-        ? Response.json(busyTimeline(200))
-        : defaultResponder(url),
+      isTimeline(url) ? Response.json(dense) : defaultResponder(url),
     );
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     render(<App client={client} />);
 
     const rail = await screen.findByRole("region", { name: "Node timeline" });
+    expect(
+      within(rail).getByRole("button", {
+        name: /Phase: Supervised conversations/,
+      }),
+    ).toBeInTheDocument();
     // Two hundred conversations, and a rail a reader can take in at a glance.
     expect(
-      within(rail).getByRole("button", { name: /204 × dispatch/ }),
+      within(rail).getByRole("button", {
+        name: /204 grouped judge activities/,
+      }),
     ).toBeInTheDocument();
     expect(within(rail).getAllByRole("button").length).toBeLessThan(12);
 
-    // Opening the group hands out a page at a time rather than every row at once.
+    // Expanding the density cap hands out a page at a time.
     await userEvent.click(
-      within(rail).getByRole("button", { name: /204 × dispatch/ }),
+      within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
     );
     const paged = within(rail).getAllByRole("button");
     expect(paged.length).toBeLessThan(60);
     expect(
       within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
     ).toBeInTheDocument();
+  });
+
+  test("labels a worker dispatched after a retry request as the retry", async () => {
+    const retried = parseRunTimeline(runTimeline(LIVE_RUN));
+    const node = retried.spans.find(({ id }) => id === "node-1-dashboard");
+    const worker = retried.spans.find(
+      ({ id }) => id === "dispatch-worker-session",
+    );
+    if (node === undefined || worker === undefined)
+      throw new Error("fixture lost dashboard work");
+    node.events.push({
+      id: "retry-requested-1",
+      kind: "retry-requested",
+      at: "2026-07-26T11:02:35.000Z",
+      node_id: "dashboard",
+      round: 1,
+    });
+    retried.spans.push({
+      ...worker,
+      id: "dispatch-worker-retry",
+      label: "engineer-dashboard",
+      started_at: "2026-07-26T11:02:40.000Z",
+      ended_at: "2026-07-26T11:03:00.000Z",
+    });
+    const { client } = telemetryHarness((url) =>
+      isTimeline(url) ? Response.json(retried) : defaultResponder(url),
+    );
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    render(<App client={client} />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: /Worker \(engineer-dashboard\) · retry 1 · conversation 2/,
+      }),
+    ).toBeVisible();
   });
 
   test("names what a failed node's attempts did not record", async () => {
