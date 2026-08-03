@@ -46,29 +46,7 @@ const SETTLED = "border-success bg-success-surface text-success";
 const LOST = "border-destructive bg-destructive-surface text-destructive";
 const DEPENDENCY_DECIDED = "border-warning bg-warning-surface text-warning";
 
-/**
- * What each node status means, in the package's semantic utilities. Keying it by the
- * contract's own `DagNodeState` is the drift gate: `DAG_NODE_STATES` is reconciled
- * with `orchestrator.projection.NodeStatus` by `scripts/check-dag-state-contract.py`,
- * so a status added there reaches this record and fails to compile until it is given
- * a meaning, rather than quietly rendering as a badge that says nothing.
- *
- * Three readings, deliberately:
- *
- * - `blocked` and `skipped` were decided by a dependency rather than by this node's
- *   own run. They are not the same condition — `blocked` moves once a person acts,
- *   while `skipped` is terminal, since the prerequisite that would have fed it did
- *   not complete — but neutral would read as "nothing to report" for both, which is
- *   the opposite of what either means, so they take the warning tone the graph card
- *   already gives them. `waiting` keeps a neutral badge beside its warning card: a
- *   human action is the graph's own normal shape, and the card is where that is said.
- * - `not-completed` is a settled node whose work is unfinished, which is a lost
- *   outcome rather than a pause, so it reads with `failed` and `cancelled`.
- * - `pending` and `unknown` are `undefined` on purpose: work that has not started has
- *   no outcome to report, and a status this vocabulary does not recognize has none
- *   either. Borrowing a colour for them would be inventing the reading a neutral
- *   badge honestly declines to give.
- */
+/** Dependency-decided states warn; unfinished settled work reads as a lost outcome. */
 const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
   blocked: DEPENDENCY_DECIDED,
   cancelled: LOST,
@@ -82,20 +60,7 @@ const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
   waiting: undefined,
 };
 
-/**
- * The same table, plus the one word a run carries that a node does not: a run settles
- * as `complete` where a node settles as `done`, so it takes that state's meaning
- * rather than restating it. The read contract types a run's state as an open string —
- * it can also report `stopped`, `parked`, `blocked` or `unknown` — and anything not
- * named here falls through to the neutral badge.
- *
- * A run's `blocked` is not a node's: a run is blocked on a *planner* reply, a node on
- * a dependency. They share the reading this table gives them — held, awaiting
- * something outside — and they can never share a field, since a run's word comes from
- * `RunSummary.state` and a node's from `Round.node_status`. Which of the two a reader
- * is looking at is said by the surface: a run row names its run, and a node view names
- * its node and states what is holding it.
- */
+/** Run- and node-level `blocked` differ, but both use the same held-state tone. */
 const TONE: Readonly<Record<string, string | undefined>> = {
   ...NODE_TONE,
   complete: NODE_TONE.done,
