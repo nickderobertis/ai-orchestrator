@@ -1263,11 +1263,13 @@ def test_a_transcript_holding_unpaired_surrogates_serves_rather_than_500s(
         client = httpx.Client(base_url=base, timeout=30)
         detail = client.get("/api/v2/runs/demo", params={"include_conversations": "false"})
         assert detail.status_code == 200
-        listed = client.get("/api/v2/runs/demo")
-        assert listed.status_code == 200
+        with_conversations = client.get("/api/v2/runs/demo")
+        assert with_conversations.status_code == 200
         worker = next(
             conversation
-            for conversation in json.loads(listed.content.decode("utf-8"))["conversations"]
+            for conversation in json.loads(with_conversations.content.decode("utf-8"))[
+                "conversations"
+            ]
             if conversation["attribution"]["agentRole"] == "worker"
         )
         one = client.get(f"/api/v2/runs/demo/conversations/{worker['conversation']['id']}")
