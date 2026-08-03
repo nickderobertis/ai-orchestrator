@@ -283,6 +283,13 @@ def test_without_either_flag_a_process_wide_selection_still_moves_both_sides(
     Same stated value as the journey above and no flags: both sides land on
     `claude-code:alternate2`, each carrying that subscription's own config
     directory. That is what "the judge followed the worker" looks like.
+
+    This is also the legitimate half of the pair the isolation seam has to keep
+    apart. A selection oneharness carries into a provider it spawns is real
+    behaviour a journey may observe — asserted below — and it is told apart from an
+    inherited one by *provenance, not by value*: `_provider_environment` drops
+    whatever selection reached this process before any journey states its own, so a
+    value a turn records here is one this journey put there.
     """
     dispatched = _dispatch(
         tmp_path,
@@ -295,6 +302,10 @@ def test_without_either_flag_a_process_wide_selection_still_moves_both_sides(
     assert dispatched.side(WORKER_MARKER), dispatched.turns
     assert dispatched.side(JUDGE_MARKER), dispatched.turns
     assert {turn["bin"] for turn in dispatched.turns} == {"claude"}
+    # Handed to the spawned provider verbatim: neither dropped, nor narrowed to the
+    # candidate that ran. Pinned here because the sibling journey's assertion that
+    # *no* selection arrives is only meaningful while a stated one demonstrably does.
+    assert {turn["harnesses"] for turn in dispatched.turns} == {AMBIENT_SENTINEL}
     assert {turn["claude_config_dir"] for turn in dispatched.turns} == {
         str(tmp_path / "absent-alternate2")
     }
@@ -309,9 +320,19 @@ def test_with_no_selection_at_all_both_sides_resolve_their_configured_chains(
 
     Neither alternate Claude config directory exists in this fixture, so the agent
     branch substitutes a chain without them and the worker lands on codex — the
-    first identity left. oneharness narrows its process-wide selection to that
-    candidate before spawning the provider. The judge's own chain leads with codex
-    anyway. Nothing carries a per-side variable.
+    first identity left. The judge's own chain leads with codex anyway. Nothing
+    carries a per-side variable.
+
+    Both recorded values are also this suite's drift gate on what oneharness leaves
+    a provider it spawns: the whole substituted *chain* on the worker side, and no
+    variable at all on the judge side, which exports none. oneharness does not
+    narrow a selection to the candidate it actually ran — see
+    `test_without_either_flag_a_process_wide_selection_still_moves_both_sides` for
+    the pass-through this journey is the absence of — so a reading of the single
+    identity `codex` on both sides is the signature of a selection *inherited* from
+    an enclosing dispatch reaching this journey, never of anything oneharness did.
+    It was once read the other way and the assertions adapted to it, which deleted
+    this gate; the chain below is what makes a real narrowing fail loudly here.
     """
     dispatched = _dispatch(tmp_path, onejudge_bin, oneharness_bin)
 
@@ -321,10 +342,11 @@ def test_with_no_selection_at_all_both_sides_resolve_their_configured_chains(
     assert worker_turns, dispatched.turns
     assert judge_turns, dispatched.turns
     assert {turn["bin"] for turn in dispatched.turns} == {"codex"}
-    assert {turn["harnesses"] for turn in worker_turns} == {"codex"}
-    # The judge side is left entirely to its config; oneharness scopes the spawned
-    # provider to the candidate that config selected just as it does for the worker.
-    assert {turn["harnesses"] for turn in judge_turns} == {"codex"}
+    assert {turn["harnesses"] for turn in worker_turns} == {
+        "codex,codex:alternate,claude-code:primary"
+    }
+    # The judge side is left entirely to its config: no substitution, no variable.
+    assert {turn["harnesses"] for turn in judge_turns} == {None}
     assert {turn["worker_override"] for turn in dispatched.turns} == {None}
     assert {turn["judge_override"] for turn in dispatched.turns} == {None}
 

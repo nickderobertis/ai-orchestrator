@@ -328,6 +328,37 @@ identity. The other two roles are out of scope — `oneharness.orchestrator.toml
 `oneharness.llmlint.toml` keep resolving through their own wrappers, untouched by
 either variable.
 
+#### What a spawned provider inherits, and what that is not
+
+oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
+sets nothing when nothing selected one. It does *not* narrow the variable to the
+candidate it ended up running — through 0.6.6, confirmed against the binary:
+
+```
+$ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
+  the child saw ONEHARNESS_HARNESSES='codex,claude-code'
+$ oneharness run --config <chain.toml> --prompt hi                    # chain from config
+  the child saw no ONEHARNESS_HARNESSES at all
+```
+
+That is why a dispatch leaks its selection: the wrapper exports the variable, so the
+provider *and everything that provider then runs* — a worker's own `just gate`, and
+therefore this suite — inherit it. `HARNESS_SELECTION_ENV` and the fixtures over it
+exist for exactly that inheritance.
+
+The two are told apart by **provenance, not by value**. Every selection is dropped at
+each process boundary the suite owns (`tests/conftest.py` for its own environment,
+`_provider_environment` for the environment a dispatch under test is launched with),
+and each journey then states the value it wants; so a selection a recorded turn
+observes is one that journey put there, and an inherited one reaches nothing.
+
+Do not "adapt" a selection journey to a value you did not state. Reading the single
+identity a run happened to be routed to — `codex` on *both* sides of the default path,
+where the worker should record its whole substituted chain and the judge none — means a
+selection leaked in, not that oneharness narrowed one. That misreading has landed here
+once already, and adapting the assertions is what removed the gate that would have
+caught it.
+
 To address an identity explicitly in a diagnostic run, use the composed id:
 
 ```sh
