@@ -1,11 +1,5 @@
 import { layoutDag } from "@ai-orchestrator/dag-layout";
-import {
-  Background,
-  Controls,
-  type Edge,
-  MiniMap,
-  ReactFlow,
-} from "@xyflow/react";
+import { Background, Controls, type Edge, ReactFlow } from "@xyflow/react";
 import { useMemo } from "react";
 import type { NodeView } from "../runs/run-model";
 import { type DagFlowNode, DagNodeCard } from "./DagNodeCard";
@@ -93,12 +87,9 @@ export function DagGraph({
         onNodeClick={(_, node) => onSelectNode(node.id)}
         aria-label="DAG execution graph"
       >
+        {/* No minimap: these graphs are a handful of nodes that fit the canvas, so a
+            second miniature of them was chrome over the thing being read. */}
         <Background color="var(--border)" gap={22} />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(node) => tokenColor(statusToken(node.data))}
-        />
         <Controls showInteractive={false} />
       </ReactFlow>
       <ol className="accessible-node-list" aria-label="DAG nodes">
@@ -112,20 +103,4 @@ export function DagGraph({
       </ol>
     </div>
   );
-}
-
-/**
- * The minimap paints each node with a `fill` style, so it can name the design
- * system's own tokens rather than repeating their values in a second palette.
- */
-function tokenColor(token: string): string {
-  if (token === "success") return "var(--success)";
-  if (token === "danger") return "var(--destructive)";
-  if (token === "active") return "var(--info)";
-  if (token === "blocked") return "var(--warning)";
-  return "var(--muted-foreground)";
-}
-
-function statusToken(data: Record<string, unknown>): string {
-  return typeof data.style === "string" ? data.style : "neutral";
 }

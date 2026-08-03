@@ -19,9 +19,11 @@ import {
 } from "@oneharness/ui";
 import { ExternalLink, ListTree, TriangleAlert } from "lucide-react";
 import { useState } from "react";
+import { Timestamp } from "../../lib/Timestamp";
+import { formatDuration } from "../../lib/time";
 import type { NodeView } from "../runs/run-model";
 import { PAGE_SIZE } from "./TimelineRail";
-import { formatDuration, formatTime, type TimelineRow } from "./timeline-model";
+import type { TimelineRow } from "./timeline-model";
 import { useConversation } from "./useConversation";
 
 /**
@@ -68,7 +70,7 @@ export function TimelineItemDetail({
                   </Badge>
                   <h2>{row.label || row.kind}</h2>
                   <p className="detail-when">
-                    {formatTime(row.startedAt)}
+                    <Timestamp at={row.startedAt} />
                     {row.durationMs !== null &&
                       ` · ${formatDuration(row.durationMs)}`}
                     {row.endedAt === null &&
@@ -276,13 +278,24 @@ function Recorded({
   return (
     <>
       <dl className="facts">
+        {/* Both stamps are read as ages here — how recent this record is, is what a
+            reader wants from a fact list — with the moment itself one hover away and
+            the recorded ISO value on the element's own `datetime`. */}
         <div>
           <dt>Recorded at</dt>
-          <dd>{row.startedAt}</dd>
+          <dd>
+            <Timestamp at={row.startedAt} relative />
+          </dd>
         </div>
         <div>
           <dt>Ended</dt>
-          <dd>{row.endedAt ?? "Still running"}</dd>
+          <dd>
+            {row.endedAt === null ? (
+              "Still running"
+            ) : (
+              <Timestamp at={row.endedAt} relative />
+            )}
+          </dd>
         </div>
         <div>
           <dt>Status</dt>

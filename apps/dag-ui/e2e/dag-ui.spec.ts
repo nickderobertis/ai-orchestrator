@@ -37,8 +37,17 @@ const runs = (): z.infer<typeof runIdsSchema> =>
     JSON.parse(readFileSync(join(FIXTURE_WORKSPACE, "run-ids.json"), "utf8")),
   ));
 
-/** Open the app and wait for it to have mounted; each journey then asserts its own state. */
-async function openObservatory(page: Page, path = "/"): Promise<void> {
+/**
+ * Open the app and wait for it to have mounted; each journey then asserts its own state.
+ *
+ * The default names the graph because an address that names no view lands on the
+ * overall reading of the run — which is a journey of its own below, and what every
+ * graph journey here would otherwise have to walk out of first.
+ */
+async function openObservatory(
+  page: Page,
+  path = "/?view=graph",
+): Promise<void> {
   await page.goto(path);
   await expect(page.getByText("DAG Observatory")).toBeVisible();
 }
@@ -224,7 +233,7 @@ test("restores a bookmarked moment inside a session from the address alone", asy
 
   // Loading the graph in between is what makes the next load cold: nothing the
   // clicks left behind can be what reopens the moment, only the address.
-  await openObservatory(page, "/");
+  await openObservatory(page, "/?view=graph");
   await openObservatory(page, `${bookmarked.pathname}${bookmarked.search}`);
   await expect(
     rail(page)
@@ -307,6 +316,23 @@ test("keeps a node's task, criteria, dependencies and gate reachable", async ({
   await page.getByRole("button", { name: "Completion criteria" }).click();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
 
+  // A node that published nothing says so where its pull request would be.
+  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
+  await expect(page.locator(".facts")).toContainText("Not recorded");
+  await expect(page.locator(".facts").getByRole("link")).toHaveCount(0);
+
+  // The node that did publish one hands the url over as a link to follow, which is
+  // the whole of what an operator wants from that row.
+  await openObservatory(page, `/?run=${runs().live}&node=foundation`);
+  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
+  const pr = page.locator(".facts").getByRole("link");
+  await expect(pr).toHaveAttribute(
+    "href",
+    /^https:\/\/github\.com\/example\/repo\/pull\/12$/,
+  );
+  await expect(pr).toHaveAttribute("target", "_blank");
+  await expect(pr).toHaveAttribute("rel", "noreferrer");
+
   // A human action names work for a person, so the contract forbids it a completion
   // bar; the summary has to say that rather than render an empty criteria block.
   await openObservatory(page, `/?run=${runs().live}&node=approval`);
@@ -368,7 +394,9 @@ test("zooms and reframes the graph through its canvas controls", async ({
   const transform = async (): Promise<string> =>
     viewport.evaluate((element) => getComputedStyle(element).transform);
 
-  await expect(page.locator(".react-flow__minimap")).toBeVisible();
+  // These graphs are a handful of nodes that fit the canvas, so there is no minimap
+  // over them: the zoom controls are the whole of the canvas chrome.
+  await expect(page.locator(".react-flow__minimap")).toHaveCount(0);
   const framed = await transform();
   await page.getByRole("button", { name: "zoom in" }).click();
   await expect.poll(transform).not.toBe(framed);
@@ -438,7 +466,11 @@ test("restores a bookmarked view and refreshes through the read API", async ({
     page.locator(".metric").filter({ hasText: label });
   await expect(metric("Status")).toContainText("running");
   await expect(metric("Nodes")).toContainText(/[1-9]\d*/);
-  await expect(metric("Wall time")).toContainText(/\d+\.\ds/);
+  // A duration in the units it is read in, never the raw second count the contract
+  // serves: `58000.0s` is arithmetic homework, `16h 6m 40s` is an answer.
+  await expect(metric("Wall time").locator("strong")).toHaveText(
+    /^(\d+ms|\d+s|\d+m \d+s|\d+h \d+m \d+s)$/,
+  );
   await expect(metric("Turns")).toContainText(/\d+/);
   await expect(page.getByText("Run-level sessions")).toBeVisible();
   await expect(
@@ -458,6 +490,53 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(
     page.getByRole("region", { name: "Timeline for dashboard" }),
   ).toBeVisible();
+});
+
+test("lands on the run as a whole, with every deep link still opening", async ({
+  page,
+}) => {
+  // An address that names no view is an operator arriving at the observatory, and
+  // what they came to read is the run — not the shape of its graph.
+  await page.goto("/");
+  await expect(page.getByText("DAG Observatory")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.locator(".dag-node")).toHaveCount(0);
+
+  // Every address that does name where it is going still opens there.
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
+  ).toBeVisible();
+  await openObservatory(page);
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "dashboard",
+  );
+});
+
+test("reads every recorded moment as words rather than as its stamp", async ({
+  page,
+}) => {
+  // `approval` recorded work the run never closed, so its one item is shown as the
+  // typed record it is — which is where two raw ISO strings used to reach the reader.
+  await openObservatory(page, `/?run=${runs().live}&node=approval`);
+  await rail(page)
+    .getByRole("button", { name: /human-wait/ })
+    .click();
+  await expect(itemDetail(page)).toContainText("Recorded at");
+  await expect(itemDetail(page)).toContainText("Still running");
+  // Neither an ISO stamp nor a raw second count anywhere the reader is looking.
+  await expect(rail(page)).not.toContainText(/\d{4}-\d\d-\d\dT/);
+  await expect(itemDetail(page)).not.toContainText(/\d{4}-\d\d-\d\dT/);
+  await expect(itemDetail(page)).not.toContainText(/\d+\.\d+s/);
+  // The whole instant stays reachable: it is the reading's own tooltip, and the
+  // recorded stamp is on the element the browser can read it off.
+  const recorded = itemDetail(page).locator("time").first();
+  await expect(recorded).toHaveAttribute("datetime", /^\d{4}-\d\d-\d\dT/);
+  await expect(recorded).toHaveAttribute("title", /\d{4}/);
 });
 
 test("gathers every run of one launching session under it", async ({
@@ -680,12 +759,14 @@ test("paints the design system's components in the application's dark palette", 
   expect(panel).toBe(await tokenColor(page, "--sidebar"));
 
   // The graph canvas scopes its own variables, so it needs its own switch; without
-  // it the minimap and zoom controls stay white inside the dark workspace. It is
-  // reached by leaving the node view, which is the only place the canvas renders.
+  // it the zoom controls stay white inside the dark workspace. They are reached by
+  // leaving the node view, which is the only place the canvas renders.
   await page.keyboard.press("Escape");
   expect(
     brightestChannel(
-      await backgroundColor(page.locator(".react-flow__minimap")),
+      await backgroundColor(
+        page.locator(".react-flow__controls-button").first(),
+      ),
     ),
   ).toBeLessThan(80);
 });

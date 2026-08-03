@@ -14,6 +14,7 @@ import {
 } from "@oneharness/ui";
 import { Activity, ChevronRight, Clock3, Cpu, Layers3 } from "lucide-react";
 import { useState } from "react";
+import { formatDurationSeconds } from "../../lib/time";
 import { useConversation } from "../timeline/useConversation";
 
 export function OverallView({
@@ -60,7 +61,7 @@ export function OverallView({
             <Metric
               icon={<Clock3 />}
               label="Wall time"
-              value={`${detail.run.timing.wall_seconds.toFixed(1)}s`}
+              value={formatDurationSeconds(detail.run.timing.wall_seconds)}
             />
             <Metric
               icon={<Cpu />}

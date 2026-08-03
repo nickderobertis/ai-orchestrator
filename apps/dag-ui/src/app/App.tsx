@@ -64,6 +64,10 @@ export function App({
       params.set("run", selectedRunId);
       params.delete("node");
       params.delete("event");
+      // The bookmarked node belonged to a run nobody is serving, but the reading it
+      // was written for survives the fallback: an address that named one is rewritten
+      // to that run's graph, not to the view an address naming nothing lands on.
+      params.set("view", selection.view);
       window.history.replaceState(
         null,
         "",
@@ -71,7 +75,7 @@ export function App({
       );
       window.dispatchEvent(new PopStateEvent("popstate"));
     }
-  }, [selection.runId, selectedRunId]);
+  }, [selection.runId, selectedRunId, selection.view]);
 
   return (
     <TooltipProvider>
