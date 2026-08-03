@@ -237,8 +237,14 @@ its lifetime, so a re-dispatch that rejoins a run under way is protected too rat
 than only its first process. Abandoned run directories are reclaimed by the next
 run on the same identity, and only when all three hold: no one holds that shared
 lease, the recorded owning process is provably gone, and the clone has no commit
-that never reached origin. A run holding
-unpublished work is kept; rejoin it with that run's token to recover the work
+that never reached origin. The newest **3** dead runs holding unpublished work
+are kept, matching pytest's useful bounded failure history. A retry or recovery
+for one of their branches claims the dead run's occupancy lease and adopts its
+exact worktree, including uncommitted files; a held lease or live recorded owner
+forces a fresh worktree. Dirty adopted work is committed with incomplete-step
+provenance before it proceeds and must pass the ordinary merge-path gate before
+publication. Published roots are immediately reclaimable and older incomplete
+roots age out. Rejoin a retained run with that run's token to recover it explicitly
 (tearing its worktree down copies the branch into the execution checkout). Flat
 per-branch directories left by the pre-`runs/` layout are never claimed or
 reaped, and a run never collides with them.

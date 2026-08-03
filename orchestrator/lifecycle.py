@@ -1899,6 +1899,9 @@ def run_repo_task(
                         supersedes_round=resume.source_round,
                     )
         worktree = workspace.worktree(ref, branch, base=worktree_base)
+        if workspace.adopted_worktree(worktree) and gitops.is_dirty(worktree):
+            gitops.add_all(worktree)
+            gitops.commit(worktree, _incomplete_commit_message(lead, pr_base))
         if resume is not None and prepared is not None and prepared.published:
             try:
                 gitops.merge_ff_only(worktree, f"origin/{branch}")

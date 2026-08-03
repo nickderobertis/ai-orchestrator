@@ -459,6 +459,11 @@ left running. Every
 sweep names the families it examined and the families it could not, so `reclaimed
 0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
+Dead lifecycle runs form a separate bounded recovery history: retain the newest
+**3** run roots with unpublished work. A retry or `repo-recover` adopts the exact
+worktree only after claiming its free occupancy lease and rejecting a live
+recorded owner; dirty adopted work becomes an incomplete-step commit and must
+pass the ordinary merge-path gate before publication.
 
 `just smoke` spends one real agent-harness turn in a throwaway directory and
 verifies exact prompt delivery plus a successful, fully accounted oneharness

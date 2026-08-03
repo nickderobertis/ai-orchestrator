@@ -205,7 +205,9 @@ def recover_repo(
         )
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
-    recovery_root = Path(workspace_root or Path.home() / ".ai-orchestrator" / "recovery-worktrees")
+    # Recovery shares the lifecycle root so it can adopt the exact tree a killed
+    # dispatch left behind, including edits that never became a Git object.
+    recovery_root = Path(workspace_root or Path.home() / ".ai-orchestrator" / "worktrees")
     workspace = Workspace(recovery_root, resolver=lambda _spec: clone)
     target = base or gitops.default_branch(clone)
     for field_name, value in (("branch", branch), ("base", target)):
@@ -213,18 +215,27 @@ def recover_repo(
             raise RegistryError(f"{field_name} {value!r} is not a valid Git branch")
     worktree: Path | None = None
     preserved_gate_log: str | None = None
-    # A lifecycle branch only reaches the publication checkout once something has
-    # already pushed it, so a first-attempt publication lives *only* in the
-    # execution checkout the work was done in. Adopt it there rather than reporting
-    # it missing, which is what fires on exactly the branches that succeed early.
-    _adopt_preserved_branch(
-        clone,
-        _search_checkouts(registry, identity.identity, entry.origin, clone, execution_checkout),
-        branch,
-    )
     try:
         run_clone = workspace.ensure_clone(ref, base_branch=target)
-        recorded_base = recorded_pr_base(clone, f"origin/{target}", branch)
+        # A killed dispatch can leave the branch solely in its retained run clone.
+        # Try that exact worktree before requiring a durable registered-checkout ref.
+        candidate = workspace.adopt_retained_worktree(ref, branch)
+        if candidate is not None:
+            worktree = candidate
+            run_clone = workspace.clone_dir(ref)
+        else:
+            _adopt_preserved_branch(
+                clone,
+                _search_checkouts(
+                    registry, identity.identity, entry.origin, clone, execution_checkout
+                ),
+                branch,
+            )
+        recorded_base = recorded_pr_base(
+            workspace.clone_dir(ref) if worktree is not None else clone,
+            f"origin/{target}",
+            branch,
+        )
         if pr_base is not None and recorded_base is not None and pr_base != recorded_base:
             raise RegistryError(
                 f"requested pr_base={pr_base!r} conflicts with preserved branch metadata "
@@ -236,9 +247,16 @@ def recover_repo(
         )
         if not gitops.is_valid_branch_name(publication_base):
             raise RegistryError(f"pr_base {publication_base!r} is not a valid Git branch")
-        worktree = workspace.worktree(ref, branch, base=f"origin/{publication_base}")
-        if gitops.is_dirty(worktree):
-            raise RegistryError(f"preserved branch worktree for {branch!r} is dirty")
+        if worktree is None:
+            worktree = workspace.worktree(ref, branch, base=f"origin/{publication_base}")
+        if workspace.adopted_worktree(worktree) and gitops.is_dirty(worktree):
+            gitops.add_all(worktree)
+            gitops.commit(
+                worktree,
+                "chore: recover interrupted work (incomplete step)\n\n"
+                "Orchestrator-Status: incomplete\n"
+                f"Orchestrator-PR-Base: {publication_base}",
+            )
         remote_base = f"origin/{publication_base}"
         if not incomplete_commits(worktree, remote_base, branch):
             raise RegistryError(_wrong_verb_detail(worktree, clone, branch, remote_base))
