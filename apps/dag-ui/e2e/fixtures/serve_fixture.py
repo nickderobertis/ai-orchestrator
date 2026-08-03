@@ -216,9 +216,9 @@ def _record_launch(run_dir: Path, run_id: str, launch_id: str, session_id: str) 
 
 def _write_live_run(runs_dir: Path) -> None:
     """One in-flight run covering every renderable node state."""
-    from orchestrator.journal import NodeId, RunId, open_journal
     from orchestrator.detail_snapshot import CommitDetail, PrDetail
     from orchestrator.github import Check, PRStatus
+    from orchestrator.journal import NodeId, RunId, open_journal
     from orchestrator.monitor import DetailSnapshot, save_snapshot
     from orchestrator.runs import prepare_round
 
