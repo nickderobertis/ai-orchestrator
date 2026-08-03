@@ -224,7 +224,10 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
   const dependencyDecided =
     node.status === "blocked" || node.status === "skipped";
   const detail = node.failure?.detail || node.result?.detail || "";
-  const error = node.result?.error ?? undefined;
+  // `|| undefined`, not `?? undefined`: a recorded empty string is a field the run
+  // wrote nothing into, and treating it as a reason silences the fallback below and
+  // leaves a heading with no term under it.
+  const error = node.result?.error || undefined;
   const exitCode = node.result?.exit_code;
   return (
     // `Alert` carries `role="alert"` itself, so opening a node that is in trouble

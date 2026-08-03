@@ -82,12 +82,14 @@ const NODE_STATES: ReadonlySet<string> = new Set(DAG_NODE_STATES);
 /**
  * What each status means to a renderer, in semantic tokens rather than colours.
  *
- * `blocked` covers every reason a node is not moving and is waiting on something
- * outside itself — a human action it holds for, a dependency holding it, a
- * prerequisite that failed and made it unreachable. `danger` is reserved for work
- * that ran and did not come back with its job done, so a graph full of consequences
- * of one failure still reads as one failure. `neutral` is only for work with nothing
- * to report yet, and for a status this vocabulary does not recognize.
+ * `blocked` covers every status a dependency decided rather than the node's own run —
+ * a human action it holds for, a dependency holding it, a prerequisite whose failure
+ * made it unreachable. The first two will move and the third never will, but in each
+ * case what an operator has to look at is another node, so one token reads them all.
+ * `danger` is reserved for work that ran and did not come back with its job done, so
+ * a graph full of the consequences of one failure still reads as one failure.
+ * `neutral` is only for work with nothing to report yet, and for a status this
+ * vocabulary does not recognize.
  */
 const STATUS_STYLE: Readonly<Record<DagNodeState, StatusStyleToken>> = {
   pending: "neutral",

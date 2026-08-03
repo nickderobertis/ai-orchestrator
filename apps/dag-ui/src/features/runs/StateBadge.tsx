@@ -44,7 +44,7 @@ export function StateBadge({
 
 const SETTLED = "border-success bg-success-surface text-success";
 const LOST = "border-destructive bg-destructive-surface text-destructive";
-const HELD = "border-warning bg-warning-surface text-warning";
+const DEPENDENCY_DECIDED = "border-warning bg-warning-surface text-warning";
 
 /**
  * What each node status means, in the package's semantic utilities. Keying it by the
@@ -55,11 +55,13 @@ const HELD = "border-warning bg-warning-surface text-warning";
  *
  * Three readings, deliberately:
  *
- * - `blocked` and `skipped` are held work — something outside the node has to move
- *   before it can. Neutral would read as "nothing to report", which is the opposite
- *   of what they mean, so they take the warning tone the graph card already gives
- *   them. `waiting` keeps a neutral badge beside its warning card: a human action is
- *   the graph's own normal shape, and the card is where that is said.
+ * - `blocked` and `skipped` were decided by a dependency rather than by this node's
+ *   own run. They are not the same condition — `blocked` moves once a person acts,
+ *   while `skipped` is terminal, since the prerequisite that would have fed it did
+ *   not complete — but neutral would read as "nothing to report" for both, which is
+ *   the opposite of what either means, so they take the warning tone the graph card
+ *   already gives them. `waiting` keeps a neutral badge beside its warning card: a
+ *   human action is the graph's own normal shape, and the card is where that is said.
  * - `not-completed` is a settled node whose work is unfinished, which is a lost
  *   outcome rather than a pause, so it reads with `failed` and `cancelled`.
  * - `pending` and `unknown` are `undefined` on purpose: work that has not started has
@@ -68,14 +70,14 @@ const HELD = "border-warning bg-warning-surface text-warning";
  *   badge honestly declines to give.
  */
 const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
-  blocked: HELD,
+  blocked: DEPENDENCY_DECIDED,
   cancelled: LOST,
   done: SETTLED,
   failed: LOST,
   "not-completed": LOST,
   pending: undefined,
   running: "border-info bg-info-surface text-info",
-  skipped: HELD,
+  skipped: DEPENDENCY_DECIDED,
   unknown: undefined,
   waiting: undefined,
 };

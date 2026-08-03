@@ -269,9 +269,14 @@ test("renders the outcomes only a settled round records", async ({ page }) => {
     page.locator(".dag-node.state-failed").filter({ hasText: "rollback" }),
   ).toContainText("gate-failed");
 
-  // A node recorded blocked with nothing recorded about what blocks it — a legacy
-  // result, or one whose gate has since settled — says exactly that.
+  // A blocked node names the human action refs its own result recorded, not only
+  // the plan nodes the server derived — the two are different locators.
   await openObservatory(page, `/?run=${runs().outcomes}&node=stalled`);
+  await expect(page.getByRole("alert")).toContainText("migrate/sign-off");
+
+  // And one recorded blocked with nothing recorded about what blocks it — a legacy
+  // result, or one whose gate has since settled — says exactly that.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=orphaned`);
   await expect(page.getByRole("alert")).toContainText(
     "Nothing recorded; the run has not written what holds it.",
   );

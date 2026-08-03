@@ -59,7 +59,12 @@ export function nodeViews(detail: RunDetail): NodeView[] {
         : hasLifecycleShape(task)
           ? "lifecycle"
           : "agent";
-    const result = round.node_results[task.id];
+    // `node_results` holds only what a *terminal journal event* carried, so it is
+    // empty for every node the scheduler settled without dispatching. A round that
+    // finished also recorded a whole-graph result, and for those nodes it is the only
+    // record there is — the one that carries what blocked them.
+    const result =
+      round.node_results[task.id] ?? round.result?.results?.[task.id];
     return {
       id: task.id,
       label: readString(task, "name") ?? task.id,
