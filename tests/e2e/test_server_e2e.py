@@ -424,7 +424,9 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
 
             # And so does a log the run appends outside the event stream.
             (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
-            (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
+            (run_dir / "orchestrator" / "stderr.log").write_text(
+                "orchestrator: active\n", encoding="utf-8"
+            )
             from_log = _read_frames(lines, until="run.changed")
             assert json.loads(from_log[-1]["data"])["run_id"] == "demo"
 
@@ -522,7 +524,6 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         ),
     )
     (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
-    (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
     # Larger than the served tail: a log is a scan aid, never an unbounded download.
     (run_dir / "orchestrator" / "stderr.log").write_text(
         "head-that-must-be-dropped\n" + "z" * 200_000, encoding="utf-8"
@@ -541,7 +542,7 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
 
         detail = client.get("/api/v2/runs/demo").json()
         assert detail["details"]["prs"]["api"]["number"] == 7
-        assert detail["logs"]["gate_log"] == "gate: passed\n"
+        assert "gate_log" not in detail["logs"]
         tail = detail["logs"]["orchestrator_stderr"]
         assert len(tail.encode()) == 64_000  # bounded to the tail, not the whole file
         assert "head-that-must-be-dropped" not in tail  # and it is the *end* of the log
@@ -1622,10 +1623,8 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         settled = nodes["docs"]
         assert settled["ended_at"] is not None
         assert settled["status"] == "done"
-        assert settled["reference"] == {
-            "kind": "worker_report",
-            "value": "runs/demo/round-01/docs/report.json",
-        }
+        assert settled["reference"]["kind"] == "worker_report"
+        assert settled["reference"]["value"].startswith("worker_report-")
         drafting = by_kind["pr-drafting"][0]
         assert drafting["parent_id"] == settled["id"]
         # Drafting failure must never block publication, so it settles not-completed —
@@ -1679,12 +1678,11 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
             "docs-lint": ("worker", "llmlint"),
         }
 
-        # Heavy content is addressed, never inlined — and each address resolves.
+        # Artifact content is addressed rather than inlined, while the deliberately
+        # bounded verification tail remains available on its own timeline record.
         verification = by_kind["verification"][0]
-        assert verification["reference"] == {
-            "kind": "gate_log",
-            "value": "runs/demo/round-01/api/gate.log",
-        }
+        assert verification["reference"]["kind"] == "gate_log"
+        assert verification["reference"]["value"].startswith("gate_log-")
         publication = next(span for span in by_kind["publication"] if span["node_id"] == "api")
         assert publication["reference"] == {"kind": "pr", "value": "https://x/pull/7"}
         # The publication has not closed, so it shows the state the monitor observed.
@@ -1695,7 +1693,8 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         ]
         rendered = json.dumps(timeline)
         assert "a transcript body that must never reach the timeline payload" not in rendered
-        assert "a secret token in the tail" not in rendered
+        assert "a secret token in the tail" in rendered
+        assert "runs/demo/round-01/api/gate.log" not in rendered
 
         # Ordering and normalization hold across the whole payload.
         assert [span["started_at"] for span in spans] == sorted(
