@@ -229,6 +229,30 @@ def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
     assert config.read_text(encoding="utf-8") == "{broken"
 
 
+@pytest.mark.parametrize("content", ["[]", '{"projects":[]}'])
+def test_alternate_claude_trust_rejects_invalid_config_shape(tmp_path: Path, content: str) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text(content, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "must contain a JSON object" in result.stderr
+    assert config.read_text(encoding="utf-8") == content
+
+
 def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
@@ -301,6 +325,47 @@ def test_alternate_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "flock is unavailable" in result.stderr
     assert "install util-linux" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("lock-open", "cannot open the lock"),
+        ("lock-acquire", "cannot lock"),
+        ("temporary-file", "cannot create a temporary file"),
+    ],
+)
+def test_alternate_claude_trust_reports_filesystem_failures(
+    tmp_path: Path, failure: str, message: str
+) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    if failure == "lock-open":
+        (tmp_path / ".claude.json.trust.lock").mkdir()
+    elif failure == "lock-acquire":
+        _write_executable(tools / "flock", "#!/bin/sh\nexit 23\n")
+    else:
+        _write_executable(tools / "mktemp", "#!/bin/sh\nexit 24\n")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert config.read_text(encoding="utf-8") == "{}"
 
 
 @pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])

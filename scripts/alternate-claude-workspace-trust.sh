@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Shared, sourceable implementation for marking alternate-Claude workspaces trusted.
+set -euo pipefail
 
 mark_alternate_claude_trust() {
   local config_path=$1
@@ -29,6 +30,12 @@ mark_alternate_claude_trust() {
   fi
   if ! jq '.' "$config_path" >"$updated"; then
     echo "alternate-claude-workspace-trust: $config_path is not valid JSON; repair or replace it, then retry" >&2
+    rm -f "$updated"
+    return 1
+  fi
+  if ! jq -e 'type == "object" and ((.projects // {}) | type == "object")' "$updated" \
+    >/dev/null; then
+    echo "alternate-claude-workspace-trust: $config_path must contain a JSON object with an optional projects object; repair or replace it, then retry" >&2
     rm -f "$updated"
     return 1
   fi
@@ -79,7 +86,6 @@ mark_alternate_claude_workspaces() {
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-  set -euo pipefail
   SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   # shellcheck source=scripts/claude-alt-config-dir.sh
   source "$SCRIPT_DIR/claude-alt-config-dir.sh"

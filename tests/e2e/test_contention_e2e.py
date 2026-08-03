@@ -414,8 +414,8 @@ def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
     clone = original.parent / ".clone"
     for config_dir in alternate_configs:
         projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))["projects"]
-        assert projects[str(clone.resolve())] == {"hasTrustDialogAccepted": True}
-        assert projects[str(original.resolve())] == {"hasTrustDialogAccepted": True}
+        assert projects[str(clone.resolve())]["hasTrustDialogAccepted"] is True
+        assert projects[str(original.resolve())]["hasTrustDialogAccepted"] is True
     assert (
         subprocess.run(
             ["git", "-C", str(origin), "show", "main:interrupted.txt"], capture_output=True

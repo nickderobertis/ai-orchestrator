@@ -128,8 +128,11 @@ def test_workspace_lifecycle_marks_clone_and_worktree_trusted_in_both_configs(
 
     for config_dir in configs:
         projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))["projects"]
-        assert projects[str(clone.resolve())] == {"hasTrustDialogAccepted": True}
-        assert projects[str(worktree.resolve())] == {"hasTrustDialogAccepted": True}
+        # This real-helper journey is the drift gate for Claude's external project
+        # trust record; it checks the field Claude consumes without duplicating a
+        # separately maintained record schema.
+        assert projects[str(clone.resolve())]["hasTrustDialogAccepted"] is True
+        assert projects[str(worktree.resolve())]["hasTrustDialogAccepted"] is True
 
 
 def test_workspace_lifecycle_continues_when_trust_marking_fails(
