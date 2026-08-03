@@ -483,7 +483,6 @@ def test_null_node_journal_records_nothing_but_still_labels_its_own_workstream()
     assert null.artifact_dir is None
     assert null.labels == {"run_id": null.run_id, "node": "repo-task"}
     assert null.run_id.startswith("repo-task-")
-    # A step narrows the same workstream rather than starting a second one.
     stepped = null.for_step(StepId("impl"))
     assert stepped.labels == {"run_id": null.run_id, "node": "repo-task", "step": "impl"}
     # And two workstreams are told apart, so one's sessions never join the other's.

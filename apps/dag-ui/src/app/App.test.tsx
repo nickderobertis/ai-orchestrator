@@ -72,9 +72,6 @@ describe("DAG application", () => {
     expect(worker).toHaveTextContent("11:00:12");
     expect(worker).toHaveTextContent("completed");
     expect(worker).toHaveTextContent("48.0s");
-    // And a dispatch says which session it was, so a worker and the judge that
-    // supervised it are not two rows that read alike. Neither session's name
-    // contains its role, so this is the served role rather than the label.
     expect(worker).toHaveTextContent(/dispatch\s*worker/);
     expect(railRow(/you-are-a-strict-careful-evaluator/)).toHaveTextContent(
       /dispatch\s*judge/,

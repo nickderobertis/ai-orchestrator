@@ -50,7 +50,9 @@ from orchestrator.journal import (
 )
 from orchestrator.launch import (
     DEFAULT_MAX_AGE_SECONDS,
+    UNKNOWN_OWNER,
     provenance_path,
+    read_run_owner,
     session_key,
     write_provenance,
 )
@@ -339,6 +341,35 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
     with _serve(exposed_app) as base:
         exposed = httpx.Client(base_url=base, timeout=10).get("/api/v1/runs/demo").json()
         assert exposed["launch"]["launcher_session_id"] == "top-session"
+
+
+def test_malformed_durable_attribution_degrades_over_http_and_for_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+    launch_path = run_dir / "launch.json"
+    record = json.loads(launch_path.read_text(encoding="utf-8"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+        for malformed in (
+            {"launch_id": LAUNCH_ID, "launcher": "not-a-launcher", "session_key": "a" * 32},
+            {"launch_id": LAUNCH_ID, "launcher": "codex", "session_key": "not-a-key"},
+        ):
+            record["launch"] = malformed
+            launch_path.write_text(json.dumps(record), encoding="utf-8")
+
+            assert read_run_owner(run_dir) == UNKNOWN_OWNER
+            detail = client.get("/api/v1/runs/demo")
+            assert detail.status_code == 200
+            assert detail.json()["launch"] == {
+                "launch_id": LAUNCH_ID,
+                "launcher": "unknown",
+            }
 
 
 def test_events_stream_snapshots_then_invalidates_on_a_live_append(

@@ -860,9 +860,6 @@ def _fold_conversations(assembly: _Assembly, conversations: Sequence[DagConversa
             step_id=attribution.get("stepId"),
             round_number=attribution.get("round"),
             status=transcript["state"],
-            # Both roles travel with the span so a reader can say *what* a dispatch
-            # was — worker, judge, orchestrator, check-in, pr-author, lint — without
-            # fetching the transcript behind every row to find out.
             agent_role=attribution["agentRole"],
             transport_role=attribution["transportRole"],
             reference=reference,

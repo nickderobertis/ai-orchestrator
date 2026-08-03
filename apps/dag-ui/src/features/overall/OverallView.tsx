@@ -112,8 +112,6 @@ export function OverallView({
                     initiallyOpen={index === 0}
                     key={span.id}
                     label={span.label}
-                    // The same phrase the sidebar heads this run's group with, from
-                    // the same helper: one vocabulary for one run in both places.
                     launch={launchLabel(detail.launch)}
                     role={span.agent_role}
                     runId={detail.run.run_id}
