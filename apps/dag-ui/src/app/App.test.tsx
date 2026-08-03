@@ -153,6 +153,32 @@ describe("DAG application", () => {
     }
   });
 
+  test("still counts a run whose statuses the server could not fold", async () => {
+    // When a run's authoritative journal will not fold, the server counts its nodes
+    // from the tolerant telemetry index instead, whose statuses are an open string.
+    // The row has to show those words too — a run going wrong is exactly the one an
+    // operator is looking at — after the vocabulary it does know, not instead of it.
+    const degraded = {
+      ...runList,
+      runs: runList.runs.map((run) =>
+        run.run_id === LIVE_RUN
+          ? { ...run, node_counts: { improvised: 2, running: 1, absent: 0 } }
+          : run,
+      ),
+    };
+    const { client } = telemetryHarness((url) =>
+      isRunList(url) ? Response.json(degraded) : defaultResponder(url),
+    );
+    render(<App client={client} />);
+
+    const row = await screen.findByRole("button", {
+      name: new RegExp(LIVE_RUN),
+    });
+    expect(row).toHaveTextContent("1 running · 2 improvised");
+    // A status counted zero times is not a status this run has.
+    expect(row).not.toHaveTextContent("absent");
+  });
+
   test("leads a failed node's view with why it failed", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=publish`);
     const { client } = telemetryHarness();
