@@ -3,4 +3,4 @@
 set -euo pipefail
 # shellcheck source=scripts/alternate-claude-workspace-trust.sh
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/alternate-claude-workspace-trust.sh" \
-  || { echo "claude-workspace-trust: cannot load the alternate-Claude trust helper; restore scripts/alternate-claude-workspace-trust.sh, then retry" >&2; return 1 2>/dev/null || exit 1; }
+  || { echo "claude-workspace-trust: cannot load the alternate-Claude trust helper; restore scripts/alternate-claude-workspace-trust.sh, then retry" >&2; false; }
