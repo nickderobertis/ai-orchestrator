@@ -361,7 +361,12 @@ def test_runs_endpoint_pages_by_opaque_cursor_and_rejects_invalid_bounds(tmp_pat
         ).json()
         assert len({row["run_id"] for row in [*first["runs"], *second["runs"]]}) == 3
         assert "next_cursor" not in second
-        for params in ({"limit": 0}, {"limit": 201}, {"cursor": "not-a-cursor"}):
+        for params in (
+            {"limit": 0},
+            {"limit": 201},
+            {"cursor": "not-a-cursor"},
+            {"cursor": "_w"},  # urlsafe base64 for the invalid UTF-8 byte 0xff
+        ):
             response = client.get("/api/v2/runs", params=params)
             assert response.status_code == 422
 

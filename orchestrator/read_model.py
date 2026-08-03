@@ -667,7 +667,13 @@ def list_runs(
                 case _:
                     raise ValueError
             cursor_key = (-float(progress), str(validate_run_id(cursor_run_id)))
-        except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
+        except (
+            ValueError,
+            TypeError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            binascii.Error,
+        ) as exc:
             raise InvalidRunId("invalid runs cursor") from exc
         summaries = [
             item

@@ -1,6 +1,7 @@
 import {
   API_V2_PATHS,
   API_V2_QUERY,
+  API_V2_TIMELINE_SCOPES,
   type ArtifactContent,
   apiErrorSchema,
   artifactContentSchema,
@@ -122,7 +123,8 @@ export class TelemetryClient {
   async getTimeline(runId: string, nodeId?: string): Promise<RunTimeline> {
     requireOpaqueId(runId, "run ID");
     const url = this.#url(API_V2_PATHS.timeline(runId));
-    if (nodeId === undefined) url.searchParams.set(API_V2_QUERY.scope, "run");
+    if (nodeId === undefined)
+      url.searchParams.set(API_V2_QUERY.scope, API_V2_TIMELINE_SCOPES.run);
     else url.searchParams.set(API_V2_QUERY.nodeId, nodeId);
     return this.#request(url, runTimelineSchema.parse);
   }

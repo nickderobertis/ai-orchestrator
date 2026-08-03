@@ -57,7 +57,9 @@ from .read_model import (
     _artifact_id,
     contained_run_dir,
 )
-from .runs import RunId, validate_run_id
+from .runs import NodeId, RunId, validate_run_id
+
+TimelineScope = Literal["run"]
 
 #: What a timeline item points at instead of inlining it. The three artifact kinds
 #: are exactly the keys a node or step result records under ``artifacts``, so a
@@ -989,8 +991,8 @@ def run_timeline(
     *,
     oneharness_bin: str = "oneharness",
     now: datetime | None = None,
-    node_id: str | None = None,
-    scope: str | None = None,
+    node_id: NodeId | None = None,
+    scope: TimelineScope | None = None,
 ) -> RunTimeline:
     """A scoped ``RunTimeline``: one node, or only run-level items."""
     if node_id is not None and scope is not None:

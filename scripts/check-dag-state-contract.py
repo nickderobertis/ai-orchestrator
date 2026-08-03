@@ -378,7 +378,10 @@ def function_parameters(path: Path, names: set[str]) -> set[str]:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in names
     }
     if set(functions) != names:
-        fail(f"{path.name} must declare HTTP handlers {sorted(names)!r}")
+        fail(
+            f"{path.name} must declare HTTP handlers {sorted(names)!r}; restore the missing "
+            "handler or update the checked query contract, then rerun 'just check'"
+        )
     parameters: set[str] = set()
     for name, function in functions.items():
         path_parameters = {"run_id"} if name in {"get_run", "get_timeline"} else set()
@@ -401,7 +404,10 @@ def typescript_string_object(path: Path, name: str) -> set[str]:
         )
     matches = re.findall(rf"export const {name} = \{{(.*?)\}} as const;", source, flags=re.DOTALL)
     if len(matches) != 1:
-        fail(f"{path.name} must declare exactly one {name}")
+        fail(
+            f"{path.name} must declare exactly one {name}; restore one exported const object "
+            "and remove duplicates, then rerun 'just check'"
+        )
     return set(re.findall(r'\w+:\s*"([^"]+)"', matches[0]))
 
 
@@ -546,7 +552,9 @@ def literal_values(path: Path, name: str) -> list[str]:
             f"{path.name} {name} must remain a string Literal; replace its value "
             f'with `{name} = Literal["role", ...]`'
         )
-    elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else []
+    elements = (
+        annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else [annotation.slice]
+    )
     values = [
         item.value
         for item in elements
@@ -920,6 +928,17 @@ def main() -> None:
             "reconcile the server handler parameters with API_V2_QUERY, then rerun "
             "'just check'"
         )
+    reconcile(
+        "timeline scope vocabulary",
+        (
+            "orchestrator/timeline.py TimelineScope",
+            literal_values(timeline, "TimelineScope"),
+        ),
+        (
+            "packages/dag-model/src/index.ts API_V2_TIMELINE_SCOPES",
+            sorted(typescript_string_object(dag_model, "API_V2_TIMELINE_SCOPES")),
+        ),
+    )
     # The browser app reaches that same port through its dev proxy, and its operator
     # documentation restates both addresses. A silent disagreement would leave
     # `just dag-ui` proxying to nothing, so all four copies are reconciled here.

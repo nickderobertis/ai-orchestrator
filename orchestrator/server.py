@@ -53,8 +53,8 @@ from .read_model import (
     run_detail,
     run_signature,
 )
-from .runs import RunId, validate_run_id
-from .timeline import run_timeline
+from .runs import NodeId, RunId, validate_run_id
+from .timeline import TimelineScope, run_timeline
 
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HEARTBEAT_INTERVAL = 15.0
@@ -245,8 +245,15 @@ def create_app(
         try:
             if node_id is None and scope is None:
                 raise InvalidRunId("timeline requires node_id or scope=run")
+            if scope not in (None, "run"):
+                raise InvalidRunId("timeline scope must be run")
+            timeline_scope: TimelineScope | None = "run" if scope == "run" else None
             return run_timeline(
-                root, run_id, node_id=node_id, scope=scope, oneharness_bin=oneharness_bin
+                root,
+                run_id,
+                node_id=None if node_id is None else NodeId(node_id),
+                scope=timeline_scope,
+                oneharness_bin=oneharness_bin,
             )
         except ReadError as exc:
             status, code = _status_for(exc)
