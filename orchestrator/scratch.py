@@ -493,12 +493,9 @@ def processes_stamped_for(status_dir: Path) -> tuple[ProcessId, ...] | None:
     entry against one exact path, so a value that merely contains it, and a *different*
     dispatch's directory under the same scratch root, are both somebody else's.
 
-    Nothing here is weakened for this caller: the lock-based
-    `_dispatch_is_finished` proof is deliberately not consulted, because a live
-    dispatch asking about its own tree already holds that lock and would find every one
-    of its own processes retained by it. Naming its own directory is the stronger claim
-    of the two — the sweep has to infer which dispatch a stamp belongs to, while this
-    caller created the path it is matching.
+    Nothing here is weakened for this caller: the lock-based `_dispatch_is_finished`
+    proof is deliberately not consulted, for the reason given in
+    docs/onejudge-integration.md, "What teardown is allowed to signal".
 
     ``None`` means the question could not be asked; see `_readable_process_environments`.
     """

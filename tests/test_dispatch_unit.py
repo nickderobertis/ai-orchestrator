@@ -28,7 +28,6 @@ from orchestrator.dispatch import (
     REPORTED_BLOCKER_OUTCOME,
     REPORTED_BLOCKER_PREFIX,
     DispatchError,
-    OwnedTree,
     Report,
     _agent_run_context,
     _build_report,
@@ -54,10 +53,12 @@ from orchestrator.watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     TERMINATION_GRACE,
     ProcessId,
+    ProcessIdentity,
     _parse_stat,
+    identify,
     process_activity,
     process_group_of,
-    still_running,
+    terminate_identified_processes,
     terminate_process_group,
     terminate_processes,
     terminate_proven_process_group,
@@ -576,6 +577,11 @@ print(json.dumps({"schema_version": 4, "transcript": {"messages": []}, "stopped_
 """
 
 
+def _pids(identities: tuple[ProcessIdentity, ...]) -> set[ProcessId]:
+    """The numbers behind a set of proven identities, for comparison in assertions."""
+    return {identity.pid for identity in identities}
+
+
 def _group_members(group_id: ProcessId) -> set[ProcessId]:
     """Every live process procfs currently places in ``group_id``.
 
@@ -599,8 +605,8 @@ class TeardownOperation(StrEnum):
     against plain tuples.
     """
 
-    #: The one step that signals a set of pids rather than dereferencing a number.
-    EXACT_SET = "terminate_processes"
+    #: The one step that signals a set of proven identities rather than a number.
+    EXACT_SET = "terminate_identified_processes"
     #: The one broad handle teardown still uses, and only while it is proven.
     PROCESS_GROUP = "terminate_proven_process_group"
     #: Neither of these belongs on this path any more; recording them is the point.
@@ -621,15 +627,14 @@ class TeardownTrace:
     """Everything one teardown did, in order, with the evidence behind each step."""
 
     operations: list[TeardownStep] = field(default_factory=list)
-    #: Every pid teardown *selected* for the exact-pid phase, read before the
-    #: liveness filter in front of it. This is the partition decision itself, which
-    #: is what has to be disjoint from the group's half — a filter that happens to
-    #: drop a group member the group already killed is a safety net, not the rule.
+    #: Every pid teardown selected for the exact-pid phase. This is the partition
+    #: decision itself, which is what has to be disjoint from the group's half.
     pid_phase_selection: set[ProcessId] = field(default_factory=set)
-    #: Every pid actually handed to the exact-set step.
-    signalled: set[ProcessId] = field(default_factory=set)
     #: Those of them that had already exited when that step reached them.
     already_exited: list[ProcessId] = field(default_factory=list)
+    #: The identities that phase escalated to `SIGKILL` — its *second* signal, which
+    #: it sends only to a process still answering to the identity it was proven under.
+    escalated: set[ProcessId] = field(default_factory=set)
     #: Every pid a broad handle actually covered at the instant it was signalled —
     #: real process-group membership, not the parentage tree, because a descendant
     #: that left for a session of its own is under the root and *not* in its group.
@@ -674,9 +679,6 @@ class TeardownTrace:
             "already covers them, so their numbers are signalled again after that "
             "operation has released them"
         )
-        assert self.signalled.isdisjoint(self.broad_targets), sorted(
-            self.signalled & self.broad_targets
-        )
         assert self.already_exited == [], self.already_exited
 
 
@@ -695,8 +697,7 @@ def _trace_teardown(monkeypatch: pytest.MonkeyPatch, status_record: Path) -> Tea
     wrapper reads it back at the instant it is called.
     """
     trace = TeardownTrace()
-    terminate = terminate_processes
-    liveness_filter = still_running
+    terminate = terminate_identified_processes
     proven_group = terminate_proven_process_group
     tree = terminate_tree
     plain_group = terminate_process_group
@@ -713,18 +714,18 @@ def _trace_teardown(monkeypatch: pytest.MonkeyPatch, status_record: Path) -> Tea
         trace.operations.append(TeardownStep(operation, handle, evidence_is_live(handle)))
         trace.broad_targets.update(_group_members(handle))
 
-    def observing_filter(pids: tuple[ProcessId, ...]) -> tuple[ProcessId, ...]:
-        """The seam where the pid phase's *selection* is visible, before it is pruned."""
-        trace.pid_phase_selection.update(pids)
-        return liveness_filter(pids)
-
     def observing_terminate(
-        pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
-    ) -> None:
+        identities: tuple[ProcessIdentity, ...],
+        *,
+        externally_waited: tuple[ProcessId, ...] = (),
+    ) -> tuple[ProcessIdentity, ...]:
         trace.operations.append(TeardownStep(TeardownOperation.EXACT_SET, None, True))
-        trace.signalled.update(pids)
+        pids = {identity.pid for identity in identities}
+        trace.pid_phase_selection.update(pids)
         trace.already_exited.extend(pid for pid in pids if not is_running(pid))
-        terminate(pids, externally_waited=externally_waited)
+        escalated = terminate(identities, externally_waited=externally_waited)
+        trace.escalated.update(identity.pid for identity in escalated)
+        return escalated
 
     def observing_group(group_id: ProcessId, *, still_ours: Callable[[ProcessId], bool]) -> None:
         observed_broad(TeardownOperation.PROCESS_GROUP, group_id)
@@ -740,7 +741,6 @@ def _trace_teardown(monkeypatch: pytest.MonkeyPatch, status_record: Path) -> Tea
         observed_broad(TeardownOperation.UNPROVEN_GROUP, group_id)
         plain_group(group_id, externally_waited=externally_waited)
 
-    monkeypatch.setattr(dispatch_module, "still_running", observing_filter)
     monkeypatch.setattr(dispatch_module, TeardownOperation.EXACT_SET, observing_terminate)
     monkeypatch.setattr(dispatch_module, TeardownOperation.PROCESS_GROUP, observing_group)
     # Neither is used by teardown any more, and re-introducing either is the
@@ -816,7 +816,7 @@ def test_a_recorded_root_that_is_no_longer_ours_is_never_walked_grouped_or_signa
         assert unowned.root is None
         assert unowned.group is None
         assert unowned.grouped == ()
-        assert unowned.ungrouped == (ProcessId(mine.pid),)
+        assert _pids(unowned.ungrouped) == {ProcessId(mine.pid)}
         assert is_running(ProcessId(stranger.pid)) and is_running(stranger_child)
         # The same shape, one stamp different: every handle is admitted, the walk from
         # the proven root reaches a child that carries no stamp of its own, and both
@@ -826,7 +826,9 @@ def test_a_recorded_root_that_is_no_longer_ours_is_never_walked_grouped_or_signa
         assert set(owned.grouped) == {ProcessId(mine.pid), my_child}
         assert owned.ungrouped == ()
         # A dispatch whose root is gone keeps the stamped half and withholds the rest.
-        assert owned_tree(status_dir, None) == OwnedTree((), (ProcessId(mine.pid),), None, None)
+        rootless = owned_tree(status_dir, None)
+        assert (rootless.grouped, rootless.root, rootless.group) == ((), None, None)
+        assert _pids(rootless.ungrouped) == {ProcessId(mine.pid)}
     finally:
         for started in (stranger, mine):
             with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -882,8 +884,8 @@ def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
     assert report.completed is True
     assert len(churned) == 3
     assert [pid for pid in churned if is_running(pid)] == []
-    assert trace.signalled.isdisjoint(churned)
-    assert orphan in trace.signalled
+    assert trace.pid_phase_selection.isdisjoint(churned)
+    assert orphan in trace.pid_phase_selection
     assert await_reaped(orphan)
     # The root exited with the report, and the orphan left its group, so no number
     # proves anything here: every broad handle is withheld and the only operation is
@@ -907,6 +909,10 @@ if "--version" in sys.argv:
     raise SystemExit(0)
 
 QUIET = [sys.executable, "-c", "import time; time.sleep(30)"]
+# Ignores SIGTERM, so terminating it takes the second signal — the one that must be
+# sent only while the identity it was proven under still answers to the number.
+DEAF = [sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, "
+        "signal.SIG_IGN); time.sleep(30)"]
 
 
 def record(name, pid):
@@ -917,7 +923,7 @@ def record(name, pid):
 record("ROOT_RECORD", os.getpid())
 record("STATUS_RECORD", os.environ["ORCHESTRATOR_AGENT_STATUS_DIR"])
 record("GROUPED_RECORD", subprocess.Popen(QUIET).pid)
-record("DETACHED_RECORD", subprocess.Popen(QUIET, start_new_session=True).pid)
+record("DETACHED_RECORD", subprocess.Popen(DEAF, start_new_session=True).pid)
 # Its parent exits immediately, so this one is reparented to init: no walk from any
 # root reaches it, and only the stamp it inherited says whose it is.
 orphan = subprocess.Popen(
@@ -941,14 +947,17 @@ def test_a_stalled_dispatch_still_walks_and_groups_the_root_it_can_prove(
     handle cannot reach:
 
     * a **descendant in a session of its own**, which parentage still finds and
-      `killpg` does not; and
+      `killpg` does not — and which ignores `SIGTERM`, so terminating it needs the
+      second signal; and
     * a **stamped orphan**, whose parent exits immediately so that init adopts it and
-      no walk from any root can reach it either.
+      no walk from any root can reach it either — and which exits on the first signal,
+      so its number must never be signalled again.
 
     Every process here is therefore terminated, and each by exactly one mechanism: the
     group's own members through the group, these two by pid. The pid phase must not
     even be *handed* a group member — the group operation ends with that member dead,
-    and its number is then the kernel's to give away.
+    and its number is then the kernel's to give away — and within that phase, the
+    escalation to `SIGKILL` must reach the process that is still itself and no other.
     """
     records = {name: tmp_path / name for name in ("root", "grouped", "detached", "orphan")}
     status_record = tmp_path / "status-dir"
@@ -989,7 +998,10 @@ def test_a_stalled_dispatch_still_walks_and_groups_the_root_it_can_prove(
     trace.assert_one_mechanism_per_process_in_the_right_order()
     assert {pids["root"], pids["grouped"]} <= trace.broad_targets
     assert trace.pid_phase_selection == {pids["detached"], pids["orphan"]}
-    assert trace.signalled == {pids["detached"], pids["orphan"]}
+    # And inside that phase, the second signal went only where the identity still
+    # matched: the orphan exited on the `SIGTERM` and its number was left alone, while
+    # the descendant that ignored it was still itself and was killed.
+    assert trace.escalated == {pids["detached"]}
     for pid in pids.values():
         assert await_reaped(pid), pid
 
@@ -1532,6 +1544,80 @@ def test_watchdog_group_shutdown_waits_out_a_member_that_ignores_sigterm(tmp_pat
     terminate_process_group(ProcessId(process.pid))
 
     assert await_reaped(process.pid)
+
+
+def test_a_recorded_identity_whose_number_moved_on_is_never_signalled(tmp_path) -> None:
+    """The recycled pid, at the level where every teardown signal is actually sent.
+
+    Between a caller proving a set and signalling it — and, worse, between its own
+    `SIGTERM` and the `SIGKILL` behind it — a process can exit and its number can be
+    handed to something unrelated. That successor is indistinguishable from the
+    original by number alone, so what is recorded is the number *and* the kernel's
+    start token for the process holding it.
+
+    Reproduced with two real processes rather than by waiting for the counter to wrap:
+    the identity carries one process's number and another's start token, which is
+    exactly the pairing a caller ends up holding when the number changes hands. The
+    process wearing that number must be left alone, and it is still running at the end
+    to say so.
+    """
+    stranger = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    # The tokens are start times in clock ticks, so give the two processes different
+    # ones rather than trusting the scheduler to; a shared tick would make the stale
+    # identity below accidentally valid and the test meaningless.
+    time.sleep(0.05)
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        current = identify(ProcessId(stranger.pid))
+        borrowed = identify(ProcessId(other.pid))
+        assert current is not None and borrowed is not None
+        assert current.start != borrowed.start
+        stale = ProcessIdentity(ProcessId(stranger.pid), borrowed.start)
+
+        assert terminate_identified_processes((stale,)) == ()
+
+        assert is_running(stranger.pid)
+        assert stranger.poll() is None
+    finally:
+        for process in (stranger, other):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                process.kill()
+            process.wait(timeout=10)
+
+
+def test_only_a_process_that_is_still_itself_is_escalated_to_sigkill(tmp_path) -> None:
+    """The second signal, gated by the same identity the first one was.
+
+    Both halves in one call, because they are one decision: a worker that handles
+    `SIGTERM` is gone before the grace period is out, and sending its number a
+    `SIGKILL` afterwards is sending it to whoever holds that number by then — while a
+    worker that ignores `SIGTERM` is still itself, and refusing to kill it would trade
+    one defect for a leak. What is returned names the ones that had to be killed.
+    """
+    graceful_marker = tmp_path / "graceful.pid"
+    shutdown = tmp_path / "graceful.shutdown"
+    deaf_marker = tmp_path / "deaf.pid"
+    graceful = subprocess.Popen(
+        [sys.executable, "-c", _GRACEFUL_SLEEPER, os.fspath(graceful_marker), os.fspath(shutdown)]
+    )
+    deaf = subprocess.Popen([sys.executable, "-c", _SIGTERM_DEAF_SLEEPER, os.fspath(deaf_marker)])
+    assert await_recorded_pid(graceful_marker) == graceful.pid
+    assert await_recorded_pid(deaf_marker) == deaf.pid
+    identities = tuple(
+        identity
+        for pid in (graceful.pid, deaf.pid)
+        if (identity := identify(ProcessId(pid))) is not None
+    )
+    assert len(identities) == 2
+
+    escalated = terminate_identified_processes(identities)
+
+    assert _pids(escalated) == {ProcessId(deaf.pid)}
+    # The graceful worker was never sent a second signal, and it got far enough into
+    # its own shutdown to say so.
+    assert shutdown.read_text(encoding="utf-8") == "shut down on SIGTERM"
+    assert await_reaped(graceful.pid)
+    assert await_reaped(deaf.pid)
 
 
 def test_a_proven_group_kill_is_withheld_once_the_first_signal_released_the_number(

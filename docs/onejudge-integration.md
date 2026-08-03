@@ -637,9 +637,22 @@ never passed to the pid phase. Handing it on would mean signalling, one grace pe
 later, a number this teardown had itself just released — the same defect the group
 ordering fixes, arriving through the other door. What remains for the pid phase is
 exactly what `killpg` cannot reach: a stamped orphan reparented to init, and a
-descendant that put itself in a session of its own. That remainder passes through
-`still_running` immediately before it is signalled, so nothing is sent a signal this
-process can already see it does not need.
+descendant that put itself in a session of its own.
+
+**A pid is revalidated before every signal, not once per phase.** The pid phase has
+the same `SIGTERM`-then-`SIGKILL` shape as the group one, and the same problem inside
+it: the ordinary outcome of the first signal is that the process exits, which frees
+its number during the grace period the second signal waits out. So that remainder is
+carried as `ProcessIdentity` — the pid paired with the kernel's start token for the
+process holding it — captured in `owned_tree` while ownership is proven, and
+`terminate_identified_processes` re-checks it immediately before the `SIGTERM` and
+again before the `SIGKILL`. A worker that shut itself down on the first signal is
+never sent a second; one that ignored it is still itself, and is killed. The start
+token rather than the environment stamp, because the stamp cannot answer for a
+parentage-proven descendant that has since `exec`ed something which never carried it,
+while every process has a start time. `terminate_processes` keeps its pid-tuple
+signature for callers that hold only numbers and takes that identity at the moment of
+the call — the best such a caller can do, and still better than not asking.
 
 `terminate_proven_process_group` applies the same rule to its own two signals: it
 re-asks for the proof before the `SIGKILL`, because its own `SIGTERM` can be what

@@ -85,10 +85,11 @@ from .scratch import (
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
+    ProcessIdentity,
+    identify,
     process_activity,
     process_group_of,
-    still_running,
-    terminate_processes,
+    terminate_identified_processes,
     terminate_proven_process_group,
 )
 
@@ -314,8 +315,10 @@ class OwnedTree:
     #: init, a descendant that put itself in a session of its own — and therefore the
     #: exact set the pid phase signals. Disjoint from ``grouped`` by construction:
     #: a process signalled through the group must not also be signalled by a number
-    #: the group operation may already have released.
-    ungrouped: tuple[ProcessId, ...]
+    #: the group operation may already have released. Carried as identities rather
+    #: than numbers, so every later signal can ask whether it still addresses the
+    #: process this proof was about.
+    ungrouped: tuple[ProcessIdentity, ...]
     #: The root, when parentage was admitted and walked; ``None`` when it was not.
     #: A record of that decision — the walk's result is in the two sets above — never
     #: a handle to walk again later.
@@ -328,10 +331,8 @@ class OwnedTree:
 def group_holds_stamped_process(status_dir: Path, group_id: ProcessId) -> bool:
     """Whether a process stamped for ``status_dir`` is in ``group_id`` right now.
 
-    The proof behind every `killpg` this module sends. It is asked again before each
-    signal rather than once for both, because a group id is the pid of its leader and
-    the kernel reserves that number only while some live process names the group: the
-    caller's own ``SIGTERM`` can release the very reservation that authorized it.
+    The proof behind every `killpg` this module sends, which is why
+    `terminate_proven_process_group` asks it again between its own two signals.
     """
     return any(process_group_of(pid) == group_id for pid in processes_stamped_for(status_dir) or ())
 
@@ -339,40 +340,17 @@ def group_holds_stamped_process(status_dir: Path, group_id: ProcessId) -> bool:
 def owned_tree(status_dir: Path, root_pid: ProcessId | None) -> OwnedTree:
     """What a dispatch can prove, at this instant, is still its own to terminate.
 
-    The evidence is the environment stamp: `processes_stamped_for` returns the live
-    processes whose ``ORCHESTRATOR_AGENT_STATUS_DIR`` names this dispatch's own
-    status directory, which the kernel fixed at ``exec`` and no process can shed.
-    Each reading is admitted only on that evidence:
+    One evidence source, the environment stamp `processes_stamped_for` reads, and one
+    admission rule per handle: parentage is walked only from a root that is itself
+    stamped, the group is admitted only while a stamped process is still in it, and
+    the stamped processes stand on their own. The proven set is then split by the
+    mechanism that will signal it — everything must be signalled through exactly one —
+    and the pid half is paired with `identify`'s start token *before* group membership
+    is read, so a number that changes hands between the two reads matches nothing
+    rather than matching its new occupant.
 
-    * **Parentage** — walked from ``root_pid`` only once the root *itself* is
-      stamped. Otherwise the recorded number may name a recycled, unrelated process,
-      and walking it would select that stranger's whole subtree. A live descendant of
-      a proven root is this dispatch's even if it has shed the stamp — including one
-      that put itself in a process group of its own, which no `killpg` would
-      reach — so nothing a walk at teardown would have reached is given up. The walk
-      happens *here*, while the root is proven alive, and its result is partitioned
-      into ``grouped`` and ``ungrouped`` below: teardown never walks a number again.
-    * **The stamped processes themselves** — always, since they are the evidence.
-      This is what reaches a descendant whose parent has already exited, which init
-      has adopted and no walk from any root can find.
-    * **The process group** — admitted only while a stamped process is still *in* it.
-      That is stronger than it looks: the kernel keeps a pid allocated for as long as
-      any live process names it as a group, so a group still holding one of ours
-      cannot have had its id handed to anybody else. It is the only reading teardown
-      dereferences after this function returns, and it does so before it has
-      signalled anything — see ``tear_down`` in `run_onejudge`.
-
-    The proven set is then **partitioned by the mechanism that will signal it**, here,
-    while the group membership can still be read. A process the group covers is
-    terminated through the group and must never also be handed to the pid phase: the
-    group operation ends with that process dead, and a pid the caller has just killed
-    is a number the kernel is free to give to a stranger. What is left for the pid
-    phase is exactly what `killpg` cannot reach — a stamped orphan whose parent has
-    exited, and a descendant that put itself in a session of its own.
-
-    Proving nothing therefore signals nothing, which is the right failure direction:
-    the cost is a leaked process the next scratch sweep reaps on this same stamp,
-    against interrupting work that was never ours.
+    Why each of those is the rule, and what breaks without it, is in
+    docs/onejudge-integration.md, "What teardown is allowed to signal".
     """
     stamped = frozenset(processes_stamped_for(status_dir) or ())
     owned = set(stamped)
@@ -384,12 +362,18 @@ def owned_tree(status_dir: Path, root_pid: ProcessId | None) -> OwnedTree:
         if root_pid is not None and group_holds_stamped_process(status_dir, root_pid)
         else None
     )
+    identities = {pid: identify(pid) for pid in owned}
     membership = {pid: process_group_of(pid) for pid in owned}
     grouped = {pid for pid, pgid in membership.items() if group is not None and pgid == group}
-    # A pid whose group cannot be read has exited since the scan above; it belongs to
-    # neither phase, because both would only be signalling a number nobody holds.
-    ungrouped = {pid for pid, pgid in membership.items() if pgid is not None} - grouped
-    return OwnedTree(tuple(sorted(grouped)), tuple(sorted(ungrouped)), root, group)
+    # A pid this could not identify, or whose group could not be read, has exited since
+    # the scan above; it belongs to neither phase, because both would only be
+    # signalling a number nobody holds any more.
+    ungrouped = tuple(
+        identity
+        for pid, identity in sorted(identities.items())
+        if identity is not None and membership[pid] is not None and pid not in grouped
+    )
+    return OwnedTree(tuple(sorted(grouped)), ungrouped, root, group)
 
 
 class OneJudgeProvenance(TypedDict):
@@ -851,19 +835,12 @@ def run_onejudge(
             def tear_down(root_pid: ProcessId | None) -> None:
                 """Stop this dispatch's work, broad handle first and exact pids after.
 
-                What is local to this call site is the order, and it is load-bearing:
-                a pid is a capability its holder can destroy, so signalling the proven
-                processes first would kill the very members whose existence reserves
-                the group id and leave every later `killpg` aimed at a number the
-                kernel was free to hand to somebody else. The group therefore goes
-                first, while its proof is live and before anything here has signalled
-                at all — it is also the only handle that reaches work spawned into
-                this dispatch since the snapshot, which no pid list can.
-
-                `owned_tree` decides everything else, including which processes the
-                group covers and which are left for the pid phase. Those are filtered
-                once more through `still_running`, so a process that exited while the
-                group was being torn down is not sent a signal after all.
+                The order is what is local to this call site, and it is load-bearing:
+                the group goes first, while its proof is live and before anything here
+                has signalled at all, because the pid phase would otherwise kill the
+                very members whose existence reserves that number. `owned_tree`
+                decides everything else and `terminate_identified_processes` owns the
+                revalidation behind each of its own signals.
                 """
                 owned = owned_tree(agent_status_dir, root_pid)
                 if owned.group is not None:
@@ -871,8 +848,8 @@ def run_onejudge(
                         owned.group,
                         still_ours=partial(group_holds_stamped_process, agent_status_dir),
                     )
-                terminate_processes(
-                    still_running(owned.ungrouped),
+                terminate_identified_processes(
+                    owned.ungrouped,
                     externally_waited=(root_pid,) if root_pid is not None else (),
                 )
 
