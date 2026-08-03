@@ -109,6 +109,60 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
     assert not replacement.exists()
 
 
+def test_workspace_lifecycle_marks_clone_and_worktree_trusted_in_both_configs(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    configs = (tmp_path / "alternate", tmp_path / "alternate2")
+    for config_dir in configs:
+        config_dir.mkdir()
+        (config_dir / ".claude.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", str(configs[0]))
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR", str(configs[1]))
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-trust")
+    ref = normalize_repo(str(origin))
+    workspace = Workspace(tmp_path / "worktrees-trust", resolver=lambda _: canonical)
+
+    clone = workspace.ensure_clone(ref)
+    worktree = workspace.worktree(ref, "trusted", base="origin/main")
+
+    for config_dir in configs:
+        projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))["projects"]
+        # This real-helper journey is the drift gate for Claude's external project
+        # trust record; it checks the field Claude consumes without duplicating a
+        # separately maintained record schema.
+        assert projects[str(clone.resolve())]["hasTrustDialogAccepted"] is True
+        assert projects[str(worktree.resolve())]["hasTrustDialogAccepted"] is True
+
+
+def test_workspace_lifecycle_continues_when_trust_marking_fails(
+    tmp_path, bare_origin, monkeypatch, capfd
+) -> None:
+    invalid = tmp_path / "alternate-invalid"
+    invalid.mkdir()
+    (invalid / ".claude.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", str(invalid))
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR", str(tmp_path / "absent"))
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-invalid-trust")
+    ref = normalize_repo(str(origin))
+    workspace = Workspace(tmp_path / "worktrees-invalid-trust", resolver=lambda _: canonical)
+
+    clone = workspace.ensure_clone(ref)
+    worktree = workspace.worktree(ref, "still-runs", base="origin/main")
+
+    assert clone.is_dir() and worktree.is_dir()
+    assert "not valid JSON" in capfd.readouterr().err
+
+
+def test_alternate_claude_trust_launch_failure_is_nonfatal(tmp_path, monkeypatch, capfd) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path / "missing-tools"))
+
+    Workspace._mark_alternate_claude_trust(tmp_path / "worktree")
+
+    assert "trust setup failed; continuing" in capfd.readouterr().err
+
+
 def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
