@@ -279,6 +279,95 @@ only through `read_strict_events()` and `project_round()`. An inconsistent
 authoritative stream fails the detail request with `409 projection_error`; it is
 never rendered as a plausible graph.
 
+#### The plan a round executed
+
+A round's plan is served **as the run journalled it**, so this contract must describe
+every shape the plan loader has ever accepted rather than the one shape current code
+happens to write. Two of them are easy to get wrong, and both severed history when
+this contract asserted otherwise:
+
+- A lifecycle node that delegates to `steps` carries no `task` and no `persona` of its
+  own — its prose lives on each step. `task` is therefore optional here, and a node
+  *without* `steps` must still carry it; `planTaskSchema` refines exactly that, so a
+  blank agent or human node stays a contract violation instead of an empty node view.
+- `resume` is **continuation metadata**, never a boolean switch. It names the branch,
+  base, and checkpoint a preserved workstream is picked back up from. Only the four
+  fields that locate that work are required: a round journalled before a later field
+  existed simply omits it, and recorded rounds are missing both `completed_steps` and
+  `pr`.
+
+```ts
+interface PlanStep {
+  id: string;
+  kind?: "agent" | "human";
+  persona?: string;
+  task: string;
+  deps?: string[];
+  done_when?: string;
+  max_turns?: number;
+  expects_no_diff?: boolean;
+}
+
+// Every `PlanStep` field, with `task` relaxed for the `steps` shape above, plus the
+// lifecycle routing a top-level node may carry.
+interface PlanTask {
+  id: string;
+  kind?: "agent" | "human";
+  persona?: string;
+  task?: string;
+  deps?: string[];
+  done_when?: string;
+  max_turns?: number;
+  expects_no_diff?: boolean;
+  repo?: string;
+  steps?: PlanStep[];
+  session?: string;
+  project_dir?: string;
+  base_branch?: string;
+  branch?: string;
+  title?: string;
+  verify_cmd?: string;
+  skip_verify?: boolean;
+  verify_via_ci?: boolean;
+  merge_policy?: "auto" | "direct" | "none";
+  workflow?: "local" | "remote";
+  repo_type?: "single-owner" | "team";
+  execution_checkout?: string;
+  stack_bases?: StackBase[];
+  resume?: PlanTaskResume;
+}
+
+interface StackBase {
+  branch: string;
+  repo?: string;
+  identity?: string;
+  base_branch?: string;
+  pr?: string;
+  pr_base?: string;
+}
+
+interface PlanTaskResume {
+  branch: string;
+  base_branch: string;
+  pr_base: string;
+  checkpoint: string;
+  completed_steps?: string[];
+  pr?: string | null;
+  mode?: "pause" | "retry";
+  source_round?: number;
+  attempts?: number;
+}
+```
+
+`orchestrator.lifecycle` owns these shapes — it is the parser every plan passes
+through — and `scripts/check-dag-state-contract.py` reconciles the four interfaces
+above with its `RESUME_FIELDS` and `STACK_BASE_FIELDS` and with the `dag-model`
+`planStepSchema`, `planTaskSchema`, `planTaskResumeSchema`, and `stackBaseSchema`.
+Checked-in runs in the shapes this section describes live under
+`tests/fixtures/legacy-runs`, read through the real HTTP surface by
+`tests/e2e/test_server_e2e.py` and through this contract's own parser by
+`packages/dag-model/e2e/model.e2e.test.ts`.
+
 #### One authoritative node status
 
 `node_status` is the **only** node vocabulary a renderer may switch on. It holds
@@ -488,6 +577,17 @@ The server exposes only:
 There are no mutation routes, command execution, file paths, arbitrary history
 queries, or user-supplied globbing. Run, conversation, and cursor IDs are
 validated opaque identifiers and resolved beneath configured roots.
+
+Every payload is made encodable before it is served. Recorded text can carry
+unpaired UTF-16 surrogates — a reader that does not pair JSON's `😀`
+escapes splits one astral character into two, and `surrogateescape` keeps an
+undecodable byte as one — and neither survives UTF-8 encoding. Serializing one
+raises inside the response encoder, far from anything naming the run, and the
+generic handler reports it as an opaque `500 read_error`: the run simply vanishes
+from the UI. `orchestrator.read_model.servable_text` recombines a valid pair back
+into the character it always meant and replaces what is genuinely unpaired with
+U+FFFD, in values and in keys alike. The journal is never rewritten to make a read
+work; the repair is on the way out only.
 
 Every read but `/healthz` is blocking work — a walk of the runs root plus an
 `oneharness history list` subprocess that reads the whole store — so none of it

@@ -559,6 +559,53 @@ def reconcile_shape(
         )
 
 
+def reconcile_documented_schema(
+    schema_path: Path, schema_name: str, contract: Path, interface: str
+) -> None:
+    """Fail unless a Zod schema and its documented interface name the same shape.
+
+    Symmetric, unlike `reconcile_shape`: both sides describe the *same* client-facing
+    payload rather than a server's freedom to omit, so a field or an optionality that
+    appears on only one of them is drift either way round.
+    """
+    declared = zod_object_fields(schema_path, schema_name)
+    documented = interface_fields(contract, interface)
+    where = f"packages/{schema_path.parents[1].name}/src/{schema_path.name} {schema_name}"
+    if set(declared) != set(documented):
+        fail(
+            f"{where} {sorted(declared)!r} disagrees with {contract.name} "
+            f"{interface} {sorted(documented)!r}; reconcile them in one change"
+        )
+    if drifted := {name for name, required in declared.items() if required != documented[name]}:
+        fail(
+            f"{where} and {contract.name} {interface} disagree about whether "
+            f"{sorted(drifted)!r} is optional; reconcile them in one change"
+        )
+
+
+def reconcile_schema_reference(path: Path, schema_name: str, prop: str, referenced: str) -> None:
+    """Fail unless one Zod property is built from the named nested schema.
+
+    Field *types* are out of scope for this gate in general — see the note at the top
+    of this file — and these two properties are the exception worth carrying. Each once
+    declared a *scalar* where the plan records a mapping, and because every field name
+    still agreed, nothing here noticed while every run that used one failed whole-detail
+    validation in the browser. The reference is exact, so checking it needs no guessing.
+    """
+    declaration = zod_object_declarations(path, schema_name).get(prop)
+    if declaration is None:
+        fail(
+            f"packages/{path.parents[1].name}/src/{path.name} {schema_name} declares no "
+            f"{prop!r}; restore it as the {referenced} it serves"
+        )
+    if referenced not in declaration:
+        fail(
+            f"packages/{path.parents[1].name}/src/{path.name} {schema_name}.{prop} is not "
+            f"built from {referenced}; the plan records a mapping there, so a scalar or an "
+            "inline restatement silently rejects every run that carries one"
+        )
+
+
 def literal_values(path: Path, name: str) -> list[str]:
     """Read one authoritative unique string Literal assignment."""
     try:
@@ -634,6 +681,81 @@ def zod_enum_members(path: Path, name: str) -> list[str]:
             "remove duplicates or non-string entries and restore any missing ones"
         )
     return members
+
+
+def _zod_object_body(path: Path, source: str, name: str) -> tuple[str, str | None]:
+    """One Zod object schema's literal body, and the schema it extends if any."""
+    matches = list(
+        re.finditer(
+            rf"^(?:export\s+)?const\s+{re.escape(name)}\s*=\s*"
+            rf"(?:openObject\(|(\w+)\s*\.extend\()\s*\{{",
+            source,
+            flags=re.MULTILINE,
+        )
+    )
+    if len(matches) != 1:
+        fail(
+            f"{path.name} must declare exactly one {name} as `openObject({{...}})` or "
+            "`<base>.extend({...})`; restore one declaration and remove duplicates"
+        )
+    match = matches[0]
+    depth, index = 1, match.end()
+    while depth and index < len(source):
+        depth += {"{": 1, "}": -1}.get(source[index], 0)
+        index += 1
+    if depth:
+        fail(f"{path.name} {name} has an unterminated object body; restore its closing brace")
+    return source[match.end() : index - 1], match.group(1)
+
+
+def zod_object_declarations(path: Path, name: str) -> dict[str, str]:
+    """Property name -> its own declaration text, for one Zod object schema's body.
+
+    The schema a ``base.extend({...})`` inherits from is not merged in here: this is
+    what the declaration itself says, which is what a reference check must read.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read TypeScript {name} contract: {exc}; restore {path} and retry")
+    body, _ = _zod_object_body(path, source, name)
+    declared: dict[str, list[str]] = {}
+    current: str | None = None
+    depth = 0
+    for line in body.splitlines():
+        if depth == 0 and (match := re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", line)):
+            current = match.group(1)
+            if current in declared:
+                fail(f"{path.name} {name} declares {current!r} twice; remove the duplicate")
+            declared[current] = []
+        if current is not None:
+            declared[current].append(line)
+        depth += line.count("{") - line.count("}") + line.count("(") - line.count(")")
+    if not declared:
+        fail(
+            f"{path.name} {name} declares no properties; restore its `field: schema` "
+            "members so the contract has something to reconcile"
+        )
+    return {field: "\n".join(lines) for field, lines in declared.items()}
+
+
+def zod_object_fields(path: Path, name: str) -> dict[str, bool]:
+    """Property name -> required for one Zod object schema, base schemas resolved.
+
+    A property is optional exactly when its declaration ends in ``.optional()``, and a
+    ``base.extend({...})`` reports the whole shape a client validates — the base's
+    fields overlaid with the extension's, which is what makes an override such as
+    relaxing ``task`` visible to the gate instead of hidden behind inheritance.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read TypeScript {name} contract: {exc}; restore {path} and retry")
+    _, base = _zod_object_body(path, source, name)
+    fields: dict[str, bool] = dict(zod_object_fields(path, base)) if base else {}
+    for field, declaration in zod_object_declarations(path, name).items():
+        fields[field] = ".optional()" not in declaration
+    return fields
 
 
 def documented_type_union(path: Path, name: str) -> list[str]:
@@ -755,6 +877,36 @@ def main() -> None:
         design,
         interface_fields(design, "ProjectedPlan"),
     )
+
+    # The plan a round executed is served as journalled, so the contract must describe
+    # every shape the plan loader accepts. `orchestrator/lifecycle.py` is that loader
+    # and owns the two nested mappings; the design contract and the schema a browser
+    # validates with restate them, and typing either as a scalar severed whole runs.
+    lifecycle = root / "orchestrator/lifecycle.py"
+    for python_name, documented in (
+        ("RESUME_FIELDS", "PlanTaskResume"),
+        ("STACK_BASE_FIELDS", "StackBase"),
+    ):
+        reconcile(
+            f"plan task {documented} fields",
+            (f"orchestrator/lifecycle.py {python_name}", frozenset_members(lifecycle, python_name)),
+            (
+                f"docs/dag-ui/design.md {documented}",
+                list(interface_fields(design, documented)),
+            ),
+        )
+    for schema_name, documented in (
+        ("planStepSchema", "PlanStep"),
+        ("planTaskSchema", "PlanTask"),
+        ("planTaskResumeSchema", "PlanTaskResume"),
+        ("stackBaseSchema", "StackBase"),
+    ):
+        reconcile_documented_schema(dag_model, schema_name, design, documented)
+    for prop, referenced in (
+        ("resume", "planTaskResumeSchema"),
+        ("stack_bases", "stackBaseSchema"),
+    ):
+        reconcile_schema_reference(dag_model, "planTaskSchema", prop, referenced)
 
     # A required envelope field and its route prefix are one major-version contract.
     # Reconcile every executable and documented copy so a future required-field

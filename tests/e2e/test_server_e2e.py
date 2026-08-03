@@ -130,8 +130,13 @@ def _settle(run_dir: Path, run_id: str) -> None:
     write_result(run_dir / "round-01", result)
 
 
-def _history_store(tmp_path: Path, run_id: str) -> Path:
-    """A recorded oneharness store with a worker and a judge session for the run."""
+def _history_store(tmp_path: Path, run_id: str, *, said: str = "said done") -> Path:
+    """A recorded oneharness store with a worker and a judge session for the run.
+
+    ``said`` is what each side is recorded as having replied. It is a parameter so a
+    journey can record a transcript that carries what a real one carried — a truncated
+    surrogate escape, say — rather than only text that was always encodable.
+    """
     sessions = []
     for role, agent_role, name in (
         ("agent", "worker", "engineer-ship"),
@@ -147,7 +152,7 @@ def _history_store(tmp_path: Path, run_id: str) -> Path:
                     "model": "gpt",
                     "timestamp": "2026-07-19T00:00:00Z",
                     "prompt": f"{role} prompt",
-                    "text": f"{role} said done",
+                    "text": f"{role} {said}",
                     "status": "ok",
                     "session_id": f"{role}-native",
                     "usage": {"input_tokens": 5, "output_tokens": 1},
@@ -1032,6 +1037,244 @@ def test_a_malformed_journalled_goal_is_refused_before_it_can_be_served(
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "projection_error"
+
+
+#: Hand-written on-disk runs recording shapes that *past* orchestrator builds wrote and
+#: that current plan loading would never produce. They exist because this API's value is
+#: reading history: its contract evolved against fixtures current code writes, so each of
+#: these was served for months and then stopped validating in the browser, or stopped
+#: serving at all. One directory per run:
+#:
+#: * ``legacy-resume-object`` — a replanned lifecycle node whose ``resume`` is
+#:   continuation *metadata*, recorded before ``completed_steps`` and ``pr`` were
+#:   written, beside ``stack_bases`` anchors, which are mappings and not branch names.
+#: * ``legacy-steps-node`` — a lifecycle node that delegates to ``steps``: it carries
+#:   neither ``task`` prose nor a ``persona`` of its own.
+#: * ``legacy-surrogate-text`` — recorded text carrying unpaired UTF-16 surrogates: a
+#:   truncated escape in the journal, in a value and in a node id, and an astral
+#:   character a JSON-escape-unaware reader split in two in the monitor snapshot.
+#:
+#: Add a directory whenever a recorded shape turns out to be unservable; the corpus
+#: check below picks it up with no wiring. Prose stays here rather than in a README
+#: beside the bytes: `recipeWorkspace` carries `tests/fixtures/**` and `codeWorkspace`
+#: drops every `*.md`, so a Markdown file there would put the narrower cache key
+#: outside the wider one.
+LEGACY_RUNS = REPO_ROOT / "tests" / "fixtures" / "legacy-runs"
+
+
+def _legacy_corpus(tmp_path: Path) -> Path:
+    """A runs root holding every checked-in legacy run shape, copied byte for byte."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    for fixture in sorted(LEGACY_RUNS.iterdir()):
+        if fixture.is_dir():
+            shutil.copytree(fixture, runs / fixture.name)
+    return runs
+
+
+def test_every_legacy_run_shape_still_serves(tmp_path: Path) -> None:
+    """Every recorded shape under `tests/fixtures/legacy-runs` serves 200 and valid JSON.
+
+    The corpus check, and deliberately blunt: a browser sweep that fetched all 50 runs
+    on the live root is what found these, and each one had been served for months
+    before the contract moved out from under it. Anything the corpus grows is covered
+    here with no wiring, so the next such shape fails a test instead of a click.
+
+    Bodies are read as *bytes* and decoded strictly. A response whose text still holds
+    an unpaired surrogate never reaches this assertion — it fails inside the response
+    encoder and arrives as the opaque 500 this exists to prevent — but decoding here
+    keeps the check honest about what the client actually receives.
+    """
+    runs = _legacy_corpus(tmp_path)
+    expected = {path.name for path in LEGACY_RUNS.iterdir() if path.is_dir()}
+    assert expected, "the legacy corpus is empty; restore tests/fixtures/legacy-runs"
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=60)
+        listed = client.get("/api/v2/runs", params={"include_settled": "true"})
+        served = {
+            run_id: client.get(f"/api/v2/runs/{run_id}", params={"include_conversations": "false"})
+            for run_id in sorted(expected)
+        }
+        timelines = {
+            run_id: client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"})
+            for run_id in sorted(expected)
+        }
+
+    assert listed.status_code == 200
+    assert {row["run_id"] for row in listed.json()["runs"]} == expected
+    for run_id, response in {**served, **timelines}.items():
+        assert response.status_code == 200, (run_id, response.text)
+        assert json.loads(response.content.decode("utf-8"))
+
+
+def test_a_replanned_run_serves_its_resume_metadata_and_stack_anchors(tmp_path: Path) -> None:
+    """A plan task's `resume` is served as the mapping the journal recorded.
+
+    It is continuation metadata — where a preserved workstream is picked back up — and
+    the run behind this fixture recorded it before `completed_steps` and `pr` were
+    written at all. The contract called the field a boolean, so a client validating the
+    detail whole rejected every replanned run; nothing may be dropped here to fit that.
+    """
+    runs = _legacy_corpus(tmp_path)
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        served = httpx.Client(base_url=base, timeout=60).get(
+            "/api/v2/runs/legacy-resume-object", params={"include_conversations": "false"}
+        )
+
+    assert served.status_code == 200
+    task = served.json()["rounds"][0]["plan"]["tasks"][0]
+    assert task["resume"] == {
+        "branch": "ai-orchestrator/engineer/57c0ec21-839e730418",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "e9fff0a79319e8d840357f1e7055c64f11eaee62",
+        "mode": "retry",
+    }
+    assert task["stack_bases"] == [
+        {
+            "branch": "ai-orchestrator/engineer/71e36ed5-74d695c83e",
+            "repo": "nickderobertis/ai-orchestrator",
+            "base_branch": "main",
+            "pr_base": "main",
+        }
+    ]
+
+
+def test_a_steps_shaped_node_serves_the_prose_it_actually_has(tmp_path: Path) -> None:
+    """A lifecycle node that delegates to `steps` carries no `task` of its own.
+
+    Its prose lives once per step, and so does its persona. The contract required
+    `task` on every entry, which no plan of this shape has ever had.
+    """
+    runs = _legacy_corpus(tmp_path)
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        served = httpx.Client(base_url=base, timeout=60).get(
+            "/api/v2/runs/legacy-steps-node", params={"include_conversations": "false"}
+        )
+
+    assert served.status_code == 200
+    task = served.json()["rounds"][0]["plan"]["tasks"][0]
+    assert "task" not in task
+    assert "persona" not in task
+    assert [step["id"] for step in task["steps"]] == ["e2e-real-api-path", "sign-off"]
+    assert task["steps"][0]["task"].startswith("## What")
+
+
+def test_a_run_whose_text_holds_unpaired_surrogates_serves_rather_than_500s(
+    tmp_path: Path,
+) -> None:
+    """Recorded text no encoder accepts is repaired at the read boundary, not fatal.
+
+    Both halves of the class, from the two readers that produce them: a truncated
+    escape in the journal has no character left to recover and becomes U+FFFD, while a
+    monitor snapshot read as YAML splits one astral character into two surrogates that
+    still mean what they always did, so the picture-frame emoji is served intact.
+
+    A node *id* is repaired too. It is journalled text like any other, and it reaches
+    the payload as a key — of `node_status`, of `node_details`, of the telemetry index —
+    so leaving keys alone would 500 the same run for the same reason.
+    """
+    runs = _legacy_corpus(tmp_path)
+    recorded = (runs / "legacy-surrogate-text" / "events.jsonl").read_bytes()
+    assert rb"\ud83d escape" in recorded, "the fixture must carry a truncated escape"
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        served = httpx.Client(base_url=base, timeout=60).get(
+            "/api/v2/runs/legacy-surrogate-text", params={"include_conversations": "false"}
+        )
+
+    assert served.status_code == 200
+    detail = json.loads(served.content.decode("utf-8"))
+    assert (
+        detail["rounds"][0]["node_results"]["screencomp"]["detail"]
+        == "gate failed on a truncated � escape"
+    )
+    assert "\U0001f5bc" in detail["details"]["commits"]["git:petsinc/org-apps@e9d58b1"]["detail"]
+    assert sorted(detail["rounds"][0]["node_status"]) == ["gallery-�", "screencomp"]
+    # The contract's own rule: one status per plan task, under the same repaired id.
+    assert sorted(task["id"] for task in detail["rounds"][0]["plan"]["tasks"]) == [
+        "gallery-�",
+        "screencomp",
+    ]
+    # The recorded journal is the audit record and is never rewritten to make a read work.
+    assert (runs / "legacy-surrogate-text" / "events.jsonl").read_bytes() == recorded
+
+
+def test_run_list_repairs_an_unpaired_surrogate_in_a_journalled_status(tmp_path: Path) -> None:
+    """The list's projection fallback still repairs journal text before serving it."""
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "surrogate-status")
+    journal = open_journal(run_dir, RunId("surrogate-status"), 1)
+    journal.append(
+        "node-settled",
+        node=NodeId("api"),
+        detail={"status": "failed-\ud83d"},
+    )
+    # A duplicate definition makes strict projection fail, so node_counts degrades to
+    # the telemetry status recorded above—the run-list sanitization path under test.
+    journal.append(
+        "node-added",
+        detail={"definition": {"id": "api", "persona": "engineer", "task": "ship"}},
+    )
+    recorded = (run_dir / "events.jsonl").read_bytes()
+    assert rb'"status": "failed-\ud83d"' in recorded
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        response = httpx.Client(base_url=base, timeout=60).get("/api/v2/runs")
+
+    assert response.status_code == 200
+    listed = json.loads(response.content.decode("utf-8"))
+    assert listed["runs"][0]["node_counts"] == {"failed-�": 1}
+    assert (run_dir / "events.jsonl").read_bytes() == recorded
+
+
+def test_a_transcript_holding_unpaired_surrogates_serves_rather_than_500s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One transcript is repaired on its own route, not only inside the run detail.
+
+    A conversation is fetched by id when a detail is served without transcripts, so the
+    route has to survive the same recorded text the detail does — and a transcript is
+    where most of a run's recorded text lives, which makes it the likeliest carrier.
+    """
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    store = _history_store(tmp_path, "demo", said="hit a truncated \ud83d escape")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    recorded = (tmp_path / "agent.jsonl").read_bytes()
+    assert rb"truncated \ud83d escape" in recorded, "the recorded turn must carry the escape"
+
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+        detail = client.get("/api/v2/runs/demo", params={"include_conversations": "false"})
+        assert detail.status_code == 200
+        listed = client.get("/api/v2/runs/demo")
+        assert listed.status_code == 200
+        worker = next(
+            conversation
+            for conversation in json.loads(listed.content.decode("utf-8"))["conversations"]
+            if conversation["attribution"]["agentRole"] == "worker"
+        )
+        one = client.get(f"/api/v2/runs/demo/conversations/{worker['conversation']['id']}")
+
+    assert one.status_code == 200
+    served = json.loads(one.content.decode("utf-8"))
+    assert served["conversation"]["turns"][0]["assistant"] == "agent hit a truncated � escape"
 
 
 def test_run_that_recorded_no_event_serves_a_null_last_event(tmp_path: Path) -> None:

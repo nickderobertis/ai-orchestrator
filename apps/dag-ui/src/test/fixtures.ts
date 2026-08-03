@@ -78,7 +78,7 @@ export const runList = {
       pending: 1,
       cancelled: 1,
     }),
-    summary(HISTORY_RUN, "complete", { done: 1 }),
+    summary(HISTORY_RUN, "complete", { done: 1, pending: 1 }),
   ],
 };
 
@@ -90,6 +90,27 @@ export function runDetail(runId: string = LIVE_RUN) {
           id: "archive",
           task: "Archive the release",
           done_when: "Archive exists",
+        },
+        // A lifecycle node that delegates to `steps`: it has no `task` prose and no
+        // `persona` of its own, which is a shape the read API has always served and
+        // the contract once refused. Its description lives once per step.
+        {
+          id: "corpus",
+          repo: "local/example",
+          deps: ["archive"],
+          steps: [
+            {
+              id: "sweep",
+              persona: "engineer",
+              task: "Sweep the recorded corpus",
+            },
+            {
+              id: "sign-off",
+              kind: "human",
+              task: "Confirm the sweep",
+              deps: ["sweep"],
+            },
+          ],
         },
       ]
     : [
@@ -158,7 +179,7 @@ export function runDetail(runId: string = LIVE_RUN) {
   // What the server derives on top of it and serves as the one authoritative status:
   // every plan task, including the three the journal says nothing about.
   const status: Record<string, string> = historical
-    ? { archive: "done" }
+    ? { archive: "done", corpus: "pending" }
     : {
         ...states,
         queued: "blocked",

@@ -262,24 +262,80 @@ const planStepSchema = openObject({
   max_turns: counter.positive().optional(),
   expects_no_diff: z.boolean().optional(),
 });
-export const planTaskSchema = planStepSchema.extend({
-  repo: z.string().min(1).optional(),
-  steps: z.array(planStepSchema).min(1).optional(),
-  session: z.string().min(1).optional(),
-  project_dir: z.string().min(1).optional(),
-  base_branch: z.string().min(1).optional(),
-  branch: z.string().min(1).optional(),
-  title: z.string().min(1).optional(),
-  verify_cmd: z.string().min(1).optional(),
-  skip_verify: z.boolean().optional(),
-  verify_via_ci: z.boolean().optional(),
-  merge_policy: z.enum(["auto", "direct", "none"]).optional(),
-  workflow: z.enum(["local", "remote"]).optional(),
-  repo_type: z.enum(["single-owner", "team"]).optional(),
-  execution_checkout: z.string().min(1).optional(),
-  stack_bases: z.array(z.string().min(1)).optional(),
-  resume: z.boolean().optional(),
+/**
+ * Where a preserved workstream is picked back up, as the plan records it for the
+ * round that continues it. Never a boolean: the field this schema types has always
+ * carried `orchestrator.lifecycle.Resume`'s own metadata, and typing it `boolean`
+ * is what made every replanned run fail whole-detail validation in the browser.
+ * `scripts/check-dag-state-contract.py` reconciles it with
+ * `orchestrator.lifecycle.RESUME_FIELDS` and `docs/dag-ui/design.md`.
+ *
+ * Only the four fields that locate the work are required. A journal written before
+ * a later field existed omits it — `completed_steps` and `pr` are both absent from
+ * recorded rounds — so requiring them here would sever exactly the history this
+ * contract exists to read.
+ */
+export const planTaskResumeSchema = openObject({
+  branch: z.string().min(1),
+  base_branch: z.string().min(1),
+  pr_base: z.string().min(1),
+  checkpoint: z.string().min(1),
+  completed_steps: z.array(z.string()).optional(),
+  pr: z.string().nullable().optional(),
+  mode: z.enum(["pause", "retry"]).optional(),
+  source_round: counter.positive().optional(),
+  attempts: counter.optional(),
 });
+/**
+ * One anchor a stacked plan node bases on. A *mapping*, never a bare branch name:
+ * `orchestrator.lifecycle.STACK_BASE_FIELDS` is its one source and refuses anything
+ * else, so a stacked run would have failed whole-detail validation the same way a
+ * replanned one did.
+ */
+export const stackBaseSchema = openObject({
+  branch: z.string().min(1),
+  repo: z.string().min(1).optional(),
+  identity: z.string().min(1).optional(),
+  base_branch: z.string().min(1).optional(),
+  pr: z.string().min(1).optional(),
+  pr_base: z.string().min(1).optional(),
+});
+/**
+ * One top-level plan node. `task` is optional because one legal node shape has never
+ * had it: a lifecycle node that delegates to `steps` carries its prose on each step
+ * instead, and so carries no `persona` either. The refinement below holds every other
+ * shape to non-empty prose, so an agent or human node that lost its task is still a
+ * contract violation rather than a silently blank node view.
+ */
+export const planTaskSchema = planStepSchema
+  .extend({
+    task: z.string().min(1).optional(),
+    repo: z.string().min(1).optional(),
+    steps: z.array(planStepSchema).min(1).optional(),
+    session: z.string().min(1).optional(),
+    project_dir: z.string().min(1).optional(),
+    base_branch: z.string().min(1).optional(),
+    branch: z.string().min(1).optional(),
+    title: z.string().min(1).optional(),
+    verify_cmd: z.string().min(1).optional(),
+    skip_verify: z.boolean().optional(),
+    verify_via_ci: z.boolean().optional(),
+    merge_policy: z.enum(["auto", "direct", "none"]).optional(),
+    workflow: z.enum(["local", "remote"]).optional(),
+    repo_type: z.enum(["single-owner", "team"]).optional(),
+    execution_checkout: z.string().min(1).optional(),
+    stack_bases: z.array(stackBaseSchema).optional(),
+    resume: planTaskResumeSchema.optional(),
+  })
+  .superRefine((task, context) => {
+    if (task.steps === undefined && task.task === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["task"],
+        message: "a plan task without `steps` must carry its own `task` prose",
+      });
+    }
+  });
 const artifactPathsSchema = openObject({
   gate_log: z.string().optional(),
   worker_report: z.string().optional(),

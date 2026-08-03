@@ -566,6 +566,56 @@ def read_logs(run_dir: Path) -> dict[str, str]:
     return logs
 
 
+#: Any UTF-16 surrogate code point. Recorded text reaches this module carrying them
+#: two ways: a reader that does not pair JSON's 😀 escapes leaves one astral
+#: character as two lone surrogates, and text decoded with `surrogateescape` keeps
+#: each undecodable byte as \uDC80-\uDCFF. Neither survives `str.encode("utf-8")`.
+_SURROGATES = re.compile("[\ud800-\udfff]")
+
+
+def servable_text(value: str) -> str:
+    r"""``value`` with every unpaired surrogate replaced, so the payload can be served.
+
+    A run is only worth reading if it can be read at all. Serializing a response
+    string that holds a lone surrogate raises inside the response encoder, far from
+    anything that names the run, and the generic handler turns it into an opaque 500
+    — the recorded run disappears from the UI with no hint why. One replacement
+    character in a diff the operator is skimming is strictly the better failure.
+
+    A *valid* surrogate pair is recombined rather than replaced: re-encoding through
+    UTF-16 restores the astral character the two halves always meant, so the emoji a
+    JSON-escape-unaware reader split back into ``\uD83D``/``\uDDBC`` is served as the
+    picture frame it always was rather than as two question marks. Only what is
+    genuinely unpaired — a truncated pair, or a ``surrogateescape`` byte — becomes
+    U+FFFD.
+    """
+    if _SURROGATES.search(value) is None:
+        return value
+    return value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+def make_servable(payload: object) -> object:
+    """Repair every unpaired surrogate in ``payload``, dict keys included.
+
+    A container is repaired *in place* and returned, so a caller holding one may
+    ignore the return; only a bare string has to take it. In place because these
+    payloads are freshly built and wholly owned by their one builder, and a run detail
+    is megabytes of transcript — rebuilding it to touch the handful of strings that
+    need it would double the peak memory of every read.
+    """
+    match payload:
+        case str():
+            return servable_text(payload)
+        case dict():
+            for key in [k for k in payload if isinstance(k, str) and _SURROGATES.search(k)]:
+                payload[servable_text(key)] = payload.pop(key)
+            for key, value in payload.items():
+                payload[key] = make_servable(value)
+        case list():
+            payload[:] = [make_servable(item) for item in payload]
+    return payload
+
+
 def _node_counts(run_dir: Path, telemetry: RunTelemetry) -> dict[str, int]:
     """How many nodes of the newest round hold each authoritative ``NodeStatus``.
 
@@ -699,6 +749,7 @@ def list_runs(
         result["next_cursor"] = RunsCursor(
             base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
         )
+    make_servable(result)
     return result
 
 
@@ -811,6 +862,7 @@ def run_detail(
     launch = resolve_launch(run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now)
     if launch is not None:
         detail["launch"] = launch
+    make_servable(detail)
     return detail
 
 
@@ -831,6 +883,7 @@ def run_conversation(
         raise RunNotFound(f"no recorded run {validated!r}")
     for conversation in run_conversations(validated, oneharness_bin=oneharness_bin):
         if conversation["conversation"]["id"] == wanted:
+            make_servable(conversation)
             return conversation
     raise ConversationNotFound(f"no conversation {wanted!r} in run {validated!r}")
 

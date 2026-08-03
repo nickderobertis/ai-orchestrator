@@ -2795,16 +2795,14 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
 _SHA = re.compile(r"[0-9a-f]{7,40}")
 _PR_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)")
 
-
-def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | None:
-    """Validate continuation metadata from a prior human-gated lifecycle round."""
-    from .plan import PlanError
-
-    if raw is None:
-        return None
-    if not isinstance(raw, dict):
-        raise PlanError(f"task {nid!r} 'resume' must be a mapping")
-    allowed = {
+#: Every field a plan task's ``resume`` mapping may carry. It is *continuation
+#: metadata* — the branch, base, and checkpoint a preserved workstream is picked back
+#: up from — and never a boolean switch, which is what the read API's published
+#: contract wrongly said until it was reconciled against this set. The one source:
+#: `_parse_resume` validates against it, and `scripts/check-dag-state-contract.py`
+#: reconciles the dag-model schema and `docs/dag-ui/design.md` with it.
+RESUME_FIELDS: frozenset[str] = frozenset(
+    {
         "branch",
         "base_branch",
         "pr_base",
@@ -2815,7 +2813,18 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         "source_round",
         "attempts",
     }
-    if unknown := set(raw) - allowed:
+)
+
+
+def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | None:
+    """Validate continuation metadata from a prior human-gated lifecycle round."""
+    from .plan import PlanError
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise PlanError(f"task {nid!r} 'resume' must be a mapping")
+    if unknown := set(raw) - RESUME_FIELDS:
         raise PlanError(f"task {nid!r} 'resume' has unknown fields: {', '.join(sorted(unknown))}")
     for field_name in ("branch", "base_branch", "pr_base"):
         value = raw.get(field_name)
@@ -2869,6 +2878,17 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
     )
 
 
+#: Every field one plan-task stack anchor may carry. An anchor is a *mapping* naming
+#: the branch a stacked node bases on — never the bare branch name the read API's
+#: published contract claimed until it was reconciled against this set. The one
+#: source: `_parse_stack_bases` validates against it, and
+#: `scripts/check-dag-state-contract.py` reconciles the dag-model schema and
+#: `docs/dag-ui/design.md` with it.
+STACK_BASE_FIELDS: frozenset[str] = frozenset(
+    {"branch", "repo", "identity", "base_branch", "pr", "pr_base"}
+)
+
+
 def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
     from .plan import PlanError
 
@@ -2878,8 +2898,7 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise PlanError(f"task {nid!r} stack_bases #{index} must be a mapping")
-        allowed = {"branch", "repo", "identity", "base_branch", "pr", "pr_base"}
-        if set(item) - allowed:
+        if set(item) - STACK_BASE_FIELDS:
             raise PlanError(f"task {nid!r} stack_bases #{index} has unknown fields")
         branch = item.get("branch")
         if not isinstance(branch, str) or not branch.strip():

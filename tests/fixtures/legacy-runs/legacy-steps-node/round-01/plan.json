@@ -1,0 +1,28 @@
+{
+  "schema_version": 4,
+  "concurrency": 1,
+  "tasks": [
+    {
+      "id": "ivr-real-api",
+      "repo": "petsinc/org-apps",
+      "repo_type": "team",
+      "steps": [
+        {
+          "id": "e2e-real-api-path",
+          "persona": "engineer",
+          "max_turns": 40,
+          "task": "## What\nGive the ivr app a real-API e2e path.",
+          "done_when": "all task acceptance criteria are met"
+        },
+        {
+          "id": "sign-off",
+          "kind": "human",
+          "task": "Merge the published pull request.",
+          "deps": [
+            "e2e-real-api-path"
+          ]
+        }
+      ]
+    }
+  ]
+}

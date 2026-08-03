@@ -1,0 +1,5 @@
+{"version": 1, "seq": 1, "at": 1754160001.0, "kind": "node-added", "run_id": "legacy-surrogate-text", "round": 1, "detail": {"definition": {"id": "screencomp", "persona": "engineer", "task": "Render the gallery column"}}}
+{"version": 1, "seq": 2, "at": 1754160002.0, "kind": "node-added", "run_id": "legacy-surrogate-text", "round": 1, "detail": {"definition": {"id": "gallery-\ud83d", "persona": "engineer", "task": "Host the gallery"}}}
+{"version": 1, "seq": 3, "at": 1754160003.0, "kind": "round-started", "run_id": "legacy-surrogate-text", "round": 1, "detail": {"plan": {"schema_version": 4, "concurrency": 1}}}
+{"version": 1, "seq": 4, "at": 1754160004.0, "kind": "node-started", "run_id": "legacy-surrogate-text", "round": 1, "node": "screencomp", "detail": {"persona": "engineer"}}
+{"version": 1, "seq": 5, "at": 1754160005.0, "kind": "node-failed", "run_id": "legacy-surrogate-text", "round": 1, "node": "screencomp", "detail": {"detail": "gate failed on a truncated \ud83d escape", "result": {"status": "failed", "detail": "gate failed on a truncated \ud83d escape", "exit_code": 2}}}

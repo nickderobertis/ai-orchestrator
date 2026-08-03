@@ -1,0 +1,14 @@
+{
+  "version": 3,
+  "commits": {
+    "git:petsinc/org-apps@e9d58b1": {
+      "sha": "e9d58b1",
+      "subject": "feat(screencomp): link the gallery column",
+      "branch": "engineer/screencomp",
+      "base": "main",
+      "identity": "petsinc/org-apps",
+      "detail": "The PR comment gains a **Visual** column: `\ud83d\uddbc\ufe0f +A ~C -R` linking to the hosted gallery."
+    }
+  },
+  "prs": {}
+}

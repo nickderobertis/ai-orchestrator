@@ -227,6 +227,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/history.py",
         "orchestrator/labels.py",
         "orchestrator/launch.py",
+        "orchestrator/lifecycle.py",
         "orchestrator/read_model.py",
         "orchestrator/telemetry.py",
         "orchestrator/timeline.py",
@@ -295,6 +296,67 @@ def test_dag_state_contract_checker_reports_node_status_drift(tmp_path: Path) ->
 
     assert result.returncode != 0
     assert "paused" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_a_plan_task_typed_as_a_scalar(
+    tmp_path: Path,
+) -> None:
+    """`resume` is continuation metadata; calling it a boolean severed replanned runs.
+
+    Field types are otherwise out of this gate's scope, so the reference itself is what
+    is checked: every field name still agreed while the contract rejected whole runs.
+    """
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(
+        model.read_text().replace(
+            "    resume: planTaskResumeSchema.optional(),", "    resume: z.boolean().optional(),"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "planTaskSchema.resume is not built from planTaskResumeSchema" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_plan_task_optionality_drift(tmp_path: Path) -> None:
+    """A lifecycle node that delegates to `steps` has no `task`, and the docs say so."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(
+        model.read_text().replace(
+            "    task: z.string().min(1).optional(),\n    repo:",
+            "    task: z.string().min(1),\n    repo:",
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "disagree about whether ['task'] is optional" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_resume_field_drift(tmp_path: Path) -> None:
+    """`orchestrator.lifecycle` owns the resume fields; the docs may not lag them."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    lifecycle = checkout / "orchestrator/lifecycle.py"
+    lifecycle.write_text(
+        lifecycle.read_text().replace(
+            '        "source_round",\n        "attempts",\n    }\n)',
+            '        "source_round",\n        "attempts",\n        "worktree",\n    }\n)',
+            1,
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "plan task PlanTaskResume fields" in result.stderr
+    assert "worktree" in result.stderr
 
 
 @pytest.mark.reads_docs

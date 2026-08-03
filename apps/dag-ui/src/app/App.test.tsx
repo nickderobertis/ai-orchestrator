@@ -622,6 +622,27 @@ describe("DAG application", () => {
     expect(await screen.findByText("foundation")).toBeInTheDocument();
   });
 
+  test("reads a steps-shaped node's task from the steps that carry it", async () => {
+    // A lifecycle node that delegates to `steps` has no `task` prose of its own, so
+    // reading only the node's own field left the Task tab blank for exactly the nodes
+    // whose description is longest.
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${HISTORY_RUN}&node=corpus&tab=task`,
+    );
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+
+    expect(await screen.findByRole("tab", { name: "Task" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const prose = await screen.findByText(/Sweep the recorded corpus/);
+    expect(prose).toHaveTextContent("sweep");
+    expect(prose).toHaveTextContent("Confirm the sweep");
+  });
+
   test("deep-links node tabs and moves across them with the keyboard", async () => {
     window.history.replaceState(
       null,

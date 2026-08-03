@@ -138,7 +138,7 @@ export function NodeTimelineView({
           ))}
         </TabsList>
         <TabsContent className="node-tab-panel" value="task">
-          <pre>{node.task.task}</pre>
+          <pre>{taskProse(node.task)}</pre>
           <dl className="facts">
             <div>
               <dt>Outcome</dt>
@@ -245,6 +245,20 @@ export function NodeTimelineView({
       </Tabs>
     </section>
   );
+}
+
+/**
+ * The prose for a node's Task tab, wherever the plan put it.
+ *
+ * A lifecycle node that delegates to `steps` carries no `task` of its own — the work
+ * is described once per step — so reading `task.task` alone left the tab blank for
+ * exactly the nodes whose description is longest.
+ */
+function taskProse(task: NodeView["task"]): string {
+  if (task.task !== undefined) return task.task;
+  const steps = task.steps ?? [];
+  if (steps.length === 0) return "No task prose recorded.";
+  return steps.map((step) => `## ${step.id}\n\n${step.task}`).join("\n\n");
 }
 
 function Publication({ node }: { readonly node: NodeView }) {

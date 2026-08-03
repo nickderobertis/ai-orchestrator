@@ -57,6 +57,7 @@ from .read_model import (
     RunNotFound,
     _artifact_id,
     contained_run_dir,
+    make_servable,
 )
 from .runs import NodeId, RunId, validate_run_id
 
@@ -1048,12 +1049,16 @@ def run_timeline(
             log_path = detail.pop("log_path", None)
             if isinstance(log_path, str):
                 detail["artifact_id"] = by_path.get(log_path, _artifact_id("gate_log", log_path))
-    return {
+    timeline: RunTimeline = {
         "api_version": API_VERSION,
         "observed_at": (now or datetime.now(UTC)).isoformat(),
         "run_id": validated,
         "spans": spans,
     }
+    # Labels and details here are the same journalled text the run detail serves, so
+    # they carry the same unpaired surrogates and would fail the same way.
+    make_servable(timeline)
+    return timeline
 
 
 def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:

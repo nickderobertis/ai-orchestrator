@@ -1,0 +1,27 @@
+{
+  "schema_version": 4,
+  "concurrency": 1,
+  "tasks": [
+    {
+      "id": "node-timeline",
+      "repo": "nickderobertis/ai-orchestrator",
+      "persona": "engineer",
+      "task": "Continue the preserved node-timeline branch",
+      "resume": {
+        "branch": "ai-orchestrator/engineer/57c0ec21-839e730418",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "e9fff0a79319e8d840357f1e7055c64f11eaee62",
+        "mode": "retry"
+      },
+      "stack_bases": [
+        {
+          "branch": "ai-orchestrator/engineer/71e36ed5-74d695c83e",
+          "repo": "nickderobertis/ai-orchestrator",
+          "base_branch": "main",
+          "pr_base": "main"
+        }
+      ]
+    }
+  ]
+}

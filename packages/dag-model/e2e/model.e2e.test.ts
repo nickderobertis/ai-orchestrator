@@ -10,6 +10,7 @@ import {
   parseRunDetail,
   parseRunList,
   parseRunTimeline,
+  planTaskSchema,
   roundSchema,
   runConversationsSchema,
   runDetailSchema,
@@ -91,6 +92,104 @@ test("the goal id the read boundary derives is what makes a legacy run parse", a
     ],
   };
   expect(() => parseRunDetail(legacy)).toThrow();
+});
+
+/** The legacy plan shapes Python serves verbatim, read from the same committed corpus. */
+// Tuple literals keep each fixture name visible to test.each instead of widening to string[].
+const LEGACY_RUNS = ["legacy-resume-object", "legacy-steps-node"] as const;
+
+async function legacyRound(run: string) {
+  const plan = await Bun.file(
+    new URL(
+      `../../../tests/fixtures/legacy-runs/${run}/round-01/plan.json`,
+      import.meta.url,
+    ),
+  ).json();
+  const ids: string[] = plan.tasks.map((task: { id: string }) => task.id);
+  return {
+    run_id: run,
+    round: 1,
+    plan,
+    node_states: Object.fromEntries(ids.map((id) => [id, "running"])),
+    node_status: Object.fromEntries(ids.map((id) => [id, "running"])),
+    node_gated_by: {},
+    node_results: {},
+    attestations: [],
+    result: null,
+    last_seq: 3,
+  };
+}
+
+test.each(LEGACY_RUNS)(
+  "the %s corpus fixture parses as the contract's own plan shape",
+  async (run) => {
+    // The browser side of `tests/e2e/test_server_e2e.py`'s corpus check, over the same
+    // committed bytes: Python proved the read API serves these plans unchanged, so a
+    // schema that rejects them here is a run the operator cannot open.
+    const golden = await Bun.file(
+      new URL("../../../tests/golden/run-detail-v2.json", import.meta.url),
+    ).json();
+    const parsed = parseRunDetail({
+      ...golden,
+      rounds: [await legacyRound(run)],
+    });
+    expect(parsed.rounds[0]?.plan.tasks).toHaveLength(1);
+  },
+);
+
+test("a replanned task's resume is metadata, and a boolean is refused", () => {
+  const resume = {
+    branch: "ai-orchestrator/engineer/57c0ec21-839e730418",
+    base_branch: "main",
+    pr_base: "main",
+    checkpoint: "e9fff0a79319e8d840357f1e7055c64f11eaee62",
+    mode: "retry",
+  };
+  expect(
+    planTaskSchema.parse({ id: "node-timeline", task: "Continue", resume })
+      .resume,
+  ).toEqual(resume);
+  // What the contract used to say, and what nothing has ever recorded.
+  expect(
+    planTaskSchema.safeParse({ id: "n", task: "Continue", resume: true })
+      .success,
+  ).toBe(false);
+  // A branch alone does not locate preserved work; the four locators are required.
+  expect(
+    planTaskSchema.safeParse({
+      id: "n",
+      task: "Continue",
+      resume: { branch: "engineer/preserved" },
+    }).success,
+  ).toBe(false);
+  // Anchors are mappings, never bare branch names.
+  expect(
+    planTaskSchema.safeParse({
+      id: "n",
+      task: "Continue",
+      stack_bases: ["engineer/preserved"],
+    }).success,
+  ).toBe(false);
+});
+
+test("only a steps-shaped task may omit its own prose", () => {
+  expect(
+    planTaskSchema.parse({
+      id: "ivr-real-api",
+      repo: "petsinc/org-apps",
+      steps: [{ id: "build", persona: "engineer", task: "Build it" }],
+    }).task,
+  ).toBeUndefined();
+  // Everything else still owes the contract prose, so a blank agent or human node
+  // stays a violation rather than an empty node view.
+  expect(planTaskSchema.safeParse({ id: "build" }).success).toBe(false);
+  expect(
+    planTaskSchema.safeParse({ id: "approve", kind: "human" }).success,
+  ).toBe(false);
+  // A *step* has nowhere else to put its prose, so it still requires it.
+  expect(
+    planTaskSchema.safeParse({ id: "n", steps: [{ id: "build" }] }).success,
+  ).toBe(false);
 });
 
 test("a package consumer rejects incompatible list and detail payloads", () => {
