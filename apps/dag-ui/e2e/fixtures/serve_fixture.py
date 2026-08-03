@@ -443,7 +443,7 @@ def _write_outcomes_run(runs_dir: Path) -> None:
     }
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
-    _record_launch(run_dir, OUTCOMES_RUN, CLAUDE_LAUNCH)
+    _record_launch(run_dir, OUTCOMES_RUN, CLAUDE_LAUNCH, CLAUDE_SESSION_ID)
 
 
 #: Plan-file JSON, typed as every task list here is and for the same reason.
@@ -473,7 +473,7 @@ def _write_legacy_run(runs_dir: Path) -> None:
             "results": {"convert": {"status": "improvised", "task": "Convert the legacy store"}},
         },
     )
-    _record_launch(run_dir, LEGACY_RUN, CLAUDE_LAUNCH)
+    _record_launch(run_dir, LEGACY_RUN, CLAUDE_LAUNCH, CLAUDE_SESSION_ID)
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
