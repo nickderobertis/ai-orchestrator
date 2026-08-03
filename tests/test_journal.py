@@ -469,13 +469,25 @@ def test_node_journal_labels_omit_coordinates_an_untracked_round_lacks() -> None
     assert NodeJournal(sink=NullJournal(), node=NodeId("api")).labels == {"node": "api"}
 
 
-def test_null_node_journal_records_nothing_and_labels_nothing() -> None:
-    """A bare `repo-task` has no node; it must not label a dispatch with a fake one."""
+def test_null_node_journal_records_nothing_but_still_labels_its_own_workstream() -> None:
+    """A bare `repo-task` records nothing, and still names the work it dispatched.
+
+    The two are separate jobs. There is no ledger to append to, so `append` stays a
+    no-op — but every session this workstream produces has to be findable as one
+    another's company afterwards, and an unlabelled dispatch left them joinable to
+    nothing at all. The scope it labels with is synthetic and says so.
+    """
     null = NullNodeJournal()
 
-    assert null.for_step(StepId("impl")) is null
     assert null.append("node-started", detail={"x": 1}) is None
-    assert null.labels == {}
+    assert null.artifact_dir is None
+    assert null.labels == {"run_id": null.run_id, "node": "repo-task"}
+    assert null.run_id.startswith("repo-task-")
+    # A step narrows the same workstream rather than starting a second one.
+    stepped = null.for_step(StepId("impl"))
+    assert stepped.labels == {"run_id": null.run_id, "node": "repo-task", "step": "impl"}
+    # And two workstreams are told apart, so one's sessions never join the other's.
+    assert NullNodeJournal().run_id != null.run_id
 
 
 def test_detail_may_carry_keys_that_shadow_the_record_locators(tmp_path: Path) -> None:

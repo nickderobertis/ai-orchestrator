@@ -76,8 +76,13 @@ the API, or route those paths to it.
 ## Use
 
 The left navigation groups current and settled DAGs by their launching Claude
-or Codex session, read from the `launch` join the run list itself carries. Select
-a run, then:
+or Codex session, read from the `launch` attribution the run list itself carries.
+The grouping key is that record's opaque `session_key`, not its `launch_id`: one
+planner session mints a fresh launch id per `just orchestrate`, so every run of one
+session gathers under one heading, and its short form is the same fingerprint
+`just runs` prints. A run whose session nothing can name reads as its launch, and a
+run with no launch record at all — an e2e fixture, a bare `run-plan` — reads as
+`Unattributed` rather than as an unknown session. Select a run, then:
 
 - use **Graph** to inspect status and progress; green nodes succeeded, red nodes
   failed or were cancelled, and an animated acid highlight marks active work;
@@ -85,7 +90,9 @@ a run, then:
   **timeline view** (below);
 - use **Overall** to see whole-run telemetry and the run's **run-level sessions**.
   A session the graph placed at no node is run-level work, so that is where the
-  planner's own conversation and the per-round check-ins are read; each is fetched
+  planner's own conversation and the per-round check-ins are read; each names its
+  own role — orchestrator, check-in — from the role pair its timeline span carries,
+  and the same launch phrase the navigation heads its group with. Each is fetched
   only while it is open, and a timeline that has not arrived or could not be read
   is reported as such rather than as a run that recorded none.
 

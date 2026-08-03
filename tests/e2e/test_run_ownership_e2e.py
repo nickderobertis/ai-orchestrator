@@ -20,6 +20,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -41,7 +42,7 @@ from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.launch import (
     LAUNCHER_ENVIRONMENT_VARIABLES,
     provenance_dir,
-    read_launch_info,
+    read_launch_link,
     session_fingerprint,
 )
 from orchestrator.stop import RecordedOwner, recorded_owners, run_tree
@@ -426,8 +427,9 @@ def test_orchestrate_records_this_session_and_runs_shows_who_owns_each_run(
     mine = _orchestrate(tmp_path, runs, onejudge_bin, "owned", planner, launches)
 
     # No flags were passed: the run recorded the session it was launched from.
-    launch_id = read_launch_info(mine.run_dir)
-    assert launch_id is not None
+    link = read_launch_link(mine.run_dir)
+    assert link is not None
+    launch_id = link.launch_id
     record = json.loads(
         (
             Path(planner["XDG_STATE_HOME"]) / "ai-orchestrator" / "launches" / f"{launch_id}.json"
@@ -449,7 +451,7 @@ def test_orchestrate_records_this_session_and_runs_shows_who_owns_each_run(
     # A second, unattributable launch: the state every run on this host was already in.
     stranger = _session_env(tmp_path, None)
     theirs = _orchestrate(tmp_path, runs, onejudge_bin, "unowned", stranger, launches)
-    assert read_launch_info(theirs.run_dir) is not None
+    assert read_launch_link(theirs.run_dir) is not None
 
     owner_view = _runs_view(runs, planner)
     assert f"{mine.run_id}  [mine]" in owner_view
@@ -467,6 +469,22 @@ def test_orchestrate_records_this_session_and_runs_shows_who_owns_each_run(
     assert mine.run_id in _runs_view(runs, planner, "--mine")
     assert theirs.run_id not in _runs_view(runs, planner, "--mine")
     assert _runs_view(runs, other, "--mine").strip() == "No runs launched by this session."
+
+    # And none of that depends on the protected record surviving. It is short-lived
+    # and lives outside the runs root, so every run on this host eventually reads
+    # without it — which is why the run itself records what attributes it. Take the
+    # whole directory away, which is both expiry and a swept state directory, and both
+    # planners still get the same answers about the same runs.
+    shutil.rmtree(Path(planner["XDG_STATE_HOME"]) / "ai-orchestrator" / "launches")
+    assert f"{mine.run_id}  [mine]" in _runs_view(runs, planner)
+    assert f"{mine.run_id}  [claude-code:{session_fingerprint('session-alpha')}]" in _runs_view(
+        runs, other
+    )
+    assert "session-alpha" not in _runs_view(runs, other)
+    assert mine.run_id in _runs_view(runs, planner, "--mine")
+    # A run that never named a session is still nobody's, rather than becoming the
+    # reader's own once there is nothing left to check it against.
+    assert f"{theirs.run_id}  [unknown]" in _runs_view(runs, planner)
 
 
 def test_stop_refuses_another_planners_run_and_an_unattributable_one(
@@ -601,8 +619,9 @@ def test_stop_answers_for_a_run_it_cannot_address_or_has_nothing_left_to_stop(
 
 def _recorded_provenance(launch: Launch) -> dict[str, object]:
     """The out-of-repo record this launch joined to, read where the scheme puts it."""
-    launch_id = read_launch_info(launch.run_dir)
-    assert launch_id is not None
+    link = read_launch_link(launch.run_dir)
+    assert link is not None
+    launch_id = link.launch_id
     record = (
         Path(launch.env["XDG_STATE_HOME"]) / "ai-orchestrator" / "launches" / f"{launch_id}.json"
     )
@@ -696,7 +715,7 @@ def test_orchestrate_records_a_codex_session_and_honours_explicit_overrides(
         )
         degraded = Launch(str(json.loads(started.stdout)["run_id"]), runs, environment, partial)
         launches.append(degraded)
-        launch_id = read_launch_info(degraded.run_dir)
+        launch_id = read_launch_link(degraded.run_dir)
         assert launch_id is not None, "the run still records its own join key"
         assert not (
             Path(environment["XDG_STATE_HOME"])

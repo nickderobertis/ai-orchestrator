@@ -41,6 +41,12 @@ FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 #: Launch ids are 32 lowercase hex characters; these join each run to its launcher.
 CODEX_LAUNCH = "c0de" * 8
 CLAUDE_LAUNCH = "c1a0" * 8
+#: The launching sessions behind them. The codex one keeps its protected provenance
+#: record; the claude one deliberately gets none, so the navigation has to attribute
+#: that run from what the run directory itself recorded — which is the state every
+#: run reaches once its short-lived record expires.
+CODEX_SESSION_ID = "codex-top-session"
+CLAUDE_SESSION_ID = "claude-code-top-session"
 
 FOUNDATION_PR = "https://github.com/example/repo/pull/12"
 
@@ -151,17 +157,26 @@ _EVENTLESS_TASKS: list[dict[str, Any]] = [
 ]
 
 
-def _record_launch(run_dir: Path, run_id: str, launch_id: str) -> None:
-    """Persist the run->launch join exactly as the executor's launch record does."""
+def _record_launch(run_dir: Path, run_id: str, launch_id: str, session_id: str) -> None:
+    """Persist the run->launch record exactly as the executor's launch writes one.
+
+    The `launch` object is built by the production builder rather than restated here,
+    so this fixture cannot record an attribution the served reader would refuse.
+    """
+    from orchestrator.launch import LaunchId, launch_info
+
+    launcher = "codex" if launch_id == CODEX_LAUNCH else "claude-code"
     (run_dir / "launch.json").write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "run_id": run_id,
                 "channel_id": run_id,
                 "plan_name": run_id,
                 "commands": {},
-                "launch": {"launch_id": launch_id},
+                "launch": launch_info(
+                    launch_id=LaunchId(launch_id), launcher=launcher, session_id=session_id
+                ),
             }
         ),
         encoding="utf-8",
@@ -279,7 +294,7 @@ def _write_live_run(runs_dir: Path) -> None:
         node=NodeId("obsolete"),
         detail={"status": "cancelled", "result": {"status": "cancelled", "ok": False}},
     )
-    _record_launch(run_dir, LIVE_RUN, CODEX_LAUNCH)
+    _record_launch(run_dir, LIVE_RUN, CODEX_LAUNCH, CODEX_SESSION_ID)
 
 
 def _write_history_run(runs_dir: Path) -> None:
@@ -305,7 +320,7 @@ def _write_history_run(runs_dir: Path) -> None:
     }
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
-    _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH)
+    _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH, CLAUDE_SESSION_ID)
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
@@ -328,7 +343,7 @@ def _write_sibling_run(runs_dir: Path) -> None:
         journal.append("node-added", detail={"definition": _SIBLING_TASKS[0]})
         journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
         journal.append("node-started", node=NodeId("sibling"), detail={"persona": "engineer"})
-    _record_launch(run_dir, SIBLING_RUN, CODEX_LAUNCH)
+    _record_launch(run_dir, SIBLING_RUN, CODEX_LAUNCH, CODEX_SESSION_ID)
 
 
 def _write_unattributed_run(runs_dir: Path) -> None:
@@ -391,7 +406,7 @@ def _write_busy_run(runs_dir: Path) -> None:
     journal.append("node-added", detail={"definition": _BUSY_TASKS[0]})
     journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
     journal.append("node-started", node=NodeId("sweep"), detail={"persona": "engineer"})
-    _record_launch(run_dir, BUSY_RUN, CODEX_LAUNCH)
+    _record_launch(run_dir, BUSY_RUN, CODEX_LAUNCH, CODEX_SESSION_ID)
 
 
 def _session(
@@ -650,13 +665,16 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     _write_sibling_run(runs_dir)
     _write_live_run(runs_dir)
     os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))
-    for launch_id, launcher in ((CODEX_LAUNCH, "codex"), (CLAUDE_LAUNCH, "claude-code")):
-        write_provenance(
-            launch_id=launch_id,
-            launcher=launcher,
-            launcher_session_id=f"{launcher}-top-session",
-            repository_identity="local/ai-orchestrator",
-        )
+    # Only the codex launch gets the protected record. The claude one is served with
+    # none at all — the state every launch reaches once its short-lived record expires
+    # or the state directory is swept — so a browser journey that still finds its runs
+    # grouped under their session is proving attribution outlives that record.
+    write_provenance(
+        launch_id=CODEX_LAUNCH,
+        launcher="codex",
+        launcher_session_id=CODEX_SESSION_ID,
+        repository_identity="local/ai-orchestrator",
+    )
     return runs_dir, _oneharness_bin(workspace)
 
 

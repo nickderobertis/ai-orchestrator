@@ -27,6 +27,7 @@ import json
 import math
 import os
 import time
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -775,18 +776,37 @@ class NodeJournal:
         )
 
 
+#: The node id every untracked lifecycle run labels its dispatches with. One fixed
+#: name, because there is exactly one node in such a run: the workstream itself.
+UNTRACKED_NODE = "repo-task"
+#: Prefix of the synthetic run id an untracked lifecycle run labels with. It names a
+#: run that is real work but has no run *directory*, so it is deliberately shaped so
+#: nothing mistakes it for one: no recorded run id has this form.
+UNTRACKED_RUN_PREFIX = "repo-task-"
+
+
 @dataclass(frozen=True)
 class NullNodeJournal:
     """Node-scoped no-op for a lifecycle run outside any tracked graph.
 
-    A bare ``just repo-task`` has no run, round, or node. This is that absence
-    stated once, rather than a scope built around a placeholder node id — which
-    would not merely record nothing, it would *label* every dispatch it made with a
-    node that does not exist.
+    A bare ``just repo-task`` has no run directory, round, or graph node, so there
+    is nothing to record against and `append` stays a no-op.
+
+    It still *labels*, and that is not a contradiction. Recording is about a ledger
+    another process reads to make decisions; labelling is about the history sessions
+    this workstream produces being findable as one another's company afterwards. A
+    dispatch with no labels at all left every session it produced — worker, judge,
+    and the lint runs under them — joinable to nothing, which is why measured
+    telemetry could see hundreds of sessions and attribute none of them to any work.
+    The scope is synthetic and says so: a run id no run directory can have, and one
+    node named for the command that made it.
     """
 
+    run_id: str = field(default_factory=lambda: f"{UNTRACKED_RUN_PREFIX}{uuid.uuid4().hex[:12]}")
+    step: StepId | None = None
+
     def for_step(self, step: StepId) -> NullNodeJournal:
-        return self
+        return replace(self, step=step)
 
     def append(
         self,
@@ -800,7 +820,8 @@ class NullNodeJournal:
 
     @property
     def labels(self) -> dict[str, str]:
-        return {}
+        """This untracked workstream as ``ONEHARNESS_HISTORY_LABELS``."""
+        return graph_labels(run_id=RunId(self.run_id), node=NodeId(UNTRACKED_NODE), step=self.step)
 
     @property
     def artifact_dir(self) -> None:

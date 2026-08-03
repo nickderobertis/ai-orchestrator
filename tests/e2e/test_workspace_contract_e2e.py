@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -222,6 +223,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
         "orchestrator/conversations.py",
+        "orchestrator/history.py",
         "orchestrator/labels.py",
         "orchestrator/launch.py",
         "orchestrator/read_model.py",
@@ -1471,12 +1473,22 @@ def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path
 
 @pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
-    """The base bumped this 7 -> 8 while the contract still said 7; gate it."""
+    """The base bumped this 7 -> 8 while the contract still said 7; gate it.
+
+    The bumped number is read from the checkout rather than written here, so the gate
+    stays under test across the next bump instead of silently passing on a literal
+    that no longer appears in the file.
+    """
     checkout = _dag_state_contract_checkout(tmp_path)
     telemetry = checkout / "orchestrator/telemetry.py"
+    current = int(
+        re.search(r"^TELEMETRY_SCHEMA_VERSION = (\d+)$", telemetry.read_text(), re.M)
+        .group(1)  # type: ignore[union-attr]
+    )
     telemetry.write_text(
         telemetry.read_text().replace(
-            "TELEMETRY_SCHEMA_VERSION = 8", "TELEMETRY_SCHEMA_VERSION = 9"
+            f"TELEMETRY_SCHEMA_VERSION = {current}",
+            f"TELEMETRY_SCHEMA_VERSION = {current + 1}",
         )
     )
 
@@ -1484,7 +1496,7 @@ def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Pat
 
     assert result.returncode != 0
     assert "telemetry schema version" in result.stderr
-    assert "is 9 but" in result.stderr
+    assert f"is {current + 1} but" in result.stderr
     assert "reconcile them in one change" in result.stderr
 
 

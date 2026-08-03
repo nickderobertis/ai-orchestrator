@@ -179,7 +179,8 @@ class TimelineSpan(TypedDict):
     in-flight run looks like, not an error. ``parent_id`` links spans into the tree
     the recorded nesting implies; a span with no parent is run-level.
 
-    ``count`` and ``total_duration_ms`` appear only on a ``rollup`` span.
+    ``count`` and ``total_duration_ms`` appear only on a ``rollup`` span, and the
+    role pair only on a ``dispatch`` one.
     """
 
     id: str
@@ -195,6 +196,8 @@ class TimelineSpan(TypedDict):
     status: NotRequired[str]
     count: NotRequired[int]
     total_duration_ms: NotRequired[int]
+    agent_role: NotRequired[str]
+    transport_role: NotRequired[str]
     reference: NotRequired[TimelineReference]
 
 
@@ -332,6 +335,8 @@ class _Assembly:
         step_id: str | None = None,
         round_number: int | None = None,
         status: str | None = None,
+        agent_role: str | None = None,
+        transport_role: str | None = None,
         reference: TimelineReference | None = None,
     ) -> str:
         span: TimelineSpan = {
@@ -352,6 +357,10 @@ class _Assembly:
             span["round"] = round_number
         if status is not None:
             span["status"] = status
+        if agent_role is not None:
+            span["agent_role"] = agent_role
+        if transport_role is not None:
+            span["transport_role"] = transport_role
         if reference is not None:
             span["reference"] = reference
         self._spans[span_id] = span
@@ -851,6 +860,11 @@ def _fold_conversations(assembly: _Assembly, conversations: Sequence[DagConversa
             step_id=attribution.get("stepId"),
             round_number=attribution.get("round"),
             status=transcript["state"],
+            # Both roles travel with the span so a reader can say *what* a dispatch
+            # was — worker, judge, orchestrator, check-in, pr-author, lint — without
+            # fetching the transcript behind every row to find out.
+            agent_role=attribution["agentRole"],
+            transport_role=attribution["transportRole"],
             reference=reference,
         )
         for turn in transcript["turns"]:

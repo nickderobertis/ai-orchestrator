@@ -650,6 +650,16 @@ def main() -> None:
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
 
+    # The session links a node's telemetry serves. They are declared in Python by the
+    # collector rather than by the read model, and the contract documents them beside
+    # the rest of `RunTelemetry`, so this is where the two sides meet.
+    reconcile_shape(
+        root / "orchestrator/telemetry.py",
+        "SessionLink",
+        design,
+        interface_fields(design, "SessionLink"),
+    )
+
     # The served run timeline: the design contract is authoritative for its payload
     # shapes, and its two closed vocabularies are mirrored in the dag-model schemas a
     # client parses with, so all three sides are reconciled here.
@@ -848,6 +858,24 @@ def main() -> None:
             'AgentRole judge member; restore `agent_role = "judge"` and ensure '
             "orchestrator/labels.py retains the `judge` role"
         )
+
+    # The transport-party vocabulary, which three payloads now carry beside the
+    # semantic role: a conversation's attribution, a node's session links, and a
+    # timeline dispatch span. `orchestrator/history.py` owns it.
+    transport_roles = literal_values(root / "orchestrator/history.py", "SessionRole")
+    reconcile(
+        "transport role vocabulary",
+        ("orchestrator/history.py SessionRole", transport_roles),
+        (
+            "packages/dag-model/src/index.ts transportRoleSchema",
+            zod_enum_members(dag_model, "transportRoleSchema"),
+        ),
+    )
+    reconcile(
+        "transport role vocabulary",
+        ("orchestrator/history.py SessionRole", transport_roles),
+        ("docs/dag-ui/design.md SessionLink.role", union_members(design, "SessionLink", "role")),
+    )
     print("dag state contract: Python, TypeScript, docs, and judge config agree")
 
 

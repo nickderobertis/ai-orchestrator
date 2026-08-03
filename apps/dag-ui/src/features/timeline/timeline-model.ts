@@ -20,6 +20,13 @@ interface RowBase {
   readonly id: string;
   /** What the row is: a span kind, a journal event kind, or the grouped span kind. */
   readonly kind: string;
+  /**
+   * What a dispatch was for — worker, judge, orchestrator, check-in, pr-author, or
+   * the lint run under a worker. Served on the span itself, so a row says which
+   * session it is without the transcript behind it being fetched. Absent on every
+   * other kind of row, and on a dispatch recorded before the roles were served.
+   */
+  readonly role?: string;
   readonly label: string;
   readonly startedAt: string;
   /** `null` for work the recorded stream never closed, and for an instant. */
@@ -139,6 +146,7 @@ function spanRow(
     span,
     id: span.id,
     kind: span.kind,
+    role: dispatchRole(span),
     label: span.label,
     startedAt: span.started_at,
     endedAt: span.ended_at,
@@ -149,6 +157,15 @@ function spanRow(
       span.total_duration_ms ?? elapsed(span.started_at, span.ended_at),
     children: group(spanRows(span, children)),
   };
+}
+
+/**
+ * A dispatch's role as one word. Lint is the case that needs both halves: it is the
+ * worker's own verification, told apart from the worker only by its transport role.
+ */
+function dispatchRole(span: TimelineSpan): string | undefined {
+  if (span.kind !== "dispatch") return undefined;
+  return span.transport_role === "llmlint" ? "llmlint" : span.agent_role;
 }
 
 function eventRow(event: TimelineEvent): TimelineRow {

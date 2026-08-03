@@ -23,7 +23,12 @@ from waits import timeout as e2e_timeout
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.dispatch import launch_orchestrator
 from orchestrator.labels import parse_labels
-from orchestrator.launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
+from orchestrator.launch import (
+    LAUNCH_RECORD_NAME,
+    read_launch_link,
+    read_provenance,
+    session_key,
+)
 from orchestrator.read_model import resolve_launch
 from orchestrator.registry import Registry
 from orchestrator.watchdog import ProcessId, process_activity
@@ -1013,15 +1018,20 @@ def test_launch_api_records_detached_owner_and_real_report(
     # A real launch splits its provenance: the run directory gets only the join key,
     # and the sensitive session id lands in the out-of-repo record the read API
     # resolves. This is the production write path, not a manufactured fixture.
-    launch_id = read_launch_info(run_dir)
-    assert launch_id is not None
+    link = read_launch_link(run_dir)
+    assert link is not None
     assert "planner-session" not in (run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8")
-    provenance = read_provenance(launch_id)
+    provenance = read_provenance(link.launch_id)
     assert provenance is not None
     assert provenance["launcher"] == "claude-code"
     assert provenance["launcher_session_id"] == "planner-session"
-    # And the read API's own join reports that launcher back.
-    assert resolve_launch(run_dir) == {"launch_id": launch_id, "launcher": "claude-code"}
+    # And the read API resolves that session back — from the run's own durable record,
+    # under the opaque key a viewer groups by rather than the id nobody may print.
+    assert resolve_launch(run_dir) == {
+        "launch_id": link.launch_id,
+        "launcher": "claude-code",
+        "session_key": session_key("planner-session"),
+    }
     surface = _next_cli(run_id, runs)
     assert surface["surface"]["kind"] == "milestone"
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})

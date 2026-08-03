@@ -65,6 +65,7 @@ from .launch import (
     LaunchError,
     LaunchInfo,
     generate_launch_id,
+    launch_info,
     resolve_launcher_kind,
     select_launch,
     validate_session_id,
@@ -178,8 +179,10 @@ class LaunchRecord(TypedDict):
     """Stable planner handoff persisted for one orchestrator launch.
 
     The ``launch`` link is the non-sensitive half of the provenance scheme: it names
-    the ``launch_id`` the read API joins to the out-of-repo provenance record. The
-    launcher session id never enters the run directory (see `orchestrator.launch`).
+    the ``launch_id`` the read API joins to the out-of-repo provenance record, plus
+    the launcher and the irreversible session key that attribute the run on their
+    own once that record is gone. The launcher session id itself never enters the
+    run directory (see `orchestrator.launch`).
     """
 
     schema_version: int
@@ -196,10 +199,11 @@ def _launch_provenance(
     launcher: str | None,
     session_id: str | None,
     repository_identity: str,
-) -> tuple[str, dict[str, str]]:
+) -> tuple[LaunchInfo, dict[str, str]]:
     """Mint a launch id, persist provenance for a known launcher, and build labels.
 
-    Returns the ``launch_id`` and the history labels (``launch_id`` + ``launcher``)
+    Returns the run-directory `LaunchInfo` to persist — the join key plus the durable
+    launcher and session key — and the history labels (``launch_id`` + ``launcher``)
     to stamp on every oneharness invocation this launch makes, so any nested
     worker/judge/orchestrator conversation joins back to its launching session. The
     sensitive session id goes only to the protected out-of-repo provenance record.
@@ -217,7 +221,8 @@ def _launch_provenance(
             launcher_session_id=validated_session,
             repository_identity=repository_identity,
         )
-    return launch_id, {"launch_id": launch_id, "launcher": kind}
+    info = launch_info(launch_id=launch_id, launcher=kind, session_id=validated_session)
+    return info, {"launch_id": launch_id, "launcher": kind}
 
 
 class _TelemetryResult(Protocol):
@@ -1391,7 +1396,7 @@ def launch_orchestrator(
     # their node labels over it (run_onejudge -> merge_labels), so every worker, judge,
     # and check-in conversation carries the launch join without stamping each one.
     repository_identity = next(iter(sorted(str(item) for item in graph_identities(graph))), "")
-    launch_id, launch_labels = _launch_provenance(
+    launch_link, launch_labels = _launch_provenance(
         launcher=launcher,
         session_id=launcher_session_id,
         repository_identity=repository_identity,
@@ -1445,7 +1450,7 @@ def launch_orchestrator(
         raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
     )
     launch: LaunchRecord = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": run_dir.name,
         "channel_id": run_dir.name,
         "plan_name": plan_name,
@@ -1454,9 +1459,9 @@ def launch_orchestrator(
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
         },
-        # The key is a literal because `LaunchRecord` types it; `launch.read_launch_info`
-        # is the only reader, and tests/test_orchestrator_launch.py round-trips the two.
-        "launch": {"launch_id": launch_id},
+        # Built by `launch.launch_info`, which owns this on-disk shape together with
+        # `launch.read_launch_link`; tests/test_orchestrator_launch.py round-trips the two.
+        "launch": launch_link,
     }
     atomic_json(run_dir / LAUNCH_RECORD_NAME, launch)
     (run_dir / "planner.md").write_text(

@@ -479,6 +479,12 @@ p {
   font-weight: 600;
 }
 
+/* Reads as a qualifier on the kind beside it, not as a second kind. */
+.rail-role {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
 .rail-label {
   overflow: hidden;
   min-width: 0;
