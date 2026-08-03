@@ -19,8 +19,9 @@ invocations, then a real ``coverage combine`` and ``coverage report`` — over a
 generated package whose total is exact arithmetic and lands inside the band the
 regression once forgave, configured with the floor and precision this repository
 actually declares. They fail if either setting drifts back to a combination that
-cannot fail the build, if a measuring tier starts deciding the floor, or if the
-enforced total stops counting a tier that measured.
+cannot fail the build, if a measuring tier starts deciding the floor, if the
+enforced total stops counting a tier that measured, or if a measured data file
+stops being portable enough to enforce in a checkout that did not write it.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -56,10 +58,26 @@ SERIAL_SHARE = 20
 
 
 @pytest.fixture(scope="module")
-def report_config() -> dict[str, object]:
-    """The declared ``[tool.coverage.report]`` table — the floor's single source."""
+def declared() -> dict[str, dict[str, object]]:
+    """This repository's own ``[tool.coverage]`` tables."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return pyproject["tool"]["coverage"]["report"]
+    return pyproject["tool"]["coverage"]
+
+
+@pytest.fixture(scope="module")
+def report_config(declared: dict[str, dict[str, object]]) -> dict[str, object]:
+    """The declared ``[tool.coverage.report]`` table — the floor's single source."""
+    return declared["report"]
+
+
+@pytest.fixture(scope="module")
+def relative_files(declared: dict[str, dict[str, object]]) -> bool:
+    """Whether the declared ``[tool.coverage.run]`` records portable paths.
+
+    Read rather than assumed, so the fixture project measures under the same setting
+    the real tiers do and a run table that loses it fails a test instead of a build.
+    """
+    return bool(declared["run"].get("relative_files", False))
 
 
 @pytest.fixture(scope="module")
@@ -98,7 +116,9 @@ def _uncalled_for_band(floor: float) -> int:
     return uncalled
 
 
-def _write_project(root: Path, *, uncalled: int, fail_under: float, precision: int) -> float:
+def _write_project(
+    root: Path, *, uncalled: int, fail_under: float, precision: int, relative_files: bool
+) -> float:
     """Generate a package plus the two tiers' tests, with an exactly known total.
 
     The called functions are split between a serial module and a parallel one so
@@ -126,7 +146,8 @@ def _write_project(root: Path, *, uncalled: int, fail_under: float, precision: i
         'testpaths = ["."]\n\n'
         "[tool.coverage.run]\n"
         'source = ["sample"]\n'
-        "branch = true\n\n"
+        "branch = true\n"
+        f"relative_files = {str(relative_files).lower()}\n\n"
         "[tool.coverage.report]\n"
         f"fail_under = {fail_under}\n"
         f"precision = {precision}\n",
@@ -213,7 +234,7 @@ def _reported_total(output: str) -> float:
 
 
 def test_neither_measuring_tier_decides_the_floor(
-    tmp_path: Path, floor: float, precision: int
+    tmp_path: Path, floor: float, precision: int, relative_files: bool
 ) -> None:
     """Both tiers run below the floor and both succeed: measuring is not judging.
 
@@ -223,7 +244,13 @@ def test_neither_measuring_tier_decides_the_floor(
     floor there is.
     """
     root = tmp_path / "measure"
-    _write_project(root, uncalled=_uncalled_for_band(floor), fail_under=floor, precision=precision)
+    _write_project(
+        root,
+        uncalled=_uncalled_for_band(floor),
+        fail_under=floor,
+        precision=precision,
+        relative_files=relative_files,
+    )
 
     serial = _measure_serial(root)
     parallel = _measure_parallel(root)
@@ -241,12 +268,16 @@ def test_neither_measuring_tier_decides_the_floor(
 
 
 def test_the_enforced_total_combines_every_tier_and_can_fail_the_build(
-    tmp_path: Path, floor: float, precision: int
+    tmp_path: Path, floor: float, precision: int, relative_files: bool
 ) -> None:
     """The floor is decided once, on data no tier is missing from, and it can fail."""
     root = tmp_path / "below"
     total = _write_project(
-        root, uncalled=_uncalled_for_band(floor), fail_under=floor, precision=precision
+        root,
+        uncalled=_uncalled_for_band(floor),
+        fail_under=floor,
+        precision=precision,
+        relative_files=relative_files,
     )
     _measure_serial(root)
     _measure_parallel(root)
@@ -274,7 +305,7 @@ def test_the_enforced_total_combines_every_tier_and_can_fail_the_build(
 
 
 def test_a_tier_that_did_not_measure_fails_the_enforcement(
-    tmp_path: Path, floor: float, precision: int
+    tmp_path: Path, floor: float, precision: int, relative_files: bool
 ) -> None:
     """A missing tier must stop the run, not quietly shrink the total it is judged on.
 
@@ -285,7 +316,13 @@ def test_a_tier_that_did_not_measure_fails_the_enforcement(
     that reads as a coverage regression rather than as a missing tier.
     """
     root = tmp_path / "missing"
-    _write_project(root, uncalled=_uncalled_for_band(floor), fail_under=floor, precision=precision)
+    _write_project(
+        root,
+        uncalled=_uncalled_for_band(floor),
+        fail_under=floor,
+        precision=precision,
+        relative_files=relative_files,
+    )
     _measure_serial(root)
     _measure_parallel(root)
     (root / PARALLEL_DATA).unlink()
@@ -296,7 +333,9 @@ def test_a_tier_that_did_not_measure_fails_the_enforcement(
     assert PARALLEL_DATA in result.stdout + result.stderr, result.stdout + result.stderr
 
 
-def test_at_or_above_floor_run_exits_zero(tmp_path: Path, floor: float, precision: int) -> None:
+def test_at_or_above_floor_run_exits_zero(
+    tmp_path: Path, floor: float, precision: int, relative_files: bool
+) -> None:
     """The same fixture passes once the floor sits at its total — the failure is the floor's."""
     root = tmp_path / "above"
     uncalled = _uncalled_for_band(floor)
@@ -305,6 +344,7 @@ def test_at_or_above_floor_run_exits_zero(tmp_path: Path, floor: float, precisio
         uncalled=uncalled,
         fail_under=(STATEMENTS - uncalled) / STATEMENTS * 100.0,
         precision=precision,
+        relative_files=relative_files,
     )
     _measure_serial(root)
     _measure_parallel(root)
@@ -314,6 +354,46 @@ def test_at_or_above_floor_run_exits_zero(tmp_path: Path, floor: float, precisio
     assert result.returncode == 0, result.stdout + result.stderr
     assert _reported_total(result.stdout) == pytest.approx(total, abs=0.01), result.stdout
     assert "fail-under" not in result.stdout, result.stdout
+
+
+def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
+    tmp_path: Path, floor: float, precision: int, relative_files: bool
+) -> None:
+    """A measured data file is a statement about the tree, not about one directory.
+
+    Both measuring tiers declare their data file as an Nx output, so a cache hit
+    hands the enforcing tier a file some *other* checkout wrote. On this host that
+    other checkout is a per-dispatch worktree which is usually deleted by then, so
+    coverage recording absolute paths turned the saving into a failure: combine
+    succeeded, and the report then said "No source for code" about a file sitting
+    under the current root the whole time — a green branch failing its own gate for
+    where it had been measured rather than for what it covers.
+
+    Measure, move the whole project to a path the data was never written under, and
+    delete the original: that is the replay, at the real boundary.
+    """
+    measured = tmp_path / "measured"
+    total = _write_project(
+        measured,
+        uncalled=_uncalled_for_band(floor),
+        fail_under=(STATEMENTS - _uncalled_for_band(floor)) / STATEMENTS * 100.0,
+        precision=precision,
+        relative_files=relative_files,
+    )
+    _measure_serial(measured)
+    _measure_parallel(measured)
+
+    replayed = tmp_path / "replayed"
+    shutil.copytree(measured, replayed)
+    shutil.rmtree(measured)
+    result = _enforce(replayed)
+
+    assert "No source for code" not in result.stdout + result.stderr, (
+        "the combined data names the directory it was measured in, so a replayed "
+        f"cache cannot be enforced against this tree:\n{result.stdout}{result.stderr}"
+    )
+    assert _reported_total(result.stdout) == pytest.approx(total, abs=0.01), result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_every_measuring_tier_writes_data_only_the_coverage_tier_judges(

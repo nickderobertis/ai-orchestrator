@@ -93,6 +93,14 @@ markers = [
 [tool.coverage.run]
 source = ["orchestrator"]
 branch = true
+# The measuring tiers' data files are declared Nx outputs, so a cache hit replays a
+# file another checkout wrote. Absolute paths make that replay a failure rather than
+# a saving: this host runs each dispatch in its own worktree, they share one cache,
+# and the worktree that measured is usually gone by the time another replays its
+# data — leaving the combine reporting "No source for code" for a file that is right
+# there under the current root. Relative paths are what makes a recorded measurement
+# a statement about the tree rather than about one directory that held it.
+relative_files = true
 
 [tool.coverage.report]
 show_missing = true
