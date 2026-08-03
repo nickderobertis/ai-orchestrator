@@ -61,26 +61,17 @@ TERMINAL_NODE_STATES: frozenset[str] = frozenset(get_args(NodeState)) - {"runnin
 # `dag-layout` renderer states, the `dag-model` zod enum, and the documented union in
 # `docs/dag-ui/design.md` — against this Literal, and holds `NodeState` inside it.
 #: The one authoritative per-node status the read API serves, and the only node
-#: vocabulary a renderer may switch on.
+#: vocabulary a renderer may switch on. `node_statuses` below decides every node's,
+#: once, on the server.
 #:
 #: `NodeState` above is the strict fold's own answer and is deliberately narrower: the
 #: journal records a node *starting* and *settling*, so it can say nothing about a node
-#: the scheduler never dispatched. Those nodes are the ones an operator most needs to
-#: see — `pending` work not yet eligible, `blocked` work held behind a human action,
-#: `skipped` work a failed prerequisite made unreachable — and a client that inferred
-#: them from an absent `node_states` entry invented two of the three. `node_statuses`
-#: below is where every one of them is decided, once, on the server.
+#: the scheduler never dispatched — which is where `pending`, `blocked` and `skipped`
+#: live, and what a client used to invent for itself.
 #:
-#: Read each member as: `pending` not started and not gated; `running` dispatched;
-#: `waiting` holding for a human action; `blocked` held behind a dependency that is
-#: waiting or itself blocked; `skipped` unreachable because a dependency did not
-#: complete; `done` settled successfully; `not-completed` settled with its work
-#: unfinished; `failed` settled unsuccessfully; `cancelled` abandoned; `unknown` a
-#: recorded status outside this vocabulary, reported as such rather than guessed at.
-#:
-#: A run's own `state` also uses the word `blocked`, for something else entirely: a run
-#: waiting on a *planner* reply. The two never share a field — a run's is `state`, a
-#: node's is `node_status` — and `docs/dag-ui/design.md` states the distinction.
+#: `docs/dag-ui/design.md` is the durable contract: what each member means, how this
+#: relates to `node_states` and to `RunTelemetry.nodes[].status`, and why a run's own
+#: `state` uses the word `blocked` for something else entirely.
 NodeStatus = Literal[
     "pending",
     "running",

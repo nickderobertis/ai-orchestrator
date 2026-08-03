@@ -94,7 +94,7 @@ export function nodeViews(detail: RunDetail): NodeView[] {
  * and the headline of the view it opens cannot say different things.
  */
 export function nodeReason(node: NodeView): string | undefined {
-  if (node.blockers.length > 0 && DECIDED_BY_DEPENDENCIES.has(node.status)) {
+  if (node.blockers.length > 0 && REASON_IS_A_BLOCKER.has(node.status)) {
     return `blocked by ${node.blockers.join(", ")}`;
   }
   if (!OWN_WORK_LOST.has(node.status)) return undefined;
@@ -108,14 +108,15 @@ export function nodeReason(node: NodeView): string | undefined {
 }
 
 /**
- * Statuses a node holds because of *other* nodes, never because of its own run.
+ * Statuses whose reason is named in `blockers` rather than in the node's own record.
  *
- * These three are not one condition: `waiting` and `blocked` move when a person acts,
- * while `skipped` is terminal — its prerequisite did not complete, so it will never
- * run. What they share, and all this set decides, is that the reason lives somewhere
- * else and is named in `blockers`, so one sentence reads all three.
+ * They are three different conditions: `blocked` is held behind a dependency,
+ * `skipped` is terminal because a prerequisite did not complete, and `waiting` is
+ * journaled on the node itself. All this set decides is where the sentence comes
+ * from — a waiting node's own result names the human action it waits for, exactly as
+ * a blocked node's names what holds it, so one line reads all three.
  */
-const DECIDED_BY_DEPENDENCIES: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
+const REASON_IS_A_BLOCKER: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
   "blocked",
   "skipped",
   "waiting",
