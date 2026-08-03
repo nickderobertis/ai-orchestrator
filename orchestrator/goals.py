@@ -44,13 +44,16 @@ class ActiveRun(TypedDict):
     acknowledgements: NotRequired[list[ConcurrentAcknowledgement]]
 
 
-def parse_goal(data: Mapping[str, Any], *, schema_version: int) -> Goal | None:
-    """Validate and normalize the optional versioned plan goal."""
-    raw = data.get("goal")
-    if raw is None:
-        return None
-    if schema_version < 4:
-        raise ConfigError("'goal' requires schema_version 4; legacy plans must omit the field")
+def normalize_goal(raw: object) -> Goal:
+    """Validate one goal mapping and supply the id it may omit.
+
+    The id rule lives here alone: an explicit ``id`` wins, and a goal without one takes
+    the slug of its own text. Plan loading normalizes through this on the way in, and
+    the read boundary normalizes through it on the way out, because a journal written
+    before goals carried an id records `{"text": ...}` verbatim and is served verbatim.
+    One goal text must name one goal id on either side of that change, which it cannot
+    if each side derives its own.
+    """
     if not isinstance(raw, Mapping):
         raise ConfigError("'goal' must be a mapping with non-empty 'text' and optional 'id'")
     unexpected = set(raw) - {"id", "text"}
@@ -64,6 +67,16 @@ def parse_goal(data: Mapping[str, Any], *, schema_version: int) -> Goal | None:
         raise ConfigError("'goal.id' must be a non-empty string when provided")
     goal_id = GoalId(raw_id.strip() if isinstance(raw_id, str) else slugify(text))
     return {"id": goal_id, "text": text.strip()}
+
+
+def parse_goal(data: Mapping[str, Any], *, schema_version: int) -> Goal | None:
+    """Validate and normalize the optional versioned plan goal."""
+    raw = data.get("goal")
+    if raw is None:
+        return None
+    if schema_version < 4:
+        raise ConfigError("'goal' requires schema_version 4; legacy plans must omit the field")
+    return normalize_goal(raw)
 
 
 class RegistryEntries(Protocol):

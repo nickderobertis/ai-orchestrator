@@ -55,8 +55,9 @@
       "run_id": "gated",
       "round": 1,
       "plan": {
-        "schema_version": 3,
+        "schema_version": 4,
         "concurrency": 2,
+        "goal": {"id": "Ship-the-gated-release", "text": "Ship the gated release"},
         "tasks": [
           {"id": "build", "persona": "engineer", "task": "Build"},
           {"id": "approve", "kind": "human", "task": "Approve", "deps": ["build"]},

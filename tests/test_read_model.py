@@ -399,7 +399,10 @@ def test_round_record_serializes_projection(tmp_path: Path) -> None:
 
 
 def _gated_run(runs_dir: Path, run_id: str) -> Path:
-    """A live round whose graph holds a waiting node, one blocked, and one skipped."""
+    """A live round whose graph holds a waiting node, one blocked, and one skipped.
+
+    Its plan metadata is journalled in the legacy goal shape: text alone, no id.
+    """
     run_dir = runs_dir / run_id
     tasks = [
         {"id": "build", "persona": "engineer", "task": "Build"},
@@ -408,11 +411,20 @@ def _gated_run(runs_dir: Path, run_id: str) -> Path:
         {"id": "publish", "persona": "engineer", "task": "Publish"},
         {"id": "cleanup", "persona": "engineer", "task": "Clean up", "deps": ["publish"]},
     ]
-    prepare_round(run_dir, {"schema_version": 3, "tasks": tasks})
+    prepare_round(run_dir, {"schema_version": 4, "tasks": tasks})
     journal = open_journal(run_dir, RunId(run_id), 1)
     for definition in tasks:
         journal.append("node-added", detail={"definition": definition})
-    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 2}})
+    journal.append(
+        "round-started",
+        detail={
+            "plan": {
+                "schema_version": 4,
+                "concurrency": 2,
+                "goal": {"text": "Ship the gated release"},
+            }
+        },
+    )
     journal.append("node-started", node=NodeId("build"), detail={"persona": "engineer"})
     journal.append(
         "human-waiting",
@@ -474,6 +486,56 @@ def test_v2_run_detail_golden_matches_the_python_round_serializer(tmp_path: Path
     assert detail["telemetry_schema_version"] == golden["telemetry_schema_version"]
     assert detail["rounds"] == golden["rounds"]
     assert json.loads(json.dumps(detail))["rounds"] == golden["rounds"]
+
+
+def _goal_run(runs_dir: Path, run_id: str, goal: dict[str, str]) -> Path:
+    """A one-node round whose journalled plan metadata carries ``goal`` verbatim."""
+    run_dir = runs_dir / run_id
+    prepare_round(run_dir, {"schema_version": 4, "tasks": [{"id": "api", "task": "ship"}]})
+    journal = open_journal(run_dir, RunId(run_id), 1)
+    journal.append(
+        "node-added", detail={"definition": {"id": "api", "persona": "engineer", "task": "ship"}}
+    )
+    journal.append(
+        "round-started",
+        detail={"plan": {"schema_version": 4, "concurrency": 1, "goal": goal}},
+    )
+    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
+    return run_dir
+
+
+@pytest.mark.parametrize(
+    ("journalled", "served"),
+    [
+        pytest.param(
+            {"text": "Ship the gated release"},
+            {"id": "Ship-the-gated-release", "text": "Ship the gated release"},
+            id="legacy-goal-gains-the-slug-plan-loading-would-have-derived",
+        ),
+        pytest.param(
+            {"id": "ship", "text": "Ship the gated release"},
+            {"id": "ship", "text": "Ship the gated release"},
+            id="recorded-id-is-served-unchanged",
+        ),
+    ],
+)
+def test_a_journalled_goal_is_served_with_the_id_the_contract_requires(
+    tmp_path: Path, journalled: dict[str, str], served: dict[str, str]
+) -> None:
+    """A run recorded before goals carried an id still serves a valid ``plan.goal``."""
+    runs = tmp_path / "runs"
+    _goal_run(runs, "goal", journalled)
+
+    detail = run_detail(runs, "goal", oneharness_bin=ABSENT)
+
+    assert detail["rounds"][-1]["plan"]["goal"] == served
+    # The journal is the audit record and is never rewritten to make the read valid.
+    recorded = [
+        json.loads(line)
+        for line in (runs / "goal" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    started = next(event for event in recorded if event["kind"] == "round-started")
+    assert started["detail"]["plan"]["goal"] == journalled
 
 
 @pytest.mark.parametrize(

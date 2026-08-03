@@ -68,6 +68,31 @@ test("the checked-in v2 run-detail contract parses and v1 is rejected", async ()
   expect(() => parseRunDetail({ ...golden, api_version: 1 })).toThrow();
 });
 
+test("the goal id the read boundary derives is what makes a legacy run parse", async () => {
+  // Python derives this fixture's `plan.goal.id`; the run behind it recorded text
+  // alone. Without that id the contract rejects the whole detail.
+  const golden = await Bun.file(
+    new URL("../../../tests/golden/run-detail-v2.json", import.meta.url),
+  ).json();
+  expect(parseRunDetail(golden).rounds[0]?.plan.goal).toEqual({
+    id: "Ship-the-gated-release",
+    text: "Ship the gated release",
+  });
+
+  const [round, ...rest] = golden.rounds;
+  const legacy = {
+    ...golden,
+    rounds: [
+      {
+        ...round,
+        plan: { ...round.plan, goal: { text: round.plan.goal.text } },
+      },
+      ...rest,
+    ],
+  };
+  expect(() => parseRunDetail(legacy)).toThrow();
+});
+
 test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({

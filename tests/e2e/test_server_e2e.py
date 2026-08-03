@@ -888,6 +888,73 @@ def test_run_list_serves_healthy_runs_beside_a_corrupt_one(tmp_path: Path) -> No
     assert [row["run_id"] for row in listed["runs"]] == ["healthy"]
 
 
+def _goal_run(runs_dir: Path, run_id: str, goal: object) -> None:
+    """A live one-node round whose journalled plan metadata carries ``goal`` verbatim."""
+    run_dir = runs_dir / run_id
+    prepare_round(run_dir, {"schema_version": 4, "tasks": [{"id": "api", "task": "ship"}]})
+    journal = open_journal(run_dir, RunId(run_id), 1)
+    journal.append(
+        "node-added", detail={"definition": {"id": "api", "persona": "engineer", "task": "ship"}}
+    )
+    journal.append(
+        "round-started",
+        detail={"plan": {"schema_version": 4, "concurrency": 1, "goal": goal}},
+    )
+    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
+
+
+def test_a_run_journalled_before_goal_ids_serves_a_contract_shaped_goal(tmp_path: Path) -> None:
+    """A goal journalled without the id the contract requires is served with one.
+
+    `goal.id` is required, and a client validates the detail whole, so an absent one
+    took every round of those runs down with it. The padded text is canonicalized the
+    way plan loading canonicalizes it, so the id does not depend on stray whitespace.
+    """
+    runs = tmp_path / "runs"
+    _goal_run(runs, "legacy-goal", {"text": "Pay down harness debt"})
+    _goal_run(runs, "padded-goal", {"text": "  Pay down harness debt  "})
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+        served = client.get("/api/v2/runs/legacy-goal").json()
+        padded = client.get("/api/v2/runs/padded-goal").json()
+
+    goal = {"id": "Pay-down-harness-debt", "text": "Pay down harness debt"}
+    assert served["rounds"][0]["plan"]["goal"] == goal
+    assert padded["rounds"][0]["plan"]["goal"] == goal
+
+
+@pytest.mark.parametrize(
+    "goal",
+    [
+        pytest.param({"text": ""}, id="empty-text"),
+        pytest.param({"id": " ", "text": "ship"}, id="blank-id"),
+        pytest.param({"text": "ship", "objective": "ship"}, id="unknown-field"),
+        pytest.param("ship", id="not-a-mapping"),
+    ],
+)
+def test_a_malformed_journalled_goal_is_refused_before_it_can_be_served(
+    tmp_path: Path, goal: object
+) -> None:
+    """A goal the plan loader would reject never reaches the read boundary's normalizer.
+
+    The strict fold validates the whole reconstructed plan, goal included, so a journal
+    carrying one of these answers 409 rather than serving a half-normalized goal.
+    """
+    runs = tmp_path / "runs"
+    _goal_run(runs, "bad-goal", goal)
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        response = httpx.Client(base_url=base, timeout=30).get("/api/v2/runs/bad-goal")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "projection_error"
+
+
 def test_run_that_recorded_no_event_serves_a_null_last_event(tmp_path: Path) -> None:
     """A just-launched run has no last event; the API says null, never an empty string.
 

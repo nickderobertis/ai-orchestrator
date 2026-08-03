@@ -40,6 +40,7 @@ from urllib.parse import quote, urlparse
 
 from .config import ConfigError
 from .conversations import DagConversation, run_conversations
+from .goals import normalize_goal
 from .history import HistoryError, SessionScan
 from .journal import JOURNAL_NAME, Event
 from .launch import (
@@ -701,6 +702,22 @@ def list_runs(
     return result
 
 
+def _contract_plan(plan: ProjectedPlan) -> ProjectedPlan:
+    """The projected plan with the goal id the contract requires.
+
+    A run journalled before goals carried an id recorded its text alone, and the plan is
+    served as recorded — so the id is derived here through `normalize_goal`, the rule
+    plan loading applies, rather than by rewriting the journal.
+
+    Only a goal `project_round` already accepted reaches this, since its own
+    `parse_graph` normalizes through the same function; a malformed one is refused
+    upstream as the 409 this never sees.
+    """
+    if plan.get("goal") is None:
+        return plan
+    return {**plan, "goal": normalize_goal(plan["goal"])}
+
+
 def round_record(events: list[Any], run_id: RunId, round_number: int) -> Round:
     """Serialize one strict ``RoundProjection`` as the contract's ``Round``."""
     projection = project_round(events, run_id, round_number)
@@ -715,7 +732,7 @@ def round_record(events: list[Any], run_id: RunId, round_number: int) -> Round:
     return {
         "run_id": projection.run_id,
         "round": projection.round,
-        "plan": projection.plan,
+        "plan": _contract_plan(projection.plan),
         "node_states": projection.node_states,
         "node_status": statuses.status,
         "node_gated_by": statuses.gated_by,
