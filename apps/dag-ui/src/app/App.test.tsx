@@ -81,6 +81,10 @@ describe("DAG application", () => {
     ).toHaveAttribute("datetime", "2026-07-26T11:00:12.000Z");
     expect(worker).toHaveTextContent("completed");
     expect(worker).toHaveTextContent("48s");
+    expect(worker).toHaveTextContent(/dispatch\s*worker/);
+    expect(railRow(/you-are-a-strict-careful-evaluator/)).toHaveTextContent(
+      /dispatch\s*judge/,
+    );
     expect(worker.textContent).not.toMatch(/\d{4}-\d\d-\d\dT/);
     expect(railRow(/lock-wait/)).toHaveTextContent("×1240");
 
@@ -564,6 +568,14 @@ describe("DAG application", () => {
     expect(
       await screen.findByText("Coordinating the execution frontier"),
     ).toBeInTheDocument();
+    // Each run-level row says which kind of dispatch it was, from the role served on
+    // its own span — the orchestrator's own session and the round's check-in read as
+    // themselves rather than as two identically labelled sessions.
+    expect(screen.getByText("Run-level · orchestrator")).toBeInTheDocument();
+    expect(screen.getByText("Run-level · check-in")).toBeInTheDocument();
+    // And the run's launch is named with the same phrase the navigation heads its
+    // group with, rather than with the raw launcher enum.
+    expect(screen.getAllByText(/^Codex session · /)).not.toHaveLength(0);
   });
 
   test("opens a run-level session other than the one shown on arrival", async () => {
@@ -698,7 +710,7 @@ describe("DAG application", () => {
     // silently rendered from whatever survived.
     sources[0]?.emit(
       "snapshot",
-      { ...runList, telemetry_schema_version: 9 },
+      { ...runList, telemetry_schema_version: 10 },
       "5",
     );
     expect(await screen.findByRole("alert")).toBeInTheDocument();

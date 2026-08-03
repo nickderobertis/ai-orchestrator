@@ -3,9 +3,13 @@
 Implements the ``LaunchProvenance`` scheme fixed by ``docs/dag-ui/design.md``.
 
 Why the record lives outside the repository: ``launcher_session_id`` may be
-sensitive, so a checkout only ever holds the non-sensitive ``launch_id`` that joins
-to it. Missing or expired provenance degrades a run's launcher to ``"unknown"``
-rather than failing the read.
+sensitive, so a checkout only ever holds non-sensitive values — the ``launch_id``
+that joins to the protected record, and the irreversible `session_key` derived
+from the session id. The key is what makes attribution *durable*: the protected
+record is short-lived and lives outside the runs root, so joining to it is the only
+thing that can expire, and a run that has recorded its own key still names the
+session that launched it once the record is gone. Missing or expired provenance
+degrades only what the key cannot carry — never the attribution itself.
 """
 
 from __future__ import annotations
@@ -18,11 +22,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NewType, TypedDict, TypeGuard
+from typing import NewType, NotRequired, TypedDict, TypeGuard
 
 from .config import ConfigError
 from .coordination import atomic_json
 from .runs import load_mapping
+
+#: Hex characters of the session digest a run records. 128 bits: the key stands in
+#: for the session id in every ownership comparison, so it has to be wide enough
+#: that two live planners cannot collide into each other's runs.
+SESSION_KEY_CHARS = 32
+#: Hex characters of the short form printed on a planner's terminal.
+SESSION_FINGERPRINT_CHARS = 8
 
 #: The top-level harnesses a launch may come from. ``unknown`` is the recorded
 #: launcher when no provenance identifies the session, so a run is never silently
@@ -41,8 +52,13 @@ DEFAULT_MAX_AGE_SECONDS = 7 * 24 * 3600
 #: A launch id is a security-sensitive join token, not incidental text: distinguishing
 #: it from an arbitrary string keeps an unvalidated one from reaching a lookup.
 LaunchId = NewType("LaunchId", str)
+#: The durable name of one launching session. Distinguished from an arbitrary string
+#: for the same reason: it is what ownership is decided by, so a value that has not
+#: been derived or revalidated here must not reach a comparison.
+SessionKey = NewType("SessionKey", str)
 
 _LAUNCH_ID = re.compile(r"[0-9a-f]{32}\Z")
+_SESSION_KEY = re.compile(rf"[0-9a-f]{{{SESSION_KEY_CHARS}}}\Z")
 _MAX_SESSION_ID = 256
 #: Tolerance for a record written by a host whose clock runs slightly ahead of ours.
 #: Beyond it the timestamp is not skew but a forged or corrupt record that would
@@ -63,18 +79,65 @@ LAUNCH_INFO_KEY = "launch"
 
 
 class LaunchInfo(TypedDict):
-    """The non-sensitive run->launch link persisted in the run directory."""
+    """The non-sensitive run->launch link persisted in the run directory.
+
+    ``launcher`` and ``session_key`` are the durable half: they name the launching
+    session for as long as the run directory exists, with no dependency on the
+    out-of-repo provenance record. They are optional because a run recorded before
+    they existed carries only ``launch_id``, and because a launch from a plain shell
+    has no session to name.
+    """
 
     launch_id: str
+    launcher: NotRequired[str]
+    session_key: NotRequired[str]
 
 
-def read_launch_info(run_dir: Path) -> LaunchId | None:
-    """The ``launch_id`` a run recorded, or ``None`` when absent or malformed.
+@dataclass(frozen=True)
+class LaunchLink:
+    """One run's recorded link to the session that launched it."""
 
-    The reader lives beside the ``LaunchInfo`` type the writer persists so the two
-    halves of this on-disk contract are one source. A run directory holds only this
-    join key; the launcher and the sensitive session id live in the out-of-repo
-    provenance record it resolves.
+    launch_id: LaunchId
+    #: A `KNOWN_LAUNCHERS` value, or ``None`` when the record predates this field.
+    launcher: str | None = None
+    #: The irreversible session digest, or ``None`` when the run names no session.
+    session_key: SessionKey | None = None
+
+    @property
+    def session(self) -> LaunchSession | None:
+        """The launching session this link names on its own, without provenance."""
+        if self.launcher not in KNOWN_LAUNCHERS or self.session_key is None:
+            return None
+        return LaunchSession(str(self.launcher), self.session_key)
+
+
+def launch_info(*, launch_id: LaunchId, launcher: str, session_id: str | None) -> LaunchInfo:
+    """The run-directory link to persist for one launch.
+
+    Built here rather than by the writer so the on-disk contract has one source: the
+    reader below and this builder are the two halves of it. Only a *known* launcher
+    naming a session contributes durable attribution — anything else records the join
+    key alone, exactly as it always did.
+    """
+    info: LaunchInfo = {"launch_id": launch_id}
+    if launcher in KNOWN_LAUNCHERS and session_id:
+        info["launcher"] = launcher
+        info["session_key"] = session_key(session_id)
+    return info
+
+
+def _recorded_key(value: object) -> SessionKey | None:
+    """One recorded session key, or ``None`` when it is not one this scheme writes."""
+    return SessionKey(value) if isinstance(value, str) and _SESSION_KEY.match(value) else None
+
+
+def read_launch_link(run_dir: Path) -> LaunchLink | None:
+    """What a run recorded about its launch, or ``None`` when absent or malformed.
+
+    The reader lives beside the `LaunchInfo` type the writer persists so the two
+    halves of this on-disk contract are one source. Every field is revalidated: the
+    record is a file on disk, and a hand-edited launcher or key must degrade to "not
+    recorded" rather than attribute the run to a session that never launched it.
     """
     path = run_dir / LAUNCH_RECORD_NAME
     if not path.is_file():
@@ -84,7 +147,17 @@ def read_launch_info(run_dir: Path) -> LaunchId | None:
     except (ConfigError, OSError):
         return None
     info = raw.get(LAUNCH_INFO_KEY)
-    return validate_launch_id(info.get("launch_id")) if isinstance(info, dict) else None
+    if not isinstance(info, dict):
+        return None
+    launch_id = validate_launch_id(info.get("launch_id"))
+    if launch_id is None:
+        return None
+    launcher = info.get("launcher")
+    return LaunchLink(
+        launch_id,
+        launcher if launcher in KNOWN_LAUNCHERS else None,
+        _recorded_key(info.get("session_key")),
+    )
 
 
 class LaunchProvenance(TypedDict):
@@ -396,11 +469,35 @@ def select_launch(
 
 
 @dataclass(frozen=True)
+class LaunchSession:
+    """One launching session, named the way anything outside that session may.
+
+    This is the durable form: a known harness plus the irreversible digest of the
+    session id. Every comparison and every rendering of "whose run is this" goes
+    through it, so the sensitive id itself never has to leave the session that owns
+    it — or the protected record that can expire.
+    """
+
+    launcher: str
+    key: SessionKey
+
+    @property
+    def label(self) -> str:
+        """How this session is named on an operator's terminal, and in the UI."""
+        return f"{self.launcher}:{self.key[:SESSION_FINGERPRINT_CHARS]}"
+
+
+@dataclass(frozen=True)
 class LaunchIdentity:
-    """One launching session: a known harness plus the session it ran in."""
+    """One launching session as the session itself knows it: harness plus raw id."""
 
     launcher: str
     session_id: str
+
+    @property
+    def session(self) -> LaunchSession:
+        """This identity in the durable form everything else compares against."""
+        return LaunchSession(self.launcher, session_key(self.session_id))
 
     @property
     def label(self) -> str:
@@ -410,12 +507,25 @@ class LaunchIdentity:
         of the scheme — so a stable, truncated digest stands in for it. That still
         tells two concurrent planners apart, which is the whole job of the label.
         """
-        return f"{self.launcher}:{session_fingerprint(self.session_id)}"
+        return self.session.label
+
+
+def session_key(session_id: str) -> SessionKey:
+    """A stable, non-reversible key for one launching session.
+
+    Wide enough to compare on: this is what a run directory records and what
+    ownership is decided by once the protected provenance record is gone.
+    """
+    return SessionKey(hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:SESSION_KEY_CHARS])
 
 
 def session_fingerprint(session_id: str) -> str:
-    """A short, stable, non-reversible label for one launching session."""
-    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:8]
+    """A short, stable, non-reversible label for one launching session.
+
+    A prefix of `session_key`, so the short form a planner reads on the terminal and
+    the key a run records are the same digest and correlate by eye.
+    """
+    return session_key(session_id)[:SESSION_FINGERPRINT_CHARS]
 
 
 def caller_identity(environ: Mapping[str, str] | None = None) -> LaunchIdentity | None:
@@ -435,10 +545,10 @@ def caller_identity(environ: Mapping[str, str] | None = None) -> LaunchIdentity 
 class RunOwner:
     """Who launched one run, as far as this host can establish it."""
 
-    #: A `KNOWN_LAUNCHERS` value, or ``"unknown"`` when no record joins the run.
+    #: A `KNOWN_LAUNCHERS` value, or ``"unknown"`` when no record names the launcher.
     launcher: str
     #: The launching session, or ``None`` when the run is unattributable.
-    identity: LaunchIdentity | None
+    identity: LaunchSession | None
 
     def is_(self, caller: LaunchIdentity | None) -> bool:
         """Whether ``caller`` launched this run.
@@ -447,7 +557,7 @@ class RunOwner:
         can attribute belongs to another planner until proven otherwise, and a
         caller with no session of its own cannot be the owner of anything.
         """
-        return caller is not None and self.identity == caller
+        return caller is not None and self.identity == caller.session
 
     def label(self, caller: LaunchIdentity | None) -> str:
         """One short ownership indicator for a planner-facing row."""
@@ -459,20 +569,35 @@ class RunOwner:
 UNKNOWN_OWNER = RunOwner("unknown", None)
 
 
-def read_run_owner(run_dir: Path, *, now: datetime | None = None) -> RunOwner:
-    """Resolve one run's launching session through its recorded ``launch_id``.
+def resolve_launch_session(
+    link: LaunchLink, *, now: datetime | None = None
+) -> tuple[str, LaunchSession | None]:
+    """The launcher and launching session one recorded link resolves to.
 
-    Every degraded state — no ``launch.json``, no join key, a missing, malformed, or
-    expired provenance record — lands on the same `UNKNOWN_OWNER`, so a run this host
-    cannot attribute is reported as nobody's rather than as the reader's own.
+    The protected provenance record is preferred — it is the record the launcher
+    validated on the way in — but it is not required. What the run itself recorded
+    answers the same question and cannot expire, so a joined record and an aged-out
+    one attribute the run identically, and only a run that recorded neither reads as
+    nobody's.
     """
-    launch_id = read_launch_info(run_dir)
-    if launch_id is None:
+    provenance = read_provenance(link.launch_id, now=now)
+    if provenance is not None:
+        launcher = provenance["launcher"]
+        return launcher, LaunchSession(launcher, session_key(provenance["launcher_session_id"]))
+    session = link.session
+    return (session.launcher if session is not None else "unknown"), session
+
+
+def read_run_owner(run_dir: Path, *, now: datetime | None = None) -> RunOwner:
+    """Resolve one run's launching session from what it recorded at launch.
+
+    Every degraded state — no ``launch.json``, no join key, no recorded session, and
+    no provenance record to fall back on — lands on the same `UNKNOWN_OWNER`, so a
+    run this host cannot attribute is reported as nobody's rather than as the
+    reader's own.
+    """
+    link = read_launch_link(run_dir)
+    if link is None:
         return UNKNOWN_OWNER
-    provenance = read_provenance(launch_id, now=now)
-    if provenance is None:
-        return UNKNOWN_OWNER
-    return RunOwner(
-        provenance["launcher"],
-        LaunchIdentity(provenance["launcher"], provenance["launcher_session_id"]),
-    )
+    launcher, session = resolve_launch_session(link, now=now)
+    return UNKNOWN_OWNER if session is None else RunOwner(launcher, session)

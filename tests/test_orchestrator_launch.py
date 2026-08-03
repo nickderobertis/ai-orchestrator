@@ -21,9 +21,15 @@ from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.labels import LABEL_ENV, parse_labels
 from orchestrator.launch import (
     LAUNCH_RECORD_NAME,
+    UNKNOWN_OWNER,
+    LaunchLink,
+    LaunchSession,
+    RunOwner,
     provenance_path,
-    read_launch_info,
+    read_launch_link,
     read_provenance,
+    read_run_owner,
+    session_key,
 )
 
 
@@ -76,16 +82,23 @@ def test_launch_writes_provenance_and_stamps_join_labels(
         monkeypatch, tmp_path, launcher="codex", launcher_session_id="top-session"
     )
 
-    # The run directory records only the non-sensitive launch_id.
-    launch = json.loads((run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8"))["launch"]
+    # The run directory records the join key plus the durable, non-sensitive half of
+    # the attribution: which harness launched it, and an irreversible key for the
+    # session — never the session id itself.
+    record = json.loads((run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8"))
+    assert record["schema_version"] == 3
+    launch = record["launch"]
     launch_id = launch["launch_id"]
-    assert set(launch) == {"launch_id"}
+    assert set(launch) == {"launch_id", "launcher", "session_key"}
+    assert launch["launcher"] == "codex"
+    assert launch["session_key"] == session_key("top-session")
+    assert "top-session" not in (run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8")
 
     # The reader the read API uses parses exactly what this writer persisted. This
     # round trip is the reconciliation for the on-disk launch contract: the writer
     # types the key through LaunchRecord while the reader names it, and a change to
     # either half that broke the other would fail right here.
-    assert read_launch_info(run_dir) == launch_id
+    assert read_launch_link(run_dir) == LaunchLink(launch_id, "codex", session_key("top-session"))
 
     # The launch_id + launcher (+ run_id) are stamped as history labels on the
     # orchestrator env, so every nested dispatch inherits and joins on them.
@@ -100,15 +113,27 @@ def test_launch_writes_provenance_and_stamps_join_labels(
     assert provenance is not None
     assert provenance["launcher_session_id"] == "top-session"
 
+    owned = RunOwner("codex", LaunchSession("codex", session_key("top-session")))
+    assert read_run_owner(run_dir) == owned
+
+    # And the run's own record is what makes that attribution durable: delete the
+    # protected record — expiry looks exactly like this to every reader — and the run
+    # still names the session that launched it.
+    provenance_path(launch_id).unlink()
+    assert read_provenance(launch_id) is None
+    assert read_run_owner(run_dir) == owned
+
 
 def test_launch_without_known_launcher_writes_no_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, env, run_dir = _capture_launch_env(monkeypatch, tmp_path)  # no launcher supplied
 
-    launch_id = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))["launch"][
-        "launch_id"
-    ]
+    launch = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))["launch"]
+    launch_id = launch["launch_id"]
+    # No session to name, so nothing durable is recorded and the run stays nobody's.
+    assert set(launch) == {"launch_id"}
+    assert read_run_owner(run_dir) == UNKNOWN_OWNER
     labels = parse_labels(env[LABEL_ENV])
     assert labels["launcher"] == "unknown"
     assert labels["launch_id"] == launch_id

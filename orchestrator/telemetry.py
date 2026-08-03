@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast
 
 from .config import ConfigError
 from .detail_snapshot import CheckRollup
@@ -29,6 +29,7 @@ from .history import (
     HistorySession,
     SessionRole,
     SessionScan,
+    agent_role,
     session_records,
     session_role,
 )
@@ -54,7 +55,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 8
+TELEMETRY_SCHEMA_VERSION = 9
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
@@ -119,13 +120,24 @@ UsageKey = Literal[
 ]
 
 
-class SessionLink(TypedDict, total=False):
+class SessionLink(TypedDict):
+    """One session that did a node's work, per ``docs/dag-ui/design.md``.
+
+    ``role`` is the transport party oneharness recorded and ``agent_role`` the
+    semantic role the dispatch was for — the same pair a timeline dispatch span
+    carries, so a client can label and group a node's sessions without fetching a
+    transcript for each one. The semantic half is omitted only for a link onejudge
+    recorded that no readable history session backs, since it is resolved from that
+    session's labels.
+    """
+
     session_id: str
-    history_id: str | None
     role: SessionRole
-    turn_index: int | None
-    started_at: str
-    finished_at: str | None
+    agent_role: NotRequired[str]
+    history_id: NotRequired[str | None]
+    turn_index: NotRequired[int | None]
+    started_at: NotRequired[str]
+    finished_at: NotRequired[str | None]
 
 
 class HistoryRecord(TypedDict, total=False):
@@ -698,11 +710,19 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 if isinstance(command, str):
                     kind = _command_class(command)
                     commands[kind] = commands.get(kind, 0) + 1
+    semantic_role, _ = agent_role(session, role)
     return _SessionSummary(
         role=role,
         labels=dict(session.labels),
         link=SessionLink(
-            session_id=str(session.session_id), history_id=None, role=role, turn_index=None
+            session_id=str(session.session_id),
+            history_id=None,
+            role=role,
+            # The semantic role travels with the link, so a client reading a node's
+            # sessions can say which was the worker and which the judge without
+            # fetching a transcript for each of them.
+            agent_role=semantic_role,
+            turn_index=None,
         ),
         # A normalized history record is one provider invocation (one conversation turn).
         turns=len(records),
@@ -923,14 +943,66 @@ def _native_telemetry(value: object) -> _NativeTelemetry | None:
 def _link_native_roles(
     summaries: list[_SessionSummary], native: _NativeTelemetry | None
 ) -> list[_SessionSummary]:
+    """Re-role each summary onto onejudge's own linkage, keeping its semantic role.
+
+    The native link is authoritative about which *party* a session was, and that is
+    all it knows: it is written by onejudge, which has no notion of worker versus
+    check-in versus pr-author. So the summary's own semantic role is carried across
+    rather than dropped — the pair is what makes a served session link readable.
+    """
     if native is None or not native.sessions:
         return summaries
     links = {link["session_id"]: link for link in native.sessions}
     return [
-        replace(summary, role=link["role"], link=link)
+        replace(summary, role=link["role"], link=_with_agent_role(link, summary.link))
         if (link := links.get(summary.link["session_id"])) is not None
         else summary
         for summary in summaries
+    ]
+
+
+def _with_agent_role(link: SessionLink, labelled: SessionLink) -> SessionLink:
+    """A native link carrying the semantic role its labelled counterpart resolved."""
+    semantic = labelled.get("agent_role")
+    return link if semantic is None else SessionLink({**link, "agent_role": semantic})
+
+
+def _session_links(
+    linked: list[_SessionSummary], native: _NativeTelemetry | None
+) -> list[SessionLink]:
+    """Every session link one node serves, each carrying both of its roles.
+
+    A linked summary's link is already the native one where onejudge recorded it, so
+    the only thing left to add is a native link no history session backed at all —
+    served so the node still names a session whose transcript this host cannot read.
+    """
+    links = [summary.link for summary in linked]
+    if native is None:
+        return links
+    seen = {link["session_id"] for link in links}
+    return links + [link for link in native.sessions if link["session_id"] not in seen]
+
+
+def _node_summaries(
+    summaries: list[_SessionSummary], node: str, native: _NativeTelemetry | None
+) -> list[_SessionSummary]:
+    """Every session that did this node's work, by label or by native linkage.
+
+    The node label is the ordinary join, but it is not the only evidence: onejudge's
+    own telemetry names the sessions one dispatch produced, and a session it lists is
+    this node's work whether or not the label join found it. Selecting on the label
+    alone is what made a node that ran for an hour report zero turns — the sessions
+    were recorded, and nothing was counting them.
+    """
+    labelled = [summary for summary in summaries if summary.labels.get("node") == node]
+    if native is None or not native.sessions:
+        return labelled
+    seen = {summary.link["session_id"] for summary in labelled}
+    native_ids = {link["session_id"] for link in native.sessions}
+    return labelled + [
+        summary
+        for summary in summaries
+        if summary.link["session_id"] in native_ids and summary.link["session_id"] not in seen
     ]
 
 
@@ -1370,9 +1442,7 @@ def _node_record(
         comparison_remote = remote if isinstance(remote, str) else ""
         comparison_base = base if isinstance(base, str) else ""
     native = _item_native(item)
-    linked = _link_native_roles(
-        [summary for summary in summaries if summary.labels.get("node") == node], native
-    )
+    linked = _link_native_roles(_node_summaries(summaries, node, native), native)
     wall_ms = (
         native.wall_ms
         if native is not None and native.wall_ms is not None
@@ -1426,11 +1496,7 @@ def _node_record(
             native=native,
         ),
         usage=usage,
-        sessions=(
-            native.sessions + [s.link for s in linked if s.role == "llmlint"]
-            if native is not None and native.sessions
-            else [s.link for s in linked]
-        ),
+        sessions=_session_links(linked, native),
         tool_commands=_command_counts(linked),
         turns=sum(summary.turns for summary in linked if summary.role != "llmlint"),
         lint=sum(summary.turns for summary in linked if summary.role == "llmlint"),

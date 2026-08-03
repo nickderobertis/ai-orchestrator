@@ -335,6 +335,16 @@ def test_a_lint_run_nests_inside_the_dispatch_it_ran_under() -> None:
         for event in worker["events"]
     )
 
+    # Both roles travel on the span, so a reader can say what each of these three
+    # dispatches was without opening a single transcript. The lint run is the case
+    # that needs the pair: it is the worker's own verification, told apart from the
+    # worker only by its transport role.
+    assert [(span["agent_role"], span["transport_role"]) for span in (worker, judge, lint)] == [
+        ("worker", "agent"),
+        ("judge", "judge"),
+        ("worker", "llmlint"),
+    ]
+
 
 def test_a_second_lint_run_nests_under_the_worker_not_under_the_first_lint() -> None:
     """A worker that lints twice must not hang its second lint off its first."""

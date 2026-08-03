@@ -83,6 +83,21 @@ export const timingSchema = openObject({
   }),
 });
 
+/**
+ * The two role vocabularies, declared once here because three payloads carry them:
+ * a conversation's attribution, a node's session links, and a timeline dispatch
+ * span. `transportRole` is the party oneharness recorded; `agentRole` is what the
+ * dispatch was for.
+ */
+export const agentRoleSchema = z.enum([
+  "orchestrator",
+  "worker",
+  "judge",
+  "check-in",
+  "pr-author",
+]);
+export const transportRoleSchema = z.enum(["agent", "judge", "llmlint"]);
+
 const usageValue = nonnegative.nullable();
 export const usagePartySchema = openObject({
   input_tokens: usageValue,
@@ -98,10 +113,16 @@ export const usageSchema = openObject({
   total: usagePartySchema,
 });
 
+/**
+ * One session that did a node's work: the transport party in `role`, and the
+ * semantic role beside it in `agent_role` so a client can label and group sessions
+ * without fetching a transcript for each one.
+ */
 export const sessionLinkSchema = openObject({
   session_id: z.string().min(1),
   history_id: z.string().min(1).nullable().optional(),
-  role: z.enum(["agent", "judge", "llmlint"]),
+  role: transportRoleSchema,
+  agent_role: agentRoleSchema.optional(),
   turn_index: counter.nullable().optional(),
   started_at: timestamp.optional(),
   finished_at: timestamp.nullable().optional(),
@@ -158,16 +179,20 @@ export const runTelemetrySchema = openObject({
 });
 
 /**
- * A run's join to its launching session, served on both the list row and the detail.
+ * A run's attribution to its launching session, on both the list row and the detail.
  *
- * It is omitted for a run that recorded no `launch_id`, and `launcher_session_id`
- * appears only when the server is configured to expose it — so a consumer that wants
- * to group runs by the session that launched them reads it from the list itself,
- * without fetching a single run's transcripts to recover the same join.
+ * It is omitted for a run that recorded no `launch_id`. `session_key` is the opaque,
+ * stable, irreversible name of the launching session and is served by default, so a
+ * consumer groups runs by the planner that launched them from the list itself —
+ * without fetching a single run's transcripts, and without the raw
+ * `launcher_session_id`, which appears only when the server is configured to expose
+ * it. A run that named no session (a plain shell, or a record predating the key) has
+ * no `session_key`.
  */
 export const runLaunchSchema = openObject({
   launch_id: z.string().min(1),
   launcher: z.enum(["claude-code", "codex", "unknown"]),
+  session_key: z.string().min(1).optional(),
   launcher_session_id: z.string().min(1).optional(),
 });
 
@@ -186,7 +211,7 @@ export const runSummarySchema = openObject({
 
 export const runListSchema = openObject({
   api_version: z.literal(1),
-  telemetry_schema_version: z.literal(8),
+  telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
 });
@@ -353,13 +378,6 @@ export const conversationSchema = openObject({
   state: z.string(),
   turns: z.array(conversationTurnSchema),
 });
-export const agentRoleSchema = z.enum([
-  "orchestrator",
-  "worker",
-  "judge",
-  "check-in",
-  "pr-author",
-]);
 export const dagConversationSchema = openObject({
   conversation: conversationSchema,
   attribution: openObject({
@@ -369,7 +387,7 @@ export const dagConversationSchema = openObject({
     stepId: z.string().optional(),
     launchId: z.string().optional(),
     launcher: z.enum(["claude-code", "codex", "unknown"]).optional(),
-    transportRole: z.enum(["agent", "judge", "llmlint"]),
+    transportRole: transportRoleSchema,
     agentRole: agentRoleSchema,
     parentConversationId: z.string().optional(),
     persona: z.string().optional(),
@@ -402,7 +420,7 @@ export const runConversationsSchema = z.union([
 
 export const runDetailSchema = openObject({
   api_version: z.literal(1),
-  telemetry_schema_version: z.literal(8),
+  telemetry_schema_version: z.literal(9),
   observed_at: timestamp,
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),
@@ -455,7 +473,8 @@ export const timelineEventSchema = openObject({
  * One interval of recorded work. `ended_at` is null for work the recorded stream
  * never closed — an in-flight run, not an error — and `parent_id` links spans into
  * the tree the recorded nesting implies. `count` and `total_duration_ms` appear only
- * on a `rollup` span, which stands in for thousands of high-frequency records.
+ * on a `rollup` span, which stands in for thousands of high-frequency records, and
+ * the role pair only on a `dispatch` one.
  */
 export const timelineSpanSchema = openObject({
   id: z.string().min(1),
@@ -471,6 +490,8 @@ export const timelineSpanSchema = openObject({
   status: z.string().min(1).optional(),
   count: counter.optional(),
   total_duration_ms: counter.optional(),
+  agent_role: agentRoleSchema.optional(),
+  transport_role: transportRoleSchema.optional(),
   reference: timelineReferenceSchema.optional(),
 });
 export const runTimelineSchema = openObject({

@@ -33,7 +33,7 @@ from typing import Any, NotRequired, TypedDict
 from .history import (
     HistoryError,
     HistorySession,
-    SessionRole,
+    agent_role,
     all_sessions,
     session_records,
     session_role,
@@ -300,30 +300,6 @@ def _label(session: HistorySession, key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _agent_role(session: HistorySession, transport_role: SessionRole) -> tuple[str, bool]:
-    """The semantic role, and whether it was inferred rather than labelled.
-
-    A present ``agent_role`` label is authoritative and passed through verbatim so a
-    role introduced by a future dispatch needs no change here. The inference path is
-    the compatibility fallback for history written before that label existed.
-    """
-    labelled = _label(session, "agent_role")
-    if labelled is not None:
-        return labelled, False
-    persona = _label(session, "persona") or ""
-    name = session.name
-    if transport_role == "judge":
-        return "judge", True
-    if persona == "pr-author" or "pr-author" in name:
-        return "pr-author", True
-    if name.startswith("orchestrator-") or persona == "orchestrator":
-        return "orchestrator", True
-    if persona == "check-in" or "check-in" in name:
-        return "check-in", True
-    # A nested llmlint session is verification activity grouped under the worker.
-    return "worker", True
-
-
 def attribution(session: HistorySession, records: list[dict[str, Any]]) -> Attribution:
     """Graph locators and semantic role for one conversation.
 
@@ -332,11 +308,11 @@ def attribution(session: HistorySession, records: list[dict[str, Any]]) -> Attri
     and is short enough to read directly.
     """
     transport_role = session_role(session, records)
-    agent_role, inferred = _agent_role(session, transport_role)
+    role, inferred = agent_role(session, transport_role)
     launcher = _label(session, "launcher")
     result: Attribution = {
         "transportRole": transport_role,
-        "agentRole": agent_role,
+        "agentRole": role,
         "launcher": launcher if launcher in KNOWN_LAUNCHERS else "unknown",
     }
     if (value := _label(session, "run_id")) is not None:

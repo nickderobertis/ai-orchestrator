@@ -230,6 +230,35 @@ def session_role(
     return "agent" if _is_agent_name(session) else "judge"
 
 
+def agent_role(session: HistorySession, transport_role: SessionRole) -> tuple[str, bool]:
+    """The semantic role of one session, and whether it was inferred not labelled.
+
+    A present ``agent_role`` label is authoritative and passed through verbatim, so a
+    role introduced by a future dispatch needs no change here. The inference below is
+    the compatibility fallback for history written before that label existed.
+
+    It lives beside `session_role` because both answers describe the same session and
+    two callers need them together: the transcript mapper that renders a conversation
+    and the telemetry collector that links a node's sessions. A second implementation
+    of this fallback would make the two views disagree about the same history.
+    """
+    labelled = session.labels.get("agent_role")
+    if isinstance(labelled, str) and labelled:
+        return labelled, False
+    persona = session.labels.get("persona") or ""
+    name = session.name
+    if transport_role == "judge":
+        return "judge", True
+    if persona == "pr-author" or "pr-author" in name:
+        return "pr-author", True
+    if name.startswith("orchestrator-") or persona == "orchestrator":
+        return "orchestrator", True
+    if persona == "check-in" or "check-in" in name:
+        return "check-in", True
+    # A nested llmlint session is verification activity grouped under the worker.
+    return "worker", True
+
+
 def _sessions(value: Any) -> list[HistorySession]:
     if not isinstance(value, list):
         raise HistoryError("oneharness history list returned an unexpected response")

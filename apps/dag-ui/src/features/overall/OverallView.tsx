@@ -15,6 +15,7 @@ import {
 import { Activity, ChevronRight, Clock3, Cpu, Layers3 } from "lucide-react";
 import { useState } from "react";
 import { formatDurationSeconds } from "../../lib/time";
+import { launchLabel } from "../runs/run-model";
 import { useConversation } from "../timeline/useConversation";
 
 export function OverallView({
@@ -112,7 +113,8 @@ export function OverallView({
                     initiallyOpen={index === 0}
                     key={span.id}
                     label={span.label}
-                    launcher={detail.launch?.launcher ?? "unknown"}
+                    launch={launchLabel(detail.launch)}
+                    role={span.agent_role}
                     runId={detail.run.run_id}
                   />
                 ))
@@ -139,14 +141,17 @@ function RunLevelSession({
   runId,
   conversationId,
   label,
-  launcher,
+  launch,
+  role,
   initiallyOpen,
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
   readonly conversationId?: string;
   readonly label: string;
-  readonly launcher: string;
+  readonly launch: string;
+  /** The dispatch's semantic role, served on the span it was read from. */
+  readonly role?: string;
   readonly initiallyOpen: boolean;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
@@ -167,12 +172,14 @@ function RunLevelSession({
                 aria-hidden="true"
               />
               <span>
-                <span className="eyebrow">Run-level</span>
+                <span className="eyebrow">
+                  {role === undefined ? "Run-level" : `Run-level · ${role}`}
+                </span>
                 <span className="session-name">{label}</span>
               </span>
             </button>
           </CollapsibleTrigger>
-          <Badge variant="secondary">{launcher} launcher</Badge>
+          <Badge variant="secondary">{launch}</Badge>
         </header>
         <Separator className="my-2.5" />
         <CollapsibleContent>

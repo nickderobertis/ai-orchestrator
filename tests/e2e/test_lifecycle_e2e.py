@@ -47,6 +47,7 @@ from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
+from orchestrator.labels import parse_labels
 from orchestrator.lifecycle import (
     AI_ORCHESTRATOR_IDENTITY,
     MAX_AUTOMATIC_STEP_RESUMES,
@@ -467,6 +468,58 @@ def test_redispatch_reclaims_a_worktree_a_killed_worker_left_dirty(
 
     assert result.outcome == "merged", result.detail
     assert not (abandoned / "node_modules").exists()
+
+
+def test_a_bare_repo_task_labels_the_sessions_its_dispatches_produce(
+    tmp_path, bare_origin, command_base, personas_dir, monkeypatch
+) -> None:
+    """An untracked workstream's sessions still name the work they did.
+
+    A bare `just repo-task` belongs to no graph, and for that reason used to hand its
+    dispatches no history labels at all — so every session it produced joined to
+    nothing, and the telemetry that counts a node's turns could see the sessions and
+    attribute none of them. The labels are read where oneharness reads them: the
+    environment of the provider process the dispatch actually ran.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-untracked")
+    observed = tmp_path / "dispatch-labels.txt"
+    monkeypatch.setenv("FAKE_BACKEND_LABELS", str(observed))
+
+    result = run_repo_task(
+        str(origin),
+        "complete-now write-change from an untracked workstream",
+        "engineer",
+        workspace=Workspace(
+            tmp_path / "untracked-worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        branch="untracked-labels",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "merged", result.detail
+    labelled = [
+        parse_labels(line)
+        for line in observed.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert labelled, "the dispatch never reached a provider"
+    # Every session of this workstream names one run and one node, and the same ones,
+    # so a reader can gather them — and the synthetic run says plainly that it is not
+    # a recorded run directory.
+    runs = {labels.get("run_id") for labels in labelled}
+    assert len(runs) == 1
+    run_id = runs.pop()
+    assert run_id is not None and run_id.startswith("repo-task-")
+    assert {labels.get("node") for labels in labelled} == {"repo-task"}
+    # And the semantic role rides along, so a judge session is not counted as worker
+    # turns just because it inherited the worker's environment.
+    assert {labels.get("persona") for labels in labelled} == {"engineer"}
 
 
 def test_lifecycle_failure_survives_simultaneous_deferred_teardown(

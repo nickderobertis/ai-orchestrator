@@ -54,7 +54,7 @@ const usageParty = {
 test("validates and preserves additive run-list fields", () => {
   const parsed = parseRunList({
     api_version: 1,
-    telemetry_schema_version: 8,
+    telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     extension: true,
     runs: [
@@ -88,7 +88,7 @@ test("reads the launching session off the list row it is served on", () => {
   // session never has to fetch a run's transcripts to recover the same answer.
   const parsed = parseRunList({
     api_version: 1,
-    telemetry_schema_version: 8,
+    telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     runs: [
       { ...row, launch: { launch_id: "c0de".repeat(8), launcher: "codex" } },
@@ -120,7 +120,7 @@ test("accepts a run that has recorded no last event, and still rejects a blank o
   };
   const parsed = parseRunList({
     api_version: 1,
-    telemetry_schema_version: 8,
+    telemetry_schema_version: 9,
     observed_at: "2026-07-26T12:00:00Z",
     runs: [eventless],
   });
@@ -171,7 +171,7 @@ describe("boundary failures", () => {
     expect(() =>
       parseRunList({
         api_version: 2,
-        telemetry_schema_version: 8,
+        telemetry_schema_version: 9,
         observed_at: "2026-07-26T12:00:00Z",
         runs: [],
       }),
@@ -188,7 +188,7 @@ describe("boundary failures", () => {
   test("rejects a detail with an unsupported projected state", () => {
     const result = runDetailSchema.safeParse({
       api_version: 1,
-      telemetry_schema_version: 8,
+      telemetry_schema_version: 9,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
       rounds: [{ node_states: { build: "paused" } }],

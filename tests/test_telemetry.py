@@ -332,9 +332,9 @@ def test_the_clipping_order_the_contract_helper_states_is_the_one_timing_uses() 
 
 
 @pytest.mark.reads_docs
-def test_schema_v8_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v9_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v8-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v9-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -354,7 +354,7 @@ def test_schema_v8_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 8" in contract
+    assert "Index version 9" in contract
     typescript_contract = (
         Path(__file__).parents[1] / "packages" / "dag-model" / "src" / "index.ts"
     ).read_text(encoding="utf-8")
@@ -406,7 +406,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 8
+    assert active["schema_version"] == 9
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 

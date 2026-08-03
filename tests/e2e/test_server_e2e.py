@@ -48,7 +48,14 @@ from orchestrator.journal import (
     StepId,
     open_journal,
 )
-from orchestrator.launch import DEFAULT_MAX_AGE_SECONDS, provenance_path, write_provenance
+from orchestrator.launch import (
+    DEFAULT_MAX_AGE_SECONDS,
+    UNKNOWN_OWNER,
+    provenance_path,
+    read_run_owner,
+    session_key,
+    write_provenance,
+)
 from orchestrator.monitor import DetailSnapshot, save_snapshot
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
@@ -286,12 +293,17 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         assert runs_body["runs"][0]["launch"] == {
             "launch_id": LAUNCH_ID,
             "launcher": "claude-code",
+            "session_key": session_key("top-session"),
         }
 
         detail = client.get("/api/v1/runs/demo").json()
         assert detail["rounds"][0]["node_states"] == {"api": "running"}
         assert detail["run"]["run_id"] == "demo"
-        assert detail["launch"] == {"launch_id": LAUNCH_ID, "launcher": "claude-code"}
+        assert detail["launch"] == {
+            "launch_id": LAUNCH_ID,
+            "launcher": "claude-code",
+            "session_key": session_key("top-session"),
+        }
         assert "launcher_session_id" not in detail["launch"]  # redacted by default
         roles = {c["attribution"]["agentRole"] for c in detail["conversations"]}
         assert roles == {"worker", "judge"}
@@ -329,6 +341,35 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
     with _serve(exposed_app) as base:
         exposed = httpx.Client(base_url=base, timeout=10).get("/api/v1/runs/demo").json()
         assert exposed["launch"]["launcher_session_id"] == "top-session"
+
+
+def test_malformed_durable_attribution_degrades_over_http_and_for_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+    launch_path = run_dir / "launch.json"
+    record = json.loads(launch_path.read_text(encoding="utf-8"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+        for malformed in (
+            {"launch_id": LAUNCH_ID, "launcher": "not-a-launcher", "session_key": "a" * 32},
+            {"launch_id": LAUNCH_ID, "launcher": "codex", "session_key": "not-a-key"},
+        ):
+            record["launch"] = malformed
+            launch_path.write_text(json.dumps(record), encoding="utf-8")
+
+            assert read_run_owner(run_dir) == UNKNOWN_OWNER
+            detail = client.get("/api/v1/runs/demo")
+            assert detail.status_code == 200
+            assert detail.json()["launch"] == {
+                "launch_id": LAUNCH_ID,
+                "launcher": "unknown",
+            }
 
 
 def test_events_stream_snapshots_then_invalidates_on_a_live_append(
@@ -1351,6 +1392,28 @@ def _lifecycle_run(runs_dir: Path, run_id: str) -> Path:
             "result": {
                 "status": "done",
                 "artifacts": {"worker_report": "runs/demo/round-01/docs/report.json"},
+                # onejudge's own linkage for this dispatch. It names the judge
+                # session, whose history carries no `node` label — which is the
+                # ordinary shape of a real dispatch and is exactly what a node-label
+                # join alone misses. Its turns are this node's work regardless.
+                "telemetry": {
+                    "sessions": [
+                        {
+                            "session_id": "docs-worker",
+                            "role": "agent",
+                            "turn_index": 0,
+                            "started_at": "2026-07-19T00:00:00Z",
+                            "finished_at": "2026-07-19T00:05:00Z",
+                        },
+                        {
+                            "session_id": "docs-judge",
+                            "role": "judge",
+                            "turn_index": 1,
+                            "started_at": "2026-07-19T00:05:00Z",
+                            "finished_at": "2026-07-19T00:06:00Z",
+                        },
+                    ]
+                },
             },
         },
     )
@@ -1398,6 +1461,33 @@ def _lifecycle_history(tmp_path: Path, run_id: str, base: datetime) -> Path:
             "check-in",
             (60,),
             {"round": "1", "persona": "check-in"},
+        ),
+        # The settled lifecycle node's own three sessions. The judge carries no
+        # `node` label — nothing stamps one on the judge side of a conversation —
+        # so it reaches this node only through onejudge's recorded linkage.
+        (
+            "docs-worker",
+            "engineer-docs",
+            "agent",
+            "worker",
+            (200, 210),
+            {"node": "docs", "round": "1", "persona": "engineer"},
+        ),
+        (
+            "docs-judge",
+            "you-are-a-strict-careful-evaluator",
+            "judge",
+            "judge",
+            (215,),
+            {"round": "1"},
+        ),
+        (
+            "docs-lint",
+            "llmlint-diff-docs",
+            "llmlint",
+            "worker",
+            (220,),
+            {"node": "docs", "round": "1"},
         ),
     ):
         record = tmp_path / f"{session_id}.jsonl"
@@ -1564,7 +1654,27 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
         assert [event["kind"] for event in turns] == ["conversation-turn"] * 2
         # A session whose recorded start cannot be placed in time is omitted rather
         # than given an invented one — every other transcript still reaches the view.
-        assert set(dispatches) == {"worker-native", "lint-native", "check-in-native"}
+        assert set(dispatches) == {
+            "worker-native",
+            "lint-native",
+            "check-in-native",
+            "docs-worker",
+            "docs-judge",
+            "docs-lint",
+        }
+
+        # Every dispatch row says what it was, on the row itself: a client labels and
+        # groups the timeline without fetching a transcript per span to find out.
+        assert {
+            name: (span["agent_role"], span["transport_role"]) for name, span in dispatches.items()
+        } == {
+            "worker-native": ("worker", "agent"),
+            "lint-native": ("worker", "llmlint"),
+            "check-in-native": ("check-in", "agent"),
+            "docs-worker": ("worker", "agent"),
+            "docs-judge": ("judge", "judge"),
+            "docs-lint": ("worker", "llmlint"),
+        }
 
         # Heavy content is addressed, never inlined — and each address resolves.
         verification = by_kind["verification"][0]
@@ -1603,6 +1713,24 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
             "signoff": "waiting",
         }
         assert "details" in lean
+
+        # A lifecycle node that ran a worker, a judge, and a lint pass reports the
+        # turns each of them took. The judge is what this proves: its history carries
+        # no `node` label, so a label-only join counted none of its turns and the node
+        # read as "0 turns" beside a dispatch that had plainly worked.
+        nodes = {node["node"]: node for node in lean["run"]["nodes"]}
+        assert nodes["docs"]["turns"] == 3  # two worker turns and the judge's one
+        assert nodes["docs"]["lint"] == 1
+        # And each linked session names both of its roles, so the drill-down can say
+        # which one was the worker without opening a transcript.
+        assert {
+            link["session_id"]: (link["role"], link["agent_role"])
+            for link in nodes["docs"]["sessions"]
+        } == {
+            "docs-worker": ("agent", "worker"),
+            "docs-judge": ("judge", "judge"),
+            "docs-lint": ("llmlint", "worker"),
+        }
         # The default is unchanged: a client that asks for nothing still gets them.
         full = client.get("/api/v1/runs/demo").json()
         # The detail view still serves the undatable transcript: only its *position in
@@ -1611,6 +1739,9 @@ def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
             "worker-native",
             "lint-native",
             "check-in-native",
+            "docs-worker",
+            "docs-judge",
+            "docs-lint",
             "undatable-native",
         }
 
