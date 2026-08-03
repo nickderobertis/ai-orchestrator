@@ -207,9 +207,7 @@ test("leads a node that is not moving with the reason it is not", async ({
   await expect(banner).toContainText("2");
   // It is the first thing in the view: above the disclosures, not inside one.
   const bannerBox = await banner.boundingBox();
-  const taskBox = await page
-    .getByRole("button", { name: "Task" })
-    .boundingBox();
+  const taskBox = await page.getByRole("tab", { name: "Task" }).boundingBox();
   expect(bannerBox?.y ?? 0).toBeLessThan(taskBox?.y ?? 0);
 
   // A held node states what holds it, by the plan node the server named.
@@ -548,14 +546,13 @@ test("shows a verification and a publication as the records they are", async ({
 
 test("states when a verification artifact is unavailable", async ({ page }) => {
   await openObservatory(page, `/?run=${runs().live}&node=missing-artifact`);
-  const factsDisclosure = page.getByRole("button", {
-    name: "Dependencies, publication and verification",
-  });
-  await factsDisclosure.focus();
+  const checksTab = page.getByRole("tab", { name: "Checks" });
+  await checksTab.focus();
   await page.keyboard.press("Enter");
   await expect(
     page.locator(".facts").filter({ hasText: "Verification coverage" }),
-  ).toContainText("PublicationNot recorded");
+  ).toContainText("Hook: not recorded");
+  await page.getByRole("tab", { name: "Timeline" }).click();
   const rejected = page.waitForResponse(
     (response) =>
       response.url().includes("/artifacts/") && response.status() === 404,
@@ -628,26 +625,30 @@ test("keeps a node's task, criteria, dependencies and verification reachable", a
   page,
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  // A compact summary, not a wall of blocks: each part is one disclosure away.
-  await page.getByRole("button", { name: "Task" }).click();
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("tab", { name: "Overall" }).click();
+  const reopened = page
+    .locator(".overall-node-summary")
+    .filter({ hasText: "dashboard" });
+  await reopened.getByRole("button", { name: /dashboard/ }).click();
+  await reopened.getByRole("button", { name: "Open timeline" }).click();
+  await expect(page).toHaveURL(/node=dashboard/);
+  await page.getByRole("tab", { name: "Task" }).click();
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
-  await page.getByRole("button", { name: "Completion criteria" }).click();
+  await page.getByRole("tab", { name: "Completion criteria" }).click();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
 
-  await page
-    .getByRole("button", {
-      name: "Dependencies, publication and verification",
-    })
-    .click();
+  await page.getByRole("tab", { name: "Dependencies" }).click();
+  await expect(page.locator(".facts")).toContainText("foundation");
+  await page.getByRole("tab", { name: "PR" }).click();
   await expect(page.locator(".facts")).toContainText("Not recorded");
   await expect(page.locator(".facts").getByRole("link")).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=foundation`);
-  await page
-    .getByRole("button", {
-      name: "Dependencies, publication and verification",
-    })
-    .click();
+  await page.getByRole("tab", { name: "PR" }).click();
   const pr = page.locator(".facts").getByRole("link", { name: "Pull request" });
   await expect(pr).toHaveAttribute("href", fixture().foundation_pr);
   await expect(pr).toHaveAttribute("target", "_blank");
@@ -656,7 +657,7 @@ test("keeps a node's task, criteria, dependencies and verification reachable", a
   // A human action names work for a person, so the contract forbids it a completion
   // bar; the summary has to say that rather than render an empty criteria block.
   await openObservatory(page, `/?run=${runs().live}&node=approval`);
-  await page.getByRole("button", { name: "Completion criteria" }).click();
+  await page.getByRole("tab", { name: "Completion criteria" }).click();
   await expect(
     page.getByText("No completion criteria recorded."),
   ).toBeVisible();
@@ -751,11 +752,7 @@ test("renders a graph whose node depends on another run", async ({ page }) => {
 
   // The prerequisite itself stays visible where the node's dependencies are listed.
   await page.locator(".dag-node.state-running").click();
-  await page
-    .getByRole("button", {
-      name: "Dependencies, publication and verification",
-    })
-    .click();
+  await page.getByRole("tab", { name: "Dependencies" }).click();
   await expect(page.locator(".facts")).toContainText(
     `run:${runs().history}#archive`,
   );
@@ -857,7 +854,7 @@ test("restores a bookmarked view and refreshes through the read API", async ({
     /^(\d{1,3}ms|[1-5]?\ds|\d+m [1-5]?\ds|\d+h [1-5]?\dm [1-5]?\ds)$/,
   );
   await expect(metric("Turns")).toContainText(/\d+/);
-  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Run timeline")).toBeVisible();
   await expect(page.getByText("Observe the live DAG safely")).toBeVisible();
   await expect(
     page.getByText("Coordinating the execution frontier"),
@@ -868,13 +865,13 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(page.getByText(/^Codex session · /).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Run timeline")).toBeVisible();
 
   await page.getByRole("tab", { name: "Graph" }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
-  await expect(page.getByText("Run-level sessions")).toHaveCount(0);
+  await expect(page.getByText("Run timeline")).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(
@@ -893,7 +890,7 @@ test("lands on the run as a whole, with every deep link still opening", async ({
     "aria-selected",
     "true",
   );
-  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Run timeline")).toBeVisible();
   await expect(page.locator(".dag-node")).toHaveCount(0);
 
   // Picking a second run is an operator comparing the two, so the reading they are
@@ -941,8 +938,101 @@ test("lands on the run as a whole, with every deep link still opening", async ({
     "aria-selected",
     "true",
   );
-  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Run timeline")).toBeVisible();
   await expect(page.locator(".dag-node")).toHaveCount(0);
+});
+
+test("expands a node summary and opens its full timeline", async ({ page }) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  const summary = page
+    .locator(".overall-node-summary")
+    .filter({ hasText: "dashboard" });
+  await summary.getByRole("button", { name: /dashboard/ }).click();
+  await expect(
+    summary.getByRole("region", { name: "Node timeline" }),
+  ).toBeVisible();
+  await summary
+    .getByRole("region", { name: "Node timeline" })
+    .getByRole("button", { name: /worker/ })
+    .click();
+  await expect(page).toHaveURL(/node=dashboard/);
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("restores node tabs and moves between them from the keyboard", async ({
+  page,
+}) => {
+  await openObservatory(
+    page,
+    `/?run=${runs().live}&node=dashboard&tab=criteria`,
+  );
+  const criteria = page.getByRole("tab", { name: "Completion criteria" });
+  await expect(criteria).toHaveAttribute("aria-selected", "true");
+  await criteria.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Dependencies" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page).toHaveURL(/tab=dependencies/);
+
+  await page.getByRole("tab", { name: "Timeline" }).click();
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
+  await expect(page).toHaveURL(/event=/);
+  await page.getByRole("tab", { name: "Task" }).click();
+  await expect(page).not.toHaveURL(/event=/);
+
+  await page.getByRole("button", { name: /Graph/ }).click();
+  await expect(page).not.toHaveURL(/tab=/);
+  const foundation = page.getByRole("button", { name: "foundation: done" });
+  await foundation.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.getByRole("tab", { name: "Checks" }).click();
+  await expect(page.locator(".facts")).toContainText("unit: SUCCESS");
+  await expect(
+    page.locator(".facts").getByRole("link", { name: "unit: SUCCESS" }),
+  ).toHaveAttribute("href", "https://github.com/example/repo/actions/runs/12");
+  await page.getByRole("tab", { name: "Task" }).click();
+  await expect(page.locator(".facts")).toContainText(
+    "Gate completed successfully",
+  );
+
+  await page.getByRole("tab", { name: "Task" }).click();
+  await page.getByRole("tab", { name: "Overall" }).click();
+  await expect(page).not.toHaveURL(/tab=/);
+
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard&tab=bogus`);
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.getByRole("tab", { name: "Task" }).click();
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
+  await expect(page).not.toHaveURL(/tab=/);
+});
+
+test("names a node whose run summary has no recorded activity", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  const summary = page
+    .locator(".overall-node-summary")
+    .filter({ hasText: "queued" });
+  await summary.getByRole("button", { name: /queued/ }).click();
+  await expect(
+    summary.getByText("No activity summary recorded."),
+  ).toBeVisible();
 });
 
 test("reads every recorded moment as words rather than as its stamp", async ({
@@ -1098,7 +1188,7 @@ test("says so when a run recorded no run-level conversation", async ({
   // The settled run's history holds a worker session and no orchestrator one, so
   // its overall view has no planner transcript to show.
   await openObservatory(page, `/?run=${runs().history}&view=overall`);
-  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Run timeline")).toBeVisible();
   await expect(
     page.getByText("No run-level conversation is available."),
   ).toBeVisible();
@@ -1128,7 +1218,7 @@ test("recovers the selection when a bookmarked run is not being served", async (
   // The same fallback from the overall reading keeps the operator in it: only the
   // run under the view is rewritten, so a stale bookmark never also moves them.
   await openObservatory(page, "/?run=absent-run");
-  await expect(page.getByText("Run-level sessions")).toBeVisible();
+  await expect(page.getByText("Run timeline")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
     "aria-selected",
     "true",

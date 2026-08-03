@@ -491,7 +491,8 @@ def test_run_timeline_serves_a_recorded_run_and_rejects_what_it_cannot_read(
     node_only = run_timeline(runs, "demo", node_id="api", oneharness_bin=ABSENT)
     assert {span.get("node_id") for span in node_only["spans"]} == {"api"}
     run_only = run_timeline(runs, "demo", scope="run", oneharness_bin=ABSENT)
-    assert all(span.get("node_id") is None for span in run_only["spans"])
+    assert [span["kind"] for span in run_only["spans"]] == ["round", "node"]
+    assert run_only["spans"][1]["node_id"] == "api"
 
     with pytest.raises(InvalidRunId):
         run_timeline(runs, "bad!id", oneharness_bin=ABSENT)

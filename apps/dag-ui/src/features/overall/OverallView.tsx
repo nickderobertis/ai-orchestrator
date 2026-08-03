@@ -15,7 +15,9 @@ import {
 import { Activity, ChevronRight, Clock3, Cpu, Layers3 } from "lucide-react";
 import { useState } from "react";
 import { formatDurationSeconds } from "../../lib/time";
-import { launchLabel } from "../runs/run-model";
+import { launchLabel, nodeViews } from "../runs/run-model";
+import { TimelineRail } from "../timeline/TimelineRail";
+import { nodeTimeline } from "../timeline/timeline-model";
 import { useConversation } from "../timeline/useConversation";
 
 export function OverallView({
@@ -24,18 +26,21 @@ export function OverallView({
   timeline,
   timelineError,
   conversationRevision,
+  onSelectNode,
 }: {
   readonly client: TelemetryClient;
   readonly detail: RunDetail;
   readonly timeline?: RunTimeline;
   readonly timelineError?: Error;
   readonly conversationRevision?: number;
+  readonly onSelectNode: (nodeId: string) => void;
 }) {
   // A session the graph placed at no node is run-level work: the planner driving the
   // whole graph, and the per-round check-ins beside it.
   const sessions = (timeline?.spans ?? []).filter(
     (span) => span.kind === "dispatch" && span.node_id === undefined,
   );
+  const nodes = nodeViews(detail);
   return (
     <div className="overall-view">
       <ScrollArea className="h-full">
@@ -44,7 +49,9 @@ export function OverallView({
             <p className="eyebrow">Whole DAG</p>
             <h2>{detail.run.run_id}</h2>
             {detail.rounds.at(-1)?.plan.goal?.text && (
-              <p>{detail.rounds.at(-1)?.plan.goal?.text}</p>
+              <p className="run-goal">
+                {detail.rounds.at(-1)?.plan.goal?.text}
+              </p>
             )}
             <p>
               {detail.run.phase} ·{" "}
@@ -79,7 +86,7 @@ export function OverallView({
             <CardContent className="px-[15px]">
               <div className="section-heading">
                 <Activity size={16} />
-                <h3>Run-level sessions</h3>
+                <h3>Run timeline</h3>
               </div>
               {/* The sessions are read off the timeline, so a timeline that has not
                   arrived or could not be read is not the same answer as a run that
@@ -102,28 +109,76 @@ export function OverallView({
                 >
                   Loading the run's sessions…
                 </p>
-              ) : sessions.length === 0 ? (
+              ) : sessions.length === 0 && nodes.length === 0 ? (
                 <p className="m-0 text-[11px] text-muted-foreground">
                   No run-level conversation is available.
                 </p>
               ) : (
-                sessions.map((span, index) => (
-                  <RunLevelSession
-                    client={client}
-                    conversationId={
-                      span.reference?.kind === "conversation"
-                        ? span.reference.value
-                        : undefined
-                    }
-                    initiallyOpen={index === 0}
-                    conversationRevision={conversationRevision}
-                    key={span.id}
-                    label={span.label}
-                    launch={launchLabel(detail.launch)}
-                    role={span.agent_role}
-                    runId={detail.run.run_id}
-                  />
-                ))
+                <>
+                  {sessions.length === 0 && (
+                    <p className="m-0 text-[11px] text-muted-foreground">
+                      No run-level conversation is available.
+                    </p>
+                  )}
+                  {sessions.map((span, index) => (
+                    <RunLevelSession
+                      client={client}
+                      conversationId={
+                        span.reference?.kind === "conversation"
+                          ? span.reference.value
+                          : undefined
+                      }
+                      initiallyOpen={index === 0}
+                      conversationRevision={conversationRevision}
+                      key={span.id}
+                      label={span.label}
+                      launch={launchLabel(detail.launch)}
+                      role={span.agent_role}
+                      runId={detail.run.run_id}
+                    />
+                  ))}
+                  {nodes.map((node) => {
+                    const projected = nodeTimeline(timeline, node.id);
+                    return (
+                      <Collapsible key={node.id}>
+                        <article className="overall-node-summary">
+                          <header className="transcript-header">
+                            <CollapsibleTrigger asChild>
+                              <button className="session-toggle" type="button">
+                                <ChevronRight size={14} aria-hidden="true" />
+                                <span>
+                                  <span className="eyebrow">Node</span>
+                                  <span className="session-name">
+                                    {node.label}
+                                  </span>
+                                </span>
+                              </button>
+                            </CollapsibleTrigger>
+                            <button
+                              className="node-timeline-link"
+                              onClick={() => onSelectNode(node.id)}
+                              type="button"
+                            >
+                              Open timeline
+                            </button>
+                          </header>
+                          <CollapsibleContent>
+                            {projected.rows.length === 0 ? (
+                              <p className="text-[11px] text-muted-foreground">
+                                No activity summary recorded.
+                              </p>
+                            ) : (
+                              <TimelineRail
+                                rows={projected.rows}
+                                onSelect={() => onSelectNode(node.id)}
+                              />
+                            )}
+                          </CollapsibleContent>
+                        </article>
+                      </Collapsible>
+                    );
+                  })}
+                </>
               )}
             </CardContent>
           </Card>
