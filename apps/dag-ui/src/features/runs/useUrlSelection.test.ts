@@ -18,6 +18,18 @@ test("reads the selection from the query string", () => {
   expect(result.current.view).toBe("overall");
 });
 
+test("lands on the overall view when the address names none", () => {
+  const { result } = renderHook(() => useUrlSelection());
+  expect(result.current.view).toBe("overall");
+});
+
+test("opens the node a bookmark names, whether or not it names a view", () => {
+  window.history.replaceState(null, "", "/?run=run-1&node=build");
+  const { result } = renderHook(() => useUrlSelection());
+  expect(result.current.nodeId).toBe("build");
+  expect(result.current.view).toBe("graph");
+});
+
 test("carries the opened moment of a node's execution", () => {
   window.history.replaceState(null, "", "/?run=run-1&node=build");
   const { result } = renderHook(() => useUrlSelection());
@@ -33,13 +45,15 @@ test("carries the opened moment of a node's execution", () => {
   expect(result.current.nodeId).toBe("ship");
 });
 
-test("selecting a run clears the node and view", () => {
+test("selecting a run clears the node and keeps the reading", () => {
   window.history.replaceState(null, "", "/?run=run-1&node=build&view=overall");
   const { result } = renderHook(() => useUrlSelection());
   act(() => result.current.selectRun("run-2"));
   expect(result.current.runId).toBe("run-2");
   expect(result.current.nodeId).toBeUndefined();
-  expect(result.current.view).toBe("graph");
+  // A reader comparing two runs on the overall view stays on it; only the node,
+  // which belonged to the run being left, cannot survive the move.
+  expect(result.current.view).toBe("overall");
 });
 
 test("selecting and clearing a node moves back to the graph view", () => {
@@ -51,6 +65,8 @@ test("selecting and clearing a node moves back to the graph view", () => {
   expect(result.current.view).toBe("graph");
   act(() => result.current.selectNode(undefined));
   expect(result.current.nodeId).toBeUndefined();
+  // Leaving a node is a walk back to the graph it sits in, not to the landing view.
+  expect(result.current.view).toBe("graph");
 });
 
 test("follows a history navigation the browser performs itself", () => {

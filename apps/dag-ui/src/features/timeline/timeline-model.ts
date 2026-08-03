@@ -109,24 +109,6 @@ export function pathTo(
   return [];
 }
 
-/** A recorded timestamp as a stable `HH:MM:SS` in UTC, or its own text if unusable. */
-export function formatTime(at: string): string {
-  const parsed = Date.parse(at);
-  return Number.isNaN(parsed)
-    ? at
-    : new Date(parsed).toISOString().slice(11, 19);
-}
-
-/** A duration in the largest unit that keeps it readable at a glance. */
-export function formatDuration(durationMs: number): string {
-  if (durationMs < 1000) return `${Math.max(0, Math.round(durationMs))}ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
 function spanRows(
   span: TimelineSpan,
   children: Map<string, TimelineSpan[]>,

@@ -84,17 +84,23 @@ session gathers under one heading, and its short form is the same fingerprint
 run with no launch record at all — an e2e fixture, a bare `run-plan` — reads as
 `Unattributed` rather than as an unknown session. Select a run, then:
 
-- use **Graph** to inspect status and progress; green nodes succeeded, red nodes
-  failed or were cancelled, and an animated acid highlight marks active work;
-- select a node in the graph or keyboard-accessible node list to open its
-  **timeline view** (below);
-- use **Overall** to see whole-run telemetry and the run's **run-level sessions**.
+- **Overall** is where an address that names no view lands, and it is the run read
+  as a whole: its telemetry and its **run-level sessions**.
   A session the graph placed at no node is run-level work, so that is where the
   planner's own conversation and the per-round check-ins are read; each names its
   own role — orchestrator, check-in — from the role pair its timeline span carries,
   and the same launch phrase the navigation heads its group with. Each is fetched
   only while it is open, and a timeline that has not arrived or could not be read
   is reported as such rather than as a run that recorded none.
+- use **Graph** to inspect status and progress; green nodes succeeded, red nodes
+  failed or were cancelled, and an animated acid highlight marks active work;
+- select a node in the graph or keyboard-accessible node list to open its
+  **timeline view** (below).
+
+Every stamp is read in the browser's own zone — as a clock time for work recorded
+today and with the date it happened on for anything older — with the whole instant,
+zone included, on hover. Durations are read in the units they ran in (`420ms`,
+`42s`, `12m 4s`, `2h 5m 10s`), never as a raw second count.
 
 The selected run, node, view, and opened timeline item are encoded in the URL
 query string, so a specific moment of a node's execution can be bookmarked or

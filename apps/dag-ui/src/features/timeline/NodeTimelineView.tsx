@@ -127,7 +127,9 @@ export function NodeTimelineView({
               </div>
               <div>
                 <dt>Pull request</dt>
-                <dd>{formatValue(node.result?.pr)}</dd>
+                <dd>
+                  <PullRequest pr={node.result?.pr} />
+                </dd>
               </div>
               <div>
                 <dt>Gate result</dt>
@@ -180,6 +182,15 @@ export function NodeTimelineView({
         </div>
       )}
     </section>
+  );
+}
+
+function PullRequest({ pr }: { readonly pr?: string | null }) {
+  if (typeof pr !== "string" || pr === "") return <>{formatValue(pr)}</>;
+  return (
+    <a className="node-view-pr" href={pr} rel="noreferrer" target="_blank">
+      {pr} <ExternalLink size={12} />
+    </a>
   );
 }
 
