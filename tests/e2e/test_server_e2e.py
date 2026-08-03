@@ -1668,8 +1668,10 @@ def test_scoped_timeline_endpoints_reconstruct_one_ordered_run_history_over_http
         timeline = body.json()
         assert timeline["api_version"] == 2
         assert timeline["run_id"] == "demo"
+        run_scope = client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"]
+        assert any(span.get("node_id") == "api" for span in run_scope)
         spans = [
-            *client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"],
+            *(span for span in run_scope if span.get("node_id") is None),
             *timeline["spans"],
             *client.get("/api/v2/runs/demo/timeline?node_id=docs").json()["spans"],
             *client.get("/api/v2/runs/demo/timeline?node_id=signoff").json()["spans"],
@@ -2121,7 +2123,14 @@ def test_timeline_survives_a_skewed_clock_a_half_pair_and_a_session_still_speaki
         run_spans = client.get("/api/v2/runs/skewed/timeline?scope=run").json()["spans"]
 
     assert response.status_code == 200
-    spans = [*run_spans, *response.json()["spans"]]
+    node_spans = response.json()["spans"]
+    assert [span["started_at"] for span in run_spans] == sorted(
+        str(span["started_at"]) for span in run_spans
+    )
+    spans = sorted(
+        [*run_spans, *node_spans],
+        key=lambda span: (str(span["started_at"]), str(span["id"])),
+    )
     by_kind: dict[str, list[dict[str, object]]] = {}
     for span in spans:
         by_kind.setdefault(str(span["kind"]), []).append(span)

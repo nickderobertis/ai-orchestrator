@@ -1,16 +1,16 @@
 import type { RunTimeline } from "@ai-orchestrator/dag-model";
 import type { TelemetryClient } from "@ai-orchestrator/telemetry-client";
 import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
   Alert,
   AlertDescription,
   AlertTitle,
   Button,
   Card,
   cn,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "@oneharness/ui";
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import {
 import { useEffect, useMemo } from "react";
 import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
+import type { NodeTab } from "../runs/useUrlSelection";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import { TimelineRail } from "./TimelineRail";
 import { findRow, nodeTimeline } from "./timeline-model";
@@ -44,6 +45,8 @@ export function NodeTimelineView({
   onSelectItem,
   onBack,
   conversationRevision,
+  selectedTab,
+  onSelectTab,
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
@@ -54,6 +57,8 @@ export function NodeTimelineView({
   readonly onSelectItem: (id?: string) => void;
   readonly onBack: () => void;
   readonly conversationRevision?: number;
+  readonly selectedTab: NodeTab;
+  readonly onSelectTab: (tab: NodeTab) => void;
 }) {
   const projected = useMemo(
     () => nodeTimeline(timeline, node.id),
@@ -114,121 +119,123 @@ export function NodeTimelineView({
 
       <NodeProblemBanner node={node} />
 
-      <Accordion className="node-summary" collapsible type="single">
-        <AccordionItem value="task">
-          <AccordionTrigger>Task</AccordionTrigger>
-          <AccordionContent>
-            <pre>{node.task.task}</pre>
-          </AccordionContent>
-        </AccordionItem>
-        <AccordionItem value="done-when">
-          <AccordionTrigger>Completion criteria</AccordionTrigger>
-          <AccordionContent>
-            {/* A human action names work for a person, not a bar the harness can
-                check, so the contract lets it record none. */}
-            <pre>
-              {node.task.done_when ?? "No completion criteria recorded."}
-            </pre>
-          </AccordionContent>
-        </AccordionItem>
-        <AccordionItem value="context">
-          <AccordionTrigger>
-            Dependencies, publication and verification
-          </AccordionTrigger>
-          <AccordionContent>
-            <dl className="facts">
-              <div>
-                <dt>Dependencies</dt>
-                <dd>{node.task.deps?.join(", ") || "None"}</dd>
-              </div>
-              <div>
-                <dt>Publication</dt>
-                <dd>
-                  <Publication node={node} />
-                </dd>
-              </div>
-              <div>
-                <dt>Verification coverage</dt>
-                <dd>
-                  Hook:{" "}
-                  {node.detail?.verification.pre_push_hook
-                    ? "present"
-                    : "not recorded"}
-                  {" · "}Required checks:{" "}
-                  {node.detail?.verification.required_checks?.join(", ") ||
-                    "none configured"}
-                </dd>
-              </div>
-              <div>
-                <dt>Observed checks</dt>
-                <dd>
-                  {(node.detail?.verification.checks ?? []).length === 0
-                    ? "No checks observed"
-                    : node.detail?.verification.checks?.map((check, index) => (
-                        <span key={check.name}>
-                          {index > 0 && " · "}
-                          {check.url ? (
-                            <a
-                              href={check.url}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              {check.name}: {check.state}
-                            </a>
-                          ) : (
-                            `${check.name}: ${check.state}`
-                          )}
-                        </span>
-                      ))}
-                </dd>
-              </div>
-              <div>
-                <dt>Outcome</dt>
-                <dd>{formatValue(node.result?.detail)}</dd>
-              </div>
-            </dl>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-
-      {/* llmlint: ignore[changed_behavior_has_e2e] the detail and the timeline are
+      <Tabs
+        className="node-tabs"
+        onValueChange={(value) => onSelectTab(value as NodeTab)}
+        value={selectedTab}
+      >
+        <TabsList aria-label="Node details" variant="line">
+          <TabsTrigger value="timeline">Timeline</TabsTrigger>
+          <TabsTrigger value="task">Task</TabsTrigger>
+          <TabsTrigger value="criteria">Completion criteria</TabsTrigger>
+          <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
+          <TabsTrigger value="pr">PR</TabsTrigger>
+          <TabsTrigger value="checks">Checks</TabsTrigger>
+        </TabsList>
+        <TabsContent className="node-tab-panel" value="task">
+          <pre>{node.task.task}</pre>
+        </TabsContent>
+        <TabsContent className="node-tab-panel" value="criteria">
+          <pre>{node.task.done_when ?? "No completion criteria recorded."}</pre>
+        </TabsContent>
+        <TabsContent className="node-tab-panel" value="dependencies">
+          <dl className="facts">
+            <div>
+              <dt>Dependencies</dt>
+              <dd>{node.task.deps?.join(", ") || "None"}</dd>
+            </div>
+          </dl>
+        </TabsContent>
+        <TabsContent className="node-tab-panel" value="pr">
+          <dl className="facts">
+            <div>
+              <dt>Publication</dt>
+              <dd>
+                <Publication node={node} />
+              </dd>
+            </div>
+            <div>
+              <dt>Outcome</dt>
+              <dd>{formatValue(node.result?.detail)}</dd>
+            </div>
+          </dl>
+        </TabsContent>
+        <TabsContent className="node-tab-panel" value="checks">
+          <dl className="facts">
+            <div>
+              <dt>Verification coverage</dt>
+              <dd>
+                Hook:{" "}
+                {node.detail?.verification.pre_push_hook
+                  ? "present"
+                  : "not recorded"}
+                {" · "}Required checks:{" "}
+                {node.detail?.verification.required_checks?.join(", ") ||
+                  "none configured"}
+              </dd>
+            </div>
+            <div>
+              <dt>Observed checks</dt>
+              <dd>
+                {(node.detail?.verification.checks ?? []).length === 0
+                  ? "No checks observed"
+                  : node.detail?.verification.checks?.map((check, index) => (
+                      <span key={check.name}>
+                        {index > 0 && " · "}
+                        {check.url ? (
+                          <a href={check.url} rel="noreferrer" target="_blank">
+                            {check.name}: {check.state}
+                          </a>
+                        ) : (
+                          `${check.name}: ${check.state}`
+                        )}
+                      </span>
+                    ))}
+              </dd>
+            </div>
+          </dl>
+        </TabsContent>
+        <TabsContent className="node-timeline-panel" value="timeline">
+          {/* llmlint: ignore[changed_behavior_has_e2e] the detail and the timeline are
           read from the same strict journal, so no served run fails one and not the
           other; a browser reaches this only when the whole API is unreachable, and
           then there is no node view to report it in. App.test.tsx drives it through
           the real telemetry client. */}
-      {timelineError !== undefined ? (
-        <Alert className="m-5 w-auto" variant="destructive">
-          <TriangleAlert />
-          <AlertTitle>Timeline unavailable</AlertTitle>
-          <AlertDescription>{timelineError.message}</AlertDescription>
-        </Alert>
-      ) : timeline === undefined ? (
-        <div aria-live="polite" className="loading-state">
-          Loading the recorded timeline…
-        </div>
-      ) : projected.rows.length === 0 ? (
-        <Card className="m-5 items-center gap-2 p-8 text-muted-foreground">
-          <p className="m-0">This node has no recorded timeline yet.</p>
-          <p className="m-0 text-[11px]">
-            Spans and events appear here as the run records them.
-          </p>
-        </Card>
-      ) : (
-        <div className="node-view-body">
-          <TimelineRail
-            onSelect={onSelectItem}
-            rows={projected.rows}
-            selectedId={selectedItemId}
-          />
-          <TimelineItemDetail
-            client={client}
-            conversationRevision={conversationRevision}
-            node={node}
-            row={selected}
-            runId={runId}
-          />
-        </div>
-      )}
+          {timelineError !== undefined ? (
+            <Alert className="m-5 w-auto" variant="destructive">
+              <TriangleAlert />
+              <AlertTitle>Timeline unavailable</AlertTitle>
+              <AlertDescription>{timelineError.message}</AlertDescription>
+            </Alert>
+          ) : timeline === undefined ? (
+            <div aria-live="polite" className="loading-state">
+              Loading the recorded timeline…
+            </div>
+          ) : projected.rows.length === 0 ? (
+            <Card className="m-5 items-center gap-2 p-8 text-muted-foreground">
+              <p className="m-0">This node has no recorded timeline yet.</p>
+              <p className="m-0 text-[11px]">
+                Spans and events appear here as the run records them.
+              </p>
+            </Card>
+          ) : (
+            <div className="node-view-body">
+              <TimelineRail
+                onSelect={onSelectItem}
+                rows={projected.rows}
+                selectedId={selectedItemId}
+              />
+              <TimelineItemDetail
+                client={client}
+                conversationRevision={conversationRevision}
+                node={node}
+                row={selected}
+                runId={runId}
+              />
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }

@@ -188,6 +188,7 @@ export function App({
                     timeline={telemetry.timeline}
                     timelineError={telemetry.timelineError}
                     conversationRevision={telemetry.conversationRevision}
+                    onSelectNode={selection.selectNode}
                   />
                 ) : selectedNode ? (
                   // Opening a node hands it the whole working area: the graph stays
@@ -200,6 +201,8 @@ export function App({
                     onSelectItem={selection.selectItem}
                     runId={selectedRunId}
                     selectedItemId={selection.itemId}
+                    selectedTab={selection.nodeTab}
+                    onSelectTab={selection.selectNodeTab}
                     timeline={telemetry.timeline}
                     timelineError={telemetry.timelineError}
                   />

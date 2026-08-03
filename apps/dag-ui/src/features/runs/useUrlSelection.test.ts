@@ -45,6 +45,18 @@ test("carries the opened moment of a node's execution", () => {
   expect(result.current.nodeId).toBe("ship");
 });
 
+test("defaults, deep-links, and clears the selected node tab", () => {
+  window.history.replaceState(null, "", "/?run=run-1&node=build&tab=checks");
+  const { result } = renderHook(() => useUrlSelection());
+  expect(result.current.nodeTab).toBe("checks");
+  act(() => result.current.selectNodeTab("task"));
+  expect(result.current.nodeTab).toBe("task");
+  expect(window.location.search).toContain("tab=task");
+  act(() => result.current.selectNodeTab("timeline"));
+  expect(result.current.nodeTab).toBe("timeline");
+  expect(window.location.search).not.toContain("tab=");
+});
+
 test("selecting a run clears the node and keeps the reading", () => {
   window.history.replaceState(null, "", "/?run=run-1&node=build&view=overall");
   const { result } = renderHook(() => useUrlSelection());

@@ -347,9 +347,11 @@ type FailureClass =
 ### Run timeline
 
 `GET /api/v2/runs/{run_id}/timeline?node_id={id}` returns one node's spans and
-events. `scope=run` returns only spans and events without a node id. Exactly one
-scope is required, so the graph view has no reason to request a timeline.
-a consumer filters it by `node_id` rather than issuing one request per node. The
+events. `scope=run` returns run-level spans plus each node root and bounded rollups
+of its nested activity; it omits node events, references, and individual
+dispatches. Exactly one scope is required, so the graph view has no reason to
+request a timeline. A consumer opens the complete node through `node_id` rather
+than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
 

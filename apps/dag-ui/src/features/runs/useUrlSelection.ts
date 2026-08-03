@@ -25,11 +25,30 @@ export interface UrlSelection {
    * where the node view lives.
    */
   readonly view: "graph" | "overall";
+  readonly nodeTab: NodeTab;
   readonly selectRun: (runId: string) => void;
   readonly selectNode: (nodeId?: string) => void;
   readonly selectItem: (itemId?: string) => void;
   readonly showOverall: () => void;
+  readonly selectNodeTab: (tab: NodeTab) => void;
 }
+
+export type NodeTab =
+  | "timeline"
+  | "task"
+  | "criteria"
+  | "dependencies"
+  | "pr"
+  | "checks";
+
+const NODE_TABS: readonly NodeTab[] = [
+  "timeline",
+  "task",
+  "criteria",
+  "dependencies",
+  "pr",
+  "checks",
+];
 
 export function useUrlSelection(): UrlSelection {
   const query = useSyncExternalStore(subscribe, currentQuery, currentQuery);
@@ -38,6 +57,10 @@ export function useUrlSelection(): UrlSelection {
   const nodeId = params.get("node") ?? undefined;
   const itemId = params.get("event") ?? undefined;
   const named = params.get("view");
+  const namedTab = params.get("tab");
+  const nodeTab = NODE_TABS.includes(namedTab as NodeTab)
+    ? (namedTab as NodeTab)
+    : "timeline";
   const view: UrlSelection["view"] =
     named === "graph" || named === "overall"
       ? named
@@ -57,6 +80,7 @@ export function useUrlSelection(): UrlSelection {
     nodeId,
     itemId,
     view,
+    nodeTab,
     // The reading stays where it was: an operator comparing two runs on the overall
     // view is not asking to be moved to the graph by picking the second one.
     selectRun: (id) =>
@@ -64,6 +88,7 @@ export function useUrlSelection(): UrlSelection {
         next.set("run", id);
         next.delete("node");
         next.delete("event");
+        next.delete("tab");
       }),
     // A different node has different recorded work, so the moment selected inside the
     // one being left cannot survive the move. Both a node and the way back out of one
@@ -74,6 +99,7 @@ export function useUrlSelection(): UrlSelection {
         if (id) next.set("node", id);
         else next.delete("node");
         next.delete("event");
+        next.delete("tab");
         next.set("view", "graph");
       }),
     selectItem: (id) =>
@@ -86,6 +112,13 @@ export function useUrlSelection(): UrlSelection {
         next.set("view", "overall");
         next.delete("node");
         next.delete("event");
+        next.delete("tab");
+      }),
+    selectNodeTab: (tab) =>
+      update((next) => {
+        if (tab === "timeline") next.delete("tab");
+        else next.set("tab", tab);
+        if (tab !== "timeline") next.delete("event");
       }),
   };
 }

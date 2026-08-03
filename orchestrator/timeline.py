@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1025,7 +1026,7 @@ def run_timeline(
     if node_id is not None:
         spans = [span for span in spans if span.get("node_id") == node_id]
     elif scope == "run":
-        spans = [span for span in spans if span.get("node_id") is None]
+        spans = _run_scope(spans)
     by_path: dict[str, str] = {}
     for event in events:
         result = event.detail.get("result")
@@ -1053,3 +1054,52 @@ def run_timeline(
         "run_id": validated,
         "spans": spans,
     }
+
+
+def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
+    """Return run work and bounded summaries of every node's nested activity."""
+    scoped = [deepcopy(span) for span in spans if span.get("node_id") is None]
+    nodes = [span for span in spans if span["kind"] == "node"]
+    for node in nodes:
+        summary = deepcopy(node)
+        summary["events"] = []
+        scoped.append(summary)
+        children = [
+            span
+            for span in spans
+            if span.get("node_id") == node.get("node_id") and span is not node
+        ]
+        groups: dict[tuple[str, str | None], list[TimelineSpan]] = {}
+        for child in children:
+            role = child.get("agent_role") if child["kind"] == "dispatch" else None
+            groups.setdefault((child["kind"], role), []).append(child)
+        for (kind, role), grouped in groups.items():
+            first, last = grouped[0], grouped[-1]
+            durations = [
+                (
+                    datetime.fromisoformat(item["ended_at"])
+                    - datetime.fromisoformat(item["started_at"])
+                ).total_seconds()
+                * 1000
+                for item in grouped
+                if item["ended_at"] is not None
+            ]
+            rollup: TimelineSpan = {
+                "id": f"summary-{node['id']}-{kind}-{role or 'activity'}",
+                "kind": "rollup",
+                "label": role or kind,
+                "parent_id": node["id"],
+                "started_at": first["started_at"],
+                "ended_at": last["ended_at"],
+                "count": len(grouped),
+                "total_duration_ms": int(sum(durations)),
+                "events": [],
+            }
+            if (node_id := node.get("node_id")) is not None:
+                rollup["node_id"] = node_id
+            if (round_number := node.get("round")) is not None:
+                rollup["round"] = round_number
+            if role is not None:
+                rollup["agent_role"] = role
+            scoped.append(rollup)
+    return sorted(scoped, key=lambda span: (span["started_at"], span["id"]))

@@ -205,9 +205,7 @@ describe("DAG application", () => {
     expect(banner).toHaveTextContent("publication exited non-zero");
     expect(banner).toHaveTextContent("2");
     expect(
-      banner.compareDocumentPosition(
-        screen.getByRole("button", { name: "Task" }),
-      ),
+      banner.compareDocumentPosition(screen.getByRole("tab", { name: "Task" })),
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
@@ -610,33 +608,46 @@ describe("DAG application", () => {
     const { client } = telemetryHarness();
     render(<App client={client} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Task" }));
+    await userEvent.click(await screen.findByRole("tab", { name: "Task" }));
     expect(
       await screen.findByText("Build the live dashboard"),
     ).toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "Completion criteria" }),
+      screen.getByRole("tab", { name: "Completion criteria" }),
     );
     expect(
       await screen.findByText("Users can inspect transcripts"),
     ).toBeInTheDocument();
-    await userEvent.click(
-      screen.getByRole("button", {
-        name: "Dependencies, publication and verification",
-      }),
-    );
+    await userEvent.click(screen.getByRole("tab", { name: "Dependencies" }));
     expect(await screen.findByText("foundation")).toBeInTheDocument();
+  });
+
+  test("deep-links node tabs and moves across them with the keyboard", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${LIVE_RUN}&node=dashboard&tab=criteria`,
+    );
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    const criteria = await screen.findByRole("tab", {
+      name: "Completion criteria",
+    });
+    expect(criteria).toHaveAttribute("aria-selected", "true");
+    criteria.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "Dependencies" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(window.location.search).toContain("tab=dependencies");
   });
 
   test("hands the node's recorded pull request over as a link", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=foundation`);
     const { client } = telemetryHarness();
     const view = render(<App client={client} />);
-    await userEvent.click(
-      await screen.findByRole("button", {
-        name: "Dependencies, publication and verification",
-      }),
-    );
+    await userEvent.click(await screen.findByRole("tab", { name: "PR" }));
     const [link] = await screen.findAllByRole("link", { name: /Pull request/ });
     expect(link).toHaveAttribute("href", PR_URL);
     expect(link).toHaveAttribute("target", "_blank");
@@ -645,11 +656,7 @@ describe("DAG application", () => {
 
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     render(<App client={client} />);
-    await userEvent.click(
-      await screen.findByRole("button", {
-        name: "Dependencies, publication and verification",
-      }),
-    );
+    await userEvent.click(await screen.findByRole("tab", { name: "PR" }));
     expect(
       screen.getByText("Publication").nextElementSibling,
     ).toHaveTextContent("Not recorded");
@@ -717,11 +724,7 @@ describe("DAG application", () => {
         isRunDetail(url) ? Response.json(served) : defaultResponder(url),
       );
       render(<App client={client} />);
-      await userEvent.click(
-        await screen.findByRole("button", {
-          name: "Dependencies, publication and verification",
-        }),
-      );
+      await userEvent.click(await screen.findByRole("tab", { name: "PR" }));
       for (const name of expectedLinks) {
         expect(
           screen.getAllByRole("link", { name: new RegExp(name) }).length,
@@ -785,6 +788,13 @@ describe("DAG application", () => {
     const runLevelConversationReads = paths().filter((url: string) =>
       isConversation(new URL(url)),
     ).length;
+    expect(
+      paths().filter(
+        (value: string) =>
+          isTimeline(new URL(value)) &&
+          new URL(value).searchParams.has("node_id"),
+      ),
+    ).toHaveLength(0);
     await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
 
     fireEvent.click(screen.getByRole("button", { name: "dashboard: running" }));
@@ -942,7 +952,7 @@ describe("DAG application", () => {
     render(<App client={client} />);
     // The overall reading of the run is what an operator arrives for; the graph is
     // one tab away, and every deep link into it still opens where it points.
-    expect(await screen.findByText("Run-level sessions")).toBeInTheDocument();
+    expect(await screen.findByText("Run timeline")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -968,7 +978,7 @@ describe("DAG application", () => {
     await waitFor(() =>
       expect(window.location.search).toContain("view=overall"),
     );
-    expect(await screen.findByText("Run-level sessions")).toBeInTheDocument();
+    expect(await screen.findByText("Run timeline")).toBeInTheDocument();
     expect(
       await screen.findByText("Coordinating the execution frontier"),
     ).toBeInTheDocument();
@@ -1021,9 +1031,7 @@ describe("DAG application", () => {
     window.history.replaceState(null, "", `/?run=${HISTORY_RUN}&view=overall`);
     const { client } = telemetryHarness();
     render(<App client={client} />);
-    expect(
-      await screen.findByText("No run-level conversation is available."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("archive")).toBeInTheDocument();
   });
 
   test("refreshes on demand and restores a bookmarked node selection", async () => {
