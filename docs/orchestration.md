@@ -474,7 +474,29 @@ unrelated branches remain parallel.
 Do not split implementation from the tests that prove it into separate nodes or
 steps: the implementing agent writes those tests in the same dispatch, and the
 unit settles fully proven. The narrow test-focused exception and persona choice
-are defined in [the granularity rule](../AGENTS.md#the-granularity-rule-the-core-judgment).
+are defined in [the granularity rule](../AGENTS.md#the-granularity-rule-the-core-judgment),
+as is the judgment about when an interface seam is worth a split at all.
+
+A split that follows an interface seam models that interface as its own node whose
+deliverable is the surface itself: the new route, method, or CLI command backed by
+a no-op or sample-data implementation, or a **new optional field** with a defined
+default and existing callers untouched. Its `task` states the contract literally —
+route with request and response fields and types, the exact signature, or the
+field name, type, and default — because the producer node and every consumer node
+restate it from there. Its acceptance criteria are satisfiable inside its own
+dispatch: the surface exists, and existing behavior is unchanged. Name it in the
+`deps` of the real implementation and of each consumer; those siblings then become
+ready together in the same round instead of serializing, and each ships against the
+default or sample behavior until the implementation lands.
+
+A consumer that finds a departure it wants — a missing field, a wrong shape, a
+better decomposition — does not change the interface. It surfaces the ordinary
+`kind: "proposal"` its dispatch already has, and the planner decides with the user
+whether to amend the contract or defer it as a follow-up. Amending it is a [live
+edit](#live-graph-edits): a `context` note carries the amendment to a node that can
+still be dispatched, `retry` replaces one already running with a task stating the
+new contract, and a surface that has to change again after its node settled is an
+`add` with the affected consumers `reparent`ed onto it.
 
 `run-plan` starts every node whose dependencies are `done`, bounded by
 `concurrency`. Lifecycle dependencies on the same repository identity also carry
