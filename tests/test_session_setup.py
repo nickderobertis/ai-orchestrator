@@ -430,9 +430,7 @@ def test_alternate_claude_trust_standalone_resolves_configs_and_marks_roots(
 
     assert result.returncode == 0, result.stderr
     for config_dir in configs:
-        projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))[
-            "projects"
-        ]
+        projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))["projects"]
         for root in roots:
             assert projects[str(root)]["hasTrustDialogAccepted"] is True
 
@@ -575,8 +573,8 @@ def test_alternate_claude_trust_reports_comparison_read_failure(tmp_path: Path) 
 
     assert result.returncode == 1
     assert (
-        result.stderr
-        == f"alternate-claude-workspace-trust: cannot compare {config} with its updated configuration; verify both files are readable, then retry\n"
+        result.stderr == f"alternate-claude-workspace-trust: cannot compare {config} with its "
+        "updated configuration; verify both files are readable, then retry\n"
     )
     assert config.read_text(encoding="utf-8") == "{}"
 
