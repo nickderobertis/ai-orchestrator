@@ -13,6 +13,7 @@ from onejudge_sdk import RunResult
 from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from orchestrator import dispatch as dispatch_module
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
     DEFAULT_DISPATCH_STALL_TIMEOUT,
@@ -516,6 +517,108 @@ def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> No
     )
 
     assert report.completed is True
+
+
+#: A dispatch whose process tree churns the way a real one does — a run's `bunx nx`,
+#: its xdist workers, its git children all appear and exit while the watcher samples —
+#: and which then leaves one worker behind in a session of its own, so that when the
+#: tree exits nothing above the survivor is left to walk down from. Both halves are
+#: recorded by pid, because the whole question at teardown is which of them may be
+#: signalled.
+_CHURNING_ONEJUDGE = """\
+import json
+import os
+import subprocess
+import sys
+
+if "--version" in sys.argv:
+    print("onejudge 0.3.4")
+    raise SystemExit(0)
+
+churned = []
+for _ in range(3):
+    # Long enough to be sampled by a watcher polling four times a second, and waited
+    # for here, so every one of these pids has been collected before the report below.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.4)"])
+    churned.append(child.pid)
+    child.wait()
+    with open(os.environ["CHURN_RECORD"], "w") as record:
+        record.write("\\n".join(str(pid) for pid in churned))
+
+orphan = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(60)"],
+    start_new_session=True,
+    # Holding this process's pipes would keep the report unread and turn a
+    # completed dispatch into a worker death; a real leaked worker rarely does.
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+with open(os.environ["ORPHAN_RECORD"], "w") as record:
+    record.write(str(orphan.pid))
+
+print(json.dumps({"schema_version": 4, "transcript": {"messages": []}, "stopped_early": False}))
+"""
+
+
+def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Teardown acts on processes that exist, not on a list of ones that did.
+
+    Every pid the dispatch ever saw used to be unioned into one list and signalled at
+    the end, most of it long gone by then — a traced run measured 28% of the signalled
+    pids already exited. This host's pid counter completes a full cycle in under a day
+    while a single turn holds its recorded pids for up to half an hour, so those
+    signals are aimed at slots something unrelated may already hold.
+
+    Both halves of the replacement are asserted here against a real tree: nothing that
+    exited during the run is signalled, and the survivor that no walk from the root can
+    reach — reparented to init, in a session of its own — still is, claimed by the
+    environment stamp its dispatch fixed at ``exec``.
+
+    `terminate_processes` is wrapped rather than replaced: the real function runs, real
+    signals go out, and what the wrapper adds is a reading of each pid's liveness taken
+    at the instant teardown decided on it. That decision is the defect, and it is not
+    otherwise observable from outside the process it happens in.
+    """
+    churn_record = tmp_path / "churned"
+    orphan_record = tmp_path / "orphan"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(f"#!/usr/bin/env python3\n{_CHURNING_ONEJUDGE}", encoding="utf-8")
+    onejudge.chmod(0o700)
+
+    signalled: set[ProcessId] = set()
+    already_exited: list[ProcessId] = []
+    terminate = terminate_processes
+
+    def observing_terminate(
+        pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
+    ) -> None:
+        signalled.update(pids)
+        already_exited.extend(pid for pid in pids if not is_running(pid))
+        terminate(pids, externally_waited=externally_waited)
+
+    monkeypatch.setattr(dispatch_module, "terminate_processes", observing_terminate)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        cwd=tmp_path,
+        env={"CHURN_RECORD": os.fspath(churn_record), "ORPHAN_RECORD": os.fspath(orphan_record)},
+    )
+
+    churned = [ProcessId(int(line)) for line in churn_record.read_text(encoding="utf-8").split()]
+    orphan = ProcessId(int(orphan_record.read_text(encoding="utf-8")))
+
+    assert report.completed is True
+    assert len(churned) == 3
+    assert [pid for pid in churned if is_running(pid)] == []
+    assert already_exited == []
+    assert signalled.isdisjoint(churned)
+    assert orphan in signalled
+    assert await_reaped(orphan)
 
 
 def test_run_onejudge_retries_transient_empty_watchdog_pid(

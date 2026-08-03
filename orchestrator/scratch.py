@@ -416,6 +416,41 @@ def _self_and_ancestors(root: Path) -> frozenset[ProcessId]:
     return frozenset(chain)
 
 
+def _stamped_environments() -> list[tuple[ProcessId, bytes]] | None:
+    """Every live process this user can read, with the environment fixed at its ``exec``.
+
+    The one ``/proc`` walk behind both ownership questions below, so neither can drift
+    from the other on what it excludes: this process and its ancestors are never
+    candidates, a pid that vanished mid-walk is not one either, and neither is one
+    whose environment belongs to another user.
+
+    ``None`` means the question could not be asked — the same distinction
+    `_referenced_scratch_paths` draws, and for the same reason: a procfs that cannot
+    show this very process is not one any claim may be built on.
+    """
+    root = proc_root()
+    if not (root / str(os.getpid())).is_dir():
+        return None
+    protected = _self_and_ancestors(root)
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:  # pragma: no cover - unreadable between the self probe and here
+        return None
+    found: list[tuple[ProcessId, bytes]] = []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = ProcessId(int(entry.name))
+        if pid in protected:
+            continue
+        try:
+            found.append((pid, (entry / "environ").read_bytes()))
+        except OSError:
+            # Gone, or another user's — either way not something this may claim.
+            continue
+    return found
+
+
 def orphaned_dispatch_processes(scratch_root: Path) -> tuple[ProcessId, ...] | None:
     """Every live process a *finished* dispatch left behind, by its environment stamp.
 
@@ -427,31 +462,14 @@ def orphaned_dispatch_processes(scratch_root: Path) -> tuple[ProcessId, ...] | N
     directory is ownership evidence, and the same directory's ownership lock is what
     says whether the dispatch behind it is over.
 
-    ``None`` means the question could not be asked — the same distinction
-    `_referenced_scratch_paths` draws, and for the same reason: a procfs that cannot
-    show this very process is not one any claim may be built on.
+    ``None`` means the question could not be asked; see `_stamped_environments`.
     """
-    root = proc_root()
-    if not (root / str(os.getpid())).is_dir():
+    candidates = _stamped_environments()
+    if candidates is None:
         return None
-    protected = _self_and_ancestors(root)
     finished: dict[Path, bool] = {}
     orphans: set[ProcessId] = set()
-    try:
-        entries = sorted(root.iterdir())
-    except OSError:  # pragma: no cover - unreadable between the self probe and here
-        return None
-    for entry in entries:
-        if not entry.name.isdigit():
-            continue
-        pid = ProcessId(int(entry.name))
-        if pid in protected:
-            continue
-        try:
-            environ = (entry / "environ").read_bytes()
-        except OSError:
-            # Gone, or another user's — either way not something this sweep may claim.
-            continue
+    for pid, environ in candidates:
         directory = _stamped_watchdog_directory(environ, scratch_root)
         if directory is None:
             continue
@@ -460,6 +478,32 @@ def orphaned_dispatch_processes(scratch_root: Path) -> tuple[ProcessId, ...] | N
         if finished[directory]:
             orphans.add(pid)
     return tuple(sorted(orphans))
+
+
+def processes_stamped_for(status_dir: Path) -> tuple[ProcessId, ...] | None:
+    """Every live process carrying *this* dispatch's status-directory stamp.
+
+    The same ownership evidence `orphaned_dispatch_processes` reaps a finished
+    dispatch's leavings on, asked by a dispatch about its own live tree — and asked at
+    the moment the answer is used, so what it returns is a set of processes that exist
+    rather than a set that once did. The stamp is compared as a whole ``NUL``-delimited
+    entry against one exact path, so a value that merely contains it, and a *different*
+    dispatch's directory under the same scratch root, are both somebody else's.
+
+    Nothing here is weakened for this caller: the lock-based
+    `_dispatch_is_finished` proof is deliberately not consulted, because a live
+    dispatch asking about its own tree already holds that lock and would find every one
+    of its own processes retained by it. Naming its own directory is the stronger claim
+    of the two — the sweep has to infer which dispatch a stamp belongs to, while this
+    caller created the path it is matching.
+
+    ``None`` means the question could not be asked; see `_stamped_environments`.
+    """
+    candidates = _stamped_environments()
+    if candidates is None:  # pragma: no cover - a procfs that cannot show this process
+        return None
+    stamp = AGENT_STATUS_DIR_ENV.encode("utf-8") + b"=" + os.fspath(status_dir).encode("utf-8")
+    return tuple(sorted(pid for pid, environ in candidates if stamp in environ.split(b"\0")))
 
 
 def _names_a_live_process(name: str) -> bool:

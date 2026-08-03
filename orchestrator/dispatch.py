@@ -79,6 +79,7 @@ from .scratch import (
     AGENT_STATUS_DIR_ENV,
     AGENT_STATUS_DIR_NAME,
     owned_scratch_directory,
+    processes_stamped_for,
 )
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
@@ -281,11 +282,14 @@ class Report:
 
 @dataclass(frozen=True)
 class WatchdogSignal:
-    """A typed liveness decision and the process identities needed for cleanup."""
+    """A typed liveness decision and the process identity needed for cleanup.
+
+    Deliberately no list of processes: the tree is re-derived where it is torn down,
+    from what is alive then. See `run_onejudge`'s ``owned_processes``.
+    """
 
     reason: WatchdogReason
     root_pid: ProcessId
-    observed_pids: tuple[ProcessId, ...]
     #: What was observable at the point of death. Four different failures reach
     #: this watchdog as one dead tree, so the reason has to be carried explicitly.
     detail: str = ""
@@ -746,10 +750,31 @@ def run_onejudge(
                     timeout=timeout,
                 )
             )
-            observed_tree: tuple[ProcessId, ...] = ()
+
+            def owned_processes(root_pid: ProcessId | None) -> tuple[ProcessId, ...]:
+                """Every process this dispatch owns *now*, proven rather than remembered.
+
+                Teardown used to signal a union of every pid ever sampled during the
+                dispatch — every `bunx nx`, every xdist worker, every git child — most
+                of which had exited by the time it ran. This host's pid counter wraps
+                in under a day and a turn can run for half an hour, so a remembered pid
+                is not an identity: it is a slot that something unrelated may already
+                have been given, and signalling it is how a planner's own work gets
+                interrupted by somebody else's cleanup.
+
+                So the set is derived where it is used, from two proofs that are both
+                about the present. The live tree under ``root_pid`` covers everything
+                parentage can still reach; the environment stamp
+                (`processes_stamped_for`) covers what it cannot — a descendant whose
+                parent already exited, which init has adopted and no walk can find.
+                The kernel fixes that environment at ``exec`` and a process cannot shed
+                it, so it names this dispatch's own status directory and nothing else's.
+                """
+                owned = set(process_activity(root_pid).pids) if root_pid is not None else set()
+                owned.update(processes_stamped_for(agent_status_dir) or ())
+                return tuple(sorted(owned))
 
             async def watch_liveness() -> WatchdogSignal | None:
-                nonlocal observed_tree
                 pid_wait_started = time.monotonic()
                 while True:
                     if run.done():
@@ -766,8 +791,6 @@ def run_onejudge(
                             break
                     await asyncio.sleep(min(0.05, stall_timeout / 4))
                 activity = process_activity(pid)
-                observed = activity.pids
-                observed_tree = observed
                 previous = (activity, _file_progress(Path(cwd) / ".git"))
                 last_progress = time.monotonic()
                 agent_identity: str | None = None
@@ -777,10 +800,7 @@ def run_onejudge(
                 while not run.done():
                     await asyncio.sleep(min(0.25, stall_timeout / 4, heartbeat_timeout / 4))
                     activity = process_activity(pid)
-                    if activity.pids:
-                        observed = tuple(dict.fromkeys((*observed, *activity.pids)))
-                        observed_tree = observed
-                    else:
+                    if not activity.pids:
                         # Normal process exit precedes SDK report parsing by a tiny
                         # interval. Give that handoff one bounded grace period;
                         # leaked pipe holders keep the awaitable pending beyond it.
@@ -790,7 +810,6 @@ def run_onejudge(
                         return WatchdogSignal(  # pragma: no cover - real killed-worker e2e
                             "worker-died",
                             pid,
-                            observed,
                             detail=(
                                 agent_failure_reason(agent_status_dir)
                                 or "the tracked worker process tree exited without a report"
@@ -812,7 +831,6 @@ def run_onejudge(
                             return WatchdogSignal(
                                 "worker-died",
                                 pid,
-                                observed,
                                 detail=(
                                     agent_failure_reason(agent_status_dir)
                                     or "the agent harness reported a failed turn"
@@ -826,9 +844,6 @@ def run_onejudge(
                                 # before it exits: only a pid missing from the newer
                                 # tree and still unmarked has actually died.
                                 activity = process_activity(pid)
-                                if activity.pids:
-                                    observed = tuple(dict.fromkeys((*observed, *activity.pids)))
-                                    observed_tree = observed
                                 latest_agent = _agent_status(agent_status_dir, "agent.pid")
                                 if (
                                     agent_pid not in activity.pids
@@ -847,7 +862,6 @@ def run_onejudge(
                                         return WatchdogSignal(
                                             "worker-died",
                                             pid,
-                                            observed,
                                             detail=(
                                                 agent_failure_reason(agent_status_dir)
                                                 or "the agent harness process vanished mid-turn "
@@ -859,20 +873,6 @@ def run_onejudge(
                                     missing_agent_identity = None
                             else:
                                 missing_agent_identity = None
-                            child_pid_file = agent_status_dir / "agent.child.pid"
-                            if child_pid_file.exists():
-                                try:
-                                    child_pid = ProcessId(
-                                        int(child_pid_file.read_text(encoding="utf-8"))
-                                    )
-                                except (OSError, ValueError):
-                                    pass
-                                else:
-                                    if child_pid in activity.pids:
-                                        observed = tuple(
-                                            dict.fromkeys((*observed, agent_pid, child_pid))
-                                        )
-                                        observed_tree = observed
                             if agent_identity != current_agent:
                                 agent_identity = current_agent
                                 last_agent_heartbeat_ns = None
@@ -890,7 +890,6 @@ def run_onejudge(
                                 return WatchdogSignal(
                                     "worker-died",
                                     pid,
-                                    observed,
                                     detail=(
                                         agent_failure_reason(agent_status_dir)
                                         or "the agent harness stopped heartbeating for "
@@ -904,7 +903,7 @@ def run_onejudge(
                         previous = current
                         last_progress = time.monotonic()
                     elif time.monotonic() - last_progress >= stall_timeout:
-                        return WatchdogSignal("stalled", pid, observed)
+                        return WatchdogSignal("stalled", pid)
                 return None  # pragma: no cover - watcher/run completion scheduling race
 
             watcher = asyncio.create_task(watch_liveness())
@@ -924,12 +923,12 @@ def run_onejudge(
                 signal = await watcher if watcher in done else None
                 for pending_task in pending:
                     pending_task.cancel()
-                if signal is not None:
-                    terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
-                elif pid_file.exists():
+                settled_pid = signal.root_pid if signal is not None else None
+                if settled_pid is None and pid_file.exists():
+                    settled_pid = _read_watchdog_pid(pid_file)
+                if settled_pid is not None:
                     terminate_processes(
-                        observed_tree,
-                        externally_waited=(_read_watchdog_pid(pid_file),),
+                        owned_processes(settled_pid), externally_waited=(settled_pid,)
                     )
                 if pid_file.exists():
                     completed_pid = _read_watchdog_pid(pid_file)
@@ -937,7 +936,9 @@ def run_onejudge(
                     terminate_tree(completed_pid)
                 return await run
             if watcher in done and (signal := await watcher):
-                terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
+                terminate_processes(
+                    owned_processes(signal.root_pid), externally_waited=(signal.root_pid,)
+                )
                 terminate_process_group(signal.root_pid, externally_waited=(signal.root_pid,))
                 terminate_tree(signal.root_pid)
                 run.cancel()
@@ -972,12 +973,13 @@ def run_onejudge(
             run.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await run
+            cancelled_root = _read_watchdog_pid(pid_file) if pid_file.exists() else None
             terminate_processes(
-                observed_tree,
-                externally_waited=(_read_watchdog_pid(pid_file),) if pid_file.exists() else (),
+                owned_processes(cancelled_root),
+                externally_waited=(cancelled_root,) if cancelled_root is not None else (),
             )
-            if pid_file.exists():
-                cancelled_pid = _read_watchdog_pid(pid_file)
+            if cancelled_root is not None:
+                cancelled_pid = cancelled_root
                 terminate_process_group(cancelled_pid, externally_waited=(cancelled_pid,))
                 terminate_tree(cancelled_pid)
             return None

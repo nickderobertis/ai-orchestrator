@@ -512,8 +512,10 @@ Dispatch wraps the SDK-owned `onejudge` process with a stable pid and additional
 wraps the agent-side oneharness process with its own pid, completion marker, and
 monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
 distinct incomplete `worker-died` outcome promptly, independent of CPU/I/O
-from leaked descendants or `.git` churn. The last observed process tree is reaped
-even after its root has vanished, so those descendants cannot pollute a retry.
+from leaked descendants or `.git` churn. Descendants left behind after the root has
+vanished are reaped too, so they cannot pollute a retry — see
+[What teardown is allowed to signal](#what-teardown-is-allowed-to-signal) for how a
+dispatch decides which processes are still its own.
 
 `worker-died` also carries **why**, because provider throttling, quota
 exhaustion, an OOM kill, and a genuine crash otherwise all reach the supervisor
@@ -581,6 +583,38 @@ live dispatch. Directories predating the lock keep the pid-only judgment, now
 made through the same start-token identity, and a lock that cannot be opened on
 its own terms — symlinked, unreadable — never authorizes removal. Everything the
 proof does not clear is reported as retained rather than silently kept.
+
+### What teardown is allowed to signal
+
+The same "recorded pids are not identities" rule governs the end of every dispatch,
+and for a while it did not. Teardown signalled the union of every pid the liveness
+watcher had ever sampled — each `bunx nx`, each pytest worker, each `git` and
+`uv run` child — and nothing was ever removed from that union, so a traced run
+measured 28% of the signalled pids already exited. This host's `pid_max` is
+4,194,304 and its counter demonstrably completes a full cycle in under a day, while
+one dispatch holds recorded pids for the length of a turn and often far longer. A
+remembered pid is therefore a slot, not a process, and signalling one is how a
+planner's own work gets interrupted by somebody else's cleanup — the incident
+`AGENTS.md` records under "never derive a process list from `ps` and signal it",
+reached by a different derivation.
+
+So the set is derived where it is used, from two proofs that are both about the
+present:
+
+- the **live tree** under the recorded root (`process_activity`), which covers
+  everything parentage can still reach; and
+- the **environment stamp**, which covers what it cannot. `processes_stamped_for`
+  asks the same question `orphaned_dispatch_processes` asks of a finished
+  dispatch's leavings — which live processes carry `ORCHESTRATOR_AGENT_STATUS_DIR`
+  naming this dispatch's own status directory — so a descendant whose parent
+  already exited, adopted by init and unreachable by any walk, is still claimed.
+  The kernel fixes that environment at `exec` and a process cannot shed it.
+
+The lock-based `_dispatch_is_finished` proof the sweep applies is deliberately not
+consulted here: a live dispatch asking about its own tree holds that lock and would
+find every one of its own processes retained by it. Naming its own directory is the
+stronger claim of the two — the sweep has to infer which dispatch a stamp belongs
+to, while this caller created the path it matches.
 
 ## Dispatching playbook
 
