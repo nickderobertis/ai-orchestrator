@@ -14,14 +14,31 @@ export function RunNavigation({
   selectedRunId,
   liveRunIds,
   onSelect,
+  hasMore,
+  onLoadMore,
 }: {
   readonly groups: readonly RunGroup[];
   readonly selectedRunId?: string;
   readonly liveRunIds: ReadonlySet<string>;
   readonly onSelect: (runId: string) => void;
+  readonly hasMore: boolean;
+  readonly onLoadMore: () => Promise<void>;
 }) {
   return (
-    <nav aria-label="DAG runs" className="run-nav">
+    <nav
+      aria-label="DAG runs"
+      className="run-nav"
+      onScrollCapture={(event) => {
+        // React exposes EventTarget here although this handler can only receive a
+        // scroll event from an HTMLElement inside the navigation subtree.
+        const target = event.target as HTMLElement;
+        if (
+          hasMore &&
+          target.scrollHeight - target.scrollTop <= target.clientHeight + 80
+        )
+          void onLoadMore();
+      }}
+    >
       <ScrollArea className="h-full">
         <div className="px-[18px] py-6">
           <div className="brand">
@@ -94,6 +111,15 @@ export function RunNavigation({
               </section>
             ))}
           </div>
+          {hasMore && (
+            <button
+              className="sr-only"
+              onClick={() => void onLoadMore()}
+              type="button"
+            >
+              Load more runs
+            </button>
+          )}
         </div>
       </ScrollArea>
     </nav>

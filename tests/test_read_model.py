@@ -123,6 +123,21 @@ def test_list_runs_orders_by_progress_and_hides_settled(tmp_path: Path) -> None:
     everything = list_runs(runs, include_settled=True, oneharness_bin=ABSENT)
     assert {row["run_id"] for row in everything["runs"]} == {"active", "settled"}
 
+    first = list_runs(runs, include_settled=True, oneharness_bin=ABSENT, limit=1)
+    assert len(first["runs"]) == 1
+    assert "next_cursor" in first
+    second = list_runs(
+        runs,
+        include_settled=True,
+        oneharness_bin=ABSENT,
+        limit=1,
+        cursor=first["next_cursor"],
+    )
+    assert [row["run_id"] for row in [*first["runs"], *second["runs"]]] == [
+        row["run_id"] for row in everything["runs"]
+    ]
+    assert "next_cursor" not in second
+
 
 def test_list_runs_skips_a_corrupt_run(tmp_path: Path) -> None:
     runs = tmp_path / "runs"

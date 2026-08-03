@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, TypedDict, cast, get_args
+from typing import Any, Literal, NamedTuple, NotRequired, TypedDict, cast, get_args
 
 from .config import ConfigError
 from .edits import EDIT_PROTOCOL_VERSION, EditError, parse_commands
+from .goals import Goal
 from .graph import parse_graph
 from .journal import (
     AUDIT_EVENT_KINDS,
@@ -77,13 +78,14 @@ NodeStatus = Literal[
 NODE_STATUSES: frozenset[str] = frozenset(get_args(NodeStatus))
 
 
-class ProjectedPlan(TypedDict, total=False):
+class ProjectedPlan(TypedDict):
     """Serialized plan retained exactly for compatibility artifact regeneration."""
 
     tasks: list[dict[str, Any]]
-    schema_version: int
-    concurrency: int
-    name: str
+    schema_version: NotRequired[int]
+    concurrency: NotRequired[int]
+    name: NotRequired[str]
+    goal: NotRequired[Goal]
 
 
 @dataclass(frozen=True)

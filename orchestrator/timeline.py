@@ -57,7 +57,9 @@ from .read_model import (
     _artifact_id,
     contained_run_dir,
 )
-from .runs import RunId, validate_run_id
+from .runs import NodeId, RunId, validate_run_id
+
+TimelineScope = Literal["run"]
 
 #: What a timeline item points at instead of inlining it. The three artifact kinds
 #: are exactly the keys a node or step result records under ``artifacts``, so a
@@ -989,8 +991,16 @@ def run_timeline(
     *,
     oneharness_bin: str = "oneharness",
     now: datetime | None = None,
+    node_id: NodeId | None = None,
+    scope: TimelineScope | None = None,
 ) -> RunTimeline:
-    """The ``RunTimeline`` for one run: every span and event, oldest first."""
+    """A scoped ``RunTimeline``: one node, or only run-level items."""
+    if node_id is not None and scope is not None:
+        raise InvalidRunId("timeline accepts node_id or scope=run, not both")
+    if scope not in (None, "run"):
+        raise InvalidRunId("timeline scope must be run")
+    if node_id == "":
+        raise InvalidRunId("invalid node_id")
     try:
         validated = validate_run_id(run_id)
     except ConfigError as exc:
@@ -1002,7 +1012,20 @@ def run_timeline(
         events = read_strict_events(run_dir / JOURNAL_NAME, validated)
     except ProjectionError as exc:
         raise ProjectionFailed(str(exc)) from exc
+    known_node_ids = {str(event.node) for event in events if event.node is not None}
+    for event in events:
+        definition = event.detail.get("definition")
+        if isinstance(definition, Mapping):
+            definition_id = definition.get("id")
+            if isinstance(definition_id, str):
+                known_node_ids.add(definition_id)
+    if node_id is not None and node_id not in known_node_ids:
+        raise InvalidRunId("node_id does not name a node in this run")
     spans = assemble(events, _conversations(validated, oneharness_bin), load_snapshot(run_dir))
+    if node_id is not None:
+        spans = [span for span in spans if span.get("node_id") == node_id]
+    elif scope == "run":
+        spans = [span for span in spans if span.get("node_id") is None]
     by_path: dict[str, str] = {}
     for event in events:
         result = event.detail.get("result")

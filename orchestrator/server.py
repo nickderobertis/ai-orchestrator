@@ -46,6 +46,7 @@ from .read_model import (
     ProjectionFailed,
     ReadError,
     RunNotFound,
+    RunsCursor,
     contained_run_dir,
     list_runs,
     read_artifact,
@@ -53,8 +54,8 @@ from .read_model import (
     run_detail,
     run_signature,
 )
-from .runs import RunId, validate_run_id
-from .timeline import run_timeline
+from .runs import NodeId, RunId, validate_run_id
+from .timeline import TimelineScope, run_timeline
 
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HEARTBEAT_INTERVAL = 15.0
@@ -62,6 +63,7 @@ DEFAULT_HEARTBEAT_INTERVAL = 15.0
 #: `oneharness history` subprocess, which is affordable per detail view, not per poll.
 DEFAULT_CONVERSATION_INTERVAL = 5.0
 DEFAULT_PORT = 8787
+RUNS_PAGE_LIMIT = 50
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
@@ -200,13 +202,19 @@ def create_app(
     # work, and FastAPI runs a non-async handler in its threadpool, so one slow read
     # occupies a worker rather than the loop every other request shares.
     @app.get("/api/v2/runs")
-    def get_runs(include_settled: bool = False) -> Any:
+    def get_runs(
+        include_settled: bool = False,
+        limit: int = RUNS_PAGE_LIMIT,
+        cursor: RunsCursor | None = None,
+    ) -> Any:
         try:
             return list_runs(
                 root,
                 include_settled=include_settled,
                 oneharness_bin=oneharness_bin,
                 expose_launcher_session_id=expose_launcher_session_id,
+                limit=limit,
+                cursor=cursor,
             )
         except ReadError as exc:  # pragma: no cover - list degrades rather than raising
             status, code = _status_for(exc)
@@ -233,10 +241,21 @@ def create_app(
             return _error(status, code, str(exc))
 
     @app.get("/api/v2/runs/{run_id}/timeline")
-    def get_timeline(run_id: str) -> Any:
-        """The whole run's ordered spans and events; a consumer filters by node."""
+    def get_timeline(run_id: str, node_id: str | None = None, scope: str | None = None) -> Any:
+        """A node timeline, or run-level items when ``scope=run``."""
         try:
-            return run_timeline(root, run_id, oneharness_bin=oneharness_bin)
+            if node_id is None and scope is None:
+                raise InvalidRunId("timeline requires node_id or scope=run")
+            if scope not in (None, "run"):
+                raise InvalidRunId("timeline scope must be run")
+            timeline_scope: TimelineScope | None = "run" if scope == "run" else None
+            return run_timeline(
+                root,
+                run_id,
+                node_id=None if node_id is None else NodeId(node_id),
+                scope=timeline_scope,
+                oneharness_bin=oneharness_bin,
+            )
         except ReadError as exc:
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
@@ -386,7 +405,13 @@ async def _event_stream(
         cursor,
         SseEvent.SNAPSHOT,
         await _off_loop(
-            partial(list_runs, runs_dir, include_settled=True, oneharness_bin=oneharness_bin)
+            partial(
+                list_runs,
+                runs_dir,
+                include_settled=True,
+                oneharness_bin=oneharness_bin,
+                limit=RUNS_PAGE_LIMIT,
+            )
         ),
     )
     last_emit = loop.time()

@@ -488,6 +488,10 @@ def test_run_timeline_serves_a_recorded_run_and_rejects_what_it_cannot_read(
     assert [span["kind"] for span in served["spans"]] == ["round", "node"]
     # A missing history store and an absent snapshot degrade to nothing, not a failure.
     assert served["spans"][1]["ended_at"] is None
+    node_only = run_timeline(runs, "demo", node_id="api", oneharness_bin=ABSENT)
+    assert {span.get("node_id") for span in node_only["spans"]} == {"api"}
+    run_only = run_timeline(runs, "demo", scope="run", oneharness_bin=ABSENT)
+    assert all(span.get("node_id") is None for span in run_only["spans"])
 
     with pytest.raises(InvalidRunId):
         run_timeline(runs, "bad!id", oneharness_bin=ABSENT)

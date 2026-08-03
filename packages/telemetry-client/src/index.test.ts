@@ -91,7 +91,7 @@ describe("TelemetryClient fetch boundary", () => {
     expect(list.api_version).toBe(2);
     expect(list.runs).toEqual([]);
     expect(requested).toBe(
-      "http://127.0.0.1:8000/api/v2/runs?include_settled=true",
+      "http://127.0.0.1:8000/api/v2/runs?include_settled=true&limit=50",
     );
   });
 
@@ -110,7 +110,7 @@ describe("TelemetryClient fetch boundary", () => {
       fetch: async (input) => {
         const url = String(input);
         requested.push(url);
-        if (url.endsWith("/timeline")) {
+        if (url.includes("/timeline?")) {
           return Response.json({
             api_version: 2,
             observed_at: "2026-07-26T12:00:00Z",
@@ -145,11 +145,11 @@ describe("TelemetryClient fetch boundary", () => {
       "http://127.0.0.1:8000/api/v2/runs/run-1?include_conversations=false",
     );
 
-    const timeline = await client.getTimeline("run-1");
+    const timeline = await client.getTimeline("run-1", "build");
     // An in-flight node stays representable all the way to the consumer.
     expect(timeline.spans[0]?.ended_at).toBeNull();
     expect(requested[1]).toBe(
-      "http://127.0.0.1:8000/api/v2/runs/run-1/timeline",
+      "http://127.0.0.1:8000/api/v2/runs/run-1/timeline?node_id=build",
     );
 
     // Omitting the option leaves the request exactly as it was before.

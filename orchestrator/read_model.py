@@ -25,13 +25,17 @@ authoritative journal is `ProjectionFailed`; a malformed launch record degrades 
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import json
+import math
 import re
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NewType, NotRequired, TypedDict
 from urllib.parse import quote, urlparse
 
 from .config import ConfigError
@@ -140,6 +144,9 @@ class RunLaunch(TypedDict):
     launcher_session_id: NotRequired[str]
 
 
+RunsCursor = NewType("RunsCursor", str)
+
+
 class RunSummary(TypedDict):
     """One ``RunSummary`` row of the run-list view."""
 
@@ -163,6 +170,7 @@ class RunList(TypedDict):
     telemetry_schema_version: int
     observed_at: str
     runs: list[RunSummary]
+    next_cursor: NotRequired[RunsCursor]
 
 
 class Round(TypedDict):
@@ -614,6 +622,8 @@ def list_runs(
     oneharness_bin: str = "oneharness",
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
+    limit: int = 50,
+    cursor: RunsCursor | None = None,
 ) -> RunList:
     """The ``RunList``: every watchable run, most recent progress first.
 
@@ -632,7 +642,7 @@ def list_runs(
     for run_dir in _run_dirs(runs_dir):
         try:
             telemetry = collect_run(run_dir, scan=scan)
-        except (ConfigError, HistoryError):
+        except (ConfigError, HistoryError, FileNotFoundError):
             continue
         if telemetry is None:
             continue
@@ -646,13 +656,49 @@ def list_runs(
                 now=now,
             )
         )
+    if limit < 1 or limit > 200:
+        raise InvalidRunId("limit must be between 1 and 200")
     summaries.sort(key=lambda item: (-(item.get("last_progress_at") or 0.0), item["run_id"]))
-    return {
+    if cursor is not None:
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+            match decoded:
+                case [int() | float() as progress, str() as cursor_run_id] if not isinstance(
+                    progress, bool
+                ) and math.isfinite(progress):
+                    pass
+                case _:
+                    raise ValueError
+            cursor_key = (-float(progress), str(validate_run_id(cursor_run_id)))
+        except (
+            ValueError,
+            TypeError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            binascii.Error,
+        ) as exc:
+            raise InvalidRunId("invalid runs cursor") from exc
+        summaries = [
+            item
+            for item in summaries
+            if (-(item.get("last_progress_at") or 0.0), item["run_id"]) > cursor_key
+        ]
+    page = summaries[:limit]
+    result: RunList = {
         "api_version": API_VERSION,
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
         "observed_at": _now(now),
-        "runs": summaries,
+        "runs": page,
     }
+    if len(summaries) > limit:
+        last = page[-1]
+        raw = json.dumps(
+            [last.get("last_progress_at") or 0.0, last["run_id"]], separators=(",", ":")
+        )
+        result["next_cursor"] = RunsCursor(
+            base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+        )
+    return result
 
 
 def round_record(events: list[Any], run_id: RunId, round_number: int) -> Round:

@@ -56,6 +56,7 @@ interface RunList {
   telemetry_schema_version: 9;
   observed_at: string;
   runs: RunSummary[];
+  next_cursor?: string;
 }
 
 interface RunSummary {
@@ -85,6 +86,9 @@ interface RunLaunch {
 ```
 
 Runs are ordered by most recent progress descending, then `run_id` ascending.
+`limit` defaults to 50 and is bounded to 1–200. `next_cursor` is an opaque
+continuation after the last returned `(-last_progress_at, run_id)` key; clients pass
+it back unchanged as `cursor`. The settled filter is applied before pagination.
 `include_settled` defaults to false, matching `just telemetry`; true matches
 `just telemetry --all`.
 
@@ -235,12 +239,7 @@ Each `rounds[]` item is a JSON representation of
 interface Round {
   run_id: string;
   round: number;
-  plan: {
-    tasks: PlanTask[];
-    schema_version?: number;
-    concurrency?: number;
-    name?: string;
-  };
+  plan: ProjectedPlan;
   node_states: Record<
     string,
     "running" | "done" | "failed" | "waiting" | "cancelled"
@@ -251,6 +250,14 @@ interface Round {
   attestations: string[];
   result: GraphPayload | null;
   last_seq: number;
+}
+
+interface ProjectedPlan {
+  tasks: PlanTask[];
+  schema_version?: number;
+  concurrency?: number;
+  name?: string;
+  goal?: { id: string; text: string };
 }
 
 type NodeStatus =
@@ -339,7 +346,9 @@ type FailureClass =
 
 ### Run timeline
 
-`GET /api/v2/runs/{run_id}/timeline` returns one `RunTimeline` for the whole run;
+`GET /api/v2/runs/{run_id}/timeline?node_id={id}` returns one node's spans and
+events. `scope=run` returns only spans and events without a node id. Exactly one
+scope is required, so the graph view has no reason to request a timeline.
 a consumer filters it by `node_id` rather than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
@@ -468,8 +477,8 @@ The server exposes only:
 - `GET /healthz` → `{"status":"ok"}` without touching run storage.
 - `GET /api/v2/runs`.
 - `GET /api/v2/runs/{run_id}?include_conversations={optional}`.
-- `GET /api/v2/runs/{run_id}/timeline` for the whole run's ordered spans and
-  events.
+- `GET /api/v2/runs/{run_id}/timeline?node_id={id}|scope=run` for a scoped
+  ordered timeline.
 - `GET /api/v2/runs/{run_id}/conversations/{conversation_id}` for one complete
   conversation when detail responses use summaries.
 - `GET /api/v2/events?run_id={optional}&after={optional}` as SSE.

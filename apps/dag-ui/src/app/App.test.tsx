@@ -687,11 +687,7 @@ describe("DAG application", () => {
       fetch.mock.calls.map((call: unknown[]) =>
         new URL(String(call[0]), window.location.origin).toString(),
       );
-    await waitFor(() =>
-      expect(paths().some((url: string) => isTimeline(new URL(url)))).toBe(
-        true,
-      ),
-    );
+    expect(paths().some((url: string) => isTimeline(new URL(url)))).toBe(false);
     const details = paths().filter((url: string) => isRunDetail(new URL(url)));
     // One detail, for the run being looked at — not one for every listed run —
     // and it asks the server to leave the transcripts out of it.
@@ -702,14 +698,38 @@ describe("DAG application", () => {
       false,
     );
 
+    await userEvent.click(screen.getByRole("tab", { name: "Overall" }));
+    await waitFor(() =>
+      expect(
+        paths().some(
+          (value: string) =>
+            isTimeline(new URL(value)) &&
+            new URL(value).searchParams.get("scope") === "run",
+        ),
+      ).toBe(true),
+    );
+    const runLevelConversationReads = paths().filter((url: string) =>
+      isConversation(new URL(url)),
+    ).length;
+    await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+
     fireEvent.click(screen.getByRole("button", { name: "dashboard: running" }));
+    await waitFor(() =>
+      expect(
+        paths().some(
+          (value: string) =>
+            isTimeline(new URL(value)) &&
+            new URL(value).searchParams.get("node_id") === "dashboard",
+        ),
+      ).toBe(true),
+    );
     await userEvent.click(
       await screen.findByRole("button", { name: /engineer-dashboard/ }),
     );
     await waitFor(() =>
       expect(
         paths().filter((url: string) => isConversation(new URL(url))),
-      ).toHaveLength(1),
+      ).toHaveLength(runLevelConversationReads + 1),
     );
   });
 
@@ -730,6 +750,77 @@ describe("DAG application", () => {
     await waitFor(() =>
       expect(fetch.mock.calls.length).toBeGreaterThan(before),
     );
+  });
+
+  test("loads the next run-list page when the sidebar reaches its end", async () => {
+    const { client, fetch } = telemetryHarness((url) => {
+      if (isRunList(url)) {
+        return Response.json(
+          url.searchParams.has("cursor")
+            ? { ...runList, runs: [runList.runs[1]] }
+            : { ...runList, runs: [runList.runs[0]], next_cursor: "page-2" },
+        );
+      }
+      return defaultResponder(url);
+    });
+    render(<App client={client} />);
+    expect(
+      await screen.findByRole("button", { name: RegExp(LIVE_RUN) }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: RegExp(HISTORY_RUN) }),
+    ).toBeNull();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Load more runs" }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: RegExp(HISTORY_RUN) }),
+    ).toBeInTheDocument();
+    expect(
+      fetch.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("cursor=page-2"),
+      ),
+    ).toBe(true);
+  });
+
+  test("reports a failed next page and can load it on a later scroll", async () => {
+    let continuationAttempts = 0;
+    const { client } = telemetryHarness((url) => {
+      if (!isRunList(url)) return defaultResponder(url);
+      if (!url.searchParams.has("cursor"))
+        return Response.json({
+          ...runList,
+          runs: [runList.runs[0]],
+          next_cursor: "page-2",
+        });
+      continuationAttempts += 1;
+      if (continuationAttempts === 1) throw new Error("next page unavailable");
+      return Response.json({ ...runList, runs: [runList.runs[1]] });
+    });
+    render(<App client={client} />);
+    await screen.findByRole("button", { name: RegExp(LIVE_RUN) });
+
+    const viewport = document.querySelector<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (viewport === null) throw new Error("scroll viewport was not rendered");
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, value: 100 },
+    });
+    fireEvent.scroll(viewport);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Telemetry request failed",
+    );
+
+    fireEvent.scroll(viewport);
+    expect(
+      await screen.findByRole("button", { name: RegExp(HISTORY_RUN) }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
   test("opens on the run as a whole when the address names no view", async () => {
