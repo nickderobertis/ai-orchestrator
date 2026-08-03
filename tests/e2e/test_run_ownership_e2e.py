@@ -715,12 +715,12 @@ def test_orchestrate_records_a_codex_session_and_honours_explicit_overrides(
         )
         degraded = Launch(str(json.loads(started.stdout)["run_id"]), runs, environment, partial)
         launches.append(degraded)
-        launch_id = read_launch_link(degraded.run_dir)
-        assert launch_id is not None, "the run still records its own join key"
+        launch_link = read_launch_link(degraded.run_dir)
+        assert launch_link is not None, "the run still records its own join key"
         assert not (
             Path(environment["XDG_STATE_HOME"])
             / "ai-orchestrator"
             / "launches"
-            / f"{launch_id}.json"
+            / f"{launch_link.launch_id}.json"
         ).exists()
         assert f"{degraded.run_id}  [unknown]" in _runs_view(runs, environment)

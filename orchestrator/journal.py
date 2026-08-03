@@ -778,7 +778,7 @@ class NodeJournal:
 
 #: The node id every untracked lifecycle run labels its dispatches with. One fixed
 #: name, because there is exactly one node in such a run: the workstream itself.
-UNTRACKED_NODE = "repo-task"
+UNTRACKED_NODE = NodeId("repo-task")
 #: Prefix of the synthetic run id an untracked lifecycle run labels with. It names a
 #: run that is real work but has no run *directory*, so it is deliberately shaped so
 #: nothing mistakes it for one: no recorded run id has this form.
@@ -802,7 +802,9 @@ class NullNodeJournal:
     node named for the command that made it.
     """
 
-    run_id: str = field(default_factory=lambda: f"{UNTRACKED_RUN_PREFIX}{uuid.uuid4().hex[:12]}")
+    run_id: RunId = field(
+        default_factory=lambda: RunId(f"{UNTRACKED_RUN_PREFIX}{uuid.uuid4().hex[:12]}")
+    )
     step: StepId | None = None
 
     def for_step(self, step: StepId) -> NullNodeJournal:
@@ -821,7 +823,7 @@ class NullNodeJournal:
     @property
     def labels(self) -> dict[str, str]:
         """This untracked workstream as ``ONEHARNESS_HISTORY_LABELS``."""
-        return graph_labels(run_id=RunId(self.run_id), node=NodeId(UNTRACKED_NODE), step=self.step)
+        return graph_labels(run_id=self.run_id, node=UNTRACKED_NODE, step=self.step)
 
     @property
     def artifact_dir(self) -> None:

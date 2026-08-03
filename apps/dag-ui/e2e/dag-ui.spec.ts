@@ -173,6 +173,16 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(worker).toContainText("completed");
   await expect(worker).toContainText(/\d\d:\d\d:\d\d/);
   await expect(rail(page).getByRole("button")).not.toHaveCount(0);
+  // And it says which session it was, served on the row rather than read out of a
+  // transcript: every dispatch on this node read "dispatch" and nothing else, so
+  // the worker, the judge that supervised it, and the lint run under it were three
+  // rows a reader could not tell apart. Neither name contains its own role.
+  await expect(worker).toContainText("worker");
+  await expect(
+    rail(page).getByRole("button", {
+      name: /you-are-a-strict-careful-evaluator/,
+    }),
+  ).toContainText("judge");
 
   await worker.click();
   await expect
@@ -444,6 +454,10 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(
     page.getByText("Coordinating the execution frontier"),
   ).toBeVisible();
+  // Each run-level row names its own role, and the run's launch is named with the
+  // same phrase the navigation heads its group with rather than a raw enum.
+  await expect(page.getByText("Run-level · orchestrator")).toBeVisible();
+  await expect(page.getByText(/^Codex session · /).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("Run-level sessions")).toBeVisible();
@@ -504,6 +518,15 @@ test("groups a run with no recorded launch as unattributed", async ({
       name: /Unattributed/,
     }),
   ).toBeVisible();
+  // A run recorded before attribution reached the run directory, whose protected
+  // record is gone too: nothing can name its session, so it is named by the launch
+  // it did record rather than pooled with the runs that recorded nothing at all.
+  await expect(
+    sessionGroup(page, runs().eventless).getByRole("heading", {
+      name: /Unattributed launch · 1e6a1e6a…/,
+    }),
+  ).toBeVisible();
+
   await page.getByRole("button", { name: RegExp(runs().unattributed) }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText("orphan");
   await expect(page.getByText("Continue unattributed work")).toHaveCount(0);

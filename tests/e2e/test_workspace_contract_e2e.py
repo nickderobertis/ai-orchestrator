@@ -1473,18 +1473,17 @@ def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path
 
 @pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
-    """The base bumped this 7 -> 8 while the contract still said 7; gate it.
+    """A bumped index version with a contract that still states the old one; gate it.
 
-    The bumped number is read from the checkout rather than written here, so the gate
-    stays under test across the next bump instead of silently passing on a literal
-    that no longer appears in the file.
+    The declared number is read from the checkout rather than written here, so the
+    gate stays under test across the next bump instead of silently passing on a
+    literal that no longer appears in the file.
     """
     checkout = _dag_state_contract_checkout(tmp_path)
     telemetry = checkout / "orchestrator/telemetry.py"
-    current = int(
-        re.search(r"^TELEMETRY_SCHEMA_VERSION = (\d+)$", telemetry.read_text(), re.M)
-        .group(1)  # type: ignore[union-attr]
-    )
+    declared = re.search(r"^TELEMETRY_SCHEMA_VERSION = (\d+)$", telemetry.read_text(), re.M)
+    assert declared is not None, "the copied checkout must still declare the schema version"
+    current = int(declared.group(1))
     telemetry.write_text(
         telemetry.read_text().replace(
             f"TELEMETRY_SCHEMA_VERSION = {current}",

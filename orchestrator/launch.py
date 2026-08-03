@@ -52,6 +52,10 @@ DEFAULT_MAX_AGE_SECONDS = 7 * 24 * 3600
 #: A launch id is a security-sensitive join token, not incidental text: distinguishing
 #: it from an arbitrary string keeps an unvalidated one from reaching a lookup.
 LaunchId = NewType("LaunchId", str)
+#: The durable name of one launching session. Distinguished from an arbitrary string
+#: for the same reason: it is what ownership is decided by, so a value that has not
+#: been derived or revalidated here must not reach a comparison.
+SessionKey = NewType("SessionKey", str)
 
 _LAUNCH_ID = re.compile(r"[0-9a-f]{32}\Z")
 _SESSION_KEY = re.compile(rf"[0-9a-f]{{{SESSION_KEY_CHARS}}}\Z")
@@ -97,7 +101,7 @@ class LaunchLink:
     #: A `KNOWN_LAUNCHERS` value, or ``None`` when the record predates this field.
     launcher: str | None = None
     #: The irreversible session digest, or ``None`` when the run names no session.
-    session_key: str | None = None
+    session_key: SessionKey | None = None
 
     @property
     def session(self) -> LaunchSession | None:
@@ -122,9 +126,9 @@ def launch_info(*, launch_id: LaunchId, launcher: str, session_id: str | None) -
     return info
 
 
-def _recorded_key(value: object) -> str | None:
+def _recorded_key(value: object) -> SessionKey | None:
     """One recorded session key, or ``None`` when it is not one this scheme writes."""
-    return value if isinstance(value, str) and _SESSION_KEY.match(value) else None
+    return SessionKey(value) if isinstance(value, str) and _SESSION_KEY.match(value) else None
 
 
 def read_launch_link(run_dir: Path) -> LaunchLink | None:
@@ -475,7 +479,7 @@ class LaunchSession:
     """
 
     launcher: str
-    key: str
+    key: SessionKey
 
     @property
     def label(self) -> str:
@@ -506,13 +510,13 @@ class LaunchIdentity:
         return self.session.label
 
 
-def session_key(session_id: str) -> str:
+def session_key(session_id: str) -> SessionKey:
     """A stable, non-reversible key for one launching session.
 
     Wide enough to compare on: this is what a run directory records and what
     ownership is decided by once the protected provenance record is gone.
     """
-    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:SESSION_KEY_CHARS]
+    return SessionKey(hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:SESSION_KEY_CHARS])
 
 
 def session_fingerprint(session_id: str) -> str:

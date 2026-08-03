@@ -1015,9 +1015,10 @@ def test_launch_api_records_detached_owner_and_real_report(
     assert status["status"] == "running"
     assert isinstance(status["pid"], int) and status["host"]
 
-    # A real launch splits its provenance: the run directory gets only the join key,
-    # and the sensitive session id lands in the out-of-repo record the read API
-    # resolves. This is the production write path, not a manufactured fixture.
+    # A real launch splits its provenance: the run directory gets the join key plus
+    # the irreversible session key that attributes it, while the session id itself
+    # lands only in the out-of-repo record. This is the production write path, not a
+    # manufactured fixture.
     link = read_launch_link(run_dir)
     assert link is not None
     assert "planner-session" not in (run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8")

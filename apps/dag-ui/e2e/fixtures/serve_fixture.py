@@ -47,6 +47,9 @@ CLAUDE_LAUNCH = "c1a0" * 8
 #: run reaches once its short-lived record expires.
 CODEX_SESSION_ID = "codex-top-session"
 CLAUDE_SESSION_ID = "claude-code-top-session"
+#: A launch recorded before the durable attribution existed, with no protected record
+#: either: nothing can name its session, so it is named by the launch itself.
+LEGACY_LAUNCH = "1e6a" * 8
 
 FOUNDATION_PR = "https://github.com/example/repo/pull/12"
 
@@ -371,10 +374,29 @@ def _write_eventless_run(runs_dir: Path) -> None:
     stay in the navigation beside the runs that do have events: the client validates
     the run list in one parse, so a run this shape either renders with the rest or
     takes every one of them down with it.
+
+    It also carries the *legacy* launch record — the join key alone, with no
+    protected record left to resolve it — which is every run launched before the
+    launcher was detected. The navigation has to name it by the launch it does know
+    rather than claim a session for it or drop it.
     """
     from orchestrator.runs import prepare_round
 
-    prepare_round(runs_dir / EVENTLESS_RUN, {"tasks": _EVENTLESS_TASKS})
+    run_dir = runs_dir / EVENTLESS_RUN
+    prepare_round(run_dir, {"tasks": _EVENTLESS_TASKS})
+    (run_dir / "launch.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": EVENTLESS_RUN,
+                "channel_id": EVENTLESS_RUN,
+                "plan_name": EVENTLESS_RUN,
+                "commands": {},
+                "launch": {"launch_id": LEGACY_LAUNCH},
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 #: Plan-file JSON like the task lists above, typed the same way and for the same
