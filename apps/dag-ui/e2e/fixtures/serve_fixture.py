@@ -306,7 +306,17 @@ def _write_live_run(runs_dir: Path) -> None:
     journal.append(
         "node-settled",
         node=NodeId("obsolete"),
-        detail={"status": "cancelled", "result": {"status": "cancelled", "ok": False}},
+        detail={
+            "status": "cancelled",
+            # What the executor records when a live drop or retry cancels a node
+            # cooperatively: the scheduler's own words, in `error` rather than in a
+            # lifecycle's `detail`.
+            "result": {
+                "status": "cancelled",
+                "ok": False,
+                "error": "cancelled cooperatively",
+            },
+        },
     )
     _record_launch(run_dir, LIVE_RUN, CODEX_LAUNCH)
 
@@ -337,6 +347,10 @@ def _write_history_run(runs_dir: Path) -> None:
     _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH)
 
 
+#: Plan-file JSON like every task list above, typed the same way and for the same
+#: reason: `orchestrator` owns and validates this shape at the boundary this fixture
+#: feeds, per this module's `modern_domain_modeling` note, and a narrower local model
+#: would be a second declaration that drifts from the one under test.
 _OUTCOMES_TASKS: list[dict[str, Any]] = [
     {"id": "migrate", "persona": "engineer", "task": "Migrate the store"},
     {"id": "backfill", "persona": "engineer", "task": "Backfill the store"},

@@ -182,6 +182,9 @@ test("tracks every node state and kind of a live run", async ({ page }) => {
   await expect(page.locator(".dag-node.state-failed")).toContainText(
     "Deploy failed",
   );
+  await expect(page.locator(".dag-node.state-cancelled")).toContainText(
+    "cancelled cooperatively",
+  );
   // Work that is fine gets no such line at all.
   await expect(page.locator(".dag-node.state-done .node-reason")).toHaveCount(
     0,
@@ -215,6 +218,16 @@ test("leads a node that is not moving with the reason it is not", async ({
   await openObservatory(page, `/?run=${runs().live}&node=abandoned`);
   await expect(page.getByRole("alert")).toContainText("This node is skipped");
   await expect(page.getByRole("alert")).toContainText("publish");
+
+  // Abandoned work is lost work: it reads with the failures rather than with the
+  // held nodes, and the scheduler's own words for it are what the banner shows.
+  await openObservatory(page, `/?run=${runs().live}&node=obsolete`);
+  await expect(page.getByRole("alert")).toContainText(
+    "This node was cancelled",
+  );
+  await expect(page.getByRole("alert")).toContainText(
+    "cancelled cooperatively",
+  );
 });
 
 test("renders the outcomes only a settled round records", async ({ page }) => {
