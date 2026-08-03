@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast, get_args
+from typing import Any, Literal, NamedTuple, TypedDict, cast, get_args
 
 from .config import ConfigError
 from .edits import EDIT_PROTOCOL_VERSION, EditError, parse_commands
@@ -32,7 +32,12 @@ from .journal import (
     Event,
     parse_event,
 )
-from .plan import PlanError, parse_cross_dag_dependency
+from .plan import (
+    GATED_DEP_STATUSES,
+    UNMET_DEP_STATUSES,
+    PlanError,
+    parse_cross_dag_dependency,
+)
 from .runs import GraphPayload, GraphResultItem, RunId, as_result_payload
 
 
@@ -50,6 +55,45 @@ NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
 #: not. Named here rather than restated at each reader so a strict fold and a
 #: degrading read-only view judge a recorded status against the same domain.
 TERMINAL_NODE_STATES: frozenset[str] = frozenset(get_args(NodeState)) - {"running"}
+
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] this *is* the one source:
+# `scripts/check-dag-state-contract.py` reconciles every restatement of it — the
+# `dag-layout` renderer states, the `dag-model` zod enum, and the documented union in
+# `docs/dag-ui/design.md` — against this Literal, and holds `NodeState` inside it.
+#: The one authoritative per-node status the read API serves, and the only node
+#: vocabulary a renderer may switch on.
+#:
+#: `NodeState` above is the strict fold's own answer and is deliberately narrower: the
+#: journal records a node *starting* and *settling*, so it can say nothing about a node
+#: the scheduler never dispatched. Those nodes are the ones an operator most needs to
+#: see — `pending` work not yet eligible, `blocked` work held behind a human action,
+#: `skipped` work a failed prerequisite made unreachable — and a client that inferred
+#: them from an absent `node_states` entry invented two of the three. `node_statuses`
+#: below is where every one of them is decided, once, on the server.
+#:
+#: Read each member as: `pending` not started and not gated; `running` dispatched;
+#: `waiting` holding for a human action; `blocked` held behind a dependency that is
+#: waiting or itself blocked; `skipped` unreachable because a dependency did not
+#: complete; `done` settled successfully; `not-completed` settled with its work
+#: unfinished; `failed` settled unsuccessfully; `cancelled` abandoned; `unknown` a
+#: recorded status outside this vocabulary, reported as such rather than guessed at.
+#:
+#: A run's own `state` also uses the word `blocked`, for something else entirely: a run
+#: waiting on a *planner* reply. The two never share a field — a run's is `state`, a
+#: node's is `node_status` — and `docs/dag-ui/design.md` states the distinction.
+NodeStatus = Literal[
+    "pending",
+    "running",
+    "waiting",
+    "blocked",
+    "skipped",
+    "done",
+    "not-completed",
+    "failed",
+    "cancelled",
+    "unknown",
+]
+NODE_STATUSES: frozenset[str] = frozenset(get_args(NodeStatus))
 
 
 class ProjectedPlan(TypedDict, total=False):
@@ -463,6 +507,96 @@ def _validate_live_topology(builder: _RoundBuilder) -> None:
 
 def project_run(path: Path, run_id: RunId, round_number: int) -> RoundProjection:
     return project_round(read_strict_events(path, run_id), run_id, round_number)
+
+
+class RoundNodeStatuses(NamedTuple):
+    """One round's authoritative per-node status, plus why each gated node is gated."""
+
+    #: Every task in the round's plan, keyed by id. Never partial: a client reads a
+    #: status here rather than inventing one for a node it cannot find.
+    status: dict[str, NodeStatus]
+    #: For each `blocked` or `skipped` node, the dependency ids that gate it, in plan
+    #: order. Empty for every other node, and absent from the mapping entirely.
+    gated_by: dict[str, list[str]]
+
+
+def node_statuses(projection: RoundProjection) -> RoundNodeStatuses:
+    """The authoritative `NodeStatus` of every task in one projected round.
+
+    Three recorded sources are asked in order of authority. The strict fold's own
+    `node_states` wins wherever it has an answer, because it is the journal. A round
+    that finished also recorded a whole-graph result, which is the only place the
+    statuses the scheduler *derived* rather than journalled — `blocked`, `skipped` —
+    are written down. Anything else is `pending`.
+
+    A round still in flight has neither, so the last step re-derives those same two
+    gates from the plan the projection already validated, using the scheduler's own
+    `UNMET_DEP_STATUSES` / `GATED_DEP_STATUSES`. Without it every node held behind a
+    human action reads as `pending` for as long as the run is live — which is exactly
+    when an operator is reading it.
+
+    A dependency the plan does not hold is a cross-DAG prerequisite whose status lives
+    in another run's journal; it is not folded here, so a node gated only by one reads
+    as `pending` rather than as a gate this round cannot evidence.
+    """
+    tasks = [task for task in projection.plan.get("tasks", []) if isinstance(task.get("id"), str)]
+    order = [str(task["id"]) for task in tasks]
+    deps = {
+        str(task["id"]): [dep for dep in task.get("deps", []) or [] if isinstance(dep, str)]
+        for task in tasks
+    }
+    recorded = projection.result["results"] if projection.result is not None else {}
+    status: dict[str, NodeStatus] = {}
+    for node in order:
+        settled = projection.node_states.get(node)
+        if settled is not None:
+            status[node] = settled
+            continue
+        item = recorded.get(node) or projection.node_results.get(node)
+        raw = str(item.get("status", "")) if item is not None else ""
+        if not raw:
+            status[node] = "pending"
+        else:
+            status[node] = cast(NodeStatus, raw) if raw in NODE_STATUSES else "unknown"
+    _derive_gates(order, deps, status)
+    gated_by = {
+        node: [
+            dep
+            for dep in deps[node]
+            if status.get(dep)
+            in (UNMET_DEP_STATUSES if status[node] == "skipped" else GATED_DEP_STATUSES)
+        ]
+        for node in order
+        if status[node] in {"blocked", "skipped"}
+    }
+    return RoundNodeStatuses(status, {node: refs for node, refs in gated_by.items() if refs})
+
+
+def _derive_gates(
+    order: list[str], deps: dict[str, list[str]], status: dict[str, NodeStatus]
+) -> None:
+    """Settle still-`pending` nodes the scheduler would have gated, to a fixed point.
+
+    Mirrors `plan.reconcile_dag`'s own `resolve_gated`: a node whose dependencies have
+    all settled is `skipped` when any of them is unmet and `blocked` when any of them
+    is merely held, with failure taking precedence. Held to the same two tuples so the
+    served answer cannot drift from the scheduler that produces it.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for node in order:
+            if status[node] != "pending":
+                continue
+            settled = [status[dep] for dep in deps[node] if dep in status]
+            if any(state in ("pending", "running") for state in settled):
+                continue
+            if any(state in UNMET_DEP_STATUSES for state in settled):
+                status[node] = "skipped"
+                changed = True
+            elif any(state in GATED_DEP_STATUSES for state in settled):
+                status[node] = "blocked"
+                changed = True
 
 
 def _fold_node_result(builder: _RoundBuilder, event: Event) -> None:

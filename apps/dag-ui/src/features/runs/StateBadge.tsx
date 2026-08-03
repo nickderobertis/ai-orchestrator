@@ -44,22 +44,39 @@ export function StateBadge({
 
 const SETTLED = "border-success bg-success-surface text-success";
 const LOST = "border-destructive bg-destructive-surface text-destructive";
+const HELD = "border-warning bg-warning-surface text-warning";
 
 /**
- * What each node state means, in the package's semantic utilities. Keying it by the
+ * What each node status means, in the package's semantic utilities. Keying it by the
  * contract's own `DagNodeState` is the drift gate: `DAG_NODE_STATES` is reconciled
- * with `orchestrator/projection.py` by `scripts/check-dag-state-contract.py`, so a
- * state added there reaches this record and fails to compile until it is given a
- * meaning, rather than quietly rendering as a badge that says nothing. `pending` and
- * `waiting` are `undefined` deliberately: work that has not started has no outcome
- * to report, and neutral is the honest reading of that.
+ * with `orchestrator.projection.NodeStatus` by `scripts/check-dag-state-contract.py`,
+ * so a status added there reaches this record and fails to compile until it is given
+ * a meaning, rather than quietly rendering as a badge that says nothing.
+ *
+ * Three readings, deliberately:
+ *
+ * - `blocked` and `skipped` are held work — something outside the node has to move
+ *   before it can. Neutral would read as "nothing to report", which is the opposite
+ *   of what they mean, so they take the warning tone the graph card already gives
+ *   them. `waiting` keeps a neutral badge beside its warning card: a human action is
+ *   the graph's own normal shape, and the card is where that is said.
+ * - `not-completed` is a settled node whose work is unfinished, which is a lost
+ *   outcome rather than a pause, so it reads with `failed` and `cancelled`.
+ * - `pending` and `unknown` are `undefined` on purpose: work that has not started has
+ *   no outcome to report, and a status this vocabulary does not recognize has none
+ *   either. Borrowing a colour for them would be inventing the reading a neutral
+ *   badge honestly declines to give.
  */
 const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
+  blocked: HELD,
   cancelled: LOST,
   done: SETTLED,
   failed: LOST,
+  "not-completed": LOST,
   pending: undefined,
   running: "border-info bg-info-surface text-info",
+  skipped: HELD,
+  unknown: undefined,
   waiting: undefined,
 };
 
@@ -69,6 +86,13 @@ const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
  * rather than restating it. The read contract types a run's state as an open string —
  * it can also report `stopped`, `parked`, `blocked` or `unknown` — and anything not
  * named here falls through to the neutral badge.
+ *
+ * A run's `blocked` is not a node's: a run is blocked on a *planner* reply, a node on
+ * a dependency. They share the reading this table gives them — held, awaiting
+ * something outside — and they can never share a field, since a run's word comes from
+ * `RunSummary.state` and a node's from `Round.node_status`. Which of the two a reader
+ * is looking at is said by the surface: a run row names its run, and a node view names
+ * its node and states what is holding it.
  */
 const TONE: Readonly<Record<string, string | undefined>> = {
   ...NODE_TONE,

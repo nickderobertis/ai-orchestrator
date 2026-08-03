@@ -151,8 +151,17 @@ class NodeRun:
     recorded: Mapping[str, Any] | None = None
 
 
-_UNMET = ("failed", "skipped")
-_GATED = ("waiting", "blocked")
+#: Dependency statuses that mean a dependent can never run, so the scheduler settles
+#: it ``skipped``.
+#:
+#: Public because the read model re-derives the same two gates for a round that has
+#: not finished — the scheduler journals nothing when it derives them, so a served
+#: graph that did not re-derive them would show every gated node as `pending` while
+#: the run itself has them held. Two copies of this rule would let those two answers
+#: drift; `orchestrator.projection.node_statuses` reads these.
+UNMET_DEP_STATUSES = ("failed", "skipped")
+#: Dependency statuses that mean a dependent is held rather than lost: ``blocked``.
+GATED_DEP_STATUSES = ("waiting", "blocked")
 
 
 def schedule_dag(
@@ -216,11 +225,11 @@ def reconcile_dag(
                 settled = [status[d] for d in deps[nid]]
                 if any(s in ("pending", "running") for s in settled):
                     continue
-                if any(s in _UNMET for s in settled):
+                if any(s in UNMET_DEP_STATUSES for s in settled):
                     status[nid] = "skipped"
                     results[nid] = NodeRun("skipped", "a dependency did not complete")
                     changed = True
-                elif any(s in _GATED for s in settled):
+                elif any(s in GATED_DEP_STATUSES for s in settled):
                     status[nid] = "blocked"
                     results[nid] = NodeRun("blocked", "a dependency is awaiting human action")
                     changed = True

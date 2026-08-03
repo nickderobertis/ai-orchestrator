@@ -6,7 +6,7 @@ import {
   TooltipTrigger,
 } from "@oneharness/ui";
 import { Activity, Bot, ChevronRight, History } from "lucide-react";
-import type { RunGroup } from "../runs/run-model";
+import { nodeCountSummary, type RunGroup } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 
 export function RunNavigation({
@@ -43,6 +43,7 @@ export function RunNavigation({
                 </h2>
                 {group.runs.map((run) => {
                   const active = selectedRunId === run.run_id;
+                  const counts = nodeCountSummary(run.node_counts);
                   return (
                     <button
                       aria-current={active ? "page" : undefined}
@@ -79,6 +80,14 @@ export function RunNavigation({
                         state={run.state}
                       />
                       <ChevronRight aria-hidden="true" size={14} />
+                      {/* The run's own nodes, in the words the graph paints them
+                          with. A run row that stated only "running" said nothing
+                          about the node inside it that was already blocked. */}
+                      {counts !== "" && (
+                        <span className="run-link-counts" title={counts}>
+                          {counts}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

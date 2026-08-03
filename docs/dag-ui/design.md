@@ -121,7 +121,8 @@ and the client simply asked for nothing in it. It defaults to `true`.
 `check_rollup`. A `NodeTelemetry` is exactly `NodeTelemetry.record()`: required
 `node`, `status`, `sessions`, `turns`, and `lint`; optional `outcome`, `branch`,
 `comparison_remote`, `comparison_base`, `checkpoint`, `commit`,
-`retry_lineage`, `gate_attestation`, `timing`, `usage`, and `tool_commands`.
+`retry_lineage`, `gate_attestation`, `failure`, `timing`, `usage`, and
+`tool_commands`.
 `last_event` is required but nullable in both payloads: a run that has recorded no
 journal event yet — a run that has only just launched — serves it as `null` rather
 than as an empty string, so its absence is representable instead of degenerate.
@@ -206,19 +207,97 @@ interface Round {
     string,
     "running" | "done" | "failed" | "waiting" | "cancelled"
   >;
+  node_status: Record<string, NodeStatus>;
+  node_gated_by: Record<string, string[]>;
   node_results: Record<string, GraphResultItem>;
   attestations: string[];
   result: GraphPayload | null;
   last_seq: number;
 }
+
+type NodeStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "blocked"
+  | "skipped"
+  | "done"
+  | "not-completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
 ```
 
 `PlanTask`, `GraphResultItem`, and `GraphPayload` retain their validated plan and
 result JSON shapes rather than being flattened. The server obtains this object
 only through `read_strict_events()` and `project_round()`. An inconsistent
 authoritative stream fails the detail request with `409 projection_error`; it is
-never rendered as a plausible graph. Pending nodes are plan tasks absent from
-`node_states`.
+never rendered as a plausible graph.
+
+#### One authoritative node status
+
+`node_status` is the **only** node vocabulary a renderer may switch on. It holds
+one entry for every task in `plan.tasks`, so a client never has to invent a status
+for a node it cannot find, and it is owned by
+`orchestrator.projection.NodeStatus` — `scripts/check-dag-state-contract.py`
+reconciles the union above, the `dag-model` `nodeStatusSchema`, and
+`@ai-orchestrator/dag-layout`'s `DAG_NODE_STATES` against that Literal.
+
+The other two node vocabularies remain, and relate to it like this:
+
+- `node_states` is the strict fold itself: what the journal recorded, and only for
+  nodes it recorded something about. Its five members are a subset of `NodeStatus`
+  and win wherever it has an entry. It stays served because it is the audit answer —
+  what was *journalled*, with nothing derived on top.
+- `RunTelemetry.nodes[]` is the timing and usage index, keyed by node. Its `status`
+  is folded from the same journal and agrees with `node_status` for every node it
+  holds; it simply holds no entry for a node the journal never recorded.
+- `blocked`, `skipped` and `pending` exist only in `node_status`. The scheduler
+  derives them and journals nothing, so the server re-derives them from the plan's
+  own dependency edges using the scheduler's rule (`plan.UNMET_DEP_STATUSES` /
+  `plan.GATED_DEP_STATUSES`) — otherwise every held node reads as `pending` for as
+  long as the run is live. A node gated only by a cross-DAG prerequisite reads as
+  `pending`: that status lives in another run's journal and this round cannot
+  evidence it.
+- `unknown` is the honest report of a recorded status outside the vocabulary, never
+  a silent fallback onto a neighbouring meaning.
+
+`node_gated_by` names, for each `blocked` or `skipped` node, the **plan node ids**
+whose status gates it, in plan order; it omits every other node. It is not
+`GraphResultItem.blocked_by`, which names *human action refs* (`node` or
+`node/step`) on a settled result — a node view showing what holds a node reads both.
+
+A run's own `state` also uses the word `blocked`, and means something else: the run
+is waiting on a **planner** reply (`orchestrator.monitor.run_state`). The two never
+share a field — a run's is `state`, a node's is `node_status` — and no renderer may
+map one through the other's table.
+
+`RunSummary.node_counts` counts this same derivation over the run's newest round, so
+a list row and the graph it opens cannot describe different graphs. A run whose
+authoritative stream will not fold degrades to the recorded telemetry statuses.
+
+#### Typed failure and blocker facts
+
+A failed or held node's reason is served typed, not left to be parsed out of prose:
+
+- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string}` —
+  the same classification `RunTelemetry.failure` carries for the run, applied to that
+  node's own recorded item, and omitted for a node that did not fail.
+- `GraphResultItem` carries `error`, `detail`, `exit_code`, `blocked_by`,
+  `waiting_steps`, and `human_actions` for the node it describes. They are optional
+  because a node that neither failed nor waited records none of them.
+
+```ts
+type FailureClass =
+  | "agent"
+  | "gate"
+  | "checks"
+  | "publication"
+  | "timeout"
+  | "provider"
+  | "configuration"
+  | "unknown";
+```
 
 ### Run timeline
 

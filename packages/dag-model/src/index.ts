@@ -108,6 +108,29 @@ export const sessionLinkSchema = openObject({
 });
 
 const arbitraryRecord = z.record(z.string(), z.unknown());
+
+/**
+ * How a recorded outcome failed, classified once on the server.
+ *
+ * `orchestrator/telemetry.py`'s `FailureClass` owns this vocabulary and
+ * `scripts/check-dag-state-contract.py` reconciles the three copies of it. It is
+ * `class`, not `kind`, because that is the key the Python `Failure.record()` writes.
+ */
+export const failureClassSchema = z.enum([
+  "agent",
+  "gate",
+  "checks",
+  "publication",
+  "timeout",
+  "provider",
+  "configuration",
+  "unknown",
+]);
+export const failureSchema = openObject({
+  class: failureClassSchema,
+  detail: z.string().optional(),
+});
+
 export const nodeTelemetrySchema = openObject({
   node: z.string().min(1),
   status: z.string().min(1),
@@ -119,6 +142,8 @@ export const nodeTelemetrySchema = openObject({
   commit: z.string().min(1).optional(),
   retry_lineage: arbitraryRecord.optional(),
   gate_attestation: arbitraryRecord.optional(),
+  /** How this node's own outcome failed; omitted for a node that did not fail. */
+  failure: failureSchema.optional(),
   timing: timingSchema.optional(),
   usage: usageSchema.optional(),
   sessions: z.array(sessionLinkSchema),
@@ -139,7 +164,7 @@ export const runTelemetrySchema = openObject({
   timing: timingSchema,
   nodes: z.array(nodeTelemetrySchema),
   providers: z.array(arbitraryRecord).optional(),
-  failure: arbitraryRecord.optional(),
+  failure: failureSchema.optional(),
   check_rollup: arbitraryRecord.optional(),
   usage: usageSchema,
   timing_quality: timingQualitySchema,
@@ -299,6 +324,29 @@ export const nodeStateSchema = z.enum([
   "waiting",
   "cancelled",
 ]);
+/**
+ * The one authoritative per-node status, owned by `orchestrator.projection.NodeStatus`
+ * and reconciled with it, `@ai-orchestrator/dag-layout`, and `docs/dag-ui/design.md`
+ * by `scripts/check-dag-state-contract.py`.
+ *
+ * `nodeStateSchema` above is the strict journal fold and is a subset of this: it can
+ * only speak for nodes the journal recorded something about, so `pending`, `blocked`
+ * and `skipped` appear only here. A consumer renders from `Round.node_status` and
+ * never from an absent `node_states` entry — inferring one is how the sidebar and the
+ * detail view came to disagree about the same node.
+ */
+export const nodeStatusSchema = z.enum([
+  "pending",
+  "running",
+  "waiting",
+  "blocked",
+  "skipped",
+  "done",
+  "not-completed",
+  "failed",
+  "cancelled",
+  "unknown",
+]);
 export const roundSchema = openObject({
   run_id: z.string().min(1),
   round: counter,
@@ -309,6 +357,14 @@ export const roundSchema = openObject({
     name: z.string().min(1).optional(),
   }),
   node_states: z.record(z.string(), nodeStateSchema),
+  /** One entry per plan task, so a client never invents a status for a node. */
+  node_status: z.record(z.string(), nodeStatusSchema),
+  /**
+   * The plan node ids gating each `blocked` or `skipped` node, in plan order; every
+   * other node is absent. Not `GraphResultItem.blocked_by`, which names human action
+   * refs on a settled result.
+   */
+  node_gated_by: z.record(z.string(), z.array(z.string().min(1))),
   node_results: z.record(z.string(), graphResultItemSchema),
   attestations: z.array(z.string()),
   result: graphPayloadSchema.nullable(),
@@ -502,6 +558,10 @@ export const sseEventNameSchema = z.enum([
 export const sseEventDataSchema = arbitraryRecord;
 
 export type Timing = z.infer<typeof timingSchema>;
+export type FailureClass = z.infer<typeof failureClassSchema>;
+export type Failure = z.infer<typeof failureSchema>;
+export type NodeState = z.infer<typeof nodeStateSchema>;
+export type NodeStatus = z.infer<typeof nodeStatusSchema>;
 export type UsageParty = z.infer<typeof usagePartySchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type SessionLink = z.infer<typeof sessionLinkSchema>;

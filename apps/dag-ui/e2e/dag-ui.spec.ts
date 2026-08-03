@@ -151,15 +151,79 @@ test("tracks every node state and kind of a live run", async ({ page }) => {
   await expect(page.locator(".dag-node.state-waiting")).toContainText(
     "approval",
   );
-  await expect(page.locator(".dag-node.state-pending")).toContainText("queued");
+  await expect(page.locator(".dag-node.state-pending")).toContainText(
+    "followup",
+  );
   await expect(page.locator(".dag-node.state-cancelled")).toContainText(
     "obsolete",
+  );
+  // The two statuses the scheduler derives and journals nothing about. The served
+  // graph re-derives them, so they reach the canvas as themselves rather than as the
+  // "pending" a client used to invent for every node the journal never mentioned.
+  await expect(page.locator(".dag-node.state-blocked")).toContainText("queued");
+  await expect(page.locator(".dag-node.state-skipped")).toContainText(
+    "abandoned",
   );
 
   // Each card names the kind of work it stands for, so an operator can tell the two
   // apart without opening either: agent work runs itself, a human action does not.
   await expect(page.locator(".dag-node.state-running")).toContainText("agent");
   await expect(page.locator(".dag-node.state-waiting")).toContainText("human");
+
+  // And a card that is not moving says why in one line, so a graph of red and amber
+  // is a diagnosis rather than an invitation to open every node in it.
+  await expect(page.locator(".dag-node.state-blocked")).toContainText(
+    "blocked by approval",
+  );
+  await expect(page.locator(".dag-node.state-skipped")).toContainText(
+    "blocked by publish",
+  );
+  await expect(page.locator(".dag-node.state-failed")).toContainText(
+    "Deploy failed",
+  );
+  // Work that is fine gets no such line at all.
+  await expect(page.locator(".dag-node.state-done .node-reason")).toHaveCount(
+    0,
+  );
+});
+
+test("leads a node that is not moving with the reason it is not", async ({
+  page,
+}) => {
+  // The reason used to sit behind an accordion entry called "Outcome", beside four
+  // facts the reader had not opened the node for.
+  await openObservatory(page, `/?run=${runs().live}&node=publish`);
+  const banner = page.getByRole("alert");
+  await expect(banner).toContainText("This node failed: agent");
+  await expect(banner).toContainText("Deploy failed");
+  await expect(banner).toContainText("publication exited non-zero");
+  await expect(banner).toContainText("2");
+  // It is the first thing in the view: above the disclosures, not inside one.
+  const bannerBox = await banner.boundingBox();
+  const taskBox = await page
+    .getByRole("button", { name: "Task" })
+    .boundingBox();
+  expect(bannerBox?.y ?? 0).toBeLessThan(taskBox?.y ?? 0);
+
+  // A held node states what holds it, by the plan node the server named.
+  await openObservatory(page, `/?run=${runs().live}&node=queued`);
+  await expect(page.getByRole("alert")).toContainText("This node is blocked");
+  await expect(page.getByRole("alert")).toContainText("approval");
+
+  // The same for the node its failed prerequisite made unreachable.
+  await openObservatory(page, `/?run=${runs().live}&node=abandoned`);
+  await expect(page.getByRole("alert")).toContainText("This node is skipped");
+  await expect(page.getByRole("alert")).toContainText("publish");
+});
+
+test("counts a run's own nodes on the row that opens it", async ({ page }) => {
+  await openObservatory(page);
+  // The row and the graph it opens are counted from one derivation on the server, so
+  // a run whose row says only "running" can no longer hide a node already blocked.
+  const liveRow = page.getByRole("button", { name: RegExp(runs().live) });
+  await expect(liveRow).toContainText("1 blocked");
+  await expect(liveRow).toContainText("1 skipped");
+  await expect(liveRow).toContainText("1 pending");
 });
 
 test("opens a node's timeline, reads one recorded moment, and returns", async ({
@@ -378,10 +442,10 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
 test("reports a node whose recorded work the run has not written yet", async ({
   page,
 }) => {
-  // `queued` never started, so the run recorded no span or event for it at all.
+  // `followup` never started, so the run recorded no span or event for it at all.
   // That is a real state of a live graph, and it has to be said rather than shown
   // as an empty pane that reads like a broken view.
-  await openObservatory(page, `/?run=${runs().live}&node=queued`);
+  await openObservatory(page, `/?run=${runs().live}&node=followup`);
   await expect(
     page.getByText("This node has no recorded timeline yet."),
   ).toBeVisible();
@@ -883,6 +947,18 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     await page.keyboard.press("Escape");
   }
 
+  // Held work is neither settled nor lost: it needs something outside it to move, and
+  // painting it neutral would say there is nothing to report about a node that is
+  // going nowhere. `waiting` keeps its neutral badge beside its amber card — a human
+  // action is the graph's own normal shape, and the card is where that is said.
+  const held = await tokenColor(page, "--warning");
+  for (const state of ["blocked", "skipped"]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", held);
+    await page.keyboard.press("Escape");
+  }
+
   // Work that has not started has no outcome to report, so it must not borrow one of
   // those meanings — which is also what stops the assertions above from passing on a
   // mapping that simply paints everything.
@@ -922,6 +998,8 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     { state: "failed", token: "--destructive-surface" },
     { state: "running", token: "--info-surface" },
     { state: "waiting", token: "--warning-surface" },
+    { state: "blocked", token: "--warning-surface" },
+    { state: "skipped", token: "--warning-surface" },
   ]) {
     await expect(page.locator(`.dag-node.state-${state}`)).toHaveCSS(
       "background-color",

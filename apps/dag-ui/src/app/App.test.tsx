@@ -99,6 +99,103 @@ describe("DAG application", () => {
     expect(window.location.search).not.toContain("node=");
   });
 
+  test("states one status per node on every surface that shows one", async () => {
+    // The defect this replaced: the sidebar and the node view derived a node's state
+    // from different vocabularies, so one called a node blocked while the other
+    // called it running. The served run has a blocked node and a skipped one — two
+    // statuses the journal never records — and every surface has to say the same
+    // word for each of them.
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
+
+    const nodeList = screen.getByRole("list", { name: "DAG nodes" });
+    for (const [node, status] of [
+      ["queued", "blocked"],
+      ["abandoned", "skipped"],
+      ["followup", "pending"],
+      ["publish", "failed"],
+    ] as const) {
+      // The card the pointer reads.
+      expect(screen.getByText(node).closest(".dag-node")).toHaveClass(
+        `state-${status}`,
+      );
+      // The list the keyboard reads.
+      expect(
+        within(nodeList).getByRole("button", {
+          name: new RegExp(`^${node}: ${status}\\b`),
+        }),
+      ).toBeInTheDocument();
+    }
+
+    // The run row above them, counted on the server over that same derivation.
+    expect(
+      screen.getByRole("button", { name: new RegExp(LIVE_RUN) }),
+    ).toHaveTextContent("1 pending · 1 running · 1 waiting · 1 blocked");
+
+    // And the node view each card opens.
+    for (const [node, status] of [
+      ["queued", "blocked"],
+      ["abandoned", "skipped"],
+      ["followup", "pending"],
+    ] as const) {
+      // Re-queried per node: leaving the node view unmounts and remounts the list.
+      fireEvent.click(
+        within(screen.getByRole("list", { name: "DAG nodes" })).getByRole(
+          "button",
+          { name: new RegExp(`^${node}: ${status}\\b`) },
+        ),
+      );
+      const view = await screen.findByRole("region", {
+        name: `Timeline for ${node}`,
+      });
+      expect(view.querySelector(".node-view-facts")).toHaveTextContent(status);
+      fireEvent.click(screen.getByRole("button", { name: /Graph/ }));
+    }
+  });
+
+  test("leads a failed node's view with why it failed", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=publish`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+
+    // The reason is the first thing in the view and announces itself, rather than
+    // sitting behind an accordion entry called "Outcome" beside four other facts.
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("This node failed: agent");
+    expect(banner).toHaveTextContent("Deploy failed");
+    expect(banner).toHaveTextContent("publication exited non-zero");
+    expect(banner).toHaveTextContent("2");
+    expect(
+      banner.compareDocumentPosition(
+        screen.getByRole("button", { name: "Task" }),
+      ),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  test("leads a blocked node's view with what is holding it", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=queued`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("This node is blocked");
+    expect(banner).toHaveTextContent("Blocked by");
+    expect(banner).toHaveTextContent("approval");
+  });
+
+  test("says nothing extra about a node that is making progress", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=followup`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    // Work that has not started has no problem to report, and a banner over it
+    // would read as one.
+    expect(
+      await screen.findByRole("region", { name: "Timeline for followup" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   test("walks back to the graph from the breadcrumb button", async () => {
     window.history.replaceState(
       null,

@@ -10,10 +10,16 @@ import {
   AlertTitle,
   Button,
   Card,
+  cn,
 } from "@oneharness/ui";
-import { ArrowLeft, ExternalLink, TriangleAlert } from "lucide-react";
+import {
+  ArrowLeft,
+  ExternalLink,
+  OctagonPause,
+  TriangleAlert,
+} from "lucide-react";
 import { useEffect, useMemo } from "react";
-import type { NodeView } from "../runs/run-model";
+import { isUnhealthy, type NodeView } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import { TimelineRail } from "./TimelineRail";
@@ -82,7 +88,7 @@ export function NodeTimelineView({
           </ol>
         </nav>
         <div className="node-view-facts">
-          <StateBadge state={node.state} />
+          <StateBadge state={node.status} />
           <span className="node-view-meta">
             {node.kind} node · {node.telemetry?.turns ?? 0} turns ·{" "}
             {node.telemetry?.lint ?? 0} lint turns
@@ -99,6 +105,8 @@ export function NodeTimelineView({
           )}
         </div>
       </header>
+
+      <NodeProblemBanner node={node} />
 
       <Accordion className="node-summary" collapsible type="single">
         <AccordionItem value="task">
@@ -191,6 +199,89 @@ function PullRequest({ pr }: { readonly pr?: string | null }) {
     <a className="node-view-pr" href={pr} rel="noreferrer" target="_blank">
       {pr} <ExternalLink size={12} />
     </a>
+  );
+}
+
+/**
+ * Why a node is failed, blocked or skipped — first thing in the view, before the
+ * disclosures.
+ *
+ * A node in trouble used to say so only through the accordion's "Outcome" row, which
+ * put the one fact a reader opened the node for behind a click and beside four facts
+ * they did not. That row stays — a node that settled well still records an outcome
+ * worth reading — but a node that did not gets its reason up here, unprompted.
+ *
+ * Nothing here is derived: the status, the classification, the recorded text, the exit
+ * code and the blockers are each a served field, rendered when the server populated it.
+ */
+function NodeProblemBanner({ node }: { readonly node: NodeView }) {
+  if (!isUnhealthy(node.status)) return null;
+  const held = node.status === "blocked" || node.status === "skipped";
+  const detail = node.failure?.detail || node.result?.detail || "";
+  const error = node.result?.error ?? undefined;
+  const exitCode = node.result?.exit_code;
+  return (
+    // `Alert` carries `role="alert"` itself, so opening a node that is in trouble
+    // announces what is wrong rather than leaving it to be noticed.
+    // Held work takes the warning tone its badge and card already carry, not the
+    // failure's red: it has not gone wrong, it is waiting on something that has.
+    <Alert
+      className={cn(
+        "m-5 w-auto",
+        held && "border-warning bg-warning-surface text-warning",
+      )}
+      variant={held ? "default" : "destructive"}
+    >
+      {held ? <OctagonPause /> : <TriangleAlert />}
+      <AlertTitle>
+        {held
+          ? `This node is ${node.status}`
+          : `This node ${node.status === "cancelled" ? "was cancelled" : node.status === "not-completed" ? "did not complete" : "failed"}${
+              node.failure ? `: ${node.failure.class}` : ""
+            }`}
+      </AlertTitle>
+      <AlertDescription>
+        <dl className="facts">
+          {held && (
+            <div>
+              <dt>{node.status === "skipped" ? "Unmet" : "Blocked by"}</dt>
+              <dd>
+                {node.blockers.length > 0
+                  ? node.blockers.join(", ")
+                  : "Nothing recorded; the run has not written what holds it."}
+              </dd>
+            </div>
+          )}
+          {detail !== "" && (
+            <div>
+              <dt>Detail</dt>
+              <dd>{detail}</dd>
+            </div>
+          )}
+          {/* The recorded error is shown beside the detail rather than instead of
+              it: a lifecycle records prose in `detail` and the scheduler records the
+              exception text in `error`, and they are not the same sentence. */}
+          {error !== undefined && error !== "" && error !== detail && (
+            <div>
+              <dt>Error</dt>
+              <dd>{error}</dd>
+            </div>
+          )}
+          {typeof exitCode === "number" && (
+            <div>
+              <dt>Exit code</dt>
+              <dd>{exitCode}</dd>
+            </div>
+          )}
+          {detail === "" && error === undefined && !held && (
+            <div>
+              <dt>Detail</dt>
+              <dd>No reason was recorded for this outcome.</dd>
+            </div>
+          )}
+        </dl>
+      </AlertDescription>
+    </Alert>
   );
 }
 

@@ -1,7 +1,7 @@
 import { layoutDag } from "@ai-orchestrator/dag-layout";
 import { Background, Controls, type Edge, ReactFlow } from "@xyflow/react";
 import { useMemo } from "react";
-import type { NodeView } from "../runs/run-model";
+import { isUnhealthy, type NodeView, nodeReason } from "../runs/run-model";
 import { type DagFlowNode, DagNodeCard } from "./DagNodeCard";
 import { DagRoutedEdge } from "./DagRoutedEdge";
 
@@ -17,6 +17,17 @@ export function DagGraph({
   readonly selectedNodeId?: string;
   readonly onSelectNode: (nodeId: string) => void;
 }) {
+  // The one-line reason a card and the list beside it both state, keyed by node so
+  // the layout's own sorted order cannot pair a card with another node's reason.
+  const reasons = useMemo(
+    () =>
+      new Map(
+        nodeViews
+          .filter((node) => isUnhealthy(node.status))
+          .map((node) => [node.id, nodeReason(node)] as const),
+      ),
+    [nodeViews],
+  );
   const { nodes, edges } = useMemo(() => {
     const drawn = new Set(nodeViews.map((node) => node.id));
     const layout = layoutDag({
@@ -24,7 +35,7 @@ export function DagGraph({
         id: node.id,
         label: node.label,
         kind: node.kind,
-        state: node.state,
+        state: node.status,
       })),
       edges: nodeViews.flatMap((node) =>
         (node.task.deps ?? [])
@@ -51,6 +62,9 @@ export function DagGraph({
             state: node.state,
             style: node.style,
             selected: node.id === selectedNodeId,
+            ...(reasons.get(node.id) === undefined
+              ? {}
+              : { reason: reasons.get(node.id) }),
           },
           style: { width: node.width, height: node.height },
         }),
@@ -63,11 +77,12 @@ export function DagGraph({
           type: "routed",
           data: { points: edge.points },
           animated:
-            nodeViews.find(({ id }) => id === edge.target)?.state === "running",
+            nodeViews.find(({ id }) => id === edge.target)?.status ===
+            "running",
         }),
       ),
     };
-  }, [nodeViews, selectedNodeId]);
+  }, [nodeViews, reasons, selectedNodeId]);
 
   return (
     <div className="graph-wrap">
@@ -92,11 +107,17 @@ export function DagGraph({
         <Background color="var(--border)" gap={22} />
         <Controls showInteractive={false} />
       </ReactFlow>
+      {/* The keyboard path to the graph, and the only reading of it available without
+          the canvas: it states the same authoritative status each card paints, and the
+          same reason each card truncates, so nothing here is pointer-only. */}
       <ol className="accessible-node-list" aria-label="DAG nodes">
         {nodeViews.map((node) => (
           <li key={node.id}>
             <button type="button" onClick={() => onSelectNode(node.id)}>
-              {node.label}: {node.state}
+              {node.label}: {node.status}
+              {reasons.get(node.id) === undefined
+                ? ""
+                : ` — ${reasons.get(node.id)}`}
             </button>
           </li>
         ))}

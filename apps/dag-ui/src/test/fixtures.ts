@@ -62,7 +62,18 @@ export const runList = {
   telemetry_schema_version: 8,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [
-    summary(LIVE_RUN, "running", { running: 1, done: 1, failed: 1 }),
+    // Counted over the same authoritative vocabulary the run detail serves, which is
+    // what stops a list row and the graph it opens describing different graphs.
+    summary(LIVE_RUN, "running", {
+      done: 1,
+      running: 1,
+      failed: 1,
+      waiting: 1,
+      blocked: 1,
+      skipped: 1,
+      pending: 1,
+      cancelled: 1,
+    }),
     summary(HISTORY_RUN, "complete", { done: 1 }),
   ],
 };
@@ -108,12 +119,29 @@ export function runDetail(runId: string = LIVE_RUN) {
           task: "Start queued follow-up",
           done_when: "Follow-up starts",
         },
+        // Held behind the failed publish rather than behind a human action: the
+        // scheduler's other derived gate, and the other word a card has to say.
+        {
+          id: "abandoned",
+          deps: ["publish"],
+          task: "Clean up after the publish",
+          done_when: "Cleanup runs",
+        },
+        // Eligible work whose dependency is still running: the one node here that
+        // really has nothing to report.
+        {
+          id: "followup",
+          deps: ["dashboard"],
+          task: "Follow the dashboard up",
+          done_when: "The follow-up lands",
+        },
         {
           id: "obsolete",
           task: "Retire obsolete work",
           done_when: "Work is cancelled",
         },
       ];
+  // What the journal recorded: the strict fold, and only for nodes it saw.
   const states: Record<string, string> = historical
     ? { archive: "done" }
     : {
@@ -123,6 +151,19 @@ export function runDetail(runId: string = LIVE_RUN) {
         approval: "waiting",
         obsolete: "cancelled",
       };
+  // What the server derives on top of it and serves as the one authoritative status:
+  // every plan task, including the three the journal says nothing about.
+  const status: Record<string, string> = historical
+    ? { archive: "done" }
+    : {
+        ...states,
+        queued: "blocked",
+        abandoned: "skipped",
+        followup: "pending",
+      };
+  const gatedBy: Record<string, string[]> = historical
+    ? {}
+    : { queued: ["approval"], abandoned: ["publish"] };
   const launchId = historical ? CLAUDE_LAUNCH : CODEX_LAUNCH;
   const launcher = historical ? "claude-code" : "codex";
   const node = historical ? "archive" : "dashboard";
@@ -157,6 +198,11 @@ export function runDetail(runId: string = LIVE_RUN) {
                 },
               }
             : {}),
+          // Classified by the server exactly as the run-level failure is, so the
+          // node view states a kind rather than parsing one out of prose.
+          ...(id === "publish"
+            ? { failure: { class: "agent", detail: "Deploy failed" } }
+            : {}),
         })),
       usage: { agent: party, judge: party, llmlint: party, total: party },
       timing_quality: "complete",
@@ -179,6 +225,8 @@ export function runDetail(runId: string = LIVE_RUN) {
         round: 1,
         plan: { tasks },
         node_states: states,
+        node_status: status,
+        node_gated_by: gatedBy,
         node_results: historical
           ? { archive: { status: "done", ok: true } }
           : {
@@ -189,7 +237,13 @@ export function runDetail(runId: string = LIVE_RUN) {
                 detail: "Gate completed successfully",
                 telemetry: { checks: { unit: "passed", lint: "passed" } },
               },
-              publish: { status: "failed", ok: false, detail: "Deploy failed" },
+              publish: {
+                status: "failed",
+                ok: false,
+                detail: "Deploy failed",
+                error: "publication exited non-zero",
+                exit_code: 2,
+              },
             },
         attestations: [],
         result: null,

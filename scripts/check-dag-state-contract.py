@@ -2,8 +2,10 @@
 """Fail when a DAG contract restated in Python drifts from its authoritative source.
 
 Several shapes and vocabularies are mirrored across languages and would otherwise
-drift silently: renderer node states against ``orchestrator/projection.py``, the
-transcript payloads against the pinned ``@oneharness/ui`` declaration, and this
+drift silently: the served node-status vocabulary and the failure classification
+beside it across ``orchestrator/projection.py`` / ``orchestrator/telemetry.py``, the
+``dag-layout`` renderer states, the ``dag-model`` schemas and the design contract; the
+transcript payloads against the pinned ``@oneharness/ui`` declaration; and this
 repository's own envelope, HTTP payloads, timeline spans, SSE event names, and
 documented network defaults against ``docs/dag-ui/design.md``, the timeline's own
 closed vocabularies across Python, the ``dag-model`` schemas, and that contract, and
@@ -598,15 +600,24 @@ def main() -> None:
     except (OSError, subprocess.CalledProcessError) as exc:
         fail(f"resolve the repository checkout and retry: {exc}")
     projection = projection_states(root / "orchestrator/projection.py")
+    statuses = literal_values(root / "orchestrator/projection.py", "NodeStatus")
     layout = layout_states(root / "packages/dag-layout/src/index.ts")
-    # Unstarted nodes have no projection entry, but renderers need their pending state.
-    expected = {"pending", *projection}
-    if set(layout) != expected:
+    # The strict fold can only speak for nodes the journal recorded, so the served
+    # vocabulary is strictly wider. It must still contain every state that fold can
+    # produce, or a journalled node would reach the renderers as a status they refuse.
+    if not set(projection) <= set(statuses):
+        fail(
+            "orchestrator/projection.py NodeState "
+            f"{sorted(projection)!r} is not contained in its NodeStatus "
+            f"{sorted(statuses)!r}; every projected state must be servable, so add "
+            "the missing member(s) to NodeStatus"
+        )
+    if set(layout) != set(statuses):
         fail(
             "packages/dag-layout/src/index.ts DAG_NODE_STATES "
             f"{sorted(layout)!r} disagrees with orchestrator/projection.py "
-            f"NodeState plus pending {sorted(expected)!r}; reconcile the TypeScript "
-            "list with the Python projection states while retaining pending"
+            f"NodeStatus {sorted(statuses)!r}; treat the Python NodeStatus Literal as "
+            "authoritative and reconcile the TypeScript list with it"
         )
 
     # The read API restates two vocabularies whose authoritative definitions live
@@ -671,6 +682,32 @@ def main() -> None:
         reconcile(
             f"{python_name} vocabulary",
             (f"orchestrator/timeline.py {python_name}", members),
+            (
+                f"docs/dag-ui/design.md {python_name}",
+                documented_type_union(design, python_name),
+            ),
+        )
+
+    # The one authoritative node status, and the failure classification served beside
+    # it. Both are closed Python vocabularies that a client parses with and a renderer
+    # switches on exhaustively, so all three sides are reconciled here; the layout
+    # package's own copy was reconciled against the same Literal above.
+    for python_module, python_name, schema_name in (
+        ("orchestrator/projection.py", "NodeStatus", "nodeStatusSchema"),
+        ("orchestrator/telemetry.py", "FailureClass", "failureClassSchema"),
+    ):
+        members = literal_values(root / python_module, python_name)
+        reconcile(
+            f"{python_name} vocabulary",
+            (f"{python_module} {python_name}", members),
+            (
+                f"packages/dag-model/src/index.ts {schema_name}",
+                zod_enum_members(dag_model, schema_name),
+            ),
+        )
+        reconcile(
+            f"{python_name} vocabulary",
+            (f"{python_module} {python_name}", members),
             (
                 f"docs/dag-ui/design.md {python_name}",
                 documented_type_union(design, python_name),

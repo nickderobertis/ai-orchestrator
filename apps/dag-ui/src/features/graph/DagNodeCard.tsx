@@ -12,6 +12,12 @@ export interface DagNodeData extends Record<string, unknown> {
   readonly state: DagNodeState;
   readonly style: StatusStyleToken;
   readonly selected: boolean;
+  /**
+   * Why this node is not making progress, when it is not. One line: the card is
+   * 200×72 pixels, and the node view is one click away for the rest of it. Absent
+   * for a node with nothing to report.
+   */
+  readonly reason?: string;
 }
 
 export type DagFlowNode = Node<DagNodeData, "dagNode">;
@@ -42,6 +48,14 @@ export function DagNodeCard({ data }: NodeProps<DagFlowNode>) {
       </div>
       <strong>{data.label}</strong>
       <span className="node-status">{data.state}</span>
+      {/* The state word alone tells an operator that something is wrong and nothing
+          about what; the reason is what turns a red graph into a diagnosis without
+          opening every card in it. `title` carries the untruncated text. */}
+      {data.reason !== undefined && (
+        <span className="node-reason" title={data.reason}>
+          {data.reason}
+        </span>
+      )}
       <Handle type="source" position={Position.Right} />
     </div>
   );

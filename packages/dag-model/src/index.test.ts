@@ -3,9 +3,11 @@ import { describe, expect, test } from "bun:test";
 import {
   graphPayloadSchema,
   graphResultItemSchema,
+  nodeTelemetrySchema,
   parseRunList,
   parseRunTimeline,
   planTaskSchema,
+  roundSchema,
   runDetailSchema,
   runSummarySchema,
   runTelemetrySchema,
@@ -49,6 +51,42 @@ const usageParty = {
   cache_read_tokens: null,
   cache_write_tokens: null,
   cost_usd: null,
+};
+
+const TIMING_PRESENCE = {
+  agent_model_ms: false,
+  judge_model_ms: false,
+  llmlint_model_ms: false,
+  tool_ms: false,
+};
+
+/** A minimal valid `RunTelemetry`, for the tests that vary one field of it. */
+const RUN_TELEMETRY = {
+  run_id: "run-3",
+  state: "failed",
+  phase: "failed",
+  last_event: "node-failed",
+  timing,
+  nodes: [],
+  usage: {
+    agent: usageParty,
+    judge: usageParty,
+    llmlint: usageParty,
+    total: usageParty,
+  },
+  timing_quality: "legacy",
+  linkage_quality: "inferred",
+  timing_presence: TIMING_PRESENCE,
+  sources: [],
+  node_work_ms: {
+    agent_model_ms: 0,
+    judge_model_ms: 0,
+    llmlint_model_ms: 0,
+    tool_ms: 0,
+    wall_ms: 0,
+  },
+  turns: 0,
+  lint: 0,
 };
 
 test("validates and preserves additive run-list fields", () => {
@@ -195,6 +233,70 @@ describe("boundary failures", () => {
       conversations: [],
     });
     expect(result.success).toBe(false);
+  });
+
+  test("accepts the served node status and rejects one outside the vocabulary", () => {
+    const round = {
+      run_id: "run-1",
+      round: 1,
+      plan: { tasks: [{ id: "build", task: "Build it" }] },
+      node_states: {},
+      node_status: { build: "skipped" },
+      node_gated_by: { build: ["setup"] },
+      node_results: {},
+      attestations: [],
+      result: null,
+      last_seq: 2,
+    };
+    expect(roundSchema.parse(round).node_status.build).toBe("skipped");
+    // A status the vocabulary does not hold is refused at the parse rather than
+    // reaching a renderer that has no meaning for it.
+    expect(
+      roundSchema.safeParse({ ...round, node_status: { build: "paused" } })
+        .success,
+    ).toBe(false);
+    // And the field itself is required: a payload without it would leave a client
+    // inventing the status for every node, which is the defect this replaced.
+    expect(
+      roundSchema.safeParse({ ...round, node_status: undefined }).success,
+    ).toBe(false);
+  });
+
+  test("types the failure classification served on a run and on a node", () => {
+    expect(
+      runTelemetrySchema.parse({
+        ...RUN_TELEMETRY,
+        failure: { class: "gate", detail: "just gate failed" },
+      }).failure?.class,
+    ).toBe("gate");
+    expect(
+      nodeTelemetrySchema.parse({
+        node: "build",
+        status: "failed",
+        sessions: [],
+        turns: 1,
+        lint: 0,
+        timing_quality: "complete",
+        linkage_quality: "native",
+        timing_presence: TIMING_PRESENCE,
+        failure: { class: "timeout" },
+      }).failure,
+    ).toEqual({ class: "timeout" });
+    // `kind` is not this field's key, and a class outside the vocabulary is not one
+    // of its values; both would otherwise reach the banner as an empty heading.
+    expect(
+      nodeTelemetrySchema.safeParse({
+        node: "build",
+        status: "failed",
+        sessions: [],
+        turns: 1,
+        lint: 0,
+        timing_quality: "complete",
+        linkage_quality: "native",
+        timing_presence: TIMING_PRESENCE,
+        failure: { class: "flaky" },
+      }).success,
+    ).toBe(false);
   });
 
   test("rejects malformed nested plan and result payloads", () => {

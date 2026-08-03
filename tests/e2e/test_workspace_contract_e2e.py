@@ -273,8 +273,57 @@ def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> 
 
     assert result.returncode != 0
     assert "packages/dag-layout/src/index.ts DAG_NODE_STATES" in result.stderr
-    assert "orchestrator/projection.py NodeState" in result.stderr
-    assert "reconcile the TypeScript list with the Python projection states" in result.stderr
+    assert "orchestrator/projection.py NodeStatus" in result.stderr
+    assert "reconcile the TypeScript list with it" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_node_status_drift(tmp_path: Path) -> None:
+    """The served node vocabulary has four copies; adding one to Python alone fails."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    projection = checkout / "orchestrator/projection.py"
+    projection.write_text(
+        projection.read_text().replace('    "unknown",\n]', '    "unknown",\n    "paused",\n]')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "paused" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_requires_every_projected_state_to_be_servable(
+    tmp_path: Path,
+) -> None:
+    """A state the strict fold can produce but the API cannot serve is a broken read."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    projection = checkout / "orchestrator/projection.py"
+    projection.write_text(
+        projection.read_text().replace(
+            'NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]',
+            'NodeState = Literal["running", "done", "failed", "waiting", "paused"]',
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "is not contained in its NodeStatus" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_failure_class_drift(tmp_path: Path) -> None:
+    """The failure classification the node banner states is mirrored three ways."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    telemetry = checkout / "orchestrator/telemetry.py"
+    telemetry.write_text(telemetry.read_text().replace('"provider", "configuration"', '"provider"'))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "FailureClass vocabulary" in result.stderr
+    assert "configuration" in result.stderr
 
 
 @pytest.mark.reads_docs

@@ -238,21 +238,29 @@ test("a package consumer validates provenance, SSE names, and counters", () => {
 });
 
 test("a package consumer validates rounds and conversations", () => {
-  expect(
-    roundSchema.parse({
-      run_id: "run-1",
-      round: 1,
-      plan: {
-        tasks: [{ id: "build", task: "Build it" }],
-        schema_version: 5,
-      },
-      node_states: { build: "done" },
-      node_results: { build: { status: "done" } },
-      attestations: [],
-      result: null,
-      last_seq: 3,
-    }).node_states.build,
-  ).toBe("done");
+  const round = roundSchema.parse({
+    run_id: "run-1",
+    round: 1,
+    plan: {
+      tasks: [
+        { id: "build", task: "Build it" },
+        { id: "ship", task: "Ship it", deps: ["build"] },
+        { id: "announce", task: "Announce it", deps: ["ship"] },
+      ],
+      schema_version: 5,
+    },
+    node_states: { build: "done", ship: "waiting" },
+    // Served for every plan task, including the one the journal never recorded.
+    node_status: { build: "done", ship: "waiting", announce: "blocked" },
+    node_gated_by: { announce: ["ship"] },
+    node_results: { build: { status: "done" } },
+    attestations: [],
+    result: null,
+    last_seq: 3,
+  });
+  expect(round.node_states.build).toBe("done");
+  expect(round.node_status.announce).toBe("blocked");
+  expect(round.node_gated_by.announce).toEqual(["ship"]);
   const conversation = {
     canContinue: false,
     harnesses: ["codex"],

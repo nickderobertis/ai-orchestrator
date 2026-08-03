@@ -97,12 +97,32 @@ _LIVE_TASKS: list[dict[str, Any]] = [
         "deps": ["publish"],
         "task": "Wait for release approval",
     },
+    # Held behind the human action, which the scheduler derives and journals nothing
+    # about: the read model has to re-derive it or this node reads as `pending` for
+    # as long as the run is live.
     {
         "id": "queued",
         "persona": "engineer",
         "deps": ["approval"],
         "task": "Start queued follow-up",
         "done_when": "Follow-up starts",
+    },
+    # The other derived gate: unreachable because its prerequisite failed.
+    {
+        "id": "abandoned",
+        "persona": "engineer",
+        "deps": ["publish"],
+        "task": "Clean up after the publish",
+        "done_when": "Cleanup runs",
+    },
+    # And the one node here that really is only waiting its turn: its dependency is
+    # still running, so nothing gates it and it has nothing to report.
+    {
+        "id": "followup",
+        "persona": "engineer",
+        "deps": ["dashboard"],
+        "task": "Follow the dashboard up",
+        "done_when": "The follow-up lands",
     },
     {
         "id": "obsolete",
@@ -255,8 +275,12 @@ def _write_live_run(runs_dir: Path) -> None:
             "result": {
                 "status": "failed",
                 "ok": False,
-                "error": "Deploy failed",
+                # Two different sentences on purpose: the lifecycle records prose in
+                # `detail` and the scheduler records what the dispatch reported in
+                # `error`, and a reader needs both to tell what actually happened.
+                "error": "publication exited non-zero",
                 "detail": "Deploy failed",
+                "exit_code": 2,
             },
         },
     )
