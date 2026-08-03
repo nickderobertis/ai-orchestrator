@@ -2,7 +2,7 @@
 # Shared, sourceable implementation for marking alternate-Claude workspaces trusted.
 set -euo pipefail
 
-mark_alternate_claude_trust() {
+mark_alternate_claude_trust() (
   local config_path=$1
   shift
   [ -f "$config_path" ] || return 0
@@ -67,7 +67,7 @@ mark_alternate_claude_trust() {
       return 1
     fi
   fi
-}
+)
 
 mark_alternate_claude_workspaces() {
   local caller=$1

@@ -277,6 +277,59 @@ def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) 
     assert projects["/second-concurrent-worktree"]["hasTrustDialogAccepted"] is True
 
 
+def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_alive(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    caller = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /first; echo READY; read -r',
+            "test-trust",
+            str(script),
+            str(config),
+        ],
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    assert caller.stdout is not None
+    assert caller.stdout.readline().strip() == "READY"
+
+    contender = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /second',
+            "test-trust",
+            str(script),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        env=env,
+    )
+
+    assert contender.returncode == 0, contender.stderr
+    assert caller.poll() is None
+    projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
+    assert projects["/first"]["hasTrustDialogAccepted"] is True
+    assert projects["/second"]["hasTrustDialogAccepted"] is True
+    assert caller.stdin is not None
+    caller.stdin.write("done\n")
+    caller.stdin.flush()
+    assert caller.wait(timeout=5) == 0
+    assert caller.stderr is not None
+    assert caller.stderr.read() == ""
+
+
 def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
