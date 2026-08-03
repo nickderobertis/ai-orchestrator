@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import signal
+import threading
+import warnings
 from pathlib import Path
 
 import pytest
@@ -99,3 +101,38 @@ def test_an_exit_status_the_round_chose_is_relayed_unchanged(
         raise SystemExit(chosen)
 
     assert run_detached(entry, None, "run-plan") == relayed
+
+
+def test_the_deliberate_fork_is_silent_while_every_other_fork_still_warns() -> None:
+    """The interpreter's threaded-fork warning is suppressed here, and only here.
+
+    A live thread is what makes the interpreter issue it at all, so this test starts
+    one: without it the fork is single-threaded and the warning under test never
+    happens, which would leave the assertion passing for the wrong reason. The second
+    half is what keeps the suppression honest — the same fork, made straight from this
+    test, still warns, so nothing global was installed to buy the first half.
+    """
+    running = threading.Event()
+    thread = threading.Thread(target=running.wait, name="detach-warning-probe")
+    thread.start()
+    try:
+        with warnings.catch_warnings(record=True) as at_the_site:
+            warnings.simplefilter("always")
+            assert run_detached(lambda _argv: 0, None, "run-plan") == 0
+        assert [str(warned.message) for warned in at_the_site] == []
+
+        with warnings.catch_warnings(record=True) as anywhere_else:
+            warnings.simplefilter("always")
+            child = os.fork()
+            if child == 0:
+                os._exit(0)
+            os.waitpid(child, 0)
+        assert [
+            str(warned.message)
+            for warned in anywhere_else
+            if issubclass(warned.category, DeprecationWarning)
+            and "multi-threaded" in str(warned.message)
+        ] != []
+    finally:
+        running.set()
+        thread.join()
