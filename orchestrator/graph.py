@@ -34,7 +34,7 @@ from .channel import (
     ProposalSink,
 )
 from .cli_contract import ROUND_BUDGET_OPTION
-from .config import ConfigError, load_yaml
+from .config import ConfigError, load_mapping
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .detach import run_detached
 from .dispatch import Report, dispatch, incomplete_detail
@@ -485,7 +485,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
 def load_graph(path: str | Path) -> Graph:
     """Load a tracked graph file (JSON or YAML)."""
     try:
-        data = load_yaml(path)
+        data = load_mapping(path)
     except ConfigError as exc:
         raise PlanError(str(exc)) from exc
     return parse_graph(data)
@@ -1230,7 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        plan_mapping = load_yaml(args.plan)
+        plan_mapping = load_mapping(args.plan)
         graph = parse_graph(plan_mapping)
         validate_graph_repo_aliases(graph)
         # Refuse an unconfigured harness before the round is claimed: every node of

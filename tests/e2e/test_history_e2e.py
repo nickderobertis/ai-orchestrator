@@ -136,6 +136,37 @@ def test_history_recipes_use_real_cli_across_projects(tmp_path: Path) -> None:
     assert "this malformed line" not in shown.stdout
 
 
+def test_history_show_prints_a_recorded_emoji_from_the_json_ledger(tmp_path: Path) -> None:
+    """The recorded diff a planner asks for, with an emoji in it, through the recipe.
+
+    The monitor persists that snapshot with `json.dump`, so the emoji is stored as a
+    surrogate *pair*. Read back with YAML semantics it becomes two lone halves, and
+    this command then fails while *printing* its own answer — the operator-facing
+    half of the read that made a run unviewable in the DAG UI.
+    """
+    history_dir = _history_store(tmp_path)
+    runs = tmp_path / "runs"
+    (runs / "demo" / "monitor").mkdir(parents=True)
+    (runs / "demo" / "monitor" / "details.json").write_text(
+        '{"version": 3, "commits": {"local/app@abc1234": {"sha": "abc1234",'
+        ' "subject": "feat: celebrate", "identity": "local/app", "branch": "feature/party",'
+        ' "detail": "+    print(\'done \\ud83d\\ude00\')"}}, "prs": {}}\n',
+        encoding="utf-8",
+    )
+
+    shown = _run(
+        "just",
+        "history-show",
+        "git:local/app@abc1234",
+        "--runs-dir",
+        str(runs),
+        history_dir=history_dir,
+    )
+
+    assert shown.returncode == 0, shown.stderr
+    assert "Commit and diff:\n+    print('done 😀')" in shown.stdout
+
+
 def test_history_show_bad_or_judge_id_is_actionable(tmp_path: Path) -> None:
     history_dir = _history_store(tmp_path)
     for query in ("missing-session", "strict-careful-evaluator"):

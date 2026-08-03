@@ -221,6 +221,90 @@ def test_a_recorded_direct_node_names_the_stop_it_actually_had(
     assert "hit the turn cap" not in failures["released"]["detail"]
 
 
+def test_run_plan_reads_a_json_plan_file_with_json_semantics(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """`just run-plan` reads a `.json` plan as JSON, and says so when it cannot.
+
+    `json.dump` — what a planner generating a plan uses — stores an emoji as a
+    surrogate *pair*. Read back the way YAML reads it, that pair becomes two lone
+    halves, and the node is dispatched on prose no encoder can even write out, so
+    the run fails before the agent does anything wrong. The two boundaries of that
+    reading run here too: a JSON document that is not a mapping is refused by name,
+    and one JSON cannot parse at all still loads the way it always did.
+    """
+    runs = tmp_path / "runs"
+    delivered = tmp_path / "delivered.jsonl"
+    plan = tmp_path / "astral.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "banner",
+                        "persona": "engineer",
+                        "task": f"complete-now: ship the 🎉 banner. record-task={delivered}",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert "\\ud83c\\udf89" in plan.read_text(encoding="utf-8")
+
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "astral",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert settled.returncode == 0, settled.stderr
+    assert json.loads(settled.stdout)["results"]["banner"]["status"] == "done"
+    # What the agent side was actually handed, recorded by the backend it ran against.
+    assert "ship the 🎉 banner" in json.loads(delivered.read_text(encoding="utf-8").splitlines()[0])
+
+    # Reading it as JSON also means saying so: a JSON document that is not a mapping
+    # is refused by name, before any round is claimed.
+    listed = tmp_path / "list.json"
+    listed.write_text(json.dumps([{"id": "banner"}]), encoding="utf-8")
+    refused = _just("run-plan", str(listed), "--no-record")
+    assert refused.returncode == 2
+    assert "must be a JSON mapping, got list" in refused.stderr
+
+    # And a `.json` file someone wrote YAML into still runs, because JSON parsing
+    # falls back to the reading that accepted it before rather than newly rejecting it.
+    misnamed = tmp_path / "yaml-inside.json"
+    misnamed.write_text(
+        "tasks:\n  - id: banner\n    persona: engineer\n    task: 'complete-now: trivial.'\n",
+        encoding="utf-8",
+    )
+    accepted = _just(
+        "run-plan",
+        str(misnamed),
+        "--run",
+        "misnamed",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert json.loads(accepted.stdout)["results"]["banner"]["status"] == "done"
+
+
 def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:

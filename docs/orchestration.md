@@ -374,6 +374,19 @@ work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstre
 
 ## Node shapes
 
+A plan file may be JSON or YAML, and each is read with **its own** escape
+semantics: a `.json` file is parsed as JSON, so a `😀` surrogate pair —
+what `json.dump` writes for one emoji, and therefore what a plan generated
+programmatically contains — reaches the dispatched agent as the character it
+encodes. Reading it as YAML instead yields the two unpaired halves, which no
+UTF-8 encoder accepts, and the node fails on its own task prose. A `.json`
+document that is not a mapping is refused by name (`must be a JSON mapping, got
+list`); one JSON itself cannot parse falls back to the YAML reading, so nothing
+that loaded before stops loading. The same rule governs the JSON documents the run
+ledger writes and reads back — round plans and results, launch and status records,
+the monitor's detail snapshot — so a recorded emoji survives to `just history-show`
+and the read API.
+
 Every top-level node needs a unique `id`; `deps` is an optional list of other
 top-level ids or wait-only cross-DAG references of the form
 `run:<run_id>#<node_id>`. Omitted `kind` defaults to `agent` for compatibility.

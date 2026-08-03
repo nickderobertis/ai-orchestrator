@@ -14,6 +14,7 @@ is never merged in — it is passed to onejudge over the CLI (`--task`).
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,24 @@ import yaml
 
 
 class ConfigError(Exception):
-    """A config file is missing, unreadable, or not a YAML mapping."""
+    """A config or ledger file is missing, unreadable, unparseable, or not a mapping."""
+
+
+def _read_document(p: Path) -> str:
+    """Read one config/ledger file, or raise the single actionable failure type."""
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read config {p}: {exc}") from exc
+
+
+def _mapping(p: Path, data: object, language: str) -> dict[str, Any]:
+    """Require a top-level mapping, treating an empty document as an empty one."""
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{p} must be a {language} mapping, got {type(data).__name__}")
+    return data
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
@@ -31,19 +49,40 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     failure type at this trust boundary.
     """
     p = Path(path)
-    try:
-        text = p.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ConfigError(f"cannot read config {p}: {exc}") from exc
+    text = _read_document(p)
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ConfigError(f"invalid YAML in {p}: {exc}") from exc
-    if data is None:
-        data = {}
-    if not isinstance(data, dict):
-        raise ConfigError(f"{p} must be a YAML mapping, got {type(data).__name__}")
-    return data
+    return _mapping(p, data, "YAML")
+
+
+def load_mapping(path: str | Path) -> dict[str, Any]:
+    """Load a JSON or YAML mapping, parsing each with *its own* escape semantics.
+
+    A ``.json`` file is parsed as JSON because YAML is not the superset it looks
+    like here: ``json.dump`` defaults to ``ensure_ascii=True``, so every astral
+    character this harness records — an emoji in a commit diff, in a task, in a
+    transcript — is written as a ``\\uD83D\\uDE00`` surrogate *pair*, and only a
+    JSON parser merges that pair back into one character. PyYAML yields the two
+    lone surrogates instead, which no UTF-8 encoder will accept: the value then
+    travels intact all the way to whoever serves or prints it and fails there,
+    turning one recorded emoji into an unreadable run.
+
+    A ``.json`` file JSON itself cannot parse falls back to the historical YAML
+    reading rather than becoming a new hard failure — a torn or hand-edited ledger
+    file stays exactly as readable (or as degradable) as it was before, and the
+    fallback can only widen what parses, never change what JSON already accepted.
+    """
+    p = Path(path)
+    if p.suffix != ".json":
+        return load_yaml(p)
+    text = _read_document(p)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return load_yaml(p)
+    return _mapping(p, data, "JSON")
 
 
 def build_effective_config(

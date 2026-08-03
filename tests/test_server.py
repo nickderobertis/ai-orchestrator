@@ -93,6 +93,22 @@ def test_parse_cursor_tolerates_malformed_headers() -> None:
         assert server._parse_cursor(crafted) is None
 
 
+def test_served_repairs_every_container_a_payload_can_nest() -> None:
+    """The HTTP journey lives in ``tests/e2e``; this pins the shapes it walks."""
+    payload = {
+        "run \ud800": ["ok", ("nested", "half \udfff"), {"n": 1, "flag": True, "none": None}],
+        "merged": "diff 😀 done",  # a pair the JSON parse seam already rejoined
+    }
+    assert server._served(payload) == {
+        "run �": ["ok", ["nested", "half �"], {"n": 1, "flag": True, "none": None}],
+        "merged": "diff 😀 done",
+    }
+    # An unaffected string is the same object: a megabyte of transcripts is scanned,
+    # never copied, so this runs on every served payload without doubling it.
+    clean = "no surrogates here"
+    assert server._served({"text": clean})["text"] is clean
+
+
 def test_signatures_missing_dir_and_watch_filter(tmp_path: Path) -> None:
     assert server._signatures(tmp_path / "missing", None) == {}
     runs = tmp_path / "runs"

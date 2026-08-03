@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import sys
 import tempfile
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -29,7 +30,7 @@ from dataclasses import asdict
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import anyio.to_thread
 from fastapi import FastAPI, Query, Request
@@ -129,6 +130,51 @@ def _sse(cursor: int, event: SseEvent, data: Mapping[str, Any]) -> str:
 
 
 _T = TypeVar("_T")
+
+#: Every surrogate code point. In a value a JSON parser produced, a *paired* one is
+#: already merged into the character it encodes, so anything matching here is a lone
+#: half — a transcript delta split mid-character, or a hand-edited record.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+#: U+FFFD REPLACEMENT CHARACTER, what a decoder substitutes for undecodable input.
+_REPLACEMENT = "�"
+
+
+def _scrubbed(value: object) -> object:
+    """Rebuild one JSON-shaped value with every lone surrogate replaced."""
+    match value:
+        case str():
+            if not _LONE_SURROGATE.search(value):
+                return value
+            return _LONE_SURROGATE.sub(_REPLACEMENT, value)
+        case dict():
+            return {_scrubbed(key): _scrubbed(item) for key, item in value.items()}
+        case list() | tuple():
+            return [_scrubbed(item) for item in value]
+        case _:
+            return value
+
+
+def _served(payload: _T) -> _T:
+    """Return ``payload`` in a form UTF-8 can encode, whatever the records held.
+
+    A lone surrogate is not representable in UTF-8, so serializing a payload that
+    carries one raises *after* the read succeeded and the whole response becomes a
+    500 — one unlucky character makes a run permanently unviewable. Runs are
+    recorded, not curated: a stream can split an astral character across two delta
+    chunks and a bounded tail can cut one mid-sequence, so the read surface treats
+    an unpaired half as damaged text and degrades it to U+FFFD exactly as a decoder
+    would, rather than refusing to serve the run around it.
+
+    Only container spines are rebuilt: an unaffected string — nearly all of them —
+    is returned as itself, so a megabyte of transcripts is scanned, not copied.
+
+    The three payloads that carry recorded free text get this; the other two cannot
+    reach it. A run-list row is ids, closed vocabularies and numbers, and an artifact
+    or log body is a byte tail already decoded with ``errors="replace"``, which
+    resolves damaged input before it is ever a `str`. Give a route this the moment it
+    starts serving text some record supplied.
+    """
+    return cast(_T, _scrubbed(payload))
 
 
 async def _off_loop(call: Callable[[], _T]) -> _T:
@@ -235,12 +281,14 @@ def create_app(
         re-downloading every transcript on each live update.
         """
         try:
-            return run_detail(
-                root,
-                run_id,
-                oneharness_bin=oneharness_bin,
-                expose_launcher_session_id=expose_launcher_session_id,
-                include_conversations=include_conversations,
+            return _served(
+                run_detail(
+                    root,
+                    run_id,
+                    oneharness_bin=oneharness_bin,
+                    expose_launcher_session_id=expose_launcher_session_id,
+                    include_conversations=include_conversations,
+                )
             )
         except ReadError as exc:
             status, code = _status_for(exc)
@@ -255,12 +303,14 @@ def create_app(
             if scope not in (None, "run"):
                 raise InvalidRunId("timeline scope must be run")
             timeline_scope: TimelineScope | None = "run" if scope == "run" else None
-            return run_timeline(
-                root,
-                run_id,
-                node_id=None if node_id is None else NodeId(node_id),
-                scope=timeline_scope,
-                oneharness_bin=oneharness_bin,
+            return _served(
+                run_timeline(
+                    root,
+                    run_id,
+                    node_id=None if node_id is None else NodeId(node_id),
+                    scope=timeline_scope,
+                    oneharness_bin=oneharness_bin,
+                )
             )
         except ReadError as exc:
             status, code = _status_for(exc)
@@ -269,7 +319,9 @@ def create_app(
     @app.get("/api/v2/runs/{run_id}/conversations/{conversation_id}")
     def get_conversation(run_id: str, conversation_id: str) -> Any:
         try:
-            return run_conversation(root, run_id, conversation_id, oneharness_bin=oneharness_bin)
+            return _served(
+                run_conversation(root, run_id, conversation_id, oneharness_bin=oneharness_bin)
+            )
         except ReadError as exc:
             status, code = _status_for(exc)
             return _error(status, code, str(exc))

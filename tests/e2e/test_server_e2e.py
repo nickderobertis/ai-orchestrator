@@ -675,6 +675,85 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         assert corrupt.json()["error"]["code"] == "projection_error"
 
 
+def test_astral_text_in_the_records_is_served_whole_or_repaired_never_as_a_500(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run whose records carry emoji stays viewable over the real socket.
+
+    Two different hazards meet at this boundary. A *paired* escape is ordinary
+    recorded content — every ledger writer here is `json.dump`, whose default
+    `ensure_ascii=True` stores one emoji as two `\\uXXXX` halves — and it must come
+    back as the character it encodes. A *lone* surrogate is damaged text, which a
+    streamed transcript produces for real when a delta chunk splits an astral
+    character in two, and it cannot be encoded as UTF-8 at all: serving it unhandled
+    fails the whole response, so one emoji in one commit diff made a run permanently
+    unviewable.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "emoji")
+    store = _history_store(tmp_path, "emoji")
+    # The worker's transcript, with its last astral character cut in half — the shape
+    # a streamed delta boundary leaves behind. Written the way the harness writes it.
+    transcript = tmp_path / "agent.jsonl"
+    record = json.loads(transcript.read_text(encoding="utf-8"))
+    record["text"] = "shipped \ud83d"
+    transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    # The gate's own output tail, cut the same way, on the run's authoritative journal.
+    journal = open_journal(run_dir, RunId("emoji"), 1)
+    journal.append("verification-started", node=NodeId("api"), detail={"label": "gate"})
+    journal.append(
+        "verification-finished",
+        node=NodeId("api"),
+        detail={"label": "gate", "ok": True, "output_tail": "coverage 96% \ud83d"},
+    )
+
+    # The monitor's own writer stores an emoji exactly like this, so the hand-written
+    # snapshot below is that on-disk shape rather than a shape invented for the test.
+    save_snapshot(run_dir, DetailSnapshot(commits={"c": {"sha": "abc1234", "detail": "😀"}}))
+    assert "\\ud83d\\ude00" in snapshot_path(run_dir).read_text(encoding="utf-8")
+    snapshot_path(run_dir).write_text(
+        '{"version": 3, "commits": {"local/app@abc1234": {"sha": "abc1234",'
+        ' "subject": "feat: celebrate", "identity": "local/app",'
+        ' "detail": "+    print(\'done \\ud83d\\ude00\')"}}, "prs": {}}\n',
+        encoding="utf-8",
+    )
+
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+
+        response = client.get("/api/v2/runs/emoji")
+        assert response.status_code == 200
+        # The response really is UTF-8 on the wire, and carries no unpaired half.
+        response.content.decode("utf-8")
+
+        detail = response.json()
+        assert detail["details"]["commits"]["local/app@abc1234"]["detail"] == (
+            "+    print('done 😀')"
+        )
+        worker = next(
+            c for c in detail["conversations"] if c["attribution"]["agentRole"] == "worker"
+        )
+        # The unpaired half degrades to U+FFFD, exactly as a decoder repairs damaged
+        # text — the surrounding turn, and every other run field, still serve.
+        assert worker["conversation"]["turns"][0]["assistant"] == "shipped �"
+
+        conversation_id = worker["conversation"]["id"]
+        one = client.get(f"/api/v2/runs/emoji/conversations/{conversation_id}")
+        assert one.status_code == 200
+        assert one.json()["conversation"]["turns"][0]["assistant"] == "shipped �"
+
+        # The timeline reads the same journal, so it repairs the same way.
+        timeline = client.get("/api/v2/runs/emoji/timeline", params={"node_id": "api"})
+        assert timeline.status_code == 200
+        verification = next(
+            span for span in timeline.json()["spans"] if span["kind"] == "verification"
+        )
+        assert verification["detail"]["output_tail"] == "coverage 96% �"
+
+
 def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

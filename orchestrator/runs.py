@@ -17,7 +17,13 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast, get_args
 
-from .config import ConfigError, load_yaml
+from .config import ConfigError
+
+# `load_mapping` parses one config/ledger file with its own language's escape
+# semantics, so it belongs beside `load_yaml` — but this module is where the ledger's
+# readers import their loader from. The redundant alias re-exports it for them, which
+# is what mypy's no-implicit-reexport rule asks for.
+from .config import load_mapping as load_mapping
 from .coordination import advisory_lock, atomic_json
 from .merge import MergePolicy
 from .workspace import IdentityKey, RepositoryType, Workflow
@@ -725,11 +731,6 @@ def write_result(round_dir: Path, result: Mapping[str, Any]) -> None:
             raise ConfigError(f"round already has a result: {path}")
         _write_json(path, result)
         atomic_json(round_dir / "status.json", _round_status("completed"))
-
-
-def load_mapping(path: Path) -> dict[str, Any]:
-    """Load a JSON/YAML mapping used by the ledger."""
-    return load_yaml(path)
 
 
 def status_counts(result: GraphPayload) -> Counter[str]:

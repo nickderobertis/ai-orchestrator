@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from orchestrator.config import ConfigError, build_effective_config, load_yaml
+from orchestrator.config import ConfigError, build_effective_config, load_mapping, load_yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -106,3 +107,41 @@ def test_load_yaml_empty_is_empty_mapping(tmp_path) -> None:
     p = tmp_path / "empty.yaml"
     p.write_text("", encoding="utf-8")
     assert load_yaml(p) == {}
+
+
+def test_load_mapping_merges_json_surrogate_pairs(tmp_path) -> None:
+    """A `.json` ledger file is read with JSON escape semantics, not YAML's."""
+    written = tmp_path / "details.json"
+    # Exactly what `json.dump` (ensure_ascii=True, the default every ledger writer
+    # here uses) emits for one emoji, so this fixture is the real on-disk shape.
+    assert json.dumps({"detail": "diff 😀 done"}) == '{"detail": "diff \\ud83d\\ude00 done"}'
+    written.write_text('{"detail": "diff \\ud83d\\ude00 done"}', encoding="utf-8")
+
+    # PyYAML — what this used to be read with — leaves that pair as two lone
+    # surrogates instead, which is the whole reason the dispatch exists.
+    assert load_mapping(written) == {"detail": "diff 😀 done"}
+
+
+def test_load_mapping_keeps_yaml_semantics_for_yaml(tmp_path) -> None:
+    p = tmp_path / "persona.yaml"
+    p.write_text("agent:\n  name: backend\n", encoding="utf-8")
+    assert load_mapping(p) == {"agent": {"name": "backend"}}
+
+
+def test_load_mapping_rejects_a_non_mapping_json_document(tmp_path) -> None:
+    p = tmp_path / "list.json"
+    p.write_text('["a", "b"]', encoding="utf-8")
+    with pytest.raises(ConfigError, match="must be a JSON mapping"):
+        load_mapping(p)
+
+
+def test_load_mapping_falls_back_for_a_json_file_json_cannot_parse(tmp_path) -> None:
+    """A ledger file JSON rejects stays exactly as readable as it was before."""
+    truncated = tmp_path / "status.json"
+    truncated.write_text("", encoding="utf-8")
+    assert load_mapping(truncated) == {}
+
+    unparseable = tmp_path / "torn.json"
+    unparseable.write_text('{"status": "runn', encoding="utf-8")
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        load_mapping(unparseable)
