@@ -26,6 +26,7 @@ import { groupRuns, nodeViews } from "../features/runs/run-model";
 import { useDagTelemetry } from "../features/runs/useDagTelemetry";
 import { useUrlSelection } from "../features/runs/useUrlSelection";
 import { NodeTimelineView } from "../features/timeline/NodeTimelineView";
+import { Timestamp } from "../lib/Timestamp";
 
 const defaultClient = new TelemetryClient(window.location.origin, {
   fetch: window.fetch.bind(window),
@@ -105,12 +106,27 @@ export function App({
             </div>
             <div className="topbar-actions">
               <span className="connection">
-                <Satellite
-                  size={15}
-                  className={telemetry.hasUpdates ? "pulse" : ""}
-                />
-                {telemetry.hasUpdates ? "Updates received" : "Awaiting updates"}
+                <Satellite size={15} />
+                {telemetry.lastUpdated === undefined ? (
+                  "Waiting for first update"
+                ) : (
+                  <>
+                    Last updated{" "}
+                    <Timestamp at={telemetry.lastUpdated} relative />
+                  </>
+                )}
               </span>
+              {telemetry.activity.at(-1) !== undefined && (
+                <span className="connection" aria-live="polite">
+                  {telemetry.activity.at(-1)?.node}:{" "}
+                  {[
+                    telemetry.activity.at(-1)?.name,
+                    telemetry.activity.at(-1)?.detail,
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || telemetry.activity.at(-1)?.kind}
+                </span>
+              )}
               <Button
                 onClick={() => void telemetry.refresh()}
                 size="sm"
@@ -171,12 +187,14 @@ export function App({
                     detail={detail}
                     timeline={telemetry.timeline}
                     timelineError={telemetry.timelineError}
+                    conversationRevision={telemetry.conversationRevision}
                   />
                 ) : selectedNode ? (
                   // Opening a node hands it the whole working area: the graph stays
                   // one breadcrumb away rather than one narrow column beside it.
                   <NodeTimelineView
                     client={client}
+                    conversationRevision={telemetry.conversationRevision}
                     node={selectedNode}
                     onBack={() => selection.selectNode(undefined)}
                     onSelectItem={selection.selectItem}

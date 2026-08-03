@@ -39,17 +39,20 @@ export function TimelineItemDetail({
   runId,
   node,
   row,
+  conversationRevision,
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
   readonly node: NodeView;
   readonly row?: TimelineRow;
+  readonly conversationRevision?: number;
 }) {
   const reference = row === undefined ? undefined : referenceOf(row);
   const transcript = useConversation(
     client,
     runId,
     reference?.kind === "conversation" ? reference.value : undefined,
+    conversationRevision,
   );
 
   return (

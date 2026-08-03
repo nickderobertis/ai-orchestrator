@@ -1,4 +1,6 @@
 import {
+  type LiveActivity,
+  liveActivityListSchema,
   parseRunList,
   type RunDetail,
   type RunList,
@@ -47,7 +49,9 @@ export interface DagTelemetryState {
   /** A timeline read that failed, reported where the timeline would have been. */
   readonly timelineError?: Error;
   readonly loading: boolean;
-  readonly hasUpdates: boolean;
+  readonly lastUpdated?: string;
+  readonly activity: readonly LiveActivity[];
+  readonly conversationRevision: number;
   readonly error?: Error;
   readonly refresh: () => Promise<void>;
   readonly loadMore: () => Promise<void>;
@@ -62,7 +66,9 @@ export function useDagTelemetry(
   const [list, setList] = useState<RunList>();
   const [record, setRecord] = useState<RunRecord>();
   const [loading, setLoading] = useState(true);
-  const [hasUpdates, setHasUpdates] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string>();
+  const [activity, setActivity] = useState<readonly LiveActivity[]>([]);
+  const [conversationRevision, setConversationRevision] = useState(0);
   const [error, setError] = useState<Error>();
   //: Bumped whenever the selected run's reads must be taken again.
   const [revision, setRevision] = useState(0);
@@ -183,7 +189,7 @@ export function useDagTelemetry(
     void refresh();
     const subscription = client.subscribe({
       onEvent: (event) => {
-        setHasUpdates(true);
+        setLastUpdated(new Date().toISOString());
         // Every connection — including one the browser reopened after a drop —
         // opens with a snapshot, so an arriving event means the stream recovered.
         setError(undefined);
@@ -207,6 +213,37 @@ export function useDagTelemetry(
     return () => subscription.close();
   }, [client, loadList, refresh]);
 
+  useEffect(() => {
+    if (runId === undefined) {
+      setActivity([]);
+      return;
+    }
+    const subscription = client.subscribe({
+      runId,
+      onEvent: (event) => {
+        setLastUpdated(new Date().toISOString());
+        setError(undefined);
+        // The global stream owns the complete run list. A run-scoped snapshot is
+        // intentionally partial and must never replace it.
+        if (event.event === "snapshot") return;
+        if (event.event === "activity.changed") {
+          const candidate = event.data.activity;
+          setActivity(liveActivityListSchema.parse(candidate));
+        }
+        if (
+          event.event === "conversation.changed" ||
+          event.event === "activity.changed" ||
+          event.event === "run.changed"
+        ) {
+          setRevision((current) => current + 1);
+          setConversationRevision((current) => current + 1);
+        }
+      },
+      onError: (caught) => setError(asError(caught)),
+    });
+    return () => subscription.close();
+  }, [client, runId]);
+
   // A record read for a run that is no longer selected is not this run's record.
   const current =
     record !== undefined && record.runId === runId ? record : undefined;
@@ -218,13 +255,26 @@ export function useDagTelemetry(
       timeline: current?.timeline,
       timelineError: current?.timelineError,
       loading,
-      hasUpdates,
+      lastUpdated,
+      activity,
+      conversationRevision,
       error,
       refresh,
       loadMore,
       hasMore: list?.next_cursor !== undefined,
     }),
-    [list, runId, current, loading, hasUpdates, error, refresh, loadMore],
+    [
+      list,
+      runId,
+      current,
+      loading,
+      lastUpdated,
+      activity,
+      conversationRevision,
+      error,
+      refresh,
+      loadMore,
+    ],
   );
 }
 
@@ -240,7 +290,7 @@ function ignoreRemovedRun(caught: unknown): void {
 
 /** The run an invalidation event names, or `undefined` when it names none. */
 function invalidatedRunId(event: TelemetryEvent): string | undefined {
-  const runId = (event.data as Record<string, unknown>).run_id;
+  const runId = "run_id" in event.data ? event.data.run_id : undefined;
   return typeof runId === "string" && runId.length > 0 ? runId : undefined;
 }
 

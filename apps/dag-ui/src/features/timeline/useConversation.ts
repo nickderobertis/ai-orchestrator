@@ -20,10 +20,14 @@ export function useConversation(
   client: TelemetryClient,
   runId?: string,
   conversationId?: string,
+  revision = 0,
 ): ConversationState {
   const [state, setState] = useState<ConversationState>({ loading: false });
 
   useEffect(() => {
+    // Reading the invalidation token makes it an intentional input: its value is
+    // immaterial, but each change asks for the open transcript again.
+    void revision;
     if (runId === undefined || conversationId === undefined) {
       setState({ loading: false });
       return;
@@ -45,7 +49,7 @@ export function useConversation(
     return () => {
       active = false;
     };
-  }, [client, runId, conversationId]);
+  }, [client, runId, conversationId, revision]);
 
   return state;
 }

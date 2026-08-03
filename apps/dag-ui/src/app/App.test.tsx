@@ -752,6 +752,45 @@ describe("DAG application", () => {
     );
   });
 
+  test("shows live activity and refetches an open transcript on run-scoped invalidation", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    const { client, sources, fetch } = telemetryHarness();
+    render(<App client={client} />);
+    await screen.findByText("Coordinating the execution frontier");
+    await waitFor(() => expect(sources).toHaveLength(2));
+    const before = fetch.mock.calls.filter((call: unknown[]) =>
+      isConversation(new URL(String(call[0]), window.location.origin)),
+    ).length;
+
+    sources[1]?.emit(
+      "activity.changed",
+      {
+        run_id: LIVE_RUN,
+        activity: [
+          {
+            round: "1",
+            node: "dashboard",
+            at: Date.now() / 1000,
+            kind: "tool",
+            name: "Read",
+            detail: "server.py",
+            events: 12,
+          },
+        ],
+      },
+      "9",
+    );
+
+    expect(await screen.findByText("dashboard: Read server.py")).toBeVisible();
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter((call: unknown[]) =>
+          isConversation(new URL(String(call[0]), window.location.origin)),
+        ).length,
+      ).toBeGreaterThan(before),
+    );
+  });
+
   test("loads the next run-list page when the sidebar reaches its end", async () => {
     const { client, fetch } = telemetryHarness((url) => {
       if (isRunList(url)) {

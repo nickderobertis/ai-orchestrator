@@ -211,6 +211,45 @@ def enum_values(path: Path, name: str) -> list[str]:
     return values
 
 
+def dataclass_fields(path: Path, name: str) -> dict[str, bool]:
+    """Field names for one annotated Python dataclass; every field is required."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError) as exc:
+        fail(f"read {path.name} {name}: {exc}; repair the source and rerun this check")
+    declarations = [
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == name
+    ]
+    if len(declarations) != 1:
+        fail(f"{path.name} must declare exactly one dataclass {name}")
+    declaration = declarations[0]
+    decorators = {
+        decorator.id if isinstance(decorator, ast.Name) else decorator.func.id
+        for decorator in declaration.decorator_list
+        if isinstance(decorator, ast.Name)
+        or (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name))
+    }
+    if "dataclass" not in decorators:
+        fail(f"{path.name} {name} must be decorated with @dataclass")
+    defaulted = [
+        statement.target.id
+        for statement in declaration.body
+        if isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.value is not None
+    ]
+    if defaulted:
+        fail(f"{path.name} {name} fields {defaulted} have defaults; keep this payload required")
+    fields = {
+        statement.target.id: True
+        for statement in declaration.body
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+    }
+    if not fields:
+        fail(f"{path.name} {name} declares no annotated fields")
+    return fields
+
+
 def _properties(path: Path, name: str, body: str) -> dict[str, bool]:
     """Property name -> required, for one TypeScript object body's top-level fields.
 
@@ -1006,6 +1045,17 @@ def main() -> None:
             enum_values(root / "orchestrator/server.py", "SseEvent"),
         ),
         ("docs/dag-ui/design.md", design_sse_events(design)),
+    )
+    reconcile(
+        "live activity payload",
+        (
+            "orchestrator/activity.py NodeActivity",
+            dataclass_fields(root / "orchestrator/activity.py", "NodeActivity"),
+        ),
+        (
+            "packages/dag-model/src/index.ts LiveActivity",
+            interface_fields(dag_model, "LiveActivity"),
+        ),
     )
 
     # Semantic agent roles and the judge's configured role, reconciled across the

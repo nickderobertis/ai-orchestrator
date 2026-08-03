@@ -23,11 +23,13 @@ export function OverallView({
   detail,
   timeline,
   timelineError,
+  conversationRevision,
 }: {
   readonly client: TelemetryClient;
   readonly detail: RunDetail;
   readonly timeline?: RunTimeline;
   readonly timelineError?: Error;
+  readonly conversationRevision?: number;
 }) {
   // A session the graph placed at no node is run-level work: the planner driving the
   // whole graph, and the per-round check-ins beside it.
@@ -114,6 +116,7 @@ export function OverallView({
                         : undefined
                     }
                     initiallyOpen={index === 0}
+                    conversationRevision={conversationRevision}
                     key={span.id}
                     label={span.label}
                     launch={launchLabel(detail.launch)}
@@ -147,6 +150,7 @@ function RunLevelSession({
   launch,
   role,
   initiallyOpen,
+  conversationRevision,
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
@@ -156,12 +160,14 @@ function RunLevelSession({
   /** The dispatch's semantic role, served on the span it was read from. */
   readonly role?: string;
   readonly initiallyOpen: boolean;
+  readonly conversationRevision?: number;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const transcript = useConversation(
     client,
     open ? runId : undefined,
     open ? conversationId : undefined,
+    conversationRevision,
   );
   return (
     <Collapsible onOpenChange={setOpen} open={open}>

@@ -43,6 +43,7 @@ export function NodeTimelineView({
   selectedItemId,
   onSelectItem,
   onBack,
+  conversationRevision,
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
@@ -52,6 +53,7 @@ export function NodeTimelineView({
   readonly selectedItemId?: string;
   readonly onSelectItem: (id?: string) => void;
   readonly onBack: () => void;
+  readonly conversationRevision?: number;
 }) {
   const projected = useMemo(
     () => nodeTimeline(timeline, node.id),
@@ -220,6 +222,7 @@ export function NodeTimelineView({
           />
           <TimelineItemDetail
             client={client}
+            conversationRevision={conversationRevision}
             node={node}
             row={selected}
             runId={runId}

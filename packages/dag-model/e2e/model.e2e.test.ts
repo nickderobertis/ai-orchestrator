@@ -237,6 +237,7 @@ test("a package consumer validates provenance, SSE names, and counters", () => {
     }).launcher,
   ).toBe("codex");
   expect(sseEventNameSchema.parse("run.changed")).toBe("run.changed");
+  expect(sseEventNameSchema.parse("activity.changed")).toBe("activity.changed");
   expect(() => sseEventNameSchema.parse("run.created")).toThrow();
   expect(() =>
     sessionLinkSchema.parse({
