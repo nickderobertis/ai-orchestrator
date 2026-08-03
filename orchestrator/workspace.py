@@ -25,6 +25,8 @@ import os
 import re
 import shutil
 import stat
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -78,6 +80,9 @@ OWNER_RECORD_NAME = "owner.json"
 #: Keep a small, useful crash history without allowing abandoned clones to grow
 #: forever. This mirrors pytest's default of retaining its three newest runs.
 RETAINED_INCOMPLETE_RUNS = 3
+ALTERNATE_CLAUDE_TRUST_SCRIPT = (
+    Path(__file__).resolve().parent.parent / "scripts" / "alternate-claude-workspace-trust.sh"
+)
 
 
 class WorkspaceError(RuntimeError):
@@ -445,6 +450,24 @@ class Workspace:
         with self._locks_guard:
             return self._locks.setdefault(repo.dir_key, threading.Lock())
 
+    @staticmethod
+    def _mark_alternate_claude_trust(*paths: Path) -> None:
+        """Best-effort trust marking for alternate-Claude worker identities."""
+        try:
+            subprocess.run(
+                [
+                    "bash",
+                    str(ALTERNATE_CLAUDE_TRUST_SCRIPT),
+                    *(str(path.resolve()) for path in paths),
+                ],
+                check=False,
+            )
+        except OSError as exc:
+            print(
+                f"workspace: alternate Claude workspace trust setup failed; continuing: {exc}",
+                file=sys.stderr,
+            )
+
     def clone_dir(self, repo: RepoRef) -> Path:
         """Return this run's private clone (kept as a lifecycle compatibility name)."""
         try:
@@ -564,6 +587,7 @@ class Workspace:
             self._clones[repo.dir_key] = clone
             resolved = registered.resolve()
             self._adopted_worktrees.add(resolved)
+            self._mark_alternate_claude_trust(clone, resolved)
             return resolved
         return None
 
@@ -690,6 +714,7 @@ class Workspace:
                 gitops.retain_objects_for_borrowers(checkout)
                 origin = gitops.remote_url(checkout)
                 clone = self._ensure_run_clone(repo, checkout, origin=origin, base=base)
+            self._mark_alternate_claude_trust(clone)
             # This clone belongs to this run alone, so its own fetch — the one that
             # actually has to reach origin's branches — contends with nothing, and
             # neither does sweeping the run roots of dead siblings.
@@ -857,6 +882,7 @@ class Workspace:
                     "setup-finished",
                     {"operation": "worktree", "seconds": max(0.0, time.monotonic() - started)},
                 )
+                self._mark_alternate_claude_trust(result)
                 return result
             except Exception:
                 self._release_worktree_lease(path)
