@@ -8,6 +8,8 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,7 @@ from orchestrator.dispatch import (
     agent_exit_status,
     agent_failure_reason,
     dispatch,
+    group_holds_stamped_process,
     incomplete_detail,
     owned_tree,
     run_onejudge,
@@ -53,6 +56,7 @@ from orchestrator.watchdog import (
     process_activity,
     terminate_process_group,
     terminate_processes,
+    terminate_proven_process_group,
     terminate_tree,
 )
 from orchestrator.watchdog import main as watchdog_main
@@ -561,50 +565,121 @@ orphan = subprocess.Popen(
 )
 with open(os.environ["ORPHAN_RECORD"], "w") as record:
     record.write(str(orphan.pid))
+with open(os.environ["STATUS_RECORD"], "w") as record:
+    record.write(os.environ["ORCHESTRATOR_AGENT_STATUS_DIR"])
 
 print(json.dumps({"schema_version": 4, "transcript": {"messages": []}, "stopped_early": False}))
 """
 
 
-def _record_teardown_handles(
-    monkeypatch: pytest.MonkeyPatch,
-    signalled: set[ProcessId],
-    already_exited: list[ProcessId],
-) -> dict[str, list[ProcessId]]:
-    """Watch all three teardown handles without replacing any of them.
+@dataclass
+class TeardownTrace:
+    """Everything one teardown did, in order, with the evidence behind each step."""
 
-    Every wrapper here calls straight through, so the real signals go out and the real
-    processes die; what is added is a reading taken at the instant teardown decided on
-    each handle. That decision is where both defects live — a pid list assembled from
-    history, and a numeric root walked or grouped without proof — and neither is
-    observable from outside the process it happens in.
+    #: ``(operation, handle, evidence_was_live)`` per step, in the order they ran.
+    operations: list[tuple[str, ProcessId | None, bool]] = field(default_factory=list)
+    #: Every pid handed to the exact-set step.
+    signalled: set[ProcessId] = field(default_factory=set)
+    #: Those of them that had already exited when that step reached them.
+    already_exited: list[ProcessId] = field(default_factory=list)
+    #: What was alive under a broad handle at the instant it was signalled — so a pid
+    #: this teardown killed itself can be told from one that died long before it.
+    broad_targets: set[ProcessId] = field(default_factory=set)
+
+    @property
+    def names(self) -> list[str]:
+        return [operation for operation, _, _ in self.operations]
+
+    @property
+    def broad(self) -> list[tuple[str, ProcessId | None, bool]]:
+        """Every step that signals through a number rather than a set of pids."""
+        return [entry for entry in self.operations if entry[0] != EXACT_SET_STEP]
+
+    def assert_no_broad_handle_outlived_its_evidence(self) -> None:
+        """The ordering contract, asserted the same way wherever teardown runs.
+
+        Two claims, and they are one claim from both ends. Every broad operation ran
+        while a stamped process still held its number — that is the proof being live —
+        and none ran after the exact-set step, which is what can destroy that proof by
+        killing the members whose existence reserves the number. An implementation
+        that signalled the proven processes first would fail the second assertion at
+        once and the first as soon as the kill landed.
+        """
+        for operation, handle, evidence_live in self.broad:
+            assert evidence_live, f"{operation} on {handle} ran with nothing stamped holding it"
+        if EXACT_SET_STEP in self.names:
+            first_exact = self.names.index(EXACT_SET_STEP)
+            assert all(name == EXACT_SET_STEP for name in self.names[first_exact:]), self.names
+
+
+#: The one step that signals a set of pids rather than dereferencing a number.
+EXACT_SET_STEP = "terminate_processes"
+
+
+def _trace_teardown(monkeypatch: pytest.MonkeyPatch, status_record: Path) -> TeardownTrace:
+    """Watch every teardown operation, in order, without replacing any of them.
+
+    Each wrapper calls straight through, so the real signals go out and the real
+    processes die; what is added is a reading taken at the instant teardown reached
+    that operation. Three defects live in those instants and none is observable from
+    outside the process they happen in: a pid list assembled from history, a numeric
+    root walked or grouped without proof, and — the ordering one — a broad handle
+    dereferenced after an earlier step killed the process whose existence proved it.
+
+    ``status_record`` is where the dispatch under test writes its own status
+    directory, which `run_onejudge` creates and names only once it is running; each
+    wrapper reads it back at the instant it is called.
     """
+    trace = TeardownTrace()
     terminate = terminate_processes
+    proven_group = terminate_proven_process_group
     tree = terminate_tree
-    group = terminate_process_group
-    handles: dict[str, list[ProcessId]] = {"terminate_tree": [], "terminate_process_group": []}
+    plain_group = terminate_process_group
+
+    def evidence_is_live(handle: ProcessId) -> bool:
+        """Whether a stamped process still holds the number about to be signalled."""
+        try:
+            directory = Path(status_record.read_text(encoding="utf-8").strip())
+        except OSError:  # pragma: no cover - the dispatch always records it first
+            return False
+        return group_holds_stamped_process(directory, handle)
+
+    def observed_broad(operation: str, handle: ProcessId) -> None:
+        trace.operations.append((operation, handle, evidence_is_live(handle)))
+        trace.broad_targets.update(process_activity(handle).pids)
 
     def observing_terminate(
         pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
     ) -> None:
-        signalled.update(pids)
-        already_exited.extend(pid for pid in pids if not is_running(pid))
+        trace.operations.append((EXACT_SET_STEP, None, True))
+        trace.signalled.update(pids)
+        trace.already_exited.extend(pid for pid in pids if not is_running(pid))
         terminate(pids, externally_waited=externally_waited)
 
-    def observing_tree(root_pid: ProcessId) -> None:
-        handles["terminate_tree"].append(root_pid)
+    def observing_group(group_id: ProcessId, *, still_ours: Callable[[ProcessId], bool]) -> None:
+        observed_broad("process_group", group_id)
+        proven_group(group_id, still_ours=still_ours)
+
+    def observing_tree(root_pid: ProcessId) -> None:  # pragma: no cover - must never run
+        observed_broad("terminate_tree", root_pid)
         tree(root_pid)
 
-    def observing_group(
+    def observing_plain_group(  # pragma: no cover - must never run
         group_id: ProcessId, *, externally_waited: tuple[ProcessId, ...] = ()
     ) -> None:
-        handles["terminate_process_group"].append(group_id)
-        group(group_id, externally_waited=externally_waited)
+        observed_broad("terminate_process_group", group_id)
+        plain_group(group_id, externally_waited=externally_waited)
 
-    monkeypatch.setattr(dispatch_module, "terminate_processes", observing_terminate)
-    monkeypatch.setattr(dispatch_module, "terminate_tree", observing_tree)
-    monkeypatch.setattr(dispatch_module, "terminate_process_group", observing_group)
-    return handles
+    monkeypatch.setattr(dispatch_module, EXACT_SET_STEP, observing_terminate)
+    monkeypatch.setattr(dispatch_module, "terminate_proven_process_group", observing_group)
+    # Neither is used by teardown any more, and re-introducing either is the
+    # regression: both re-derive a pid list from a number after the caller's own
+    # signals may have released it.
+    monkeypatch.setattr(dispatch_module, "terminate_tree", observing_tree, raising=False)
+    monkeypatch.setattr(
+        dispatch_module, "terminate_process_group", observing_plain_group, raising=False
+    )
+    return trace
 
 
 #: A process that leads a session of its own and spawns one child, exactly as a
@@ -711,16 +786,19 @@ def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
     onejudge.write_text(f"#!/usr/bin/env python3\n{_CHURNING_ONEJUDGE}", encoding="utf-8")
     onejudge.chmod(0o700)
 
-    signalled: set[ProcessId] = set()
-    already_exited: list[ProcessId] = []
-    handles = _record_teardown_handles(monkeypatch, signalled, already_exited)
+    status_record = tmp_path / "status-dir"
+    trace = _trace_teardown(monkeypatch, status_record)
 
     report = run_onejudge(
         {},
         "task",
         onejudge_bin=os.fspath(onejudge),
         cwd=tmp_path,
-        env={"CHURN_RECORD": os.fspath(churn_record), "ORPHAN_RECORD": os.fspath(orphan_record)},
+        env={
+            "CHURN_RECORD": os.fspath(churn_record),
+            "ORPHAN_RECORD": os.fspath(orphan_record),
+            "STATUS_RECORD": os.fspath(status_record),
+        },
     )
 
     churned = [ProcessId(int(line)) for line in churn_record.read_text(encoding="utf-8").split()]
@@ -729,15 +807,16 @@ def test_teardown_signals_the_live_tree_and_never_a_pid_that_already_exited(
     assert report.completed is True
     assert len(churned) == 3
     assert [pid for pid in churned if is_running(pid)] == []
-    assert already_exited == []
-    assert signalled.isdisjoint(churned)
-    assert orphan in signalled
+    # Nothing preceded this step, so every pid it was handed was alive when it ran.
+    assert trace.already_exited == []
+    assert trace.signalled.isdisjoint(churned)
+    assert orphan in trace.signalled
     assert await_reaped(orphan)
-    # The root exited with the report, so its recorded number proves nothing about
-    # what holds it now and neither handle built on it may be used. The orphan was
-    # still reaped, by its stamp — which is the point: withholding the two numeric
-    # handles costs this teardown nothing it could prove it owned.
-    assert handles == {"terminate_tree": [], "terminate_process_group": []}
+    # The root exited with the report, and the orphan left its group, so no number
+    # proves anything here: every broad handle is withheld and the only operation is
+    # the exact set. The orphan was still reaped, by its stamp — which is the point.
+    assert trace.names == [EXACT_SET_STEP]
+    trace.assert_no_broad_handle_outlived_its_evidence()
 
 
 def test_a_stalled_dispatch_still_walks_and_groups_the_root_it_can_prove(
@@ -754,20 +833,20 @@ def test_a_stalled_dispatch_still_walks_and_groups_the_root_it_can_prove(
     """
     root_record = tmp_path / "root"
     child_record = tmp_path / "child"
+    status_record = tmp_path / "status-dir"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
         '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         f'printf "%s\\n" "$$" >"{root_record}"\n'
         "sleep 30 &\n"
         f'printf "%s\\n" "$!" >"{child_record}"\n'
+        f'printf "%s\\n" "$ORCHESTRATOR_AGENT_STATUS_DIR" >"{status_record}"\n'
         "sleep 30\n",
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
 
-    signalled: set[ProcessId] = set()
-    already_exited: list[ProcessId] = []
-    handles = _record_teardown_handles(monkeypatch, signalled, already_exited)
+    trace = _trace_teardown(monkeypatch, status_record)
 
     with pytest.raises(DispatchError, match="dispatch stalled"):
         run_onejudge(
@@ -781,9 +860,18 @@ def test_a_stalled_dispatch_still_walks_and_groups_the_root_it_can_prove(
     root = ProcessId(int(root_record.read_text(encoding="utf-8")))
     child = ProcessId(int(child_record.read_text(encoding="utf-8")))
 
-    assert handles == {"terminate_tree": [root], "terminate_process_group": [root]}
-    assert {root, child} <= signalled
-    assert already_exited == []
+    # One broad operation, on the proven group, and it is the *first* thing teardown
+    # does — before any pid this dispatch owns has been signalled, so the members
+    # whose existence reserves that number are all still alive to reserve it.
+    assert trace.names == ["process_group", EXACT_SET_STEP]
+    assert trace.broad == [("process_group", root, True)]
+    trace.assert_no_broad_handle_outlived_its_evidence()
+    assert {root, child} <= trace.signalled
+    # The exact set does find members gone, because the group signal above killed
+    # them moments earlier — and every one of them is a process this teardown itself
+    # had just proven and killed, never one that died during the run. That is the
+    # distinction the accumulated list could not make.
+    assert set(trace.already_exited) <= trace.broad_targets
     assert await_reaped(root)
     assert await_reaped(child)
 
@@ -1326,6 +1414,39 @@ def test_watchdog_group_shutdown_waits_out_a_member_that_ignores_sigterm(tmp_pat
     terminate_process_group(ProcessId(process.pid))
 
     assert await_reaped(process.pid)
+
+
+def test_a_proven_group_kill_is_withheld_once_the_first_signal_released_the_number(
+    tmp_path,
+) -> None:
+    """The second signal asks again, because the first one can release the number.
+
+    A group id is its leader's pid, and the kernel holds that number only while some
+    live process names the group — so the `SIGTERM` a caller sends is exactly what can
+    free it, and a proof taken before that signal says nothing about the instant
+    after. A caller that can no longer prove the group therefore keeps its hands off
+    it: the deaf member below survives, as an unrelated process that had been handed
+    the recycled number would have to. With the proof intact the same call kills it,
+    so the gate withholds nothing a caller can still show is its own.
+    """
+    marker = tmp_path / "deaf-group-member.pid"
+    process = subprocess.Popen(
+        [sys.executable, "-c", _SIGTERM_DEAF_SLEEPER, os.fspath(marker)],
+        start_new_session=True,
+    )
+    assert await_recorded_pid(marker) == process.pid
+    try:
+        terminate_proven_process_group(ProcessId(process.pid), still_ours=lambda _group: False)
+
+        assert is_running(process.pid)
+
+        terminate_proven_process_group(ProcessId(process.pid), still_ours=lambda _group: True)
+
+        assert await_reaped(process.pid)
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        process.wait(timeout=10)
 
 
 def test_watchdog_terminates_live_process_group() -> None:

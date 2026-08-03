@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -245,20 +246,61 @@ def terminate_processes(
             time.sleep(0.01)
 
 
+def _signal_process_group(group_id: ProcessId, sig: int) -> None:
+    """Deliver one signal to whatever is in ``group_id`` at this instant."""
+    with suppress(PermissionError, ProcessLookupError):
+        os.killpg(group_id, sig)
+
+
+def _await_group_shutdown(group_id: ProcessId) -> None:
+    """The grace `_await_shutdown` gives a pid tuple, asked of a whole group.
+
+    Its membership is the thing being terminated, so nothing here has a list to poll
+    and `process_group_is_running` is the whole answer.
+    """
+    deadline = time.monotonic() + TERMINATION_GRACE
+    while process_group_is_running(group_id) and time.monotonic() < deadline:
+        time.sleep(_TERMINATION_POLL)
+
+
+def terminate_proven_process_group(
+    group_id: ProcessId, *, still_ours: Callable[[ProcessId], bool]
+) -> None:
+    """`SIGTERM` a group, and `SIGKILL` it only while the caller can still prove it.
+
+    A group id is the pid of its leader, and the kernel reserves that number only for
+    as long as some live process names the group — so a proof taken before the
+    ``SIGTERM`` says nothing about the instant after it, when the members that
+    reserved the number may all have exited. The second signal therefore asks again.
+
+    Nothing is lost by refusing it: a group emptied by the ``SIGTERM`` has nothing
+    left for a ``SIGKILL`` to reach, and a group that still holds a process the caller
+    can prove is its own is still that caller's to kill. What is avoided is the
+    reverse — insisting on a number whose reservation this caller has just released.
+
+    Deliberately no reaping pass: enumerating a group's members *after* killing them
+    re-derives a pid list from the same released number. A caller that must reap owns
+    an exact set of pids for that, taken while its proof was live.
+    """
+    _signal_process_group(group_id, signal.SIGTERM)
+    _await_group_shutdown(group_id)
+    if still_ours(group_id):
+        _signal_process_group(group_id, signal.SIGKILL)
+
+
 def terminate_process_group(
     group_id: ProcessId, *, externally_waited: tuple[ProcessId, ...] = ()
 ) -> None:
-    """Terminate and reap every process in a dispatch-owned process group."""
-    with suppress(PermissionError, ProcessLookupError):
-        os.killpg(group_id, signal.SIGTERM)
-    # The same grace `_await_shutdown` gives a known pid tuple, asked of the group:
-    # its membership is the thing being terminated, so nothing here has a list to
-    # poll and `process_group_is_running` is the whole answer.
-    group_deadline = time.monotonic() + TERMINATION_GRACE
-    while process_group_is_running(group_id) and time.monotonic() < group_deadline:
-        time.sleep(_TERMINATION_POLL)
-    with suppress(PermissionError, ProcessLookupError):
-        os.killpg(group_id, signal.SIGKILL)
+    """Terminate and reap every process in a caller-owned process group.
+
+    For a caller whose ownership of the number is not in question for the length of
+    the call — `gitops` and `verify` each hold the group leader as their own live
+    child throughout. A caller whose evidence its own signals can destroy wants
+    `terminate_proven_process_group` instead.
+    """
+    _signal_process_group(group_id, signal.SIGTERM)
+    _await_group_shutdown(group_id)
+    _signal_process_group(group_id, signal.SIGKILL)
     members = [
         pid
         for pid in _process_ids()

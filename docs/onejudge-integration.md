@@ -598,26 +598,49 @@ planner's own work gets interrupted by somebody else's cleanup — the incident
 `AGENTS.md` records under "never derive a process list from `ps` and signal it",
 reached by a different derivation.
 
-Teardown therefore asks `owned_tree` what it can prove *right now*, and gets back
-three handles that are each either evidenced or withheld. The evidence is one
-snapshot of the environment stamp, taken before anything is signalled:
-`processes_stamped_for` asks the same question `orphaned_dispatch_processes` asks of
-a finished dispatch's leavings — which live processes carry
-`ORCHESTRATOR_AGENT_STATUS_DIR` naming this dispatch's own status directory — and the
-kernel fixes that environment at `exec`, so no process can shed it.
+Teardown therefore asks `owned_tree` what it can prove *right now*. The evidence is
+the environment stamp: `processes_stamped_for` asks the same question
+`orphaned_dispatch_processes` asks of a finished dispatch's leavings — which live
+processes carry `ORCHESTRATOR_AGENT_STATUS_DIR` naming this dispatch's own status
+directory — and the kernel fixes that environment at `exec`, so no process can shed
+it.
 
-- **The stamped processes** are always signalled: they *are* the evidence. This is
+- **The stamped processes** are always selected: they *are* the evidence. This is
   what reaches a descendant whose parent has already exited, adopted by init and
   unreachable by any walk.
-- **Parentage** (`process_activity`, and `terminate_tree` behind it) is walked from
-  the recorded root only once that root is itself stamped. An unproven number may
-  name a recycled stranger, and walking it would select that stranger's whole
-  subtree. Nothing is given up by the gate: a live descendant of a proven root is
-  this dispatch's even if it carries no stamp of its own.
-- **The process group** (`terminate_process_group`) is signalled only while a stamped
-  process is still *in* that group. That is stronger than it looks — the kernel keeps
-  a pid allocated for as long as any live process names it as a group, so a group
-  still holding one of ours cannot have had its id handed to anybody else.
+- **Parentage** is walked from the recorded root only once that root is itself
+  stamped. An unproven number may name a recycled stranger, and walking it would
+  select that stranger's whole subtree. Nothing is given up by the gate: a live
+  descendant of a proven root is this dispatch's even if it carries no stamp of its
+  own — including one in a process group of its own, which no `killpg` reaches.
+- **The process group** is signalled only while a stamped process is still *in* that
+  group. That is stronger than it looks — the kernel keeps a pid allocated for as
+  long as any live process names it as a group, so a group still holding one of ours
+  cannot have had its id handed to anybody else.
+
+**Order is part of the proof, not a detail of it.** A pid is a capability its holder
+can destroy: the members whose existence reserves a group id are the same ones
+teardown is about to kill, so signalling the proven processes first would release the
+number and every later `killpg` would be aimed at one the kernel was free to reuse. A
+single snapshot does not make three handles safe — it makes them safe *until the
+first signal*. So `tear_down` runs exactly one broad operation, first, before it has
+signalled anything: `terminate_proven_process_group` on the proven group, which is
+also the only handle that reaches work spawned into this dispatch since the snapshot.
+Everything after it is the exact pid set `owned_tree` took while that same proof held.
+Nothing is walked, enumerated, or grouped from a number afterwards, and
+`terminate_tree` is not used on this path at all — the walk it would repeat already
+happened, while the root was proven alive.
+
+`terminate_proven_process_group` applies the same rule to its own two signals: it
+re-asks for the proof before the `SIGKILL`, because its own `SIGTERM` can be what
+released the number. Refusing that second signal costs nothing — a group the
+`SIGTERM` emptied has nothing left to kill — while insisting on it would mean
+signalling a reservation the caller had just given up. It also does no reaping pass,
+because enumerating a group's members after killing them is that same mistake once
+more; callers that must reap hold an exact pid set for it.
+`orchestrator.watchdog.terminate_process_group` keeps the enumerating behaviour for
+`gitops` and `verify`, which hold their group leader as a live child of their own for
+the whole call.
 
 `externally_waited` is not a substitute for any of this: it governs which pids this
 process may `waitpid` for, not which ones get signalled.
