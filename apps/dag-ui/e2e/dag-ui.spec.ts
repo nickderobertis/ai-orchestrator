@@ -968,6 +968,48 @@ test("restores node tabs and moves between them from the keyboard", async ({
     "true",
   );
   await expect(page).toHaveURL(/tab=dependencies/);
+
+  await page.getByRole("tab", { name: "Timeline" }).click();
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
+  await expect(page).toHaveURL(/event=/);
+  await page.getByRole("tab", { name: "Task" }).click();
+  await expect(page).not.toHaveURL(/event=/);
+
+  await page.getByRole("button", { name: /Graph/ }).click();
+  await expect(page).not.toHaveURL(/tab=/);
+  const foundation = page.getByRole("button", { name: "foundation: done" });
+  await foundation.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.getByRole("tab", { name: "Checks" }).click();
+  await expect(page.locator(".facts")).toContainText("unit: SUCCESS");
+  await expect(
+    page.locator(".facts").getByRole("link", { name: "unit: SUCCESS" }),
+  ).toHaveAttribute("href", "https://github.com/example/repo/actions/runs/12");
+  await page.getByRole("tab", { name: "PR" }).click();
+  await expect(page.locator(".facts")).toContainText(
+    "Gate completed successfully",
+  );
+
+  await page.getByRole("tab", { name: "Task" }).click();
+  await page.getByRole("tab", { name: "Overall" }).click();
+  await expect(page).not.toHaveURL(/tab=/);
+
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard&tab=bogus`);
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.getByRole("tab", { name: "Task" }).click();
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
+  await expect(page).not.toHaveURL(/tab=/);
 });
 
 test("names a node whose run summary has no recorded activity", async ({
