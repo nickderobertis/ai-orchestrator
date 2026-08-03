@@ -371,6 +371,36 @@ def test_runs_endpoint_pages_by_opaque_cursor_and_rejects_invalid_bounds(tmp_pat
             assert response.status_code == 422
 
 
+def test_runs_endpoint_skips_a_run_removed_during_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    _active_run(runs, "alpha")
+    vanishing = _active_run(runs, "beta")
+    invocation = tmp_path / "history-invoked"
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "alpha")))
+    monkeypatch.setenv("FAKE_ONEHARNESS_INVOCATION_LOG", str(invocation))
+    monkeypatch.setenv("FAKE_ONEHARNESS_DELAY_SECONDS", "1.5")
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        responses: list[httpx.Response] = []
+        request = threading.Thread(
+            target=lambda: responses.append(httpx.get(f"{base}/api/v2/runs", timeout=10))
+        )
+        request.start()
+        deadline = time.monotonic() + 5
+        while not invocation.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert invocation.exists(), "history collection did not reach its real subprocess boundary"
+        shutil.rmtree(vanishing)
+        request.join(timeout=10)
+
+    assert not request.is_alive()
+    assert responses[0].status_code == 200
+    assert [run["run_id"] for run in responses[0].json()["runs"]] == ["alpha"]
+
+
 def test_malformed_durable_attribution_degrades_over_http_and_for_ownership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

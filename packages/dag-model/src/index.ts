@@ -50,11 +50,9 @@ export const API_V2_QUERY = {
   limit: "limit",
   nodeId: "node_id",
   scope: "scope",
-  // Preserve exact query-name literals for URL builders and the drift gate.
 } as const;
 export const API_V2_TIMELINE_SCOPES = {
   run: "run",
-  // Preserve the closed scope vocabulary for typed transport consumers.
 } as const;
 
 export const timingQualitySchema = z.enum(["complete", "partial", "legacy"]);
