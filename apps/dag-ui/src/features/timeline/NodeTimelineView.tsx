@@ -19,7 +19,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { isUnhealthy, type NodeView } from "../runs/run-model";
+import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import { TimelineRail } from "./TimelineRail";
@@ -223,10 +223,11 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
   // below states which of the two it is, and the term list names the difference.
   const dependencyDecided =
     node.status === "blocked" || node.status === "skipped";
-  const detail = node.failure?.detail || node.result?.detail || "";
+  // The same chain the graph card's line reads, so the card and the view it opens
+  // cannot explain one failure two ways.
+  const detail = recordedReason(node);
   // `|| undefined`, not `?? undefined`: a recorded empty string is a field the run
-  // wrote nothing into, and treating it as a reason silences the fallback below and
-  // leaves a heading with no term under it.
+  // wrote nothing into, and treating it as a reason would head a term with no value.
   const error = node.result?.error || undefined;
   const exitCode = node.result?.exit_code;
   return (
@@ -261,16 +262,17 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
               </dd>
             </div>
           )}
-          {detail !== "" && (
+          {!dependencyDecided && (
             <div>
               <dt>Detail</dt>
-              <dd>{detail}</dd>
+              <dd>{detail ?? "No reason was recorded for this outcome."}</dd>
             </div>
           )}
           {/* The recorded error is shown beside the detail rather than instead of
               it: a lifecycle records prose in `detail` and the scheduler records the
-              exception text in `error`, and they are not the same sentence. */}
-          {error !== undefined && error !== "" && error !== detail && (
+              exception text in `error`, and they are usually not the same sentence.
+              When they are, the chain above already led with it. */}
+          {error !== undefined && error !== detail && (
             <div>
               <dt>Error</dt>
               <dd>{error}</dd>
@@ -280,12 +282,6 @@ function NodeProblemBanner({ node }: { readonly node: NodeView }) {
             <div>
               <dt>Exit code</dt>
               <dd>{exitCode}</dd>
-            </div>
-          )}
-          {detail === "" && error === undefined && !dependencyDecided && (
-            <div>
-              <dt>Detail</dt>
-              <dd>No reason was recorded for this outcome.</dd>
             </div>
           )}
         </dl>

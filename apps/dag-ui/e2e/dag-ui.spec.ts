@@ -268,6 +268,11 @@ test("renders the outcomes only a settled round records", async ({ page }) => {
   await expect(
     page.locator(".dag-node.state-failed").filter({ hasText: "rollback" }),
   ).toContainText("gate-failed");
+  // The banner reads the same chain, so the card and the view it opens cannot
+  // explain one failure two ways.
+  await openObservatory(page, `/?run=${runs().outcomes}&node=rollback`);
+  await expect(page.getByRole("alert")).toContainText("This node failed: gate");
+  await expect(page.getByRole("alert")).toContainText("gate-failed");
 
   // A blocked node names the human action refs its own result recorded, not only
   // the plan nodes the server derived — the two are different locators.

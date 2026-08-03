@@ -98,13 +98,26 @@ export function nodeReason(node: NodeView): string | undefined {
     return `blocked by ${node.blockers.join(", ")}`;
   }
   if (!OWN_WORK_LOST.has(node.status)) return undefined;
+  return recordedReason(node) ?? `${node.status}, with no reason recorded`;
+}
+
+/**
+ * What the run itself recorded about a lost outcome, or `undefined` when it recorded
+ * nothing — the classified failure detail first, then the lifecycle's own prose, the
+ * dispatch's error, and last the outcome word, which is a classification rather than
+ * a sentence and so is the least it can say.
+ *
+ * One chain, read by the card's line and the node view's banner alike: two orders
+ * would let a card and the view it opens explain the same failure differently.
+ */
+export function recordedReason(node: NodeView): string | undefined {
   const recorded =
     node.failure?.detail ||
     node.result?.detail ||
     node.result?.error ||
     node.telemetry?.outcome ||
     node.result?.outcome;
-  return recorded?.trim() || `${node.status}, with no reason recorded`;
+  return recorded?.trim() || undefined;
 }
 
 /**
