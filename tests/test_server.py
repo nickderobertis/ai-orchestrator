@@ -147,6 +147,88 @@ def test_event_stream_resume_still_snapshots_but_continues_the_cursor(tmp_path: 
     anyio.run(body)
 
 
+def test_run_scoped_stream_emits_live_activity_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    summaries = iter(
+        [
+            (),
+            (
+                {
+                    "round": "1",
+                    "node": "api",
+                    "at": 10.0,
+                    "kind": "tool",
+                    "name": "Read",
+                    "detail": "server.py",
+                    "events": 3,
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(server, "_activity_snapshot", lambda _run, _root: next(summaries))
+
+    async def body() -> None:
+        gen = server._event_stream(
+            _Request(2), runs, "demo", None, ABSENT, 0.0, 100.0, 100.0, tmp_path
+        )
+        await gen.__anext__()
+        changed = await gen.__anext__()
+        assert "event: activity.changed" in changed
+        assert json.loads(changed.split("data: ", 1)[1]) == {
+            "run_id": "demo",
+            "activity": [
+                {
+                    "round": "1",
+                    "node": "api",
+                    "at": 10.0,
+                    "kind": "tool",
+                    "name": "Read",
+                    "detail": "server.py",
+                    "events": 3,
+                }
+            ],
+        }
+
+    anyio.run(body)
+
+
+def test_run_scoped_stream_opens_with_activity_then_clears_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    current = (
+        {
+            "round": "1",
+            "node": "api",
+            "at": 10.0,
+            "kind": "tool",
+            "name": "Read",
+            "detail": "server.py",
+            "events": 3,
+        },
+    )
+    snapshots = iter((current, ()))
+    monkeypatch.setattr(server, "_activity_snapshot", lambda _run, _root: next(snapshots))
+
+    async def body() -> None:
+        gen = server._event_stream(
+            _Request(2), runs, "demo", None, ABSENT, 0.0, 100.0, 100.0, tmp_path
+        )
+        assert "event: snapshot" in await gen.__anext__()
+        initial = await gen.__anext__()
+        assert "event: activity.changed" in initial
+        assert json.loads(initial.split("data: ", 1)[1])["activity"] == list(current)
+        cleared = await gen.__anext__()
+        assert "event: activity.changed" in cleared
+        assert json.loads(cleared.split("data: ", 1)[1])["activity"] == []
+
+    anyio.run(body)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

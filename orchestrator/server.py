@@ -23,7 +23,9 @@ import asyncio
 import hashlib
 import json
 import sys
+import tempfile
 from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import asdict
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -34,6 +36,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .activity import live_activity
 from .config import ConfigError
 from .conversations import run_conversations
 from .history import HistoryError
@@ -77,6 +80,7 @@ class SseEvent(StrEnum):
     SNAPSHOT = "snapshot"
     RUN_CHANGED = "run.changed"
     CONVERSATION_CHANGED = "conversation.changed"
+    ACTIVITY_CHANGED = "activity.changed"
     RUN_REMOVED = "run.removed"
 
 
@@ -149,6 +153,7 @@ def create_app(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     conversation_interval: float = DEFAULT_CONVERSATION_INTERVAL,
+    activity_root: Path | None = None,
 ) -> FastAPI:
     """Build the read-only API bound to one runs root.
 
@@ -168,6 +173,7 @@ def create_app(
             raise ValueError(f"{label} must be a positive number of seconds, got {interval!r}")
     app = FastAPI(title="ai-orchestrator DAG read API", version="2")
     root = Path(runs_dir)
+    dispatch_scratch_root = Path(tempfile.gettempdir()) if activity_root is None else activity_root
 
     @app.exception_handler(RequestValidationError)
     async def _on_invalid_query(_request: Request, _exc: RequestValidationError) -> JSONResponse:
@@ -304,6 +310,7 @@ def create_app(
                 poll_interval,
                 heartbeat_interval,
                 conversation_interval,
+                dispatch_scratch_root,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -343,6 +350,14 @@ def _conversation_signature(
     )
 
 
+def _activity_snapshot(watched: str | None, root: Path | None) -> tuple[dict[str, Any], ...]:
+    """A stable, JSON-ready snapshot of one run's validated live publications."""
+    if watched is None:
+        return ()
+    found = live_activity(watched, root=root)
+    return tuple(asdict(found[key]) for key in sorted(found))
+
+
 def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, ...]]:
     """Change tokens for every run (or the single watched run) under the root.
 
@@ -377,6 +392,7 @@ async def _event_stream(
     poll_interval: float,
     heartbeat_interval: float,
     conversation_interval: float = DEFAULT_CONVERSATION_INTERVAL,
+    activity_root: Path | None = None,
 ) -> AsyncIterator[str]:
     """Emit a snapshot then invalidation events until the client disconnects.
 
@@ -399,6 +415,7 @@ async def _event_stream(
     cursor = resume_from if resume_from is not None else 0
     baseline = await _off_loop(partial(_signatures, runs_dir, watched))
     conversations = await _off_loop(partial(_conversation_signature, watched, oneharness_bin))
+    activities = await _off_loop(partial(_activity_snapshot, watched, activity_root))
     loop = asyncio.get_event_loop()
     cursor += 1
     yield _sse(
@@ -414,6 +431,13 @@ async def _event_stream(
             )
         ),
     )
+    if activities:
+        cursor += 1
+        yield _sse(
+            cursor,
+            SseEvent.ACTIVITY_CHANGED,
+            {"run_id": watched, "activity": list(activities)},
+        )
     last_emit = loop.time()
     last_conversation_poll = loop.time()
     while True:
@@ -442,6 +466,17 @@ async def _event_stream(
                 yield _sse(cursor, SseEvent.CONVERSATION_CHANGED, {"run_id": watched})
                 last_emit = loop.time()
                 now = loop.time()
+        latest_activity = await _off_loop(partial(_activity_snapshot, watched, activity_root))
+        if latest_activity != activities:
+            activities = latest_activity
+            cursor += 1
+            yield _sse(
+                cursor,
+                SseEvent.ACTIVITY_CHANGED,
+                {"run_id": watched, "activity": list(latest_activity)},
+            )
+            last_emit = loop.time()
+            now = loop.time()
         if now - last_emit >= heartbeat_interval:
             yield ": keep-alive\n\n"
             last_emit = now
@@ -468,6 +503,12 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - process en
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
     parser.add_argument("--oneharness-bin", default="oneharness")
     parser.add_argument(
+        "--activity-root",
+        type=Path,
+        default=Path(tempfile.gettempdir()),
+        help="dispatch scratch root containing live agent.activity publications",
+    )
+    parser.add_argument(
         "--allow-nonloopback",
         action="store_true",
         help="permit a non-loopback bind (deployment must add its own auth)",
@@ -488,6 +529,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - process en
     app = create_app(
         args.runs_dir,
         oneharness_bin=args.oneharness_bin,
+        activity_root=args.activity_root,
         expose_launcher_session_id=args.expose_launcher_session_id,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

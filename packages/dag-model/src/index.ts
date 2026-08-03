@@ -657,9 +657,30 @@ export const sseEventNameSchema = z.enum([
   "snapshot",
   "run.changed",
   "conversation.changed",
+  "activity.changed",
   "run.removed",
 ]);
 export const sseEventDataSchema = arbitraryRecord;
+
+export interface LiveActivity {
+  round: string;
+  node: string;
+  at: number;
+  kind: string;
+  name: string;
+  detail: string;
+  events: number;
+}
+export const liveActivitySchema: z.ZodType<LiveActivity> = z.object({
+  round: z.string().min(1),
+  node: z.string().min(1),
+  at: z.number().finite(),
+  kind: z.string(),
+  name: z.string(),
+  detail: z.string(),
+  events: z.number().int().nonnegative(),
+});
+export const liveActivityListSchema = z.array(liveActivitySchema);
 
 export type Timing = z.infer<typeof timingSchema>;
 export type FailureClass = z.infer<typeof failureClassSchema>;

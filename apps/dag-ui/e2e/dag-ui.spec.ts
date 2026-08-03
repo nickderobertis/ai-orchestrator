@@ -1057,10 +1057,10 @@ test("says so when a run recorded no run-level conversation", async ({
 
 test("connects to the server's event stream on load", async ({ page }) => {
   await openObservatory(page);
-  // The server opens every connection with a snapshot, so the header flips to
-  // "Updates received" only once the browser's EventSource really connected. The
+  // The server opens every connection with a snapshot, so the header gains a
+  // last-updated reading only once the browser's EventSource really connected. The
   // journeys below then change the served run and assert what the stream carries.
-  await expect(page.getByText("Updates received")).toBeVisible();
+  await expect(page.getByText(/Last updated/)).toBeVisible();
 });
 
 test("recovers the selection when a bookmarked run is not being served", async ({
@@ -1303,7 +1303,7 @@ test("surfaces a telemetry read it cannot complete", async ({ page }) => {
   await expect(
     banner.locator('[data-slot="alert-description"]'),
   ).not.toBeEmpty();
-  await expect(page.getByText("Awaiting updates")).toBeVisible();
+  await expect(page.getByText("Waiting for first update")).toBeVisible();
 
   // The one control that can retry the read stays reachable while the read is
   // failing, and reporting the failure again is the honest outcome of pressing it.
@@ -1328,7 +1328,36 @@ test("streams real progress the server observes on disk", async ({ page }) => {
     page.locator(".dag-node.state-done", { hasText: "dashboard" }),
   ).toBeVisible();
   await expect(page.locator(".dag-node.state-running")).toHaveCount(0);
-  await expect(page.getByText("Updates received")).toBeVisible();
+  await expect(page.getByText(/Last updated/)).toBeVisible();
+});
+
+test("shows mid-turn activity from a live dispatch", async ({ page }) => {
+  await openObservatory(page, `/?run=${runs().live}&view=graph`);
+  await page
+    .getByRole("button", { name: /dashboard: (running|done)/ })
+    .press("Enter");
+  await page.getByRole("button", { name: /engineer-dashboard/ }).click();
+  await expect(page.getByText("Implementing the dashboard now")).toBeVisible();
+  changeServedRuns(["--stream-dashboard"]);
+  await expect(
+    page.getByText("dashboard: Read orchestrator/server.py"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Streaming the dashboard response now"),
+  ).toBeVisible();
+
+  // A newly opened run-scoped stream receives activity that was already live,
+  // rather than waiting for the next publication to change it.
+  await page.reload();
+  await expect(
+    page.getByText("dashboard: Read orchestrator/server.py"),
+  ).toBeVisible();
+
+  // Ending the publication emits an empty activity set and clears the live summary.
+  changeServedRuns(["--clear-dashboard-stream"]);
+  await expect(
+    page.getByText("dashboard: Read orchestrator/server.py"),
+  ).toHaveCount(0);
 });
 
 test("drops a run the server stops serving", async ({ page }) => {

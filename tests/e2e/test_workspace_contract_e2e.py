@@ -222,6 +222,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
     for relative in (
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
+        "orchestrator/activity.py",
         "orchestrator/conversations.py",
         "orchestrator/history.py",
         "orchestrator/labels.py",
@@ -1434,6 +1435,22 @@ def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: 
     assert result.returncode != 0
     assert "read_model.py Round declares ['invented']" in result.stderr
     assert "add it to the contract or drop it" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_live_activity_drift(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    activity = checkout / "orchestrator/activity.py"
+    activity.write_text(
+        activity.read_text().replace("    events: int", "    events: int\n    invented: str")
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "live activity payload" in result.stderr
+    assert "orchestrator/activity.py NodeActivity" in result.stderr
+    assert "'invented'" in result.stderr
 
 
 @pytest.mark.reads_docs
