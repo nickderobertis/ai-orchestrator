@@ -40,6 +40,8 @@ readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 # shellcheck source=scripts/claude-alt-config-dir.sh
 source "$SCRIPT_DIR/claude-alt-config-dir.sh"
+# shellcheck source=scripts/claude-workspace-trust.sh
+source "$SCRIPT_DIR/claude-workspace-trust.sh"
 # The shared resolver is also used by fail-fast wrappers and enables `set -e`;
 # session setup deliberately continues after optional setup failures.
 set +e
@@ -49,47 +51,6 @@ set +e
 export LLMLINT_ONEHARNESS_BIN="$REPO_ROOT/scripts/llmlint-oneharness.sh"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
-
-mark_alternate_claude_trust() {
-  local config_path=$1
-  shift
-  [ -f "$config_path" ] || return 0
-  if ! command -v jq >/dev/null 2>&1; then
-    log "cannot mark alternate Claude workspaces trusted: jq is unavailable"
-    return 1
-  fi
-  local updated root
-  updated=$(mktemp "${config_path}.trust.XXXXXX") || return 1
-  if ! jq '.' "$config_path" >"$updated"; then
-    log "alternate Claude config is not valid JSON: $config_path"
-    rm -f "$updated"
-    return 1
-  fi
-  for root in "$@"; do
-    if ! jq --arg root "$root" \
-      '.projects = (.projects // {}) | .projects[$root] = ((.projects[$root] // {}) + {hasTrustDialogAccepted: true})' \
-      "$updated" >"${updated}.next"; then
-      rm -f "$updated" "${updated}.next"
-      return 1
-    fi
-    if ! mv "${updated}.next" "$updated"; then
-      rm -f "$updated" "${updated}.next"
-      return 1
-    fi
-  done
-  if cmp -s "$config_path" "$updated"; then
-    rm -f "$updated"
-  else
-    if ! chmod --reference="$config_path" "$updated"; then
-      rm -f "$updated"
-      return 1
-    fi
-    if ! mv "$updated" "$config_path"; then
-      rm -f "$updated"
-      return 1
-    fi
-  fi
-}
 
 if [[ ! $ADOPTED_ONEJUDGE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   log "invalid adopted onejudge version in $ONEJUDGE_VERSION_FILE: '$ADOPTED_ONEJUDGE_VERSION'"

@@ -102,6 +102,10 @@ def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.Complet
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    (test_repo / "scripts" / "claude-workspace-trust.sh").write_text(
+        (REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     (test_repo / "config" / "onejudge.version").write_text(
         f"{ADOPTED_ONEJUDGE_VERSION}\n", encoding="utf-8"
     )
@@ -225,6 +229,30 @@ def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
     assert config.read_text(encoding="utf-8") == "{broken"
 
 
+def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
+    command = 'source "$1"; mark_alternate_claude_trust "$2" "$3"'
+    processes = [
+        subprocess.Popen(
+            ["bash", "-c", command, "test-trust", str(script), str(config), root],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        )
+        for root in ("/first-concurrent-worktree", "/second-concurrent-worktree")
+    ]
+
+    results = [process.communicate(timeout=10) for process in processes]
+
+    assert [process.returncode for process in processes] == [0, 0], results
+    projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
+    assert projects["/first-concurrent-worktree"]["hasTrustDialogAccepted"] is True
+    assert projects["/second-concurrent-worktree"]["hasTrustDialogAccepted"] is True
+
+
 def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
@@ -296,7 +324,7 @@ exec /usr/bin/chmod "$@"
 
     assert result.returncode == 1
     assert config.read_bytes() == original
-    assert list(tmp_path.glob(".claude.json.trust.*")) == []
+    assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"] == []
 
 
 def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(
@@ -486,6 +514,10 @@ def _run_full_setup_without_bun(
     )
     (scripts / "claude-alt-config-dir.sh").write_text(
         (REPO_ROOT / "scripts" / "claude-alt-config-dir.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (scripts / "claude-workspace-trust.sh").write_text(
+        (REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
