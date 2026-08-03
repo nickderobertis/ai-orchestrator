@@ -499,7 +499,7 @@ one's sessions.
 
 SSE uses `text/event-stream`, `Cache-Control: no-cache`, and heartbeat comments
 at least every 15 seconds. Each event has journal sequence or server cursor in
-`id`, one of `snapshot`, `run.changed`, `conversation.changed`, or `run.removed`
+`id`, one of `snapshot`, `run.changed`, `conversation.changed`, `activity.changed`, or `run.removed`
 in `event`, and one compact JSON object in `data`.
 
 Every connection opens with `snapshot` carrying the current `RunList`, including a
@@ -513,6 +513,10 @@ refused. Cursors are ordered only within one server process.
 `run.changed` and `run.removed` are polled from the runs root. `conversation.changed`
 is polled from oneharness history on its own slower interval and only when the
 request names a single `run_id`, because each poll spawns a real history subprocess.
+`activity.changed` is likewise run-scoped and carries the current validated,
+bounded activity summaries read from the configured dispatch scratch root (the
+system temporary directory by default). It invalidates the visible run and open
+transcript while also giving the UI immediate progress to display.
 Backpressure coalesces repeated changes to the same run, never unboundedly queues
 them. Clients refetch run detail after a change event; SSE is invalidation, not a
 second state model.

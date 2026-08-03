@@ -17,12 +17,14 @@ exits, so a browser run never reads or writes the operator's own ``runs/``.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shutil
 import socket
 import sys
 import tempfile
+import time
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -1166,16 +1168,51 @@ def serve(workspace: Path, port: int) -> int:
     )
     from orchestrator.server import main as serve_api
 
-    return serve_api(
-        [
-            "--runs-dir",
-            str(runs_dir),
-            "--port",
-            str(port),
-            "--oneharness-bin",
-            str(oneharness_bin),
-        ]
+    activity_root = workspace / "dispatch-scratch"
+    status_dir = activity_root / "orchestrator-watchdog-fixture" / "agent"
+    status_dir.mkdir(parents=True)
+    with (status_dir.parent / "owner.lock").open("w+") as owner:
+        fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return serve_api(
+            [
+                "--runs-dir",
+                str(runs_dir),
+                "--port",
+                str(port),
+                "--oneharness-bin",
+                str(oneharness_bin),
+                "--activity-root",
+                str(activity_root),
+            ]
+        )
+
+
+def stream_dashboard(workspace: Path) -> int:
+    """Publish one realistic mid-turn event into the live dispatch's scratch tree."""
+    path = (
+        workspace
+        / "dispatch-scratch"
+        / "orchestrator-watchdog-fixture"
+        / "agent"
+        / "agent.activity"
     )
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": LIVE_RUN,
+                "round": "1",
+                "node": "dashboard",
+                "persona": "engineer",
+                "at": time.time(),
+                "kind": "tool_call",
+                "name": "Read",
+                "detail": "orchestrator/server.py",
+                "events": 12,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1191,6 +1228,11 @@ def main(argv: list[str] | None = None) -> int:
         "--settle-dashboard",
         action="store_true",
         help="append real progress to an already-served fixture instead of serving",
+    )
+    parser.add_argument(
+        "--stream-dashboard",
+        action="store_true",
+        help="publish live dashboard activity into the serving process's scratch root",
     )
     parser.add_argument(
         "--remove-run",
@@ -1226,6 +1268,8 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["XDG_STATE_HOME"] = str(workspace / "state")
     if args.settle_dashboard:
         return settle_dashboard(workspace)
+    if args.stream_dashboard:
+        return stream_dashboard(workspace)
     if args.remove_run is not None:
         return remove_run(workspace, args.remove_run)
     if args.remove_page_runs:

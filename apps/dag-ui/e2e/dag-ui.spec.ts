@@ -1057,10 +1057,10 @@ test("says so when a run recorded no run-level conversation", async ({
 
 test("connects to the server's event stream on load", async ({ page }) => {
   await openObservatory(page);
-  // The server opens every connection with a snapshot, so the header flips to
-  // "Updates received" only once the browser's EventSource really connected. The
+  // The server opens every connection with a snapshot, so the header gains a
+  // last-updated reading only once the browser's EventSource really connected. The
   // journeys below then change the served run and assert what the stream carries.
-  await expect(page.getByText("Updates received")).toBeVisible();
+  await expect(page.getByText(/Last updated/)).toBeVisible();
 });
 
 test("recovers the selection when a bookmarked run is not being served", async ({
@@ -1303,7 +1303,7 @@ test("surfaces a telemetry read it cannot complete", async ({ page }) => {
   await expect(
     banner.locator('[data-slot="alert-description"]'),
   ).not.toBeEmpty();
-  await expect(page.getByText("Awaiting updates")).toBeVisible();
+  await expect(page.getByText("Waiting for first update")).toBeVisible();
 
   // The one control that can retry the read stays reachable while the read is
   // failing, and reporting the failure again is the honest outcome of pressing it.
@@ -1328,7 +1328,15 @@ test("streams real progress the server observes on disk", async ({ page }) => {
     page.locator(".dag-node.state-done", { hasText: "dashboard" }),
   ).toBeVisible();
   await expect(page.locator(".dag-node.state-running")).toHaveCount(0);
-  await expect(page.getByText("Updates received")).toBeVisible();
+  await expect(page.getByText(/Last updated/)).toBeVisible();
+});
+
+test("shows mid-turn activity from a live dispatch", async ({ page }) => {
+  await openObservatory(page, `/?run=${runs().live}`);
+  changeServedRuns(["--stream-dashboard"]);
+  await expect(
+    page.getByText("dashboard: Read orchestrator/server.py"),
+  ).toBeVisible();
 });
 
 test("drops a run the server stops serving", async ({ page }) => {

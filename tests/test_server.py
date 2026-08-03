@@ -147,6 +147,54 @@ def test_event_stream_resume_still_snapshots_but_continues_the_cursor(tmp_path: 
     anyio.run(body)
 
 
+def test_run_scoped_stream_emits_live_activity_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    summaries = iter(
+        [
+            (),
+            (
+                {
+                    "round": "1",
+                    "node": "api",
+                    "at": 10.0,
+                    "kind": "tool",
+                    "name": "Read",
+                    "detail": "server.py",
+                    "events": 3,
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(server, "_activity_snapshot", lambda _run, _root: next(summaries))
+
+    async def body() -> None:
+        gen = server._event_stream(
+            _Request(2), runs, "demo", None, ABSENT, 0.0, 100.0, 100.0, tmp_path
+        )
+        await gen.__anext__()
+        changed = await gen.__anext__()
+        assert "event: activity.changed" in changed
+        assert json.loads(changed.split("data: ", 1)[1]) == {
+            "run_id": "demo",
+            "activity": [
+                {
+                    "round": "1",
+                    "node": "api",
+                    "at": 10.0,
+                    "kind": "tool",
+                    "name": "Read",
+                    "detail": "server.py",
+                    "events": 3,
+                }
+            ],
+        }
+
+    anyio.run(body)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

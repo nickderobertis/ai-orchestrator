@@ -657,6 +657,7 @@ export const sseEventNameSchema = z.enum([
   "snapshot",
   "run.changed",
   "conversation.changed",
+  "activity.changed",
   "run.removed",
 ]);
 export const sseEventDataSchema = arbitraryRecord;
