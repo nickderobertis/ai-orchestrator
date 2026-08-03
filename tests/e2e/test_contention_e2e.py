@@ -19,6 +19,7 @@ from multiprocessing.synchronize import Event as MPEvent
 from pathlib import Path
 
 import pytest
+from conftest import install_pre_push_hook
 from rendezvous import Rendezvous
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -34,6 +35,8 @@ from orchestrator.coordination import (
 )
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import run_repo_task
+from orchestrator.provenance import incomplete_commits
+from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, RunId, prepare_round
 from orchestrator.workspace import Workspace, normalize_repo
@@ -119,13 +122,40 @@ def _orphan_worktree_process(
 
 
 def _dirty_orphan_worktree_process(
-    canonical: str, root: str, branch: str, ready: multiprocessing.Queue[str]
+    repo_spec: str,
+    canonical: str,
+    root: str,
+    branch: str,
+    ready: multiprocessing.Queue[str],
 ) -> None:
-    repo = normalize_repo(canonical)
-    workspace = _open_workspace(canonical, root)
+    repo = normalize_repo(repo_spec)
+    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
+    workspace.ensure_clone(repo)
     worktree = workspace.worktree(repo, branch, base="origin/main")
     (worktree / "interrupted.txt").write_text("survived the killed dispatch\n", encoding="utf-8")
     ready.put(str(worktree))
+
+
+def _held_identity_worktree_process(
+    repo_spec: str,
+    canonical: str,
+    root: str,
+    branch: str,
+    state_root: str,
+    token: str,
+    ready: multiprocessing.Queue[str],
+    release: MPEvent,
+) -> None:
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+    repo = normalize_repo(repo_spec)
+    workspace = Workspace(
+        root, resolver=lambda _spec: Path(canonical), workflow="local", run_token=token
+    )
+    workspace.ensure_clone(repo)
+    worktree = workspace.worktree(repo, branch, base="origin/main")
+    ready.put(str(worktree))
+    release.wait(e2e_timeout(30))
+    workspace.remove_worktree(repo, worktree)
 
 
 def _committing_run_process(
@@ -334,9 +364,12 @@ def test_sibling_run_can_neither_remove_a_live_worktree_nor_delete_its_branch(
 
 
 def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
-    tmp_path: Path, bare_origin: Callable[..., Path]
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
 ) -> None:
-    """A retry takes ownership of the only tree containing a killed worker's edits."""
+    """The real dispatch path takes ownership of a killed worker's exact tree."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-adopt-dead")
     root = tmp_path / "worktrees-adopt-dead"
@@ -344,27 +377,41 @@ def test_dead_dispatch_worktree_is_adopted_at_the_same_path(
     ready: multiprocessing.Queue[str] = MP.Queue()
     process = MP.Process(
         target=_dirty_orphan_worktree_process,
-        args=(str(canonical), str(root), branch, ready),
+        args=(str(origin), str(canonical), str(root), branch, ready),
     )
     process.start()
     original = Path(ready.get(timeout=e2e_timeout(10)))
     _join(process)
 
-    retry = _open_workspace(str(canonical), str(root))
-    adopted = retry.worktree(normalize_repo(str(canonical)), branch, base="origin/main")
-
-    assert adopted == original
-    assert retry.adopted_worktree(adopted)
-    assert (adopted / "interrupted.txt").read_text(encoding="utf-8") == (
-        "survived the killed dispatch\n"
+    observed = tmp_path / "retry-cwd"
+    result = run_repo_task(
+        str(origin),
+        f"complete-now continue interrupted work\nrecord-cwd={observed}",
+        "engineer",
+        workspace=Workspace(root, resolver=lambda _spec: canonical, workflow="local"),
+        branch=branch,
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        recorded_gate=["true"],
     )
-    retry.remove_worktree(normalize_repo(str(canonical)), adopted)
+
+    assert Path(observed.read_text(encoding="utf-8")) == original
+    assert result.ok and result.outcome == "merged", result.detail
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "show", "main:interrupted.txt"], capture_output=True
+        ).returncode
+        == 0
+    )
 
 
 def test_live_dispatch_worktree_is_not_adopted_and_retry_uses_fresh_path(
-    tmp_path: Path, bare_origin: Callable[..., Path]
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
 ) -> None:
-    """A free ownership lease is mandatory even when the desired branch matches."""
+    """The real dispatch path falls back while the earlier owner remains live."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-adopt-live")
     root = tmp_path / "worktrees-adopt-live"
@@ -372,8 +419,9 @@ def test_live_dispatch_worktree_is_not_adopted_and_retry_uses_fresh_path(
     ready: multiprocessing.Queue[str] = MP.Queue()
     release = MP.Event()
     owner = MP.Process(
-        target=_held_worktree_process,
+        target=_held_identity_worktree_process,
         args=(
+            str(origin),
             str(canonical),
             str(root),
             branch,
@@ -386,15 +434,99 @@ def test_live_dispatch_worktree_is_not_adopted_and_retry_uses_fresh_path(
     owner.start()
     held = Path(ready.get(timeout=e2e_timeout(10)))
     try:
-        retry = _open_workspace(str(canonical), str(root))
-        fresh = retry.worktree(normalize_repo(str(canonical)), branch, base="origin/main")
+        observed = tmp_path / "fresh-cwd"
+        result = run_repo_task(
+            str(origin),
+            f"complete-now write-change\nrecord-cwd={observed}",
+            "engineer",
+            workspace=Workspace(root, resolver=lambda _spec: canonical, workflow="local"),
+            branch=branch,
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            recorded_gate=["true"],
+        )
+        fresh = Path(observed.read_text(encoding="utf-8"))
         assert fresh != held
-        assert not retry.adopted_worktree(fresh)
+        assert result.ok, result.detail
         assert held.exists()
-        retry.remove_worktree(normalize_repo(str(canonical)), fresh)
     finally:
         release.set()
         _join(owner)
+
+
+def test_dirty_retained_recovery_is_marked_and_gate_rejection_cannot_advance_base(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """Recovery adopts the crash tree but publication still depends on its real hook."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-dirty-recovery")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    root = tmp_path / "worktrees-dirty-recovery"
+    branch = "feature/dirty-recovery"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
+        target=_dirty_orphan_worktree_process,
+        args=(str(canonical), str(canonical), str(root), branch, ready),
+    )
+    process.start()
+    original = Path(ready.get(timeout=e2e_timeout(10)))
+    _join(process)
+    before = gitops.ref_sha(canonical, "main")
+    gate_cwd = tmp_path / "recovery-gate-cwd"
+    install_pre_push_hook(
+        canonical,
+        f"pwd > {gate_cwd}\nprintf 'complete gate failed deliberately\\n' >&2\nexit 1",
+    )
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=root,
+        recorded_gate=["true"],
+    )
+
+    assert recovered.outcome == "gate-failed", recovered.detail
+    assert Path(gate_cwd.read_text(encoding="utf-8").strip()) == original
+    assert gitops.ref_sha(canonical, "main") == before
+    assert incomplete_commits(canonical, "origin/main", branch)
+    assert "(incomplete step)" in gitops.log_messages(canonical, "origin/main", branch)[0].message
+
+
+def test_only_the_three_newest_incomplete_run_worktrees_are_retained(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The crash window is useful but bounded rather than an unbounded archive."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-bounded-retention")
+    root = tmp_path / "worktrees-bounded-retention"
+    run_roots: list[Path] = []
+    for number in range(5):
+        ready: multiprocessing.Queue[str] = MP.Queue()
+        process = MP.Process(
+            target=_dirty_orphan_worktree_process,
+            args=(
+                str(canonical),
+                str(canonical),
+                str(root),
+                f"feature/incomplete-{number}",
+                ready,
+            ),
+        )
+        process.start()
+        worktree = Path(ready.get(timeout=e2e_timeout(10)))
+        _join(process)
+        run_roots.append(worktree.parent)
+        # Retention order is the run-root mtime, so make the intended ordering
+        # explicit instead of depending on filesystem timestamp resolution.
+        stamp = time.time() + number
+        os.utime(worktree.parent, (stamp, stamp))
+
+    _open_workspace(str(canonical), str(root))
+
+    assert all(not path.exists() for path in run_roots[:2])
+    assert all(path.exists() for path in run_roots[2:])
+    for path in run_roots[2:]:
+        shutil.rmtree(path)
 
 
 def _same_branch_lifecycle_process(
@@ -897,6 +1029,13 @@ def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
 
     assert gitops.branch_exists(canonical, "feature/reap-False")
     assert not _has_file(origin, "main", "work.txt")
+
+    # Once the durable checkout carries the same-or-newer branch, the run root is
+    # superseded and, after this rejoining owner ends, the next sweep may reclaim it.
+    reclaim._run_leases[roots[False]].__exit__(None, None, None)
+    (roots[False] / "owner.json").unlink()
+    _open_workspace(str(canonical), str(root))
+    assert not roots[False].exists()
 
 
 def _rejoining_run_process(
