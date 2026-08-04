@@ -11,7 +11,7 @@ from orchestrator.dispatch import classify_provider_failure
 from orchestrator.journal import NodeId, open_journal
 from orchestrator.next_round import main_runs
 from orchestrator.provider_health import IDENTITIES, failure_rollups, probe, render
-from orchestrator.read_model import list_runs
+from orchestrator.read_model import list_runs, run_detail
 from orchestrator.runs import RunId, prepare_round, write_result
 from orchestrator.status import main as status_main
 
@@ -209,9 +209,16 @@ def test_provider_health_crosses_cli_views_and_read_api(
 
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / "health"
-    round_record = prepare_round(run_dir, {"tasks": [{"id": "work", "task": "x"}]})
+    round_record = prepare_round(
+        run_dir, {"tasks": [{"id": "work", "persona": "engineer", "task": "x"}]}
+    )
     journal = open_journal(run_dir, RunId("health"), round_record.number)
-    journal.append("round-started", detail={"plan": {}})
+    # A well-formed round: the node is declared before the round starts, which is
+    # what the strict projection behind `run_detail` requires.
+    journal.append(
+        "node-added", detail={"definition": {"id": "work", "persona": "engineer", "task": "x"}}
+    )
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
     journal.append("node-started", node=NodeId("work"))
 
     assert status_main(["health", "--runs-dir", str(runs_dir)]) == 0
@@ -236,4 +243,13 @@ def test_provider_health_crosses_cli_views_and_read_api(
     assert served["provider_health"]["identities"][2]["identity"] == "codex"
     assert (
         served["provider_health"]["identities"][2]["availability"]["windows"][0]["binding"] is True
+    )
+
+    # Both served envelopes carry it, so both are read here: a client that opens one
+    # run rather than listing them must still see the capacity that explains its
+    # failures, and the run-detail copy is the same snapshot rather than a stub.
+    detail = run_detail(runs_dir, "health", oneharness_bin=str(fake))
+    assert detail["provider_health"] == served["provider_health"]
+    assert [item["identity"] for item in detail["provider_health"]["identities"]] == list(
+        IDENTITIES
     )
