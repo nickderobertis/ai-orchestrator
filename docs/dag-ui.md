@@ -129,7 +129,12 @@ Escape key. It is a **timeline over a transcript**, both projected from
   reads local wall-clock time and elapsed-from-start, and the compact line and the
   expanded lanes always span the same window, so a moment does not move when the
   view is collapsed. An aggregate is plotted at the total it carries, not across
-  the window its records happened to fall in.
+  the window its records happened to fall in. The compact line is sized to fit
+  whole at every width, because it is the view a node opens on. Ten expanded lanes
+  and a reading fit no viewport shorter than the laptop the layout is designed
+  against, so below that the region scrolls: the axis is painted inside the plot's
+  own clipping box, so it cannot be pinned above that fold, and collapsing is the
+  one-click way back to it.
 - the **transcript** below it is the long-form reading: one item per span and
   event, in order, each with its summary inline. Scrolling it moves the
   timeline's cursor and clicking a segment or a marker scrolls and focuses its
@@ -146,7 +151,9 @@ Escape key. It is a **timeline over a transcript**, both projected from
   `src/features/timeline/timeline-model.ts` recovers the same grouping from the
   nesting and roles schema 9 does serve.
 - the node's **task, completion criteria, dependencies, PR and gate result** are
-  tabs beside the timeline, one selection away rather than a wall of blocks.
+  tabs beside the timeline, one selection away rather than a wall of blocks. Six
+  names do not fit every width, so below the breakpoint they wrap onto a second
+  row rather than hiding the ones past the edge behind a scroller.
 
 Nothing in either surface grows with the size of the run. A run of eight or more
 consecutive same-kind siblings arrives as one grouped row, and a conversation
@@ -197,7 +204,11 @@ supports, into gitignored `apps/dag-ui/.screens/`. It is deliberately outside
 reflow, which no selector describes. It is what found the tab list widening the
 working area past the viewport, the pinned timeline leaving the transcript no
 room at ten expanded lanes, and the document that scrolled out from under
-`scrollIntoView`.
+`scrollIntoView`. It went on to find the axis sliced through the middle of its own
+digits by the fold, the six tab names spilling past *both* edges of a scroller that
+could only ever reach one of them, and — once they wrapped — a second row of them
+drawn below the strip that was supposed to hold it. Each is now a journey, because
+a gallery only catches what someone looks at.
 
 Every ordinary run exercises that choice; only two overlapping runs exercise what
 it is for, so `isolation.config.ts` is one more Playwright run that starts no server

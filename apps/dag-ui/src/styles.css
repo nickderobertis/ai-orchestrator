@@ -453,11 +453,18 @@ p {
 .node-tabs > [role="tablist"] {
   margin: 0 20px;
   /* Six named readings do not fit a laptop's working area; they scroll rather than
-     widening the view that holds them. The design system sizes the list to its own
-     content, so the ceiling has to be stated here. */
+     widening the view that holds them, and below the breakpoint they wrap instead
+     (see the media query at the foot of this file). The design system sizes the list
+     to its own content, so the ceiling has to be stated here. */
   min-width: 0;
   max-width: calc(100% - 40px);
   overflow-x: auto;
+  /* The design system centres its tab row. A centred row that overflows spills half
+     its excess past each edge, and a scroller can only ever reach the half past its
+     right one — which is how the first reading's own name lost its first letter with
+     nothing able to scroll it back into view. Reading from the start instead keeps
+     every name reachable. */
+  justify-content: flex-start;
 }
 
 .node-tab-panel {
@@ -481,7 +488,12 @@ p {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: fit-content(40%) minmax(0, 1fr);
+  /* The share is what the collapsed line needs at the narrowest width the layout
+     supports, where the ten lane names wrap the legend onto a second row: this is the
+     view an operator lands on, so it is the one view that has to be whole. Being
+     `fit-content`, a plot that needs less than its share still takes only what it
+     needs, and the reading keeps the rest. */
+  grid-template-rows: fit-content(60%) minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -490,15 +502,27 @@ p {
 
 /* Expanding is the reader asking for the lanes, so the plot may take more of the
    working area — still bounded, because the reading it is read against is the other
-   half of the view and must not be squeezed to nothing. */
+   half of the view and must not be squeezed to nothing.
+   The share is what the whole lane vocabulary needs on the laptop the layout is
+   designed against, so that reading fits without scrolling at all. A shorter viewport
+   cannot hold ten lanes and a reading at once whatever share is named, so its region
+   scrolls; the axis is painted inside the plot's own clipping box and cannot be
+   pinned above that fold, so reaching the clock there is a scroll rather than a
+   given. Collapsing is the other way back to it, and it is one click. */
 .node-execution[data-expanded="true"] {
-  grid-template-rows: fit-content(62%) minmax(0, 1fr);
+  grid-template-rows: fit-content(72%) minmax(0, 1fr);
 }
 
 .node-timeline-sticky {
   z-index: 5;
   min-height: 0;
   overflow: auto;
+  /* A short viewport cannot hold the expanded lanes, so this region is sometimes the
+     one thing on the page with somewhere to scroll to. A thin bar is what says so;
+     without it a plot that continues below the fold and a plot that was cut off look
+     exactly alike. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
   width: 100%;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
@@ -514,7 +538,6 @@ p {
      and takes the pinned timeline with it. */
   overscroll-behavior: contain;
   width: 100%;
-  min-height: 0;
   gap: 10px;
   padding: 18px 24px 24px;
   align-content: start;
@@ -984,5 +1007,27 @@ pre {
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Below the breakpoint the six names stop fitting one row at all, and scrolling
+     them hides whichever readings are past the edge behind an affordance nothing
+     announces. They wrap instead, which costs one row of height and leaves every
+     reading named and reachable. The design system fixes the row's height for a
+     single line, so releasing that is what lets the second one exist. */
+  .node-tabs > [role="tablist"] {
+    flex-wrap: wrap;
+    height: auto;
+    overflow-x: visible;
+  }
+
+  /* Each name is sized to fill the single row the design system lays them out in, so
+     on a second row every one of them is still a whole row tall and the two together
+     are twice the strip that holds them — which is how the sixth reading came to be
+     drawn below its own tab strip and clipped away entirely. Wrapped, they take the
+     height of the name they carry, plus the padding that keeps each one a target a
+     finger can hit on the layout that needs two rows in the first place. */
+  .node-tabs > [role="tablist"] > [role="tab"] {
+    height: auto;
+    padding-block: 5px;
   }
 }

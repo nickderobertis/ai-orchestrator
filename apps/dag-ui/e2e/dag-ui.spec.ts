@@ -1485,12 +1485,33 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
 
   await page.setViewportSize({ width: 800, height: 700 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  // Below the layout's breakpoint the six named readings scroll their own tab list
-  // rather than widening the view that holds them.
+  // Below the layout's breakpoint the six named readings wrap onto a second row
+  // rather than widening the view that holds them — and rather than overflowing a
+  // centred row, which spilled the first and last of them past both edges of a
+  // scroller that could only ever reach one of the two.
   expect(await viewportOverflow()).toEqual({
     overflowsX: false,
     overflowsY: false,
   });
+  const tabStrip = page.getByRole("tablist", { name: "Node details" });
+  const stripBox = await tabStrip.boundingBox();
+  if (stripBox === null) throw new Error("the node tab strip has no bounds");
+  const labels = await tabStrip.getByRole("tab").all();
+  expect(labels).toHaveLength(6);
+  for (const label of labels) {
+    // Both axes: the row they spill past horizontally is only reachable one way, and
+    // the row they spill past vertically is drawn under the reading below and reaches
+    // nobody at all.
+    const box = await label.boundingBox();
+    if (box === null) throw new Error("a node tab has no bounds");
+    expect(box.x).toBeGreaterThanOrEqual(stripBox.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(stripBox.x + stripBox.width);
+    expect(box.y).toBeGreaterThanOrEqual(stripBox.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(
+      stripBox.y + stripBox.height,
+    );
+    await expect(label).toBeInViewport();
+  }
   await rail(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
@@ -1516,6 +1537,65 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     tiles.map((tile) => tile.getBoundingClientRect().top),
   );
   expect(new Set(narrowRows).size).toBe(2);
+});
+
+test("keeps the timeline's clock readable when its lanes outgrow the view", async ({
+  page,
+}) => {
+  /** How far the axis falls outside the region that holds it, in pixels. */
+  const clipped = async (): Promise<number> => {
+    const region = await rail(page).boundingBox();
+    const axis = await rail(page).getByTestId("timeline-axis").boundingBox();
+    if (region === null || axis === null)
+      throw new Error("the timeline has no bounds to read");
+    return Math.max(
+      0,
+      region.y - axis.y,
+      axis.y + axis.height - (region.y + region.height),
+    );
+  };
+  /** Whether the plot really is taller than the room it was given. */
+  const overflowing = async (): Promise<boolean> =>
+    rail(page).evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    );
+
+  // The laptop the layout is designed against, and the compact size below its
+  // breakpoint: ten lanes and a reading do not both fit the second one at any share
+  // of it, so the two viewports state different things about the expanded plot.
+  for (const viewport of [
+    { width: 1400, height: 900, expandedFits: true },
+    { width: 800, height: 700, expandedFits: false },
+  ]) {
+    await page.setViewportSize(viewport);
+    await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+    await expect(rail(page).getByTestId("timeline-axis")).toBeVisible();
+    // The view an operator lands on is never cut: the collapsed plot is one line, and
+    // the region holds it and its clock whole at every width — including the one
+    // whose ten lane names wrap the legend onto a second row.
+    expect(await overflowing()).toBe(false);
+    expect(await clipped()).toBe(0);
+
+    await rail(page).getByRole("button", { name: "Expand timeline" }).click();
+    expect(await overflowing()).toBe(!viewport.expandedFits);
+    if (!viewport.expandedFits) {
+      // Where the lanes cannot fit, the region scrolls rather than dropping what it
+      // could not draw, and the clock is at the end of that scroll — whole, not the
+      // half-drawn line of digits the bottom edge used to leave.
+      await rail(page).evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+    }
+    expect(await clipped()).toBe(0);
+    // Still the axis it was, not a stub of one: both ticks, each naming the wall
+    // clock and the elapsed time the reader tracks lanes against.
+    const ticks = rail(page).getByTestId("timeline-axis").locator("span");
+    await expect(ticks).toHaveCount(2);
+    for (const tick of await ticks.allTextContents()) {
+      expect(tick).toMatch(/\d{2}:\d{2}:\d{2}.*[+−]\d/u);
+    }
+    await expect(ticks.first()).toBeInViewport();
+  }
 });
 
 test("paints the design system's components in the application's dark palette", async ({
