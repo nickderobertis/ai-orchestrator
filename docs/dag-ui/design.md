@@ -31,7 +31,7 @@ Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
 The authoritative node-status contract is API v2 at `/api/v2`. Its telemetry payload embeds the existing
-telemetry index at `telemetry_schema_version: 9`, mirroring that index's own
+telemetry index at `telemetry_schema_version: 10`, mirroring that index's own
 `schema_version`; this API version does not replace or renumber that contract.
 `scripts/check-dag-state-contract.py` reconciles every copy of that number here
 against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
@@ -53,7 +53,7 @@ required per-task status coverage.
 ```ts
 interface RunList {
   api_version: 2;
-  telemetry_schema_version: 9;
+  telemetry_schema_version: 10;
   observed_at: string;
   runs: RunSummary[];
   next_cursor?: string;
@@ -97,7 +97,7 @@ it back unchanged as `cursor`. The settled filter is applied before pagination.
 ```ts
 interface RunDetail {
   api_version: 2;
-  telemetry_schema_version: 9;
+  telemetry_schema_version: 10;
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
@@ -455,10 +455,10 @@ interface RunTimeline {
 // One interval of recorded work. ended_at is null for work the recorded stream
 // never closed, which is what an in-flight run looks like rather than an error.
 // parent_id links spans into a tree; a span with no parent is run-level.
-// count and total_duration_ms appear only on a "rollup" span; agent_role and
-// transport_role only on a "dispatch" one, where they are the DagConversation
-// attribution's own values so a row can be labelled and grouped without
-// fetching the transcript behind it.
+// count, total_duration_ms and intervals appear only on a "rollup" span;
+// agent_role, transport_role and dispatch_id only on a "dispatch" one, where the
+// roles are the DagConversation attribution's own values so a row can be labelled
+// and grouped without fetching the transcript behind it.
 interface TimelineSpan {
   id: string;
   kind: TimelineSpanKind;
@@ -473,10 +473,21 @@ interface TimelineSpan {
   status?: string;
   count?: number;
   total_duration_ms?: number;
+  intervals?: TimelineInterval[];
   agent_role?: AgentRole;
   transport_role?: "agent" | "judge" | "llmlint";
+  dispatch_id?: string;
   reference?: TimelineReference;
   detail?: { ok?: boolean; output_tail?: string; artifact_id?: string };
+}
+
+// One discrete wait a rollup absorbed. A rollup stands in for thousands of
+// records, and one bar across the whole contention window says only that a node
+// contended; these say when it actually stalled. Bounded to the largest few, so
+// the payload stays sized by the graph rather than by contention.
+interface TimelineInterval {
+  started_at: string;
+  ended_at: string;
 }
 
 // One instant recorded inside a span. `kind` is the journal event kind that
@@ -542,9 +553,24 @@ conversations, and the persisted `DetailSnapshot`. Its rules:
   dispatch span it ran within rather than emitted beside it; a conversation whose
   attribution names no node attaches to its round, or to the run when it names
   neither.
+- A dispatch span starts when its first turn *started* — the turn's own
+  `startedAt`, or its recorded `timestamp` less its measured `durationMs`, since a
+  history record is written when its turn finishes. A single-turn session, and
+  every claude-code session (which reports no wall interval and only a measured
+  duration), would otherwise render as a sliver.
+- `dispatch_id` groups the several oneharness sessions one onejudge dispatch
+  produced: the agent session's own id, carried by its supervisor and lint spans
+  through `attribution.parentConversationId`.
+- A `step` span is served for steps the plan declared. A workstream given one
+  `(persona, task)` runs as a synthesized `main` step, whose span described nothing
+  the plan asked for, so its children attach to the node span instead; a plan that
+  declares a step named `main` keeps its span like any other.
 - High-frequency kinds — those recorded per lock acquisition rather than per graph
   transition, currently `lock-wait` — collapse into one `rollup` span per node
-  carrying `count` and `total_duration_ms`, never one item each.
+  carrying `count` and `total_duration_ms`, never one item each. That span also
+  carries `intervals`: the largest few waits it absorbed, each ending when its
+  record was journalled and starting its own recorded `seconds` earlier, so a
+  client renders discrete stalls instead of one bar across the whole window.
 - The `DetailSnapshot` carries no timestamps and so contributes no ordered item.
   It supplies the observed PR `state` as the `status` of a publication span the
   journal has not closed.
@@ -767,6 +793,8 @@ The package has turns, not a message union. Records map in source order:
 | `turn.status`, `failureKind` | Status mapping above; `failure_kind ?? null`. |
 | `turn.usage` | Rename snake-case keys to `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd`; preserve number/null and omit absent properties. |
 | `turn.tools` | Every event becomes required `index`/`kind` plus `input`, `name`, `output` only when present. Unsupported kinds remain visible generic tool events. |
+| `turn.startedAt`, `finishedAt` | `started_at`, `finished_at` as RFC 3339 UTC, present exactly when the record carries a `null` or a parseable timestamp; a recorded `null` is preserved, since that is what a harness reporting no wall interval writes. |
+| `turn.durationMs`, `modelMs`, `toolMs` | `duration_ms`, `model_ms`, `tool_ms`, present exactly when the record carries a `null` or a finite non-negative number. A value none of these five can serve stays under `turn.unknown` rather than being dropped. |
 | `turn.unknown` | Every unconsumed record key and JSON value; system content without a public field stays here. |
 
 Timing, graph labels, launch provenance, semantic role, persona, finish time, and
@@ -795,6 +823,16 @@ session labels to check-in, the dedicated orchestrator node/session to
 orchestrator, and remaining `role=agent`/`llmlint` to worker. It marks this
 classification `inferred: true`; new writers must emit labels and cannot rely on
 names.
+
+`transportRole: "judge"` is the exception to "a present label is authoritative":
+that session is served as `agentRole: "judge"` whatever its `agent_role` label
+says, and is marked `inferred` when the two disagree. A dispatch stamped the
+worker's semantic role into `ONEHARNESS_HISTORY_LABELS`, which outranks the judge
+config's own `agent_role = "judge"`, so thousands of recorded supervisor sessions
+carry `agent_role=worker` — which is what showed an operator a strict-evaluator
+transcript under a row labelled "worker". `scripts/oneharness-agent.sh` keeps that
+env label off the judge side now; the read heals the history that already exists,
+because a store only grows.
 
 Native onejudge session linkage is the parent/turn authority. Fallback linking
 uses exact `run_id` + `node` + optional `step` labels and time containment,

@@ -953,7 +953,13 @@ def main() -> None:
     # The served run timeline: the design contract is authoritative for its payload
     # shapes, and its two closed vocabularies are mirrored in the dag-model schemas a
     # client parses with, so all three sides are reconciled here.
-    for name in ("TimelineReference", "TimelineEvent", "TimelineSpan", "RunTimeline"):
+    for name in (
+        "TimelineReference",
+        "TimelineEvent",
+        "TimelineInterval",
+        "TimelineSpan",
+        "RunTimeline",
+    ):
         reconcile_shape(timeline, name, design, interface_fields(design, name))
     for python_name, schema_name in (
         ("TimelineSpanKind", "timelineSpanKindSchema"),

@@ -32,6 +32,7 @@ class HistoryError(Exception):
 
 JUDGE_PREFIXES = (
     "you-are-a-strict-careful-evaluator",
+    "you-are-a-careful-evaluator",
     "you-are-roleplaying-the-user-in",
 )
 SessionId = NewType("SessionId", str)
@@ -234,8 +235,16 @@ def agent_role(session: HistorySession, transport_role: SessionRole) -> tuple[st
     """The semantic role of one session, and whether it was inferred not labelled.
 
     A present ``agent_role`` label is authoritative and passed through verbatim, so a
-    role introduced by a future dispatch needs no change here. The inference below is
-    the compatibility fallback for history written before that label existed.
+    role introduced by a future dispatch needs no change here — *except* on the judge
+    side, where the transport role is the stronger evidence and overrides it. A
+    dispatch used to stamp its worker's semantic role into the environment oneharness
+    reads, and the environment layer beats the judge config's own
+    ``agent_role = "judge"``, so thousands of recorded supervisor sessions carry
+    ``agent_role=worker``. Serving that label verbatim is what showed an operator a
+    strict-evaluator transcript under a row labelled "worker" — and no re-labelling of
+    history can heal it, because the store only grows. The stamping is fixed at
+    dispatch (`scripts/oneharness-agent.sh` keeps the judge side's own labels); this is
+    the read-time half, and both are needed.
 
     It lives beside `session_role` because both answers describe the same session and
     two callers need them together: the transcript mapper that renders a conversation
@@ -243,12 +252,14 @@ def agent_role(session: HistorySession, transport_role: SessionRole) -> tuple[st
     of this fallback would make the two views disagree about the same history.
     """
     labelled = session.labels.get("agent_role")
+    if transport_role == "judge":
+        # Marked inferred exactly when the served role is not the one stamped, so a
+        # consumer can still tell an authoritative label from a healed one.
+        return "judge", labelled != "judge"
     if isinstance(labelled, str) and labelled:
         return labelled, False
     persona = session.labels.get("persona") or ""
     name = session.name
-    if transport_role == "judge":
-        return "judge", True
     if persona == "pr-author" or "pr-author" in name:
         return "pr-author", True
     if name.startswith("orchestrator-") or persona == "orchestrator":
