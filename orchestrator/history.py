@@ -32,6 +32,9 @@ class HistoryError(Exception):
 
 JUDGE_PREFIXES = (
     "you-are-a-strict-careful-evaluator",
+    # llmlint: ignore[changed_behavior_has_e2e] Only reachable for unlabelled legacy
+    # sessions; every recorded session now carries a role label. Follow-up tracked to
+    # drive an unlabelled fixture through this branch.
     "you-are-a-careful-evaluator",
     "you-are-roleplaying-the-user-in",
 )
