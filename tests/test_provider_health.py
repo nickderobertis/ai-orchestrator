@@ -4,6 +4,9 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from orchestrator import provider_health
 from orchestrator.dispatch import classify_provider_failure
 from orchestrator.journal import NodeId, open_journal
 from orchestrator.next_round import main_runs
@@ -50,9 +53,8 @@ def test_provider_failure_vocabulary_and_bounded_payload() -> None:
     }
 
 
-def test_probe_keeps_all_configured_identities_and_renders_unknown(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_probe_keeps_all_configured_identities_and_renders_unknown(tmp_path: Path) -> None:
+    """An answer that names one identity still accounts for all five."""
     payload = {
         "schema_version": "0.1",
         "identities": [
@@ -71,18 +73,46 @@ def test_probe_keeps_all_configured_identities_and_renders_unknown(
             }
         ],
     }
-
-    class Result:
-        returncode = 0
-        stdout = json.dumps(payload)
-        stderr = ""
-
-    monkeypatch.setattr("orchestrator.provider_health.subprocess.run", lambda *a, **k: Result())
-    snapshot = probe(cwd=tmp_path)
+    snapshot = probe(cwd=tmp_path, read_usage=lambda _bin, _cwd: json.dumps(payload))
     assert [item["identity"] for item in snapshot["identities"]] == list(IDENTITIES)
     shown = render(snapshot)
     assert "codex: weekly binding, 100% used, resets 2026-08-08" in shown
     assert "claude-code:alternate: unknown" in shown
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["", "not json at all", '{"identities": "not a list"}'],
+    ids=["no-answer", "unparseable", "wrong-shape"],
+)
+def test_a_probe_that_cannot_answer_lists_every_identity_as_unknown(
+    tmp_path: Path, answer: str
+) -> None:
+    """A refusing, timing-out, or nonsense-returning probe is degraded, not dropped."""
+    snapshot = probe(cwd=tmp_path, read_usage=lambda _bin, _cwd: answer or None)
+
+    assert [item["identity"] for item in snapshot["identities"]] == list(IDENTITIES)
+    assert render(snapshot).splitlines()[1:] == [f"  {name}: unknown" for name in IDENTITIES]
+
+
+def test_the_disable_switch_answers_unknown_without_reaching_a_provider(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The suite and an offline host turn ambient probing off by name."""
+
+    def refuse(_bin: str, _cwd: Path) -> str:
+        raise AssertionError("a disabled probe must not reach the usage boundary")
+
+    monkeypatch.setattr(provider_health, "_read_usage", refuse)
+    monkeypatch.setenv(provider_health.PROBE_ENV, "0")
+    assert [item["availability"]["state"] for item in probe(cwd=tmp_path)["identities"]] == [
+        "unknown"
+    ] * len(IDENTITIES)
+
+    # The switch governs the ambient default only: a caller that states its own
+    # boundary — every unit test above — is asking for that boundary, not for this.
+    stated = probe(cwd=tmp_path, read_usage=lambda _bin, _cwd: '{"identities": []}')
+    assert [item["identity"] for item in stated["identities"]] == list(IDENTITIES)
 
 
 def test_failure_rollup_collapses_same_cause(tmp_path: Path) -> None:
@@ -147,6 +177,9 @@ def test_provider_health_crosses_cli_views_and_read_api(
     monkeypatch.delenv("ONEHARNESS_HISTORY_DIR", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "home").mkdir()
+    # The suite disables ambient probing; this journey is the one that means to spend
+    # one, through the real wrapper and the identity indirections it sources.
+    monkeypatch.setenv(provider_health.PROBE_ENV, "1")
 
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / "health"

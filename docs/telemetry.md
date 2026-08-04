@@ -158,3 +158,36 @@ no time.
    carries the same bounded `output_tail` and points at the same log, so "the
    gate rejected it", "a sibling run moved the base", and "the host failed" are
    three different readings rather than one silent settle.
+
+## Diagnosing a provider failure
+
+A node that dies to the provider says which side of the conversation refused,
+which identity refused it, and why. `just status` and `just runs` carry that
+without any further command, because the incident this exists for cost a night:
+every death printed `provider error (respond): harness failed (quota)`, which
+names neither.
+
+1. Read the **provider health** block both views print. It lists all five
+   configured identities under the same indirections dispatch uses
+   (`scripts/claude-alt-config-dir.sh`, `scripts/codex-alt-home.sh`), with each
+   one's binding window, utilization, and reset time. An identity whose probe
+   failed is listed as `unknown` rather than dropped, so a chain is never
+   silently short one member.
+2. Read the rolled-up failure lines beneath each run. Repeated deaths on one
+   cause collapse to one line — `3 nodes failed on judge-side codex:primary
+   quota mid conversation, resets Aug 8` — so a whole round's worth of the same
+   refusal reads as the single fact it is.
+3. `just results <run-id>` and the read API's `failure` record carry the same
+   attribution per node, plus a bounded `raw_tail` of what the harness actually
+   printed and, where the harness stated one, its structured error payload.
+   `quota_at_launch` fell through to the next identity; `quota_mid_conversation`
+   could not, because the conversation was already bound to the refusing one.
+4. A dispatch whose agent side was recorded but whose judge side was not is
+   marked `judge_unrecorded`. The supervisor did not vanish — its harness failed
+   to write history — so read the raw session rather than concluding the run was
+   unsupervised.
+
+The probe is read-only and cheap, but it does reach the configured providers.
+Set `ORCHESTRATOR_PROVIDER_HEALTH_PROBE=0` on an offline or metered host to
+answer every view with unknown identities instead; this repository's own test
+suite sets it so a suite run never touches a paid identity.

@@ -233,6 +233,14 @@ export const runTelemetrySchema = openObject({
   lint: counter,
 });
 
+/**
+ * A read-only provider capacity snapshot, served beside a run list or detail.
+ *
+ * Every configured identity is present whether or not its probe answered — one that
+ * did not carries `availability.state = "unknown"` rather than being dropped, so a
+ * client can never mistake an unprobed identity for one that is not configured. The
+ * per-identity shape is upstream oneharness's and is deliberately not restated here.
+ */
 export const providerHealthSchema = openObject({
   schema_version: z.union([z.string(), z.number()]).optional(),
   observed_at: z.string().optional(),
@@ -276,6 +284,7 @@ export const runListSchema = openObject({
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
   next_cursor: z.string().min(1).optional(),
+  provider_health: providerHealthSchema.optional(),
 });
 
 const planStepSchema = openObject({
@@ -636,6 +645,7 @@ export const runDetailSchema = openObject({
   conversations: runConversationsSchema,
   node_details: z.record(z.string(), nodeDetailSchema).optional().default({}),
   launch: runLaunchSchema.optional(),
+  provider_health: providerHealthSchema.optional(),
 });
 
 export const timelineReferenceKindSchema = z.enum([

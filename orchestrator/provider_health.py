@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import time
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,54 +20,42 @@ IDENTITIES = (
     "codex:alternate",
     "claude-code:primary",
 )
+#: Set to ``0`` to answer every view with unknown identities instead of probing.
+#: The probe is read-only and cheap, but it does reach the configured providers, so
+#: an offline or metered host — and this repository's own suite, which must never
+#: touch a paid identity — turns it off here rather than by guessing from other
+#: environment variables what kind of process is asking.
+PROBE_ENV = "ORCHESTRATOR_PROVIDER_HEALTH_PROBE"
+#: Bounded because a view must render whatever the providers are doing. Every exit
+#: from `_read_usage` — answer, refusal, timeout, or a wrapper that cannot start —
+#: leaves no probe process behind.
+PROBE_TIMEOUT_SECONDS = 8.0
 _USAGE_WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "oneharness-usage.sh"
-_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
+#: One usage answer serves every view for this long. The read API re-lists runs on
+#: each poll, so without it a watched run would spawn a probe per second.
+_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _CACHE_SECONDS = 30.0
 
+#: The one boundary that spawns anything. Injected by tests of the parsing and
+#: merging above it, so proving those never launches a subprocess at all.
+UsageReader = Callable[[str, Path], str | None]
 
-def probe(*, oneharness_bin: str = "oneharness", cwd: Path | None = None) -> dict[str, Any]:
-    """Probe every configured identity; failure is data and never blocks a view."""
-    selected_cwd = cwd or Path.cwd()
-    resolved_command = shutil.which(oneharness_bin) or oneharness_bin
-    key = (oneharness_bin, resolved_command, str(selected_cwd.resolve()))
-    cached = _CACHE.get(key)
-    if cached is not None and time.monotonic() - cached[0] < _CACHE_SECONDS:
-        return cached[1]
-    unknown = {
-        "schema_version": "0.1",
-        "identities": [
-            {"identity": identity, "availability": {"state": "unknown"}} for identity in IDENTITIES
-        ],
-    }
-    # A redirected history store is the deterministic command-provider/test mode;
-    # it has no relationship to ambient paid identities. Its explicit usage seam is
-    # tested by calling this function with a patched subprocess boundary.
-    if os.environ.get("ONEHARNESS_HISTORY_DIR"):
-        _CACHE[key] = (time.monotonic(), unknown)
-        return unknown
-    # Read-model tests and embedded callers commonly point history at a purpose-built
-    # executable. It implements the history protocol, not the usage command; probing
-    # it can strand its fake provider children. Only the configured oneharness CLI is
-    # the usage boundary. Tests of this boundary patch subprocess under the default.
-    if Path(oneharness_bin).name != "oneharness":
-        _CACHE[key] = (time.monotonic(), unknown)
-        return unknown
-    resolved = shutil.which("oneharness")
-    if (
-        "/" in oneharness_bin
-        and resolved is not None
-        and Path(oneharness_bin).resolve() != Path(resolved).resolve()
-    ):
-        _CACHE[key] = (time.monotonic(), unknown)
-        return unknown
+
+def probing_enabled() -> bool:
+    """Whether an ambient caller may spend a probe on the configured providers."""
+    return os.environ.get(PROBE_ENV, "1").strip().lower() not in {"0", "off", "false", "no"}
+
+
+def _read_usage(oneharness_bin: str, cwd: Path) -> str | None:
+    """Run the usage wrapper to completion or kill it; never leave one running."""
     try:
-        proc = subprocess.run(
+        completed = subprocess.run(
             [
                 str(_USAGE_WRAPPER),
                 "--harness",
                 ",".join(IDENTITIES),
                 "--cwd",
-                str(selected_cwd),
+                str(cwd),
                 "--format",
                 "json",
                 "--compact",
@@ -75,13 +63,52 @@ def probe(*, oneharness_bin: str = "oneharness", cwd: Path | None = None) -> dic
             text=True,
             capture_output=True,
             env={**os.environ, "ONEHARNESS_BIN": oneharness_bin},
-            timeout=8,
+            timeout=PROBE_TIMEOUT_SECONDS,
             check=False,
         )
-        value = json.loads(proc.stdout) if proc.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        _CACHE[key] = (time.monotonic(), unknown)
-        return unknown
+    except (OSError, subprocess.SubprocessError):
+        # `subprocess.run` kills and waits for the child before it raises
+        # `TimeoutExpired`, so the timeout path reaps as surely as the others.
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def unknown_snapshot() -> dict[str, Any]:
+    """Every configured identity, listed and explicitly unknown."""
+    return {
+        "schema_version": "0.1",
+        "identities": [
+            {"identity": identity, "availability": {"state": "unknown"}} for identity in IDENTITIES
+        ],
+    }
+
+
+def probe(
+    *,
+    oneharness_bin: str = "oneharness",
+    cwd: Path | None = None,
+    read_usage: UsageReader | None = None,
+) -> dict[str, Any]:
+    """Probe every configured identity; failure is data and never blocks a view.
+
+    ``read_usage`` is the caller's own boundary and is always used when given —
+    `PROBE_ENV` governs only the ambient default, which is what a view reaches for.
+    """
+    selected_cwd = (cwd or Path.cwd()).resolve()
+    if read_usage is None:
+        if not probing_enabled():
+            return unknown_snapshot()
+        read_usage = _read_usage
+    key = (oneharness_bin, str(selected_cwd))
+    cached = _CACHE.get(key)
+    if cached is not None and time.monotonic() - cached[0] < _CACHE_SECONDS:
+        return cached[1]
+    unknown = unknown_snapshot()
+    stdout = read_usage(oneharness_bin, selected_cwd)
+    try:
+        value = json.loads(stdout) if stdout else None
+    except json.JSONDecodeError:
+        value = None
     if not isinstance(value, dict) or not isinstance(value.get("identities"), list):
         _CACHE[key] = (time.monotonic(), unknown)
         return unknown
@@ -97,6 +124,11 @@ def probe(*, oneharness_bin: str = "oneharness", cwd: Path | None = None) -> dic
     ]
     _CACHE[key] = (time.monotonic(), value)
     return value
+
+
+def forget_probes() -> None:
+    """Drop every cached usage answer, so the next probe asks again."""
+    _CACHE.clear()
 
 
 def render(snapshot: dict[str, Any]) -> str:
