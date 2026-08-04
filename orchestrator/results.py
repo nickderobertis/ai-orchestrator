@@ -12,14 +12,20 @@ from .runs import as_result_payload, load_mapping, rounds, validate_run_id
 
 
 def _failure_line(value: object) -> str | None:
+    """Name the refusing side and identity for a node the provider turned away.
+
+    Only what the round recorded on the item itself: `judge_unrecorded` is derived
+    from the history sessions rather than written here, so it belongs to the views
+    that read those — `just status` and the read API — and claiming it from this
+    one would be a guess.
+    """
     if not isinstance(value, dict):
         return None
     side = value.get("side", "unknown")
     identity = value.get("identity", "unknown")
     cause = str(value.get("cause", "provider failure")).replace("_", " ")
     reset = f", resets {value['reset_time']}" if value.get("reset_time") else ""
-    unrecorded = "; judge history unrecorded" if value.get("judge_unrecorded") else ""
-    return f"Provider: {side}-side {identity} {cause}{reset}{unrecorded}"
+    return f"Provider: {side}-side {identity} {cause}{reset}"
 
 
 def render(run: str, runs_dir: Path) -> str:
