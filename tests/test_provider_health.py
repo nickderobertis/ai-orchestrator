@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,82 @@ def test_the_disable_switch_answers_unknown_without_reaching_a_provider(
     # boundary — every unit test above — is asking for that boundary, not for this.
     stated = probe(cwd=tmp_path, read_usage=lambda _bin, _cwd: '{"identities": []}')
     assert [item["identity"] for item in stated["identities"]] == list(IDENTITIES)
+
+
+def _hermetic_probe_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point every indirection `scripts/oneharness-usage.sh` resolves into `tmp_path`.
+
+    The wrapper is the real one, so it really does source the two helpers, and one of
+    them creates the alternate Codex home. Overridden here rather than left to derive
+    from `$HOME`, so exercising the probe never touches the operator's own.
+    """
+    monkeypatch.setenv(provider_health.PROBE_ENV, "1")
+    monkeypatch.setenv("ORCHESTRATOR_CODEX_ALT_HOME", str(tmp_path / "codex-alt"))
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", str(tmp_path / "claude-alt"))
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR", str(tmp_path / "claude-alt2"))
+    provider_health.forget_probes()
+
+
+def _fake_oneharness(tmp_path: Path, name: str, body: str) -> Path:
+    binary = tmp_path / name
+    binary.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+    binary.chmod(0o755)
+    return binary
+
+
+def test_a_real_probe_answers_through_the_wrapper_and_leaves_nothing_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one boundary that spawns: driven for real, through the real wrapper.
+
+    Every other probe test states its own `read_usage`, so nothing proved that the
+    default one spawns the wrapper correctly or that it reaps what it spawns. The
+    `leak_guard` plugin fails this test if any of these three probes leaves a
+    process behind, which is what makes it the proof rather than an assertion.
+    """
+    _hermetic_probe_env(tmp_path, monkeypatch)
+    answer = json.dumps(
+        {
+            "identities": [
+                {"harness": "codex", "variant": "alternate", "availability": {"state": "available"}}
+            ]
+        }
+    )
+    answering = _fake_oneharness(tmp_path, "answering-oneharness", f"cat <<'JSON'\n{answer}\nJSON")
+
+    snapshot = probe(oneharness_bin=str(answering), cwd=tmp_path)
+
+    assert [item["identity"] for item in snapshot["identities"]] == list(IDENTITIES)
+    available = next(
+        item for item in snapshot["identities"] if item["identity"] == "codex:alternate"
+    )
+    assert available["availability"]["state"] == "available"
+    # The wrapper really was asked for every configured identity at once.
+    assert (tmp_path / "codex-alt").is_dir()
+
+    # A refusal is data: the identities stay listed, explicitly unknown.
+    provider_health.forget_probes()
+    refusing = _fake_oneharness(
+        tmp_path, "refusing-oneharness", "echo 'no credentials' >&2\nexit 3"
+    )
+    refused = probe(oneharness_bin=str(refusing), cwd=tmp_path)
+    assert [item["availability"]["state"] for item in refused["identities"]] == ["unknown"] * len(
+        IDENTITIES
+    )
+
+    # And a probe that would never answer is bounded, killed, and reaped rather than
+    # holding the view open — the failure path a leaked process would hide in.
+    provider_health.forget_probes()
+    monkeypatch.setattr(provider_health, "PROBE_TIMEOUT_SECONDS", 0.5)
+    hanging = _fake_oneharness(tmp_path, "hanging-oneharness", "sleep 120")
+    started = time.monotonic()
+    hung = probe(oneharness_bin=str(hanging), cwd=tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 30, elapsed
+    assert [item["availability"]["state"] for item in hung["identities"]] == ["unknown"] * len(
+        IDENTITIES
+    )
 
 
 def test_failure_rollup_collapses_same_cause(tmp_path: Path) -> None:
