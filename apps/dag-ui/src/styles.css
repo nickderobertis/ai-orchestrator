@@ -382,9 +382,8 @@ p {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
-  /* Both zeroed: a grid item sizes to its content by default, so the widest row —
-     the tab list — pushed the whole working area past the viewport and clipped
-     every other row against the right edge instead of reflowing. */
+  /* Zeroed on both axes: a grid item sizes to its content by default, so the view
+     itself has to be allowed to shrink as well as its column. */
   min-width: 0;
   min-height: 0;
 }

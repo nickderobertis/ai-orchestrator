@@ -1,4 +1,5 @@
 import type {
+  AgentRole,
   RunTimeline,
   TimelineEvent,
   TimelineSpan,
@@ -43,7 +44,7 @@ interface RowBase {
    * session it is without the transcript behind it being fetched. Absent on every
    * other kind of row, and on a dispatch recorded before the roles were served.
    */
-  readonly role?: string;
+  readonly role?: DispatchRole;
   readonly label: string;
   readonly startedAt: string;
   /** `null` for work the recorded stream never closed, and for an instant. */
@@ -126,6 +127,45 @@ const LANE_BY_SPAN_KIND: Readonly<Record<TimelineSpanKind, LaneId | null>> = {
   "conflict-resolution": "publication",
   "human-wait": "human-wait",
   rollup: "lock-waits",
+};
+
+/**
+ * What one dispatch is read as: the semantic role the server records on it, or the
+ * lint transport, which is the worker's own verification told apart from the worker
+ * by nothing else.
+ */
+type DispatchRole = AgentRole | typeof LLMLINT_TRANSPORT;
+
+const LLMLINT_TRANSPORT = "llmlint";
+
+/**
+ * The lane each of those roles is plotted in.
+ *
+ * Keyed by the contract's own closed `agentRoleSchema`, so a role added there fails
+ * to compile until it has been given a lane — rather than falling through to the
+ * dispatch default and being plotted and named "Worker" without anything saying so.
+ */
+const LANE_BY_ROLE: Readonly<Record<DispatchRole, LaneId>> = {
+  worker: "worker",
+  judge: "judge",
+  llmlint: "lint",
+  orchestrator: "orchestrator",
+  "check-in": "check-in",
+  "pr-author": "pr-author",
+};
+
+/**
+ * Which of those roles onejudge dispatches in its own right, and which run over an
+ * agent's work. Keyed by the same enum for the same reason: a newly served role that
+ * matched neither would be left an ungrouped sibling with nothing reporting it.
+ */
+const OPENS_DISPATCH: Readonly<Record<DispatchRole, boolean>> = {
+  worker: true,
+  orchestrator: true,
+  "check-in": true,
+  "pr-author": true,
+  judge: false,
+  llmlint: false,
 };
 
 /** What each aggregated journal kind is called; `rollup` is never a word here. */
@@ -323,23 +363,8 @@ function laneId(row: TimelineRow): LaneId | null {
 }
 
 /** A dispatch's own lane, from the roles the server records on it. */
-function roleLane(role: string | undefined): LaneId | null {
-  switch (role) {
-    case "worker":
-      return "worker";
-    case "judge":
-      return "judge";
-    case "llmlint":
-      return "lint";
-    case "orchestrator":
-      return "orchestrator";
-    case "check-in":
-      return "check-in";
-    case "pr-author":
-      return "pr-author";
-    default:
-      return null;
-  }
+function roleLane(role: DispatchRole | undefined): LaneId | null {
+  return role === undefined ? null : (LANE_BY_ROLE[role] ?? null);
 }
 
 export function nodeTimeline(
@@ -444,9 +469,11 @@ function spanRow(
  * A dispatch's role as one word. Lint is the case that needs both halves: it is the
  * worker's own verification, told apart from the worker only by its transport role.
  */
-function dispatchRole(span: TimelineSpan): string | undefined {
+function dispatchRole(span: TimelineSpan): DispatchRole | undefined {
   if (span.kind !== "dispatch") return undefined;
-  return span.transport_role === "llmlint" ? "llmlint" : span.agent_role;
+  return span.transport_role === LLMLINT_TRANSPORT
+    ? LLMLINT_TRANSPORT
+    : span.agent_role;
 }
 
 function eventRow(event: TimelineEvent): TimelineRow {
@@ -513,7 +540,10 @@ function group(rows: readonly TimelineRow[]): TimelineRow[] {
  * Every answer is a category an operator reads about; the served identifiers
  * `rollup` and `pr-drafting` never reach the screen as themselves.
  */
-function displayKind(span: TimelineSpan, role: string | undefined): string {
+function displayKind(
+  span: TimelineSpan,
+  role: DispatchRole | undefined,
+): string {
   if (span.kind === "step") return "Lifecycle";
   if (span.kind === "rollup") return ROLLUP_LABELS[span.label] ?? span.label;
   const lane = roleLane(role) ?? LANE_BY_SPAN_KIND[span.kind];
@@ -525,7 +555,7 @@ function displayKind(span: TimelineSpan, role: string | undefined): string {
  * artifact it was. A judge session says Judge and says which session it was, which is
  * the pair a reader needs to tell three concurrent sessions apart.
  */
-function spanLabel(span: TimelineSpan, role: string | undefined): string {
+function spanLabel(span: TimelineSpan, role: DispatchRole | undefined): string {
   if (span.kind === "step")
     return span.label ? `Lifecycle: ${span.label}` : "Lifecycle step";
   const kind = displayKind(span, role);
@@ -598,18 +628,13 @@ function groupDispatches(rows: readonly TimelineRow[]): TimelineRow[] {
 }
 
 /** The roles onejudge dispatches in their own right, each opening a group. */
-function opensDispatch(role: string | undefined): boolean {
-  return (
-    role === "worker" ||
-    role === "orchestrator" ||
-    role === "check-in" ||
-    role === "pr-author"
-  );
+function opensDispatch(role: DispatchRole | undefined): boolean {
+  return role !== undefined && OPENS_DISPATCH[role] === true;
 }
 
 /** The roles that run over an agent's work rather than being dispatched alone. */
-function supervises(role: string | undefined): boolean {
-  return role === "judge" || role === "llmlint";
+function supervises(role: DispatchRole | undefined): boolean {
+  return role !== undefined && OPENS_DISPATCH[role] === false;
 }
 
 function sameKindSpan(

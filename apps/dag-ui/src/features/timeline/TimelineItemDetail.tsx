@@ -1,4 +1,5 @@
 import type {
+  AgentRole,
   DagConversation,
   TimelineReference,
 } from "@ai-orchestrator/dag-model";
@@ -510,7 +511,6 @@ function isPublication(
 }
 
 type Attribution = DagConversation["attribution"];
-type AgentRole = Attribution["agentRole"];
 
 /**
  * Every semantic role the contract's closed `agentRole` enum admits.
