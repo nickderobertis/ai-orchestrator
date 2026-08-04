@@ -984,8 +984,8 @@ def main() -> None:
     for python_module, python_name, schema_name in (
         ("orchestrator/projection.py", "NodeStatus", "nodeStatusSchema"),
         ("orchestrator/telemetry.py", "FailureClass", "failureClassSchema"),
-        ("orchestrator/dispatch.py", "ConversationSide", "conversationSideSchema"),
-        ("orchestrator/dispatch.py", "ProviderFailureCause", "providerFailureCauseSchema"),
+        ("orchestrator/provider_failure.py", "ConversationSide", "conversationSideSchema"),
+        ("orchestrator/provider_failure.py", "ProviderFailureCause", "providerFailureCauseSchema"),
     ):
         members = literal_values(root / python_module, python_name)
         reconcile(

@@ -9,7 +9,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .journal import JOURNAL_NAME, read_events
 
@@ -166,13 +166,28 @@ def render(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+class Refusal(NamedTuple):
+    """What makes two provider failures the same line in a planner's view.
+
+    Named rather than a bare 4-tuple because it is built in one place and read in
+    another: a reordering of positional fields would silently swap the side with
+    the identity in every rendered line, which is exactly the misreading the
+    rollup exists to prevent.
+    """
+
+    side: str
+    identity: str
+    cause: str
+    reset_time: str
+
+
 def failure_rollups(run_dir: Path) -> list[str]:
     """Collapse repeated provider failures into one immediately legible line."""
     try:
         events = read_events(run_dir / JOURNAL_NAME)
     except OSError:
         return []
-    facts: Counter[tuple[str, str, str, str]] = Counter()
+    facts: Counter[Refusal] = Counter()
     for event in events:
         if event.kind not in {"node-failed", "step-settled"}:
             continue
@@ -183,16 +198,19 @@ def failure_rollups(run_dir: Path) -> list[str]:
         if not isinstance(value, dict):
             continue
         facts[
-            (
-                str(value.get("side", "unknown")),
-                str(value.get("identity", "unknown")),
-                str(value.get("cause", "unknown")),
-                str(value.get("reset_time", "")),
+            Refusal(
+                side=str(value.get("side", "unknown")),
+                identity=str(value.get("identity", "unknown")),
+                cause=str(value.get("cause", "unknown")),
+                reset_time=str(value.get("reset_time", "")),
             )
         ] += 1
     lines: list[str] = []
-    for (side, identity, cause, reset), count in facts.items():
+    for refusal, count in facts.items():
         noun = "node failed" if count == 1 else "nodes failed"
-        suffix = f", resets {reset}" if reset else ""
-        lines.append(f"{count} {noun} on {side}-side {identity} {cause.replace('_', ' ')}{suffix}")
+        suffix = f", resets {refusal.reset_time}" if refusal.reset_time else ""
+        lines.append(
+            f"{count} {noun} on {refusal.side}-side {refusal.identity} "
+            f"{refusal.cause.replace('_', ' ')}{suffix}"
+        )
     return lines

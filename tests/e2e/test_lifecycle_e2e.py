@@ -42,7 +42,12 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.config import ConfigError
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
-from orchestrator.dispatch import DispatchError, Report, scoped_session
+from orchestrator.dispatch import (
+    DispatchError,
+    Report,
+    classify_provider_failure,
+    scoped_session,
+)
 from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
@@ -76,6 +81,7 @@ from orchestrator.provenance import (
     format_preserved_step_metadata,
     incomplete_commits,
 )
+from orchestrator.provider_health import failure_rollups
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
@@ -8365,3 +8371,66 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     assert not result.ok
     assert result.results["a"].status == "failed"
     assert result.results["b"].status == "skipped"
+
+
+def test_a_workstream_step_refused_by_the_provider_records_which_identity_refused(
+    tmp_path, bare_origin
+) -> None:
+    """The lifecycle half of failure attribution, end to end on a real workstream.
+
+    A direct agent node and a lifecycle step reach the provider by different paths,
+    and only the direct one was covered. The night this work exists for lost
+    lifecycle workstreams too, so a refused step has to settle as the refusal it
+    was — naming the side and the identity in its journal, in the recorded result,
+    and in the rolled-up line a planner reads — rather than propagating as a bare
+    dispatch error that names neither.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-refused-step")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    refusal = (
+        "provider error (supervisor): harness failed (quota) — judge-side codex:primary "
+        "quota exhausted mid-conversation; resets Aug 8"
+    )
+
+    def refused_by_the_provider(persona: str, task: str, **_: object) -> Report:
+        raise DispatchError(refusal, failure_attribution=classify_provider_failure(refusal))
+
+    journal = open_journal(tmp_path / "refused-run", RunId("refused"), 1)
+    result = run_repo_task(
+        str(canonical),
+        "## What\nMeasure lifecycle cost.\n\n## Why\nA refused run must say who refused.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "refused-worktrees"),
+        branch="feature/refused-by-provider",
+        dispatch_fn=refused_by_the_provider,
+        recorded_gate=["true"],
+        journal=NodeJournal(journal, NodeId("work"), RunId("refused"), 1),
+    )
+
+    # Settled as a refusal rather than propagating: the workstream is not completed,
+    # and the step it stopped on is recorded rather than lost to a raised error.
+    assert result.outcome == "not-completed", result.detail
+    attribution = result_payload(result)["failure_attribution"]
+    assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
+        "judge",
+        "codex:primary",
+        "quota_mid_conversation",
+    )
+    assert attribution["reset_time"] == "Aug 8"
+
+    # The same fact reaches the journal, which is what the planner views fold.
+    settled = [
+        json.loads(line)
+        for line in (tmp_path / "refused-run" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if json.loads(line)["kind"] == "step-settled"
+    ]
+    assert settled, "the refused step recorded no step-settled event"
+    assert settled[-1]["detail"]["failure_attribution"] == attribution
+
+    # And it reads as the one rolled-up line `just status` / `just runs` print.
+    assert failure_rollups(tmp_path / "refused-run") == [
+        "1 node failed on judge-side codex:primary quota mid conversation, resets Aug 8"
+    ]

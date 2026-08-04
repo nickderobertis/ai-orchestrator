@@ -103,6 +103,7 @@ from .plan import (
     parse_node_context,
     reconcile_dag,
 )
+from .provider_failure import journalled
 from .registry import Registry
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
@@ -677,11 +678,7 @@ def run_graph(
                     "status": "failed",
                     "task": node.task,
                     "error": str(exc),
-                    **(
-                        {"failure_attribution": exc.failure_attribution}
-                        if exc.failure_attribution
-                        else {}
-                    ),
+                    **journalled(exc.failure_attribution),
                 },
             )
             run = NodeRun("failed", str(exc), recorded=item)
@@ -689,11 +686,7 @@ def run_graph(
                 "node-failed",
                 detail={
                     "detail": str(exc),
-                    **(
-                        {"failure_attribution": exc.failure_attribution}
-                        if exc.failure_attribution
-                        else {}
-                    ),
+                    **journalled(exc.failure_attribution),
                     TERMINAL_NODE_RESULT_FIELD: cast(dict[str, Any], item),
                 },
             )
@@ -744,11 +737,7 @@ def run_graph(
                 "detail": detail,
                 **({"outcome": report.outcome} if report.outcome else {}),
                 **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
-                **(
-                    {"failure_attribution": report.failure_attribution}
-                    if report.failure_attribution
-                    else {}
-                ),
+                **journalled(report.failure_attribution),
                 "turns": report.assistant_turns,
                 TERMINAL_NODE_RESULT_FIELD: cast(
                     Any, _run_payload(node, run, dependents.get(nid, []))

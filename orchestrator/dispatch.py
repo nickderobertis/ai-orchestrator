@@ -75,6 +75,7 @@ from .launch import (
 from .liveness import PARKED_AFTER_SECONDS
 from .monitor import attach
 from .personas import persona_path
+from .provider_failure import ConversationSide, ProviderFailure, ProviderFailureCause
 from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify, validate_run_id
 from .scratch import (
@@ -175,7 +176,7 @@ REPORTED_NOTE_CHARS = 300
 class DispatchError(Exception):
     """onejudge could not be run, or rejected the config (a loud failure)."""
 
-    def __init__(self, message: str, *, failure_attribution: dict[str, Any] | None = None):
+    def __init__(self, message: str, *, failure_attribution: ProviderFailure | None = None):
         super().__init__(message)
         self.failure_attribution = failure_attribution
 
@@ -276,7 +277,7 @@ class Report:
     #: running — and at or below it exited on its own, which is what a harness that
     #: refused to start does. ``None`` when the wrapper recorded nothing usable.
     agent_exit_status: int | None = None
-    failure_attribution: dict[str, Any] | None = None
+    failure_attribution: ProviderFailure | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -295,24 +296,6 @@ class Report:
 
 
 _FAILURE_TAIL = 2_000
-#: Which of onejudge's two conversation sides — plus the lint tier that runs beside
-#: them — the refusal came from. A planner reading "quota" needs this first: the
-#: judge chain and the agent chain prefer different identities, so a fix aimed at
-#: the wrong side changes nothing.
-ConversationSide = Literal["agent", "judge", "llmlint"]
-#: Why the provider refused, closed so a client can switch on it exhaustively.
-#: `quota_at_launch` fell through to the next identity in the chain and cost only
-#: time; `quota_mid_conversation` could not, because the conversation was already
-#: bound to the identity that refused it. `harness_exit` is the unclassified
-#: remainder and carries the harness's own structured error payload where it
-#: reported one.
-ProviderFailureCause = Literal[
-    "quota_at_launch",
-    "quota_mid_conversation",
-    "stale_session_resume",
-    "rate_limit",
-    "harness_exit",
-]
 _IDENTITY_RE = re.compile(r"\b(codex|claude(?:-code)?)(?::(primary|alternate2?|default))?\b", re.I)
 _RESET_RE = re.compile(r"(?:resets?|reset(?:s)? at)[: ]+([^,;\n]+)", re.I)
 _SESSION_RE = re.compile(r"No conversation found with session ID[: ]+([\w.-]+)", re.I)
@@ -323,7 +306,7 @@ _WAIT_RE = re.compile(
 
 def classify_provider_failure(
     raw: str, *, side: ConversationSide | None = None
-) -> dict[str, Any] | None:
+) -> ProviderFailure | None:
     """Normalize provider diagnostics without discarding their bounded evidence."""
     text = " ".join(raw.split())
     lower = text.lower()
@@ -362,7 +345,7 @@ def classify_provider_failure(
         )
     else:
         cause = "harness_exit"
-    result: dict[str, Any] = {
+    result: ProviderFailure = {
         "side": inferred_side,
         "harness": harness,
         "variant": variant,
@@ -395,7 +378,7 @@ def classify_provider_failure(
     return result
 
 
-def recordable_provider_failure(attribution: dict[str, Any] | None) -> bool:
+def recordable_provider_failure(attribution: ProviderFailure | None) -> bool:
     """Whether a dispatch failure is provider evidence rather than generic harness prose."""
     if not attribution or attribution.get("identity") == "unknown":
         return False

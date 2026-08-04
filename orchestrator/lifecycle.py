@@ -78,6 +78,7 @@ from .provenance import (
     is_provenance_commit,
     unattested_incomplete,
 )
+from .provider_failure import journalled
 from .redaction import redact
 from .registry import Registry, RegistryError, merge_gate_coverage, validate_identity_key
 from .runs import (
@@ -1269,11 +1270,7 @@ def _run_steps(
                     "status": "not-completed",
                     "step_kind": step.kind,
                     "detail": str(exc),
-                    **(
-                        {"failure_attribution": exc.failure_attribution}
-                        if exc.failure_attribution
-                        else {}
-                    ),
+                    **journalled(exc.failure_attribution),
                 },
             )
             return NodeRun("failed", f"step {sid!r} {exc}", report)
@@ -1337,11 +1334,7 @@ def _run_steps(
                     "preserved": preserved,
                     **({"outcome": report.outcome} if report.outcome else {}),
                     **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
-                    **(
-                        {"failure_attribution": report.failure_attribution}
-                        if report.failure_attribution
-                        else {}
-                    ),
+                    **journalled(report.failure_attribution),
                 },
             )
             if preserved:

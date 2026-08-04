@@ -41,6 +41,7 @@ from .journal import (
     read_events,
 )
 from .monitor import DetailSnapshot, load_snapshot, run_state
+from .provider_failure import ProviderFailure
 from .runs import (
     RETRY_DISPOSITIONS,
     GraphResultItem,
@@ -217,7 +218,7 @@ class TimingPresenceRecord(TypedDict):
 class Failure:
     classification: FailureClass
     detail: str = ""
-    attribution: dict[str, object] | None = None
+    attribution: ProviderFailure | None = None
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"class": self.classification}
@@ -438,7 +439,10 @@ def _failure(item: GraphResultItem) -> Failure | None:
     else:
         kind = "unknown"
     attribution = item.get("failure_attribution")
-    return Failure(kind, detail, dict(attribution) if isinstance(attribution, dict) else None)
+    # Read back from a recorded result, so it arrives as arbitrary JSON: narrowed
+    # here rather than trusted, and the served shape is the model above.
+    recorded = cast("ProviderFailure", dict(attribution)) if isinstance(attribution, dict) else None
+    return Failure(kind, detail, recorded)
 
 
 def _gate_seconds(events: list[Event]) -> float:
