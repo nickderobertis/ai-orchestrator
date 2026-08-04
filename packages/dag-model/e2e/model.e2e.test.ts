@@ -52,7 +52,7 @@ test("a package consumer validates an API response through the public export", (
   expect(
     parseRunList({
       api_version: 2,
-      telemetry_schema_version: 9,
+      telemetry_schema_version: 10,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
     }).runs,
@@ -196,7 +196,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({
       api_version: 3,
-      telemetry_schema_version: 9,
+      telemetry_schema_version: 10,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
     }),
@@ -204,7 +204,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(
     runDetailSchema.safeParse({
       api_version: 2,
-      telemetry_schema_version: 9,
+      telemetry_schema_version: 10,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
       rounds: [{ node_states: { build: "paused" } }],
@@ -271,7 +271,7 @@ function completeDetail(conversations: unknown[]) {
   };
   return {
     api_version: 2,
-    telemetry_schema_version: 9,
+    telemetry_schema_version: 10,
     observed_at: "2026-07-26T12:00:00Z",
     run: {
       run_id: "run-1",

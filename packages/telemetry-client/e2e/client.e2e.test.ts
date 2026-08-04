@@ -14,7 +14,7 @@ test("a package consumer reads a validated response from a real HTTP server", as
       ) {
         return Response.json({
           api_version: 2,
-          telemetry_schema_version: 9,
+          telemetry_schema_version: 10,
           observed_at: "2026-07-26T12:00:00Z",
           runs: [],
         });
@@ -41,7 +41,7 @@ test("a package consumer receives typed HTTP and response-contract failures", as
       if (path.endsWith("/invalid")) {
         return Response.json({
           api_version: 2,
-          telemetry_schema_version: 9,
+          telemetry_schema_version: 10,
           observed_at: "2026-07-26T12:00:00Z",
           run: {},
           rounds: [],

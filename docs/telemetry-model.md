@@ -147,6 +147,16 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
+Index version 10 widens `nodes[].failure` with the provider-refusal record: the
+side that was refused, the harness, variant, and configured identity that refused
+it, the classified `cause`, a bounded `raw_tail` of what the harness printed, and
+whatever else it stated — a reset time, a dropped session id, a killed wait, its
+own structured error payload, or `judge_unrecorded` when the agent side was
+recorded in history and the judge side was not. The run and run-detail envelopes
+additionally carry an optional `provider_health` snapshot, one entry per configured
+identity, an unanswered probe included as `unknown`. Every field is additive and
+omitted when nothing was recorded, so a version-9 reader parsing a failure that met
+no provider sees exactly the record it saw before.
 Index version 9 adds an optional `agent_role` to each `nodes[].sessions` entry:
 `role` remains the transport party oneharness recorded, and `agent_role` names
 what the dispatch was for, so a reader can tell a node's worker from its judge

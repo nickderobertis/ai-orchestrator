@@ -311,7 +311,7 @@ export const runSummarySchema = openObject({
 
 export const runListSchema = openObject({
   api_version: z.literal(2),
-  telemetry_schema_version: z.literal(9),
+  telemetry_schema_version: z.literal(10),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
   next_cursor: z.string().min(1).optional(),
@@ -669,7 +669,7 @@ export const nodeDetailSchema = openObject({
 });
 export const runDetailSchema = openObject({
   api_version: z.literal(2),
-  telemetry_schema_version: z.literal(9),
+  telemetry_schema_version: z.literal(10),
   observed_at: timestamp,
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),

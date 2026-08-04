@@ -1,10 +1,35 @@
 {
-  "history_schema_versions": ["0.2", "0.3", 1, 2, "1.0", "1.1", "1.2"],
-  "linkage_qualities": ["inferred", "labelled", "native"],
-  "timing_qualities": ["complete", "legacy", "partial"],
-  "roles": ["agent", "judge", "llmlint"],
-  "schema_version": 9,
-  "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
+  "history_schema_versions": [
+    "0.2",
+    "0.3",
+    1,
+    2,
+    "1.0",
+    "1.1",
+    "1.2"
+  ],
+  "linkage_qualities": [
+    "inferred",
+    "labelled",
+    "native"
+  ],
+  "timing_qualities": [
+    "complete",
+    "legacy",
+    "partial"
+  ],
+  "roles": [
+    "agent",
+    "judge",
+    "llmlint"
+  ],
+  "schema_version": 10,
+  "sources": [
+    "history_legacy",
+    "journal_legacy",
+    "oneharness",
+    "onejudge"
+  ],
   "fractions": [
     "agent_model",
     "idle_orchestration",
@@ -71,5 +96,19 @@
     "cost_usd",
     "input_tokens",
     "output_tokens"
+  ],
+  "provider_failure": [
+    "cause",
+    "failure_kind",
+    "harness",
+    "identity",
+    "judge_unrecorded",
+    "missing_session_id",
+    "raw_tail",
+    "reset_time",
+    "side",
+    "structured_error",
+    "variant",
+    "wait_seconds"
   ]
 }

@@ -16,6 +16,7 @@ import orchestrator.history as history_module
 import orchestrator.telemetry as telemetry_module
 from orchestrator.history import HistorySession, SessionId, SessionRole
 from orchestrator.journal import NodeJournal, open_journal
+from orchestrator.provider_failure import ProviderFailure
 from orchestrator.runs import NodeId, RunId, StepId, prepare_round, write_result
 from orchestrator.telemetry import (
     SUPPORTED_HISTORY_SCHEMA_VERSIONS,
@@ -332,9 +333,9 @@ def test_the_clipping_order_the_contract_helper_states_is_the_one_timing_uses() 
 
 
 @pytest.mark.reads_docs
-def test_schema_v9_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v10_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v9-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v10-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -350,11 +351,16 @@ def test_schema_v9_field_golden_prevents_cross_layer_drift() -> None:
         "session_link": sorted(SessionLink.__required_keys__ | SessionLink.__optional_keys__),
         "llmlint_retry_rate": sorted(LlmlintRetryRate.__required_keys__),
         "llmlint_retry_metrics": sorted(LlmlintRetryMetrics.__required_keys__),
+        # What version 10 exists for: a field added to the refusal record on the
+        # Python side alone fails here, which is the bump this golden asks for.
+        "provider_failure": sorted(
+            ProviderFailure.__optional_keys__ | ProviderFailure.__required_keys__
+        ),
     }
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 9" in contract
+    assert "Index version 10" in contract
     typescript_contract = (
         Path(__file__).parents[1] / "packages" / "dag-model" / "src" / "index.ts"
     ).read_text(encoding="utf-8")
@@ -406,7 +412,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 9
+    assert active["schema_version"] == TELEMETRY_SCHEMA_VERSION
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 

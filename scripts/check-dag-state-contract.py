@@ -1058,7 +1058,8 @@ def main() -> None:
         ),
     )
     # The embedded telemetry schema version: Python owns it, the contract restates it,
-    # and the dag-model schema pins it as a literal, so a bump has three places to land.
+    # the dag-model schema pins it as a literal, and the checked-in v2 golden carries a
+    # serialized copy — so a bump has four places to land.
     reconcile_number(
         "telemetry schema version",
         (
@@ -1086,6 +1087,26 @@ def main() -> None:
                 r"telemetry_schema_version: z\.literal\((\d+)\)",
             ),
         ),
+    )
+    # The golden is a recorded envelope, not a declaration, so it drifts silently: the
+    # serializer and the document it is compared against both move, and nothing reads
+    # the number in between. Reconciled here so a bump that leaves it behind fails the
+    # same way every other copy does, rather than only when its own test happens to run.
+    reconcile_number(
+        "telemetry schema version",
+        (
+            "orchestrator/telemetry.py TELEMETRY_SCHEMA_VERSION",
+            module_number(root / "orchestrator/telemetry.py", "TELEMETRY_SCHEMA_VERSION"),
+        ),
+        (
+            "tests/golden/run-detail-v2.json",
+            documented_number(
+                root / "tests/golden/run-detail-v2.json",
+                "telemetry schema version",
+                r'"telemetry_schema_version": (\d+)',
+            ),
+        ),
+        remedy="regenerate the golden alongside the bump, then reconcile them in one change",
     )
 
     # Network defaults the contract states in prose and the server states in code.

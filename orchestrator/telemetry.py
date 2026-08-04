@@ -56,7 +56,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 9
+TELEMETRY_SCHEMA_VERSION = 10
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies

@@ -31,7 +31,7 @@ Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
 The authoritative node-status contract is API v2 at `/api/v2`. Its telemetry payload embeds the existing
-telemetry index at `telemetry_schema_version: 9`, mirroring that index's own
+telemetry index at `telemetry_schema_version: 10`, mirroring that index's own
 `schema_version`; this API version does not replace or renumber that contract.
 `scripts/check-dag-state-contract.py` reconciles every copy of that number here
 against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
@@ -53,7 +53,7 @@ required per-task status coverage.
 ```ts
 interface RunList {
   api_version: 2;
-  telemetry_schema_version: 9;
+  telemetry_schema_version: 10;
   observed_at: string;
   runs: RunSummary[];
   next_cursor?: string;
@@ -98,7 +98,7 @@ it back unchanged as `cursor`. The settled filter is applied before pagination.
 ```ts
 interface RunDetail {
   api_version: 2;
-  telemetry_schema_version: 9;
+  telemetry_schema_version: 10;
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
