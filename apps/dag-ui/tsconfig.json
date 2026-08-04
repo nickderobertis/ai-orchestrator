@@ -14,7 +14,9 @@
     "vite.config.ts",
     "playwright.config.ts",
     "isolation.config.ts",
+    "screens.config.ts",
     "e2e",
-    "e2e-isolation"
+    "e2e-isolation",
+    "e2e-screens"
   ]
 }

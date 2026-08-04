@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -786,6 +786,11 @@ def _write_busy_run(runs_dir: Path) -> None:
     _record_launch(run_dir, BUSY_RUN, CODEX_LAUNCH, CODEX_SESSION_ID)
 
 
+def _stamp(moment: datetime) -> str:
+    """One UTC instant in the `Z` form every recorded fixture stamp is written in."""
+    return moment.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _session(
     workspace: Path,
     *,
@@ -817,12 +822,12 @@ def _session(
                     "name": name,
                     "harness": "claude-code",
                     "model": "claude-sonnet-5",
-                    "timestamp": (started_at + timedelta(seconds=index * 10))
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                    "finished_at": (started_at + timedelta(seconds=index * 10 + 30))
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    # A claude-code turn records when it began *and* when it stopped,
+                    # which is what gives a dispatch a width rather than an instant.
+                    "timestamp": _stamp(started_at + timedelta(seconds=index * 10)),
+                    "finished_at": _stamp(
+                        started_at + timedelta(seconds=index * 10 + 30)
+                    ),
                     "prompt": prompt,
                     "text": text if turns == 1 else f"{text} ({index})",
                     "status": "ok",
@@ -880,9 +885,19 @@ class DashboardSession(NamedTuple):
     transport_role: str
     agent_role: str
     text: str
+    #: Seconds after the node started working, so the served spans carry real timing.
+    offset_seconds: int
+    turns: int = 1
 
 
 #: One session per attributed role the detail view labels separately.
+#:
+#: The offsets are the shape one claude-code dispatch actually records, not five
+#: evenly spaced instants: the worker talks for a couple of minutes, the lint run it
+#: makes of its own work happens *inside* that dispatch, and the judge supervises it
+#: once it stops. That shape is what the node view has to survive — a judge or lint
+#: session projected against a run's whole wall-clock window collapses to a sliver
+#: too narrow to see, let alone click.
 _DASHBOARD_SESSIONS = (
     DashboardSession(
         "worker-session",
@@ -890,27 +905,8 @@ _DASHBOARD_SESSIONS = (
         "agent",
         "worker",
         "Implementing the dashboard now",
-    ),
-    DashboardSession(
-        "judge-session",
-        "you-are-a-strict-careful-evaluator",
-        "judge",
-        "judge",
-        "The transcript is accessible",
-    ),
-    DashboardSession(
-        "check-in-session",
-        "check-in-dashboard",
-        "agent",
-        "check-in",
-        "Progress update sent",
-    ),
-    DashboardSession(
-        "pr-author-session",
-        "pr-author-dashboard",
-        "agent",
-        "pr-author",
-        "Drafted the pull request",
+        offset_seconds=5,
+        turns=3,
     ),
     DashboardSession(
         "llmlint-session",
@@ -918,12 +914,42 @@ _DASHBOARD_SESSIONS = (
         "llmlint",
         "worker",
         "Reviewed the changed behavior",
+        offset_seconds=30,
+    ),
+    DashboardSession(
+        "judge-session",
+        "you-are-a-strict-careful-evaluator",
+        "judge",
+        "judge",
+        "The transcript is accessible",
+        offset_seconds=135,
+    ),
+    DashboardSession(
+        "check-in-session",
+        "check-in-dashboard",
+        "agent",
+        "check-in",
+        "Progress update sent",
+        offset_seconds=180,
+    ),
+    DashboardSession(
+        "pr-author-session",
+        "pr-author-dashboard",
+        "agent",
+        "pr-author",
+        "Drafted the pull request",
+        offset_seconds=225,
     ),
 )
 
 
 def _history_store(workspace: Path) -> Path:
     """A recorded oneharness store covering every attributed role of both runs."""
+    # The live run's journal is written moments before this, at wall clock, so its
+    # sessions are stamped from the same clock. A fixed calendar date would put them
+    # hours from the spans they belong to, and every dispatch would then be plotted as
+    # a sliver at one edge of a window nothing else occupied.
+    dashboard_start = datetime.now(UTC)
     sessions = [
         _session(
             workspace,
@@ -937,9 +963,10 @@ def _history_store(workspace: Path) -> Path:
             launch_id=CODEX_LAUNCH,
             prompt=f"Act as {recorded.agent_role}",
             text=recorded.text,
-            started=f"2026-07-26T11:0{index}:00Z",
+            started=_stamp(dashboard_start + timedelta(seconds=recorded.offset_seconds)),
+            turns=recorded.turns,
         )
-        for index, recorded in enumerate(_DASHBOARD_SESSIONS)
+        for recorded in _DASHBOARD_SESSIONS
     ]
     sessions.append(
         _session(

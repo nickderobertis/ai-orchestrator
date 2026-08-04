@@ -613,12 +613,13 @@ function liveSpans() {
       "llmlint-session",
       "llmlint-dashboard",
       "dashboard",
-      132,
-      150,
+      20,
+      50,
       ["llmlint-session-0"],
       // Lint is verification inside the worker dispatch, so it keeps the worker's
       // semantic role and is told apart by its transport role alone.
       { agent_role: "worker", transport_role: "llmlint" },
+      "dispatch-worker-session",
     ),
     {
       id: "rollup-lock-wait-11",
@@ -758,13 +759,16 @@ function dispatch(
   to: number,
   turnIds: readonly string[],
   roles: DispatchRoles = WORKER,
+  // A lint run happens inside the dispatch it is verifying, and the server serves it
+  // nested there rather than beside it; every other session hangs off its node.
+  parentId: string = `node-1-${nodeId}`,
 ) {
   const reference = { kind: "conversation", value: conversationId };
   return {
     id: `dispatch-${conversationId}`,
     kind: "dispatch",
     label,
-    parent_id: `node-1-${nodeId}`,
+    parent_id: parentId,
     node_id: nodeId,
     round: 1,
     started_at: stamp(from),

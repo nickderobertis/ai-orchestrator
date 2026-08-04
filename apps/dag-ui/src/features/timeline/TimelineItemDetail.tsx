@@ -70,10 +70,12 @@ export function TimelineItemDetail({
             <>
               <header className="detail-title">
                 <div>
+                  {/* The category the operator already read in the lane and the
+                      transcript, never the served identifier behind it. */}
                   <Badge className="mb-1" variant="outline">
-                    {row.kind}
+                    {row.displayKind}
                   </Badge>
-                  <h2>{row.label || row.kind}</h2>
+                  <h2>{row.displayLabel}</h2>
                   <p className="detail-when">
                     <Timestamp at={row.startedAt} />
                     {row.durationMs !== null &&
@@ -181,8 +183,12 @@ function Session({
       <CardContent className="px-3">
         <header className="transcript-header">
           <div>
+            {/* The dispatch first, then this session's own role inside it: an
+                operator reading a judge transcript has to be able to see which
+                dispatch it supervised without leaving the panel. */}
             <p className="eyebrow">
-              {roleLabel(attribution.agentRole, attribution.transportRole)}
+              {row.dispatch === undefined ? "" : `${row.dispatch.label} · `}
+              {author}
               {attribution.persona ? ` · ${attribution.persona}` : ""}
             </p>
             <h4>{conversation.name}</h4>

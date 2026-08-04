@@ -2,6 +2,7 @@ import type {
   RunTimeline,
   TimelineEvent,
   TimelineSpan,
+  TimelineSpanKind,
 } from "@ai-orchestrator/dag-model";
 import type {
   TimelineItem,
@@ -20,6 +21,17 @@ import type {
 
 /** Siblings of one kind collapse into a group once a run reaches this many. */
 export const GROUP_THRESHOLD = 8;
+
+/**
+ * One onejudge dispatch: the agent session and the judge and lint sessions that
+ * supervised it, which the operator reads as a single labelled unit.
+ */
+export interface DispatchGroup {
+  /** The agent session's own span id, which every member of the group shares. */
+  readonly id: string;
+  /** Operator-facing name of the group, in the order the node dispatched them. */
+  readonly label: string;
+}
 
 interface RowBase {
   readonly id: string;
@@ -41,8 +53,12 @@ interface RowBase {
   readonly children: readonly TimelineRow[];
   /** Operator-facing identity; never the free-text transport/session label. */
   readonly displayLabel: string;
-  /** Legend vocabulary, with lifecycle wrappers presented as named phases. */
+  /** Lane vocabulary; a container and an aggregate are named for what they hold. */
   readonly displayKind: string;
+  /** The oneharness session this row is, when it is one; absent otherwise. */
+  readonly sessionName?: string;
+  /** The onejudge dispatch this session belongs to; absent on every other row. */
+  readonly dispatch?: DispatchGroup;
 }
 
 export type TimelineRow =
@@ -60,23 +76,68 @@ export interface NodeTimeline {
 
 const EMPTY: NodeTimeline = { rows: [], total: 0 };
 
-export const NODE_LANES: readonly TimelineLane[] = [
-  "Worker",
-  "Judge",
-  "Lint",
-  "Orchestrator",
-  "Check-in",
-  "PR author",
-  "Verification",
-  "Publication",
-  "Lock waits",
-  "Human wait",
-].map((label) => ({ id: label.toLowerCase().replaceAll(" ", "-"), label }));
+/**
+ * The categories a node's recorded work is read in, one lane each.
+ *
+ * Every one of them is a word the server already serves — the `agent_role` and
+ * `transport_role` of a dispatch, and the span kinds around them — so a reader is
+ * never shown a category the journal has no record of.
+ */
+const LANE_LABELS = {
+  worker: "Worker",
+  judge: "Judge",
+  lint: "Lint",
+  orchestrator: "Orchestrator",
+  "check-in": "Check-in",
+  "pr-author": "PR author",
+  verification: "Verification",
+  publication: "Publication",
+  "lock-waits": "Lock waits",
+  "human-wait": "Human wait",
+} as const;
+
+export type LaneId = keyof typeof LANE_LABELS;
+
+export const NODE_LANES: readonly TimelineLane[] = Object.entries(
+  LANE_LABELS,
+).map(([id, label]) => ({ id, label }));
+
+/**
+ * Which lane each served span kind belongs in, or `null` for the kinds that hold
+ * work rather than being work.
+ *
+ * Keyed by the contract's own closed span vocabulary, so a kind added to
+ * `orchestrator/timeline.py` fails to compile here until it has been given a lane
+ * rather than silently landing in whichever one a string comparison reached first.
+ */
+const LANE_BY_SPAN_KIND: Readonly<Record<TimelineSpanKind, LaneId | null>> = {
+  round: null,
+  node: null,
+  // A lifecycle step brackets the sessions inside it; the transcript names it, and
+  // giving it a lane of its own would plot the container over its own contents.
+  step: null,
+  // Refined by the dispatch's own served roles; `worker` is what an unroled one is.
+  dispatch: "worker",
+  verification: "verification",
+  publication: "publication",
+  "pr-drafting": "pr-author",
+  // Resolving a conflict is work on the merge, so it reads beside the publication
+  // it is unblocking rather than as a category an operator has to learn.
+  "conflict-resolution": "publication",
+  "human-wait": "human-wait",
+  rollup: "lock-waits",
+};
+
+/** What each aggregated journal kind is called; `rollup` is never a word here. */
+const ROLLUP_LABELS: Readonly<Record<string, string>> = {
+  "lock-wait": "Lock waits",
+};
 
 export interface NodeTimelineV2 {
   readonly items: readonly TimelineItem<TimelineRow>[];
   readonly markers: readonly TimelineMarker<TimelineRow>[];
   readonly lanes: readonly TimelineLane[];
+  /** Every row this node recorded, flattened into the order they are read in. */
   readonly rows: readonly TimelineRow[];
 }
 
@@ -84,6 +145,11 @@ export interface NodeTimelineV2 {
  * The compact lane answers which activity dominated a moment. Coincident point
  * records cannot all own the same hit target, so retain one deterministically;
  * expanding restores every category in its own lane.
+ *
+ * Whichever items it drops, the interval the survivors span is the interval the whole
+ * set spans: the plotted range is read straight off the items, so dropping the
+ * earliest one would move the axis and the time cursor on collapse, and the same
+ * moment would sit at two different places depending on which view was open.
  */
 export function compactTimelineItems(
   items: readonly TimelineItem<TimelineRow>[],
@@ -93,6 +159,21 @@ export function compactTimelineItems(
   const last = Math.max(
     first + 1,
     ...ordered.map((item) => item.end ?? item.start),
+  );
+  const boundaries = new Set(
+    [
+      ordered.at(0),
+      ordered.reduce<TimelineItem<TimelineRow> | undefined>(
+        (latest, item) =>
+          latest === undefined ||
+          (item.end ?? item.start) > (latest.end ?? latest.start)
+            ? item
+            : latest,
+        undefined,
+      ),
+    ]
+      .filter((item) => item !== undefined)
+      .map(({ id }) => id),
   );
   // A compact point is 20 CSS pixels wide. Treat the nearest 2% of the plotted
   // range as one visual moment so sibling buttons never cover one another at the
@@ -113,7 +194,14 @@ export function compactTimelineItems(
         item.start <= candidateVisualEnd && candidate.start <= itemVisualEnd
       );
     });
-    if (collision === undefined) {
+    // An item that meets one of the two boundaries neither replaces it nor is
+    // dropped by it: both are kept, because losing either end moves the axis and
+    // losing the other would silently hide work that really did happen there.
+    if (
+      collision === undefined ||
+      boundaries.has(item.id) ||
+      boundaries.has(collision.id)
+    ) {
       result.push(item);
     } else if (compactPriority(item) < compactPriority(collision)) {
       result[result.indexOf(collision)] = item;
@@ -157,12 +245,18 @@ export function nodeTimelineV2(
   timeline: RunTimeline | undefined,
   nodeId: string,
 ): NodeTimelineV2 {
-  const rows = flattenRows(nodeTimeline(timeline, nodeId).rows);
-  const plottedRows = flattenRows(nodeTimeline(timeline, nodeId).rows, false);
+  const projected = nodeTimeline(timeline, nodeId).rows;
+  const rows = flattenRows(projected);
+  const plottedRows = flattenRows(projected, false);
   const items = plottedRows.flatMap((row): TimelineItem<TimelineRow>[] => {
-    if (row.rowKind === "event") return [];
+    const lane = laneId(row);
+    if (lane === null) return [];
     const start = Date.parse(row.startedAt);
     const recordedEnd = row.endedAt === null ? null : Date.parse(row.endedAt);
+    // An aggregate stands in for thousands of separate waits and carries their total
+    // itself, so it is plotted at the length it actually waited. Its recorded
+    // start-to-end interval is the window those waits fell in, and plotting that
+    // would draw a bar across the whole node for a wait of a few seconds.
     const end =
       row.rowKind === "span" && row.span.total_duration_ms !== undefined
         ? start + row.span.total_duration_ms
@@ -171,7 +265,7 @@ export function nodeTimelineV2(
       {
         id: row.id,
         label: row.displayLabel,
-        laneId: laneId(row),
+        laneId: lane,
         payload: row,
         start,
         end,
@@ -215,16 +309,46 @@ function flattenRows(
   return result;
 }
 
-function laneId(row: TimelineRow): string {
-  const value = roleKind(row.role, row.kind).toLowerCase();
-  const identity = `${value} ${row.id} ${row.label}`.toLowerCase();
-  if (value === "step") return "worker";
-  if (value.includes("verify") || value === "gate") return "verification";
-  if (value.includes("publish") || value.includes("merge"))
-    return "publication";
-  if (identity.includes("lock")) return "lock-waits";
-  if (value.includes("human") || value.includes("wait")) return "human-wait";
-  return value.replaceAll(" ", "-");
+/** The lane a row is plotted in, or `null` for a journal record and a container. */
+function laneId(row: TimelineRow): LaneId | null {
+  // A journal record is a moment, not an interval: it is a marker over every lane.
+  if (row.rowKind === "event") return null;
+  const role = roleLane(row.role);
+  if (role !== null) return role;
+  return LANE_BY_SPAN_KIND[spanKind(row)] ?? null;
+}
+
+/** A dispatch's own lane, from the roles the server records on it. */
+function roleLane(role: string | undefined): LaneId | null {
+  switch (role) {
+    case "worker":
+      return "worker";
+    case "judge":
+      return "judge";
+    case "llmlint":
+      return "lint";
+    case "orchestrator":
+      return "orchestrator";
+    case "check-in":
+      return "check-in";
+    case "pr-author":
+      return "pr-author";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The served span kind behind a row.
+ *
+ * A group stands for a run of same-kind siblings and carries their kind, and both are
+ * validated against the closed vocabulary before they reach this module, so the cast
+ * narrows a string the contract has already checked.
+ */
+function spanKind(row: TimelineRow): TimelineSpanKind {
+  return row.rowKind === "span"
+    ? row.span.kind
+    : (row.kind as TimelineSpanKind);
 }
 
 export function nodeTimeline(
@@ -260,9 +384,9 @@ export function nodeTimeline(
       .map((span) => spanRow(span, children)),
     ...orphanEvents(timeline.spans, ids, nodeId),
   ].sort(byStart);
-  // Pairing makes alternating worker/judge streams consecutive worker groups; run
+  // Grouping makes alternating worker/judge streams consecutive worker groups; run
   // the density cap again so hundreds of full conversations remain bounded.
-  const rows = group(pairConversations(labelWorkerRetries(group(top))));
+  const rows = group(groupDispatches(labelWorkerRetries(group(top))));
   return { span: own, rows, total: count(rows) };
 }
 
@@ -318,7 +442,10 @@ function spanRow(
       span.total_duration_ms ?? elapsed(span.started_at, span.ended_at),
     children: group(spanRows(span, children)),
     displayLabel: spanLabel(span, role),
-    displayKind: span.kind === "step" ? "Lifecycle" : roleKind(role, span.kind),
+    displayKind: displayKind(span, role),
+    ...(span.kind === "dispatch" && span.label
+      ? { sessionName: span.label }
+      : {}),
   };
 }
 
@@ -389,44 +516,35 @@ function group(rows: readonly TimelineRow[]): TimelineRow[] {
   return grouped;
 }
 
-function roleKind(role: string | undefined, fallback: string): string {
-  switch (role) {
-    case "worker":
-      return "Worker";
-    case "judge":
-      return "Judge";
-    case "llmlint":
-      return "Lint";
-    case "orchestrator":
-      return "Orchestrator";
-    case "check-in":
-      return "Check-in";
-    case "pr-author":
-      return "PR author";
-    default:
-      return fallback;
-  }
+/**
+ * What one span is called in the lane legend and the transcript's eyebrow.
+ *
+ * Every answer is a category an operator reads about; the served identifiers
+ * `rollup` and `pr-drafting` never reach the screen as themselves.
+ */
+function displayKind(span: TimelineSpan, role: string | undefined): string {
+  if (span.kind === "step") return "Lifecycle";
+  if (span.kind === "rollup") return ROLLUP_LABELS[span.label] ?? span.label;
+  const lane = roleLane(role) ?? LANE_BY_SPAN_KIND[span.kind];
+  return lane === null || lane === undefined ? span.kind : LANE_LABELS[lane];
 }
 
+/**
+ * How the operator names one recorded activity: its category, then the session or
+ * artifact it was. A judge session says Judge and says which session it was, which is
+ * the pair a reader needs to tell three concurrent sessions apart.
+ */
 function spanLabel(span: TimelineSpan, role: string | undefined): string {
   if (span.kind === "step")
     return span.label ? `Lifecycle: ${span.label}` : "Lifecycle step";
-  switch (role) {
-    case "worker":
-      return `Worker (${span.label || "worker"})`;
-    case "judge":
-      return "Judge";
-    case "llmlint":
-      return "Lint";
-    case "orchestrator":
-      return "Orchestrator";
-    case "check-in":
-      return "Check-in";
-    case "pr-author":
-      return "PR author";
-    default:
-      return span.label || span.kind;
-  }
+  const kind = displayKind(span, role);
+  if (span.kind === "rollup") return `${kind}: ${span.count ?? 0} recorded`;
+  if (!span.label || span.label === kind) return kind;
+  // A session is named for the session it is; everything else is named for the
+  // artifact or branch it acted on, which reads as a subtitle rather than an alias.
+  return span.kind === "dispatch"
+    ? `${kind} (${span.label})`
+    : `${kind}: ${span.label}`;
 }
 
 /** Label each worker attempt from retry-requested records without renaming sessions. */
@@ -445,39 +563,62 @@ function labelWorkerRetries(rows: readonly TimelineRow[]): TimelineRow[] {
   });
 }
 
-function pairConversations(rows: readonly TimelineRow[]): TimelineRow[] {
-  const paired: TimelineRow[] = [];
-  let workerIndex = -1;
-  let conversation = 0;
+/**
+ * Gather each onejudge dispatch's sessions under the agent session that opened it.
+ *
+ * One dispatch is an agent conversation plus the judge that supervised it and the
+ * lint run it made of its own work — three oneharness sessions an operator has to be
+ * able to read as one unit, and which three sibling rows of equal weight hid.
+ *
+ * The identity comes from what the server records about each session. A lint session
+ * is already served nested inside the dispatch it ran under, so it arrives as a child.
+ * A judge session is served as a sibling, and the dispatch it belongs to is the agent
+ * session it is supervising — the most recent one opened in the same scope, which is
+ * exactly the pairing onejudge produces. Schema 10 serves that identity outright as
+ * `dispatch_id`; this recovers the same grouping from what schema 9 records.
+ */
+function groupDispatches(rows: readonly TimelineRow[]): TimelineRow[] {
+  const grouped: TimelineRow[] = [];
+  let agentIndex = -1;
+  let ordinal = 0;
+  const joined = (row: TimelineRow, dispatch: DispatchGroup): TimelineRow => ({
+    ...row,
+    dispatch,
+    children: row.children.map((child) => joined(child, dispatch)),
+  });
   for (const row of rows) {
-    if (row.role === "worker") {
-      conversation += 1;
-      workerIndex = paired.length;
-      paired.push({
-        ...row,
-        displayLabel: `${row.displayLabel} · conversation ${conversation}`,
-      });
+    if (opensDispatch(row.role)) {
+      ordinal += 1;
+      agentIndex = grouped.length;
+      grouped.push(joined(row, { id: row.id, label: `Dispatch ${ordinal}` }));
       continue;
     }
-    if ((row.role === "judge" || row.role === "llmlint") && workerIndex >= 0) {
-      const worker = paired[workerIndex];
-      if (worker !== undefined) {
-        paired[workerIndex] = {
-          ...worker,
-          children: [
-            ...worker.children,
-            {
-              ...row,
-              displayLabel: `${row.displayLabel} · conversation ${conversation}`,
-            },
-          ],
-        };
-        continue;
-      }
+    const agent = agentIndex < 0 ? undefined : grouped[agentIndex];
+    if (supervises(row.role) && agent?.dispatch !== undefined) {
+      grouped[agentIndex] = {
+        ...agent,
+        children: [...agent.children, joined(row, agent.dispatch)],
+      };
+      continue;
     }
-    paired.push(row);
+    grouped.push(row);
   }
-  return paired;
+  return grouped;
+}
+
+/** The roles onejudge dispatches in their own right, each opening a group. */
+function opensDispatch(role: string | undefined): boolean {
+  return (
+    role === "worker" ||
+    role === "orchestrator" ||
+    role === "check-in" ||
+    role === "pr-author"
+  );
+}
+
+/** The roles that run over an agent's work rather than being dispatched alone. */
+function supervises(role: string | undefined): boolean {
+  return role === "judge" || role === "llmlint";
 }
 
 function sameKindSpan(

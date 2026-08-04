@@ -21,7 +21,9 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Timestamp } from "../../lib/Timestamp";
+import { formatDuration } from "../../lib/time";
 import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 import {
@@ -33,6 +35,7 @@ import { TimelineItemDetail } from "./TimelineItemDetail";
 import {
   compactTimelineItems,
   compactTimelineMarkers,
+  type DispatchGroup,
   findRow,
   nodeTimeline,
   nodeTimelineV2,
@@ -293,6 +296,16 @@ function NodeExecution({
       ),
     [projection.items, projection.markers, selectedItemId],
   );
+  // The plotted window, read the way the plot itself reads it. The transcript lists
+  // rows the plot has no lane for — a lifecycle step brackets its sessions rather
+  // than being one — so scrolling onto one can put the reading position outside the
+  // window; pinning it to the nearest edge keeps the cursor on screen instead of
+  // dropping it and leaving the reader with no mark at all.
+  const plotted = useMemo(() => timeRange(projection.items), [projection.items]);
+  const cursor =
+    sync.cursor === undefined
+      ? undefined
+      : Math.min(Math.max(sync.cursor, plotted[0]), plotted[1]);
   const selected =
     selectedItemId === undefined
       ? undefined
@@ -312,8 +325,8 @@ function NodeExecution({
         data-testid="node-timeline"
       >
         <Timeline
-          axis={{ origin: Math.min(...entries.map(({ time }) => time)) }}
-          cursor={sync.cursor}
+          axis={{ origin: plotted[0] }}
+          cursor={cursor}
           expanded={expanded}
           getFailureExcerpt={(item) =>
             item.payload.rowKind === "span"
@@ -333,15 +346,29 @@ function NodeExecution({
         className="node-transcript"
         ref={sync.containerRef}
       >
-        {projection.rows.map((row) => (
-          <TranscriptItem
-            key={row.id}
-            row={row}
-            selected={row.id === selectedItemId}
-            register={sync.register}
-            onOpen={() => select(row.id)}
-          />
-        ))}
+        {transcriptRuns(projection.rows).map((entry) => {
+          const items = entry.rows.map((row) => (
+            <TranscriptItem
+              key={row.id}
+              onOpen={select}
+              register={sync.register}
+              row={row}
+              selected={row.id === selectedItemId}
+            />
+          ));
+          return entry.dispatch === undefined ? (
+            <Fragment key={entry.id}>{items}</Fragment>
+          ) : (
+            <section
+              aria-label={entry.dispatch.label}
+              className="transcript-dispatch"
+              key={entry.id}
+            >
+              <h3>{entry.dispatch.label}</h3>
+              {items}
+            </section>
+          );
+        })}
       </section>
       {selected !== undefined && (
         <aside aria-label="Item detail panel" className="node-detail-drawer">
@@ -367,6 +394,49 @@ function NodeExecution({
   );
 }
 
+/**
+ * The window the timeline plots, derived exactly as the plot derives it: the earliest
+ * start to the latest end of the items it is given.
+ */
+function timeRange(
+  items: readonly { start: number; end?: number | null }[],
+): readonly [number, number] {
+  const starts = items.map(({ start }) => start);
+  const ends = items.map((item) => item.end ?? item.start);
+  if (starts.length === 0) return [0, 1];
+  const first = Math.min(...starts);
+  const last = Math.max(...ends);
+  return [first, last > first ? last : first + 1];
+}
+
+/**
+ * The transcript in the order it is read: one entry per item, except that the
+ * sessions of one dispatch travel together so they can be nested under its name.
+ *
+ * The rows of a dispatch arrive consecutively — the projection lists an agent session
+ * and then the sessions recorded inside it — so a run of them is a group, and every
+ * other row is a group of one.
+ */
+function transcriptRuns(rows: readonly TimelineRow[]): readonly {
+  readonly id: string;
+  readonly dispatch?: DispatchGroup;
+  readonly rows: readonly TimelineRow[];
+}[] {
+  const runs: { id: string; dispatch?: DispatchGroup; rows: TimelineRow[] }[] =
+    [];
+  for (const row of rows) {
+    const open = runs.at(-1);
+    if (
+      row.dispatch !== undefined &&
+      open?.dispatch !== undefined &&
+      open.dispatch.id === row.dispatch.id
+    )
+      open.rows.push(row);
+    else runs.push({ id: row.id, dispatch: row.dispatch, rows: [row] });
+  }
+  return runs;
+}
+
 function TranscriptItem({
   row,
   selected,
@@ -376,39 +446,32 @@ function TranscriptItem({
   readonly row: TimelineRow;
   readonly selected: boolean;
   readonly register: (id: string, element: HTMLElement | null) => void;
-  readonly onOpen: () => void;
+  readonly onOpen: (id: string) => void;
 }) {
   return (
     <article
+      aria-label={row.displayLabel}
       className="transcript-item"
-      data-dispatch-group={dispatchGroup(row)}
+      data-dispatch-group={row.dispatch?.label}
       data-selected={selected}
       ref={(element) => register(row.id, element)}
     >
       <button
-        aria-label={`Open transcript ${row.displayKind} item`}
-        onClick={onOpen}
+        aria-label={`Open ${row.displayLabel}`}
+        onClick={() => onOpen(row.id)}
         type="button"
       >
-        <span className="eyebrow">
-          {dispatchGroup(row) ?? row.displayKind} · {row.displayKind}
-        </span>
+        <span className="eyebrow">{row.displayKind}</span>
         <strong>{row.displayLabel}</strong>
-        {row.label && row.label !== row.displayLabel && (
-          <span>{row.label}</span>
-        )}
-        <span>
-          {new Date(row.startedAt).toLocaleTimeString()} ·{" "}
-          {row.status ?? "recorded"}
+        <span className="transcript-facts">
+          <Timestamp at={row.startedAt} />
+          {row.durationMs !== null && ` · ${formatDuration(row.durationMs)}`}
+          {` · ${row.status ?? "recorded"}`}
+          {row.sessionName !== undefined && ` · ${row.sessionName}`}
         </span>
       </button>
     </article>
   );
-}
-
-function dispatchGroup(row: TimelineRow): string | undefined {
-  const conversation = /conversation (\d+)/u.exec(row.displayLabel)?.[1];
-  return conversation === undefined ? undefined : `Dispatch ${conversation}`;
 }
 
 /**

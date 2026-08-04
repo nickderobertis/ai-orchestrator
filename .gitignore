@@ -12,6 +12,8 @@ __pycache__/
 htmlcov/
 test-results/
 playwright-report/
+# `just dag-ui-screens` writes a gallery for a reviewer to read, not an artifact.
+.screens/
 .mypy_cache/
 .ruff_cache/
 

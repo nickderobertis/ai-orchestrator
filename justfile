@@ -293,6 +293,13 @@ telemetry *args:
 dag-ui:
     ./scripts/nx.sh run dag-ui:serve
 
+# Photograph the node view at every supported viewport into `apps/dag-ui/.screens/`.
+# Deliberately outside `just check`: its product is images a reviewer reads for
+# clipping and overlap, which no assertion describes.
+# llmlint: ignore[tool_output_is_signal] the captured gallery and the paths it wrote are this command's product.
+dag-ui-screens:
+    ./scripts/nx.sh run dag-ui:screens
+
 # Serve the read-only DAG telemetry API (FastAPI + SSE), loopback-bound by default.
 # llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
 telemetry-server *args:

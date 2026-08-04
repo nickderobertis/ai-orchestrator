@@ -31,22 +31,51 @@ describe("one node's slice of the run timeline", () => {
     expect(worker?.status).toBe("completed");
     // 11:00:12 to 11:01:00 is the interval the stream recorded for it.
     expect(worker?.durationMs).toBe(48_000);
-    expect(worker?.displayLabel).toBe(
-      "Worker (engineer-dashboard) · conversation 1",
-    );
+    expect(worker?.displayLabel).toBe("Worker (engineer-dashboard)");
+    // Every session says which role it played and which session it was — three
+    // concurrent sessions of one dispatch are told apart by nothing else.
     expect(worker?.children.map(({ displayLabel }) => displayLabel)).toEqual([
       "conversation-turn",
-      "Judge · conversation 1",
-      "Lint · conversation 1",
+      "Lint (llmlint-dashboard)",
+      "Judge (you-are-a-strict-careful-evaluator)",
     ]);
     expect(dashboard.rows.map(({ displayLabel }) => displayLabel)).toContain(
-      "Check-in",
+      "Check-in (check-in-dashboard)",
     );
     expect(dashboard.rows.map(({ displayLabel }) => displayLabel)).toContain(
-      "PR author",
+      "PR author (pr-author-dashboard)",
     );
-    // A rollup stands in for thousands of records and carries their total itself.
+    // An aggregate stands in for thousands of records and carries their total
+    // itself; it is named for what was aggregated, never for the word `rollup`.
     expect(dashboard.rows[1]?.durationMs).toBe(4200);
+    expect(dashboard.rows[1]).toMatchObject({
+      displayKind: "Lock waits",
+      displayLabel: "Lock waits: 1240 recorded",
+    });
+  });
+
+  test("gathers one dispatch's agent, lint, and judge sessions under it", () => {
+    const dashboard = nodeTimeline(timeline, "dashboard");
+    const worker = findRow(dashboard.rows, "dispatch-worker-session");
+    // The agent session names the dispatch, and every session recorded inside it
+    // carries the same name — which is what lets the transcript nest them.
+    expect(worker?.dispatch).toEqual({
+      id: "dispatch-worker-session",
+      label: "Dispatch 1",
+    });
+    expect(
+      worker?.children
+        .filter(({ rowKind }) => rowKind === "span")
+        .map(({ dispatch }) => dispatch?.label),
+    ).toEqual(["Dispatch 1", "Dispatch 1"]);
+    // A separately dispatched role is its own dispatch, not a member of the first.
+    expect(
+      findRow(dashboard.rows, "dispatch-check-in-session")?.dispatch,
+    ).toEqual({ id: "dispatch-check-in-session", label: "Dispatch 2" });
+    // The aggregate is no session at all, so it belongs to no dispatch.
+    expect(
+      findRow(dashboard.rows, "rollup-lock-wait-11")?.dispatch,
+    ).toBeUndefined();
   });
 
   test("reports work the stream never closed as still running", () => {
@@ -85,8 +114,8 @@ describe("one node's slice of the run timeline", () => {
     // stand for — every consecutive dispatch, including the four the fixture's own
     // node recorded — is still reachable inside it, in the order it happened.
     const group = busy.rows.find(({ rowKind }) => rowKind === "group");
-    expect(group?.label).toBe("204 × dispatch");
-    expect(group?.children).toHaveLength(204);
+    expect(group?.label).toBe("203 × dispatch");
+    expect(group?.children).toHaveLength(203);
     expect(busy.rows.length).toBeLessThan(GROUP_THRESHOLD);
     expect(busy.total).toBeGreaterThan(200);
   });
@@ -131,10 +160,15 @@ describe("one node's slice of the run timeline", () => {
 
     const projected = nodeTimeline(fixture, "dashboard");
     expect(
-      findRow(projected.rows, "dispatch-worker-session")?.displayLabel,
-    ).toContain("conversation 1");
+      findRow(projected.rows, "dispatch-worker-session")?.dispatch,
+    ).toMatchObject({ label: "Dispatch 1" });
     expect(findRow(projected.rows, "dispatch-worker-retry")?.displayLabel).toBe(
-      "Worker (engineer-dashboard-retry) · retry 1 · conversation 2",
+      "Worker (engineer-dashboard-retry) · retry 1",
+    );
+    // A retry is a second dispatch of the same node, never a second session of the
+    // first one, so it opens a group of its own.
+    expect(findRow(projected.rows, "dispatch-worker-retry")?.dispatch?.id).toBe(
+      "dispatch-worker-retry",
     );
     expect(findRow(projected.rows, "step-build")).toMatchObject({
       displayKind: "Lifecycle",

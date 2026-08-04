@@ -362,14 +362,32 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(
     rail(page).getByRole("button", { name: /^PR author/ }),
   ).toBeVisible();
-  const lockWait = rail(page).getByRole("button", { name: /lock-wait/ });
+  // The waits a node spent on a lock are plotted at the length they actually took,
+  // not stretched across the window they happened to fall in.
+  const lockWait = rail(page).getByRole("button", { name: /^Lock waits/ });
   await expect(lockWait).toHaveAttribute("data-timeline-shape", "span");
   const lockWidth = (await lockWait.boundingBox())?.width ?? 0;
   const timelineWidth = (await rail(page).boundingBox())?.width ?? 1;
   expect(lockWidth / timelineWidth).toBeLessThan(0.1);
+  expect(lockWidth).toBeGreaterThan(0);
+  // The categories the reader was promised, and no served identifier among them.
   await expect(
-    rail(page).getByRole("button", { name: /Lifecycle: build/ }),
-  ).toBeVisible();
+    page.getByRole("list", { name: "Timeline legend" }),
+  ).toHaveText(
+    [
+      "Worker",
+      "Judge",
+      "Lint",
+      "Orchestrator",
+      "Check-in",
+      "PR author",
+      "Verification",
+      "Publication",
+      "Lock waits",
+      "Human wait",
+    ].join(""),
+  );
+  await expect(rail(page)).not.toContainText(/phase|rollup/i);
   await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
   await expect(worker).toHaveAttribute("data-timeline-shape", "span");
   await expect(
@@ -401,21 +419,25 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(itemDetail(page)).toContainText(
     "Implementing the dashboard now",
   );
-  await expect(itemDetail(page)).toContainText("Worker");
+  // The dispatch it belongs to and the role it played in it, on the transcript's
+  // own header rather than left to be inferred from the session name.
+  await expect(itemDetail(page)).toContainText("Dispatch 1 · Worker · engineer");
   await expect(
-    itemDetail(page).getByRole("article", { name: /^Turn / }),
+    itemDetail(page).getByRole("article", { name: /^Turn / }).first(),
   ).toBeVisible();
+  // One disclosure per recorded turn: this worker ran three.
   await expect(
     itemDetail(page).getByRole("button", {
       name: "command_execution tool details",
     }),
-  ).toHaveCount(1);
+  ).toHaveCount(3);
   await itemDetail(page)
     .getByRole("button", { name: "command_execution tool details" })
+    .first()
     .click();
-  const toolOutput = itemDetail(page).getByLabel(
-    "command_execution tool output",
-  );
+  const toolOutput = itemDetail(page)
+    .getByLabel("command_execution tool output")
+    .first();
   await expect(toolOutput).toContainText('"exit_code": 0');
   await expect(toolOutput.locator(".hljs-number")).toHaveText("0");
   // The detail region is where the reading happens, so it holds the majority of
@@ -463,12 +485,16 @@ test("restores a bookmarked moment inside a session from the address alone", asy
   await openObservatory(page, `${bookmarked.pathname}${bookmarked.search}`);
   const bookmarkedId = bookmarked.searchParams.get("event");
   if (bookmarkedId === null) throw new Error("bookmark lost its event id");
+  // The address alone reopens the moment: its marker is the pressed one among the
+  // node's journal icons, and its item is the focused one in the transcript.
   await expect(
-    rail(page).getByRole("button", { name: /conversation-turn, marker/ }),
-  ).toBeVisible();
+    rail(page).locator('[data-selected="true"]'),
+  ).toHaveAccessibleName(/conversation-turn, marker/);
   await expect(
-    rail(page).getByRole("button", { name: /conversation-turn, marker/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page
+      .getByRole("region", { name: "Node transcript" })
+      .locator('[data-selected="true"]'),
+  ).toHaveCount(1);
   await expect(itemDetail(page)).toContainText(
     "Implementing the dashboard now",
   );
@@ -1142,7 +1168,9 @@ test("reads every recorded moment as words rather than as its stamp", async ({
     name: /engineer-dashboard/,
   });
   await dashboardWorker.hover();
-  await expect(page.getByRole("tooltip")).toContainText("Duration: 30.0 s");
+  // Three recorded turns, each with its own start and finish: the served span is as
+  // long as the session actually ran, not the instant a start stamp alone gives it.
+  await expect(page.getByRole("tooltip")).toContainText("Duration: 50.0 s");
 });
 
 test("gathers every run of one launching session under it", async ({
@@ -1560,8 +1588,13 @@ test("shows mid-turn activity from a live dispatch", async ({ page }) => {
   await page
     .getByRole("button", { name: /dashboard: (running|done)/ })
     .press("Enter");
-  await page.getByRole("button", { name: /engineer-dashboard/ }).click();
-  await expect(page.getByText("Implementing the dashboard now")).toBeVisible();
+  await page
+    .getByRole("region", { name: "Node transcript" })
+    .getByRole("button", { name: /^Open Worker \(engineer-dashboard\)/ })
+    .click();
+  await expect(
+    page.getByText("Implementing the dashboard now").first(),
+  ).toBeVisible();
   changeServedRuns(["--stream-dashboard"]);
   await expect(
     page.getByText("dashboard: Read orchestrator/server.py"),

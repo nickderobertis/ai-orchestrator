@@ -41,6 +41,12 @@ body {
   /* Unlayered, so it wins over the package base layer's bundled-font declaration. */
   font-family: var(--font-sans);
   min-width: 320px;
+  /* The shell is exactly the viewport and every region inside it scrolls itself, so
+     the document must not scroll as well: `scrollIntoView` walks every scrollable
+     ancestor, and a document that can move at all takes the navigation and the pinned
+     timeline off screen the moment the transcript scrolls to an item. */
+  height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(
       circle at 72% 5%,
@@ -365,14 +371,19 @@ p {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
+  /* Both zeroed: a grid item sizes to its content by default, so the widest row —
+     the tab list — pushed the whole working area past the viewport and clipped
+     every other row against the right edge instead of reflowing. */
+  min-width: 0;
   min-height: 0;
 }
 
 .node-view-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 16px;
   padding: 10px 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -431,6 +442,10 @@ p {
 
 .node-tabs > [role="tablist"] {
   margin: 0 20px;
+  /* Six named readings do not fit a laptop's working area; they scroll rather than
+     widening the view that holds them. */
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .node-tab-panel {
@@ -440,35 +455,46 @@ p {
 }
 
 .node-timeline-panel {
+  min-width: 0;
   min-height: 0;
 }
 
+/* A column, not a grid: the timeline is capped at a share of the working area, and
+   only a flex track sizes itself to that cap. An `auto` grid row measures the
+   element's unconstrained height instead, so capping the element left the row at its
+   full size and opened a band of empty space between the plot and the transcript. */
 .node-execution {
   position: relative;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
 .node-timeline-sticky {
-  position: sticky;
   z-index: 5;
-  top: 0;
+  /* Ten expanded lanes are taller than a laptop's working area; without this the
+     reading surface below disappeared behind the thing pinned above it. */
+  flex: 0 0 auto;
+  max-height: 46%;
+  overflow: auto;
   width: 100%;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
-  backdrop-filter: blur(10px);
 }
 
 .node-transcript {
   display: grid;
+  flex: 1 1 auto;
   overflow: auto;
   width: 100%;
+  min-height: 0;
   gap: 10px;
   padding: 18px 24px 50vh;
+  align-content: start;
 }
 
 .transcript-item {
@@ -494,9 +520,37 @@ p {
   text-align: left;
   cursor: pointer;
 }
-.transcript-item button > span:last-child {
+.transcript-facts {
   color: var(--muted-foreground);
   font-size: 11px;
+}
+
+/* One onejudge dispatch, read as one unit: its own name above, and the agent and
+   supervising sessions inside it indented so the nesting is visible rather than
+   merely stated. */
+.transcript-dispatch {
+  display: grid;
+  width: min(100%, 1100px);
+  margin-inline: auto;
+  gap: 10px;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.transcript-dispatch > h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.transcript-dispatch .transcript-item {
+  width: auto;
+  margin-inline: 0 0;
+}
+.transcript-dispatch .transcript-item + .transcript-item {
+  margin-left: 24px;
 }
 
 .node-detail-drawer {
@@ -515,6 +569,11 @@ p {
   z-index: 2;
   top: 12px;
   right: 12px;
+}
+/* The panel's own close control floats over its content, so the record's heading
+   keeps a lane clear for it rather than putting its status badge underneath. */
+.node-detail-drawer .detail-title {
+  padding-right: 40px;
 }
 .conversation-timeline-sticky {
   position: sticky;
