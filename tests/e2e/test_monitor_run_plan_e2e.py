@@ -231,8 +231,8 @@ def _watch(
     )
 
 
-def _fake_codex_path(tmp_path: Path, body: str) -> str:
-    """Put a codex stand-in ahead of the paid binary for *every* pinned identity.
+def _install_fake_codex_on_path(tmp_path: Path, body: str) -> str:
+    """Write a codex stand-in and return the PATH that finds it before the paid binary.
 
     `ONEHARNESS_BIN_CODEX` names the base harness alone — a variant keeps resolving the
     real binary, which reaches a paid provider and, against a fresh CODEX_HOME, clones
@@ -247,12 +247,12 @@ def _fake_codex_path(tmp_path: Path, body: str) -> str:
     return f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
-def _isolated_codex_alt_home(tmp_path: Path) -> str:
-    """An alternate Codex home pinned off the real one, and existing.
+def _ensure_isolated_codex_alt_home(tmp_path: Path) -> str:
+    """Create a throwaway alternate Codex home, pinned off the real one.
 
-    Existing is not incidental: an absent CODEX_HOME fails the candidate before it
-    reaches its binary, which is why scripts/codex-alt-home.sh creates the real one.
-    A journey that skipped this would prove a startup error rather than a refusal.
+    Creating it is the point: an absent CODEX_HOME fails the candidate before it reaches
+    its binary, so a journey handed a path that does not exist would prove a startup
+    error rather than the refusal it is about.
     """
     home = tmp_path / "codex-alt"
     home.mkdir(parents=True, exist_ok=True)
@@ -260,15 +260,11 @@ def _isolated_codex_alt_home(tmp_path: Path) -> str:
 
 
 def _ensure_codex_alt_home() -> str:
-    """Derive the real alternate Codex home, CREATING it (mode 700) when it is absent.
+    """Ensure the real alternate Codex home through scripts/codex-alt-home.sh.
 
-    `ensure`, like the helper it delegates to: scripts/codex-alt-home.sh is named that
-    way because deriving this path has a filesystem side effect, and this is the real
-    `$HOME/.codex-alt` rather than a temporary one. `codex:alternate` maps CODEX_HOME
-    from this indirection and oneharness refuses to start whenever a selected variant's
-    indirection is unset, which is why every dispatch wrapper sources that helper. This
-    turn drives the CLI directly rather than through a wrapper, so it sources the same
-    helper instead of re-deriving the path — and its side effect — a second way.
+    Every dispatch reaches that helper through a wrapper; this turn drives the CLI
+    directly, so it sources the helper rather than re-deriving the path — and the
+    filesystem side effect the helper documents — a second way.
     """
     derived = subprocess.run(
         [
@@ -416,8 +412,8 @@ def test_a_codex_family_with_no_quota_left_reports_the_environment(
     completed = _codex_smoke_turn(
         oneharness_bin,
         tmp_path,
-        PATH=_fake_codex_path(tmp_path, REFUSING_CODEX),
-        ORCHESTRATOR_CODEX_ALT_HOME=_isolated_codex_alt_home(tmp_path),
+        PATH=_install_fake_codex_on_path(tmp_path, REFUSING_CODEX),
+        ORCHESTRATOR_CODEX_ALT_HOME=_ensure_isolated_codex_alt_home(tmp_path),
         SMOKE_CODEX_REFUSAL=RECORDED_CODEX_REFUSAL,
     )
 
@@ -445,8 +441,8 @@ def test_a_codex_failure_that_is_not_spent_quota_still_fails(
         completed = _codex_smoke_turn(
             oneharness_bin,
             tmp_path / label,
-            PATH=_fake_codex_path(tmp_path / label, body),
-            ORCHESTRATOR_CODEX_ALT_HOME=_isolated_codex_alt_home(tmp_path / label),
+            PATH=_install_fake_codex_on_path(tmp_path / label, body),
+            ORCHESTRATOR_CODEX_ALT_HOME=_ensure_isolated_codex_alt_home(tmp_path / label),
         )
 
         outcome = _smoke_outcome(completed)
