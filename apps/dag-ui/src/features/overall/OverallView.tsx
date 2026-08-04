@@ -44,7 +44,7 @@ export function OverallView({
   return (
     <div className="overall-view">
       <ScrollArea className="h-full">
-        <div className="p-[34px]">
+        <div className="p-[34px] max-sm:p-3">
           <section className="overall-hero">
             <p className="eyebrow">Whole DAG</p>
             <h2>{detail.run.run_id}</h2>

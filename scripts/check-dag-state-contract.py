@@ -450,6 +450,86 @@ def typescript_string_object(path: Path, name: str) -> set[str]:
     return set(re.findall(r'\w+:\s*"([^"]+)"', matches[0]))
 
 
+def typescript_viewport_names(path: Path) -> list[str]:
+    """The names one ``VIEWPORTS`` array declares, in the order it declares them."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(
+            f"read {path.name} VIEWPORTS: {exc}; restore the viewport matrix, "
+            "then rerun 'just check'"
+        )
+    matches = re.findall(r"export const VIEWPORTS[^=]*= \[(.*?)\n\];", source, flags=re.DOTALL)
+    if len(matches) != 1:
+        fail(
+            f"{path.name} must declare exactly one exported VIEWPORTS array; restore one "
+            "and remove the duplicates, then rerun 'just check'"
+        )
+    names = [f"{width}x{height}" for width, height in re.findall(r"\((\d+), (\d+)\)", matches[0])]
+    if not names or len(names) != len(set(names)):
+        fail(
+            f"{path.name} VIEWPORTS must name each viewport exactly once; remove the "
+            "duplicates, then rerun 'just check'"
+        )
+    return names
+
+
+def documented_viewport_names(path: Path) -> list[str]:
+    """The viewport names the operator documentation's matrix table lists."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read documented viewport matrix: {exc}; restore {path} and retry")
+    names = re.findall(r"^\| (\d+x\d+) \|", source, flags=re.MULTILINE)
+    if not names or len(names) != len(set(names)):
+        fail(
+            f"{path.name} must list each viewport of the matrix exactly once in its table; "
+            "remove the duplicates, then rerun 'just check'"
+        )
+    return names
+
+
+def typescript_surface_names(path: Path) -> list[str]:
+    """The capture names one ``SURFACES`` array declares, in the order it declares them."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(
+            f"read {path.name} SURFACES: {exc}; restore the photographed surfaces, "
+            "then rerun 'just check'"
+        )
+    matches = re.findall(r"const SURFACES[^=]*= \[(.*?)\n\];", source, flags=re.DOTALL)
+    if len(matches) != 1:
+        fail(
+            f"{path.name} must declare exactly one SURFACES array; restore one and remove "
+            "the duplicates, then rerun 'just check'"
+        )
+    # Anchored to the entry's own indentation: every `open` callback below it also passes
+    # `name:` to a role query, and those name page regions rather than captures.
+    names = re.findall(r'^    name: "([^"]+)",$', matches[0], flags=re.MULTILINE)
+    if not names or len(names) != len(set(names)):
+        fail(
+            f"{path.name} SURFACES must name each surface exactly once; remove the "
+            "duplicates, then rerun 'just check'"
+        )
+    return names
+
+
+def documented_surface_names(path: Path) -> list[str]:
+    """The capture names the operator documentation's surface table lists."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read documented surface table: {exc}; restore {path} and retry")
+    names = re.findall(r"^\| `([0-9]{2}-[a-z0-9-]+)` \|", source, flags=re.MULTILINE)
+    if not names or len(names) != len(set(names)):
+        fail(
+            f"{path.name} must list each photographed surface exactly once in its table; "
+            "remove the duplicates, then rerun 'just check'"
+        )
+    return names
+
+
 def frozenset_members(path: Path, name: str) -> list[str]:
     """The string members of a module-level ``name: frozenset[str] = frozenset({...})``."""
     try:
@@ -1179,6 +1259,31 @@ def main() -> None:
             "the Vite config owns this port, so change the address docs/dag-ui.md "
             "tells the operator to open, then rerun 'just check'"
         ),
+    )
+    # The screenshot tier and the navigation journeys share one viewport matrix, and the
+    # operator documentation restates it as the table an operator reads before running
+    # `just dag-ui-screens`. A width that reached the gallery without reaching that table
+    # would be a size nobody knows is covered — or, the other way round, a promised size
+    # nothing photographs.
+    reconcile(
+        "DAG UI viewport matrix",
+        (
+            "apps/dag-ui/e2e/viewports.ts VIEWPORTS",
+            typescript_viewport_names(root / "apps/dag-ui/e2e/viewports.ts"),
+        ),
+        ("docs/dag-ui.md viewport table", documented_viewport_names(dag_ui_doc)),
+    )
+    # The same reasoning one axis over. Each surface names the PNG it writes at every
+    # viewport, and the operator documentation lists those names as how to find a capture
+    # in the gallery — so a surface that stopped being photographed, or one that started,
+    # must not leave that table describing a gallery nobody writes.
+    reconcile(
+        "DAG UI screenshot surfaces",
+        (
+            "apps/dag-ui/e2e/gallery.screens.spec.ts SURFACES",
+            typescript_surface_names(root / "apps/dag-ui/e2e/gallery.screens.spec.ts"),
+        ),
+        ("docs/dag-ui.md surface table", documented_surface_names(dag_ui_doc)),
     )
     reconcile_number(
         "SSE heartbeat interval",

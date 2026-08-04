@@ -293,6 +293,14 @@ telemetry *args:
 dag-ui:
     ./scripts/nx.sh run dag-ui:serve
 
+# Photograph every major DAG Observatory surface at every viewport in the matrix
+# (`apps/dag-ui/e2e/viewports.ts`, documented in docs/dag-ui.md) against the browser
+# tier's own fixture server, and print the gallery it wrote. The gallery is per
+# invocation and gitignored, so two of these at once neither collide nor leave the
+# tree dirty. Extra arguments reach Playwright (`--grep "at 390x844"` for one width).
+dag-ui-screens *args:
+    ./scripts/dag-ui-screens.sh "$@"
+
 # Serve the read-only DAG telemetry API (FastAPI + SSE), loopback-bound by default.
 # llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
 telemetry-server *args:
