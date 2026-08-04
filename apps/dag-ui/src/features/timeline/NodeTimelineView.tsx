@@ -45,11 +45,12 @@ import {
 /**
  * One node, read as what it did rather than as a column of stacked blocks.
  *
- * The graph is reduced to a breadcrumb, and the working area becomes master and
- * detail: the node's recorded spans and events in order on the left, and whichever
- * one is open expanded across the rest. The node's own task, criteria, dependencies,
- * PR and gate result stay one disclosure away rather than pushing that record down
- * the page.
+ * The graph is reduced to a breadcrumb, and the working area becomes a timeline over
+ * a transcript, locked to one clock: the plot stays pinned across the full width
+ * while the node's recorded work is read below it in order. Whatever the reader opens
+ * arrives in a panel over the right two thirds, so the reading it came from is still
+ * behind it. The node's own task, criteria, dependencies, PR and gate result are tabs
+ * beside the timeline rather than blocks pushing that record down the page.
  */
 export function NodeTimelineView({
   client,
@@ -321,11 +322,10 @@ function NodeExecution({
     if (selectedItemId !== undefined) sync.scrollTo(selectedItemId);
   }, [selectedItemId, sync]);
   return (
-    <div className="node-execution">
+    <div className="node-execution" data-expanded={expanded}>
       <section
         aria-label="Node timeline"
         className="node-timeline-sticky"
-        data-expanded={expanded}
         data-testid="node-timeline"
       >
         <Timeline

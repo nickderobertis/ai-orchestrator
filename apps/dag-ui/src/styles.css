@@ -368,13 +368,18 @@ p {
 }
 
 /*
- * The node view owns the whole working area: a compact head and summary above, then
- * master and detail. The rail is a fixed reading column and the detail takes every
- * remaining pixel, which is the point — a transcript turn is unreadable in a column
- * sized for a list of timestamps.
+ * The node view owns the whole working area: a compact head and its tabs above, then
+ * the timeline pinned over the transcript it is read against. Whatever the reader
+ * opens arrives in a panel over the right two thirds, which is the point — a
+ * transcript turn is unreadable in a column sized for a list of timestamps, and the
+ * reading it was opened from should still be there when the panel closes.
  */
 .node-view {
   display: grid;
+  /* One column, explicitly shrinkable. Without it the column sizes to the widest
+     item's content — the tab list — and every other row is clipped against the right
+     edge of a working area that is now wider than the viewport. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
   /* Both zeroed: a grid item sizes to its content by default, so the widest row —
@@ -449,8 +454,10 @@ p {
 .node-tabs > [role="tablist"] {
   margin: 0 20px;
   /* Six named readings do not fit a laptop's working area; they scroll rather than
-     widening the view that holds them. */
+     widening the view that holds them. The design system sizes the list to its own
+     content, so the ceiling has to be stated here. */
   min-width: 0;
+  max-width: calc(100% - 40px);
   overflow-x: auto;
 }
 
@@ -465,26 +472,33 @@ p {
   min-height: 0;
 }
 
-/* A column, not a grid: the timeline is capped at a share of the working area, and
-   only a flex track sizes itself to that cap. An `auto` grid row measures the
-   element's unconstrained height instead, so capping the element left the row at its
-   full size and opened a band of empty space between the plot and the transcript. */
+/* `fit-content(<share>)`, which is the one track sizing that says what this layout
+   means: the plot takes the height it needs, up to a share of the working area, and
+   the reading takes the rest. A plain `auto` row grows to the element's unconstrained
+   height, and a flex column computes its free space from that same unclamped height —
+   both leave the reading overflowing the column it sits in, which then scrolls and
+   takes the plot that is supposed to stay pinned with it. */
 .node-execution {
   position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: fit-content(40%) minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
+/* Expanding is the reader asking for the lanes, so the plot may take more of the
+   working area — still bounded, because the reading it is read against is the other
+   half of the view and must not be squeezed to nothing. */
+.node-execution[data-expanded="true"] {
+  grid-template-rows: fit-content(62%) minmax(0, 1fr);
+}
+
 .node-timeline-sticky {
   z-index: 5;
-  /* Ten expanded lanes are taller than a laptop's working area; without this the
-     reading surface below disappeared behind the thing pinned above it. */
-  flex: 0 0 auto;
-  max-height: 40%;
+  min-height: 0;
   overflow: auto;
   width: 100%;
   padding: 12px 18px;
@@ -492,22 +506,29 @@ p {
   background: var(--background);
 }
 
-/* Expanding is the reader asking for the lanes, so the plot may take more of the
-   working area — still bounded, because the transcript it is read against is the
-   other half of the view and must not be squeezed to nothing. */
-.node-timeline-sticky[data-expanded="true"] {
-  max-height: 62%;
-}
-
 .node-transcript {
   display: grid;
-  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  /* The reading scrolls; the plot above it does not. Without this, a wheel that
+     reaches the end of the transcript chains into whatever ancestor can still move
+     and takes the pinned timeline with it. */
+  overscroll-behavior: contain;
   width: 100%;
   min-height: 0;
   gap: 10px;
-  padding: 18px 24px 50vh;
+  padding: 18px 24px 24px;
   align-content: start;
+}
+
+/* Room to bring the last item up to the top of the reading, as a spacer rather than
+   as bottom padding: padding is part of the scroller's own box, and half a viewport
+   of it made the box taller than the row it sits in — which is how the column came to
+   scroll and carry the pinned plot with it. */
+.node-transcript::after {
+  content: "";
+  display: block;
+  height: 50vh;
 }
 
 .transcript-item {

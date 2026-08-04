@@ -456,6 +456,34 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
     (await page.locator(".workspace").boundingBox())?.width ?? 0;
   expect(detailWidth / workingWidth).toBeCloseTo(2 / 3, 1);
 
+  // The conversation's own timeline is pinned above its turns and drives them: it
+  // stays where it is while they scroll, and picking a moment on it moves the
+  // reading to that turn.
+  const conversationTimeline = itemDetail(page).getByRole("region", {
+    name: "Conversation timeline",
+  });
+  await expect(conversationTimeline).toBeVisible();
+  const reading = itemDetail(page).locator("[data-radix-scroll-area-viewport]");
+  const readingTop = () =>
+    reading.evaluate((element) => Math.round(element.scrollTop));
+  expect(await readingTop()).toBe(0);
+  // Expanded first, because a collapsed line stacks turns and the tool calls inside
+  // them on one row — which is what collapsing is for, and what makes any single one
+  // of them unreachable by pointer.
+  await conversationTimeline
+    .getByRole("button", { name: "Expand timeline" })
+    .click();
+  await conversationTimeline
+    .getByRole("button", { name: /claude-code turn/ })
+    .last()
+    .click();
+  await expect.poll(readingTop).toBeGreaterThan(0);
+  // Pinned, not carried off: the turns scroll under it and it is still on screen.
+  await expect(conversationTimeline).toBeInViewport();
+  await reading.hover();
+  await page.mouse.wheel(0, -20_000);
+  await expect.poll(readingTop).toBe(0);
+
   // A span contains its events, and opening it discloses them: one turn here.
   const turn = rail(page).getByRole("button", { name: /conversation-turn/ });
   await expect(turn.first()).toBeVisible();
@@ -521,14 +549,15 @@ test("keeps timeline, transcript, and nested judge conversation in time sync", a
     expect(tick).toMatch(/\d{2}:\d{2}:\d{2}.*[+−]\d/u);
   }
 
+  // Scrolled the way a reader scrolls it — a wheel over the transcript — because the
+  // cursor tracks the real scroll path, not a value written into `scrollTop`.
   const timelineTop = (await timeline.boundingBox())?.y;
   const cursor = timeline.getByTestId("timeline-cursor");
   const before = await cursor.getAttribute("style");
-  await transcript.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-    element.dispatchEvent(new Event("scroll"));
-  });
+  await transcript.hover();
+  await page.mouse.wheel(0, 400);
   await expect.poll(() => cursor.getAttribute("style")).not.toBe(before);
+  // And the timeline stays exactly where it was while the reading moves under it.
   expect((await timeline.boundingBox())?.y).toBe(timelineTop);
 
   await timeline.getByRole("button", { name: "Expand timeline" }).click();
@@ -1408,9 +1437,30 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     (await locator.boundingBox())?.width;
   const navigation = page.getByRole("navigation", { name: "DAG runs" });
   const metrics = page.locator(".metric");
+  /**
+   * Whether the whole reading fits the viewport it was given, in both axes.
+   *
+   * A view that overflows the document does not merely look wrong: the widest row
+   * sized the working area and clipped every other one against the right edge, and
+   * a document with anywhere to scroll to gets scrolled by the first
+   * `scrollIntoView` the transcript makes — taking the navigation and the pinned
+   * timeline off screen with it.
+   */
+  const fitsViewport = async () =>
+    page.evaluate(() => {
+      const root = document.documentElement;
+      return {
+        overflowsX: root.scrollWidth > root.clientWidth,
+        overflowsY: root.scrollHeight > root.clientHeight,
+      };
+    });
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  expect(await fitsViewport()).toEqual({
+    overflowsX: false,
+    overflowsY: false,
+  });
   await rail(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
@@ -1433,6 +1483,12 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
 
   await page.setViewportSize({ width: 800, height: 700 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  // Below the layout's breakpoint the six named readings scroll their own tab list
+  // rather than widening the view that holds them.
+  expect(await fitsViewport()).toEqual({
+    overflowsX: false,
+    overflowsY: false,
+  });
   await rail(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
@@ -1446,6 +1502,12 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     -1,
   );
   await page.getByRole("button", { name: "Close detail" }).click();
+  // The panel opened and closed over the view without ever giving the document
+  // somewhere to scroll to.
+  expect(await fitsViewport()).toEqual({
+    overflowsX: false,
+    overflowsY: false,
+  });
   await page.getByRole("tab", { name: "Overall" }).click();
   await expect(metrics).toHaveCount(4);
   const narrowRows = await metrics.evaluateAll((tiles) =>

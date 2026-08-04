@@ -54,14 +54,15 @@ const railRow = (name: RegExp) =>
 const openTranscript = async (name: RegExp) => {
   // Re-queried through the region on every attempt, never held across one: moving
   // between nodes remounts the whole view, and an element captured before that move
-  // is a detached node whose click reaches nothing and reports nothing.
-  let entry: HTMLElement | undefined;
-  await waitFor(() => {
-    entry = within(
-      screen.getByRole("region", { name: "Node transcript" }),
-    ).getByRole("button", { name });
-  });
-  await userEvent.click(entry as HTMLElement);
+  // is a detached node whose click reaches nothing and reports nothing. `waitFor`
+  // resolves to what its last attempt returned, which is the live element.
+  const entry = await waitFor(() =>
+    within(screen.getByRole("region", { name: "Node transcript" })).getByRole(
+      "button",
+      { name },
+    ),
+  );
+  await userEvent.click(entry);
   await screen.findByRole("region", { name: "Timeline item detail" });
 };
 
