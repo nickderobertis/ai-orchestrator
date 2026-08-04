@@ -479,8 +479,11 @@ def _write_live_run(runs_dir: Path) -> None:
         ),
     )
     journal.append("node-started", node=NodeId("dashboard"), detail={"persona": "engineer"})
-    journal.append("lock-wait", node=NodeId("dashboard"), detail={"seconds": 1.2})
-    journal.append("lock-wait", node=NodeId("dashboard"), detail={"seconds": 2.8})
+    # Two separate waits, aggregated into one served record that carries their total.
+    # The journal writes them milliseconds apart, so the window they fall in says
+    # nothing about how long this node actually waited — only the total does.
+    journal.append("lock-wait", node=NodeId("dashboard"), detail={"seconds": 4.5})
+    journal.append("lock-wait", node=NodeId("dashboard"), detail={"seconds": 5.5})
     journal.append(
         "step-started",
         node=NodeId("dashboard"),

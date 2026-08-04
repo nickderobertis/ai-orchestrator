@@ -301,7 +301,10 @@ function NodeExecution({
   // than being one — so scrolling onto one can put the reading position outside the
   // window; pinning it to the nearest edge keeps the cursor on screen instead of
   // dropping it and leaving the reader with no mark at all.
-  const plotted = useMemo(() => timeRange(projection.items), [projection.items]);
+  const plotted = useMemo(
+    () => timeRange(projection.items),
+    [projection.items],
+  );
   const cursor =
     sync.cursor === undefined
       ? undefined

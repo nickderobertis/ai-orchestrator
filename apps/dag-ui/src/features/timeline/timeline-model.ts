@@ -315,7 +315,11 @@ function laneId(row: TimelineRow): LaneId | null {
   if (row.rowKind === "event") return null;
   const role = roleLane(row.role);
   if (role !== null) return role;
-  return LANE_BY_SPAN_KIND[spanKind(row)] ?? null;
+  // Widened for the lookup, not narrowed for it: a group row carries the kind of the
+  // spans it stands for as a plain string, and a kind the table has no entry for is
+  // an answer here rather than an assertion that it must have one.
+  const table: Readonly<Record<string, LaneId | null>> = LANE_BY_SPAN_KIND;
+  return table[row.rowKind === "span" ? row.span.kind : row.kind] ?? null;
 }
 
 /** A dispatch's own lane, from the roles the server records on it. */
@@ -336,19 +340,6 @@ function roleLane(role: string | undefined): LaneId | null {
     default:
       return null;
   }
-}
-
-/**
- * The served span kind behind a row.
- *
- * A group stands for a run of same-kind siblings and carries their kind, and both are
- * validated against the closed vocabulary before they reach this module, so the cast
- * narrows a string the contract has already checked.
- */
-function spanKind(row: TimelineRow): TimelineSpanKind {
-  return row.rowKind === "span"
-    ? row.span.kind
-    : (row.kind as TimelineSpanKind);
 }
 
 export function nodeTimeline(

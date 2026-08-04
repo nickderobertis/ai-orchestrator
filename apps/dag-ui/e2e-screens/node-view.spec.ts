@@ -54,7 +54,10 @@ async function openNode(page: Page): Promise<void> {
 
 for (const viewport of VIEWPORTS) {
   test(`node view at ${viewport.name}`, async ({ page }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
     await openNode(page);
     await page.screenshot({
       path: join(GALLERY, `${viewport.name}-collapsed.png`),

@@ -362,18 +362,18 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(
     rail(page).getByRole("button", { name: /^PR author/ }),
   ).toBeVisible();
-  // The waits a node spent on a lock are plotted at the length they actually took,
-  // not stretched across the window they happened to fall in.
+  // The waits a node spent on a lock are plotted at the length they actually took —
+  // ten seconds of a four-minute node — and neither stretched across the window the
+  // journal happened to write them in nor collapsed to the instant that window is.
   const lockWait = rail(page).getByRole("button", { name: /^Lock waits/ });
   await expect(lockWait).toHaveAttribute("data-timeline-shape", "span");
   const lockWidth = (await lockWait.boundingBox())?.width ?? 0;
-  const timelineWidth = (await rail(page).boundingBox())?.width ?? 1;
-  expect(lockWidth / timelineWidth).toBeLessThan(0.1);
-  expect(lockWidth).toBeGreaterThan(0);
+  const plot = rail(page).getByLabel(/Timeline plot/);
+  const plotWidth = (await plot.boundingBox())?.width ?? 1;
+  expect(lockWidth / plotWidth).toBeLessThan(0.1);
+  expect(lockWidth / plotWidth).toBeGreaterThan(0.02);
   // The categories the reader was promised, and no served identifier among them.
-  await expect(
-    page.getByRole("list", { name: "Timeline legend" }),
-  ).toHaveText(
+  await expect(page.getByRole("list", { name: "Timeline legend" })).toHaveText(
     [
       "Worker",
       "Judge",
@@ -387,13 +387,18 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
       "Human wait",
     ].join(""),
   );
-  await expect(rail(page)).not.toContainText(/phase|rollup/i);
+  // Not the rail alone: the words are banned from the whole reading, and a lifecycle
+  // step is named in the transcript rather than plotted over its own contents. Read
+  // without word boundaries on purpose — this matches the concatenated text content
+  // of the whole view, where a banned word runs straight into the next label.
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
+  ).not.toContainText(/phase|rollup/i);
   await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
   await expect(worker).toHaveAttribute("data-timeline-shape", "span");
   await expect(
     page.getByRole("list", { name: "Timeline legend" }),
   ).toBeVisible();
-  const plot = rail(page).getByLabel(/Timeline plot/);
   await plot.hover();
   await page.mouse.wheel(0, -120);
   await expect(
@@ -421,9 +426,13 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   );
   // The dispatch it belongs to and the role it played in it, on the transcript's
   // own header rather than left to be inferred from the session name.
-  await expect(itemDetail(page)).toContainText("Dispatch 1 · Worker · engineer");
+  await expect(itemDetail(page)).toContainText(
+    "Dispatch 1 · Worker · engineer",
+  );
   await expect(
-    itemDetail(page).getByRole("article", { name: /^Turn / }).first(),
+    itemDetail(page)
+      .getByRole("article", { name: /^Turn / })
+      .first(),
   ).toBeVisible();
   // One disclosure per recorded turn: this worker ran three.
   await expect(
@@ -527,8 +536,18 @@ test("keeps timeline, transcript, and nested judge conversation in time sync", a
   const lint = timeline.getByRole("button", { name: /^Lint/ });
   await expect(judge).toHaveAttribute("data-timeline-shape", "span");
   await expect(lint).toHaveAttribute("data-timeline-shape", "span");
-  expect((await judge.boundingBox())?.width ?? 0).toBeGreaterThan(3);
-  expect((await lint.boundingBox())?.width ?? 0).toBeGreaterThan(3);
+  // Read as a share of the plot, not as pixels: a supervising session projected
+  // against a window nothing else occupied still clears the minimum bar width the
+  // design system paints, which is exactly the sliver this has to rule out. Each of
+  // these ran half a minute of a four-minute node.
+  const plotWidth = (await timeline.getByLabel(/Timeline plot/).boundingBox())
+    ?.width;
+  if (plotWidth === undefined) throw new Error("timeline plot has no bounds");
+  for (const supervising of [judge, lint]) {
+    expect((await supervising.boundingBox())?.width ?? 0).toBeGreaterThan(
+      plotWidth * 0.05,
+    );
+  }
   await judge.click();
   await expect
     .poll(() => new URL(page.url()).searchParams.get("event"))
@@ -557,6 +576,53 @@ test("keeps timeline, transcript, and nested judge conversation in time sync", a
   ).toContainText("Judge");
   await page.keyboard.press("Escape");
   await expect(page.getByLabel("Item detail panel")).toHaveCount(0);
+});
+
+test("scrolls the transcript to the journal record a marker names", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  const timeline = rail(page);
+  const transcript = page.getByRole("region", { name: "Node transcript" });
+  // A journal record occupies no lane: it is a marker over all of them, which is why
+  // clicking one is the only way to reach an instant from the plot.
+  const markers = timeline.getByRole("button", { name: /, marker$/ });
+  await expect(markers.first()).toBeVisible();
+  const marked = await markers.last().getAttribute("aria-label");
+  if (marked === null) throw new Error("a marker carries no accessible name");
+
+  const before = await transcript.evaluate((element) => element.scrollTop);
+  await markers.last().click();
+  const focused = transcript.locator('[data-selected="true"]');
+  await expect(focused).toHaveCount(1);
+  await expect(focused).toHaveAccessibleName(marked.replace(", marker", ""));
+  // Focusing is a move, not just a highlight: the reading position follows.
+  await expect
+    .poll(() => transcript.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(before);
+  // And the moment it moved to is in the address, so the reading is bookmarkable.
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("event"))
+    .not.toBeNull();
+
+  // The sessions of one dispatch are nested under its own name, not listed beside
+  // it: the agent session and the lint run it made of its own work read as one unit.
+  const dispatch = transcript.getByRole("region", { name: "Dispatch 1" });
+  await expect(
+    dispatch.getByRole("article", { name: /^Worker \(engineer-dashboard\)/ }),
+  ).toBeVisible();
+  await expect(
+    dispatch.getByRole("article", { name: /^Lint \(llmlint-dashboard\)/ }),
+  ).toBeVisible();
+  await expect(
+    dispatch.getByRole("article", { name: /^Judge \(/ }),
+  ).toBeVisible();
+  // A separately dispatched role is its own group rather than a member of the first.
+  await expect(
+    transcript
+      .getByRole("region", { name: "Dispatch 2" })
+      .getByRole("article", { name: /^Check-in \(/ }),
+  ).toBeVisible();
 });
 
 test("opens a node from the keyboard-accessible node list and walks back", async ({

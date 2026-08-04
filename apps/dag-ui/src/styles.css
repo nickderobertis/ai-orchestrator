@@ -570,11 +570,6 @@ p {
   top: 12px;
   right: 12px;
 }
-/* The panel's own close control floats over its content, so the record's heading
-   keeps a lane clear for it rather than putting its status badge underneath. */
-.node-detail-drawer .detail-title {
-  padding-right: 40px;
-}
 .conversation-timeline-sticky {
   position: sticky;
   z-index: 2;
@@ -771,6 +766,12 @@ p {
 .detail-title h2 {
   margin: 0;
   font-size: 19px;
+}
+
+/* The panel's own close control floats over its content, so the record's heading
+   keeps a lane clear for it rather than putting its status badge underneath. */
+.node-detail-drawer .detail-title {
+  padding-right: 40px;
 }
 
 .section-heading {
