@@ -3,6 +3,11 @@ import type {
   TimelineEvent,
   TimelineSpan,
 } from "@ai-orchestrator/dag-model";
+import type {
+  TimelineItem,
+  TimelineLane,
+  TimelineMarker,
+} from "@oneharness/ui";
 
 /**
  * One node's slice of the served run timeline, as rows a rail can render.
@@ -54,6 +59,92 @@ export interface NodeTimeline {
 }
 
 const EMPTY: NodeTimeline = { rows: [], total: 0 };
+
+export const NODE_LANES: readonly TimelineLane[] = [
+  "Worker",
+  "Judge",
+  "Lint",
+  "Orchestrator",
+  "Check-in",
+  "PR author",
+  "Verification",
+  "Publication",
+  "Lock waits",
+  "Human wait",
+].map((label) => ({ id: label.toLowerCase().replaceAll(" ", "-"), label }));
+
+export interface NodeTimelineV2 {
+  readonly items: readonly TimelineItem<TimelineRow>[];
+  readonly markers: readonly TimelineMarker<TimelineRow>[];
+  readonly lanes: readonly TimelineLane[];
+  readonly rows: readonly TimelineRow[];
+}
+
+/** Project the served vocabulary into Timeline v2: intervals use lanes; journals use markers. */
+export function nodeTimelineV2(
+  timeline: RunTimeline | undefined,
+  nodeId: string,
+): NodeTimelineV2 {
+  const rows = flattenRows(nodeTimeline(timeline, nodeId).rows);
+  const items = rows.flatMap((row): TimelineItem<TimelineRow>[] => {
+    if (row.rowKind === "event") return [];
+    const start = Date.parse(row.startedAt);
+    const end = row.endedAt === null ? null : Date.parse(row.endedAt);
+    return [
+      {
+        id: row.id,
+        label: row.displayLabel,
+        laneId: laneId(row),
+        payload: row,
+        start,
+        end,
+        duration: end === null ? null : end - start,
+        status: row.status,
+      },
+    ];
+  });
+  const markers = rows.flatMap((row): TimelineMarker<TimelineRow>[] =>
+    row.rowKind === "event"
+      ? [
+          {
+            id: row.id,
+            label: row.displayLabel,
+            at: Date.parse(row.startedAt),
+            payload: row,
+            status: row.status,
+          },
+        ]
+      : [],
+  );
+  return { items, markers, lanes: NODE_LANES, rows };
+}
+
+function flattenRows(rows: readonly TimelineRow[]): TimelineRow[] {
+  const seen = new Set<string>();
+  const result: TimelineRow[] = [];
+  const visit = (nested: readonly TimelineRow[]) => {
+    for (const row of nested) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        result.push(row);
+      }
+      visit(row.children);
+    }
+  };
+  visit(rows);
+  return result;
+}
+
+function laneId(row: TimelineRow): string {
+  const value = roleKind(row.role, row.kind).toLowerCase();
+  const identity = `${value} ${row.id} ${row.label}`.toLowerCase();
+  if (value.includes("verify") || value === "gate") return "verification";
+  if (value.includes("publish") || value.includes("merge"))
+    return "publication";
+  if (identity.includes("lock")) return "lock-waits";
+  if (value.includes("human") || value.includes("wait")) return "human-wait";
+  return value.replaceAll(" ", "-");
+}
 
 export function nodeTimeline(
   timeline: RunTimeline | undefined,
@@ -146,7 +237,7 @@ function spanRow(
       span.total_duration_ms ?? elapsed(span.started_at, span.ended_at),
     children: group(spanRows(span, children)),
     displayLabel: spanLabel(span, role),
-    displayKind: span.kind === "step" ? "Phase" : roleKind(role, span.kind),
+    displayKind: span.kind === "step" ? "Lifecycle" : roleKind(role, span.kind),
   };
 }
 
@@ -238,7 +329,7 @@ function roleKind(role: string | undefined, fallback: string): string {
 
 function spanLabel(span: TimelineSpan, role: string | undefined): string {
   if (span.kind === "step")
-    return span.label ? `Phase: ${span.label}` : "Lifecycle phase";
+    return span.label ? `Lifecycle: ${span.label}` : "Lifecycle step";
   switch (role) {
     case "worker":
       return `Worker (${span.label || "worker"})`;

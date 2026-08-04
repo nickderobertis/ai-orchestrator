@@ -11,11 +11,13 @@ import {
   Button,
   Card,
   CardContent,
+  ConversationTimeline,
   ScrollArea,
   Separator,
   Skeleton,
   StatusBadge,
   TurnCard,
+  useTimelineScrollSync,
 } from "@oneharness/ui";
 import { ExternalLink, ListTree, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -143,6 +145,14 @@ function Session({
   readonly transcript: Transcript;
 }) {
   const [visible, setVisible] = useState(PAGE_SIZE);
+  const availableTurns = transcript.conversation?.conversation.turns ?? [];
+  const turns: readonly Turn[] =
+    row.rowKind === "event"
+      ? availableTurns.filter(({ id }) => id === row.event.id)
+      : availableTurns;
+  const sync = useTimelineScrollSync(
+    turns.map((turn) => ({ id: turn.id, time: Date.parse(turn.timestamp) })),
+  );
   if (transcript.loading)
     return (
       <div aria-live="polite" className="loading-inline">
@@ -163,10 +173,7 @@ function Session({
       </Alert>
     );
   const { conversation, attribution } = transcript.conversation;
-  const turns: readonly Turn[] =
-    row.rowKind === "event"
-      ? conversation.turns.filter(({ id }) => id === row.event.id)
-      : conversation.turns;
+  const author = roleLabel(attribution.agentRole, attribution.transportRole);
   // The turns sit on the design system's own card surface rather than straight on
   // the page: `TurnCard` paints its own bubbles and nothing behind them.
   return (
@@ -183,6 +190,13 @@ function Session({
           <StatusBadge state={conversation.state} />
         </header>
         <Separator className="my-2.5" />
+        <div className="conversation-timeline-sticky">
+          <ConversationTimeline
+            cursor={sync.cursor}
+            onSelectTurn={sync.scrollTo}
+            turns={[...turns]}
+          />
+        </div>
         {/* llmlint: ignore[changed_behavior_has_e2e] the same unproducible state as
             above, from the other side: a served timeline names this turn, so only a
             history store rewritten between the two reads drops it. */}
@@ -192,9 +206,16 @@ function Session({
           </p>
         ) : (
           <>
-            {turns.slice(0, visible).map((turn) => (
-              <TurnCard key={turn.id} turn={turn} />
-            ))}
+            <div ref={sync.containerRef}>
+              {turns.slice(0, visible).map((turn) => (
+                <div
+                  key={turn.id}
+                  ref={(element) => sync.register(turn.id, element)}
+                >
+                  <TurnCard author={{ label: author }} turn={turn} />
+                </div>
+              ))}
+            </div>
             {turns.length > visible && (
               <Button
                 onClick={() => setVisible(visible + PAGE_SIZE)}

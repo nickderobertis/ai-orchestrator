@@ -11,14 +11,17 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  Timeline,
+  useTimelineScrollSync,
 } from "@oneharness/ui";
 import {
   ArrowLeft,
   ExternalLink,
   OctagonPause,
   TriangleAlert,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 import {
@@ -27,8 +30,12 @@ import {
   type NodeTab,
 } from "../runs/useUrlSelection";
 import { TimelineItemDetail } from "./TimelineItemDetail";
-import { TimelineRail } from "./TimelineRail";
-import { findRow, nodeTimeline } from "./timeline-model";
+import {
+  findRow,
+  nodeTimeline,
+  nodeTimelineV2,
+  type TimelineRow,
+} from "./timeline-model";
 
 /**
  * One node, read as what it did rather than as a column of stacked blocks.
@@ -68,20 +75,18 @@ export function NodeTimelineView({
     () => nodeTimeline(timeline, node.id),
     [timeline, node.id],
   );
-  const selected =
-    selectedItemId === undefined
-      ? undefined
-      : findRow(projected.rows, selectedItemId);
-
   // Escape is the way out of a full-screen view everywhere else, so it is the way
   // out of this one; the breadcrumb button is the visible half of the same exit.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onBack();
+      if (event.key === "Escape") {
+        if (selectedItemId !== undefined) onSelectItem();
+        else onBack();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onBack]);
+  }, [onBack, onSelectItem, selectedItemId]);
   const prUrl =
     node.detail?.publication === undefined
       ? (node.result?.pr ?? undefined)
@@ -226,24 +231,152 @@ export function NodeTimelineView({
               </p>
             </Card>
           ) : (
-            <div className="node-view-body">
-              <TimelineRail
-                onSelect={onSelectItem}
-                rows={projected.rows}
-                selectedId={selectedItemId}
-              />
-              <TimelineItemDetail
-                client={client}
-                conversationRevision={conversationRevision}
-                node={node}
-                row={selected}
-                runId={runId}
-              />
-            </div>
+            <NodeExecution
+              client={client}
+              conversationRevision={conversationRevision}
+              node={node}
+              onSelectItem={onSelectItem}
+              runId={runId}
+              selectedItemId={selectedItemId}
+              timeline={timeline}
+            />
           )}
         </TabsContent>
       </Tabs>
     </section>
+  );
+}
+
+function NodeExecution({
+  client,
+  conversationRevision,
+  node,
+  onSelectItem,
+  runId,
+  selectedItemId,
+  timeline,
+}: {
+  readonly client: TelemetryClient;
+  readonly conversationRevision?: number;
+  readonly node: NodeView;
+  readonly onSelectItem: (id?: string) => void;
+  readonly runId: string;
+  readonly selectedItemId?: string;
+  readonly timeline: RunTimeline;
+}) {
+  const projection = useMemo(
+    () => nodeTimelineV2(timeline, node.id),
+    [timeline, node.id],
+  );
+  const entries = useMemo(
+    () =>
+      projection.rows.map((row) => ({
+        id: row.id,
+        time: Date.parse(row.startedAt),
+      })),
+    [projection.rows],
+  );
+  const sync = useTimelineScrollSync(entries);
+  const [expanded, setExpanded] = useState(false);
+  const selected =
+    selectedItemId === undefined
+      ? undefined
+      : findRow(projection.rows, selectedItemId);
+  const select = (id: string) => {
+    onSelectItem(id);
+    sync.scrollTo(id);
+  };
+  useEffect(() => {
+    if (selectedItemId !== undefined) sync.scrollTo(selectedItemId);
+  }, [selectedItemId, sync]);
+  return (
+    <div className="node-execution">
+      <section
+        aria-label="Node timeline"
+        className="node-timeline-sticky"
+        data-testid="node-timeline"
+      >
+        <Timeline
+          axis={{ origin: Math.min(...entries.map(({ time }) => time)) }}
+          cursor={sync.cursor}
+          expanded={expanded}
+          items={projection.items}
+          lanes={projection.lanes}
+          markers={projection.markers}
+          onExpandedChange={setExpanded}
+          onSelect={(entry) => select(entry.id)}
+          selectedId={selectedItemId}
+        />
+      </section>
+      <section
+        aria-label="Node transcript"
+        className="node-transcript"
+        ref={sync.containerRef}
+      >
+        {projection.rows.map((row) => (
+          <TranscriptItem
+            key={row.id}
+            row={row}
+            selected={row.id === selectedItemId}
+            register={sync.register}
+            onOpen={() => select(row.id)}
+          />
+        ))}
+      </section>
+      {selected !== undefined && (
+        <aside aria-label="Item detail panel" className="node-detail-drawer">
+          <Button
+            aria-label="Close detail"
+            className="drawer-close"
+            onClick={() => onSelectItem()}
+            size="icon"
+            variant="ghost"
+          >
+            <X />
+          </Button>
+          <TimelineItemDetail
+            client={client}
+            conversationRevision={conversationRevision}
+            node={node}
+            row={selected}
+            runId={runId}
+          />
+        </aside>
+      )}
+    </div>
+  );
+}
+
+function TranscriptItem({
+  row,
+  selected,
+  register,
+  onOpen,
+}: {
+  readonly row: TimelineRow;
+  readonly selected: boolean;
+  readonly register: (id: string, element: HTMLElement | null) => void;
+  readonly onOpen: () => void;
+}) {
+  return (
+    <article
+      className="transcript-item"
+      data-selected={selected}
+      ref={(element) => register(row.id, element)}
+    >
+      <button
+        aria-label={`Open transcript ${row.displayKind} item`}
+        onClick={onOpen}
+        type="button"
+      >
+        <span className="eyebrow">{row.displayKind}</span>
+        <strong>{row.displayLabel}</strong>
+        <span>
+          {new Date(row.startedAt).toLocaleTimeString()} ·{" "}
+          {row.status ?? "recorded"}
+        </span>
+      </button>
+    </article>
   );
 }
 

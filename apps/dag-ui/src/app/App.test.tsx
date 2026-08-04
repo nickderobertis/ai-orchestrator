@@ -119,7 +119,9 @@ describe("DAG application", () => {
         .querySelector(".hljs-number"),
     ).toHaveTextContent("1");
 
-    // Escape is the keyboard way back to the graph.
+    // Escape closes on-demand detail first, preserving reading context; a second
+    // Escape returns to the graph.
+    await userEvent.keyboard("{Escape}");
     await userEvent.keyboard("{Escape}");
     expect(await screen.findByText("queued")).toBeInTheDocument();
     expect(window.location.search).not.toContain("node=");
@@ -260,14 +262,8 @@ describe("DAG application", () => {
     );
     const { client } = telemetryHarness();
     render(<App client={client} />);
-    // The rail reveals the row the address names, however deep it sits.
-    expect(
-      (
-        await screen.findAllByRole("button", { name: /conversation-turn/ })
-      ).some((button) =>
-        button.getAttribute("aria-describedby")?.includes("worker-session-0"),
-      ),
-    ).toBe(true);
+    // The address opens the matching long-form item in the detail panel.
+    expect(await screen.findByLabelText("Item detail panel")).toBeVisible();
     expect(
       await within(detail()).findByText("Implementing the dashboard now"),
     ).toBeInTheDocument();
@@ -344,25 +340,17 @@ describe("DAG application", () => {
     const rail = await screen.findByRole("region", { name: "Node timeline" });
     expect(
       within(rail).getByRole("button", {
-        name: /Phase: Supervised conversations/,
+        name: /Lifecycle: Supervised conversations/,
       }),
     ).toBeInTheDocument();
-    // Two hundred conversations, and a rail a reader can take in at a glance.
     expect(
-      within(rail).getByRole("button", {
-        name: /204 grouped judge activities/,
-      }),
+      within(rail).getByRole("button", { name: "Expand timeline" }),
     ).toBeInTheDocument();
-    expect(within(rail).getAllByRole("button").length).toBeLessThan(12);
-
-    // Expanding the density cap hands out a page at a time.
     await userEvent.click(
-      within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
+      within(rail).getByRole("button", { name: "Expand timeline" }),
     );
-    const paged = within(rail).getAllByRole("button");
-    expect(paged.length).toBeLessThan(60);
     expect(
-      within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
+      within(rail).getByRole("button", { name: "Collapse timeline" }),
     ).toBeInTheDocument();
   });
 
@@ -569,13 +557,8 @@ describe("DAG application", () => {
     // It arrives with no item named in the address, so the detail region says how
     // to read one rather than standing empty beside a full rail.
     release(Response.json(runTimeline(LIVE_RUN)));
-    const region = await screen.findByRole("region", {
-      name: "Timeline item detail",
-    });
     expect(
-      within(region).getByText(
-        "Select an item in the timeline to read what it recorded.",
-      ),
+      await screen.findByRole("region", { name: "Node transcript" }),
     ).toBeInTheDocument();
     expect(railRow(/engineer-dashboard/)).toBeInTheDocument();
   });

@@ -332,9 +332,9 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   ).toContainText("dashboard");
   await expect(page.locator(".node-view-facts")).toContainText("running");
 
-  await expect(itemDetail(page)).toContainText(
-    "Select an item in the timeline to read what it recorded.",
-  );
+  await expect(
+    page.getByRole("region", { name: "Node transcript" }),
+  ).toBeVisible();
 
   // The upstream plot distinguishes duration bars from instant icons and moves the
   // old row metadata into a compact hover tooltip.
@@ -363,7 +363,7 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
     page.getByRole("list", { name: "Timeline legend" }),
   ).toBeVisible();
   await expect(
-    rail(page).getByRole("button", { name: /Phase: build/ }),
+    rail(page).getByRole("button", { name: /Lifecycle: build/ }),
   ).toBeVisible();
   const plot = rail(page).getByLabel(/Timeline plot/);
   await plot.hover();
@@ -410,9 +410,10 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(toolOutput.locator(".hljs-number")).toHaveText("0");
   // The detail region is where the reading happens, so it holds the majority of
   // the width rather than a fixed narrow column.
-  const railWidth = (await rail(page).boundingBox())?.width ?? 0;
   const detailWidth = (await itemDetail(page).boundingBox())?.width ?? 0;
-  expect(detailWidth).toBeGreaterThan(railWidth);
+  const workingWidth =
+    (await page.locator(".workspace").boundingBox())?.width ?? 0;
+  expect(detailWidth / workingWidth).toBeCloseTo(2 / 3, 1);
 
   // A span contains its events, and opening it discloses them: one turn here.
   const turn = rail(page).getByRole("button", { name: /conversation-turn/ });
@@ -422,7 +423,8 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
     "Implementing the dashboard now",
   );
 
-  // Escape is the keyboard way back to the graph.
+  // Escape closes detail first, then returns to the graph.
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",

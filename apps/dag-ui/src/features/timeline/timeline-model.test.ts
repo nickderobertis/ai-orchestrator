@@ -5,6 +5,7 @@ import {
   findRow,
   GROUP_THRESHOLD,
   nodeTimeline,
+  nodeTimelineV2,
   pathTo,
 } from "./timeline-model";
 
@@ -88,7 +89,7 @@ describe("one node's slice of the run timeline", () => {
     expect(busy.total).toBeGreaterThan(200);
   });
 
-  test("names lifecycle phases and distinguishes a retried worker dispatch", () => {
+  test("names lifecycle steps and distinguishes a retried worker dispatch", () => {
     const fixture = parseRunTimeline(runTimeline(LIVE_RUN));
     const node = fixture.spans.find(({ id }) => id === "node-1-dashboard");
     const worker = fixture.spans.find(
@@ -134,11 +135,35 @@ describe("one node's slice of the run timeline", () => {
       "Worker (engineer-dashboard-retry) · retry 1 · conversation 2",
     );
     expect(findRow(projected.rows, "step-build")).toMatchObject({
-      displayKind: "Phase",
-      displayLabel: "Phase: Build and verify",
+      displayKind: "Lifecycle",
+      displayLabel: "Lifecycle: Build and verify",
     });
     expect(projected.rows.some(({ id }) => id === "node-1-dashboard")).toBe(
       false,
     );
+  });
+
+  test("projects intervals into deterministic lanes and journals into markers", () => {
+    const projected = nodeTimelineV2(timeline, "dashboard");
+    expect(projected.lanes.map(({ label }) => label)).toEqual([
+      "Worker",
+      "Judge",
+      "Lint",
+      "Orchestrator",
+      "Check-in",
+      "PR author",
+      "Verification",
+      "Publication",
+      "Lock waits",
+      "Human wait",
+    ]);
+    expect(
+      projected.items.find(({ id }) => id === "dispatch-judge-session"),
+    ).toMatchObject({ laneId: "judge" });
+    expect(
+      projected.items.find(({ id }) => id === "rollup-lock-wait-11"),
+    ).toMatchObject({ laneId: "lock-waits" });
+    expect(projected.markers.some(({ id }) => id === "event-9")).toBe(true);
+    expect(projected.items.some(({ id }) => id === "event-9")).toBe(false);
   });
 });
