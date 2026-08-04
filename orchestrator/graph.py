@@ -706,6 +706,11 @@ def run_graph(
                 "detail": detail,
                 **({"outcome": report.outcome} if report.outcome else {}),
                 **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
+                **(
+                    {"failure_attribution": report.failure_attribution}
+                    if report.failure_attribution
+                    else {}
+                ),
                 "turns": report.assistant_turns,
                 TERMINAL_NODE_RESULT_FIELD: cast(
                     Any, _run_payload(node, run, dependents.get(nid, []))
@@ -1113,6 +1118,11 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
                 # emit this additive report-v5 field; the telemetry CLI E2E injects the exact
                 # upstream payload at the persisted report boundary and exercises consumption.
                 **({"telemetry": report.telemetry} if report and report.telemetry else {}),
+                **(
+                    {"failure_attribution": report.failure_attribution}
+                    if report and report.failure_attribution
+                    else {}
+                ),
             }
         )
     item.update({"kind": result.kind, "status": result.status, "task": result.task})

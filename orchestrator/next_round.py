@@ -218,6 +218,16 @@ def main_runs(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not math.isfinite(args.parked_after) or args.parked_after <= 0:
         parser.error("--parked-after must be a positive, finite number of seconds")
+    from .provider_health import (
+        failure_rollups,
+    )
+    from .provider_health import (
+        probe as probe_provider_health,
+    )
+    from .provider_health import (
+        render as render_provider_health,
+    )
+
     rows = list_runs(args.runs_dir)
     run_dirs = (
         sorted(path for path in args.runs_dir.iterdir() if path.is_dir())
@@ -276,6 +286,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
+    print(render_provider_health(probe_provider_health(cwd=Path.cwd())))
     recorded = {row.run_id for row in rows}
     for run_id in sorted((active_launches | abandoned.keys()) - recorded):
         owner = f"[{ownership.get(run_id, 'unknown')}]"
@@ -324,6 +335,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         if run_id in concurrent:
             print(f"    {concurrent[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
+        for line in failure_rollups(args.runs_dir / run_id):
+            print(f"    {line}")
     return 0
 
 

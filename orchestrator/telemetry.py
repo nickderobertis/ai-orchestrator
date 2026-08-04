@@ -217,11 +217,14 @@ class TimingPresenceRecord(TypedDict):
 class Failure:
     classification: FailureClass
     detail: str = ""
+    attribution: dict[str, object] | None = None
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"class": self.classification}
         if self.detail:
             result["detail"] = self.detail
+        if self.attribution:
+            result.update(self.attribution)
         return result
 
 
@@ -434,7 +437,8 @@ def _failure(item: GraphResultItem) -> Failure | None:
         kind = "agent"
     else:
         kind = "unknown"
-    return Failure(kind, detail)
+    attribution = item.get("failure_attribution")
+    return Failure(kind, detail, dict(attribution) if isinstance(attribution, dict) else None)
 
 
 def _gate_seconds(events: list[Event]) -> float:
@@ -1631,6 +1635,28 @@ def collect_run(
     nodes = [
         _node_record(node, item, events, summaries, active_at=node_active_at)
         for node, item in items.items()
+    ]
+    # A recorded worker session proves this dispatch reached oneharness and should
+    # have a simulated-user side. Keep an absent judge explicit; do not infer this
+    # when the entire optional history store is unavailable.
+    roles_by_node: dict[str, set[SessionRole]] = {}
+    for summary in summaries:
+        if node := summary.labels.get("node"):
+            roles_by_node.setdefault(node, set()).add(summary.role)
+    nodes = [
+        replace(
+            node,
+            failure=Failure(
+                node.failure.classification,
+                node.failure.detail,
+                {**(node.failure.attribution or {}), "judge_unrecorded": True},
+            ),
+        )
+        if node.failure is not None
+        and "agent" in roles_by_node.get(node.node, set())
+        and "judge" not in roles_by_node.get(node.node, set())
+        else node
+        for node in nodes
     ]
     native_parts = [part for part in native_by_node.values() if part is not None]
     timing = _run_timing(

@@ -160,6 +160,25 @@ export const failureClassSchema = z.enum([
 export const failureSchema = openObject({
   class: failureClassSchema,
   detail: z.string().optional(),
+  side: z.enum(["agent", "judge", "llmlint"]).optional(),
+  harness: z.string().optional(),
+  variant: z.string().optional(),
+  identity: z.string().optional(),
+  cause: z
+    .enum([
+      "quota_at_launch",
+      "quota_mid_conversation",
+      "stale_session_resume",
+      "rate_limit",
+      "harness_exit",
+    ])
+    .optional(),
+  raw_tail: z.string().optional(),
+  reset_time: z.string().optional(),
+  missing_session_id: z.string().optional(),
+  wait_seconds: z.number().nonnegative().optional(),
+  structured_error: arbitraryRecord.optional(),
+  judge_unrecorded: z.boolean().optional(),
 });
 
 export const nodeTelemetrySchema = openObject({
@@ -211,6 +230,12 @@ export const runTelemetrySchema = openObject({
   }),
   turns: counter,
   lint: counter,
+});
+
+export const providerHealthSchema = openObject({
+  schema_version: z.union([z.string(), z.number()]).optional(),
+  observed_at: z.string().optional(),
+  identities: z.array(arbitraryRecord),
 });
 
 /**

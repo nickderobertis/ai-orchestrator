@@ -1531,7 +1531,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 5
+    assert first_result["schema_version"] == 6
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -1610,7 +1610,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 5 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == 6 and "round" not in unrecorded
 
 
 def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever(

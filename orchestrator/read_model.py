@@ -59,6 +59,7 @@ from .projection import (
     project_round,
     read_strict_events,
 )
+from .provider_health import probe as probe_provider_health
 from .runs import (
     GraphPayload,
     GraphResultItem,
@@ -172,6 +173,7 @@ class RunList(TypedDict):
     observed_at: str
     runs: list[RunSummary]
     next_cursor: NotRequired[RunsCursor]
+    provider_health: NotRequired[dict[str, Any]]
 
 
 class Round(TypedDict):
@@ -207,6 +209,7 @@ class RunDetail(TypedDict):
     node_details: dict[str, dict[str, Any]]
     logs: NotRequired[dict[str, str]]
     launch: NotRequired[RunLaunch]
+    provider_health: NotRequired[dict[str, Any]]
 
 
 class ArtifactContent(TypedDict):
@@ -740,6 +743,7 @@ def list_runs(
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
         "observed_at": _now(now),
         "runs": page,
+        "provider_health": probe_provider_health(oneharness_bin=oneharness_bin),
     }
     if len(summaries) > limit:
         last = page[-1]
@@ -856,6 +860,7 @@ def run_detail(
         ),
         "details": snapshot.to_record(),
         "node_details": node_details,
+        "provider_health": probe_provider_health(oneharness_bin=oneharness_bin),
     }
     if logs := read_logs(run_dir):
         detail["logs"] = logs

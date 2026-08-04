@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -271,6 +272,7 @@ class Report:
     #: running — and at or below it exited on its own, which is what a harness that
     #: refused to start does. ``None`` when the wrapper recorded nothing usable.
     agent_exit_status: int | None = None
+    failure_attribution: dict[str, Any] | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -286,6 +288,70 @@ class Report:
         if self.assessment:
             line += f"\n  follow-ups: {self.assessment}"
         return line
+
+
+_FAILURE_TAIL = 2_000
+_IDENTITY_RE = re.compile(r"\b(codex|claude-code)(?::(primary|alternate2?|default))?\b", re.I)
+_RESET_RE = re.compile(r"(?:resets?|reset(?:s)? at)[: ]+([^,;\n]+)", re.I)
+_SESSION_RE = re.compile(r"No conversation found with session ID[: ]+([\w.-]+)", re.I)
+_WAIT_RE = re.compile(
+    r"(?:wait|retry(?:ing)? in|after)\s+(\d+(?:\.\d+)?)\s*(seconds?|s|minutes?|m)\b", re.I
+)
+
+
+def classify_provider_failure(raw: str, *, side: str | None = None) -> dict[str, Any] | None:
+    """Normalize provider diagnostics without discarding their bounded evidence."""
+    text = " ".join(raw.split())
+    lower = text.lower()
+    if not any(
+        word in lower
+        for word in ("provider", "harness", "quota", "rate limit", "conversation found")
+    ):
+        return None
+    match = _IDENTITY_RE.search(text)
+    harness = match.group(1).lower() if match else "unknown"
+    variant = (match.group(2) or "primary").lower() if match else "unknown"
+    identity = f"{harness}:{variant}" if harness != "unknown" else "unknown"
+    inferred_side = side or ("judge" if re.search(r"\bjudge(?:-side)?\b", text, re.I) else "agent")
+    reset = _RESET_RE.search(text)
+    session = _SESSION_RE.search(text)
+    waiting = _WAIT_RE.search(text)
+    if session:
+        cause = "stale_session_resume"
+    elif "rate limit" in lower or "rate_limit" in lower:
+        cause = "rate_limit"
+    elif "quota" in lower or "usage limit" in lower or "weekly limit" in lower:
+        cause = (
+            "quota_at_launch"
+            if any(token in lower for token in ("launch", "fell through", "fallback"))
+            else "quota_mid_conversation"
+        )
+    else:
+        cause = "harness_exit"
+    result: dict[str, Any] = {
+        "side": inferred_side,
+        "harness": harness,
+        "variant": variant,
+        "identity": identity,
+        "cause": cause,
+        "raw_tail": text[-_FAILURE_TAIL:],
+    }
+    if reset:
+        result["reset_time"] = reset.group(1).strip()
+    if session:
+        result["missing_session_id"] = session.group(1)
+    if waiting:
+        duration = float(waiting.group(1))
+        result["wait_seconds"] = duration * (60 if waiting.group(2).lower().startswith("m") else 1)
+    for candidate in re.findall(r"\{[^{}]{1,4000}\}", raw, re.S):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and ("errors" in payload or "subtype" in payload):
+            result["structured_error"] = payload
+            break
+    return result
 
 
 @dataclass(frozen=True)
@@ -541,6 +607,7 @@ def _build_report(
     if provenance is not None:
         raw["provenance"] = provenance
     reported_blocker = _reported_blocker(result)
+    failure_attribution = classify_provider_failure(result.stderr)
     return Report(
         persona=persona,
         exit_code=result.exit_code,
@@ -564,6 +631,7 @@ def _build_report(
         ),
         outcome_detail=reported_blocker,
         max_turns=max_turns,
+        failure_attribution=failure_attribution,
     )
 
 

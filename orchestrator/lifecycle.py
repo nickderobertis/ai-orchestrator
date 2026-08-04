@@ -1299,6 +1299,11 @@ def _run_steps(
                     "preserved": preserved,
                     **({"outcome": report.outcome} if report.outcome else {}),
                     **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
+                    **(
+                        {"failure_attribution": report.failure_attribution}
+                        if report.failure_attribution
+                        else {}
+                    ),
                 },
             )
             if preserved:

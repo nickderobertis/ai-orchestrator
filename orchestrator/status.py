@@ -26,6 +26,15 @@ from .journal import JOURNAL_NAME, EventKind, read_events
 from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 from .monitor import RUN_LABEL
 from .projection import TERMINAL_NODE_STATES, NodeState
+from .provider_health import (
+    failure_rollups,
+)
+from .provider_health import (
+    probe as probe_provider_health,
+)
+from .provider_health import (
+    render as render_provider_health,
+)
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
 
@@ -563,7 +572,19 @@ def main(argv: list[str] | None = None) -> int:
                     indicators.append(f"{run_dir.name}: {waiting}")
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
+                indicators.extend(f"{run_dir.name}: {line}" for line in failure_rollups(run_dir))
+        health = (
+            render_provider_health(probe_provider_health(cwd=Path.cwd()))
+            if selected or indicators or running_dispatches
+            else ""
+        )
         print(
-            "\n".join([*indicators, _human(selected, run_id=run_id, in_flight=running_dispatches)])
+            "\n".join(
+                [
+                    *([health] if health else []),
+                    *indicators,
+                    _human(selected, run_id=run_id, in_flight=running_dispatches),
+                ]
+            )
         )
     return 0

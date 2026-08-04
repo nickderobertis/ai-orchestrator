@@ -57,6 +57,7 @@ interface RunList {
   observed_at: string;
   runs: RunSummary[];
   next_cursor?: string;
+  provider_health?: ProviderHealth;
 }
 
 interface RunSummary {
@@ -106,6 +107,13 @@ interface RunDetail {
   node_details: Record<string, NodeDetail>; // verification + publication rendering facts
   logs?: Record<string, string>; // bounded, path-free tails of the run's own logs
   launch?: RunLaunch; // same run-level launch join as RunSummary
+  provider_health?: ProviderHealth; // read-only capacity snapshot; unavailable probes stay unknown
+}
+
+interface ProviderHealth {
+  schema_version?: string | number;
+  observed_at?: string;
+  identities: Array<Record<string, unknown>>;
 }
 
 interface NodeDetail {
@@ -412,9 +420,15 @@ authoritative stream will not fold degrades to the recorded telemetry statuses.
 
 #### Typed failure and blocker facts
 
+The run-list and run-detail envelopes may additionally carry `provider_health`, a
+read-only oneharness usage snapshot with one entry for every configured identity.
+Unavailable and failed probes remain present with `availability.state = unknown`.
+
 A failed or held node's reason is served typed, not left to be parsed out of prose:
 
-- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string}` —
+- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string,
+  side?, harness?, variant?, identity?, cause?, raw_tail?, reset_time?,
+  missing_session_id?, wait_seconds?, structured_error?, judge_unrecorded?}` —
   the same classification `RunTelemetry.failure` carries for the run, applied to that
   node's own recorded item, and omitted for a node that did not fail.
 - `GraphResultItem` carries `error`, `detail`, `exit_code`, `blocked_by`,
