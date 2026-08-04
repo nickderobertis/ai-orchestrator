@@ -34,6 +34,7 @@ from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.monitor import Monitor, load_snapshot
 from orchestrator.read_model import run_detail
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.telemetry import TELEMETRY_SCHEMA_VERSION
 from orchestrator.workspace import Workspace
 
 RUN_ID = "real-monitor-e2e"
@@ -377,7 +378,7 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert json.loads(indexed.stdout)["schema_version"] == 9
+    assert json.loads(indexed.stdout)["schema_version"] == TELEMETRY_SCHEMA_VERSION
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()
