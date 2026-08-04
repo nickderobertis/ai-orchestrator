@@ -325,6 +325,7 @@ function NodeExecution({
       <section
         aria-label="Node timeline"
         className="node-timeline-sticky"
+        data-expanded={expanded}
         data-testid="node-timeline"
       >
         <Timeline

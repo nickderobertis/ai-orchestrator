@@ -828,9 +828,7 @@ def _session(
                     # A claude-code turn records when it began *and* when it stopped,
                     # which is what gives a dispatch a width rather than an instant.
                     "timestamp": _stamp(started_at + timedelta(seconds=index * 10)),
-                    "finished_at": _stamp(
-                        started_at + timedelta(seconds=index * 10 + 30)
-                    ),
+                    "finished_at": _stamp(started_at + timedelta(seconds=index * 10 + 30)),
                     "prompt": prompt,
                     "text": text if turns == 1 else f"{text} ({index})",
                     "status": "ok",

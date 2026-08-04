@@ -478,12 +478,19 @@ p {
   /* Ten expanded lanes are taller than a laptop's working area; without this the
      reading surface below disappeared behind the thing pinned above it. */
   flex: 0 0 auto;
-  max-height: 46%;
+  max-height: 40%;
   overflow: auto;
   width: 100%;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
+}
+
+/* Expanding is the reader asking for the lanes, so the plot may take more of the
+   working area — still bounded, because the transcript it is read against is the
+   other half of the view and must not be squeezed to nothing. */
+.node-timeline-sticky[data-expanded="true"] {
+  max-height: 62%;
 }
 
 .node-transcript {
