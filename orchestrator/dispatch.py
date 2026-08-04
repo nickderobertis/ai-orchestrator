@@ -295,6 +295,24 @@ class Report:
 
 
 _FAILURE_TAIL = 2_000
+#: Which of onejudge's two conversation sides — plus the lint tier that runs beside
+#: them — the refusal came from. A planner reading "quota" needs this first: the
+#: judge chain and the agent chain prefer different identities, so a fix aimed at
+#: the wrong side changes nothing.
+ConversationSide = Literal["agent", "judge", "llmlint"]
+#: Why the provider refused, closed so a client can switch on it exhaustively.
+#: `quota_at_launch` fell through to the next identity in the chain and cost only
+#: time; `quota_mid_conversation` could not, because the conversation was already
+#: bound to the identity that refused it. `harness_exit` is the unclassified
+#: remainder and carries the harness's own structured error payload where it
+#: reported one.
+ProviderFailureCause = Literal[
+    "quota_at_launch",
+    "quota_mid_conversation",
+    "stale_session_resume",
+    "rate_limit",
+    "harness_exit",
+]
 _IDENTITY_RE = re.compile(r"\b(codex|claude(?:-code)?)(?::(primary|alternate2?|default))?\b", re.I)
 _RESET_RE = re.compile(r"(?:resets?|reset(?:s)? at)[: ]+([^,;\n]+)", re.I)
 _SESSION_RE = re.compile(r"No conversation found with session ID[: ]+([\w.-]+)", re.I)
@@ -303,7 +321,9 @@ _WAIT_RE = re.compile(
 )
 
 
-def classify_provider_failure(raw: str, *, side: str | None = None) -> dict[str, Any] | None:
+def classify_provider_failure(
+    raw: str, *, side: ConversationSide | None = None
+) -> dict[str, Any] | None:
     """Normalize provider diagnostics without discarding their bounded evidence."""
     text = " ".join(raw.split())
     lower = text.lower()
@@ -319,7 +339,7 @@ def classify_provider_failure(raw: str, *, side: str | None = None) -> dict[str,
     variant = (match.group(2) or "primary").lower() if match else "unknown"
     identity = f"{harness}:{variant}" if harness != "unknown" else "unknown"
     operation = re.search(r"provider error \((respond|user|supervisor|judge)\)", text, re.I)
-    inferred_side = side or (
+    inferred_side: ConversationSide = side or (
         "judge"
         if re.search(r"\bjudge(?:-side)?\b", text, re.I)
         or operation is not None
@@ -329,6 +349,7 @@ def classify_provider_failure(raw: str, *, side: str | None = None) -> dict[str,
     reset = _RESET_RE.search(text)
     session = _SESSION_RE.search(text)
     waiting = _WAIT_RE.search(text)
+    cause: ProviderFailureCause
     if session:
         cause = "stale_session_resume"
     elif "rate limit" in lower or "rate_limit" in lower:

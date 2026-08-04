@@ -447,6 +447,28 @@ type FailureClass =
   | "unknown";
 ```
 
+A provider refusal carries two further closed vocabularies. `side` names which of
+onejudge's two conversation sides — or the lint tier beside them — was refused;
+`cause` says why, and is closed so a client can switch on it exhaustively.
+`quota_at_launch` fell through to the next identity in the chain and cost only
+time, while `quota_mid_conversation` could not, because the conversation was
+already bound to the identity that refused it. `harness_exit` is the unclassified
+remainder and carries `structured_error` where the harness reported one.
+
+```ts
+type ConversationSide =
+  | "agent"
+  | "judge"
+  | "llmlint";
+
+type ProviderFailureCause =
+  | "quota_at_launch"
+  | "quota_mid_conversation"
+  | "stale_session_resume"
+  | "rate_limit"
+  | "harness_exit";
+```
+
 ### Run timeline
 
 `GET /api/v2/runs/{run_id}/timeline?node_id={id}` returns one node's spans and

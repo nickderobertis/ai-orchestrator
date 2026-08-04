@@ -157,22 +157,41 @@ export const failureClassSchema = z.enum([
   "configuration",
   "unknown",
 ]);
+/**
+ * Which side of onejudge's two-party conversation the provider refused.
+ *
+ * `orchestrator/dispatch.py`'s `ConversationSide` owns this vocabulary and
+ * `scripts/check-dag-state-contract.py` reconciles the three copies of it. A
+ * planner reading "quota" needs it first: the two sides prefer different
+ * identities, so a fix aimed at the wrong one changes nothing.
+ */
+export const conversationSideSchema = z.enum(["agent", "judge", "llmlint"]);
+
+/**
+ * Why the provider refused, closed so a client can switch on it exhaustively.
+ *
+ * `orchestrator/dispatch.py`'s `ProviderFailureCause` owns this vocabulary and
+ * `scripts/check-dag-state-contract.py` reconciles the three copies of it.
+ * `quota_at_launch` fell through to the next identity in the chain;
+ * `quota_mid_conversation` could not, because the conversation was already bound
+ * to the identity that refused it.
+ */
+export const providerFailureCauseSchema = z.enum([
+  "quota_at_launch",
+  "quota_mid_conversation",
+  "stale_session_resume",
+  "rate_limit",
+  "harness_exit",
+]);
+
 export const failureSchema = openObject({
   class: failureClassSchema,
   detail: z.string().optional(),
-  side: z.enum(["agent", "judge", "llmlint"]).optional(),
+  side: conversationSideSchema.optional(),
   harness: z.string().optional(),
   variant: z.string().optional(),
   identity: z.string().optional(),
-  cause: z
-    .enum([
-      "quota_at_launch",
-      "quota_mid_conversation",
-      "stale_session_resume",
-      "rate_limit",
-      "harness_exit",
-    ])
-    .optional(),
+  cause: providerFailureCauseSchema.optional(),
   failure_kind: z.string().optional(),
   raw_tail: z.string().optional(),
   reset_time: z.string().optional(),
