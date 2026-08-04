@@ -871,7 +871,17 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-cancelled-backoff")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
-    cancel = threading.Event()
+    waits: list[float] = []
+
+    class MeasuringEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            started = time.monotonic()
+            try:
+                return super().wait(timeout)
+            finally:
+                waits.append(time.monotonic() - started)
+
+    cancel = MeasuringEvent()
     launches: list[str] = []
 
     def dying_under_cancellation(persona: str, task: str, **_: object) -> Report:
@@ -881,7 +891,6 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
         threading.Timer(0.05, cancel.set).start()
         return _launch_death(persona)
 
-    started = time.monotonic()
     result = run_repo_task(
         str(canonical),
         "## What\nTier the workspace.\n\n## Why\nThe suite reruns work it proved.\n",
@@ -892,11 +901,10 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
         recorded_gate=["true"],
         cancel=cancel,
     )
-    elapsed = time.monotonic() - started
-
     assert result.outcome == "not-completed", result.detail
     # Woken, not expired: the full backoff was never spent.
-    assert elapsed < RELAUNCH_BACKOFF_SECONDS, elapsed
+    assert len(waits) == 1, waits
+    assert waits[0] < RELAUNCH_BACKOFF_SECONDS, waits
     # And the cancelled round did not launch one more dispatch on the way out.
     assert launches == ["engineer"]
     # The round decided this stop, so it is reported as the cancellation it was —
