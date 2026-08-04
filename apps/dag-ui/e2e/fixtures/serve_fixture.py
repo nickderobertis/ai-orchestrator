@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -478,6 +479,8 @@ def _write_live_run(runs_dir: Path) -> None:
         ),
     )
     journal.append("node-started", node=NodeId("dashboard"), detail={"persona": "engineer"})
+    journal.append("lock-wait", node=NodeId("dashboard"), detail={"seconds": 1.2})
+    journal.append("lock-wait", node=NodeId("dashboard"), detail={"seconds": 2.8})
     journal.append(
         "step-started",
         node=NodeId("dashboard"),
@@ -805,15 +808,21 @@ def _session(
     so a fixture can record the long session a real worker actually produces.
     """
     record = workspace / f"{session_id}.jsonl"
+    started_at = datetime.fromisoformat(started.replace("Z", "+00:00"))
     record.write_text(
         "".join(
             json.dumps(
                 {
                     "session": session_id,
                     "name": name,
-                    "harness": "codex",
-                    "model": "gpt-5",
-                    "timestamp": started,
+                    "harness": "claude-code",
+                    "model": "claude-sonnet-5",
+                    "timestamp": (started_at + timedelta(seconds=index * 10))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "finished_at": (started_at + timedelta(seconds=index * 10 + 30))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                     "prompt": prompt,
                     "text": text if turns == 1 else f"{text} ({index})",
                     "status": "ok",

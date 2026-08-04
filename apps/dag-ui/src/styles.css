@@ -56,6 +56,7 @@ a {
 }
 
 .app-shell {
+  --sidebar-width: 280px;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   height: 100vh;
@@ -444,9 +445,11 @@ p {
 
 .node-execution {
   position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .node-timeline-sticky {
@@ -456,19 +459,21 @@ p {
   width: 100%;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--background) 94%, transparent);
+  background: var(--background);
   backdrop-filter: blur(10px);
 }
 
 .node-transcript {
   display: grid;
+  overflow: auto;
+  width: 100%;
   gap: 10px;
-  max-width: 1100px;
-  margin: 0 auto;
   padding: 18px 24px 50vh;
 }
 
 .transcript-item {
+  width: min(100%, 1100px);
+  margin-inline: auto;
   scroll-margin-top: 190px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -521,9 +526,6 @@ p {
 .node-timeline-sticky [data-testid="timeline-cursor"] {
   pointer-events: none;
 }
-.node-timeline-sticky [data-timeline-shape] {
-  z-index: 20;
-}
 
 .node-view-body {
   display: grid;
@@ -549,6 +551,11 @@ p {
 .timeline-detail {
   min-width: 0;
   min-height: 0;
+}
+
+.node-detail-drawer .timeline-detail {
+  height: 100%;
+  overflow: hidden;
 }
 
 .rail-list {
@@ -872,6 +879,7 @@ pre {
 
 @media (max-width: 900px) {
   .app-shell {
+    --sidebar-width: 220px;
     grid-template-columns: 220px minmax(0, 1fr);
   }
 

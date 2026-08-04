@@ -2,6 +2,8 @@ import { parseRunTimeline } from "@ai-orchestrator/dag-model";
 import { describe, expect, test } from "vitest";
 import { busyTimeline, LIVE_RUN, runTimeline } from "../../test/fixtures";
 import {
+  compactTimelineItems,
+  compactTimelineMarkers,
   findRow,
   GROUP_THRESHOLD,
   nodeTimeline,
@@ -162,8 +164,34 @@ describe("one node's slice of the run timeline", () => {
     ).toMatchObject({ laneId: "judge" });
     expect(
       projected.items.find(({ id }) => id === "rollup-lock-wait-11"),
-    ).toMatchObject({ laneId: "lock-waits" });
+    ).toMatchObject({ laneId: "lock-waits", duration: 4200 });
     expect(projected.markers.some(({ id }) => id === "event-9")).toBe(true);
     expect(projected.items.some(({ id }) => id === "event-9")).toBe(false);
+  });
+
+  test("keeps one deterministic hit target for coincident compact items", () => {
+    const projected = nodeTimelineV2(timeline, "dashboard");
+    const worker = projected.items.find(({ laneId }) => laneId === "worker");
+    const judge = projected.items.find(({ laneId }) => laneId === "judge");
+    if (worker === undefined || judge === undefined)
+      throw new Error("fixture lost worker or judge");
+    const coincident = compactTimelineItems([
+      { ...judge, end: judge.start },
+      { ...worker, start: judge.start, end: judge.start },
+    ]);
+    expect(coincident).toHaveLength(1);
+    expect(coincident[0]?.laneId).toBe("worker");
+  });
+
+  test("keeps a selected marker clickable when journal icons coincide", () => {
+    const projected = nodeTimelineV2(timeline, "dashboard");
+    const markers = projected.markers.slice(0, 2);
+    const second = markers[1];
+    if (second === undefined) throw new Error("fixture lost journal markers");
+    const coincident = markers.map((marker) => ({ ...marker, at: second.at }));
+    expect(compactTimelineMarkers(coincident, projected.items)).toHaveLength(1);
+    expect(
+      compactTimelineMarkers(coincident, projected.items, second.id)[0]?.id,
+    ).toBe(second.id);
   });
 });

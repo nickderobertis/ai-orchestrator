@@ -31,6 +31,8 @@ import {
 } from "../runs/useUrlSelection";
 import { TimelineItemDetail } from "./TimelineItemDetail";
 import {
+  compactTimelineItems,
+  compactTimelineMarkers,
   findRow,
   nodeTimeline,
   nodeTimelineV2,
@@ -278,6 +280,19 @@ function NodeExecution({
   );
   const sync = useTimelineScrollSync(entries);
   const [expanded, setExpanded] = useState(false);
+  const compactItems = useMemo(
+    () => compactTimelineItems(projection.items),
+    [projection.items],
+  );
+  const compactMarkers = useMemo(
+    () =>
+      compactTimelineMarkers(
+        projection.markers,
+        projection.items,
+        selectedItemId,
+      ),
+    [projection.items, projection.markers, selectedItemId],
+  );
   const selected =
     selectedItemId === undefined
       ? undefined
@@ -300,9 +315,14 @@ function NodeExecution({
           axis={{ origin: Math.min(...entries.map(({ time }) => time)) }}
           cursor={sync.cursor}
           expanded={expanded}
-          items={projection.items}
+          getFailureExcerpt={(item) =>
+            item.payload.rowKind === "span"
+              ? item.payload.span.detail?.output_tail
+              : undefined
+          }
+          items={expanded ? projection.items : compactItems}
           lanes={projection.lanes}
-          markers={projection.markers}
+          markers={compactMarkers}
           onExpandedChange={setExpanded}
           onSelect={(entry) => select(entry.id)}
           selectedId={selectedItemId}
@@ -361,6 +381,7 @@ function TranscriptItem({
   return (
     <article
       className="transcript-item"
+      data-dispatch-group={dispatchGroup(row)}
       data-selected={selected}
       ref={(element) => register(row.id, element)}
     >
@@ -369,8 +390,13 @@ function TranscriptItem({
         onClick={onOpen}
         type="button"
       >
-        <span className="eyebrow">{row.displayKind}</span>
+        <span className="eyebrow">
+          {dispatchGroup(row) ?? row.displayKind} · {row.displayKind}
+        </span>
         <strong>{row.displayLabel}</strong>
+        {row.label && row.label !== row.displayLabel && (
+          <span>{row.label}</span>
+        )}
         <span>
           {new Date(row.startedAt).toLocaleTimeString()} ·{" "}
           {row.status ?? "recorded"}
@@ -378,6 +404,11 @@ function TranscriptItem({
       </button>
     </article>
   );
+}
+
+function dispatchGroup(row: TimelineRow): string | undefined {
+  const conversation = /conversation (\d+)/u.exec(row.displayLabel)?.[1];
+  return conversation === undefined ? undefined : `Dispatch ${conversation}`;
 }
 
 /**

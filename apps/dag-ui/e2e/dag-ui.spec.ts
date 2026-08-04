@@ -349,6 +349,10 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   // rows a reader could not tell apart. Neither name contains its own role.
   await expect(worker).toHaveAccessibleName(/Worker \(engineer-dashboard\)/);
   await expect(
+    rail(page).getByRole("button", { name: "Expand timeline" }),
+  ).toBeVisible();
+  await rail(page).getByRole("button", { name: "Expand timeline" }).click();
+  await expect(
     rail(page).getByRole("button", { name: /^Judge/ }),
   ).toBeVisible();
   await expect(rail(page).getByRole("button", { name: /^Lint/ })).toBeVisible();
@@ -358,12 +362,18 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(
     rail(page).getByRole("button", { name: /^PR author/ }),
   ).toBeVisible();
-  await expect(worker).toHaveAttribute("data-timeline-shape", "point");
-  await expect(
-    page.getByRole("list", { name: "Timeline legend" }),
-  ).toBeVisible();
+  const lockWait = rail(page).getByRole("button", { name: /lock-wait/ });
+  await expect(lockWait).toHaveAttribute("data-timeline-shape", "span");
+  const lockWidth = (await lockWait.boundingBox())?.width ?? 0;
+  const timelineWidth = (await rail(page).boundingBox())?.width ?? 1;
+  expect(lockWidth / timelineWidth).toBeLessThan(0.1);
   await expect(
     rail(page).getByRole("button", { name: /Lifecycle: build/ }),
+  ).toBeVisible();
+  await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
+  await expect(worker).toHaveAttribute("data-timeline-shape", "span");
+  await expect(
+    page.getByRole("list", { name: "Timeline legend" }),
   ).toBeVisible();
   const plot = rail(page).getByLabel(/Timeline plot/);
   await plot.hover();
@@ -454,11 +464,73 @@ test("restores a bookmarked moment inside a session from the address alone", asy
   const bookmarkedId = bookmarked.searchParams.get("event");
   if (bookmarkedId === null) throw new Error("bookmark lost its event id");
   await expect(
-    rail(page).locator(`[aria-describedby="timeline-detail-${bookmarkedId}"]`),
+    rail(page).getByRole("button", { name: /conversation-turn, marker/ }),
   ).toBeVisible();
+  await expect(
+    rail(page).getByRole("button", { name: /conversation-turn, marker/ }),
+  ).toHaveAttribute("aria-pressed", "true");
   await expect(itemDetail(page)).toContainText(
     "Implementing the dashboard now",
   );
+});
+
+test("keeps timeline, transcript, and nested judge conversation in time sync", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  const timeline = rail(page);
+  const transcript = page.getByRole("region", { name: "Node transcript" });
+  const axis = timeline.getByTestId("timeline-axis");
+  await expect(axis.locator("span")).toHaveCount(2);
+  for (const tick of await axis.locator("span").allTextContents()) {
+    expect(tick).toMatch(/\d{2}:\d{2}:\d{2}.*[+−]\d/u);
+  }
+
+  const timelineTop = (await timeline.boundingBox())?.y;
+  const cursor = timeline.getByTestId("timeline-cursor");
+  const before = await cursor.getAttribute("style");
+  await transcript.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect.poll(() => cursor.getAttribute("style")).not.toBe(before);
+  expect((await timeline.boundingBox())?.y).toBe(timelineTop);
+
+  await timeline.getByRole("button", { name: "Expand timeline" }).click();
+  const judge = timeline.getByRole("button", { name: /^Judge/ });
+  const lint = timeline.getByRole("button", { name: /^Lint/ });
+  await expect(judge).toHaveAttribute("data-timeline-shape", "span");
+  await expect(lint).toHaveAttribute("data-timeline-shape", "span");
+  expect((await judge.boundingBox())?.width ?? 0).toBeGreaterThan(3);
+  expect((await lint.boundingBox())?.width ?? 0).toBeGreaterThan(3);
+  await judge.click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("event"))
+    .toBe("dispatch-judge-session");
+
+  const judgeItem = transcript
+    .getByRole("article")
+    .filter({ hasText: "you-are-a-strict-careful-evaluator" });
+  await expect(judgeItem).toHaveAttribute("data-selected", "true");
+  await expect(judgeItem).toHaveAttribute("data-dispatch-group", "Dispatch 1");
+  await expect(judgeItem).toContainText("Judge");
+  const workerItem = transcript
+    .getByRole("article")
+    .filter({ hasText: "engineer-dashboard" });
+  await expect(workerItem).toHaveAttribute("data-dispatch-group", "Dispatch 1");
+
+  await expect(itemDetail(page)).toContainText("Judge");
+  await expect(itemDetail(page)).toContainText(
+    "you-are-a-strict-careful-evaluator",
+  );
+  await expect(
+    itemDetail(page).locator(".conversation-timeline-sticky"),
+  ).toHaveCSS("position", "sticky");
+  await expect(
+    itemDetail(page).getByRole("article", { name: /^Turn / }),
+  ).toContainText("Judge");
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Item detail panel")).toHaveCount(0);
 });
 
 test("opens a node from the keyboard-accessible node list and walks back", async ({
@@ -514,6 +586,7 @@ test("shows a verification and a publication as the records they are", async ({
   await expect(itemDetail(page)).not.toContainText(
     "round-01/foundation/gate.log",
   );
+  await page.getByRole("button", { name: "Close detail" }).click();
 
   // The publication carries the PR and the checks that were observed on it.
   await rail(page)
@@ -535,15 +608,16 @@ test("shows a verification and a publication as the records they are", async ({
     "href",
     `https://github.com/example/repo/commit/${"4".repeat(40)}`,
   );
+  await page.getByRole("button", { name: "Close detail" }).click();
 
   // Its own recorded events sit inside it, in the order they happened.
-  const checks = rail(page).getByRole("button", {
-    name: /pr-checks-observed/,
-  });
-  await checks.hover();
-  await expect(page.getByRole("tooltip")).toContainText("Status: passing");
+  const checks = page
+    .getByRole("article")
+    .filter({ hasText: /pr-checks-observed/ })
+    .getByRole("button");
   await checks.click();
   await expect(itemDetail(page)).toContainText("Observed checks");
+  await expect(itemDetail(page)).toContainText("passing");
 });
 
 test("states when a verification artifact is unavailable", async ({ page }) => {
@@ -677,20 +751,20 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
     name: /grouped worker activities/,
   });
   await expect(grouped).toBeVisible();
-  expect(await rows.count()).toBeLessThan(12);
-
-  // Expanding the density cap hands out a page of it, not every row at once.
-  await rail(page)
-    .getByRole("button", { name: /Show 25 more of \d\d\d/ })
-    .click();
+  expect(
+    await rail(page).locator("[data-timeline-shape]").count(),
+  ).toBeLessThan(12);
+  await rail(page).getByRole("button", { name: "Expand timeline" }).click();
   await expect(
-    rail(page).getByRole("button", { name: /Show 25 more of \d\d\d/ }),
+    rail(page).getByRole("button", { name: "Collapse timeline" }),
   ).toBeVisible();
-  expect(await rows.count()).toBeLessThan(60);
+  await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
 
   // And one session's own turns are paged the same way inside the detail region.
-  await rail(page)
-    .getByRole("button", { name: /engineer-sweep-7\b/ })
+  await page
+    .getByRole("article")
+    .filter({ hasText: /engineer-sweep-7\b/ })
+    .getByRole("button")
     .click();
   await expect(itemDetail(page)).toContainText("Swept batch 7 (0)");
   const groupedBookmark = new URL(page.url());
@@ -953,10 +1027,11 @@ test("expands a node summary and opens its full timeline", async ({ page }) => {
   await expect(
     summary.getByRole("region", { name: "Node timeline" }),
   ).toBeVisible();
-  await summary
+  const workerSummary = summary
     .getByRole("region", { name: "Node timeline" })
-    .getByRole("button", { name: /worker/ })
-    .click();
+    .getByRole("button", { name: /worker/ });
+  await workerSummary.focus();
+  await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/node=dashboard/);
   await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
     "aria-selected",
@@ -1067,9 +1142,7 @@ test("reads every recorded moment as words rather than as its stamp", async ({
     name: /engineer-dashboard/,
   });
   await dashboardWorker.hover();
-  await expect(page.getByRole("tooltip")).toContainText(
-    "Duration: not recorded",
-  );
+  await expect(page.getByRole("tooltip")).toContainText("Duration: 30.0 s");
 });
 
 test("gathers every run of one launching session under it", async ({
@@ -1240,13 +1313,18 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(280);
   // The visualization receives enough width for bars while detail remains larger.
   expect(await width(rail(page))).toBeGreaterThan(380);
-  expect(await width(itemDetail(page))).toBeGreaterThan(
-    (await width(rail(page))) ?? 0,
+  expect((await width(itemDetail(page))) ?? 0).toBeCloseTo(
+    (1400 - 280) * (2 / 3),
+    -1,
   );
+  await page.getByRole("button", { name: "Close detail" }).click();
   // Four metrics across one row while there is room for them.
   await page.getByRole("tab", { name: "Overall" }).click();
   await expect(metrics).toHaveCount(4);
@@ -1257,14 +1335,19 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
 
   await page.setViewportSize({ width: 800, height: 700 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
   // Everything stays on screen: the navigation and the rail each give up width,
   // and the metrics wrap onto a second row instead of being squeezed.
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(220);
   expect(await width(rail(page))).toBeGreaterThan(190);
-  expect(await width(itemDetail(page))).toBeGreaterThan(
-    (await width(rail(page))) ?? 0,
+  expect((await width(itemDetail(page))) ?? 0).toBeCloseTo(
+    (800 - 220) * (2 / 3),
+    -1,
   );
+  await page.getByRole("button", { name: "Close detail" }).click();
   await page.getByRole("tab", { name: "Overall" }).click();
   await expect(metrics).toHaveCount(4);
   const narrowRows = await metrics.evaluateAll((tiles) =>
@@ -1312,11 +1395,12 @@ test("paints the design system's components in the application's dark palette", 
   // a hand-picked palette beside it.
   const panel = await backgroundColor(rail(page));
   expect(panel).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
-  expect(panel).toBe(await tokenColor(page, "--sidebar"));
+  expect(panel).toBe(await tokenColor(page, "--background"));
 
   // The graph canvas scopes its own variables, so it needs its own switch; without
   // it the zoom controls stay white inside the dark workspace. They are reached by
   // leaving the node view, which is the only place the canvas renders.
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   expect(
     brightestChannel(

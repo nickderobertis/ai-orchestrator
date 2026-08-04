@@ -80,16 +80,93 @@ export interface NodeTimelineV2 {
   readonly rows: readonly TimelineRow[];
 }
 
+/**
+ * The compact lane answers which activity dominated a moment. Coincident point
+ * records cannot all own the same hit target, so retain one deterministically;
+ * expanding restores every category in its own lane.
+ */
+export function compactTimelineItems(
+  items: readonly TimelineItem<TimelineRow>[],
+): readonly TimelineItem<TimelineRow>[] {
+  const ordered = [...items].sort((left, right) => left.start - right.start);
+  const first = ordered.at(0)?.start ?? 0;
+  const last = Math.max(
+    first + 1,
+    ...ordered.map((item) => item.end ?? item.start),
+  );
+  // A compact point is 20 CSS pixels wide. Treat the nearest 2% of the plotted
+  // range as one visual moment so sibling buttons never cover one another at the
+  // viewport sizes the application supports.
+  const pointCluster = (last - first) * 0.02;
+  const result: TimelineItem<TimelineRow>[] = [];
+  for (const item of ordered) {
+    const itemVisualEnd = Math.max(
+      item.end ?? item.start,
+      item.start + pointCluster,
+    );
+    const collision = result.findLast((candidate) => {
+      const candidateVisualEnd = Math.max(
+        candidate.end ?? candidate.start,
+        candidate.start + pointCluster,
+      );
+      return (
+        item.start <= candidateVisualEnd && candidate.start <= itemVisualEnd
+      );
+    });
+    if (collision === undefined) {
+      result.push(item);
+    } else if (compactPriority(item) < compactPriority(collision)) {
+      result[result.indexOf(collision)] = item;
+    }
+  }
+  return result;
+}
+
+function compactPriority(item: TimelineItem<TimelineRow>): number {
+  const lane = item.laneId ?? "";
+  const order = NODE_LANES.findIndex(({ id }) => id === lane);
+  return order < 0 ? NODE_LANES.length : order;
+}
+
+/** Keep one clickable journal icon per visual moment, always retaining a deep link. */
+export function compactTimelineMarkers(
+  markers: readonly TimelineMarker<TimelineRow>[],
+  items: readonly TimelineItem<TimelineRow>[],
+  selectedId?: string,
+): readonly TimelineMarker<TimelineRow>[] {
+  const times = [
+    ...markers.map(({ at }) => at),
+    ...items.flatMap((item) => [item.start, item.end ?? item.start]),
+  ];
+  const first = Math.min(...times);
+  const cluster = (Math.max(...times) - first) * 0.02;
+  const result: TimelineMarker<TimelineRow>[] = [];
+  for (const marker of [...markers].sort((left, right) => left.at - right.at)) {
+    const collision = result.findLast(
+      (candidate) => marker.at - candidate.at <= cluster,
+    );
+    if (collision === undefined) result.push(marker);
+    else if (marker.id === selectedId)
+      result[result.indexOf(collision)] = marker;
+  }
+  return result;
+}
+
 /** Project the served vocabulary into Timeline v2: intervals use lanes; journals use markers. */
 export function nodeTimelineV2(
   timeline: RunTimeline | undefined,
   nodeId: string,
 ): NodeTimelineV2 {
   const rows = flattenRows(nodeTimeline(timeline, nodeId).rows);
-  const items = rows.flatMap((row): TimelineItem<TimelineRow>[] => {
+  const plottedRows = flattenRows(nodeTimeline(timeline, nodeId).rows, false);
+  const items = plottedRows.flatMap((row): TimelineItem<TimelineRow>[] => {
     if (row.rowKind === "event") return [];
     const start = Date.parse(row.startedAt);
-    const end = row.endedAt === null ? null : Date.parse(row.endedAt);
+    const recordedEnd = row.endedAt === null ? null : Date.parse(row.endedAt);
+    const end =
+      row.rowKind === "span" && row.span.total_duration_ms !== undefined
+        ? start + row.span.total_duration_ms
+        : recordedEnd;
     return [
       {
         id: row.id,
@@ -103,7 +180,7 @@ export function nodeTimelineV2(
       },
     ];
   });
-  const markers = rows.flatMap((row): TimelineMarker<TimelineRow>[] =>
+  const markers = plottedRows.flatMap((row): TimelineMarker<TimelineRow>[] =>
     row.rowKind === "event"
       ? [
           {
@@ -119,7 +196,10 @@ export function nodeTimelineV2(
   return { items, markers, lanes: NODE_LANES, rows };
 }
 
-function flattenRows(rows: readonly TimelineRow[]): TimelineRow[] {
+function flattenRows(
+  rows: readonly TimelineRow[],
+  includeGroupChildren = true,
+): TimelineRow[] {
   const seen = new Set<string>();
   const result: TimelineRow[] = [];
   const visit = (nested: readonly TimelineRow[]) => {
@@ -128,7 +208,7 @@ function flattenRows(rows: readonly TimelineRow[]): TimelineRow[] {
         seen.add(row.id);
         result.push(row);
       }
-      visit(row.children);
+      if (includeGroupChildren || row.rowKind !== "group") visit(row.children);
     }
   };
   visit(rows);
@@ -138,6 +218,7 @@ function flattenRows(rows: readonly TimelineRow[]): TimelineRow[] {
 function laneId(row: TimelineRow): string {
   const value = roleKind(row.role, row.kind).toLowerCase();
   const identity = `${value} ${row.id} ${row.label}`.toLowerCase();
+  if (value === "step") return "worker";
   if (value.includes("verify") || value === "gate") return "verification";
   if (value.includes("publish") || value.includes("merge"))
     return "publication";
