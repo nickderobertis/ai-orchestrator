@@ -1231,6 +1231,9 @@ def _run_steps(
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         step_session = f"{scoped_session(branch, worktree)}:{sid}"
+        # The refusal's own account of the stop, when the harness never returned a
+        # report for `incomplete_detail` below to read one out of.
+        refusal: str | None = None
         try:
             report = dispatch_fn(
                 cast(str, step.persona),
@@ -1251,6 +1254,12 @@ def _run_steps(
         except DispatchError as exc:
             if not recordable_provider_failure(exc.failure_attribution):
                 raise
+            # A refusal is a stop, and it settles through the shared not-completed
+            # path below rather than returning here: `quota_mid_conversation` is by
+            # definition a worker that was already working, so the worktree it was
+            # holding can carry authored work, and recording who refused while
+            # dropping that work would trade one silent loss for another.
+            refusal = str(exc)
             report = Report(
                 # Narrowed for the same reason the dispatch call above narrows it:
                 # `persona` is optional only on a `human` step, and `_run_steps`
@@ -1263,21 +1272,13 @@ def _run_steps(
                 verdicts=[],
                 usage={},
                 raw=None,
-                stderr=str(exc),
+                stderr=refusal,
                 failure_attribution=exc.failure_attribution,
             )
-            reports[sid] = report
-            log.append(
-                "step-settled",
-                detail={
-                    "status": "not-completed",
-                    "step_kind": step.kind,
-                    "detail": str(exc),
-                    **journalled(exc.failure_attribution),
-                },
-            )
-            return NodeRun("failed", f"step {sid!r} {exc}", report)
-        persist_report_artifacts(log, report, session=step_session)
+        else:
+            # Only a dispatch that returned has artifacts; a refused one raised
+            # before onejudge wrote any.
+            persist_report_artifacts(log, report, session=step_session)
         reports[sid] = report
         if not report.completed:
             # llmlint: ignore[changed_behavior_has_e2e] The live orchestrator e2e kills this
@@ -1288,7 +1289,7 @@ def _run_steps(
             # A death carries the dispatcher's account of it (exit status, stderr);
             # a stop that is not a death says how far it got and why, because
             # "hit the turn cap" on turn 1 is a lie a reader cannot see through.
-            failure: str = (
+            failure: str = refusal or (
                 (report.stderr.strip() or report.outcome)
                 if report.outcome
                 else incomplete_detail(report)

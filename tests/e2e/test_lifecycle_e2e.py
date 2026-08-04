@@ -8434,3 +8434,54 @@ def test_a_workstream_step_refused_by_the_provider_records_which_identity_refuse
     assert failure_rollups(tmp_path / "refused-run") == [
         "1 node failed on judge-side codex quota mid conversation, resets Aug 8"
     ]
+
+
+def test_a_refused_step_preserves_the_work_its_worker_had_already_written(
+    tmp_path, bare_origin
+) -> None:
+    """A refusal is a stop, and a stop preserves the branch like every other one.
+
+    `quota_mid_conversation` is by definition a worker that was already working, so
+    the worktree it is holding can carry real authored work. Settling that refusal
+    as a recorded failure must go through the same preservation every other
+    incomplete step takes; recording the attribution and dropping the work would
+    trade one silent loss for another.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-refused-preserve")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    refusal = (
+        "provider error (respond): harness failed (quota) — claude-code:alternate "
+        "quota exhausted mid-conversation"
+    )
+
+    def refused_after_writing(persona: str, task: str, **kwargs: object) -> Report:
+        (Path(cast(str, kwargs["project_dir"])) / "tiering.md").write_text(
+            "the work the refusal interrupted\n", encoding="utf-8"
+        )
+        raise DispatchError(refusal, failure_attribution=classify_provider_failure(refusal))
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nTier the workspace.\n\n## Why\nA refusal must not cost the work.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "refused-preserve-worktrees"),
+        branch="feature/refused-mid-work",
+        dispatch_fn=refused_after_writing,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "not-completed", result.detail
+    # Resumable, because there is work on the branch worth resuming onto.
+    assert result.resume is not None and result.resume.mode == "retry"
+    # The branch really carries it, under the marker recovery recognises.
+    assert _subject(canonical, result.branch) == "chore: Tier the workspace. (incomplete step)"
+    assert incomplete_commits(canonical, "main", result.branch)
+    assert _has_file(canonical, result.branch, "tiering.md")
+    # And the refusal is still attributed, not traded away for the preservation.
+    attribution = result_payload(result)["failure_attribution"]
+    assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
+        "agent",
+        "claude-code:alternate",
+        "quota_mid_conversation",
+    )
