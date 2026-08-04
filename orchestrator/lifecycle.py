@@ -3469,6 +3469,10 @@ def main_plan(argv: list[str] | None = None) -> int:
     round_record: ClaimedRound | None = None
     if run_dir is not None:
         try:
+            # Deliberately not folded the way `run-plan` folds a transition into a new
+            # round (`graph._plan_of_record`): this deprecated lifecycle-only alias
+            # journals no authoritative stream, so there is no executed graph to fold
+            # from and the plan file it is handed is all there has ever been.
             round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
         except ConfigError as exc:
             print(f"repo-plan: could not claim run: {exc}", file=sys.stderr)

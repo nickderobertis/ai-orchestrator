@@ -22,6 +22,10 @@ with**, so `executed_plan` folds it from the run's journal rather than re-readin
 round-scoped rule: a `retry` replacement's id exists only in the executed graph, so
 the launch file can neither recognise the merged replacement as done nor keep the
 branch pin it carried. docs/orchestration.md has the planner-facing account.
+
+That rule is about *transitions*, not about one command: `plan_for_the_next_round`
+is what `run-plan` folds through when it is pointed at a run whose latest round has
+already finished, so a re-run of the launch file cannot start the next round from it.
 """
 
 from __future__ import annotations
@@ -38,7 +42,13 @@ from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
 from .runs import NodeId, RunId, StackBasePayload
 
-__all__ = ["executed_plan", "next_round", "round_context", "round_supersessions"]
+__all__ = [
+    "executed_plan",
+    "next_round",
+    "plan_for_the_next_round",
+    "round_context",
+    "round_supersessions",
+]
 
 
 def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +138,57 @@ def round_context(run_dir: Path, round_number: int) -> dict[str, list[str]]:
             if isinstance(nid, str) and isinstance(note, str) and note.strip():
                 collected.setdefault(nid, []).append(note)
     return collected
+
+
+def plan_for_the_next_round(run_dir: Path) -> dict[str, Any] | None:
+    """The graph a *new* round on an already-recorded run must execute, or ``None``.
+
+    ``run-plan`` is handed a plan file, and for a run with no finished round that
+    file *is* the round. For a run whose latest round has finished it is only that
+    round's launch record: every live edit the reconciler committed lives in the
+    journal and not in the file, so re-running the file re-dispatches work that
+    already merged and discards the planner's accepted edits — a `retry`'s
+    replacement id, an amended `task`, a branch pin, a `drop`. This derives what
+    `next-round` derives with no edits of its own: the executed plan of record,
+    folded from the journal and carried forward through the round's own result.
+
+    ``None`` means this invocation is not a transition at all — there is no recorded
+    round yet, or the latest one has not finished — which is the reuse and
+    ``--recover`` case where the launch record is still the round to run.
+
+    A round whose result was never written is still finished when its journal says
+    so: an owner can die between `round-finished` and `result.json`, and that is one
+    of the transitions this exists to fold. `prepare_round` writes the missing
+    result out of the same projection immediately afterwards.
+    """
+    from .projection import ProjectionError, project_run
+    from .runs import latest_round, load_mapping
+
+    latest = latest_round(run_dir)
+    if latest is None:
+        return None
+    number, round_dir = latest
+    plan_path, result_path = round_dir / "plan.json", round_dir / "result.json"
+    launch = load_mapping(plan_path) if plan_path.is_file() else None
+    if result_path.is_file():
+        result = load_mapping(result_path)
+    else:
+        try:
+            projected = project_run(run_dir / "events.jsonl", RunId(run_dir.name), number)
+        except (ProjectionError, ConfigError, OSError):
+            return None
+        if projected.result is None:
+            return None
+        result = dict(projected.result)
+        launch = dict(projected.plan) if launch is None else launch
+    if launch is None:
+        return None
+    return next_round(
+        executed_plan(run_dir, number, launch),
+        result,
+        carried_context=round_context(run_dir, number),
+        superseded=round_supersessions(run_dir, number),
+    )
 
 
 def next_round(

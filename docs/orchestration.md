@@ -1130,6 +1130,21 @@ replaced in the executed graph, cancelled, so `round_supersessions` removes it a
 transition exactly as an explicit `drop` would. A node recorded `done` — including
 `merged` — is never rescheduled; there is no case that reschedules one.
 
+The rule belongs to the **transition**, not to one command. `run-plan` therefore folds
+too: pointed at a run whose latest round has already finished, it derives the next
+round from that round's executed graph and says so on stderr, rather than starting it
+from the plan file it was handed. That covers a round the budget cancelled and a
+round whose owner died between `round-finished` and `result.json` — the journal says
+a round is over, so a re-run of the launch file is a transition however it is spelled.
+Without it the fold was one command wide: `run-plan runs/<id>/round-01/plan.json --run
+<id>` is what an orchestrator reaches for to reclaim a run it is already driving, and
+on `dag-observatory-ux-2` it started rounds 2 and 3 from the untouched round-1 launch
+file — re-dispatching merged work and discarding every accepted live edit, which cost
+two rounds of hand repair. `run-plan` still runs the file it is given whenever the
+latest round has *not* finished, which is the ordinary claim and `--recover`. The
+deprecated `repo-plan` alias is excluded: it journals no authoritative stream, so
+there is nothing to fold from.
+
 ### Carried planner context
 
 What the planner learned while the round ran is not in the launch record, and
