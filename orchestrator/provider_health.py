@@ -12,14 +12,8 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from .journal import JOURNAL_NAME, read_events
+from .provider_failure import IDENTITIES as IDENTITIES
 
-IDENTITIES = (
-    "claude-code:alternate",
-    "claude-code:alternate2",
-    "codex",
-    "codex:alternate",
-    "claude-code:primary",
-)
 #: Set to ``0`` to answer every view with unknown identities instead of probing.
 #: The probe is read-only and cheap, but it does reach the configured providers, so
 #: an offline or metered host — and this repository's own suite, which must never

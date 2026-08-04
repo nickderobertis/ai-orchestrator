@@ -174,7 +174,7 @@ names neither.
    failed is listed as `unknown` rather than dropped, so a chain is never
    silently short one member.
 2. Read the rolled-up failure lines beneath each run. Repeated deaths on one
-   cause collapse to one line — `3 nodes failed on judge-side codex:primary
+   cause collapse to one line — `3 nodes failed on judge-side codex
    quota mid conversation, resets Aug 8` — so a whole round's worth of the same
    refusal reads as the single fact it is.
 3. `just results <run-id>` and the read API's `failure` record carry the same

@@ -53,6 +53,32 @@ def test_provider_failure_vocabulary_and_bounded_payload() -> None:
     }
 
 
+def test_a_refusal_is_only_ever_attributed_to_a_configured_identity() -> None:
+    """The classifier resolves against the gated roster, not a second copy of it.
+
+    An identity it invented would read as capacity nobody can find: the rollup would
+    name one thing and the provider-health block beside it another, for the same
+    account. `codex:primary` is what an operator and a harness both write for the
+    identity the configs spell `codex`, so it resolves to that — not to a sixth
+    identity — and `codex:alternate` is never shortened to it.
+    """
+    for spelling, expected in (
+        ("judge-side codex:primary quota exhausted", "codex"),
+        ("judge-side codex quota exhausted", "codex"),
+        ("agent-side codex:alternate quota exhausted", "codex:alternate"),
+        ("agent-side claude-code:alternate2 quota exhausted", "claude-code:alternate2"),
+    ):
+        classified = classify_provider_failure(spelling)
+        assert classified is not None, spelling
+        assert classified["identity"] == expected, spelling
+        assert classified["identity"] in IDENTITIES, spelling
+
+    # An identity nothing configures is not guessed at from a harness name alone.
+    invented = classify_provider_failure("harness failed (quota) for claude-code:alternate9")
+    assert invented is not None
+    assert invented["identity"] == "unknown"
+
+
 def test_probe_keeps_all_configured_identities_and_renders_unknown(tmp_path: Path) -> None:
     """An answer that names one identity still accounts for all five."""
     payload = {
@@ -120,14 +146,14 @@ def test_failure_rollup_collapses_same_cause(tmp_path: Path) -> None:
     journal = open_journal(run_dir, RunId("run"), 1)
     fact = {
         "side": "judge",
-        "identity": "codex:primary",
+        "identity": "codex",
         "cause": "quota_mid_conversation",
         "reset_time": "Aug 8",
     }
     for node in ("a", "b", "c"):
         journal.append("node-failed", node=NodeId(node), detail={"failure_attribution": fact})
     assert failure_rollups(run_dir) == [
-        "3 nodes failed on judge-side codex:primary quota mid conversation, resets Aug 8"
+        "3 nodes failed on judge-side codex quota mid conversation, resets Aug 8"
     ]
 
 

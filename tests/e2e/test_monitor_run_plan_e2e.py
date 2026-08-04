@@ -623,7 +623,7 @@ _PROVIDER_FAILURE_SHAPES = (
     (
         "judge-quota",
         "judge-attributed-provider-failure",
-        {"side": "judge", "identity": "codex:primary", "cause": "quota_mid_conversation"},
+        {"side": "judge", "identity": "codex", "cause": "quota_mid_conversation"},
         {"reset_time": "Aug 8"},
     ),
     (

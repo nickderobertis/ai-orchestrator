@@ -671,22 +671,23 @@ def run_graph(
         except DispatchError as exc:
             if not recordable_provider_failure(exc.failure_attribution):
                 raise
-            item = cast(
-                GraphResultItem,
-                {
-                    "kind": "agent",
-                    "status": "failed",
-                    "task": node.task,
-                    "error": str(exc),
-                    **journalled(exc.failure_attribution),
-                },
-            )
+            item: GraphResultItem = {
+                "kind": "agent",
+                "status": "failed",
+                "task": node.task,
+                "error": str(exc),
+            }
+            if exc.failure_attribution:
+                item["failure_attribution"] = exc.failure_attribution
             run = NodeRun("failed", str(exc), recorded=item)
             node_log.append(
                 "node-failed",
                 detail={
                     "detail": str(exc),
                     **journalled(exc.failure_attribution),
+                    # Same invariance as `journalled`: a `TypedDict` is not a
+                    # `Mapping[str, DetailValue]` to a checker even when every value
+                    # it holds is one, and this is the shape the round records.
                     TERMINAL_NODE_RESULT_FIELD: cast(dict[str, Any], item),
                 },
             )

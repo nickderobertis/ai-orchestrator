@@ -40,6 +40,7 @@ from orchestrator.dispatch import (
     group_holds_stamped_process,
     incomplete_detail,
     owned_tree,
+    recordable_provider_failure,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -1110,8 +1111,13 @@ def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_pat
     assert len(report.stderr) < 1600
     assert report.failure_attribution is not None
     assert report.failure_attribution["cause"] == "stale_session_resume"
-    assert report.failure_attribution["identity"] == "claude-code:primary"
+    # The harness wrote a bare "claude", which names none of the three configured
+    # claude-code identities. Reported unknown rather than guessed at: an invented
+    # identity would send the operator to capacity that no view can corroborate.
+    # The cause and the dropped session id are what this failure is diagnosed from.
+    assert report.failure_attribution["identity"] == "unknown"
     assert report.failure_attribution["missing_session_id"] == "0dd"
+    assert recordable_provider_failure(report.failure_attribution)
 
 
 def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
@@ -1127,7 +1133,7 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
         'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\n'
         'printf "%s\\n" "$$" >"$d/agent.pid"\n'
         'touch "$d/agent.heartbeat"\n'
-        'printf "provider error: codex:primary 429 rate_limit_error quota exhausted; '
+        'printf "provider error: codex 429 rate_limit_error quota exhausted; '
         'retry after 30 seconds\\n" >"$d/agent.stderr"\n'
         'printf "agent harness exited 7\\n" >"$d/agent.failure"\n'
         'printf "%s\\n" "$$" >"$d/agent.failed"\n'
@@ -1170,7 +1176,7 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
 
     assert throttled.outcome == stopped.outcome == "worker-died"
     assert throttled.outcome_detail == (
-        "agent harness exited 7: provider error: codex:primary 429 rate_limit_error quota "
+        "agent harness exited 7: provider error: codex 429 rate_limit_error quota "
         "exhausted; retry after 30 seconds"
     )
     assert stopped.outcome_detail == "the agent harness stopped heartbeating for 0.2s"
@@ -1182,7 +1188,7 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
     assert throttled.failure_attribution["side"] == "agent"
     assert throttled.failure_attribution["cause"] == "rate_limit"
     assert throttled.failure_attribution["failure_kind"] == "rate_limit"
-    assert throttled.failure_attribution["identity"] == "codex:primary"
+    assert throttled.failure_attribution["identity"] == "codex"
     assert throttled.failure_attribution["wait_seconds"] == 30
 
 

@@ -1252,6 +1252,9 @@ def _run_steps(
             if not recordable_provider_failure(exc.failure_attribution):
                 raise
             report = Report(
+                # Narrowed for the same reason the dispatch call above narrows it:
+                # `persona` is optional only on a `human` step, and `_run_steps`
+                # never dispatches one, so a step that reached here has a persona.
                 persona=cast(str, step.persona),
                 exit_code=2,
                 completed=False,

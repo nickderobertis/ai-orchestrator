@@ -426,11 +426,10 @@ Unavailable and failed probes remain present with `availability.state = unknown`
 
 A failed or held node's reason is served typed, not left to be parsed out of prose:
 
-- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string,
-  side?, harness?, variant?, identity?, cause?, failure_kind?, raw_tail?, reset_time?,
-  missing_session_id?, wait_seconds?, structured_error?, judge_unrecorded?}` —
-  the same classification `RunTelemetry.failure` carries for the run, applied to that
-  node's own recorded item, and omitted for a node that did not fail.
+- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string}`
+  widened by every `ProviderFailure` field below — the same classification
+  `RunTelemetry.failure` carries for the run, applied to that node's own recorded
+  item, and omitted for a node that did not fail.
 - `GraphResultItem` carries `error`, `detail`, `exit_code`, `blocked_by`,
   `waiting_steps`, and `human_actions` for the node it describes. They are optional
   because a node that neither failed nor waited records none of them.
@@ -445,6 +444,29 @@ type FailureClass =
   | "provider"
   | "configuration"
   | "unknown";
+```
+
+A provider refusal is served as these fields, all optional because only a failure
+that reached a provider carries any of them, and because the evidence a harness
+gives varies — a refusal that stated no reset time is recorded with that silence
+visible rather than invented. `orchestrator/provider_failure.py` owns the shape and
+`scripts/check-dag-state-contract.py` reconciles all three copies.
+
+```ts
+interface ProviderFailure {
+  side?: ConversationSide;
+  harness?: string;
+  variant?: string;
+  identity?: string; // always one the role chains configure, or "unknown"
+  cause?: ProviderFailureCause;
+  raw_tail?: string; // bounded tail of what the harness printed
+  reset_time?: string;
+  missing_session_id?: string;
+  wait_seconds?: number;
+  failure_kind?: string;
+  structured_error?: Record<string, unknown>;
+  judge_unrecorded?: boolean; // agent side recorded, judge side absent
+}
 ```
 
 A provider refusal carries two further closed vocabularies. `side` names which of

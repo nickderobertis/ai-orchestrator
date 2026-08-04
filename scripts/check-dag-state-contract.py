@@ -895,6 +895,17 @@ def main() -> None:
                 list(interface_fields(design, documented)),
             ),
         )
+    # The provider-refusal record: owned in Python, restated for the client that
+    # parses it and for the contract a reader trusts. Fields as well as vocabularies,
+    # because a field added on one side alone reaches a client as an untyped
+    # passthrough that nothing fails on.
+    reconcile_shape(
+        root / "orchestrator/provider_failure.py",
+        "ProviderFailure",
+        design,
+        interface_fields(design, "ProviderFailure"),
+    )
+    reconcile_documented_schema(dag_model, "providerFailureSchema", design, "ProviderFailure")
     for schema_name, documented in (
         ("planStepSchema", "PlanStep"),
         ("planTaskSchema", "PlanTask"),

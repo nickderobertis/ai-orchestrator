@@ -160,7 +160,7 @@ export const failureClassSchema = z.enum([
 /**
  * Which side of onejudge's two-party conversation the provider refused.
  *
- * `orchestrator/dispatch.py`'s `ConversationSide` owns this vocabulary and
+ * `orchestrator/provider_failure.py`'s `ConversationSide` owns this vocabulary and
  * `scripts/check-dag-state-contract.py` reconciles the three copies of it. A
  * planner reading "quota" needs it first: the two sides prefer different
  * identities, so a fix aimed at the wrong one changes nothing.
@@ -170,7 +170,7 @@ export const conversationSideSchema = z.enum(["agent", "judge", "llmlint"]);
 /**
  * Why the provider refused, closed so a client can switch on it exhaustively.
  *
- * `orchestrator/dispatch.py`'s `ProviderFailureCause` owns this vocabulary and
+ * `orchestrator/provider_failure.py`'s `ProviderFailureCause` owns this vocabulary and
  * `scripts/check-dag-state-contract.py` reconciles the three copies of it.
  * `quota_at_launch` fell through to the next identity in the chain;
  * `quota_mid_conversation` could not, because the conversation was already bound
@@ -184,21 +184,33 @@ export const providerFailureCauseSchema = z.enum([
   "harness_exit",
 ]);
 
-export const failureSchema = openObject({
-  class: failureClassSchema,
-  detail: z.string().optional(),
+/**
+ * A provider refusal, as served on a failure record.
+ *
+ * `orchestrator/provider_failure.py`'s `ProviderFailure` owns this shape and
+ * `scripts/check-dag-state-contract.py` reconciles all three copies of it. Every
+ * field is optional: only a failure that reached a provider carries any of them,
+ * and the evidence a harness gives varies.
+ */
+export const providerFailureSchema = openObject({
   side: conversationSideSchema.optional(),
   harness: z.string().optional(),
   variant: z.string().optional(),
   identity: z.string().optional(),
   cause: providerFailureCauseSchema.optional(),
-  failure_kind: z.string().optional(),
   raw_tail: z.string().optional(),
   reset_time: z.string().optional(),
   missing_session_id: z.string().optional(),
   wait_seconds: z.number().nonnegative().optional(),
+  failure_kind: z.string().optional(),
   structured_error: arbitraryRecord.optional(),
   judge_unrecorded: z.boolean().optional(),
+});
+
+/** The classification, plus whatever a provider refusal recorded beside it. */
+export const failureSchema = providerFailureSchema.extend({
+  class: failureClassSchema,
+  detail: z.string().optional(),
 });
 
 export const nodeTelemetrySchema = openObject({

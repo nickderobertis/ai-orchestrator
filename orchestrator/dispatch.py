@@ -75,7 +75,12 @@ from .launch import (
 from .liveness import PARKED_AFTER_SECONDS
 from .monitor import attach
 from .personas import persona_path
-from .provider_failure import ConversationSide, ProviderFailure, ProviderFailureCause
+from .provider_failure import (
+    ConversationSide,
+    ProviderFailure,
+    ProviderFailureCause,
+    resolve_identity,
+)
 from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify, validate_run_id
 from .scratch import (
@@ -296,7 +301,6 @@ class Report:
 
 
 _FAILURE_TAIL = 2_000
-_IDENTITY_RE = re.compile(r"\b(codex|claude(?:-code)?)(?::(primary|alternate2?|default))?\b", re.I)
 _RESET_RE = re.compile(r"(?:resets?|reset(?:s)? at)[: ]+([^,;\n]+)", re.I)
 _SESSION_RE = re.compile(r"No conversation found with session ID[: ]+([\w.-]+)", re.I)
 _WAIT_RE = re.compile(
@@ -315,12 +319,7 @@ def classify_provider_failure(
         for word in ("provider", "harness", "quota", "rate limit", "conversation found")
     ):
         return None
-    match = _IDENTITY_RE.search(text)
-    harness = match.group(1).lower() if match else "unknown"
-    if harness == "claude":
-        harness = "claude-code"
-    variant = (match.group(2) or "primary").lower() if match else "unknown"
-    identity = f"{harness}:{variant}" if harness != "unknown" else "unknown"
+    harness, variant, identity = resolve_identity(text)
     operation = re.search(r"provider error \((respond|user|supervisor|judge)\)", text, re.I)
     inferred_side: ConversationSide = side or (
         "judge"
@@ -379,10 +378,21 @@ def classify_provider_failure(
 
 
 def recordable_provider_failure(attribution: ProviderFailure | None) -> bool:
-    """Whether a dispatch failure is provider evidence rather than generic harness prose."""
-    if not attribution or attribution.get("identity") == "unknown":
+    """Whether a dispatch failure is provider evidence rather than generic harness prose.
+
+    A positively classified cause is enough on its own. The identity is what the
+    operator acts on, but a harness that named a quota, a rate limit, or a session
+    it had dropped has already said something no generic worker-died conveys — and
+    withholding that because it wrote only "claude", which could be any of three
+    configured identities, would put it back in the bucket this work exists to empty.
+    An unclassified exit still has to carry evidence: the harness's own structured
+    payload, or at least a configured identity to attribute it to.
+    """
+    if not attribution:
         return False
-    return attribution.get("cause") != "harness_exit" or "structured_error" in attribution
+    if attribution.get("cause") != "harness_exit":
+        return True
+    return "structured_error" in attribution or attribution.get("identity") != "unknown"
 
 
 @dataclass(frozen=True)

@@ -8389,7 +8389,7 @@ def test_a_workstream_step_refused_by_the_provider_records_which_identity_refuse
     canonical = gitops.clone(origin, tmp_path / "canonical-refused-step")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
     refusal = (
-        "provider error (supervisor): harness failed (quota) — judge-side codex:primary "
+        "provider error (supervisor): harness failed (quota) — judge-side codex "
         "quota exhausted mid-conversation; resets Aug 8"
     )
 
@@ -8414,7 +8414,7 @@ def test_a_workstream_step_refused_by_the_provider_records_which_identity_refuse
     attribution = result_payload(result)["failure_attribution"]
     assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
         "judge",
-        "codex:primary",
+        "codex",
         "quota_mid_conversation",
     )
     assert attribution["reset_time"] == "Aug 8"
@@ -8432,5 +8432,5 @@ def test_a_workstream_step_refused_by_the_provider_records_which_identity_refuse
 
     # And it reads as the one rolled-up line `just status` / `just runs` print.
     assert failure_rollups(tmp_path / "refused-run") == [
-        "1 node failed on judge-side codex:primary quota mid conversation, resets Aug 8"
+        "1 node failed on judge-side codex quota mid conversation, resets Aug 8"
     ]
