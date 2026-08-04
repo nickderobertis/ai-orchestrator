@@ -311,8 +311,16 @@ _WAIT_RE = re.compile(
 def classify_provider_failure(
     raw: str, *, side: ConversationSide | None = None
 ) -> ProviderFailure | None:
-    """Normalize provider diagnostics without discarding their bounded evidence."""
-    text = " ".join(raw.split())
+    """Normalize provider diagnostics without discarding their bounded evidence.
+
+    Redacted before anything is derived from it, not after: every field below is
+    persisted to the journal and the recorded result and served over the read API,
+    which is exactly the durable surface `REPORTED_NOTE_CHARS` states harness-authored
+    stderr must be bounded *and* redacted for. Doing it once here covers the tail, the
+    structured payload, and every matched fragment alike.
+    """
+    redacted = redact(raw)
+    text = " ".join(redacted.split())
     lower = text.lower()
     if not any(
         word in lower
@@ -361,7 +369,7 @@ def classify_provider_failure(
         result["wait_seconds"] = duration * (60 if waiting.group(2).lower().startswith("m") else 1)
     if cause == "rate_limit":
         result["failure_kind"] = "rate_limit"
-    for candidate in re.findall(r"\{[^{}]{1,4000}\}", raw, re.S):
+    for candidate in re.findall(r"\{[^{}]{1,4000}\}", redacted, re.S):
         try:
             payload = json.loads(candidate)
         except json.JSONDecodeError:

@@ -36,6 +36,7 @@ from orchestrator.dispatch import (
     _read_watchdog_pid,
     agent_exit_status,
     agent_failure_reason,
+    classify_provider_failure,
     dispatch,
     group_holds_stamped_process,
     incomplete_detail,
@@ -1190,6 +1191,36 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
     assert throttled.failure_attribution["failure_kind"] == "rate_limit"
     assert throttled.failure_attribution["identity"] == "codex"
     assert throttled.failure_attribution["wait_seconds"] == 30
+
+
+def test_a_recorded_provider_refusal_never_carries_a_credential_value() -> None:
+    """`raw_tail` is the harness's own words, so it is redacted like every other line.
+
+    The attribution is persisted to the journal and the recorded result and served
+    over the read API — the durable, served surface the redaction path exists to keep
+    a credential out of. The structured payload is the same text by another route, so
+    the redaction happens before either is derived rather than on the tail alone.
+    """
+    token = "sk-ant-oat01-not-a-real-credential"
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    try:
+        classified = classify_provider_failure(
+            f"provider error (respond): harness failed (quota) for codex using {token}; "
+            f'resets Aug 8; {{"subtype":"auth_error","errors":["token {token} rejected"]}}'
+        )
+    finally:
+        del os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+    assert classified is not None
+    assert token not in classified["raw_tail"]
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in classified["raw_tail"]
+    structured = classified["structured_error"]
+    assert structured["errors"] == ["token <redacted:CLAUDE_CODE_OAUTH_TOKEN> rejected"]
+    assert structured["subtype"] == "auth_error"
+    # Redacting did not cost the classification the evidence around it.
+    assert classified["cause"] == "quota_mid_conversation"
+    assert classified["identity"] == "codex"
+    assert classified["reset_time"] == "Aug 8"
 
 
 def test_a_recorded_agent_failure_never_carries_a_credential_value(tmp_path) -> None:
