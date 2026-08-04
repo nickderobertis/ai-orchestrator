@@ -32,6 +32,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
+from orchestrator.harnesses import WORKER_SIDE, configured_harnesses
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import result_payload, run_repo_task
 from orchestrator.merge import GitHubMergeStrategy
@@ -47,11 +48,16 @@ GRAPH_LABELS = (
     "node=history-turns",
     "step=record",
 )
-#: Every codex identity `oneharness.toml` names, in chain order. The smoke pins the
-#: family rather than one identity because the second exists to absorb the first
-#: one's exhausted quota — pinning one made the deterministic gate red for four days
-#: on a tree that was fine, which is judging the operator's credits, not the code.
-CODEX_IDENTITIES = ("codex", "codex:alternate")
+#: Every codex identity the agent config's chain names, in its own order — read from
+#: that chain rather than restated, so a third one added there is pinned here too. The
+#: smoke pins the family because the later identities exist to absorb the first one's
+#: exhausted quota; pinning one made the deterministic gate red for four days on a tree
+#: that was fine, which is judging the operator's credits rather than the code.
+CODEX_IDENTITIES = tuple(
+    identity
+    for identity in configured_harnesses(WORKER_SIDE.config)
+    if identity == "codex" or identity.startswith("codex:")
+)
 SMOKE_PROMPT = "Reply with exactly oneharness-codex-smoke and do nothing else."
 #: Codex names the moment a spent subscription comes back; the skip repeats it, so an
 #: operator reading a skipped gate knows how long they are without this journey.
@@ -230,7 +236,7 @@ def _fake_codex_path(tmp_path: Path, body: str) -> str:
 
     `ONEHARNESS_BIN_CODEX` names the base harness alone — a variant keeps resolving the
     real binary, which reaches a paid provider and, against a fresh CODEX_HOME, clones
-    codex's plugin repository over the network. Both identities resolve the bare name
+    codex's plugin repository over the network. Every identity resolves the bare name
     `codex`, so the seam that covers the whole family is the PATH they resolve it on.
     """
     bin_dir = tmp_path / "bin"
@@ -302,7 +308,7 @@ def _codex_smoke_turn(
     environment.update(overrides)
     return _run_record(
         oneharness_bin,
-        config=REPO_ROOT / "oneharness.toml",
+        config=WORKER_SIDE.config,
         name="real-oneharness-codex-smoke",
         environment=environment,
         mock_harness=False,
@@ -398,9 +404,9 @@ def test_real_oneharness_codex_smoke(oneharness_bin: str, tmp_path: Path) -> Non
 def test_a_codex_family_with_no_quota_left_reports_the_environment(
     oneharness_bin: str, tmp_path: Path
 ) -> None:
-    """Both identities refusing is an environment state, and the smoke says so.
+    """A whole family refusing is an environment state, and the smoke says so.
 
-    Exhausting two real subscriptions on demand is not something a test can do, so the
+    Exhausting every real subscription on demand is not something a test can do, so the
     refusal is recorded and replayed from the binary each identity resolves — the paid
     provider and nothing else. The chain, the config, the classifier, the report and
     the smoke's own decision are all real.
@@ -414,7 +420,7 @@ def test_a_codex_family_with_no_quota_left_reports_the_environment(
     )
 
     attempted = [item["harness_id"] for item in json.loads(completed.stdout)["results"]]
-    # The whole point of pinning the family: the second identity really was asked.
+    # The whole point of pinning the family: every later identity really was asked.
     assert attempted == list(CODEX_IDENTITIES)
     reason = _smoke_outcome(completed)
     assert reason.startswith("skipped: "), reason
