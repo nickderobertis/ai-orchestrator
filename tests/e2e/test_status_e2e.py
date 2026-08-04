@@ -22,8 +22,9 @@ from history_store import write_worker_session as _record
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.journal import open_journal
 from orchestrator.labels import graph_labels
+from orchestrator.next_round import main_runs
 from orchestrator.registry import Registry
-from orchestrator.runs import NodeId, RunId
+from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.status import main as status_main
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -271,6 +272,50 @@ def test_failed_dispatch_with_missing_judge_history_is_explicit(
     assert status_main(["missing-judge", "--runs-dir", str(runs_dir), "--all"]) == 0
     shown = capsys.readouterr().out
     assert "work judge_unrecorded — judge history is missing" in shown
+
+
+def test_a_round_lost_to_one_refusing_identity_reads_as_one_line(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The incident this exists for: a whole round dying on one exhausted identity.
+
+    Three nodes died, so the planner views used to print three deaths that between
+    them named neither the refusing side nor the identity. Both views a planner
+    reads must instead state the one fact — and state it once, so a round that lost
+    thirty nodes is still one line to act on.
+    """
+    runs_dir = tmp_path / "runs"
+    journal = open_journal(runs_dir / "exhausted", RunId("exhausted"), 1)
+    attribution = {
+        "side": "judge",
+        "identity": "codex:primary",
+        "cause": "quota_mid_conversation",
+        "reset_time": "Aug 8",
+        "raw_tail": "provider error (respond): harness failed (quota)",
+    }
+    for node in ("build", "document", "verify"):
+        journal.append("node-started", node=NodeId(node))
+        journal.append(
+            "node-failed", node=NodeId(node), detail={"failure_attribution": attribution}
+        )
+    # One node that died to something else must not be folded into that line.
+    journal.append("node-started", node=NodeId("publish"))
+    journal.append("node-failed", node=NodeId("publish"), detail={"status": "failed"})
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(tmp_path / "history"))
+    rolled = "3 nodes failed on judge-side codex:primary quota mid conversation, resets Aug 8"
+
+    assert status_main(["exhausted", "--runs-dir", str(runs_dir), "--all"]) == 0
+    shown = capsys.readouterr().out
+    assert shown.count(rolled) == 1, shown
+    assert "quota" not in shown.replace(rolled, ""), shown
+
+    prepare_round(runs_dir / "exhausted", {"tasks": [{"id": "build", "task": "x"}]})
+    write_result(
+        runs_dir / "exhausted" / "round-01",
+        {"schema_version": 6, "ok": False, "started_order": [], "results": {}},
+    )
+    assert main_runs(["--runs-dir", str(runs_dir)]) == 0
+    assert rolled in capsys.readouterr().out
 
 
 def test_status_reports_every_settled_node_as_the_journal_recorded_it(
