@@ -246,6 +246,33 @@ def _settled_run(runs_dir: Path, run_id: str, outcomes: dict[str, str]) -> None:
             journal.append("node-settled", node=NodeId(node), detail={"status": status})
 
 
+def test_failed_dispatch_with_missing_judge_history_is_explicit(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    runs_dir = tmp_path / "runs"
+    _settled_run(runs_dir, "missing-judge", {"work": "failed"})
+    round_dir = runs_dir / "missing-judge" / "round-01"
+    round_dir.mkdir()
+    (round_dir / "plan.json").write_text("{}\n", encoding="utf-8")
+    history_dir = tmp_path / "history"
+    store = history_dir / "project"
+    store.mkdir(parents=True)
+    _record(
+        store / "work-20260804T120000Z-123.jsonl",
+        project=tmp_path,
+        status="nonzero",
+        labels={
+            **graph_labels(run_id="missing-judge", round_number=1, node="work"),
+            "role": "agent",
+        },
+    )
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+
+    assert status_main(["missing-judge", "--runs-dir", str(runs_dir), "--all"]) == 0
+    shown = capsys.readouterr().out
+    assert "work judge_unrecorded — judge history is missing" in shown
+
+
 def test_status_reports_every_settled_node_as_the_journal_recorded_it(
     tmp_path: Path, bare_origin
 ) -> None:

@@ -1108,6 +1108,10 @@ def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_pat
     assert report.stderr.endswith("claude: no conversation found with session id 0dd")
     assert "..." in report.stderr
     assert len(report.stderr) < 1600
+    assert report.failure_attribution is not None
+    assert report.failure_attribution["cause"] == "stale_session_resume"
+    assert report.failure_attribution["identity"] == "claude-code:primary"
+    assert report.failure_attribution["missing_session_id"] == "0dd"
 
 
 def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
@@ -1123,7 +1127,8 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
         'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\n'
         'printf "%s\\n" "$$" >"$d/agent.pid"\n'
         'touch "$d/agent.heartbeat"\n'
-        'printf "provider error: 429 rate_limit_error quota exhausted\\n" >"$d/agent.stderr"\n'
+        'printf "provider error: codex:primary 429 rate_limit_error quota exhausted; '
+        'retry after 30 seconds\\n" >"$d/agent.stderr"\n'
         'printf "agent harness exited 7\\n" >"$d/agent.failure"\n'
         'printf "%s\\n" "$$" >"$d/agent.failed"\n'
         "while :; do sleep 0.05; done\n",
@@ -1165,13 +1170,20 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
 
     assert throttled.outcome == stopped.outcome == "worker-died"
     assert throttled.outcome_detail == (
-        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+        "agent harness exited 7: provider error: codex:primary 429 rate_limit_error quota "
+        "exhausted; retry after 30 seconds"
     )
     assert stopped.outcome_detail == "the agent harness stopped heartbeating for 0.2s"
     # The reported sentence is the observed condition wrapped in what the wrapper
     # recorded about the child, so both halves reach a reader of the node result.
     assert throttled.stderr.startswith("worker-died (watchdog pid ")
     assert throttled.stderr.endswith(f": {throttled.outcome_detail}")
+    assert throttled.failure_attribution is not None
+    assert throttled.failure_attribution["side"] == "agent"
+    assert throttled.failure_attribution["cause"] == "rate_limit"
+    assert throttled.failure_attribution["failure_kind"] == "rate_limit"
+    assert throttled.failure_attribution["identity"] == "codex:primary"
+    assert throttled.failure_attribution["wait_seconds"] == 30
 
 
 def test_a_recorded_agent_failure_never_carries_a_credential_value(tmp_path) -> None:

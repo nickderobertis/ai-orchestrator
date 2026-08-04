@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from orchestrator.dispatch import classify_provider_failure
 from orchestrator.journal import NodeId, open_journal
+from orchestrator.next_round import main_runs
 from orchestrator.provider_health import IDENTITIES, failure_rollups, probe, render
-from orchestrator.runs import RunId
+from orchestrator.read_model import list_runs
+from orchestrator.runs import RunId, prepare_round, write_result
+from orchestrator.status import main as status_main
 
 
 def test_provider_failure_vocabulary_and_bounded_payload() -> None:
@@ -31,10 +35,24 @@ def test_provider_failure_vocabulary_and_bounded_payload() -> None:
     )
     assert rate is not None
     assert rate["cause"] == "rate_limit"
+    assert rate["failure_kind"] == "rate_limit"
     assert rate["wait_seconds"] == 720
 
+    structured = classify_provider_failure(
+        'claude-code:primary harness exited 1 {"subtype":"error_during_execution",'
+        '"errors":["first failure","second failure"]}'
+    )
+    assert structured is not None
+    assert structured["cause"] == "harness_exit"
+    assert structured["structured_error"] == {
+        "subtype": "error_during_execution",
+        "errors": ["first failure", "second failure"],
+    }
 
-def test_probe_keeps_all_configured_identities_and_renders_unknown(monkeypatch) -> None:
+
+def test_probe_keeps_all_configured_identities_and_renders_unknown(
+    tmp_path: Path, monkeypatch
+) -> None:
     payload = {
         "schema_version": "0.1",
         "identities": [
@@ -60,7 +78,7 @@ def test_probe_keeps_all_configured_identities_and_renders_unknown(monkeypatch) 
         stderr = ""
 
     monkeypatch.setattr("orchestrator.provider_health.subprocess.run", lambda *a, **k: Result())
-    snapshot = probe(cwd=Path("."))
+    snapshot = probe(cwd=tmp_path)
     assert [item["identity"] for item in snapshot["identities"]] == list(IDENTITIES)
     shown = render(snapshot)
     assert "codex: weekly binding, 100% used, resets 2026-08-08" in shown
@@ -81,3 +99,82 @@ def test_failure_rollup_collapses_same_cause(tmp_path: Path) -> None:
     assert failure_rollups(run_dir) == [
         "3 nodes failed on judge-side codex:primary quota mid conversation, resets Aug 8"
     ]
+
+
+def test_provider_health_crosses_cli_views_and_read_api(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The public views all consume the same real usage subprocess payload."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "oneharness"
+    payload = {
+        "schema_version": "0.1",
+        "observed_at": "2026-08-04T00:00:00Z",
+        "identities": [
+            {
+                "harness": "codex",
+                "availability": {
+                    "state": "available",
+                    "windows": [
+                        {
+                            "id": "weekly",
+                            "binding": True,
+                            "usage": {"kind": "metered", "used_percent": 0.75},
+                            "resets_at": "2026-08-08T00:00:00Z",
+                        }
+                    ],
+                },
+            },
+            {
+                "harness": "claude-code",
+                "variant": "alternate",
+                "availability": {"state": "unknown"},
+            },
+        ],
+    }
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = usage ]; then\n'
+        f"  printf '%s\\n' '{json.dumps(payload)}'\n"
+        "else\n"
+        "  printf '[]\\n'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("ONEHARNESS_HISTORY_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "health"
+    round_record = prepare_round(run_dir, {"tasks": [{"id": "work", "task": "x"}]})
+    journal = open_journal(run_dir, RunId("health"), round_record.number)
+    journal.append("round-started", detail={"plan": {}})
+    journal.append("node-started", node=NodeId("work"))
+
+    assert status_main(["health", "--runs-dir", str(runs_dir)]) == 0
+    status_output = capsys.readouterr().out
+    assert "Provider health:" in status_output
+    assert "codex: weekly binding, 75% used, resets 2026-08-08" in status_output
+    assert "claude-code:alternate: unknown" in status_output
+
+    write_result(
+        round_record.directory,
+        {
+            "schema_version": 6,
+            "ok": True,
+            "started_order": ["work"],
+            "results": {"work": {"status": "done"}},
+        },
+    )
+    assert main_runs(["--runs-dir", str(runs_dir)]) == 0
+    assert "Provider health:" in capsys.readouterr().out
+
+    served = list_runs(runs_dir, include_settled=True, oneharness_bin=str(fake))
+    assert served["provider_health"]["identities"][2]["identity"] == "codex"
+    assert (
+        served["provider_health"]["identities"][2]["availability"]["windows"][0]["binding"] is True
+    )

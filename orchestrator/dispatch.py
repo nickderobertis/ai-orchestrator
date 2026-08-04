@@ -175,6 +175,10 @@ REPORTED_NOTE_CHARS = 300
 class DispatchError(Exception):
     """onejudge could not be run, or rejected the config (a loud failure)."""
 
+    def __init__(self, message: str, *, failure_attribution: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.failure_attribution = failure_attribution
+
 
 class LaunchRecord(TypedDict):
     """Stable planner handoff persisted for one orchestrator launch.
@@ -291,7 +295,7 @@ class Report:
 
 
 _FAILURE_TAIL = 2_000
-_IDENTITY_RE = re.compile(r"\b(codex|claude-code)(?::(primary|alternate2?|default))?\b", re.I)
+_IDENTITY_RE = re.compile(r"\b(codex|claude(?:-code)?)(?::(primary|alternate2?|default))?\b", re.I)
 _RESET_RE = re.compile(r"(?:resets?|reset(?:s)? at)[: ]+([^,;\n]+)", re.I)
 _SESSION_RE = re.compile(r"No conversation found with session ID[: ]+([\w.-]+)", re.I)
 _WAIT_RE = re.compile(
@@ -310,9 +314,18 @@ def classify_provider_failure(raw: str, *, side: str | None = None) -> dict[str,
         return None
     match = _IDENTITY_RE.search(text)
     harness = match.group(1).lower() if match else "unknown"
+    if harness == "claude":
+        harness = "claude-code"
     variant = (match.group(2) or "primary").lower() if match else "unknown"
     identity = f"{harness}:{variant}" if harness != "unknown" else "unknown"
-    inferred_side = side or ("judge" if re.search(r"\bjudge(?:-side)?\b", text, re.I) else "agent")
+    operation = re.search(r"provider error \((respond|user|supervisor|judge)\)", text, re.I)
+    inferred_side = side or (
+        "judge"
+        if re.search(r"\bjudge(?:-side)?\b", text, re.I)
+        or operation is not None
+        and operation.group(1).lower() != "respond"
+        else "agent"
+    )
     reset = _RESET_RE.search(text)
     session = _SESSION_RE.search(text)
     waiting = _WAIT_RE.search(text)
@@ -343,15 +356,29 @@ def classify_provider_failure(raw: str, *, side: str | None = None) -> dict[str,
     if waiting:
         duration = float(waiting.group(1))
         result["wait_seconds"] = duration * (60 if waiting.group(2).lower().startswith("m") else 1)
+    if cause == "rate_limit":
+        result["failure_kind"] = "rate_limit"
     for candidate in re.findall(r"\{[^{}]{1,4000}\}", raw, re.S):
         try:
             payload = json.loads(candidate)
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict) and ("errors" in payload or "subtype" in payload):
-            result["structured_error"] = payload
+            bounded: dict[str, Any] = {}
+            if isinstance(payload.get("subtype"), str):
+                bounded["subtype"] = payload["subtype"][:200]
+            if isinstance(payload.get("errors"), list):
+                bounded["errors"] = [str(item)[:500] for item in payload["errors"][:10]]
+            result["structured_error"] = bounded
             break
     return result
+
+
+def recordable_provider_failure(attribution: dict[str, Any] | None) -> bool:
+    """Whether a dispatch failure is provider evidence rather than generic harness prose."""
+    if not attribution or attribution.get("identity") == "unknown":
+        return False
+    return attribution.get("cause") != "harness_exit" or "structured_error" in attribution
 
 
 @dataclass(frozen=True)
@@ -1105,6 +1132,7 @@ def run_onejudge(
                         outcome_detail=signal.detail,
                         max_turns=turn_cap,
                         agent_exit_status=agent_exit_status(agent_status_dir),
+                        failure_attribution=classify_provider_failure(worker_detail, side="agent"),
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
@@ -1130,13 +1158,21 @@ def run_onejudge(
         # the harness process dying → "provider error ... Broken pipe"). Don't
         # assume "bad config" — surface onejudge's own stderr, which says which.
         detail = exc.stderr.strip() or "<no stderr>"
-        raise DispatchError(
+        failure_attribution = classify_provider_failure(detail)
+        displayed_detail = (
+            str(failure_attribution["raw_tail"])
+            if failure_attribution and failure_attribution.get("raw_tail")
+            else detail
+        )
+        message = (
             f"onejudge failed (exit {exc.returncode} — bad config or provider/runtime error): "
-            f"{detail}"
-        ) from exc
+            f"{displayed_detail}"
+        )
+        raise DispatchError(message, failure_attribution=failure_attribution) from exc
     except ContractError as exc:
+        message = f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         raise DispatchError(
-            f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
+            message, failure_attribution=classify_provider_failure(str(exc))
         ) from exc
     if isinstance(result, Report):
         result.raw = dict(result.raw or {})

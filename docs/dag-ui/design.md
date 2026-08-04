@@ -427,7 +427,7 @@ Unavailable and failed probes remain present with `availability.state = unknown`
 A failed or held node's reason is served typed, not left to be parsed out of prose:
 
 - `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string,
-  side?, harness?, variant?, identity?, cause?, raw_tail?, reset_time?,
+  side?, harness?, variant?, identity?, cause?, failure_kind?, raw_tail?, reset_time?,
   missing_session_id?, wait_seconds?, structured_error?, judge_unrecorded?}` —
   the same classification `RunTelemetry.failure` carries for the run, applied to that
   node's own recorded item, and omitted for a node that did not fail.

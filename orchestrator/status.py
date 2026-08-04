@@ -36,6 +36,7 @@ from .provider_health import (
     render as render_provider_health,
 )
 from .registry import Registry, RegistryError
+from .telemetry import collect_run
 from .workspace import IdentityKey, RepositoryType, Workflow
 
 # A history record describes one completed harness invocation, not the whole
@@ -573,6 +574,17 @@ def main(argv: list[str] | None = None) -> int:
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
                 indicators.extend(f"{run_dir.name}: {line}" for line in failure_rollups(run_dir))
+                try:
+                    run_telemetry = collect_run(run_dir)
+                except (ConfigError, history.HistoryError, OSError):
+                    run_telemetry = None
+                if run_telemetry is not None:
+                    indicators.extend(
+                        f"{run_dir.name}: {node.node} judge_unrecorded — judge history is missing"
+                        for node in run_telemetry.nodes
+                        if node.failure is not None
+                        and bool((node.failure.attribution or {}).get("judge_unrecorded"))
+                    )
         health = (
             render_provider_health(probe_provider_health(cwd=Path.cwd()))
             if selected or indicators or running_dispatches

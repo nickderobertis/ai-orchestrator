@@ -266,6 +266,20 @@ def main() -> int:
     capped_resume_segment = "resume-after-cap" in task and resume_segments <= 1
     fail = "should-fail" in task or capped_resume_segment or (drafting and "drafting-fails" in task)
 
+    if "agent-attributed-provider-failure" in task and op == "respond":
+        sys.stderr.write(
+            "agent-side claude-code:alternate2 quota at launch; fell through; "
+            "resets Aug 8; " + "provider-output " * 300 + "\n"
+        )
+        return 1
+    if "judge-attributed-provider-failure" in task and op in {"supervisor", "judge"}:
+        sys.stderr.write(
+            "judge-side codex:primary quota exhausted mid-conversation; resets Aug 8; "
+            + "provider-output " * 300
+            + "\n"
+        )
+        return 1
+
     match op:
         case "respond":
             # A deterministic real-provider boundary: whatever this turn is about to

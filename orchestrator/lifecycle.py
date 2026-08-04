@@ -36,7 +36,14 @@ from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_identity
-from .dispatch import Report, dispatch, incomplete_detail, scoped_session
+from .dispatch import (
+    DispatchError,
+    Report,
+    dispatch,
+    incomplete_detail,
+    recordable_provider_failure,
+    scoped_session,
+)
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .harnesses import JUDGE_SIDE, WORKER_SIDE, harness_option_help, harness_override_env
@@ -1223,22 +1230,53 @@ def _run_steps(
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         step_session = f"{scoped_session(branch, worktree)}:{sid}"
-        report = dispatch_fn(
-            cast(str, step.persona),
-            step.task,
-            project_dir=str(worktree),
-            oneharness_mode=oneharness_mode,
-            use_llmlint_wrapper=use_llmlint_wrapper,
-            base_path=base_path,
-            persona_dir=persona_dir,
-            session=step_session,
-            max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-            done_when=step.done_when,
-            extra_instructions=extra_instructions,
-            labels=log.labels,
-            env=dispatch_env,
-            cancel=cancel,
-        )
+        try:
+            report = dispatch_fn(
+                cast(str, step.persona),
+                step.task,
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session=step_session,
+                max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                done_when=step.done_when,
+                extra_instructions=extra_instructions,
+                labels=log.labels,
+                env=dispatch_env,
+                cancel=cancel,
+            )
+        except DispatchError as exc:
+            if not recordable_provider_failure(exc.failure_attribution):
+                raise
+            report = Report(
+                persona=cast(str, step.persona),
+                exit_code=2,
+                completed=False,
+                stopped_early=True,
+                assistant_turns=0,
+                verdicts=[],
+                usage={},
+                raw=None,
+                stderr=str(exc),
+                failure_attribution=exc.failure_attribution,
+            )
+            reports[sid] = report
+            log.append(
+                "step-settled",
+                detail={
+                    "status": "not-completed",
+                    "step_kind": step.kind,
+                    "detail": str(exc),
+                    **(
+                        {"failure_attribution": exc.failure_attribution}
+                        if exc.failure_attribution
+                        else {}
+                    ),
+                },
+            )
+            return NodeRun("failed", f"step {sid!r} {exc}", report)
         persist_report_artifacts(log, report, session=step_session)
         reports[sid] = report
         if not report.completed:
@@ -3301,6 +3339,20 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "ok": result.ok,
         "pr": result.pr.url if result.pr else None,
         "detail": result.detail,
+        **(
+            {"failure_attribution": failed_attribution}
+            if (
+                failed_attribution := next(
+                    (
+                        step.report.failure_attribution
+                        for step in result.steps
+                        if step.report and step.report.failure_attribution
+                    ),
+                    None,
+                )
+            )
+            else {}
+        ),
         **({"artifacts": artifacts} if artifacts else {}),
         **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
         "follow_ups": _result_follow_ups(result),

@@ -173,6 +173,7 @@ export const failureSchema = openObject({
       "harness_exit",
     ])
     .optional(),
+  failure_kind: z.string().optional(),
   raw_tail: z.string().optional(),
   reset_time: z.string().optional(),
   missing_session_id: z.string().optional(),

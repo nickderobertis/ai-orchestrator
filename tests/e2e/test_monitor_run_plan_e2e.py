@@ -31,6 +31,7 @@ from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import result_payload, run_repo_task
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.monitor import Monitor, load_snapshot
+from orchestrator.read_model import run_detail
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace
 
@@ -604,6 +605,66 @@ def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
     missing = _just("telemetry", "--runs-dir", str(tmp_path / "missing-runs"))
     assert missing.returncode == 0, missing.stderr
     assert json.loads(missing.stdout)["runs"] == []
+
+
+def test_real_onejudge_provider_failures_reach_journal_and_read_api(
+    tmp_path: Path, command_base: Any, onejudge_bin: str
+) -> None:
+    """The real onejudge loop identifies which command-provider operation failed."""
+    runs_dir = tmp_path / "runs"
+    expected = {
+        "agent-provider": ("agent", "claude-code:alternate2", "quota_at_launch"),
+        "judge-provider": ("judge", "codex:primary", "quota_mid_conversation"),
+    }
+    for run_id, sentinel in (
+        ("agent-provider", "agent-attributed-provider-failure"),
+        ("judge-provider", "judge-attributed-provider-failure"),
+    ):
+        plan = tmp_path / f"{run_id}.json"
+        plan.write_text(
+            json.dumps(
+                {"tasks": [{"id": "fail", "persona": "engineer", "task": sentinel, "max_turns": 1}]}
+            ),
+            encoding="utf-8",
+        )
+        failed = _just(
+            "run-plan",
+            str(plan),
+            "--run",
+            run_id,
+            "--runs-dir",
+            str(runs_dir),
+            "--base",
+            str(command_base()),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        )
+        assert failed.returncode == 1, failed.stderr
+        side, identity, cause = expected[run_id]
+        events = [
+            json.loads(line)
+            for line in (runs_dir / run_id / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        node_failed = next(event for event in events if event["kind"] == "node-failed")
+        attribution = node_failed["detail"]["failure_attribution"]
+        assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
+            side,
+            identity,
+            cause,
+        )
+        assert attribution["reset_time"] == "Aug 8"
+        assert len(attribution["raw_tail"]) == 2_000
+        served = run_detail(runs_dir, run_id, oneharness_bin="/absent/oneharness")
+        failure = served["run"]["nodes"][0]["failure"]
+        assert (failure["side"], failure["identity"], failure["cause"]) == (
+            side,
+            identity,
+            cause,
+        )
 
 
 def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:

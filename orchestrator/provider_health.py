@@ -20,14 +20,16 @@ IDENTITIES = (
     "codex:alternate",
     "claude-code:primary",
 )
-_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_USAGE_WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "oneharness-usage.sh"
+_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
 _CACHE_SECONDS = 30.0
 
 
 def probe(*, oneharness_bin: str = "oneharness", cwd: Path | None = None) -> dict[str, Any]:
     """Probe every configured identity; failure is data and never blocks a view."""
     selected_cwd = cwd or Path.cwd()
-    key = (oneharness_bin, str(selected_cwd.resolve()))
+    resolved_command = shutil.which(oneharness_bin) or oneharness_bin
+    key = (oneharness_bin, resolved_command, str(selected_cwd.resolve()))
     cached = _CACHE.get(key)
     if cached is not None and time.monotonic() - cached[0] < _CACHE_SECONDS:
         return cached[1]
@@ -61,8 +63,7 @@ def probe(*, oneharness_bin: str = "oneharness", cwd: Path | None = None) -> dic
     try:
         proc = subprocess.run(
             [
-                oneharness_bin,
-                "usage",
+                str(_USAGE_WRAPPER),
                 "--harness",
                 ",".join(IDENTITIES),
                 "--cwd",
@@ -73,6 +74,7 @@ def probe(*, oneharness_bin: str = "oneharness", cwd: Path | None = None) -> dic
             ],
             text=True,
             capture_output=True,
+            env={**os.environ, "ONEHARNESS_BIN": oneharness_bin},
             timeout=8,
             check=False,
         )

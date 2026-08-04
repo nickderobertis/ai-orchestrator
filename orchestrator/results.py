@@ -11,6 +11,17 @@ from .ids import GraphId
 from .runs import as_result_payload, load_mapping, rounds, validate_run_id
 
 
+def _failure_line(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    side = value.get("side", "unknown")
+    identity = value.get("identity", "unknown")
+    cause = str(value.get("cause", "provider failure")).replace("_", " ")
+    reset = f", resets {value['reset_time']}" if value.get("reset_time") else ""
+    unrecorded = "; judge history unrecorded" if value.get("judge_unrecorded") else ""
+    return f"Provider: {side}-side {identity} {cause}{reset}{unrecorded}"
+
+
 def render(run: str, runs_dir: Path) -> str:
     """Render the latest completed round; node failures remain successful viewing."""
     run_id = validate_run_id(run)
@@ -28,6 +39,8 @@ def render(run: str, runs_dir: Path) -> str:
             or ("completed" if item.get("completed") else "-")
         )
         lines.append(f"{node}  {item['status']}  {outcome}")
+        if failure := _failure_line(item.get("failure_attribution")):
+            lines.append(f"  {failure}")
         detail_id = GraphId(str(run_id), number, node)
         lines.append(f"  Detail: just history-show {detail_id} --runs-dir {runs_dir}")
         failed = item["status"] in {"failed", "blocked", "cancelled"} or item.get("ok") is False

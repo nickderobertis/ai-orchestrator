@@ -37,7 +37,13 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_mapping
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .detach import run_detached
-from .dispatch import Report, dispatch, incomplete_detail
+from .dispatch import (
+    DispatchError,
+    Report,
+    dispatch,
+    incomplete_detail,
+    recordable_provider_failure,
+)
 from .edits import EditError, apply_edit
 from .goals import (
     ConcurrentAcknowledgement,
@@ -659,7 +665,39 @@ def run_graph(
         if "cancel" in inspect.signature(agent_runner).parameters:
             agent_args["cancel"] = cancellations[nid]
         direct = cast(PlanNode, node.direct)
-        report = agent_runner(direct, **agent_args)
+        try:
+            report = agent_runner(direct, **agent_args)
+        except DispatchError as exc:
+            if not recordable_provider_failure(exc.failure_attribution):
+                raise
+            item = cast(
+                GraphResultItem,
+                {
+                    "kind": "agent",
+                    "status": "failed",
+                    "task": node.task,
+                    "error": str(exc),
+                    **(
+                        {"failure_attribution": exc.failure_attribution}
+                        if exc.failure_attribution
+                        else {}
+                    ),
+                },
+            )
+            run = NodeRun("failed", str(exc), recorded=item)
+            node_log.append(
+                "node-failed",
+                detail={
+                    "detail": str(exc),
+                    **(
+                        {"failure_attribution": exc.failure_attribution}
+                        if exc.failure_attribution
+                        else {}
+                    ),
+                    TERMINAL_NODE_RESULT_FIELD: cast(dict[str, Any], item),
+                },
+            )
+            return run
         persist_report_artifacts(
             node_log,
             report,
