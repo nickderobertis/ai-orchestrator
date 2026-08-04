@@ -207,22 +207,18 @@ describe("one node's slice of the run timeline", () => {
     const projected = nodeTimelineV2(timeline, "dashboard");
     const worker = projected.items.find(({ laneId }) => laneId === "worker");
     const judge = projected.items.find(({ laneId }) => laneId === "judge");
-    const publication = projected.items.find(({ laneId }) => laneId === "lint");
-    if (
-      worker === undefined ||
-      judge === undefined ||
-      publication === undefined
-    )
+    const lint = projected.items.find(({ laneId }) => laneId === "lint");
+    if (worker === undefined || judge === undefined || lint === undefined)
       throw new Error("fixture lost the dashboard's dispatches");
     // Three moments, two of them coincident and neither an end of the window: the
     // pair collapses to the category that dominates it, and the window's own ends
     // are untouched, so what the compact line spans is what the node spans.
-    const first = { ...publication, start: 0, end: 10 };
+    const first = { ...lint, start: 0, end: 10 };
     const compacted = compactTimelineItems([
       first,
       { ...judge, start: 1_000, end: 1_000 },
       { ...worker, start: 1_000, end: 1_000 },
-      { ...publication, id: "last", start: 100_000, end: 100_010 },
+      { ...lint, id: "last", start: 100_000, end: 100_010 },
     ]);
     expect(compacted.map(({ id }) => id)).toEqual([
       first.id,
