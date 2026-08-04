@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fakes import FakeGitHub, make_writing_dispatch
 from mock_oneharness import run_mock_oneharness
 from waits import deadline as e2e_deadline
@@ -607,64 +608,111 @@ def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
     assert json.loads(missing.stdout)["runs"] == []
 
 
+#: Each real provider refusal the fake backend can be asked for, and the facts the
+#: journal and the read API must carry back for it. `extra` is what distinguishes
+#: that shape from a bare "harness failed (quota)" — the reset a planner waits for,
+#: the session the harness dropped, the wait a watchdog killed, or the harness's own
+#: structured error payload for an exit nothing else classified.
+_PROVIDER_FAILURE_SHAPES = (
+    (
+        "agent-quota",
+        "agent-attributed-provider-failure",
+        {"side": "agent", "identity": "claude-code:alternate2", "cause": "quota_at_launch"},
+        {"reset_time": "Aug 8"},
+    ),
+    (
+        "judge-quota",
+        "judge-attributed-provider-failure",
+        {"side": "judge", "identity": "codex:primary", "cause": "quota_mid_conversation"},
+        {"reset_time": "Aug 8"},
+    ),
+    (
+        "stale-session",
+        "stale-session-provider-failure",
+        {"side": "agent", "identity": "claude-code:alternate", "cause": "stale_session_resume"},
+        {"missing_session_id": "0f6c1d2e-dead-4bee-9abc-1234567890ab"},
+    ),
+    (
+        "rate-limit",
+        "rate-limit-provider-failure",
+        {"side": "agent", "identity": "claude-code:primary", "cause": "rate_limit"},
+        {"failure_kind": "rate_limit", "wait_seconds": 720.0},
+    ),
+    (
+        "unclassified",
+        "unclassified-provider-failure",
+        {"side": "agent", "identity": "codex:alternate", "cause": "harness_exit"},
+        {
+            "structured_error": {
+                "subtype": "error_during_execution",
+                "errors": ["stream closed before result", "no result message"],
+            }
+        },
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("run_id", "sentinel", "attributed", "extra"),
+    _PROVIDER_FAILURE_SHAPES,
+    ids=[shape[0] for shape in _PROVIDER_FAILURE_SHAPES],
+)
 def test_real_onejudge_provider_failures_reach_journal_and_read_api(
-    tmp_path: Path, command_base: Any, onejudge_bin: str
+    tmp_path: Path,
+    command_base: Any,
+    onejudge_bin: str,
+    run_id: str,
+    sentinel: str,
+    attributed: dict[str, str],
+    extra: dict[str, Any],
 ) -> None:
-    """The real onejudge loop identifies which command-provider operation failed."""
+    """The real onejudge loop identifies which command-provider operation failed.
+
+    The outage this exists for printed `provider error (respond): harness failed
+    (quota)` for every one of these, naming neither the side nor the identity. Each
+    shape is driven through the real CLI and read back where a planner reads it.
+    """
     runs_dir = tmp_path / "runs"
-    expected = {
-        "agent-provider": ("agent", "claude-code:alternate2", "quota_at_launch"),
-        "judge-provider": ("judge", "codex:primary", "quota_mid_conversation"),
-    }
-    for run_id, sentinel in (
-        ("agent-provider", "agent-attributed-provider-failure"),
-        ("judge-provider", "judge-attributed-provider-failure"),
-    ):
-        plan = tmp_path / f"{run_id}.json"
-        plan.write_text(
-            json.dumps(
-                {"tasks": [{"id": "fail", "persona": "engineer", "task": sentinel, "max_turns": 1}]}
-            ),
-            encoding="utf-8",
-        )
-        failed = _just(
-            "run-plan",
-            str(plan),
-            "--run",
-            run_id,
-            "--runs-dir",
-            str(runs_dir),
-            "--base",
-            str(command_base()),
-            "--onejudge-bin",
-            onejudge_bin,
-            "--format",
-            "json",
-        )
-        assert failed.returncode == 1, failed.stderr
-        side, identity, cause = expected[run_id]
-        events = [
-            json.loads(line)
-            for line in (runs_dir / run_id / "events.jsonl")
-            .read_text(encoding="utf-8")
-            .splitlines()
-        ]
-        node_failed = next(event for event in events if event["kind"] == "node-failed")
-        attribution = node_failed["detail"]["failure_attribution"]
-        assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
-            side,
-            identity,
-            cause,
-        )
-        assert attribution["reset_time"] == "Aug 8"
-        assert len(attribution["raw_tail"]) == 2_000
-        served = run_detail(runs_dir, run_id, oneharness_bin="/absent/oneharness")
-        failure = served["run"]["nodes"][0]["failure"]
-        assert (failure["side"], failure["identity"], failure["cause"]) == (
-            side,
-            identity,
-            cause,
-        )
+    plan = tmp_path / f"{run_id}.json"
+    plan.write_text(
+        json.dumps(
+            {"tasks": [{"id": "fail", "persona": "engineer", "task": sentinel, "max_turns": 1}]}
+        ),
+        encoding="utf-8",
+    )
+    failed = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        run_id,
+        "--runs-dir",
+        str(runs_dir),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert failed.returncode == 1, failed.stderr
+    events = [
+        json.loads(line)
+        for line in (runs_dir / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    node_failed = next(event for event in events if event["kind"] == "node-failed")
+    attribution = node_failed["detail"]["failure_attribution"]
+    assert {key: attribution[key] for key in attributed} == attributed
+    assert {key: attribution[key] for key in extra} == extra
+    # Bounded, and still evidence: the harness's own words, not a summary of them.
+    assert 0 < len(attribution["raw_tail"]) <= 2_000
+    assert sentinel not in attribution["raw_tail"]
+
+    served = run_detail(runs_dir, run_id, oneharness_bin="/absent/oneharness")
+    failure = served["run"]["nodes"][0]["failure"]
+    assert {key: failure[key] for key in attributed} == attributed
+    assert {key: failure[key] for key in extra} == extra
+    assert failure["raw_tail"] == attribution["raw_tail"]
 
 
 def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:

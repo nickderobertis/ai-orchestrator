@@ -23,6 +23,7 @@ from orchestrator import REPO_ROOT, gitops
 from orchestrator.journal import open_journal
 from orchestrator.labels import graph_labels
 from orchestrator.next_round import main_runs
+from orchestrator.read_model import run_detail
 from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.status import main as status_main
@@ -250,6 +251,14 @@ def _settled_run(runs_dir: Path, run_id: str, outcomes: dict[str, str]) -> None:
 def test_failed_dispatch_with_missing_judge_history_is_explicit(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    """A supervisor whose harness never wrote history must not simply disappear.
+
+    Every history-derived view answers "who worked on this node" from the recorded
+    sessions, so a judge side that failed to write one reads exactly like a dispatch
+    that was never supervised. Saying so is the difference between "the run was
+    unsupervised" and "the judge harness could not record", which is what the outage
+    behind this work actually was.
+    """
     runs_dir = tmp_path / "runs"
     _settled_run(runs_dir, "missing-judge", {"work": "failed"})
     round_dir = runs_dir / "missing-judge" / "round-01"
@@ -272,6 +281,16 @@ def test_failed_dispatch_with_missing_judge_history_is_explicit(
     assert status_main(["missing-judge", "--runs-dir", str(runs_dir), "--all"]) == 0
     shown = capsys.readouterr().out
     assert "work judge_unrecorded — judge history is missing" in shown
+
+    # Read back through the same real history store the view above consulted: the
+    # marker is a fact about recorded sessions, so a scan that reads none proves
+    # nothing about a judge that is missing from the ones that exist.
+    served = run_detail(runs_dir, "missing-judge")
+    node = served["run"]["nodes"][0]
+    assert node["failure"]["judge_unrecorded"] is True
+    # The agent side is still served as the recorded session it is; only the
+    # supervisor beside it is marked absent.
+    assert [session["role"] for session in node["sessions"]] == ["agent"]
 
 
 def test_a_round_lost_to_one_refusing_identity_reads_as_one_line(
