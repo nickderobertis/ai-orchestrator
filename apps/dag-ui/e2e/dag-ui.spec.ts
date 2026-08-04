@@ -1006,8 +1006,7 @@ test("loads another run-list page when navigation reaches the end", async ({
 
 test("loads another run-list page from the keyboard", async ({ page }) => {
   // Seventy Tab presses, each a browser round trip and an evaluate: the journey is
-  // latency-bound rather than slow, and it sat at the default budget until this
-  // tier grew. Its assertions are unchanged; only what it is allowed to spend is.
+  // latency-bound rather than slow, so it needs the budget rather than the speed.
   test.slow();
   await page.goto("/?view=graph");
   const navigation = page.getByRole("navigation", { name: "DAG runs" });

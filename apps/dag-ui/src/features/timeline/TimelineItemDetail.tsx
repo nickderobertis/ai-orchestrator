@@ -26,7 +26,11 @@ import { Timestamp } from "../../lib/Timestamp";
 import { formatDuration } from "../../lib/time";
 import type { NodeView } from "../runs/run-model";
 import { PAGE_SIZE } from "./TimelineRail";
-import type { TimelineRow } from "./timeline-model";
+import {
+  dispatchRoleLabel,
+  LLMLINT_TRANSPORT,
+  type TimelineRow,
+} from "./timeline-model";
 import { useConversation } from "./useConversation";
 
 /**
@@ -513,26 +517,21 @@ function isPublication(
 type Attribution = DagConversation["attribution"];
 
 /**
- * Every semantic role the contract's closed `agentRole` enum admits.
+ * What this session is called, from the lane vocabulary that names it in the plot.
  *
- * Keyed by that enum rather than by `string`: the vocabulary is reconciled across
- * `orchestrator/labels.py`, the `dag-model` enum and the design contract by
- * `scripts/check-dag-state-contract.py`, so a role added there reaches this record
- * and fails to compile until it is given a word — rather than rendering as its own
- * raw identifier.
+ * The word is not chosen here: `dispatchRoleLabel` derives it from the lane the role
+ * is plotted in, so an opened conversation cannot head itself with one word while the
+ * segment that opened it carries another. The vocabulary is reconciled against
+ * `orchestrator/labels.py` by `scripts/check-dag-state-contract.py`, and it is keyed
+ * on the contract's closed `agentRole` enum, so a role added there fails to compile
+ * until it has been given a lane rather than rendering as its raw identifier.
  */
-const ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
-  worker: "Worker",
-  judge: "Judge",
-  "check-in": "Check-in",
-  "pr-author": "PR author",
-  orchestrator: "Orchestrator",
-};
-
 function roleLabel(
   agentRole: AgentRole,
   transportRole: Attribution["transportRole"],
 ): string {
   // Nested lint work is grouped under its worker, so its transport is what names it.
-  return transportRole === "llmlint" ? "Lint" : ROLE_LABELS[agentRole];
+  return dispatchRoleLabel(
+    transportRole === LLMLINT_TRANSPORT ? LLMLINT_TRANSPORT : agentRole,
+  );
 }

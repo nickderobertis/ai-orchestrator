@@ -134,9 +134,9 @@ const LANE_BY_SPAN_KIND: Readonly<Record<TimelineSpanKind, LaneId | null>> = {
  * lint transport, which is the worker's own verification told apart from the worker
  * by nothing else.
  */
-type DispatchRole = AgentRole | typeof LLMLINT_TRANSPORT;
+export type DispatchRole = AgentRole | typeof LLMLINT_TRANSPORT;
 
-const LLMLINT_TRANSPORT = "llmlint";
+export const LLMLINT_TRANSPORT = "llmlint";
 
 /**
  * The lane each of those roles is plotted in.
@@ -167,6 +167,19 @@ const OPENS_DISPATCH: Readonly<Record<DispatchRole, boolean>> = {
   judge: false,
   llmlint: false,
 };
+
+/**
+ * What one dispatch role is called wherever the operator meets it: the lane legend,
+ * the transcript's eyebrow, and the header of the conversation it opens.
+ *
+ * The lane vocabulary above is the one source of those words. A second table of them
+ * beside the conversation panel would agree with this one only for as long as nobody
+ * renamed a role in one place — and every test would stay green while the plot and
+ * the transcript it is read against called the same session two different things.
+ */
+export function dispatchRoleLabel(role: DispatchRole): string {
+  return LANE_LABELS[LANE_BY_ROLE[role]];
+}
 
 /** What each aggregated journal kind is called; `rollup` is never a word here. */
 const ROLLUP_LABELS: Readonly<Record<string, string>> = {

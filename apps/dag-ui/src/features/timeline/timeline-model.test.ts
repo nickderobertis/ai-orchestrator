@@ -4,8 +4,11 @@ import { busyTimeline, LIVE_RUN, runTimeline } from "../../test/fixtures";
 import {
   compactTimelineItems,
   compactTimelineMarkers,
+  type DispatchRole,
+  dispatchRoleLabel,
   findRow,
   GROUP_THRESHOLD,
+  NODE_LANES,
   nodeTimeline,
   nodeTimelineV2,
   pathTo,
@@ -52,6 +55,33 @@ describe("one node's slice of the run timeline", () => {
       displayKind: "Lock waits",
       displayLabel: "Lock waits: 1240 recorded",
     });
+  });
+
+  test("calls a session the same word in the plot and wherever it is opened", () => {
+    // Every served role, and the word the operator reads for it. The conversation
+    // panel heads an opened session with this same call, so the two surfaces cannot
+    // drift into naming one session two things: there is one vocabulary, not a copy
+    // of it beside each surface that reads it.
+    const roles: readonly DispatchRole[] = [
+      "worker",
+      "judge",
+      "llmlint",
+      "orchestrator",
+      "check-in",
+      "pr-author",
+    ];
+    expect(roles.map(dispatchRoleLabel)).toEqual([
+      "Worker",
+      "Judge",
+      "Lint",
+      "Orchestrator",
+      "Check-in",
+      "PR author",
+    ]);
+    // And each is a word the plot's own legend really shows, rather than a synonym
+    // of one that would read as a category the reader never saw named.
+    const legend = NODE_LANES.map(({ label }) => label);
+    for (const role of roles) expect(legend).toContain(dispatchRoleLabel(role));
   });
 
   test("gathers one dispatch's agent, lint, and judge sessions under it", () => {
