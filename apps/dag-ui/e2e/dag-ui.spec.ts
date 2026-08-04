@@ -1438,7 +1438,7 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   const navigation = page.getByRole("navigation", { name: "DAG runs" });
   const metrics = page.locator(".metric");
   /**
-   * Whether the whole reading fits the viewport it was given, in both axes.
+   * Which way, if either, the whole reading spills out of the viewport it was given.
    *
    * A view that overflows the document does not merely look wrong: the widest row
    * sized the working area and clipped every other one against the right edge, and
@@ -1446,7 +1446,7 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
    * `scrollIntoView` the transcript makes — taking the navigation and the pinned
    * timeline off screen with it.
    */
-  const fitsViewport = async () =>
+  const viewportOverflow = async () =>
     page.evaluate(() => {
       const root = document.documentElement;
       return {
@@ -1457,7 +1457,7 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  expect(await fitsViewport()).toEqual({
+  expect(await viewportOverflow()).toEqual({
     overflowsX: false,
     overflowsY: false,
   });
@@ -1485,7 +1485,7 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   // Below the layout's breakpoint the six named readings scroll their own tab list
   // rather than widening the view that holds them.
-  expect(await fitsViewport()).toEqual({
+  expect(await viewportOverflow()).toEqual({
     overflowsX: false,
     overflowsY: false,
   });
@@ -1504,7 +1504,7 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   await page.getByRole("button", { name: "Close detail" }).click();
   // The panel opened and closed over the view without ever giving the document
   // somewhere to scroll to.
-  expect(await fitsViewport()).toEqual({
+  expect(await viewportOverflow()).toEqual({
     overflowsX: false,
     overflowsY: false,
   });
