@@ -259,14 +259,16 @@ def _isolated_codex_alt_home(tmp_path: Path) -> str:
     return str(home)
 
 
-def _codex_alt_home() -> str:
-    """Derive the alternate Codex home from its one source.
+def _ensure_codex_alt_home() -> str:
+    """Derive the real alternate Codex home, CREATING it (mode 700) when it is absent.
 
-    `codex:alternate` maps CODEX_HOME from this indirection and oneharness refuses to
-    start whenever a selected variant's indirection is unset, which is why every
-    dispatch wrapper sources this helper. This turn drives the CLI directly rather
-    than through a wrapper, so it sources the same helper instead of re-deriving the
-    path a second way.
+    `ensure`, like the helper it delegates to: scripts/codex-alt-home.sh is named that
+    way because deriving this path has a filesystem side effect, and this is the real
+    `$HOME/.codex-alt` rather than a temporary one. `codex:alternate` maps CODEX_HOME
+    from this indirection and oneharness refuses to start whenever a selected variant's
+    indirection is unset, which is why every dispatch wrapper sources that helper. This
+    turn drives the CLI directly rather than through a wrapper, so it sources the same
+    helper instead of re-deriving the path — and its side effect — a second way.
     """
     derived = subprocess.run(
         [
@@ -304,7 +306,7 @@ def _codex_smoke_turn(
         }
     )
     if "ORCHESTRATOR_CODEX_ALT_HOME" not in overrides:
-        environment["ORCHESTRATOR_CODEX_ALT_HOME"] = _codex_alt_home()
+        environment["ORCHESTRATOR_CODEX_ALT_HOME"] = _ensure_codex_alt_home()
     environment.update(overrides)
     return _run_record(
         oneharness_bin,
