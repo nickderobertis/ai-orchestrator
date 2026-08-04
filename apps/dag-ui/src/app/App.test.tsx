@@ -606,8 +606,8 @@ describe("DAG application", () => {
       screen.queryByText("This node has no recorded timeline yet."),
     ).toBeNull();
 
-    // It arrives with no item named in the address, so the detail region says how
-    // to read one rather than standing empty beside a full rail.
+    // It arrives with no item named in the address, so the reading an operator
+    // lands on is the transcript itself rather than an empty pane beside a plot.
     release(Response.json(runTimeline(LIVE_RUN)));
     expect(
       await screen.findByRole("region", { name: "Node transcript" }),

@@ -881,7 +881,8 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
   ).toBeVisible();
   await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
 
-  // And one session's own turns are paged the same way inside the detail region.
+  // And one long session's own turns are handed out a page at a time in the panel,
+  // so opening it does not render thirty of them at once either.
   await page
     .getByRole("article")
     .filter({ hasText: /engineer-sweep-7\b/ })
@@ -1466,7 +1467,8 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     .click();
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(280);
-  // The visualization receives enough width for bars while detail remains larger.
+  // The plot keeps the full working width for its bars, and whatever is opened over
+  // it takes two thirds of that width — enough to read a turn in.
   expect(await width(rail(page))).toBeGreaterThan(380);
   expect((await width(itemDetail(page))) ?? 0).toBeCloseTo(
     (1400 - 280) * (2 / 3),
