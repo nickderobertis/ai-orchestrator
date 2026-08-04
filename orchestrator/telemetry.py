@@ -150,8 +150,14 @@ class HistoryRecord(TypedDict, total=False):
     project: str
     timestamp: str
     harness: str
+    #: The variant-qualified identity, e.g. ``claude-code:alternate2``. Two records
+    #: in one session can name the same ``harness`` and differ only here, which is
+    #: exactly the case a fallback chain records.
+    harness_id: str
     prompt: str
     status: str
+    #: How oneharness classified a candidate's failure, when it classified one.
+    failure_kind: str | None
     exit_code: int
     duration_ms: int
     model_ms: int
@@ -786,7 +792,54 @@ def _launch_usage_failure(value: object) -> str | None:
     return None
 
 
-def history_session_launch_failure(session: HistorySession) -> str | None:
+#: What a session with no run record at all is reported as. Named because the
+#: caller that splits a chain into fallen-through candidates and a selected record
+#: has no record to hold to the bar below, and must still say this same thing.
+NO_LAUNCH_RECORD_FAILURE = "recorded no harness run"
+#: The failure kinds `run_mode = "fallback"` moves past. A candidate that could not
+#: run the task *at all* is recorded and handed on to the next identity, so these
+#: are the shape of a healthy chain rather than of a broken launch. `rate_limit` is
+#: deliberately absent: oneharness stops the chain on one, because that record
+#: carries work the provider already billed for — see
+#: `tests/e2e/test_quota_fallthrough_e2e.py`.
+FALLTHROUGH_FAILURE_KINDS: frozenset[str] = frozenset({"quota", "auth"})
+#: The status of a candidate the chain never even started, which spends nothing and
+#: classifies nothing; being skipped is its own reason.
+SKIPPED_STATUS = "skipped"
+
+
+def history_record_identity(record: HistoryRecord) -> str:
+    """Name the identity a record was written for, as a chain selects identities.
+
+    `harness_id` rather than `harness`, because a chain's two Claude subscriptions
+    are one harness and differ only by variant: reporting the harness would say
+    "claude-code fell through to claude-code".
+    """
+    identity = record.get("harness_id")
+    if isinstance(identity, str) and identity:
+        return identity
+    harness = record.get("harness")
+    return harness if isinstance(harness, str) and harness else "an unidentified harness"
+
+
+def history_record_fallthrough_reason(record: HistoryRecord) -> str | None:
+    """Why the fallback chain moved past this candidate, or ``None`` if it did not.
+
+    A reason here is evidence the chain worked, not evidence the launch path is
+    broken: the candidate refused the turn without running it and the next identity
+    was offered the same task.
+    """
+    kind = record.get("failure_kind")
+    if isinstance(kind, str) and kind in FALLTHROUGH_FAILURE_KINDS:
+        return kind
+    if record.get("status") == SKIPPED_STATUS:
+        return SKIPPED_STATUS
+    return None
+
+
+def history_session_launch_failure(
+    session: HistorySession, records: list[HistoryRecord] | None = None
+) -> str | None:
     """Why a session fails the real-harness launch contract, or ``None`` if it holds.
 
     This is the launch guard, deliberately weaker than ``validated_native_fields``.
@@ -805,12 +858,17 @@ def history_session_launch_failure(session: HistorySession) -> str | None:
     itself, so it never depends on what the provider reports), and well-formed
     token accounting. Optional values that ARE present are still validated —
     ``_summarize_session`` rejects malformed or contradictory timing.
+
+    ``records`` narrows the guard to a subset of the session's own records. A
+    fallback chain records every candidate it attempted, and only the one it
+    *selected* is held to this bar; the caller that made that distinction passes
+    the record it made it about, rather than having it re-read here.
     """
-    records = cast(list[HistoryRecord], session_records(session))
+    records = cast(list[HistoryRecord], session_records(session) if records is None else records)
     # Raises on a malformed or self-contradictory value the harness did report.
     _summarize_session(session, records)
     if not records:
-        return "recorded no harness run"
+        return NO_LAUNCH_RECORD_FAILURE
     for record in records:
         schema_version = record.get("schema_version")
         if schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:

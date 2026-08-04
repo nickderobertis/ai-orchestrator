@@ -8,9 +8,15 @@ from pathlib import Path
 
 import pytest
 from harness_records import (
+    AUTH_REFUSAL,
+    CLAUDE_ALTERNATE2_RECORD,
     CLAUDE_RECORD,
     CODEX_RECORD,
+    QUOTA_REFUSAL,
+    RATE_LIMITED_RECORD,
+    SKIPPED_CANDIDATE,
     reported_usage,
+    smoke_history_chain,
     smoke_history_record,
 )
 
@@ -30,6 +36,11 @@ def _record(path: Path, shape: dict[str, object] = CLAUDE_RECORD, **overrides: o
         json.dumps(smoke_history_record(shape, **overrides)) + "\n",
         encoding="utf-8",
     )
+
+
+def _chain(path: Path, *shapes: dict[str, object], **overrides: object) -> None:
+    """Persist one session recording every candidate a fallback chain attempted."""
+    path.write_text(smoke_history_chain(*shapes, **overrides), encoding="utf-8")
 
 
 def _session(tmp_path: Path, history: Path) -> HistorySession:
@@ -55,7 +66,7 @@ def test_run_smoke_validates_prompt_and_launch_contract(
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
     assert smoke.run_smoke() == smoke.SmokeResult(
-        str(shape["harness"]), reported_usage(shape)["cost_usd"]
+        str(shape["harness_id"]), reported_usage(shape)["cost_usd"]
     )
 
 
@@ -76,7 +87,10 @@ def test_validation_mode_loads_isolated_store_through_public_cli(tmp_path: Path,
     assert len(sessions) == 1
     assert sessions[0].labels == {"role": "agent", "smoke": "smoke-id"}
     assert smoke.main(["--validate-history", str(tmp_path), "--smoke-id", "smoke-id"]) == 0
-    assert "smoke: passed via claude-code (recorded cost: $0.063882)" in capsys.readouterr().out
+    assert (
+        "smoke: passed via claude-code:alternate (recorded cost: $0.063882)"
+        in capsys.readouterr().out
+    )
 
 
 @pytest.mark.parametrize("reported_cost", ["malformed", math.inf, -math.inf, math.nan])
@@ -199,6 +213,120 @@ def test_run_smoke_pays_for_one_turn_when_the_recorded_contract_is_broken(
         smoke.run_smoke()
 
     assert len(launches) == 1
+
+
+def test_run_smoke_passes_on_the_record_of_the_identity_the_chain_selected(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A refused subscription the chain moved past is the fallback working.
+
+    This is the host as it stands: `claude-code:alternate` is out of weekly quota
+    and `claude-code:alternate2` serves the turn. Reading the refusal as launch
+    breakage failed this smoke — and with it every push whose diff touches
+    `scripts/` — while the launch path was healthy the whole time.
+    """
+    history = tmp_path / "history.jsonl"
+    _chain(history, QUOTA_REFUSAL, CLAUDE_ALTERNATE2_RECORD)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    assert smoke.main([]) == 0
+
+    out = capsys.readouterr().out
+    # Named, not swallowed: which subscription is gone is the operator's business
+    # even when the verdict is a pass.
+    assert "smoke: fell through claude-code:alternate (quota)" in out
+    assert "handed the turn to the next identity" in out
+    assert "smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)" in out
+
+
+@pytest.mark.parametrize(
+    ("refusal", "reason"),
+    [(QUOTA_REFUSAL, "quota"), (AUTH_REFUSAL, "auth"), (SKIPPED_CANDIDATE, "skipped")],
+    ids=["quota", "auth", "skipped"],
+)
+def test_run_smoke_accepts_every_refusal_the_chain_moves_past(
+    tmp_path: Path, monkeypatch, refusal: dict[str, object], reason: str
+) -> None:
+    """Each of these candidates declined the task without running it."""
+    history = tmp_path / "history.jsonl"
+    _chain(history, refusal, CODEX_RECORD)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    assert smoke.run_smoke() == smoke.SmokeResult(
+        "codex",
+        None,
+        fell_through=(smoke.FellThrough(str(refusal["harness_id"]), reason),),
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"status": "error"}, r"records status 'error' with exit code 0"),
+        ({"prompt": "a different task"}, "did not receive the dispatched task"),
+        ({"usage": reported_usage(CODEX_RECORD, input_tokens=None)}, "reports no input_tokens"),
+    ],
+)
+def test_run_smoke_holds_the_selected_record_to_the_whole_bar_after_a_fall_through(
+    tmp_path: Path, monkeypatch, overrides: dict[str, object], message: str
+) -> None:
+    """Falling through excuses the candidate, never the identity that then ran."""
+    history = tmp_path / "history.jsonl"
+    _chain(history, QUOTA_REFUSAL, {**CODEX_RECORD, **overrides})
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    with pytest.raises(HistoryError, match=message):
+        smoke.run_smoke()
+
+
+def test_run_smoke_rejects_a_candidate_that_failed_for_an_unclassified_reason(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`rate_limit` carries billed work, so the chain stops on it rather than moving on.
+
+    A record like this one *ahead* of another therefore describes a chain that did
+    something it does not do — which is launch breakage, not fallback.
+    """
+    history = tmp_path / "history.jsonl"
+    _chain(history, RATE_LIMITED_RECORD, CODEX_RECORD)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    with pytest.raises(
+        HistoryError,
+        match=(
+            "real harness candidate claude-code:alternate failed unclassified with "
+            "status 'nonzero' and exit code 1"
+        ),
+    ):
+        smoke.run_smoke()
+
+
+def test_run_smoke_rejects_a_chain_with_no_candidate_left_to_run_the_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Every identity refusing is the outage this smoke must still report."""
+    history = tmp_path / "history.jsonl"
+    _chain(history, QUOTA_REFUSAL, AUTH_REFUSAL)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    with pytest.raises(
+        HistoryError,
+        match=(
+            "no candidate left to run the task: claude-code:alternate \\(quota\\), "
+            "claude-code:alternate2 \\(auth\\); restore one of these identities"
+        ),
+    ):
+        smoke.run_smoke()
 
 
 def test_run_smoke_rejects_missing_matching_history(monkeypatch) -> None:

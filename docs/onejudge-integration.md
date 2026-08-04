@@ -448,6 +448,40 @@ Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; every other pushed diff
 skips it.
 
+### The record a fallback chain is judged by
+
+`run_mode = "fallback"` records **every candidate it attempts**, in priority order,
+and stops at the first that can actually run the task — so one turn can leave
+several records in one session, and only the last of them is the launch path's
+outcome. The smoke judges that one: it is held to the whole bar above, and the
+records ahead of it are read as the chain doing its job. Holding all of them to
+that bar is what failed this smoke for weeks of healthy launches while
+`claude-code:alternate`'s weekly quota was gone and `claude-code:alternate2` served
+every turn — and, because the pre-push hook selects this smoke for any diff
+touching `scripts/`, it blocked publication of work that had already passed its
+gate.
+
+A candidate only counts as fallen through when its own record says it never ran the
+task: `failure_kind` of `quota` or `auth`
+(`orchestrator.telemetry.FALLTHROUGH_FAILURE_KINDS`), or a `skipped` status, which
+carries no exit code, no duration, and no accounting at all. `rate_limit` is
+deliberately not in that set — oneharness stops the chain on one, because that
+record carries work the provider already billed for (see
+`tests/e2e/test_quota_fallthrough_e2e.py`) — so a `rate_limit` record ahead of
+another describes something the chain does not do, and fails the smoke as an
+unclassified candidate failure. A chain whose *every* candidate refused fails too,
+naming each identity and its reason so the operator knows which subscription to
+restore. A pass names the fallen-through candidates on their own lines, above the
+verdict:
+
+```
+smoke: fell through claude-code:alternate (quota); the fallback chain handed the turn to the next identity
+smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)
+```
+
+Both lines name the *identity* rather than the harness, because a chain's two
+Claude subscriptions are one harness and differ only by variant.
+
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
 `--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.

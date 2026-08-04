@@ -17,9 +17,14 @@ from pathlib import Path
 import pytest
 from fake_codex import provider_environment
 from harness_records import (
+    AUTH_REFUSAL,
+    CLAUDE_ALTERNATE2_RECORD,
     CLAUDE_RECORD,
     CODEX_RECORD,
+    QUOTA_REFUSAL,
+    RATE_LIMITED_RECORD,
     reported_usage,
+    smoke_history_chain,
     smoke_history_record,
 )
 from waits import timeout as e2e_timeout
@@ -49,6 +54,25 @@ def _record(
     )
     path = project / f"smoke-{suffix}-20260725T000000Z-{history_id}.jsonl"
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+
+def _chain(
+    history_dir: Path, smoke_id: str, *shapes: dict[str, object], suffix: str = "chain"
+) -> None:
+    """Persist one session recording every candidate a fallback chain attempted.
+
+    One file, because that is how oneharness stores one turn's chain: the candidates
+    it refused and the one it selected are records of the same session, in the order
+    it tried them.
+    """
+    project = history_dir / "tmp-smoke-target"
+    project.mkdir(parents=True, exist_ok=True)
+    history_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{smoke_id}-{suffix}"))
+    path = project / f"smoke-{suffix}-20260725T000000Z-{history_id}.jsonl"
+    path.write_text(
+        smoke_history_chain(*shapes, smoke_id=smoke_id, session=f"smoke-{suffix}"),
+        encoding="utf-8",
+    )
 
 
 def _usage(**overrides: object) -> dict[str, object]:
@@ -246,7 +270,7 @@ def test_validation_command_rejects_a_session_that_never_reached_a_harness(tmp_p
     ("harness", "shape", "rendered_cost"),
     [
         ("codex", CODEX_RECORD, "unreported"),
-        ("claude-code", CLAUDE_RECORD, "$0.063882"),
+        ("claude-code:alternate", CLAUDE_RECORD, "$0.063882"),
     ],
 )
 def test_validation_command_accepts_each_real_harness_record_shape(
@@ -260,6 +284,66 @@ def test_validation_command_accepts_each_real_harness_record_shape(
 
     assert result.returncode == 0, result.stderr
     assert f"smoke: passed via {harness} (recorded cost: {rendered_cost})" in result.stdout
+
+
+def test_validation_command_passes_a_chain_that_fell_through_a_refused_candidate(
+    tmp_path: Path,
+) -> None:
+    """The public command reads the launch path's outcome off the selected record.
+
+    This is the shape this host writes today: `claude-code:alternate` is out of
+    weekly quota, the chain hands the turn to `claude-code:alternate2`, and both
+    records land in one session. Failing on the refusal blocked every push whose
+    diff selects this smoke, for a launch path that was working.
+    """
+    smoke_id = "fell-through"
+    _chain(tmp_path, smoke_id, QUOTA_REFUSAL, CLAUDE_ALTERNATE2_RECORD)
+
+    result = _validate(tmp_path, smoke_id)
+
+    assert result.returncode == 0, result.stderr
+    assert "smoke: fell through claude-code:alternate (quota)" in result.stdout
+    assert "smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("case", "shapes", "diagnostic"),
+    [
+        (
+            "selected-failed",
+            (QUOTA_REFUSAL, {**CODEX_RECORD, "status": "error"}),
+            "records status 'error' with exit code 0",
+        ),
+        (
+            "selected-unaccounted",
+            (QUOTA_REFUSAL, {**CODEX_RECORD, "usage": None}),
+            "reports no token accounting",
+        ),
+        (
+            "unclassified-candidate",
+            (RATE_LIMITED_RECORD, CODEX_RECORD),
+            "real harness candidate claude-code:alternate failed unclassified",
+        ),
+        (
+            "chain-exhausted",
+            (QUOTA_REFUSAL, AUTH_REFUSAL),
+            "no candidate left to run the task: claude-code:alternate (quota), "
+            "claude-code:alternate2 (auth)",
+        ),
+    ],
+)
+def test_validation_command_still_fails_a_chain_that_did_not_run_the_task(
+    tmp_path: Path, case: str, shapes: tuple[dict[str, object], ...], diagnostic: str
+) -> None:
+    """Falling through excuses the candidate, never the launch path's own outcome."""
+    smoke_id = f"chain-{case}"
+    _chain(tmp_path, smoke_id, *shapes, suffix=case)
+
+    result = _validate(tmp_path, smoke_id)
+
+    assert result.returncode == 1
+    assert diagnostic in result.stderr
+    assert "rerun 'just smoke'" in result.stderr
 
 
 def test_validation_command_rejects_multiple_matching_sessions(tmp_path: Path) -> None:
