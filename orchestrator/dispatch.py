@@ -385,14 +385,19 @@ def recordable_provider_failure(attribution: ProviderFailure | None) -> bool:
     it had dropped has already said something no generic worker-died conveys — and
     withholding that because it wrote only "claude", which could be any of three
     configured identities, would put it back in the bucket this work exists to empty.
-    An unclassified exit still has to carry evidence: the harness's own structured
-    payload, or at least a configured identity to attribute it to.
+
+    An unclassified exit is held to the harness's own structured payload, and an
+    identity name in the prose is deliberately *not* accepted in its place. Naming a
+    harness is not refusing: "harness codex cannot write v1.0 history telemetry" is
+    an infrastructure failure that happens to say both words, and taking it for a
+    refusal both misattributes it and swallows the terminal blocker it should have
+    raised. Only a payload the harness emitted about its own exit is evidence of one.
     """
     if not attribution:
         return False
     if attribution.get("cause") != "harness_exit":
         return True
-    return "structured_error" in attribution or attribution.get("identity") != "unknown"
+    return "structured_error" in attribution
 
 
 @dataclass(frozen=True)

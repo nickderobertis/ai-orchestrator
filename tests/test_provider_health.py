@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator import provider_health
-from orchestrator.dispatch import classify_provider_failure
+from orchestrator.dispatch import classify_provider_failure, recordable_provider_failure
 from orchestrator.journal import NodeId, open_journal
 from orchestrator.next_round import main_runs
 from orchestrator.provider_health import IDENTITIES, failure_rollups, probe, render
@@ -52,6 +52,33 @@ def test_provider_failure_vocabulary_and_bounded_payload() -> None:
         "subtype": "error_during_execution",
         "errors": ["first failure", "second failure"],
     }
+
+
+def test_naming_a_harness_is_not_refusing() -> None:
+    """An infrastructure failure that says "harness" and an identity is not a refusal.
+
+    These are the exact strings the orchestrator's infrastructure-failure journeys
+    drive, and each must stay a terminal blocker. Swallowing one as a recorded
+    provider refusal replaces the surface a planner has to answer with a node that
+    quietly failed — and attributes an unrelated outage to a live subscription.
+    Only a payload the harness emitted about its own exit is evidence of a refusal.
+    """
+    for prose in (
+        "harness codex cannot write v1.0 history telemetry",
+        "harness claude-code cannot write v0.3 history telemetry",
+        "harness failed (auth): login required",
+    ):
+        classified = classify_provider_failure(prose)
+        assert classified is not None and classified["cause"] == "harness_exit", prose
+        assert not recordable_provider_failure(classified), prose
+
+    # The same unclassified exit *is* recorded once the harness says something about
+    # it — which is the evidence, not the identity that appears in the prose.
+    payload = classify_provider_failure(
+        'codex harness exited 1 {"subtype":"error_during_execution","errors":["stream closed"]}'
+    )
+    assert payload is not None and payload["cause"] == "harness_exit"
+    assert recordable_provider_failure(payload)
 
 
 def test_a_refusal_is_only_ever_attributed_to_a_configured_identity() -> None:
