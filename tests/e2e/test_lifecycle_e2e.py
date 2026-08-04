@@ -861,6 +861,31 @@ def test_a_workstream_whose_relaunches_all_die_names_the_launch_path(tmp_path, b
     assert "just smoke" in result.detail
 
 
+class _CancelLandingDuringTheBackoff(threading.Event):
+    """A round cancellation that arrives while the relaunch backoff is waiting.
+
+    That window is the whole subject of the test below, and it used to be aimed at
+    from outside with a short ``threading.Timer``: a race the timer thread loses
+    whenever this host is busy, failing a green tree with no defect present. The
+    backoff performs the one ``wait`` on this event, so setting it from inside that
+    call puts the cancellation in the window by construction — no thread to starve
+    and no wall clock to read. Each wait records the interval it was asked for and
+    whether it returned woken (``True``) or expired (``False``).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.backoffs: list[float | None] = []
+        self.wakes: list[bool] = []
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.backoffs.append(timeout)
+        self.set()
+        woken = super().wait(timeout)
+        self.wakes.append(woken)
+        return woken
+
+
 def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_origin) -> None:
     """The round is already closing; the backoff must not hold the branch hostage.
 
@@ -871,17 +896,13 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-cancelled-backoff")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
-    cancel = threading.Event()
+    cancel = _CancelLandingDuringTheBackoff()
     launches: list[str] = []
 
     def dying_under_cancellation(persona: str, task: str, **_: object) -> Report:
         launches.append(persona)
-        # Cancellation lands while the backoff below is already waiting, which is
-        # the window the event has to be able to interrupt.
-        threading.Timer(0.05, cancel.set).start()
         return _launch_death(persona)
 
-    started = time.monotonic()
     result = run_repo_task(
         str(canonical),
         "## What\nTier the workspace.\n\n## Why\nThe suite reruns work it proved.\n",
@@ -892,11 +913,14 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
         recorded_gate=["true"],
         cancel=cancel,
     )
-    elapsed = time.monotonic() - started
 
     assert result.outcome == "not-completed", result.detail
-    # Woken, not expired: the full backoff was never spent.
-    assert elapsed < RELAUNCH_BACKOFF_SECONDS, elapsed
+    # The backoff was waited on the event rather than slept through, once, for the
+    # first relaunch's interval.
+    assert cancel.backoffs == [RELAUNCH_BACKOFF_SECONDS]
+    # Woken, not expired: the wait returned on the cancellation, so the full
+    # interval was never spent — whatever the host's speed.
+    assert cancel.wakes == [True]
     # And the cancelled round did not launch one more dispatch on the way out.
     assert launches == ["engineer"]
     # The round decided this stop, so it is reported as the cancellation it was —
