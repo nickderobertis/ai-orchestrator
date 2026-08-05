@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from fake_claude_code import chain_environment
+from fake_claude_code import Refusal, chain_environment
 from fake_codex import provider_environment, uninstalled_provider_environment
 from waits import timeout as e2e_timeout
 
@@ -42,7 +42,7 @@ FAKE_CODEX = REPO_ROOT / "tests" / "e2e" / "fake_codex.py"
 
 
 def _run_smoke(
-    tmp_path: Path, *, omit_usage: bool = False, refusal: str = "quota"
+    tmp_path: Path, *, omit_usage: bool = False, refusal: Refusal = "quota"
 ) -> subprocess.CompletedProcess[str]:
     """Run the public recipe against a chain that must never reach a paid provider."""
     return subprocess.run(
@@ -103,7 +103,7 @@ def test_no_smoke_journey_inherits_the_dispatch_s_harness_pin(
 
 @pytest.mark.parametrize("refusal", ["quota", "auth", "skipped"])
 def test_smoke_passes_when_the_chain_falls_through_a_refused_candidate(
-    tmp_path: Path, refusal: str
+    tmp_path: Path, refusal: Refusal
 ) -> None:
     """A refused subscription the chain moved past is the fallback working.
 

@@ -26,8 +26,14 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Literal
 
 from fake_codex import unpinned_worker_side
+
+#: The three ways a chain's first candidate can step aside, as a closed set: a
+#: misspelled one is a type error rather than a silent fall back to the quota shape
+#: here and to the installed-binary branch in `chain_environment`.
+Refusal = Literal["quota", "auth", "skipped"]
 
 #: The zero-work subscription rejection, in Claude Code's own wire shape. Spelled
 #: the way the provider spells it (`camelCase` `modelUsage`, an empty `result`)
@@ -64,7 +70,7 @@ def chain_environment(
     codex_bin: Path,
     attempt_log: Path,
     omit_usage: bool = False,
-    refusal: str = "quota",
+    refusal: Refusal = "quota",
 ) -> dict[str, str]:
     """Point a real `just smoke` at a chain whose first candidate refuses the turn.
 
