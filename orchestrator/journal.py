@@ -795,7 +795,8 @@ UNTRACKED_RUN_PREFIX = "repo-task-"
 class NullNodeJournal:
     """Node-scoped no-op for a lifecycle run outside any tracked graph.
 
-    A bare ``just repo-task`` has no run directory, round, or graph node, so there
+    A `run_repo_task` reached outside a tracked round — a recovery, or a caller
+    driving the unit directly — has no run directory, round, or graph node, so there
     is nothing to record against and `append` stays a no-op.
 
     It still *labels*, and that is not a contradiction. Recording is about a ledger

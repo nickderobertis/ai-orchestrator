@@ -40,7 +40,8 @@ from orchestrator.channel import (
     write_message,
 )
 from orchestrator.config import build_effective_config, load_yaml
-from orchestrator.dispatch import DispatchError, dispatch, main, run_onejudge
+from orchestrator.dispatch import DispatchError, dispatch, run_onejudge
+from orchestrator.graph import main as run_plan_main
 from orchestrator.watchdog import ProcessId, process_activity
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -146,18 +147,40 @@ def test_real_onejudge_sdk_and_cli_match_adopted_contract(
     assert "--format <FORMAT>" in run_help.stdout
 
 
-def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, onejudge_bin) -> None:
-    task = 'complete-now: preserve spaces, (parentheses), and "quotes".'
-    done_when = 'matches when (a) and (b), including "quoted text"'
+def test_just_run_plan_preserves_metacharacter_laden_arguments(
+    command_base, onejudge_bin, tmp_path
+) -> None:
+    """The recipe forwards `"$@"` verbatim, including a plan path that needs quoting.
+
+    The task and its `done_when` now travel inside the plan file rather than as
+    argv, so both halves are stated here: metacharacters in the plan's own path,
+    which the recipe still has to forward intact, and metacharacters in the node's
+    task text, which has to reach the agent unchanged.
+    """
+    plan = tmp_path / 'plan (with "quotes") & spaces.json'
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "solo",
+                        "persona": "engineer",
+                        "task": 'complete-now: preserve spaces, (parentheses), and "quotes".',
+                        "done_when": 'matches when (a) and (b), including "quoted text"',
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     subject = subprocess.run(
         [
             "just",
-            "dispatch",
-            "engineer",
-            task,
-            "--done-when",
-            done_when,
+            "run-plan",
+            str(plan),
+            "--no-record",
             "--base",
             str(command_base()),
             "--onejudge-bin",
@@ -171,7 +194,7 @@ def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, one
     )
 
     assert subject.returncode == 0, subject.stderr
-    assert json.loads(subject.stdout)["schema_version"] == 5
+    assert json.loads(subject.stdout)["results"]["solo"]["status"] == "done"
 
 
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
@@ -604,11 +627,26 @@ def test_dispatch_rejects_unsafe_persona_names(persona, command_base, onejudge_b
         dispatch(persona, "x", base_path=command_base(), onejudge_bin=onejudge_bin)
 
 
-def test_dispatch_cli_json_output(command_base, onejudge_bin, capsys) -> None:
-    rc = main(
+def _one_node_plan(tmp_path: Path, **node: object) -> Path:
+    """Write the plan file a single direct dispatch is now expressed as."""
+    plan = tmp_path / "one-node.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [{"id": "solo", "persona": "reviewer", "task": "Review the diff."} | node],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan
+
+
+def test_one_node_plan_cli_json_output(command_base, onejudge_bin, tmp_path, capsys) -> None:
+    rc = run_plan_main(
         [
-            "reviewer",
-            "Review the diff.",
+            str(_one_node_plan(tmp_path)),
+            "--no-record",
             "--base",
             str(command_base()),
             "--onejudge-bin",
@@ -618,23 +656,24 @@ def test_dispatch_cli_json_output(command_base, onejudge_bin, capsys) -> None:
         ]
     )
     assert rc == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["schema_version"] == 5
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 5
+    assert payload["results"]["solo"]["completed"] is True
 
 
-def test_dispatch_cli_human_reads_task_from_stdin(command_base, onejudge_bin, capsys) -> None:
-    import io
-
-    original_stdin = sys.stdin
-    sys.stdin = io.StringIO("Document the API.")  # drive the real `--task -` stdin path
-    try:
-        rc = main(
-            ["docs-writer", "-", "--base", str(command_base()), "--onejudge-bin", onejudge_bin]
-        )
-    finally:
-        sys.stdin = original_stdin
+def test_one_node_plan_cli_human_output(command_base, onejudge_bin, tmp_path, capsys) -> None:
+    rc = run_plan_main(
+        [
+            str(_one_node_plan(tmp_path, persona="docs-writer", task="Document the API.")),
+            "--no-record",
+            "--base",
+            str(command_base()),
+            "--onejudge-bin",
+            onejudge_bin,
+        ]
+    )
     assert rc == 0
-    assert "completed" in capsys.readouterr().out
+    assert "done" in capsys.readouterr().out
 
 
 def test_dispatch_provider_override(command_base, onejudge_bin) -> None:
@@ -660,19 +699,24 @@ class BindingRejection(NamedTuple):
     session: str
 
 
-def test_dispatch_preserves_real_onejudge_failure_status_and_stderr(
+def test_a_failed_node_preserves_the_real_onejudge_failure_detail(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    """The binding backend's exact failure must survive watchdog termination."""
+    """The binding backend's exact failure must survive watchdog termination.
+
+    The round fails rather than the command refusing, so the detail the watchdog
+    had to keep is on the node it belongs to — which is where a planner reads it.
+    """
     rejection = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
 
-    assert rejection.process.returncode == 2, (
+    assert rejection.process.returncode == 1, (
         f"operator stderr={rejection.process.stderr!r}\noperator report={rejection.process.stdout}"
     )
-    assert f"`{rejection.session}-skill` was created on harness `codex`" in rejection.process.stderr
-    assert "cannot be continued on `claude-code`" in rejection.process.stderr
-    assert "exit 255" not in rejection.process.stderr
-    assert "<no stderr>" not in rejection.process.stderr
+    detail = json.loads(rejection.process.stdout)["results"]["solo"]["error"]
+    assert f"`{rejection.session}-skill` was created on harness `codex`" in detail
+    assert "cannot be continued on `claude-code`" in detail
+    assert "exit 255" not in detail
+    assert "<no stderr>" not in detail
 
 
 def _split_oneharness_fixture(tmp_path: Path, oneharness_bin: str) -> SplitHarnessFixture:
@@ -704,11 +748,31 @@ def _split_oneharness_fixture(tmp_path: Path, oneharness_bin: str) -> SplitHarne
     return SplitHarnessFixture(target, base_path, env, invocation_log)
 
 
+def _written_plan(plan_path: Path, *nodes: dict[str, object]) -> Path:
+    """Write the plan file the dispatch below runs, and return its path."""
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "concurrency": len(nodes),
+                "tasks": [{"persona": "engineer"} | node for node in nodes],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan_path
+
+
 def _dispatch_command(
-    onejudge_bin: str, target: Path, base_path: Path, task: str, *extra: str
+    onejudge_bin: str,
+    target: Path,
+    base_path: Path,
+    plan_path: Path,
+    *extra: str,
 ) -> list[str]:
+    """The command a single dispatch is now run as: a one-node plan under run-plan."""
     source_override = os.environ.get("DISPATCH_E2E_SOURCE_ROOT")
-    executable = [str(Path(onejudge_bin).with_name("orchestrator-dispatch"))]
+    executable = [str(Path(onejudge_bin).with_name("orchestrator-run-plan"))]
     if source_override:
         executable = [
             os.environ.get("DISPATCH_E2E_PYTHON", sys.executable),
@@ -716,14 +780,14 @@ def _dispatch_command(
             (
                 "import sys;"
                 f"sys.path.insert(0, {source_override!r});"
-                "from orchestrator.dispatch import main;"
+                "from orchestrator.graph import main;"
                 "raise SystemExit(main(sys.argv[1:]))"
             ),
         ]
     return [
         *executable,
-        "engineer",
-        task,
+        str(plan_path),
+        "--no-record",
         "--base",
         str(base_path),
         "--cwd",
@@ -747,31 +811,36 @@ def _recorded_sessions(path: Path) -> list[str]:
 def test_concurrent_sessionless_dispatches_reach_distinct_real_harness_sessions(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
+    """Two sessionless dispatches must not land in one another's conversation.
+
+    Two nodes of one plan running at once is what concurrent dispatch looks like
+    now that the graph is the only executor; neither names a session, so each has
+    to reach a real harness session of its own.
+    """
     fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
-    commands = [
-        _dispatch_command(
-            onejudge_bin,
-            fixture.target,
-            fixture.base_path,
-            f"complete-now: concurrent dispatch {index}",
-        )
-        for index in range(2)
-    ]
+    command = _dispatch_command(
+        onejudge_bin,
+        fixture.target,
+        fixture.base_path,
+        _written_plan(
+            tmp_path / "concurrent.plan.json",
+            *(
+                {"id": f"concurrent-{index}", "task": f"complete-now: concurrent dispatch {index}"}
+                for index in range(2)
+            ),
+        ),
+    )
 
-    processes = [
-        subprocess.Popen(
-            command,
-            cwd=fixture.target,
-            env=fixture.env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        for command in commands
-    ]
-    results = [process.communicate(timeout=30) for process in processes]
+    process = subprocess.run(
+        command,
+        cwd=fixture.target,
+        env=fixture.env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
 
-    assert [process.returncode for process in processes] == [0, 0], results
+    assert process.returncode == 0, process.stderr
     sessions = _recorded_sessions(fixture.invocation_log)
     assert len(sessions) == 4
     assert len(set(sessions)) == 2
@@ -787,9 +856,10 @@ def test_explicit_session_is_threaded_across_real_harness_turns(
             onejudge_bin,
             fixture.target,
             fixture.base_path,
-            "finish on the second turn",
-            "--session",
-            "operator-resume",
+            _written_plan(
+                tmp_path / "resume.plan.json",
+                {"id": "solo", "task": "finish on the second turn", "session": "operator-resume"},
+            ),
         ),
         cwd=fixture.target,
         env=fixture.env,
@@ -875,9 +945,14 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
             onejudge_bin,
             target,
             base_path,
-            "complete-now: binding must reject",
-            "--session",
-            bound_session,
+            _written_plan(
+                tmp_path / "binding.plan.json",
+                {
+                    "id": "solo",
+                    "task": "complete-now: binding must reject",
+                    "session": bound_session,
+                },
+            ),
             "--format",
             "json",
         ),
@@ -895,20 +970,22 @@ def test_real_session_harness_binding_rejection_names_session_and_both_harnesses
 ) -> None:
     rejection = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
 
-    assert rejection.process.returncode == 2
-    detail = rejection.process.stderr
+    # The round fails rather than the command refusing: a rejection this deep is a
+    # node outcome, and the plan path keeps the whole harness detail on that node.
+    assert rejection.process.returncode == 1, rejection.process.stderr
+    detail = json.loads(rejection.process.stdout)["results"]["solo"]["error"]
     assert "session/harness binding rejection" in detail
     assert f"`{rejection.session}-skill`" in detail
     assert "`codex`" in detail
     assert "`claude-code`" in detail
 
 
-def test_dispatch_cli_writes_output_file(command_base, onejudge_bin, tmp_path) -> None:
+def test_one_node_plan_cli_writes_output_file(command_base, onejudge_bin, tmp_path) -> None:
     out = tmp_path / "report.json"
-    rc = main(
+    rc = run_plan_main(
         [
-            "reviewer",
-            "complete-now: quick review.",
+            str(_one_node_plan(tmp_path, task="complete-now: quick review.")),
+            "--no-record",
             "--base",
             str(command_base()),
             "--onejudge-bin",
@@ -923,7 +1000,7 @@ def test_dispatch_cli_writes_output_file(command_base, onejudge_bin, tmp_path) -
     assert '"schema_version"' in out.read_text(encoding="utf-8")
 
 
-def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
+def test_one_node_plan_applies_ordered_models_to_real_oneharness(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
     target = tmp_path / "target"
@@ -962,25 +1039,38 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     }
     # Pin the selected harness and model so every provider invocation crosses the
     # matching shipped mock while still proving dispatch forwards ordered models.
-    # The default session ("dispatch-<persona>") is a fixed global name: oneharness
-    # would resume whatever harness a previous run of it bound, so a stored
-    # codex-bound session silently overrides the claude-code model asserted here.
-    # Deriving the name from this test's target keeps the run on a session of its
+    # A node's session defaults to its own id, a name any other plan could reuse:
+    # oneharness would resume whatever harness a previous run of it bound, so a
+    # stored codex-bound session silently overrides the claude-code model asserted
+    # here. Naming it after this test's target keeps the run on a session of its
     # own without reaching into the global session store.
-    session = f"dispatch-models-{tmp_path.parent.name}-{target.name}"
+    plan = tmp_path / "models.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "solo",
+                        "persona": "engineer",
+                        "task": "complete-now: prove model fallback",
+                        "project_dir": str(target),
+                        "session": f"dispatch-models-{tmp_path.parent.name}-{target.name}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     proc = subprocess.run(
         [
-            str(Path(onejudge_bin).with_name("orchestrator-dispatch")),
-            "engineer",
-            "complete-now: prove model fallback",
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
             "--base",
             str(base_path),
             "--cwd",
             str(target),
-            "--project-dir",
-            str(target),
-            "--session",
-            session,
             "--onejudge-bin",
             onejudge_bin,
             "--format",
@@ -996,9 +1086,10 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     assert argv_path.exists(), (proc.stdout, proc.stderr)
     argv = argv_path.read_text(encoding="utf-8").splitlines()
     assert argv[argv.index("--model") + 1] == "claude-opus-4-8"
-    report = json.loads(proc.stdout)
-    assert report["schema_version"] == 5
-    assert "telemetry" not in report
+    payload = json.loads(proc.stdout)
+    assert payload["schema_version"] == 5
+    assert payload["results"]["solo"]["completed"] is True
+    assert "telemetry" not in payload["results"]["solo"]
     config_env = env.copy()
     config_env.pop("ONEHARNESS_HARNESSES")
     config_env.pop("ONEHARNESS_MODELS")

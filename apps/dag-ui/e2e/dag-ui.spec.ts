@@ -297,7 +297,7 @@ test("renders the outcomes only a settled round records", async ({ page }) => {
 test("counts a run the strict fold cannot read at all", async ({ page }) => {
   await openObservatory(page);
   // The served run recorded a result with no authoritative journal behind it, which
-  // is what every `repo-plan` run looks like. The per-node derivation cannot run, so
+  // is what a run predating the journal looks like. The per-node derivation cannot run, so
   // the row is counted from the tolerant telemetry index instead — whose statuses are
   // an open string, and whose words the navigation still has to show rather than drop.
   await expect(

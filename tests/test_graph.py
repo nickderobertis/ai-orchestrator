@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import socket
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NotRequired, cast, get_origin, get_type_hints
+from typing import Any, NotRequired, cast, get_origin, get_type_hints
 
 import pytest
 
@@ -29,7 +30,6 @@ from orchestrator.graph import (
     infrastructure_failure_detail,
     load_graph,
     main,
-    main_repo_plan,
     parse_graph,
     print_continuation,
     render_actions,
@@ -1122,12 +1122,44 @@ def test_expects_no_diff_direct_node_records_no_changes_without_runner() -> None
 
 @pytest.mark.reads_docs
 def test_plan_schema_version_documentation_cannot_drift() -> None:
+    """Every shipped example and embedded plan snippet declares the current version.
+
+    Globbed rather than listed: an example added later — a one-node form, say — is
+    the shape an operator copies, so it has to be held to the same bar without
+    anyone remembering to name it here. Plan snippets pasted into the documentation
+    are the same copy an operator makes, so they are gated the same way; one that
+    omits the version is demonstrating the accepted legacy shape and is left alone.
+    """
     root = Path(__file__).parents[1]
     docs = (root / "docs" / "orchestration.md").read_text(encoding="utf-8")
     assert f"schema version {PLAN_SCHEMA_VERSION}" in docs
-    for example in ("plan.example.json", "repo-plan.example.json", "tracked-graph.example.json"):
-        mapping = json.loads((root / "examples" / example).read_text(encoding="utf-8"))
-        assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
+    examples = sorted((root / "examples").glob("*.json"))
+    assert len(examples) >= 5, examples
+    for example in examples:
+        mapping = json.loads(example.read_text(encoding="utf-8"))
+        assert mapping["schema_version"] == PLAN_SCHEMA_VERSION, example.name
+        parse_graph(mapping)  # every shipped example is a plan the executor accepts
+
+    snippets = _documented_plan_snippets(root)
+    assert snippets, "the self-dispatch plan snippet is documented and has to stay gated"
+    for source, mapping in snippets:
+        assert mapping["schema_version"] == PLAN_SCHEMA_VERSION, source
+        parse_graph(mapping)
+
+
+def _documented_plan_snippets(root: Path) -> list[tuple[str, dict[str, Any]]]:
+    """Every versioned plan mapping pasted into a fenced `json` block in the docs."""
+    found: list[tuple[str, dict[str, Any]]] = []
+    for markdown in sorted(root.glob("docs/**/*.md")):
+        text = markdown.read_text(encoding="utf-8")
+        for block in re.findall(r"(?ms)^```json\n(.*?)^```", text):
+            try:
+                mapping = json.loads(block)
+            except json.JSONDecodeError:
+                continue  # an elided fragment, not a plan an operator can copy whole
+            if isinstance(mapping, dict) and "tasks" in mapping and "schema_version" in mapping:
+                found.append((markdown.name, mapping))
+    return found
 
 
 def test_cross_dag_dependency_resolves_done_and_surfaces_later_journal_advance(
@@ -1921,12 +1953,6 @@ def test_print_continuation_complete_and_failed_without_humans(tmp_path, capsys)
     }
     print_continuation("demo", 1, tmp_path, failed, tmp_path / "runs")
     assert "edits.json" in capsys.readouterr().err
-
-
-def test_repo_plan_alias_warns(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("orchestrator.graph.main", lambda argv=None: 0)
-    assert main_repo_plan(["plan.json"]) == 0
-    assert "deprecated" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

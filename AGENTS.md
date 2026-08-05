@@ -60,12 +60,12 @@ protocol](docs/orchestration.md#live-graph-edits) to change the desired frontier
 ## What "agent" means here
 
 In this repo, an **agent** (or **subagent**) is a **dispatched onejudge process** —
-a coding agent run under a simulated-user supervisor via `just dispatch` /
-`just repo-task`, or as a worker launched by `just orchestrate`. This is the
-default sense of the word
-everywhere below and in requests to you. When a task says "use an agent," "have an
-agent do X," "dispatch an agent," or "spin up a subagent" — including for research
-or investigation, not just code changes — dispatch onejudge. Do **not** reach for
+a coding agent run under a simulated-user supervisor as a node of a plan launched
+by `just orchestrate` (or run directly by `just run-plan`). This is the default
+sense of the word everywhere below and in requests to you. When a task says "use
+an agent," "have an agent do X," "dispatch an agent," or "spin up a subagent" —
+including for research or investigation, not just code changes — dispatch
+onejudge. Do **not** reach for
 the host harness's own built-in subagent mechanism (its own agent/task/fork tool)
 unless the request names that mechanism explicitly. When the wording is ambiguous,
 dispatch onejudge.
@@ -361,12 +361,11 @@ quota that is left. Do not reorder these to restore the old isolation.
 
 Those files decide every run on this host, so pair the two sides differently for
 **one** dispatch with `--worker-harness` / `--judge-harness` rather than by editing
-a config concurrent runs also read. `just dispatch`, `just repo-task`, `just
-run-plan`, and `just orchestrate` all take them; each side is validated against its
-own config and refused by name when it is not one this repo configures, and with
-neither flag set nothing changes. oneharness's own `ONEHARNESS_HARNESSES` cannot
-express this: it is process-wide and beats config, so it moves both sides at once.
-See [Choosing a harness per
+a config concurrent runs also read. `just run-plan` and `just orchestrate` both
+take them; each side is validated against its own config and refused by name when
+it is not one this repo configures, and with neither flag set nothing changes.
+oneharness's own `ONEHARNESS_HARNESSES` cannot express this: it is process-wide
+and beats config, so it moves both sides at once. See [Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
@@ -403,9 +402,9 @@ with `onejudge init --force`.
 **Live dispatch** picks a harness via `oneharness.toml`'s fallback (alternate
 Claude subscription primary, codex secondary).
 The lifecycle *and the orchestrator process itself* dispatch in **`bypass`** mode by
-default — the no-approval mode; `just dispatch`, `just run-plan`, `just repo-task`,
-and `just orchestrate` all take the same `--oneharness-mode`. It is
-correct here because the **whole environment is a sandbox** (a container):
+default — the no-approval mode; `just run-plan` and `just orchestrate` both take
+the same `--oneharness-mode`. It is correct here because the **whole environment
+is a sandbox** (a container):
 codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
 namespaces this host disables, so `bypass` (no approvals, no inner sandbox) is the
 working no-approval mode and the container is the boundary. The **allowlister**
@@ -436,7 +435,10 @@ is the recorded mixed-graph executor driven internally by the dedicated
 orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
 over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
-does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
+does not invoke `run-plan` directly. There is no single-dispatch command: one
+subtask is a one-node plan (`examples/single-node-direct.plan.json`,
+`examples/single-node-lifecycle.plan.json`), so no running work falls outside the
+run ledger and the views built on it.
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the
@@ -612,22 +614,25 @@ back to the deterministic body and must never block publication.
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any
-repo or project. Use `just dispatch` for one direct-agent node, `just repo-task`
-for one lifecycle node, and `just orchestrate <plan.json>` by default for every
-multi-node tracked graph. Lifecycle
-nodes clone the target, work in an isolated worktree, verify with its gate, and
-publish. Dispatch smaller project work with a single task rather than doing it
-directly; only the slight-tweak exception above applies. This repo is one
+repo or project. A **plan file launched by `just orchestrate`** is the only way to
+dispatch: one subtask is a plan holding one node — one direct agent
+(`examples/single-node-direct.plan.json`) or one lifecycle node
+(`examples/single-node-lifecycle.plan.json`) — and a larger task is the same file
+with more nodes. Nothing about plan schema, personas, or node semantics changes
+with the node count, so a one-node run still gets a journal, an ownership row,
+planner surfaces, and a place in the DAG UI. Lifecycle nodes clone the target,
+work in an isolated worktree, verify with its gate, and publish. Dispatch smaller
+project work with a single-node plan rather than doing it directly; only the
+slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
 
 **Self-dispatch rule (this repo).** Never author working-tree changes in the shared
 canonical checkout: concurrent orchestrators use it and direct edits race them.
 Every change — including plans, personas, docs, and `AGENTS.md` — must be dispatched
 into an isolated worktree cut from the registered `local/ai-orchestrator-isolated`
-safety clone, with the canonical checkout retained as the positional publication
-repository and only fast-forwarded after integration. Pass `--execution-checkout`
-for `just repo-task`; in a plan launched by `just orchestrate`, set
-`execution_checkout` on each lifecycle node instead of passing a top-level flag.
+safety clone, with the canonical checkout retained as the node's `repo` publication
+repository and only fast-forwarded after integration. Set `execution_checkout` on
+each lifecycle node of the plan rather than passing a top-level flag.
 This does not restrict the narrow direct git operations above on finished
 dispatched work. Confirm `git config core.bare` is `false` before trusting a
 self-dispatch result.

@@ -1734,24 +1734,9 @@ def print_continuation(
     print(f"  just next-round {run_id} [edits.json]{suffix}", file=sys.stderr)
 
 
-def main_repo_plan(argv: list[str] | None = None) -> int:
-    """Deprecated repo-plan alias routed through the canonical executor."""
-    print(
-        "repo-plan: deprecated; `just run-plan` is now the tracked graph executor and "
-        "accepts this plan unchanged.",
-        file=sys.stderr,
-    )
-    return main(argv)
-
-
 def main_cli(argv: list[str] | None = None) -> int:
     """`just run-plan` process entry point: detach from the launching turn first."""
     return run_detached(main, argv, "run-plan")
-
-
-def main_repo_plan_cli(argv: list[str] | None = None) -> int:
-    """`just repo-plan` process entry point: detach from the launching turn first."""
-    return run_detached(main_repo_plan, argv, "repo-plan")
 
 
 if __name__ == "__main__":  # pragma: no cover
