@@ -29,7 +29,6 @@ from orchestrator.graph import (
     infrastructure_failure_detail,
     load_graph,
     main,
-    main_repo_plan,
     parse_graph,
     print_continuation,
     render_actions,
@@ -967,12 +966,21 @@ def test_expects_no_diff_direct_node_records_no_changes_without_runner() -> None
 
 @pytest.mark.reads_docs
 def test_plan_schema_version_documentation_cannot_drift() -> None:
+    """Every shipped example declares the current version and still parses.
+
+    Globbed rather than listed: an example added later — a one-node form, say — is
+    the shape an operator copies, so it has to be held to the same bar without
+    anyone remembering to name it here.
+    """
     root = Path(__file__).parents[1]
     docs = (root / "docs" / "orchestration.md").read_text(encoding="utf-8")
     assert f"schema version {PLAN_SCHEMA_VERSION}" in docs
-    for example in ("plan.example.json", "repo-plan.example.json", "tracked-graph.example.json"):
-        mapping = json.loads((root / "examples" / example).read_text(encoding="utf-8"))
-        assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
+    examples = sorted((root / "examples").glob("*.json"))
+    assert len(examples) >= 5, examples
+    for example in examples:
+        mapping = json.loads(example.read_text(encoding="utf-8"))
+        assert mapping["schema_version"] == PLAN_SCHEMA_VERSION, example.name
+        parse_graph(mapping)  # every shipped example is a plan the executor accepts
 
 
 def test_cross_dag_dependency_resolves_done_and_surfaces_later_journal_advance(
@@ -1766,12 +1774,6 @@ def test_print_continuation_complete_and_failed_without_humans(tmp_path, capsys)
     }
     print_continuation("demo", 1, tmp_path, failed, tmp_path / "runs")
     assert "edits.json" in capsys.readouterr().err
-
-
-def test_repo_plan_alias_warns(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("orchestrator.graph.main", lambda argv=None: 0)
-    assert main_repo_plan(["plan.json"]) == 0
-    assert "deprecated" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

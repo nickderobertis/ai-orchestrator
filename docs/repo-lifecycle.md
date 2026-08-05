@@ -94,12 +94,14 @@ a worktree under its own run root and gets its own. A name that repeated across
 runs would ask the harness to resume a conversation it filed under a directory
 that no longer exists, which fails before the first turn.
 
-`just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
+`just run-plan <plan.json>` runs one, over a plan holding a single lifecycle node
+(`examples/single-node-lifecycle.plan.json`); it is the only executor, so there is
+no second path a single workstream can take. The node's `repo` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
 shown by `just repos`. It selects the publication repository identity and checkout.
-For self-dispatch safety, `--execution-checkout` likewise accepts a path or alias
-and cuts the task worktree from that exact clone while keeping `<repo>`'s publication
-workflow and post-merge fast-forward.
+For self-dispatch safety, the node's `execution_checkout` likewise accepts a path or
+alias and cuts the task worktree from that exact clone while keeping `repo`'s
+publication workflow and post-merge fast-forward.
 
 Before resolving or cloning the target, lifecycle dispatch checks free space on
 the filesystem backing Python's temporary directory. It refuses to start below
@@ -179,8 +181,8 @@ unless the run supplies `--repo-type`. Conflicting legacy
 entries fail with every alias/path/workflow and the exact migration command; no
 workflow is selected implicitly.
 
-`--repo-type` on `register-repo` persists. The same option on `repo-task`,
-`repo-recover`, or `run-plan` is run-only. A plan node's `repo_type` beats the
+`--repo-type` on `register-repo` persists. The same option on `repo-recover` or
+`run-plan` is run-only. A plan node's `repo_type` beats the
 command option, which beats stored or inferred type. Change stored type with
 `just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
 also normalizes workflow to `remote`.
@@ -276,13 +278,23 @@ into spurious `init` commits and mass deletions. Develop those subsystems agains
 **isolated clone** (its own `.git`) while preserving the canonical checkout as the
 publication selection:
 
-```sh
-just repo-task /path/to/ai-orchestrator engineer - \
-  --execution-checkout /path/to/ai-orchestrator-isolated
+```json
+{
+  "schema_version": 6,
+  "tasks": [
+    {
+      "id": "self",
+      "repo": "/path/to/ai-orchestrator",
+      "execution_checkout": "/path/to/ai-orchestrator-isolated",
+      "persona": "engineer",
+      "task": "## What\n…\n\n## Why\n…\n\n## Acceptance criteria\n- …"
+    }
+  ]
+}
 ```
 
 The branch is pushed and locally merged because the shared identity is local, then
-the positional canonical checkout is fast-forwarded. Recovery is cheap because no
+the node's `repo` canonical checkout is fast-forwarded. Recovery is cheap because no
 data is lost: `git config core.bare false` restores the checkout, and the agent's
 real work is intact at its last commit *before* the `init`-commit corruption.
 
@@ -899,9 +911,11 @@ publication. Both failed attempts retain their underlying dispatch or harness
 detail in the node journal's drafting-fallback event and in the lifecycle
 follow-up surfaced to the planner.
 
-Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
-accepts old lifecycle-only files unchanged. See
-`examples/tracked-graph.example.json` and `examples/repo-plan.example.json`.
+Run these nodes with `just run-plan`, the one executor; it still accepts old
+lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
+`examples/repo-plan.example.json`, and the one-node forms in
+`examples/single-node-lifecycle.plan.json` and
+`examples/single-node-direct.plan.json`.
 
 ## Several onejudge on ONE PR: workstreams
 
@@ -1102,8 +1116,8 @@ enables auto-merge, and local single-owner omission uses direct merge. For an
 older stacked preserved commit without the base trailer, pass the ledger's values
 explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
 fast-forwards the root publication checkout after a merge into a non-root base.
-`repo-task-auto` prints this
-command when it reports `not-completed`.
+A node that settles `not-completed` names its preserved branch in the round result,
+which is what this command takes.
 
 Local recovery performs its base sync, recovery attestation, gated branch push,
 and gated direct merge inside one FIFO turn. A content conflict dequeues the turn,

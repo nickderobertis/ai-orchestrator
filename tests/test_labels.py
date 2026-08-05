@@ -113,7 +113,7 @@ def test_merge_labels_with_no_inherited_value() -> None:
 
 
 def test_graph_labels_omits_absent_components() -> None:
-    # A bare `just dispatch` has no run/node; empty values would break the contract.
+    # An untracked lifecycle run has no run/node; empty values would break the contract.
     assert graph_labels() == {}
     assert graph_labels(run_id="r", round_number=0) == {"run_id": "r", "round": "0"}
     assert graph_labels(run_id="r", round_number=2, node="api", step="impl") == {

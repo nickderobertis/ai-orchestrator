@@ -4,9 +4,13 @@
 # Tracked graph orchestration
 
 `just run-plan` turns one large task into one recorded hierarchical DAG. It is
-the canonical executor for direct onejudge work, full repository lifecycles, and
-explicit actions that only a person can complete. `just repo-plan` is a deprecated
-alias retained so old lifecycle-only plan files keep working.
+the **only** executor for direct onejudge work, full repository lifecycles, and
+explicit actions that only a person can complete: a single dispatch is a plan file
+holding one node, so every piece of running work has a journal, an ownership row,
+surfaces, and a place in the DAG UI. See
+`examples/single-node-direct.plan.json` and
+`examples/single-node-lifecycle.plan.json`. Old lifecycle-only plan mappings —
+no `schema_version`, lifecycle nodes only — are still accepted unchanged.
 
 The current tracked-plan contract is schema version 6 (`"schema_version": 6`).
 Plans that omit the version retain version-1 behavior for compatibility.
@@ -865,10 +869,9 @@ does not stop scheduling; `just stop` is what ends a run.
 `just runs` says where a round *ended* and `just history-show` says everything
 about one thing in it. `just monitor` answers the question in between — "what is
 happening right now, across the whole run?" It is the standard first view for
-every recorded in-flight dispatch: both `run-plan` graphs and single
-`repo-task`/`repo-task-auto` lifecycle nodes (the auto wrapper records a
-monitorable run). It folds four stores that settle
-at different times into one ordered stream:
+every recorded in-flight dispatch, from a wide DAG down to a one-node plan — the
+one executor means there is no dispatch it cannot see. It folds four stores that
+settle at different times into one ordered stream:
 
 | Source | Read from | Reported when |
 | --- | --- | --- |

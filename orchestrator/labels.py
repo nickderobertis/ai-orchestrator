@@ -134,8 +134,9 @@ def graph_labels(
 ) -> dict[str, str]:
     """Build the labels locating a dispatch in the tracked graph.
 
-    Every component is optional: a bare ``just dispatch`` has no run or node, and
-    labelling it with empty strings would violate the non-empty value rule.
+    Every component is optional: a lifecycle run outside any tracked graph has no
+    run or node, and labelling it with empty strings would violate the non-empty
+    value rule.
     """
     labels: dict[str, str] = {}
     if run_id:

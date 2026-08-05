@@ -1,9 +1,10 @@
 """Which provider each side of one dispatch actually ran on.
 
-These journeys drive the real `orchestrator-dispatch` and `orchestrator-run-plan`
-console scripts, the real onejudge CLI, the real `scripts/oneharness-agent.sh`,
-and the real oneharness — every party that decides a selection, plus real git for
-the lifecycle node.
+These journeys drive the real `orchestrator-run-plan` console script — the one
+executor, over plans holding a single direct node, a single lifecycle node, or
+both — the real onejudge CLI, the real `scripts/oneharness-agent.sh`, and the real
+oneharness: every party that decides a selection, plus real git for the lifecycle
+node.
 
 The one thing they replace is the paid provider itself, this repository's
 designated external seam: a fake `codex` and a fake `claude` earlier on PATH than
@@ -206,26 +207,45 @@ def _dispatch(
     extra_args: tuple[str, ...] = (),
     env: Mapping[str, str] | None = None,
 ) -> Dispatched:
-    """Run one real dispatch with both paid providers replaced on PATH."""
+    """Run one real dispatch with both paid providers replaced on PATH.
+
+    A single dispatch is a one-node plan: the tracked graph is the only executor,
+    so `orchestrator-run-plan` over a plan holding one direct agent node is what an
+    operator runs for one subtask, and what these journeys drive.
+    """
     target = tmp_path / "target"
     target.mkdir(exist_ok=True)
     record, environment = _provider_environment(tmp_path, oneharness_bin)
     environment.update(env or {})
+    plan = tmp_path / "one-node.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "side-selection",
+                        "persona": "engineer",
+                        "task": "record which provider ran this side",
+                        "project_dir": str(target),
+                        "max_turns": 1,
+                        # oneharness resumes whatever harness a stored session was
+                        # bound to, so a name of this test's own keeps the selection
+                        # under test the only one.
+                        "session": f"side-selection-{tmp_path.name}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     process = subprocess.run(
         [
-            str(Path(onejudge_bin).with_name("orchestrator-dispatch")),
-            "engineer",
-            "record which provider ran this side",
-            "--project-dir",
-            str(target),
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
             "--cwd",
             str(target),
-            "--max-turns",
-            "1",
-            # oneharness resumes whatever harness a stored session was bound to, so
-            # a name of this test's own keeps the selection under test the only one.
-            "--session",
-            f"side-selection-{tmp_path.name}",
             "--onejudge-bin",
             onejudge_bin,
             *extra_args,
@@ -458,30 +478,45 @@ def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
     assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
 
 
-def test_repo_task_runs_a_whole_workstream_on_the_providers_it_was_given(
+def test_a_one_node_plan_runs_a_whole_workstream_on_the_providers_it_was_given(
     tmp_path: Path, bare_origin, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    """The lifecycle entry point an operator reaches for one change, end to end.
+    """The lifecycle plan an operator reaches for one change, end to end.
 
-    `just repo-task` clones, works in an isolated worktree, verifies with the
+    One lifecycle node clones, works in an isolated worktree, verifies with the
     identity's own gate and merges — several dispatches on one branch. All of them
-    have to run the pair this command was given, and the merge is what proves the
+    have to run the pair this run was given, and the merge is what proves the
     selection did not just parse but carried a real workstream through.
     """
     origin = bare_origin()
     checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
     record, environment = _provider_environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "workstream.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "workstream",
+                        "repo": str(checkout),
+                        "persona": "engineer",
+                        "task": "record which provider ran this workstream",
+                        "max_turns": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     process = subprocess.run(
         [
-            str(Path(onejudge_bin).with_name("orchestrator-repo-task")),
-            str(checkout),
-            "engineer",
-            "record which provider ran this workstream",
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
             "--workspace",
             str(tmp_path / "worktrees"),
-            "--max-turns",
-            "1",
             "--worker-harness",
             "codex",
             "--judge-harness",
@@ -498,7 +533,7 @@ def test_repo_task_runs_a_whole_workstream_on_the_providers_it_was_given(
     dispatched = _recorded_turns(record, process)
 
     assert process.returncode == 0, process.stderr
-    assert json.loads(process.stdout)["outcome"] == "merged"
+    assert json.loads(process.stdout)["results"]["workstream"]["outcome"] == "merged"
     assert dispatched.side(WORKER_MARKER), dispatched.turns
     assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
     assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}

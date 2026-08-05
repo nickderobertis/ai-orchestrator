@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from conftest import install_pre_push_hook
 
+import orchestrator.graph as graph
 import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
 from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
@@ -1876,93 +1877,99 @@ def test_run_repo_task_git_error_is_reported(tmp_path) -> None:
 # --- CLIs ------------------------------------------------------------------
 
 
-def test_main_task_json_output(monkeypatch, capsys) -> None:
+def _one_node_lifecycle_plan(tmp_path: Path, **node: object) -> Path:
+    """The plan file a single lifecycle dispatch is now expressed as."""
+    plan = tmp_path / "one-node.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {"id": "solo", "repo": "acme/widget", "persona": "engineer", "task": "do it"}
+                    | node
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan
+
+
+def test_one_node_plan_json_output_carries_the_lifecycle_outcome(
+    monkeypatch, tmp_path, capsys
+) -> None:
     captured: dict[str, object] = {}
 
     def fake_task(*args, **kwargs):
         captured.update(kwargs)
         return _result("merged", pr=PullRequest(1, "url", "o/r", "b", "main"))
 
-    monkeypatch.setattr(
-        lc,
-        "run_repo_task",
-        fake_task,
+    monkeypatch.setattr(lc, "run_repo_task", fake_task)
+    rc = graph.main(
+        [
+            str(_one_node_lifecycle_plan(tmp_path)),
+            "--no-record",
+            "--verify-via-ci",
+            "--format",
+            "json",
+        ]
     )
-    rc = lc.main_task(["acme/widget", "engineer", "do it", "--verify-via-ci", "--format", "json"])
     assert rc == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["outcome"] == "merged" and payload["pr"] == "url"
+    node = json.loads(capsys.readouterr().out)["results"]["solo"]
+    assert node["outcome"] == "merged" and node["pr"] == "url"
     assert captured["verify_via_ci"] is True
 
 
-def test_main_task_rejects_nonpositive_publication_attempts(capsys) -> None:
+def test_one_node_plan_rejects_nonpositive_publication_attempts(tmp_path, capsys) -> None:
     with pytest.raises(SystemExit) as exc:
-        lc.main_task(["acme/widget", "engineer", "do it", "--publication-attempts", "0"])
+        graph.main([str(_one_node_lifecycle_plan(tmp_path)), "--publication-attempts", "0"])
     assert exc.value.code == 2
     assert "must be at least 1" in capsys.readouterr().err
 
 
-def test_main_task_rejects_invalid_literal_branch_before_resolution(capsys) -> None:
-    rc = lc.main_task(
-        [
-            "acme/widget",
-            "engineer",
-            "do it",
-            "--branch",
-            "bad..branch",
-            "--format",
-            "json",
-        ]
+def test_one_node_plan_rejects_invalid_literal_branch_before_resolution(tmp_path, capsys) -> None:
+    """The plan path refuses this before the round is claimed, not per node.
+
+    The removed `just repo-task --branch` reached the workstream and came back an
+    `error` outcome. A plan file is validated up front, so the same bad value is a
+    correctable usage error naming the node it came from.
+    """
+    rc = graph.main([str(_one_node_lifecycle_plan(tmp_path, branch="bad..branch")), "--no-record"])
+    assert rc == 2
+    stderr = capsys.readouterr().err
+    assert "task 'solo'" in stderr and "valid non-empty Git branch" in stderr
+
+
+def test_one_node_plan_rejects_nonconventional_explicit_title(tmp_path, capsys) -> None:
+    rc = graph.main(
+        [str(_one_node_lifecycle_plan(tmp_path, title="Fix the release")), "--no-record"]
     )
-    payload = json.loads(capsys.readouterr().out)
-    assert rc == 1 and payload["outcome"] == "error"
-    assert "not a valid Git branch" in payload["detail"]
+    assert rc == 2
+    stderr = capsys.readouterr().err
+    assert "task 'solo'" in stderr and "Conventional Commit subject" in stderr
 
 
-def test_main_task_rejects_nonconventional_explicit_title(capsys) -> None:
-    rc = lc.main_task(
-        [
-            "acme/widget",
-            "engineer",
-            "do it",
-            "--title",
-            "Fix the release",
-            "--format",
-            "json",
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-    assert rc == 1 and payload["outcome"] == "error"
-    assert "Conventional Commit subject" in payload["detail"]
-
-
-def test_main_task_human_nonzero_on_failure(monkeypatch, capsys) -> None:
+def test_one_node_plan_human_nonzero_on_failure(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(lc, "run_repo_task", lambda *a, **k: _result("gate-failed"))
-    rc = lc.main_task(["acme/widget", "engineer", "do it"])
+    rc = graph.main([str(_one_node_lifecycle_plan(tmp_path)), "--no-record"])
     assert rc == 1
     assert "gate-failed" in capsys.readouterr().out
 
 
-def test_main_task_writes_output_file(monkeypatch, tmp_path) -> None:
+def test_one_node_plan_writes_output_file(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(lc, "run_repo_task", lambda *a, **k: _result("merged"))
     out = tmp_path / "r.json"
-    rc = lc.main_task(["acme/widget", "reviewer", "do it", "--format", "json", "-o", str(out)])
+    rc = graph.main(
+        [
+            str(_one_node_lifecycle_plan(tmp_path, persona="reviewer")),
+            "--no-record",
+            "--format",
+            "json",
+            "-o",
+            str(out),
+        ]
+    )
     assert rc == 0 and '"outcome"' in out.read_text(encoding="utf-8")
-
-
-def test_main_task_reads_task_from_stdin(monkeypatch, capsys) -> None:
-    import io
-
-    seen = {}
-
-    def fake_task(repo, task, persona, **kw):
-        seen["task"] = task
-        return _result("merged")
-
-    monkeypatch.setattr(lc, "run_repo_task", fake_task)
-    monkeypatch.setattr("sys.stdin", io.StringIO("task via stdin"))
-    rc = lc.main_task(["acme/widget", "engineer"])  # task omitted → stdin
-    assert rc == 0 and seen["task"] == "task via stdin"
 
 
 def test_main_plan_bad_plan_exit_2(tmp_path, capsys) -> None:
