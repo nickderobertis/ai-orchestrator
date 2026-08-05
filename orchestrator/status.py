@@ -21,7 +21,13 @@ from .channel import (
     planner_wait_indicator,
 )
 from .config import ConfigError
-from .dispatches import LiveDispatch, live_dispatches, load_indicator, undriven_locators
+from .dispatches import (
+    UNDRIVEN_AFTER_SECONDS,
+    LiveDispatch,
+    live_dispatches,
+    load_indicator,
+    undriven_locators,
+)
 from .goals import concurrent_indicator
 from .journal import JOURNAL_NAME, EventKind, read_events
 from .liveness import PARKED_AFTER_SECONDS, observe_launch, parked_indicator
@@ -208,6 +214,7 @@ def reconcile_live(
     live: Sequence[LiveDispatch] | None,
     *,
     launch_is_working: bool,
+    undriven_after: float = UNDRIVEN_AFTER_SECONDS,
     now: float | None = None,
 ) -> list[InFlightDispatch]:
     """Join what the ledger says is running to what the ownership registry can prove.
@@ -222,6 +229,7 @@ def reconcile_live(
         live,
         {(str(item.round), item.node): item.started_at for item in dispatches},
         launch_is_working=launch_is_working,
+        undriven_after=undriven_after,
         now=now,
     )
     return [
@@ -535,12 +543,22 @@ def main(argv: list[str] | None = None) -> int:
         help="report a launch with no child process, planner surface, or ledger write for "
         f"this long as parked (default: {PARKED_AFTER_SECONDS:g})",
     )
+    parser.add_argument(
+        "--undriven-after",
+        type=float,
+        default=UNDRIVEN_AFTER_SECONDS,
+        metavar="SECONDS",
+        help="flag a node the ledger records as started, and no live dispatch is "
+        f"driving, once it has been started this long (default: {UNDRIVEN_AFTER_SECONDS:g})",
+    )
     args = parser.parse_args(argv)
     limit, requested_run = _positional(args.target)
     if limit is not None and limit <= 0:
         parser.error("N must be a positive integer")
     if not math.isfinite(args.parked_after) or args.parked_after <= 0:
         parser.error("--parked-after must be a positive, finite number of seconds")
+    if not math.isfinite(args.undriven_after) or args.undriven_after < 0:
+        parser.error("--undriven-after must be a non-negative, finite number of seconds")
     run_id: runs.RunId | None = None
     if requested_run is not None:
         try:
@@ -572,6 +590,7 @@ def main(argv: list[str] | None = None) -> int:
             launch_is_working=observe_launch(
                 args.runs_dir / run_id, parked_after=args.parked_after
             ).live_descendant,
+            undriven_after=args.undriven_after,
         )
         if run_id is not None
         else []

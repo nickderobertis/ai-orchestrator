@@ -367,9 +367,21 @@ def _harness_identity(record: _ProcessRecord) -> str | None:
     directory it hands the child: `oneharness.toml` maps
     ``ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR`` into ``CLAUDE_CONFIG_DIR`` for the
     ``alternate2`` variant alone, and the primary variant unsets it outright.
+
+    The whole command line is searched for the provider rather than only its first
+    word, because a provider is rarely the first word: `claude` ships as a script, so
+    the kernel puts its interpreter in ``argv[0]`` and the provider's own path one or
+    two entries along. Reading only ``argv[0]`` reports every real claude-code turn as
+    an unidentified `node`, which is the one answer this must not give.
     """
-    executable = PurePosixPath(argv[0]).name if (argv := record.argv) else ""
-    provider = _PROVIDER_BINARIES.get(executable)
+    provider = next(
+        (
+            named
+            for argument in record.argv
+            if (named := _PROVIDER_BINARIES.get(PurePosixPath(argument).name)) is not None
+        ),
+        None,
+    )
     if provider is None:
         return None
     if provider == "codex":
@@ -466,6 +478,7 @@ def undriven_locators(
     started: Mapping[tuple[str, str], float],
     *,
     launch_is_working: bool,
+    undriven_after: float = UNDRIVEN_AFTER_SECONDS,
     now: float | None = None,
 ) -> frozenset[tuple[str, str]]:
     """Which started nodes no live dispatch is driving — only where that is provable.
@@ -491,7 +504,7 @@ def undriven_locators(
     return frozenset(
         locator
         for locator, began in started.items()
-        if locator not in driven and at - began >= UNDRIVEN_AFTER_SECONDS
+        if locator not in driven and at - began >= undriven_after
     )
 
 
