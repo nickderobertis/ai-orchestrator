@@ -40,6 +40,7 @@ from orchestrator.harnesses import (
     PROCESS_WIDE_HARNESS_ENV,
     WORKER_HARNESS_ENV,
 )
+from orchestrator.labels import parse_labels
 
 #: onejudge's own framing of a supervisor turn — how a recorded turn says which
 #: side of the conversation it belongs to.
@@ -73,6 +74,9 @@ with open(os.environ["SELECTION_RECORD"], "a") as record:
         "harnesses": os.environ.get("ONEHARNESS_HARNESSES"),
         "worker_override": os.environ.get({worker_env!r}),
         "judge_override": os.environ.get({judge_env!r}),
+        # What oneharness would stamp on the session this turn becomes, read where
+        # oneharness reads it: the environment of the provider it spawned.
+        "history_labels": os.environ.get("ONEHARNESS_HISTORY_LABELS"),
         "argv": sys.argv[1:],
     }}) + "\\n")
 PROMPT = " ".join(sys.argv[1:])
@@ -293,6 +297,36 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
     # A masked CLAUDE_CONFIG_DIR is what distinguishes the primary account from the
     # alternate2 one the ambient value named; both run the same binary.
     assert {turn["claude_config_dir"] for turn in judge_turns} == {None}
+
+
+def test_a_dispatch_never_stamps_the_worker_role_on_its_own_supervisor(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The semantic role a real dispatch stamps reaches only the side it describes.
+
+    A dispatch exports one `ONEHARNESS_HISTORY_LABELS` for the whole conversation,
+    and oneharness merges labels CLI > env > project file — so the worker's
+    `agent_role` outranked `oneharness.judge.toml`'s own `agent_role = "judge"` and
+    every supervisor session in the store was recorded as its worker's role. Read at
+    the provider oneharness spawned, which is where the recording is decided: this
+    is the real dispatch, the real wrapper, and the real oneharness label merge.
+    """
+    dispatched = _dispatch(tmp_path, onejudge_bin, oneharness_bin)
+
+    assert dispatched.process.returncode == 0, dispatched.process.stderr
+    worker_labels = [_labels(turn) for turn in dispatched.side(WORKER_MARKER)]
+    judge_labels = [_labels(turn) for turn in dispatched.side(JUDGE_MARKER)]
+    assert worker_labels and judge_labels, dispatched.turns
+    assert all(labels.get("agent_role") == "worker" for labels in worker_labels)
+    assert all("agent_role" not in labels for labels in judge_labels)
+    # Only that one key: a judge session must still name the persona and the dispatch
+    # it supervised, or nothing could group the two sides of one conversation.
+    assert all(labels.get("persona") == "engineer" for labels in judge_labels)
+
+
+def _labels(turn: Mapping[str, Any]) -> dict[str, str]:
+    recorded = turn.get("history_labels")
+    return parse_labels(recorded) if isinstance(recorded, str) else {}
 
 
 def test_without_either_flag_a_process_wide_selection_still_moves_both_sides(

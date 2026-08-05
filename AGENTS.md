@@ -456,7 +456,11 @@ Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 `just telemetry-server` serves the read-only DAG API over a runs root and
 `just dag-ui` serves the browser view against it; both are read-only and mutate
-no run. Operational detail lives in [`docs/dag-ui.md`](docs/dag-ui.md).
+no run. `just dag-ui-screens` photographs every major surface of that view at every
+viewport in its declared matrix, against the browser tier's own fixture server rather
+than any real run, and prints the gitignored per-invocation gallery it wrote — which
+is how a change to this UI is checked across resolutions without starting it by hand.
+Operational detail lives in [`docs/dag-ui.md`](docs/dag-ui.md).
 Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch,
 harness scratch no live process still references, and conservatively stale known
 third-party scratch; omit `--dry-run` to reclaim it.
