@@ -329,6 +329,28 @@ def test_run_smoke_rejects_a_chain_with_no_candidate_left_to_run_the_task(
         smoke.run_smoke()
 
 
+def test_run_smoke_reports_a_session_that_recorded_no_harness_run(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A turn that streamed events and never recorded a run never reached a harness.
+
+    The chain split reads the launch path's outcome off the LAST record, so an empty
+    session has to be caught ahead of it: there is no selected candidate to hold to
+    the bar, and what the operator needs is that diagnostic rather than a crash.
+    """
+    history = tmp_path / "history.jsonl"
+    history.write_text('{"type": "event", "run_id": "turn-1", "event": {}}\n', encoding="utf-8")
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    assert smoke.main([]) == 1
+
+    err = capsys.readouterr().err
+    assert "smoke: real harness history recorded no harness run" in err
+    assert "rerun 'just smoke'" in err
+
+
 def test_run_smoke_rejects_missing_matching_history(monkeypatch) -> None:
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [])

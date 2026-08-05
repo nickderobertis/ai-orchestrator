@@ -43,13 +43,16 @@ RETRY_BACKOFF_SECONDS = 2.0
 class FellThrough:
     """One candidate the fallback chain moved past on its way to the selected one."""
 
-    harness: str
+    #: The variant-qualified identity, not the harness: a chain's two Claude
+    #: subscriptions are one harness and differ only here.
+    identity: str
     reason: str
 
 
 @dataclass(frozen=True)
 class SmokeResult:
-    harness: str
+    #: The identity the chain selected, named the same way for the same reason.
+    identity: str
     cost_usd: int | float | None
     #: How many real turns this smoke had to launch to record one.
     attempts: int = 1
@@ -188,7 +191,7 @@ def _selected(records: list[HistoryRecord]) -> tuple[tuple[FellThrough, ...], Hi
     exhausted = history_record_fallthrough_reason(selected)
     if exhausted is not None:
         refused = ", ".join(
-            f"{entry.harness} ({entry.reason})"
+            f"{entry.identity} ({entry.reason})"
             for entry in [*fell_through, FellThrough(history_record_identity(selected), exhausted)]
         )
         raise HistoryError(
@@ -228,7 +231,7 @@ def _validate_history(
     if failure is not None:
         raise HistoryError(f"real harness history {failure}")
     # The launch contract above already proved the selected record names its harness.
-    harness = history_record_identity(selected)
+    identity = history_record_identity(selected)
     usage = selected.get("usage", {})
     cost = usage.get("cost_usd") if isinstance(usage, dict) else None
     valid_cost = (
@@ -239,7 +242,7 @@ def _validate_history(
         and cost >= 0
         else None
     )
-    return SmokeResult(harness=harness, cost_usd=valid_cost, fell_through=fell_through)
+    return SmokeResult(identity=identity, cost_usd=valid_cost, fell_through=fell_through)
 
 
 def run_smoke() -> SmokeResult:
@@ -309,11 +312,11 @@ def main(argv: list[str] | None = None) -> int:
     # wants to know which subscription is gone and why.
     for entry in result.fell_through:
         print(
-            f"smoke: fell through {entry.harness} ({entry.reason}); "
+            f"smoke: fell through {entry.identity} ({entry.reason}); "
             "the fallback chain handed the turn to the next identity"
         )
     # Reported rather than smoothed into an ordinary pass: only the operator can
     # act on a host that killed a launch.
     retried = f" after {result.attempts} attempts" if result.attempts > 1 else ""
-    print(f"smoke: passed via {result.harness} (recorded cost: {rendered_cost}){retried}")
+    print(f"smoke: passed via {result.identity} (recorded cost: {rendered_cost}){retried}")
     return 0

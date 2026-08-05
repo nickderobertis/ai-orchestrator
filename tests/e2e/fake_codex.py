@@ -93,6 +93,21 @@ def provider_environment(
     }
 
 
+def uninstalled_provider_environment() -> dict[str, str]:
+    """Point a real `just smoke` at a codex binary that is not installed.
+
+    The same narrowing and the same dropped pin as `provider_environment`, for the
+    same reason: what makes a journey about a launch that cannot start cost nothing
+    is the selection alone. Keeping the dispatch's pin would resolve a paid variant
+    that starts perfectly well, and the journey would buy a turn to prove it.
+    """
+    return {
+        **unpinned_worker_side(os.environ),
+        "ONEHARNESS_HARNESSES": "codex",
+        "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
+    }
+
+
 def record_launch() -> int | None:
     """Append this launch to the attempt log, returning how many it now holds."""
     log = os.environ.get("FAKE_CODEX_ATTEMPT_LOG")

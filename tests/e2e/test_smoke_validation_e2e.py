@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from fake_codex import provider_environment
+from fake_codex import provider_environment, uninstalled_provider_environment
 from harness_records import (
     AUTH_REFUSAL,
     CLAUDE_ALTERNATE2_RECORD,
@@ -146,15 +146,15 @@ def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> No
     whatever it is set to — so it guarded nothing, and dropping the narrowing spends a
     real turn and passes the smoke. The second half of this test's name is therefore
     asserted rather than assumed, in oneharness' own words for having run nothing.
+
+    The selection is built rather than spelled inline for the same reason it is in
+    the journeys above: a dispatch's `ORCHESTRATOR_WORKER_HARNESSES` beats the
+    narrowing, and inheriting it here would launch a paid identity that starts.
     """
     result = subprocess.run(
         ["just", "smoke"],
         cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "ONEHARNESS_HARNESSES": "codex",
-            "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
-        },
+        env=uninstalled_provider_environment(),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(300),

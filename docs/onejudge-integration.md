@@ -501,8 +501,11 @@ Together they are a money hazard rather than a style point: a journey that misse
 either one spawns a live subscription with its double sitting unused, and a billed
 run and a free one look identical from the assertions. `fake_codex.py`'s
 `unpinned_worker_side` is the single source for the first, and
-`test_no_smoke_journey_inherits_the_dispatch_s_harness_pin` holds every smoke
-journey's environment to both.
+`test_no_smoke_journey_inherits_the_dispatch_s_harness_pin` holds both — over the
+three builders (`chain_environment`, `provider_environment`,
+`uninstalled_provider_environment`) that are every environment a smoke journey
+launches through. Build the selection there rather than spelling one inline in a
+journey, which is how a launch would escape that guard.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with

@@ -29,7 +29,11 @@ from pathlib import Path
 
 import pytest
 from fake_claude_code import chain_environment
-from fake_codex import WORKER_SIDE_SELECTION, provider_environment
+from fake_codex import (
+    WORKER_SIDE_SELECTION,
+    provider_environment,
+    uninstalled_provider_environment,
+)
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
@@ -67,8 +71,9 @@ def _launches(tmp_path: Path) -> int:
     [
         lambda path: chain_environment(codex_bin=FAKE_CODEX, attempt_log=path),
         lambda path: provider_environment(attempt_log=path),
+        lambda _path: uninstalled_provider_environment(),
     ],
-    ids=["refusing-chain", "single-candidate"],
+    ids=["refusing-chain", "single-candidate", "uninstalled-provider"],
 )
 def test_no_smoke_journey_inherits_the_dispatch_s_harness_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build: Callable[[Path], dict[str, str]]
@@ -82,6 +87,11 @@ def test_no_smoke_journey_inherits_the_dispatch_s_harness_pin(
     live subscription with its double sitting unused — which is not a failure the
     journeys above can detect, since a green run and a billed one look identical
     from here. Asserted rather than observed, for that reason.
+
+    The three builders parametrized here are every environment a smoke journey
+    launches through, across this file, `test_smoke_validation_e2e.py`, and
+    `test_smoke_contention_e2e.py`; a journey that spelled its own selection inline
+    would be outside this guard, which is why none of them do.
     """
     monkeypatch.setenv(WORKER_SIDE_SELECTION, "claude-code:alternate2")
 
