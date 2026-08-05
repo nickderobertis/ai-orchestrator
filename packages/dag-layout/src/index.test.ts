@@ -54,6 +54,9 @@ describe("layoutDag", () => {
       done: "success",
       "not-completed": "danger",
       failed: "danger",
+      // A planner idled this one and its work is preserved, so it is inert by
+      // decision rather than lost — the same reading `cancelled` gets.
+      parked: "muted",
       cancelled: "muted",
       unknown: "neutral",
     });
