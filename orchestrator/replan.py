@@ -601,9 +601,15 @@ def _apply_lifecycle_resume(
     )
     retrying_preserved = retry_requested and status == "failed"
     continuing_preserved = status == "failed" and resume is not None
-    if not (status == "waiting" or retrying_preserved or continuing_preserved) or (
-        resume is None and not waiting_steps
-    ):
+    # A parked node is carried forward still parked, so nothing redispatches it here.
+    # It carries its checkpoint anyway, because that is what a later `requeue` has to
+    # adopt: the branch the cancelled dispatch preserved, not a fresh one. No
+    # continuation budget is spent — parking is the planner's decision, not the
+    # harness repeating itself.
+    parked_preserved = status == "parked" and resume is not None
+    if not (
+        status == "waiting" or retrying_preserved or continuing_preserved or parked_preserved
+    ) or (resume is None and not waiting_steps):
         return True
     if not isinstance(resume, dict):
         from .plan import PlanError

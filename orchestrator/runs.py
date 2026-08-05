@@ -784,7 +784,7 @@ def result_state(result: GraphPayload) -> str:
     statuses = set(status_counts(result))
     if statuses & {"failed", "skipped"}:
         return "failed"
-    if statuses & {"waiting", "blocked"}:
+    if statuses & {"waiting", "blocked", "parked"}:
         return "waiting"
     return "complete"
 
@@ -806,7 +806,7 @@ def human_actions(result: GraphPayload) -> list[HumanActionPayload]:
 def status_summary(result: GraphPayload) -> str:
     """Render stable per-status counts, waiting actions, and follow-ups."""
     counts = status_counts(result)
-    keys = ["done", "waiting", "blocked", "failed", "skipped"]
+    keys = ["done", "waiting", "blocked", "parked", "failed", "skipped"]
     keys.extend(sorted(set(counts) - set(keys)))
     summary = ", ".join(f"{counts[key]} {key}" for key in keys if key in counts)
     waiting = [

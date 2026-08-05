@@ -242,7 +242,7 @@ interface Round {
   plan: ProjectedPlan;
   node_states: Record<
     string,
-    "running" | "done" | "failed" | "waiting" | "cancelled"
+    "running" | "done" | "failed" | "waiting" | "parked" | "cancelled"
   >;
   node_status: Record<string, NodeStatus>;
   node_gated_by: Record<string, string[]>;
@@ -269,6 +269,7 @@ type NodeStatus =
   | "done"
   | "not-completed"
   | "failed"
+  | "parked"
   | "cancelled"
   | "unknown";
 ```

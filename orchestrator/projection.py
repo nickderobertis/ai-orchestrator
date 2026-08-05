@@ -50,7 +50,7 @@ class ProjectionError(ValueError):
 # plain strings by the codebase string-status convention (no canonical enum to source from); this
 # strict-reader view is drift-gated where it matters — round-finished folding rejects any state that
 # disagrees with the recorded result, so a status the executor emits but omits here cannot project.
-NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
+NodeState = Literal["running", "done", "failed", "waiting", "parked", "cancelled"]
 
 #: The states a node can *settle* in — `NodeState` minus the one that means it has
 #: not. Named here rather than restated at each reader so a strict fold and a
@@ -72,6 +72,7 @@ NodeStatus = Literal[
     "done",
     "not-completed",
     "failed",
+    "parked",
     "cancelled",
     "unknown",
 ]
@@ -453,6 +454,30 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
             builder.edges = [edge for edge in builder.edges if node not in edge]
             builder.states.pop(node, None)
             builder.results.pop(node, None)
+        case "node-parked":
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("node-parked references an unknown node")
+            definition = next(item for item in builder.nodes if item["id"] == node)
+            definition["parked"] = True
+            # A running node keeps `running` here: its own `node-settled` records the
+            # park, and overwriting the state first would make that settlement look
+            # like one with no start behind it.
+            if builder.states.get(node) != "running":
+                builder.states[node] = "parked"
+        case "node-requeued":
+            amend = detail.get("amend", {})
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("node-requeued references an unknown node")
+            definition = next(item for item in builder.nodes if item["id"] == node)
+            if not definition.pop("parked", False):
+                raise ProjectionError("node-requeued target is not parked")
+            if not isinstance(amend, dict) or {"id", "deps"} & set(amend):
+                raise ProjectionError("node-requeued amendments must be a mapping without id/deps")
+            definition.update(amend)
+            # The node is on the frontier again, so a fresh dispatch of it this round
+            # is a legal first start rather than the second one it would look like.
+            builder.states.pop(node, None)
+            builder.results.pop(node, None)
         case "context-added":
             note = detail.get("note")
             if not isinstance(node, str) or node not in builder.node_ids:
@@ -597,7 +622,7 @@ def _fold_node_result(builder: _RoundBuilder, event: Event) -> None:
     match status:
         case "done":
             state = "complete"
-        case "waiting":
+        case "waiting" | "parked":
             state = "waiting"
         case _:
             state = "failed"

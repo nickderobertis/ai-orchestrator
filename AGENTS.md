@@ -149,9 +149,18 @@ dispatch onejudge.
    report. Require verified publication closeout before issuing `complete`. A run
    the progress views report as `PARKED` is alive and not working — no child process,
    no surface, no ledger write — so treat it as stopped and intervene rather than
-   waiting on it. `channel-reply` refuses an edit it cannot apply, with the reason,
-   and every edit it accepts reaches the graph; a non-zero reply is a rejection to
-   correct, never a command to resend.
+   waiting on it; that liveness verdict is unrelated to a node the planner *parked*
+   with `cancel`, which is a deliberate idle. `channel-reply` refuses an edit it
+   cannot apply, with the reason, and every edit it accepts reaches the graph; a
+   non-zero reply is a rejection to correct, never a command to resend.
+
+   **One execution path per deliverable.** When a path fails, diagnose and fix that
+   path or escalate to the operator with evidence; never launch a duplicate parallel
+   path for the same deliverable — a planner-driven integrate or recovery beside a
+   live node delivering it counts as a duplicate — without explicit operator
+   approval. `cancel` is the tool for idling a redundant or misdirected node and
+   `requeue` for resuming it; see [Parking a node, and picking it up
+   again](docs/orchestration.md#parking-a-node-and-picking-it-up-again).
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /

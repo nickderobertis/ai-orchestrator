@@ -18,7 +18,9 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast, get_
 if TYPE_CHECKING:
     from .graph import Graph
 
-EditOp = Literal["add", "drop", "reparent", "retry", "attest", "complete", "context"]
+EditOp = Literal[
+    "add", "drop", "reparent", "retry", "cancel", "requeue", "attest", "complete", "context"
+]
 EDIT_OPS = frozenset(get_args(EditOp))
 # Single source of truth for the down-channel edit envelope version. The parser
 # here and every producer (see channel._reply) reference this so the accepted and
@@ -61,6 +63,21 @@ class RetryPayload(TypedDict):
     node: dict[str, Any]
 
 
+class CancelPayload(TypedDict):
+    """Park a pending or running node without naming a successor."""
+
+    op: Literal["cancel"]
+    id: str
+
+
+class RequeuePayload(TypedDict, total=False):
+    """Return a parked node to the desired frontier, optionally amended."""
+
+    op: Literal["requeue"]
+    id: str
+    amend: dict[str, Any]
+
+
 class AttestPayload(TypedDict):
     """Attest a currently-ready human action by reference."""
 
@@ -88,6 +105,8 @@ EditPayload: TypeAlias = (
     | DropPayload
     | ReparentPayload
     | RetryPayload
+    | CancelPayload
+    | RequeuePayload
     | AttestPayload
     | CompletePayload
     | ContextPayload
@@ -99,6 +118,8 @@ EditOperationKind = Literal[
     "edge-added",
     "edge-removed",
     "node-dropped",
+    "node-parked",
+    "node-requeued",
     "reparent",
     "retry-requested",
     "human-attested",
@@ -323,6 +344,43 @@ def apply_edit(
                         },
                     ]
                 )
+        case "cancel":
+            node_id = item.get("id")
+            if not isinstance(node_id, str) or node_id not in by_id:
+                raise EditError("cancel requires an existing node id")
+            # The definition is the authoritative record of parking, not the frontier:
+            # a node carried into a later round is parked with nothing journalled about
+            # it there, so a frontier lookup alone would answer "pending" and let the
+            # same node be parked twice.
+            if by_id[node_id].get("parked"):
+                raise EditError("cancel requires a node that is not already parked")
+            if states.get(node_id) not in {None, "running"}:
+                raise EditError("cancel requires a pending or running node")
+            by_id[node_id]["parked"] = True
+            events.append({"kind": "node-parked", "node": node_id, "detail": {}})
+        case "requeue":
+            node_id, amend = item.get("id"), item.get("amend", {})
+            if not isinstance(node_id, str) or node_id not in by_id:
+                raise EditError("requeue requires an existing node id")
+            if not by_id[node_id].get("parked"):
+                raise EditError("requeue requires a parked node")
+            if not isinstance(amend, dict):
+                raise EditError("requeue amendments must be a mapping")
+            # `id` names the node being requeued and `deps` is `reparent`'s to change;
+            # letting an amendment rewrite either would make one op silently do the
+            # work of another, with no separate record of the rewiring.
+            forbidden = [key for key in ("id", "deps") if key in amend]
+            if forbidden:
+                raise EditError(
+                    f"requeue cannot amend {', '.join(map(repr, forbidden))}: "
+                    "use 'add' or 'reparent' for that"
+                )
+            target = by_id[node_id]
+            del target["parked"]
+            target.update(amend)
+            events.append(
+                {"kind": "node-requeued", "node": node_id, "detail": {"amend": dict(amend)}}
+            )
         case "attest":
             ref = item.get("ref")
             if not isinstance(ref, str) or states.get(ref) != "waiting":
