@@ -1283,7 +1283,7 @@ def test_a_transcript_holding_unpaired_surrogates_serves_rather_than_500s(
 def test_run_that_recorded_no_event_serves_a_null_last_event(tmp_path: Path) -> None:
     """A just-launched run has no last event; the API says null, never an empty string.
 
-    A prepared round with no journal is exactly what a `repo-plan` run looks like the
+    A prepared round with no journal is exactly what a run predating the journal looks like the
     moment it launches. The empty string this used to serve failed the published
     contract's non-empty-string rule, and because the client validates the whole list
     in one parse, those runs took every healthy run in the response down with them.

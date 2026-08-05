@@ -4,8 +4,8 @@ from typing import Literal, get_args
 
 ROUND_BUDGET_OPTION = "--round-budget"
 # oneharness's approval/sandbox modes, offered identically by every entry point
-# that dispatches (`just dispatch`, `just run-plan`, `just repo-task`, and
-# `just orchestrate`) so one option cannot drift away from the others. The domain
+# that dispatches (`just run-plan` and `just orchestrate`) so one option cannot
+# drift away from the other. The domain
 # is closed, so it is a Literal; the tuple is derived from it rather than repeated,
 # which is what argparse `choices` and the dispatch-time guards read.
 OneharnessMode = Literal["read-only", "plan", "default", "edit", "auto", "bypass"]

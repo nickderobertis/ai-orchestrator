@@ -335,33 +335,24 @@ def test_remote_identity_without_required_checks_refuses_recovery(
     assert "just repos --audit-gate-coverage" in recovered.stderr
 
 
-@pytest.mark.parametrize(
-    ("command", "positionals"),
-    [
-        ("orchestrator-repo-task", ("o/r", "engineer", "never dispatched")),
-        ("orchestrator-run-plan", ("plan.json",)),
-    ],
-)
-def test_lifecycle_clis_reject_the_retired_skip_verify_flag(
-    command: str, positionals: tuple[str, ...]
-) -> None:
-    """The flag is gone from every surface that used to accept it.
+def test_the_lifecycle_cli_rejects_the_retired_skip_verify_flag() -> None:
+    """The flag is gone from the one surface that used to accept it.
 
     It never skipped merge-path verification, and now cannot skip anything, so a
     script still passing it must fail loudly rather than appear to take effect.
     """
-    rejected = _cli(command, *positionals, "--skip-verify", check=False)
+    rejected = _cli("orchestrator-run-plan", "plan.json", "--skip-verify", check=False)
 
     assert rejected.returncode == 2
     assert "unrecognized arguments: --skip-verify" in rejected.stderr
 
 
-def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
+def test_the_lifecycle_cli_rejects_unknown_local_aliases_before_dispatch(
     tmp_path: Path,
     bare_origin: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every serialized lifecycle CLI rejects reserved aliases at its boundary."""
+    """The one serialized lifecycle CLI rejects reserved aliases at its boundary."""
     state = tmp_path / "state"
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
     checkout = tmp_path / "checkout"
@@ -369,29 +360,32 @@ def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
     Registry().register(str(checkout), workflow="local")
     assert Registry().resolve("local/checkout") == checkout.resolve()
 
+    unknown_repo_plan = tmp_path / "unknown-repo-plan.json"
+    unknown_repo_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "unknown-repo",
+                        "repo": "local/does-not-exist",
+                        "persona": "engineer",
+                        "task": "must not dispatch",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     unknown_repo = _cli(
-        "orchestrator-repo-task",
-        "local/does-not-exist",
-        "engineer",
-        "must not dispatch",
+        "orchestrator-run-plan",
+        str(unknown_repo_plan),
+        "--no-record",
         check=False,
     )
     assert unknown_repo.returncode == 2
     assert "unknown local checkout alias 'local/does-not-exist'" in unknown_repo.stderr
     assert "just repos" in unknown_repo.stderr
-
-    unknown_execution = _cli(
-        "orchestrator-repo-task",
-        "local/checkout",
-        "engineer",
-        "must not dispatch",
-        "--execution-checkout",
-        "local/missing-execution",
-        check=False,
-    )
-    assert unknown_execution.returncode == 2
-    assert "unknown local checkout alias 'local/missing-execution'" in unknown_execution.stderr
-    assert "just repos" in unknown_execution.stderr
 
     plan = tmp_path / "unknown-execution-plan.json"
     plan.write_text(
@@ -413,7 +407,7 @@ def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
     )
     runs = tmp_path / "runs"
     unknown_plan = _cli(
-        "orchestrator-repo-plan",
+        "orchestrator-run-plan",
         str(plan),
         "--runs-dir",
         str(runs),
