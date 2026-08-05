@@ -195,6 +195,7 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 def main_runs(argv: list[str] | None = None) -> int:
     from .channel import ChannelError, pending_surface_indicator, planner_wait_indicator
+    from .dispatches import live_dispatches, run_indicator
     from .goals import concurrent_indicator
     from .launch import UNKNOWN_OWNER, caller_identity, read_run_owner
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
@@ -273,6 +274,16 @@ def main_runs(argv: list[str] | None = None) -> int:
         for path in run_dirs
         if (indicator := pending_surface_indicator(path)) is not None
     }
+    # A row that says ACTIVE says the orchestrator holds its pid; it has never said
+    # whether any node is being worked. One registry read answers that for every row
+    # at once, so the distinction between a run with dispatches in flight and one with
+    # none is on the same line a planner already reads.
+    observed = live_dispatches()
+    live = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := run_indicator(path.name, observed)) is not None
+    }
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
@@ -293,6 +304,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         except (ChannelError, ConfigError, OSError):
             waiting = None
         print(f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})")
+        if run_id in live:
+            print(f"    {live[run_id]}")
         if run_id in unread:
             print(f"    {unread[run_id]}")
         if run_id in concurrent:
@@ -316,6 +329,11 @@ def main_runs(argv: list[str] | None = None) -> int:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:
             print(f"    {parked[run_id]}")
+        # A stopped run keeps this too, and deliberately: "no live dispatch carries
+        # this run's ownership stamp" is the observation that turns an abandoned
+        # round from a claim about a recorded pid into one about running work.
+        if run_id in live and (run_id in active_launches or stopped):
+            print(f"    {live[run_id]}")
         # Same rule the wait above follows: a queued surface outlives the work that
         # queued it, so a stopped run keeps the line that says why it stopped rather
         # than one inviting the planner to read updates nothing will follow up on.
