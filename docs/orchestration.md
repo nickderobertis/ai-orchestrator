@@ -394,7 +394,10 @@ Cross-DAG edges resolve through the active-runs index and the upstream journal.
 An unknown or inactive run, unfinished node, or failed node leaves the consumer
 blocked. Once an upstream succeeds, the consumer records its journal sequence;
 if that journal later advances, the consumer emits a non-crashing
-`upstream-modified` event for planner review without rerunning work.
+`upstream-modified` event for planner review without rerunning work. The watch
+outlives the node that carried it: a transition keeps the reference rather than
+removing it as a satisfied dependency, and passes it to the dependents of a
+consumer it carried out — see [Replanning](#replanning).
 
 The planner writes every agent node and step `task` with this prose template:
 
@@ -1081,6 +1084,16 @@ preserved. An unresolved same-repository publication anchor passes through remov
 human gates (and other non-publication nodes), so attestation cannot silently cut a
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
+
+A **cross-DAG reference is not a satisfied dependency id** and is never removed by
+that rule: `run:<id>#<node>` names no node of this graph, so it was never in the
+round to be satisfied. It stays on a node carried forward, and it passes through a
+consumer the transition carried out to whatever still depends on that consumer —
+the same pass-through the publication anchor above gets, for the same reason. A
+watch that its own consumer's completion silently ended would stop reporting
+`upstream-modified` and stop blocking on an upstream that became unresolvable,
+which is exactly what the reference is for. A consumer with no dependents leaves
+nothing to carry the watch, and it ends there.
 
 A failed lifecycle node whose preserved branch is carried forward is continued
 **automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**. The count is

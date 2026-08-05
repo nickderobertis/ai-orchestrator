@@ -162,6 +162,7 @@ def plan_for_the_next_round(run_dir: Path) -> dict[str, Any] | None:
     of the transitions this exists to fold. `prepare_round` writes the missing
     result out of the same projection immediately afterwards.
     """
+    from .journal import JOURNAL_NAME
     from .projection import ProjectionError, project_run
     from .runs import latest_round, load_mapping
 
@@ -175,7 +176,7 @@ def plan_for_the_next_round(run_dir: Path) -> dict[str, Any] | None:
         result = load_mapping(result_path)
     else:
         try:
-            projected = project_run(run_dir / "events.jsonl", RunId(run_dir.name), number)
+            projected = project_run(run_dir / JOURNAL_NAME, RunId(run_dir.name), number)
         except (ProjectionError, ConfigError, OSError):
             return None
         if projected.result is None:

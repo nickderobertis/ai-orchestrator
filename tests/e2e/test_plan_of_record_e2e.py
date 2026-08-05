@@ -29,6 +29,11 @@ from orchestrator.plan import PLAN_SCHEMA_VERSION
 #: A dispatch's whole life, from launch to a settled recorded round.
 ROUND_TIMEOUT = 180
 
+#: A cross-DAG watch on a run that is not active, so it never resolves and the node
+#: holding it is blocked in every round — which is what makes it observable that the
+#: transition carried the reference rather than removing it.
+EXTERNAL_DEPENDENCY = "run:no-such-upstream#publish"
+
 
 def _wait_for_node_event(events: Path, kind: str, node: str, seconds: float = 120) -> None:
     """Block until one journaled record carries both ``kind`` and ``node``.
@@ -110,6 +115,17 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
                         "task": "should-fail",
                         "max_turns": 1,
                     },
+                    {
+                        # A watch on a run that does not exist, so it is blocked in
+                        # every round and carried forward holding the reference
+                        # itself. What it proves is that the transition keeps that
+                        # reference: strip it as a satisfied dependency id and this
+                        # node stops waiting on an upstream it never saw resolve.
+                        "id": "watcher",
+                        "task": "Wait for the external producer.",
+                        "expects_no_diff": True,
+                        "deps": [EXTERNAL_DEPENDENCY],
+                    },
                 ],
             }
         ),
@@ -170,6 +186,7 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
     assert executed["holder"]["status"] == "done"
     assert executed["flaky"]["status"] == "failed"
     assert executed["flaky-again"]["status"] == "failed"
+    assert executed["watcher"]["status"] == "blocked"
 
     # The transition the defect report is about: the same launch file, handed back to
     # `run-plan` against the run it already recorded a round for.
@@ -185,11 +202,18 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
     # Folded, not re-read: the two finished nodes are carried out rather than
     # dispatched again, and the frontier is the replacement's id — which exists
     # nowhere in the file this round was launched with.
-    assert [task["id"] for task in _round(run_dir, 2, "plan.json")["tasks"]] == ["flaky-again"]
+    carried = _round(run_dir, 2, "plan.json")["tasks"]
+    assert [task["id"] for task in carried] == ["watcher", "flaky-again"]
+    # The watch is not a satisfied dependency id: it names no node of this graph, so
+    # the transition keeps it rather than stripping it off the node that holds it.
+    assert next(task for task in carried if task["id"] == "watcher")["deps"] == [
+        EXTERNAL_DEPENDENCY
+    ]
     assert "deriving the next one from the graph that round executed" in second.stderr
     cancelled = _round(run_dir, 2, "result.json")["results"]
-    assert set(cancelled) == {"flaky-again"}
+    assert set(cancelled) == {"flaky-again", "watcher"}
     assert cancelled["flaky-again"]["status"] == "cancelled"
+    assert cancelled["watcher"]["status"] == "blocked"
 
     # And again out of the round the budget cancelled, which is the transition that
     # bypassed the fold on the real run.
@@ -202,7 +226,12 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
         timeout=e2e_timeout(ROUND_TIMEOUT),
     )
     assert third.returncode == 1, (third.stdout, third.stderr)
-    assert [task["id"] for task in _round(run_dir, 3, "plan.json")["tasks"]] == ["flaky-again"]
+    resumed_plan = _round(run_dir, 3, "plan.json")["tasks"]
+    assert [task["id"] for task in resumed_plan] == ["watcher", "flaky-again"]
+    # Still held after a second transition, and after one out of a cancelled round.
+    assert next(task for task in resumed_plan if task["id"] == "watcher")["deps"] == [
+        EXTERNAL_DEPENDENCY
+    ]
     resumed = _round(run_dir, 3, "result.json")["results"]
-    assert set(resumed) == {"flaky-again"}
+    assert set(resumed) == {"flaky-again", "watcher"}
     assert resumed["flaky-again"]["status"] == "failed"

@@ -574,10 +574,11 @@ def _settle_from_the_journal(run_dir: Path, number: int, round_dir: Path) -> boo
     authoritative stream is what says which of those happened — so this is a repair,
     not a decision: it only ever makes the ledger say what the journal already does.
     """
+    from .journal import JOURNAL_NAME, read_events
+
     plan_path = round_dir / "plan.json"
     replayed = None
-    events_path = run_dir / "events.jsonl"
-    from .journal import read_events
+    events_path = run_dir / JOURNAL_NAME
 
     has_terminal_event = any(
         event.round == number and event.kind == "round-finished"
