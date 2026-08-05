@@ -243,13 +243,23 @@ def test_run_smoke_passes_on_the_record_of_the_identity_the_chain_selected(
 
 @pytest.mark.parametrize(
     ("refusal", "reason"),
-    [(QUOTA_REFUSAL, "quota"), (AUTH_REFUSAL, "auth"), (SKIPPED_CANDIDATE, "skipped")],
-    ids=["quota", "auth", "skipped"],
+    [
+        (QUOTA_REFUSAL, "quota"),
+        (AUTH_REFUSAL, "auth"),
+        (SKIPPED_CANDIDATE, "skipped"),
+        ({**SKIPPED_CANDIDATE, "usage": None}, "skipped"),
+    ],
+    ids=["quota", "auth", "skipped", "unaccounted"],
 )
 def test_run_smoke_accepts_every_refusal_the_chain_moves_past(
     tmp_path: Path, monkeypatch, refusal: dict[str, object], reason: str
 ) -> None:
-    """Each of these candidates declined the task without running it."""
+    """Each of these candidates declined the task without running it.
+
+    Absent accounting is not evidence of spend: the counters a refusal does report
+    have to be zero, but a candidate that reports none at all — as one nobody
+    started may — is still one the chain merely stepped past.
+    """
     history = tmp_path / "history.jsonl"
     _chain(history, refusal, CODEX_RECORD)
     monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
@@ -307,6 +317,80 @@ def test_run_smoke_rejects_a_candidate_that_failed_for_an_unclassified_reason(
         ),
     ):
         smoke.run_smoke()
+
+
+@pytest.mark.parametrize(
+    ("candidate", "message"),
+    [
+        (
+            {**QUOTA_REFUSAL, "harness_id": "", "harness": ""},
+            "recorded as quota but does not name the identity it was written for",
+        ),
+        (
+            {**QUOTA_REFUSAL, "usage": reported_usage(QUOTA_REFUSAL, output_tokens=340)},
+            "recorded as quota but reports output_tokens 340 that was billed for",
+        ),
+        (
+            {**QUOTA_REFUSAL, "usage": reported_usage(QUOTA_REFUSAL, cost_usd=0.21)},
+            "recorded as quota but reports cost_usd 0.21 that was billed for",
+        ),
+        (
+            {**QUOTA_REFUSAL, "usage": reported_usage(QUOTA_REFUSAL, input_tokens="many")},
+            "recorded as quota but reports malformed input_tokens 'many'",
+        ),
+        (
+            {**QUOTA_REFUSAL, "usage": 12},
+            "recorded as quota but reports malformed token accounting 12",
+        ),
+        (
+            {**QUOTA_REFUSAL, "status": "ok", "exit_code": 0},
+            "recorded as quota but records a successful turn",
+        ),
+    ],
+    ids=["nameless", "billed-tokens", "billed-cost", "malformed-counter", "malformed-usage", "ran"],
+)
+def test_run_smoke_rejects_a_candidate_whose_record_does_not_back_its_own_reason(
+    tmp_path: Path, monkeypatch, candidate: dict[str, object], message: str
+) -> None:
+    """A candidate's word for what happened to it is checked, not believed.
+
+    These records come out of a store nothing in this process wrote, and each one
+    reaches the verdict and the operator's report alike. A refusal that names no
+    identity would be reported as "an unidentified harness fell through", and one
+    carrying a billed turn is a candidate that RAN — excusing either as fallback is
+    the launch breakage this smoke exists to name.
+    """
+    history = tmp_path / "history.jsonl"
+    _chain(history, candidate, CODEX_RECORD)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    with pytest.raises(HistoryError, match=message):
+        smoke.run_smoke()
+
+
+def test_run_smoke_reads_the_verdict_off_the_last_turn_a_session_recorded(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A store holds more than turns, and only a turn may stand in for the launch.
+
+    The selected candidate is the LAST record, so anything else a store appends —
+    an index envelope wrapping a record inside a `record` key, a line the format
+    grows later — would take its place and be judged as the identity that ran.
+    """
+    history = tmp_path / "history.jsonl"
+    _chain(history, QUOTA_REFUSAL, CLAUDE_ALTERNATE2_RECORD)
+    with history.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"session_path": str(history), "record": {"harness": "codex"}}))
+        stream.write("\n")
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    assert smoke.main([]) == 0
+
+    assert "smoke: passed via claude-code:alternate2" in capsys.readouterr().out
 
 
 def test_run_smoke_rejects_a_chain_with_no_candidate_left_to_run_the_task(

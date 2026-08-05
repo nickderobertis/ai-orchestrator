@@ -503,8 +503,10 @@ launches it took. The record it judges is the **selected** candidate's: a
 the turn with a classified `quota` or `auth` failure — or was skipped outright — is
 the chain working, and the smoke names it in the pass rather than failing on it.
 Anything else is still a launch failure: the selected record breaking the contract,
-a candidate failing for a reason the chain does not move past, or every candidate
-refusing. See [The record a fallback chain is judged
+a candidate failing for a reason the chain does not move past, a candidate whose
+record does not back the reason it names — one that identifies no harness, or that
+carries a turn somebody was billed for — or every candidate refusing. See [The
+record a fallback chain is judged
 by](docs/onejudge-integration.md#the-record-a-fallback-chain-is-judged-by).
 It is deliberately outside `just gate`. The pre-push hook runs it
 only when the pushed diff touches `scripts/`,

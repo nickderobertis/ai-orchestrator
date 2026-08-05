@@ -16,10 +16,11 @@ import json
 import math
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import Any, Literal, NotRequired, TypedDict, TypeGuard, cast
 
 from .config import ConfigError
 from .detail_snapshot import CheckRollup
@@ -806,6 +807,40 @@ FALLTHROUGH_FAILURE_KINDS: frozenset[str] = frozenset({"quota", "auth"})
 #: The status of a candidate the chain never even started, which spends nothing and
 #: classifies nothing; being skipped is its own reason.
 SKIPPED_STATUS = "skipped"
+#: The ``type`` a stored line carries when it is one harness turn.
+TURN_RECORD_TYPE = "run"
+#: What a record that names no harness at all is called where one is reported.
+UNIDENTIFIED_HARNESS = "an unidentified harness"
+
+
+def is_turn_record(value: Mapping[str, Any]) -> TypeGuard[HistoryRecord]:
+    """Narrow one stored history object to the turn-record shape readers assume.
+
+    A history store is an external input: nothing in this process wrote it, and a
+    launch verdict is read straight back out of it. Checking the tag here is what
+    makes reading one as a ``HistoryRecord`` a parse rather than an assertion — and
+    it is the check a chain needs most, because the verdict is read off the LAST
+    turn a session recorded, so a trailing line of any other kind would take its
+    place. The tag is required rather than merely not-an-event: a store also holds
+    an index whose lines wrap a record inside an envelope that names no harness of
+    its own, and one of those read as a turn is a launch failure out of thin air.
+
+    Only the envelope is decided here. What a turn *reported* stays with the callers
+    that judge it, because their diagnostics quote the value the harness actually
+    wrote: dropping a malformed counter as "not a record" would replace
+    "reports malformed input_tokens 'many'" with silence.
+    """
+    return value.get("type") == TURN_RECORD_TYPE
+
+
+def session_turn_records(session: HistorySession) -> list[HistoryRecord]:
+    """Read back every harness turn a session recorded, and nothing else.
+
+    A `run_mode = "fallback"` chain writes one of these per candidate it attempted,
+    in the order it tried them, so this list is the launch path's own account of
+    itself: the identities it moved past, and last, the one it selected.
+    """
+    return [value for value in session_records(session) if is_turn_record(value)]
 
 
 def history_record_identity(record: HistoryRecord) -> str:
@@ -819,7 +854,7 @@ def history_record_identity(record: HistoryRecord) -> str:
     if isinstance(identity, str) and identity:
         return identity
     harness = record.get("harness")
-    return harness if isinstance(harness, str) and harness else "an unidentified harness"
+    return harness if isinstance(harness, str) and harness else UNIDENTIFIED_HARNESS
 
 
 def history_record_fallthrough_reason(record: HistoryRecord) -> str | None:
@@ -834,6 +869,43 @@ def history_record_fallthrough_reason(record: HistoryRecord) -> str | None:
         return kind
     if record.get("status") == SKIPPED_STATUS:
         return SKIPPED_STATUS
+    return None
+
+
+def history_record_fallthrough_failure(record: HistoryRecord) -> str | None:
+    """Why this record cannot be read as a candidate the chain merely stepped past.
+
+    ``history_record_fallthrough_reason`` reports the harness's own word for what
+    became of a candidate. This is the check that the record *backs* that word,
+    because both the verdict and what an operator is told are read out of a store
+    nothing in this process wrote: a refusal that names no identity would be
+    reported as "an unidentified harness fell through", and one carrying billed
+    tokens or a successful turn is a candidate that RAN — excusing that as fallback
+    is precisely the launch breakage the smoke exists to name.
+
+    Absent accounting is not evidence of spend, and demanding it would reject the
+    real thing: a skipped candidate records a null counter for every field, and an
+    auth refusal on this host does the same. A counter that IS reported must be a
+    valid count of zero.
+    """
+    if history_record_identity(record) == UNIDENTIFIED_HARNESS:
+        return "does not name the identity it was written for"
+    if record.get("status") == "ok":
+        return "records a successful turn"
+    usage = record.get("usage")
+    if usage is None:
+        return None
+    if not isinstance(usage, dict):
+        return f"reports malformed token accounting {usage!r}"
+    for key in USAGE_FIELDS:
+        raw = usage.get(key)
+        if raw is None:
+            continue
+        spent = _number(raw) if key == "cost_usd" else _non_negative_int(raw)
+        if spent is None:
+            return f"reports malformed {key} {raw!r}"
+        if spent:
+            return f"reports {key} {raw!r} that was billed for"
     return None
 
 
@@ -864,7 +936,7 @@ def history_session_launch_failure(
     *selected* is held to this bar; the caller that made that distinction passes
     the record it made it about, rather than having it re-read here.
     """
-    records = cast(list[HistoryRecord], session_records(session) if records is None else records)
+    records = session_turn_records(session) if records is None else records
     # Raises on a malformed or self-contradictory value the harness did report.
     _summarize_session(session, records)
     if not records:

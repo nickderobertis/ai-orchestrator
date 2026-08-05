@@ -23,6 +23,7 @@ from harness_records import (
     CODEX_RECORD,
     QUOTA_REFUSAL,
     RATE_LIMITED_RECORD,
+    SKIPPED_CANDIDATE,
     reported_usage,
     smoke_history_chain,
     smoke_history_record,
@@ -286,24 +287,66 @@ def test_validation_command_accepts_each_real_harness_record_shape(
     assert f"smoke: passed via {harness} (recorded cost: {rendered_cost})" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("case", "refusal", "selected", "reported"),
+    [
+        (
+            "quota",
+            QUOTA_REFUSAL,
+            CLAUDE_ALTERNATE2_RECORD,
+            (
+                "fell through claude-code:alternate (quota)",
+                "passed via claude-code:alternate2 (recorded cost: $0.063882)",
+            ),
+        ),
+        (
+            "auth",
+            AUTH_REFUSAL,
+            CODEX_RECORD,
+            (
+                "fell through claude-code:alternate2 (auth)",
+                "passed via codex (recorded cost: unreported)",
+            ),
+        ),
+        (
+            "skipped",
+            SKIPPED_CANDIDATE,
+            CODEX_RECORD,
+            (
+                "fell through claude-code:alternate (skipped)",
+                "passed via codex (recorded cost: unreported)",
+            ),
+        ),
+    ],
+)
 def test_validation_command_passes_a_chain_that_fell_through_a_refused_candidate(
     tmp_path: Path,
+    case: str,
+    refusal: dict[str, object],
+    selected: dict[str, object],
+    reported: tuple[str, str],
 ) -> None:
     """The public command reads the launch path's outcome off the selected record.
 
-    This is the shape this host writes today: `claude-code:alternate` is out of
-    weekly quota, the chain hands the turn to `claude-code:alternate2`, and both
-    records land in one session. Failing on the refusal blocked every push whose
-    diff selects this smoke, for a launch path that was working.
+    The quota case is the shape this host writes today: `claude-code:alternate` is
+    out of weekly quota, the chain hands the turn to `claude-code:alternate2`, and
+    both records land in one session. Failing on the refusal blocked every push
+    whose diff selects this smoke, for a launch path that was working.
+
+    An unauthenticated identity and one the chain never started are the same story
+    with the other two shapes a candidate can step aside in: an auth refusal names
+    a failure kind, and a skipped candidate names none at all — it has no exit code,
+    no duration, and a null for every counter, so nothing but its status says what
+    became of it.
     """
-    smoke_id = "fell-through"
-    _chain(tmp_path, smoke_id, QUOTA_REFUSAL, CLAUDE_ALTERNATE2_RECORD)
+    smoke_id = f"fell-through-{case}"
+    _chain(tmp_path, smoke_id, refusal, selected, suffix=case)
 
     result = _validate(tmp_path, smoke_id)
 
     assert result.returncode == 0, result.stderr
-    assert "smoke: fell through claude-code:alternate (quota)" in result.stdout
-    assert "smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)" in result.stdout
+    for line in reported:
+        assert f"smoke: {line}" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -329,6 +372,20 @@ def test_validation_command_passes_a_chain_that_fell_through_a_refused_candidate
             (QUOTA_REFUSAL, AUTH_REFUSAL),
             "no candidate left to run the task: claude-code:alternate (quota), "
             "claude-code:alternate2 (auth)",
+        ),
+        (
+            "candidate-was-billed",
+            (
+                {**QUOTA_REFUSAL, "usage": reported_usage(QUOTA_REFUSAL, input_tokens=1200)},
+                CODEX_RECORD,
+            ),
+            "candidate claude-code:alternate was recorded as quota but reports "
+            "input_tokens 1200 that was billed for",
+        ),
+        (
+            "nameless-candidate",
+            ({**QUOTA_REFUSAL, "harness_id": "", "harness": ""}, CODEX_RECORD),
+            "was recorded as quota but does not name the identity it was written for",
         ),
     ],
 )

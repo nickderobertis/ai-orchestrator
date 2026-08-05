@@ -46,10 +46,25 @@ ZERO_WORK_REJECTION: dict[str, object] = {
 #: own history: the turn failed, so the record is `nonzero` with exit code 1 — the
 #: very shape the smoke used to read as launch breakage.
 REFUSAL_EXIT_CODE = 1
+#: What an identity nobody authenticated says instead, on stderr and nowhere else.
+#: oneharness classifies this as `auth`, which is the second kind a chain steps
+#: past — and the one whose record carries a null for every counter rather than the
+#: zeros the quota shape reports.
+UNAUTHENTICATED_REJECTION = "401 Unauthorized: no credentials"
+#: Which rejection this double answers with, read from the environment because it is
+#: spawned as the provider binary and has no other way to be told.
+REFUSAL_ENV = "FAKE_CLAUDE_CODE_REFUSAL"
+#: The candidate the chain never starts at all: not a rejection this double can
+#: write, because a binary that is absent is what oneharness records as `skipped`.
+UNINSTALLED_BIN = Path("/does/not/exist/claude")
 
 
 def chain_environment(
-    *, codex_bin: Path, attempt_log: Path, omit_usage: bool = False
+    *,
+    codex_bin: Path,
+    attempt_log: Path,
+    omit_usage: bool = False,
+    refusal: str = "quota",
 ) -> dict[str, str]:
     """Point a real `just smoke` at a chain whose first candidate refuses the turn.
 
@@ -62,13 +77,21 @@ def chain_environment(
     — `ONEHARNESS_BIN_CLAUDE_CODE` leaves `claude-code:alternate` resolving to the
     real `claude` — so a chain naming variants here would spawn the paid provider
     with the double sitting unused beside it.
+
+    ``refusal`` picks which way the first candidate steps aside: ``quota`` and
+    ``auth`` are answered by this double, and ``skipped`` points the candidate at a
+    binary that is not there, because a chain only records that status for one it
+    never started.
     """
     return {
         **unpinned_worker_side(os.environ),
         # Both candidates are replaced, so the chain can reach no paid provider by
         # any path — including the fall-through this journey is about.
         "ONEHARNESS_HARNESSES": "claude-code,codex",
-        "ONEHARNESS_BIN_CLAUDE_CODE": str(Path(__file__).resolve()),
+        "ONEHARNESS_BIN_CLAUDE_CODE": str(
+            UNINSTALLED_BIN if refusal == "skipped" else Path(__file__).resolve()
+        ),
+        REFUSAL_ENV: refusal,
         "ONEHARNESS_BIN_CODEX": str(codex_bin),
         "FAKE_CODEX_ATTEMPT_LOG": str(attempt_log),
         "FAKE_CODEX_UNAVAILABLE_ATTEMPTS": "0",
@@ -77,12 +100,17 @@ def chain_environment(
 
 
 def main() -> int:
-    """Answer the turn with the rejection, in whichever format oneharness asked for.
+    """Answer the turn with the rejection this launch was asked for.
 
-    `stream-json` and `json` differ here only in that the streamed form is one
-    JSON document per line; the terminal record oneharness classifies is the same
-    object either way, so both are emitted from one source.
+    The quota shape is written to stdout in whichever format oneharness asked for:
+    `stream-json` and `json` differ here only in that the streamed form is one JSON
+    document per line, and the terminal record oneharness classifies is the same
+    object either way. An unauthenticated identity never gets that far — it fails
+    before it can answer, and says so on stderr alone.
     """
+    if os.environ.get(REFUSAL_ENV) == "auth":
+        print(UNAUTHENTICATED_REJECTION, file=sys.stderr)
+        return REFUSAL_EXIT_CODE
     json.dump(ZERO_WORK_REJECTION, sys.stdout)
     if "stream-json" in sys.argv:
         sys.stdout.write("\n")

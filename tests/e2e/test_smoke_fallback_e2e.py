@@ -44,7 +44,9 @@ from orchestrator import REPO_ROOT
 FAKE_CODEX = REPO_ROOT / "tests" / "e2e" / "fake_codex.py"
 
 
-def _run_smoke(tmp_path: Path, *, omit_usage: bool = False) -> subprocess.CompletedProcess[str]:
+def _run_smoke(
+    tmp_path: Path, *, omit_usage: bool = False, refusal: str = "quota"
+) -> subprocess.CompletedProcess[str]:
     """Run the public recipe against a chain that must never reach a paid provider."""
     return subprocess.run(
         ["just", "smoke"],
@@ -53,6 +55,7 @@ def _run_smoke(tmp_path: Path, *, omit_usage: bool = False) -> subprocess.Comple
             codex_bin=FAKE_CODEX,
             attempt_log=tmp_path / "harness-attempts",
             omit_usage=omit_usage,
+            refusal=refusal,
         ),
         text=True,
         capture_output=True,
@@ -101,19 +104,28 @@ def test_no_smoke_journey_inherits_the_dispatch_s_harness_pin(
     assert environment["ONEHARNESS_HARNESSES"].split(",")[0] in ("claude-code", "codex")
 
 
-def test_smoke_passes_when_the_chain_falls_through_a_refused_candidate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("refusal", ["quota", "auth", "skipped"])
+def test_smoke_passes_when_the_chain_falls_through_a_refused_candidate(
+    tmp_path: Path, refusal: str
+) -> None:
     """A refused subscription the chain moved past is the fallback working.
 
     The whole point of the change: the launch path is healthy precisely because the
     chain refused one identity and ran the next, so the record that decides the
     verdict is the selected one's.
+
+    All three ways a candidate steps aside are driven through the real classifier
+    rather than asserted from one and assumed for the rest, because the records
+    differ in what they leave behind and the smoke reads all of them: the quota
+    rejection reports a zero for every counter, the unauthenticated one a null, and
+    the candidate that was never started has no exit code or duration at all.
     """
-    result = _run_smoke(tmp_path)
+    result = _run_smoke(tmp_path, refusal=refusal)
 
     assert result.returncode == 0, result.stderr
     # Named on the pass, not swallowed: which subscription is gone is the operator's
     # business even when the verdict is green.
-    assert "smoke: fell through claude-code (quota)" in result.stdout
+    assert f"smoke: fell through claude-code ({refusal})" in result.stdout
     assert "the fallback chain handed the turn to the next identity" in result.stdout
     assert "smoke: passed via codex" in result.stdout
     # One turn, not one per candidate: the refusal cost nothing and was not retried.

@@ -14,18 +14,20 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
 
 from . import REPO_ROOT
-from .history import HistoryError, HistorySession, SessionId, all_sessions, session_records
+from .history import HistoryError, HistorySession, SessionId, all_sessions
 from .labels import format_labels
 from .scratch import AGENT_STATUS_DIR_ENV
 from .telemetry import (
     NO_LAUNCH_RECORD_FAILURE,
     HistoryRecord,
+    history_record_fallthrough_failure,
     history_record_fallthrough_reason,
     history_record_identity,
     history_session_launch_failure,
+    is_turn_record,
+    session_turn_records,
 )
 
 TASK = "Reply with exactly: smoke-ok"
@@ -134,9 +136,9 @@ def _stored_sessions(history_dir: Path) -> list[HistorySession]:
     for path in history_dir.rglob("*.jsonl"):
         try:
             records = [
-                cast(HistoryRecord, value)
+                value
                 for line in path.read_text(encoding="utf-8").splitlines()
-                if isinstance((value := json.loads(line)), dict) and value.get("type") == "run"
+                if isinstance((value := json.loads(line)), dict) and is_turn_record(value)
             ]
         except (OSError, json.JSONDecodeError):
             continue
@@ -175,6 +177,12 @@ def _selected(records: list[HistoryRecord]) -> tuple[tuple[FellThrough, ...], Hi
     A candidate that failed for any other reason is not one the chain moved past:
     it either ran and broke, or it broke in a way nobody classified, and both are
     the launch breakage this smoke exists to report.
+
+    A candidate's own word for what happened to it is not taken on trust, because
+    these records come out of a store nothing here wrote and each one reaches both
+    the verdict and the operator's report. One that claims it stepped aside while
+    naming no identity, or while carrying a turn somebody was billed for, is
+    reported rather than believed.
     """
     *candidates, selected = records
     fell_through: list[FellThrough] = []
@@ -186,6 +194,13 @@ def _selected(records: list[HistoryRecord]) -> tuple[tuple[FellThrough, ...], Hi
                 f"unclassified with status {candidate.get('status')!r} and exit code "
                 f"{candidate.get('exit_code')!r}; the fallback chain only moves past a "
                 "candidate it could not run at all, so this is a launch failure"
+            )
+        unsupported = history_record_fallthrough_failure(candidate)
+        if unsupported is not None:
+            raise HistoryError(
+                f"real harness candidate {history_record_identity(candidate)} was recorded "
+                f"as {reason} but {unsupported}; the fallback chain only moves past a "
+                "candidate that ran nothing, so this is a launch failure"
             )
         fell_through.append(FellThrough(history_record_identity(candidate), reason))
     exhausted = history_record_fallthrough_reason(selected)
@@ -221,7 +236,7 @@ def _validate_history(
     if len(matches) != 1:
         raise HistoryError(f"expected one smoke history session, found {len(matches)}")
     session = matches[0]
-    records = cast(list[HistoryRecord], session_records(session))
+    records = session_turn_records(session)
     if not records:
         raise HistoryError(f"real harness history {NO_LAUNCH_RECORD_FAILURE}")
     fell_through, selected = _selected(records)

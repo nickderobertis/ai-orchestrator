@@ -471,8 +471,24 @@ record carries work the provider already billed for (see
 another describes something the chain does not do, and fails the smoke as an
 unclassified candidate failure. A chain whose *every* candidate refused fails too,
 naming each identity and its reason so the operator knows which subscription to
-restore. A pass names the fallen-through candidates on their own lines, above the
-verdict:
+restore.
+
+A candidate's own word for what became of it is checked rather than believed. These
+records are read back out of a store nothing in the smoke wrote, and each one
+reaches both the verdict and the operator's report, so a record must *back* the
+reason it names: it has to identify the harness it was written for, and it has to
+show that nothing was spent — no successful turn, and every counter it reports at
+zero (`orchestrator.telemetry.history_record_fallthrough_failure`). Absent
+accounting is not evidence of spend and is accepted: a skipped candidate records a
+null for every counter, and so does an auth refusal on this host. A refusal that
+names no identity would otherwise be reported as "an unidentified harness fell
+through", and one carrying billed tokens is a candidate that ran — excusing either
+as fallback is the launch breakage this smoke exists to name. For the same reason
+only a `type: "run"` line can stand in for the selected candidate: a store also
+holds an index whose lines wrap a record inside an envelope that names no harness
+of its own, and the verdict is read off the session's *last* turn.
+
+A pass names the fallen-through candidates on their own lines, above the verdict:
 
 ```
 smoke: fell through claude-code:alternate (quota); the fallback chain handed the turn to the next identity
