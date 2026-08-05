@@ -1158,8 +1158,9 @@ on `dag-observatory-ux-2` it started rounds 2 and 3 from the untouched round-1 l
 file — re-dispatching merged work and discarding every accepted live edit, which cost
 two rounds of hand repair. `run-plan` still runs the file it is given whenever the
 latest round has *not* finished, which is the ordinary claim and `--recover`. The
-deprecated `repo-plan` alias is excluded: it journals no authoritative stream, so
-there is nothing to fold from.
+lifecycle-only plan executor (`lifecycle.main_plan`, kept for the old mappings and no
+longer a command) is excluded: it journals no authoritative stream, so there is
+nothing to fold from.
 
 ### Carried planner context
 

@@ -1202,8 +1202,8 @@ def _plan_of_record(
     reaches for to reclaim a run (`run-plan <plan> --run <id>`, with or without
     ``--recover``).
 
-    `repo-plan` is deliberately not folded here: it is the deprecated lifecycle-only
-    alias, it journals no authoritative stream, and there is nothing to fold from.
+    `lifecycle.main_plan` is deliberately not folded here: that lifecycle-only
+    executor journals no authoritative stream, so there is nothing to fold from.
     """
     from .replan import plan_for_the_next_round
 
