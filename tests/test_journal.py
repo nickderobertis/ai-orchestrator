@@ -470,7 +470,7 @@ def test_node_journal_labels_omit_coordinates_an_untracked_round_lacks() -> None
 
 
 def test_null_node_journal_records_nothing_but_still_labels_its_own_workstream() -> None:
-    """A bare `repo-task` records nothing, and still names the work it dispatched.
+    """An untracked lifecycle run records nothing, and still names the work it dispatched.
 
     The two are separate jobs. There is no ledger to append to, so `append` stays a
     no-op — but every session this workstream produces has to be findable as one

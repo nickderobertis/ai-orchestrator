@@ -40,7 +40,7 @@ export function RunNavigation({
       }}
     >
       <ScrollArea className="h-full">
-        <div className="px-[18px] py-6">
+        <div className="px-[18px] py-6 max-sm:px-2">
           <div className="brand">
             <div aria-hidden="true" className="brand-mark">
               <Activity size={20} />

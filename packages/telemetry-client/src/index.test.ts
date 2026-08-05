@@ -4,7 +4,7 @@ import { TelemetryClient, TelemetryClientError } from "./index.js";
 
 const emptyList = {
   api_version: 2,
-  telemetry_schema_version: 9,
+  telemetry_schema_version: 10,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [],
 } as const;
@@ -129,7 +129,7 @@ describe("TelemetryClient fetch boundary", () => {
         }
         return Response.json({
           api_version: 2,
-          telemetry_schema_version: 9,
+          telemetry_schema_version: 10,
           observed_at: "2026-07-26T12:00:00Z",
           run: runTelemetry,
           rounds: [],
@@ -226,7 +226,7 @@ test("validates SSE snapshots before notifying subscribers", () => {
   );
   listeners.get("snapshot")?.(
     new MessageEvent("snapshot", {
-      data: JSON.stringify({ ...emptyList, telemetry_schema_version: 10 }),
+      data: JSON.stringify({ ...emptyList, telemetry_schema_version: 11 }),
     }),
   );
   expect(events).toHaveLength(1);

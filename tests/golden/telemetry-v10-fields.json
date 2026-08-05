@@ -3,7 +3,7 @@
   "linkage_qualities": ["inferred", "labelled", "native"],
   "timing_qualities": ["complete", "legacy", "partial"],
   "roles": ["agent", "judge", "llmlint"],
-  "schema_version": 9,
+  "schema_version": 10,
   "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
   "fractions": [
     "agent_model",

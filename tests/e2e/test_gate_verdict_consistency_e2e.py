@@ -19,6 +19,15 @@ for real by Git on the publishing push. Only the paid harness is faked, as
 everywhere else in this suite, and the fake agent runs the repository's real gate
 command before it settles, exactly as a real worker does.
 
+The miniature gate below memoizes *both* verdicts, which this repository's own
+llmlint tier deliberately does not — Nx caches successful tasks only, so a red
+there re-judges (`docs/repo-lifecycle.md`, "One judged diff, one verdict"). That is
+a fixture choice, not a claim about the tier: memoizing the failure is what makes
+the second journey's assertion sharp, because a re-roll of a judge that passes
+every later time is then unmistakable. What both journeys actually own is narrower
+and unchanged — whether the publishing push looks up the same (content, base)
+question the worker's gate did.
+
 llmlint: ignore-file[e2e_not_mocked] The judge here is a fixture because the claim
 under test is that one tree yields one verdict across two runs, which a genuinely
 non-deterministic judge cannot demonstrate. Everything the lifecycle owns — the

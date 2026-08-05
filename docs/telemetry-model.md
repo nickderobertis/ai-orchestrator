@@ -147,6 +147,15 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
+Index version 10 changes what a judge session is *served* as rather than what the
+index carries: a session whose transport `role` is `judge` reports
+`agent_role: "judge"` whatever its recorded label says. Dispatch used to stamp the
+worker's semantic role into the environment oneharness reads, which outranks the
+judge config's own label, so thousands of recorded supervisor sessions carry
+`agent_role=worker`. The stamping is fixed at the dispatch boundary and the read
+heals the history that already exists; a version-9 reader would attribute those
+sessions to the worker. The bump lands beside the read API's own additive
+`attribution.parentConversationId`, per-turn timing, and timeline `dispatch_id`.
 Index version 9 adds an optional `agent_role` to each `nodes[].sessions` entry:
 `role` remains the transport party oneharness recorded, and `agent_role` names
 what the dispatch was for, so a reader can tell a node's worker from its judge

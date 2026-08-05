@@ -2839,10 +2839,15 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
         assert message in rejected.stderr
 
 
-def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
+def test_legacy_repo_plan_mapping_runs_through_the_canonical_executor(
     tmp_path: Path, bare_origin, command_base, onejudge_bin: str
 ) -> None:
-    """Old lifecycle-only plan mappings work through both command names."""
+    """Old lifecycle-only plan mappings still run unchanged.
+
+    The `repo-plan` alias that used to accept them is gone; the mappings themselves
+    are an external input a planner may still be carrying, so `run-plan` keeps
+    taking one with no schema version and no direct nodes.
+    """
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "legacy-repo-canonical")
     Registry().register(str(canonical), workflow="local")
@@ -2889,25 +2894,10 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
     assert canonical_payload["state"] == "complete"
     assert canonical_payload["results"]["legacy-repo"]["outcome"] == "merged"
 
-    alias_run = _just(
-        "repo-plan",
-        str(
-            write_plan(
-                "legacy-alias",
-                "complete-now write-unique-change: deprecated repo plan alias",
-            )
-        ),
-        *common,
-    )
-    assert alias_run.returncode == 0, alias_run.stderr
-    assert "deprecated" in alias_run.stderr
-    # The deprecated alias owns rounds through the same detaching entry point, and
-    # relays their exit status the same way; what detaching buys is proven by
+    # The one executor owns its rounds through the detaching entry point and relays
+    # their exit status; what detaching buys is proven by
     # tests/e2e/test_round_ownership_e2e.py.
-    assert re.search(r"repo-plan: round owner pid \d+ leads its own session", alias_run.stderr)
-    alias_payload = json.loads(alias_run.stdout)
-    assert alias_payload["state"] == "complete"
-    assert alias_payload["results"]["legacy-alias"]["outcome"] == "merged"
+    assert re.search(r"run-plan: round owner pid \d+ leads its own session", canonical_run.stderr)
     assert (
         subprocess.run(
             ["git", "-C", str(origin), "cat-file", "-e", "main:CHANGE.txt"],

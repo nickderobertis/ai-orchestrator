@@ -1,20 +1,22 @@
-"""E2E proof that the llmlint tier's verdict is memoized by its cached Nx target.
+"""E2E proof that the llmlint tier's judge run is cached by Nx, and only when clean.
 
 The judge itself is non-deterministic, so `just lint-llm-diff` routes through the
-cached `workspace:lint-llm-diff` target: an unchanged tree judged against an
-unchanged base replays the recorded verdict instead of rolling the dice again.
-These journeys drive the real recipe, the real `scripts/nx.sh`, the real Nx target
-definition, and the real `llmlint config` resolution in a throwaway copy of this
-repository. Only the billed judge run is faked — the same boundary the rest of the
-e2e suite fakes — so `llmlint --diff` is counted rather than paid for, while
-`llmlint config` still merges a real plugin off disk.
+cached `workspace:lint-llm-diff` target — but nothing records or replays a verdict
+any more. Nx caches the judge *run*: a clean run's `-v` report is the task's
+terminal output and Nx replays it verbatim, while a run with findings and a run
+that never reached a verdict fail the task and are never stored. These journeys
+drive the real recipe, the real `scripts/nx.sh`, the real Nx target definition, and
+the real `llmlint config` resolution in a throwaway copy of this repository. Only
+the billed judge run is faked — the same boundary the rest of the e2e suite fakes —
+so `llmlint --diff` is counted rather than paid for, while `llmlint config` still
+merges a real plugin off disk.
 
 llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
 boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness.
 It is also the one thing these journeys cannot use for real: the claim under test
-is that an unchanged tree yields the same verdict twice, which a non-deterministic
-judge cannot demonstrate. Counting `--diff` invocations is what proves a verdict
-was replayed rather than re-rolled; every other boundary — the recipe, Nx, git, and
+is that an unchanged tree yields the same report twice, which a non-deterministic
+judge cannot demonstrate. Counting `--diff` invocations is what proves a report was
+replayed rather than re-rolled; every other boundary — the recipe, Nx, git, and
 llmlint's own config resolution — is real.
 """
 
@@ -32,11 +34,22 @@ from nx_workspace import copy_checkout, requires_workspace_install
 ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
-FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
+FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-judge.sh"
+#: Emitted only when the tier asks for `-v`: the per-rule itemization and the
+#: pointer into `llmlint history` are what make a replayed run worth as much as a
+#: fresh one, so they are the thing the cache has to carry.
+VERBOSE_DETAIL = "fake-judge detail: local_rule passed on 6 files"
+HISTORY_POINTER = "fake-judge: run logged as 0ff1ce — see `llmlint history 0ff1ce`"
+#: `-v` also sends the oneharness debug view to stderr: short diagnostics, plus one
+#: enormous line per judge call carrying every judged file inside the prompt. Nx
+#: replays a hit as one burst and exits, so a replay bigger than a pipe buffer loses
+#: its tail — a green has to stay small enough to survive its own replay, which it
+#: does by eliding the payload and keeping the pointer to where it can be retrieved.
+DEBUG_DIAGNOSTIC = "fake-judge: see full results with `llmlint history 0ff1ce`"
+DEBUG_PAYLOAD = "fake-judge serialized judge call: " + "x" * 3000
+ELISION = f"elided a {len(DEBUG_PAYLOAD)}-character serialized judge call"
 CACHE_HIT = "replayed the recorded verdict for base"
 CACHE_MISS = "judged this diff against base"
-# scripts/llmlint-verdict.sh: an unusable record, distinct from the judge's 0 and 1.
-UNUSABLE_RECORD = 2
 
 pytestmark = [
     pytest.mark.skipif(
@@ -72,6 +85,10 @@ class Workspace:
 
     def judge_runs(self) -> int:
         return len(self.judge_log.read_text().splitlines())
+
+    def judge_arguments(self) -> list[str]:
+        """The argument line each judge run was actually invoked with."""
+        return [line.split("\t", 1)[0] for line in self.judge_log.read_text().splitlines()]
 
     def judge_labels(self) -> list[str]:
         """The `ONEHARNESS_HISTORY_LABELS` each judge run was actually handed."""
@@ -110,10 +127,22 @@ def _write_fake_judge(directory: Path) -> None:
         'if [[ ${1:-} == "config" ]]; then\n'
         '  exec "$REAL_LLMLINT" "$@"\n'
         "fi\n"
-        # One line per run, so counting them still counts judge runs; the labels the
-        # recipe handed over ride along on it because they are the other thing a run
-        # of this tier is supposed to carry.
+        # One line per run, so counting them still counts judge runs; the arguments
+        # and the labels the recipe handed over ride along on it because they are
+        # the other things a run of this tier is supposed to carry.
         'printf "%s\\t%s\\n" "$*" "${ONEHARNESS_HISTORY_LABELS:-}" >>"$FAKE_LLMLINT_LOG"\n'
+        # The detail a bare run omits, so a report that carries it proves the tier
+        # asked for `-v` — and a replayed one proves Nx kept it.
+        'if [[ " $* " == *" -v "* ]]; then\n'
+        # Single-quoted: the pointer quotes the command with backticks, which a
+        # double-quoted echo would run instead of print.
+        f"  echo '{VERBOSE_DETAIL}'\n"
+        f"  echo '{HISTORY_POINTER}'\n"
+        # Both halves of what `-v` puts on stderr: a short diagnostic that has to
+        # survive a replay, and the payload that would sink one.
+        f"  echo '{DEBUG_DIAGNOSTIC}' >&2\n"
+        f"  echo '{DEBUG_PAYLOAD}' >&2\n"
+        "fi\n"
         "if [[ ${FAKE_LLMLINT_EXIT:-0} != 0 ]]; then\n"
         f'  echo "{FAIL_FINDING}"\n'
         f'  echo "{FAIL_VERDICT}"\n'
@@ -202,7 +231,8 @@ def workspace(tmp_path: Path) -> Workspace:
     return workspace
 
 
-def test_unchanged_tree_and_base_replays_the_recorded_verdict(workspace: Workspace) -> None:
+def test_unchanged_tree_and_base_replays_the_whole_judge_report(workspace: Workspace) -> None:
+    """One judge roll, and the restored run says everything the first one said."""
     base = workspace.head()
 
     first = workspace.lint(base)
@@ -211,9 +241,20 @@ def test_unchanged_tree_and_base_replays_the_recorded_verdict(workspace: Workspa
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
     assert workspace.judge_runs() == 1
-    assert PASS_VERDICT in first.stdout
-    assert PASS_VERDICT in second.stdout
-    assert CACHE_HIT in second.stderr
+    assert workspace.judge_arguments() == [f"--diff --diff-base {base} -v"]
+    for result in (first, second):
+        # The `-v` report is the product now — per-rule detail and the pointer into
+        # `llmlint history` — so a replayed run has to carry all of it, not a
+        # summary line reconstructed from a record.
+        assert PASS_VERDICT in result.stdout
+        assert VERBOSE_DETAIL in result.stdout
+        assert HISTORY_POINTER in result.stdout
+        # The short diagnostic survives; the payload that would push a real replay
+        # past a pipe buffer — and take the three lines above with it — does not.
+        report = result.stdout + result.stderr
+        assert DEBUG_DIAGNOSTIC in report
+        assert DEBUG_PAYLOAD not in report
+        assert ELISION in report
     # "Green" is a claim about one base commit, so the one line of provenance names
     # it: a worker's gate and the push that publishes its work resolving different
     # bases are answering different questions, visible without digging.
@@ -380,52 +421,69 @@ def test_an_ambient_llmlint_still_lets_the_judge_configuration_invalidate(
     assert CACHE_MISS in second.stderr
 
 
-def test_a_failing_verdict_is_replayed_with_its_findings_and_its_exit(
-    workspace: Workspace,
-) -> None:
+def test_findings_fail_the_tier_and_are_never_cached(workspace: Workspace) -> None:
+    """A red is re-judged every time: Nx caches successful tasks only.
+
+    That is the deliberate trade for deleting the record/replay protocol this tier
+    used to smuggle failing verdicts through Nx with. An honest re-roll costs a
+    judge call; the protocol cost a poisoned entry no documented lever could
+    displace.
+    """
     base = workspace.head()
 
     first = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
     second = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
 
-    assert workspace.judge_runs() == 1
-    assert CACHE_HIT in second.stderr
+    assert workspace.judge_runs() == 2
     for result in (first, second):
         report = result.stdout + result.stderr
         assert result.returncode != 0, report
         assert FAIL_FINDING in report
         assert FAIL_VERDICT in report
+        # A failure is never cached, so it never has to survive a replay: the whole
+        # debug view reaches the operator who has to act on it, payload included.
+        assert DEBUG_PAYLOAD in report
+        assert ELISION not in report
+        assert CACHE_MISS in result.stderr
 
 
-# llmlint: ignore[tests_mirror_real_usage] Rewriting the record is the premise, not the exercise.
-def test_an_edited_verdict_loses_to_the_cached_one(workspace: Workspace) -> None:
-    base = workspace.head()
-    workspace.lint(base, FAKE_LLMLINT_EXIT="1")
-    # Nx leaves pre-existing outputs alone, so the recorded failure would survive
-    # as a pass here if the recipe did not clear it before asking for the cache.
-    (workspace.root / ".nx/llmlint-diff/report").write_text("all clear\n", encoding="utf-8")
-    (workspace.root / ".nx/llmlint-diff/status").write_text("0\n", encoding="utf-8")
-
-    replayed = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
-
-    assert workspace.judge_runs() == 1
-    assert replayed.returncode != 0
-    assert FAIL_FINDING in replayed.stdout + replayed.stderr
-    assert "all clear" not in replayed.stdout
-
-
-def test_a_judge_that_never_reached_a_verdict_is_not_recorded(workspace: Workspace) -> None:
+def test_a_judge_that_never_reached_a_verdict_fails_and_is_never_cached(
+    workspace: Workspace,
+) -> None:
+    """A broken judge toolchain is not a verdict, so it must re-run rather than stick."""
     base = workspace.head()
 
     first = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
     second = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
 
-    # A broken toolchain is not a verdict, so it must re-run rather than stick.
     assert workspace.judge_runs() == 2
     for result in (first, second):
         report = result.stdout + result.stderr
         assert result.returncode != 0, report
-        assert "exited 2 without reaching a verdict" in report
+        # Whatever the broken toolchain managed to say still reaches the operator —
+        # its report and its debug view both; what it must never do is become a
+        # stored answer about the diff.
+        assert FAIL_FINDING in report
+        assert DEBUG_PAYLOAD in report
+        assert CACHE_MISS in result.stderr
+
+
+def test_a_cleared_red_caches_the_green_that_replaced_it(workspace: Workspace) -> None:
+    """The path a worker actually walks: judge, fix, judge again, then settle."""
+    base = workspace.head()
+
+    red = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
+    cleared = workspace.root / "orchestrator/dispatch.py"
+    cleared.write_text(cleared.read_text() + "\n# the finding, cleared\n", encoding="utf-8")
+    green = workspace.lint(base)
+    settled = workspace.lint(base)
+
+    assert red.returncode != 0, red.stdout + red.stderr
+    assert green.returncode == 0, green.stdout + green.stderr
+    assert settled.returncode == 0, settled.stdout + settled.stderr
+    assert workspace.judge_runs() == 2
+    assert CACHE_MISS in green.stderr
+    assert CACHE_HIT in settled.stderr
 
 
 def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
@@ -438,6 +496,28 @@ def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
     assert forced.returncode == 0, forced.stdout + forced.stderr
     assert workspace.judge_runs() == 2
     assert CACHE_MISS in forced.stderr
+
+
+def test_a_forced_re_judge_does_not_replace_the_cached_run(workspace: Workspace) -> None:
+    """The honest limit of the re-judge lever, so nobody plans a rescue around it.
+
+    Under this Nx, `--skip-nx-cache` neither reads nor writes the cache: it buys one
+    fresh look at the diff and leaves the stored run exactly where it was. So a
+    *green* an operator disagrees with sticks until the tree, the base commit, or
+    the judge configuration moves — the next ordinary invocation replays the same
+    entry, and the judge is not rolled again.
+    """
+    base = workspace.head()
+    workspace.lint(base)
+
+    workspace.lint(base, "--skip-nx-cache")
+    afterwards = workspace.lint(base)
+
+    assert afterwards.returncode == 0, afterwards.stdout + afterwards.stderr
+    # Two rolls: the original and the forced one. The third invocation replayed the
+    # original rather than anything the forced run produced.
+    assert workspace.judge_runs() == 2
+    assert CACHE_HIT in afterwards.stderr
 
 
 def _stub(directory: Path, name: str, body: str) -> Path:
@@ -479,126 +559,6 @@ def test_the_target_refuses_a_base_it_cannot_judge(
 
     assert result.returncode != 0
     assert expected in result.stderr
-    assert workspace.judge_runs() == 0
-
-
-def _replay_verdict(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(workspace.root / "scripts" / "llmlint-verdict.sh")],
-        cwd=workspace.root,
-        env={**workspace.env, **overrides},
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-
-@pytest.mark.parametrize(
-    ("record", "expected"),
-    [
-        ({}, "no recorded verdict"),
-        ({"report": "findings\n"}, "no recorded verdict"),
-        ({"report": "findings\n", "status": "2\n"}, "is not a judged 0 or 1"),
-    ],
-)
-# Nx restoring a partial record is the state this refuses; no recipe run produces it.
-# llmlint: ignore[tests_mirror_real_usage] Only a broken cache restore reaches this state.
-def test_an_incomplete_record_is_never_read_as_a_clean_run(
-    workspace: Workspace, record: dict[str, str], expected: str
-) -> None:
-    verdict = workspace.root / ".nx/llmlint-diff"
-    verdict.mkdir(parents=True)
-    for name, content in record.items():
-        (verdict / name).write_text(content, encoding="utf-8")
-
-    result = _replay_verdict(workspace)
-
-    assert result.returncode == UNUSABLE_RECORD
-    assert expected in result.stderr
-
-
-@pytest.mark.parametrize(
-    "supplied",
-    [
-        "",
-        "origin/main",
-        "not-a-sha",
-        "0123456789abcdef",
-        "../../etc/passwd",
-        "$(id)",
-        # Right shape, no such commit — the case a shape check alone waves through,
-        # and exactly as false a provenance as a branch name would be.
-        "a" * 40,
-    ],
-)
-def test_provenance_never_names_a_base_it_cannot_vouch_for(
-    workspace: Workspace, supplied: str
-) -> None:
-    """The base reaches this reader through the environment, so it is validated here.
-
-    A verdict's provenance is what an operator reads to know *which* base a green
-    covers. Anything that can set a variable could otherwise write that answer, so
-    only a commit id this repository actually has is echoed; the recorded verdict
-    itself still replays, because the base is provenance about the verdict rather
-    than part of it.
-    """
-    verdict = workspace.root / ".nx/llmlint-diff"
-    verdict.mkdir(parents=True)
-    (verdict / "status").write_text("0\n", encoding="utf-8")
-    (verdict / "report").write_text("findings\n", encoding="utf-8")
-
-    result = _replay_verdict(workspace, LLMLINT_DIFF_BASE_SHA=supplied)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "replayed the recorded verdict for base <unresolved>" in result.stderr
-    assert supplied not in result.stderr or supplied == ""
-    assert "findings" in result.stdout
-
-
-def test_provenance_names_a_resolved_base_commit(workspace: Workspace) -> None:
-    """The validated case still reports the commit the verdict was keyed on."""
-    verdict = workspace.root / ".nx/llmlint-diff"
-    verdict.mkdir(parents=True)
-    (verdict / "status").write_text("0\n", encoding="utf-8")
-    (verdict / "report").write_text("findings\n", encoding="utf-8")
-    base = workspace.head()
-
-    result = _replay_verdict(workspace, LLMLINT_DIFF_BASE_SHA=base)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert f"replayed the recorded verdict for base {base}" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("unreadable", "expected"),
-    [
-        ("status", "could not read the recorded verdict status from"),
-        ("report", "could not read the recorded findings from"),
-    ],
-)
-# A file that passes `-r` and then fails to read is a broken cache restore, not a
-# state any recipe run reaches.
-# llmlint: ignore[tests_mirror_real_usage] Only a broken cache restore reaches this state.
-def test_an_unreadable_record_is_a_hard_error_not_a_silent_pass(
-    workspace: Workspace, unreadable: str, expected: str
-) -> None:
-    verdict = workspace.root / ".nx/llmlint-diff"
-    verdict.mkdir(parents=True)
-    (verdict / "status").write_text("1\n", encoding="utf-8")
-    (verdict / "report").write_text("findings\n", encoding="utf-8")
-    # A directory reads as present and readable, then fails at the read itself —
-    # the shape of an I/O fault, and one that does not depend on running as a user
-    # whose permissions can actually be revoked.
-    (verdict / unreadable).unlink()
-    (verdict / unreadable).mkdir()
-
-    result = _replay_verdict(workspace)
-
-    # Hard error, deliberately: an unusable record is neither a clean tree nor
-    # findings, and this reader never re-judges to paper over one.
-    assert result.returncode == UNUSABLE_RECORD
-    assert expected in result.stderr
-    assert f"{verdict}/{unreadable}" in result.stderr
     assert workspace.judge_runs() == 0
 
 
@@ -657,7 +617,9 @@ def test_the_recipe_refuses_unusable_harness_history_labels(
     result = workspace.lint(workspace.head(), PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}")
 
     assert result.returncode != 0
-    assert expected in result.stderr
+    # Whatever the task says — findings or a refusal like this one — comes back on
+    # the report stream, because Nx's terminal output is what the tier replays.
+    assert expected in result.stdout + result.stderr
     assert workspace.judge_runs() == 0
 
 

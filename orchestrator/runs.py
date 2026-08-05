@@ -762,7 +762,7 @@ def round_abandonment_guard(round_dir: Path) -> Iterator[None]:
 
 
 def write_result(round_dir: Path, result: Mapping[str, Any]) -> None:
-    """Persist a repo-plan JSON result for an already-created round."""
+    """Persist a plan round's JSON result for an already-created round."""
     with advisory_lock(f"ledger:{round_dir.parent.resolve()}"):
         path = round_dir / "result.json"
         if path.exists():

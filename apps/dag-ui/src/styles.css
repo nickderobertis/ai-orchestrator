@@ -61,6 +61,33 @@ a {
   height: 100vh;
 }
 
+/*
+ * The design system's `ScrollArea` root is `relative` and nothing else, so the
+ * scrollable content inside its viewport stays part of the document's layout overflow:
+ * a fifty-run navigation made this document four screens tall behind a `body` that
+ * happens to clip it. Nothing scrolled there, but everything that measures the
+ * document — a screenshot, a print, any future surface that lets the body scroll —
+ * saw three empty screens under the app. A scroll container's own box is where its
+ * content ends, which is what clipping the root says.
+ */
+[data-slot="scroll-area"] {
+  overflow: hidden;
+}
+
+/*
+ * Every scroll area here scrolls one way, and its viewport clips the other. The
+ * primitive still wraps the content in a shrink-to-fit table so a horizontal scrollbar
+ * would have something to measure — which lets a long branch name or a two-column fact
+ * list set a width wider than the region and then be clipped at an edge no scroll can
+ * bring it back from. A block box is exactly as wide as the viewport, so the same
+ * content wraps instead. `!important` because the primitive writes that display inline.
+ */
+[data-slot="scroll-area"] [data-radix-scroll-area-viewport] > * {
+  /* biome-ignore lint/complexity/noImportantStyles: the primitive writes this display
+     inline on a wrapper it owns, so nothing weaker than `!important` can reach it. */
+  display: block !important;
+}
+
 .run-nav {
   min-height: 0;
   border-right: 1px solid var(--border);
@@ -359,12 +386,22 @@ p {
  * master and detail. The rail is a fixed reading column and the detail takes every
  * remaining pixel, which is the point — a transcript turn is unreadable in a column
  * sized for a list of timestamps.
+ *
+ * A column, not a fixed list of rows, because the view has three children on a healthy
+ * node and four on one that is in trouble. `grid-template-rows: auto auto minmax(0,
+ * 1fr)` over a `display: contents` tab set could not describe both: with a problem
+ * banner present the *tab strip* took the flexible row and stretched, and the panel
+ * below it was pushed past the bottom of the shell — where nothing scrolls, because
+ * every ancestor clips. The recorded timeline of every failed, blocked, skipped and
+ * cancelled node was off screen and unreachable. A column sizes each child by what it
+ * is instead of by where it landed.
  */
 .node-view {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  height: 100%;
+  display: flex;
+  min-width: 0;
   min-height: 0;
+  height: 100%;
+  flex-direction: column;
 }
 
 .node-view-head {
@@ -425,11 +462,36 @@ p {
 }
 
 .node-tabs {
-  display: contents;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
 }
 
+/*
+ * The strip scrolls rather than widening the view around it. Six tabs are wider than a
+ * phone, and a `w-fit` tab list left unconstrained sets its container's width — which
+ * took the whole master-and-detail region off the side of the screen with it, with no
+ * scroll container anywhere to bring it back. Native scrollbars stay hidden the way
+ * the design system's own `ScrollArea` hides them; the tabs are reachable by drag, by
+ * swipe, and by the arrow keys the tab set already answers.
+ */
 .node-tabs > [role="tablist"] {
+  overflow-x: auto;
+  max-width: calc(100% - 40px);
+  flex: none;
+  /* The list centres its tabs, which in a scroll container puts the overflow on both
+     sides at once — and the leading half of it behind a `scrollLeft` that cannot go
+     below zero. The first tab is the selected one on arrival, so that is the tab it
+     hid. */
+  justify-content: flex-start;
   margin: 0 20px;
+  scrollbar-width: none;
+}
+
+.node-tabs > [role="tablist"]::-webkit-scrollbar {
+  display: none;
 }
 
 .node-tab-panel {
@@ -442,10 +504,14 @@ p {
   min-height: 0;
 }
 
+/* `height: 100%` is what bounds the rail: master and detail divide the panel they are
+   given, and without it the region is sized by whichever of them recorded more and
+   grows past the bottom of the view instead of scrolling inside it. */
 .node-view-body {
   display: grid;
   grid-template-columns: minmax(380px, 44%) minmax(0, 1fr);
   min-height: 0;
+  height: 100%;
 }
 
 .timeline-rail {
@@ -611,12 +677,15 @@ p {
   font-weight: 600;
 }
 
+/* Wrapping, because the status beside the title is the half that gets pushed out
+   otherwise: a branch name is as long as it is, and these regions clip sideways. */
 .detail-title,
 .transcript-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .detail-title h2 {
@@ -800,5 +869,81 @@ pre {
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/*
+ * The phone. Two full columns stop fitting here: a 220px navigation beside a 390px
+ * screen leaves 170px of working area, which is narrower than the master column of
+ * the node view alone — so the detail region sat entirely off the side of the screen,
+ * and a restored bookmark opened a record nobody could see. The navigation keeps only
+ * what a truncated run id needs, and master and detail stack instead of sharing a row.
+ */
+@media (max-width: 640px) {
+  .app-shell {
+    grid-template-columns: 160px minmax(0, 1fr);
+  }
+
+  .node-view-body {
+    grid-template-rows: minmax(0, 38%) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Stacked, the rail's edge is the one below it. */
+  .timeline-rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .metric-grid,
+  .facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Both header rows stop insisting on one line. Their controls have nowhere to go at
+     this width, and a `space-between` row that cannot shrink pushes its last one — the
+     Refresh button, the node's own state badge — off the side of a screen that never
+     scrolls sideways, out of reach of pointer and of view. */
+  .topbar,
+  .node-view-head {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 14px;
+  }
+
+  .topbar-actions,
+  .node-view-facts {
+    flex-wrap: wrap;
+  }
+
+  .topbar h2 {
+    overflow-wrap: anywhere;
+    font-size: 14px;
+  }
+
+  .view-tabs {
+    padding: 5px 14px 6px;
+  }
+
+  .node-tabs > [role="tablist"] {
+    max-width: calc(100% - 28px);
+    margin: 0 14px;
+  }
+
+  .overall-hero {
+    padding: 14px;
+  }
+
+  /* One column, so the run id keeps the width instead of sharing it with a state pill
+     and a decorative chevron — at 160px those left `dag-ui-live` reading as `d..`, and
+     a run list nobody can read a run out of is not a navigation. */
+  .run-link {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .run-link > svg {
+    display: none;
   }
 }
