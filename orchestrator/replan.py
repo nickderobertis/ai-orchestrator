@@ -40,6 +40,7 @@ from typing import Any
 from .config import ConfigError, load_yaml
 from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
+from .plan import parse_cross_dag_dependency
 from .runs import NodeId, RunId, StackBasePayload
 
 __all__ = [
@@ -363,15 +364,48 @@ def next_round(
     for node in add:  # brand-new work
         _emit(node)
 
+    def _watches_through(nid: str, seen: frozenset[str] = frozenset()) -> list[str]:
+        """Cross-DAG watches that outlive the node this transition carried out.
+
+        A `run:<id>#<node>` reference is a **watch**, not a one-shot prerequisite: once
+        its upstream settles `done` the consumer keeps reporting `upstream-modified`
+        for planner review, and an upstream that stops being resolvable blocks it
+        again. Both stop the moment the reference leaves the graph, so it passes to
+        whatever still depends on the consumer — the same way an unresolved
+        publication anchor passes through a removed gate above, and for the same
+        reason: the edge outlives the node that consumed it.
+        """
+        if nid in seen:
+            return []
+        source = prior_tasks.get(nid)
+        if not isinstance(source, dict):
+            return []
+        found: list[str] = []
+        for dep in source.get("deps") or []:
+            if not isinstance(dep, str) or dep in kept_ids:
+                continue
+            if parse_cross_dag_dependency(dep) is not None:
+                found.append(dep)
+            else:
+                found.extend(_watches_through(dep, seen | {nid}))
+        return found
+
     # A dep that is no longer in the round is satisfied (merged) or intentionally
-    # gone — drop it so the node runs against the updated base.
+    # gone — drop it so the node runs against the updated base. A cross-DAG reference
+    # is neither: it names no node of this graph, so it was never "in the round" to
+    # begin with, and stripping it as satisfied ends the watch it exists to be.
     for node in next_tasks:
         if "deps" in node:
             previous_deps = node["deps"]
             anchors = list(node.get("stack_bases") or [])
+            watches: list[str] = []
             for dep in previous_deps:
                 if dep in kept_ids:
                     continue
+                if parse_cross_dag_dependency(dep) is not None:
+                    watches.append(dep)
+                    continue
+                watches.extend(_watches_through(dep))
                 for anchor in _anchors_through(dep):
                     anchors = [
                         existing
@@ -381,7 +415,8 @@ def next_round(
                     anchors.append(anchor)
             if anchors:
                 node["stack_bases"] = anchors
-            node["deps"] = [d for d in previous_deps if d in kept_ids]
+            kept = [d for d in previous_deps if d in kept_ids]
+            node["deps"] = kept + [w for w in dict.fromkeys(watches) if w not in kept]
 
     plan: dict[str, Any] = {"concurrency": prev_plan.get("concurrency", 4), "tasks": next_tasks}
     if "schema_version" in prev_plan:
