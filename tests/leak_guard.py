@@ -336,15 +336,8 @@ class ResourceLeakGuard:
         A tree that was told to stop takes a moment to go, and the last thing to
         leave is often a process whose whole job is to outlive the others. Reporting
         that instant as a leak would turn every ordinary teardown into a flake, so
-        the sweep waits for the set to *drain* and only reports what is left.
-
-        The condition is the empty set; `drain_seconds` is a ceiling on it, not a
-        delay. It is deliberately generous because it bounds somebody else's
-        shutdown: how long a dispatch's `onejudge run` takes to leave is decided by
-        the box's load, and a window sized for an idle host reported a healthy
-        teardown as a leak. Nothing is paid for on the ordinary path — the loop is
-        not entered when the set is already empty, and it returns the moment it
-        empties.
+        the condition here is the *empty set*, and `drain_seconds` only bounds how
+        long it may take to get there.
         """
         survivors = self._survivors()
         deadline = time.monotonic() + self.drain_seconds

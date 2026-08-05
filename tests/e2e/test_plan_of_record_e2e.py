@@ -116,11 +116,6 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
                         "max_turns": 1,
                     },
                     {
-                        # A watch on a run that does not exist, so it is blocked in
-                        # every round and carried forward holding the reference
-                        # itself. What it proves is that the transition keeps that
-                        # reference: strip it as a satisfied dependency id and this
-                        # node stops waiting on an upstream it never saw resolve.
                         "id": "watcher",
                         "task": "Wait for the external producer.",
                         "expects_no_diff": True,
@@ -204,8 +199,6 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
     # nowhere in the file this round was launched with.
     carried = _round(run_dir, 2, "plan.json")["tasks"]
     assert [task["id"] for task in carried] == ["watcher", "flaky-again"]
-    # The watch is not a satisfied dependency id: it names no node of this graph, so
-    # the transition keeps it rather than stripping it off the node that holds it.
     assert next(task for task in carried if task["id"] == "watcher")["deps"] == [
         EXTERNAL_DEPENDENCY
     ]
@@ -228,7 +221,6 @@ def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
     assert third.returncode == 1, (third.stdout, third.stderr)
     resumed_plan = _round(run_dir, 3, "plan.json")["tasks"]
     assert [task["id"] for task in resumed_plan] == ["watcher", "flaky-again"]
-    # Still held after a second transition, and after one out of a cancelled round.
     assert next(task for task in resumed_plan if task["id"] == "watcher")["deps"] == [
         EXTERNAL_DEPENDENCY
     ]
