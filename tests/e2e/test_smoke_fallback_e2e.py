@@ -29,14 +29,11 @@ from pathlib import Path
 
 import pytest
 from fake_claude_code import chain_environment
-from fake_codex import (
-    WORKER_SIDE_SELECTION,
-    provider_environment,
-    uninstalled_provider_environment,
-)
+from fake_codex import provider_environment, uninstalled_provider_environment
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.harnesses import WORKER_HARNESS_ENV
 
 #: The double that takes the turn over once the first candidate has refused it. It
 #: reports token accounting of its own, which is how a real fall-through is told
@@ -96,11 +93,11 @@ def test_no_smoke_journey_inherits_the_dispatch_s_harness_pin(
     `test_smoke_contention_e2e.py`; a journey that spelled its own selection inline
     would be outside this guard, which is why none of them do.
     """
-    monkeypatch.setenv(WORKER_SIDE_SELECTION, "claude-code:alternate2")
+    monkeypatch.setenv(WORKER_HARNESS_ENV, "claude-code:alternate2")
 
     environment = build(tmp_path / "harness-attempts")
 
-    assert WORKER_SIDE_SELECTION not in environment
+    assert WORKER_HARNESS_ENV not in environment
     assert environment["ONEHARNESS_HARNESSES"].split(",")[0] in ("claude-code", "codex")
 
 

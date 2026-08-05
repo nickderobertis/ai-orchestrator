@@ -23,7 +23,9 @@ modes it can be asked for are the two the smoke has to tell apart:
   the smoke must stop on it after one paid turn instead of buying the same
   verdict twice more.
 
-Keep this deterministic and stdlib-only — it is spawned as a subprocess.
+Keep the spawned path deterministic and stdlib-only — this file *is* the provider
+binary. The environment helpers below run only in the test process, so the one that
+must name a product constant imports it there rather than respelling it here.
 """
 
 from __future__ import annotations
@@ -47,26 +49,29 @@ TURN: tuple[dict[str, object], ...] = (
 )
 
 
-#: The per-side selection `scripts/oneharness-agent.sh` applies to the agent turn.
-#: It deliberately beats `ONEHARNESS_HARNESSES`, so a journey that sets only the
-#: latter while this one is exported picks the *dispatch's* identity and spawns the
-#: paid provider it meant to replace.
-WORKER_SIDE_SELECTION = "ORCHESTRATOR_WORKER_HARNESSES"
-
-
 def unpinned_worker_side(environment: Mapping[str, str]) -> dict[str, str]:
     """Copy ``environment`` with the agent side's harness pin removed.
 
     This repository runs its own suite from inside a dispatch, and a dispatch
-    exports `ORCHESTRATOR_WORKER_HARNESSES` to pin the identity its worker runs on.
-    The wrapper applies that pin over any `ONEHARNESS_HARNESSES` a journey sets —
-    which is correct for a real dispatch and catastrophic here, because the pinned
-    identity is a *variant*, no `ONEHARNESS_BIN_*` spelling reaches a variant, and
-    the journey therefore spends a real paid turn while its double sits unused.
-    Observed, not theorized: two `just smoke` runs billed a live subscription this
-    way before the pin was found.
+    exports the per-side worker selection to pin the identity its worker runs on.
+    `scripts/oneharness-agent.sh` applies that pin over any `ONEHARNESS_HARNESSES` a
+    journey sets — which is correct for a real dispatch and catastrophic here,
+    because the pinned identity is a *variant*, no `ONEHARNESS_BIN_*` spelling
+    reaches a variant, and the journey therefore spends a real paid turn while its
+    double sits unused. Observed, not theorized: two `just smoke` runs billed a live
+    subscription this way before the pin was found.
+
+    The variable is named by `orchestrator.harnesses`, which declares it, rather
+    than respelled here: a rename that moved the product constant while a copy in
+    this file went on stripping the old name would strip nothing, and every journey
+    would go back to spending that turn — with a green run and a billed one looking
+    identical from the assertions. The import is deferred because this file is also
+    *spawned* as the provider binary, and that path stays stdlib-only; only the test
+    process ever calls this helper.
     """
-    return {key: value for key, value in environment.items() if key != WORKER_SIDE_SELECTION}
+    from orchestrator.harnesses import WORKER_HARNESS_ENV
+
+    return {key: value for key, value in environment.items() if key != WORKER_HARNESS_ENV}
 
 
 def provider_environment(
