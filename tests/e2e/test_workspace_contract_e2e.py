@@ -512,7 +512,8 @@ if [[ "${ECHO_COMMAND:-}" == "$(basename "$0")" ]]; then echo "$ECHO_LINE"; fi
 if [[ "${BLOCK_COMMAND:-}" == "$(basename "$0")" ]]; then
   while [[ ! -e "$BLOCK_UNTIL" ]]; do sleep 0.05; done
 fi
-if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" ]]; then
+invocation="$(basename "$0") $*"
+if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" || "${FAIL_INVOCATION:-}" == "$invocation" ]]; then
   echo "$(basename "$0"): captured failure detail" >&2
   exit 9
 fi
@@ -565,9 +566,8 @@ def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
     checkout, trace = _recipe_checkout(tmp_path)
     shutil.copy2(ROOT / "scripts/comparison-base.sh", checkout / "scripts/comparison-base.sh")
-    verdict = checkout / "scripts/llmlint-verdict.sh"
-    verdict.write_text((checkout / "scripts/nx.sh").read_text())
-    verdict.chmod(0o755)
+    # The recipe only checks that llmlint is installed before handing the tier to
+    # Nx; the traced `scripts/nx.sh` double above is what stands in for the run.
     llmlint = checkout / "bin/llmlint"
     llmlint.write_text((checkout / "scripts/nx.sh").read_text())
     llmlint.chmod(0o755)
@@ -1253,14 +1253,21 @@ def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> N
 def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
     checkout, trace = _gate_checkout(tmp_path)
 
+    # The llmlint tier alone, not the deterministic stages `just check` runs
+    # through the same Nx double: this asserts the *second* gate stage's log.
     result = _recipe_run(
-        checkout, trace, "gate", "origin", "main", fail_command="llmlint-verdict.sh"
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION="nx.sh run workspace:lint-llm-diff",
     )
 
     assert result.returncode != 0
     log = checkout / ".logs/gate-llmlint.log"
     assert f"full output: {log}" in result.stderr
-    assert "llmlint-verdict.sh: captured failure detail" in log.read_text()
+    assert "nx.sh: captured failure detail" in log.read_text()
 
 
 UPGRADE_MANIFEST = ("package.json", "bun.lock")

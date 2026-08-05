@@ -1,12 +1,12 @@
 """E2E proof that the worker's gate and the merge path look up one llmlint verdict.
 
-`tests/e2e/test_llmlint_cache_e2e.py` proves the memo holds when the same checkout
-asks twice. Production never asks twice from the same checkout. The worker judges
-in a per-branch worktree cut from its run's clone, under the environment a dispatch
-carries; the publication is rebuilt in a detached scratch worktree at an unrelated
-path and judged there by the `pre-push` hook, under the environment a publishing
-push carries. Two paths, one content, one base — and the memo is only worth having
-if both reach the same recorded answer.
+`tests/e2e/test_llmlint_cache_e2e.py` proves the cached judge run holds when the
+same checkout asks twice. Production never asks twice from the same checkout. The
+worker judges in a per-branch worktree cut from its run's clone, under the
+environment a dispatch carries; the publication is rebuilt in a detached scratch
+worktree at an unrelated path and judged there by the `pre-push` hook, under the
+environment a publishing push carries. Two paths, one content, one base — and the
+cache is only worth having if both reach the same stored run.
 
 They did not. On 2026-07-31 a branch cleared its own complete gate at 95.99%
 coverage (`38 rules: 18 passed, 0 failed`) and was rejected seventeen minutes later
@@ -25,12 +25,14 @@ second roll is the defect, whichever way the second roll then lands.
 The three ways the key must still move — the judged content, the base commit, and
 the judge configuration — are proved across the two paths too, because a fix that
 made the merge path agree by hashing less would replay a verdict for a tree nobody
-judged. And a worker whose own gate failed still cannot reach the base, because the
-merge path replays that recorded **failure** rather than re-rolling into a pass;
-`tests/e2e/test_gate_verdict_consistency_e2e.py` drives the publishing push that
-rejection rides on through the real lifecycle, so it is not restaged here. What
-this journey owns is the question both callers ask, and whether one recorded answer
-comes back.
+judged. What this journey owns is the question both callers ask, and whether one
+stored answer comes back.
+
+Only a *clean* run is stored: Nx caches successful tasks only, and this tier no
+longer smuggles failures through it. So a worker whose own gate went red is judged
+again on the merge path rather than replayed — the accepted cost of deleting that
+protocol. It is not a way past the gate, and the journey below says so by rolling a
+judge that fails every time.
 
 llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
 boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness,
@@ -61,7 +63,7 @@ BASE_BRANCH = "main"
 FEATURE_BRANCH = "feature"
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
-FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
+FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-judge.sh"
 CACHE_HIT = "replayed the recorded verdict for base"
 CACHE_MISS = "judged this diff against base"
 
@@ -305,25 +307,26 @@ def test_the_worker_gate_and_the_merge_path_reach_one_verdict(two_paths: TwoPath
     assert two_paths.judge_runs() == 1
 
 
-def test_a_failed_worker_gate_is_replayed_as_a_failure_on_the_merge_path(
+def test_a_failed_worker_gate_is_judged_again_and_still_rejected(
     two_paths: TwoPaths,
 ) -> None:
-    """Replay is not leniency, which is what keeps unclearable work off the base."""
+    """A red is not stored, so the merge path re-judges — and still refuses the push."""
     _work(two_paths)
 
     worker_run = two_paths.worker_llmlint_tier(FAKE_LLMLINT_EXIT="1")
     two_paths.push_branch()
-    rebuilt = two_paths.merge_path_llmlint_tier()
+    rebuilt = two_paths.merge_path_llmlint_tier(FAKE_LLMLINT_EXIT="1")
 
     assert worker_run.returncode != 0, worker_run.stdout + worker_run.stderr
     assert FAIL_FINDING in worker_run.stdout
-    # The findings the worker was shown are the findings the merge path reports,
-    # replayed rather than re-rolled — so the push this verdict gates is rejected
-    # even where a fresh roll would have passed.
+    # Nothing was cached for the worker's failing run, so this is a second roll —
+    # the deliberate cost of the cache holding successes only. What the tier still
+    # owes is the outcome: findings reported, and the push this verdict gates
+    # rejected rather than waved through.
     assert rebuilt.returncode != 0, rebuilt.stdout + rebuilt.stderr
     assert FAIL_FINDING in rebuilt.stdout
-    assert CACHE_HIT in rebuilt.stderr
-    assert two_paths.judge_runs() == 1
+    assert CACHE_MISS in rebuilt.stderr
+    assert two_paths.judge_runs() == 2
 
 
 def test_content_the_worker_never_judged_is_judged_on_the_merge_path(

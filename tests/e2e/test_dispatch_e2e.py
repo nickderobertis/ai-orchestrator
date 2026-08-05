@@ -1539,9 +1539,11 @@ print(json.dumps({
         (
             # The diff recipe resolves its base ref before Nx hashes it, and judges
             # exactly the commit it keyed on. `--skip-nx-cache` reaches Nx, not
-            # llmlint, and keeps this boundary check off the recorded verdict.
+            # llmlint, and keeps this boundary check off the cached judge run.
+            # `-v` is the tier's own: the report Nx caches has to carry the
+            # per-rule detail and the `llmlint history` pointer, not a summary.
             ["lint-llm-diff", "HEAD", "--skip-nx-cache"],
-            ["--diff", "--diff-base", "{base_sha}"],
+            ["--diff", "--diff-base", "{base_sha}", "-v"],
         ),
     ],
 )

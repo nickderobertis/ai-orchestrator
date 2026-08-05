@@ -514,13 +514,20 @@ finding stops being worth another gate cycle—landing with a justified line-sco
 suppression plus a tracked follow-up—is the planner's call from that surfaced
 report, never the worker's by suppressing.
 
-The judge behind that tier is non-deterministic, so its verdict is memoized: `just
+The judge behind that tier is non-deterministic, so the run itself is cached: `just
 lint-llm-diff` resolves the base ref to a commit and runs the cached Nx
 `workspace:lint-llm-diff` target (the root `project.json` — the check spans the
-whole tree, so it belongs to no single project). Re-running `just gate` on an
-unchanged tree against an unchanged base replays the recorded verdict instead of
-rolling the judge again, which is what stops one branch from being blocked by
-opposite verdicts on an identical diff. The key covers the whole workspace, the
+whole tree, so it belongs to no single project), whose command is
+`scripts/llmlint-judge.sh` — llmlint with `-v`, and nothing else. Re-running `just
+gate` on an unchanged tree against an unchanged base replays that run's own
+terminal output instead of rolling the judge again, which is what stops one branch
+from being blocked by opposite verdicts on an identical diff. `-v` is why replay
+loses nothing that matters: the report carries every rule and the `llmlint history
+<id>` pointer, and Nx replays it verbatim. A green elides one thing — the
+serialized judge calls `-v` also prints, ~214KB of a 226KB run — because Nx
+replays a hit as one burst and a burst past one pipe buffer arrives truncated;
+`llmlint history <id>` has them in full, and a failure is never cached and so
+prints everything. The key covers the whole workspace, the
 resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
 version plus the effective merged config, so a rule change in a plugin fetched from
 outside this repository still invalidates. That fingerprint resolves both of those
@@ -534,20 +541,23 @@ fails a quieter way too — because Nx scores a runtime input that exits non-zer
 *no contribution* rather than as an error, a fingerprint the caller's environment
 can break does not fail the tier, it drops the judge configuration out of the key
 and replays a verdict that configuration has moved on from. Because Nx caches
-successful tasks only,
-the target records its verdict — findings and judged status — into its declared
-output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure blocks
-`gate` and pre-push identically whether it was just judged or restored from cache.
-Only llmlint's own 0/1 verdicts are recorded: a tool that failed without judging
-propagates and stays uncached. A wrong verdict does stick:
-force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. That
-per-invocation flag is the only supported re-judge lever; an ambient global
+successful tasks only, **only a green is cached**: findings (llmlint exit 1) and a
+toolchain that never reached a verdict (exit >= 2) both fail the tier and re-judge
+on the next run. That is deliberate — the record/replay protocol that used to
+smuggle failures through Nx is gone, and with it the shared scratch directory a
+concurrent invocation could clear out from under an in-flight judge. A branch
+working through a red pays a fresh roll each time, and `llmlint history` (retained at
+`history.max_runs` in `llmlint.yml`) is where every roll lands. A wrong *green*
+still sticks: `just lint-llm-diff <base> --skip-nx-cache` re-judges but neither
+reads nor writes the cache, so the next ordinary run replays the same entry until
+the tree, the base commit, or the judge configuration moves. That per-invocation
+flag is the only supported re-judge lever; an ambient global
 `NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE` is reported and ignored by this tier,
 because it re-rolls the judge from every unrelated command and breaks the checks
 whose contract is cache replay. When a
 miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
-on an unchanged tree is a changed judge, not a changed diff. The recorded verdict
-for one content, base commit, and judge configuration is authoritative and the
+on an unchanged tree is a changed judge, not a changed diff. The cached green for
+one content, base commit, and judge configuration is authoritative and the
 worker's own gate pays for it: `verify.comparison_env` is that identity's one
 source, and the lifecycle exports it to every dispatch and every publishing push
 of a workstream so the `pre-push` hook replays what the worker cleared instead of
