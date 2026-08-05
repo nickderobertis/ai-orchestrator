@@ -37,7 +37,7 @@ class PlanError(Exception):
 #: for backward-compatible plans; ``human`` names action the harness must never
 #: infer or execute.
 NODE_KINDS = ("agent", "human")
-PLAN_SCHEMA_VERSION = 6
+PLAN_SCHEMA_VERSION = 7
 
 #: Heading the planner's carried context is rendered under inside a dispatched task.
 NODE_CONTEXT_HEADING = "## Planner context"
@@ -161,7 +161,10 @@ class NodeRun:
 #: drift; `orchestrator.projection.node_statuses` reads these.
 UNMET_DEP_STATUSES = ("failed", "skipped")
 #: Dependency statuses that mean a dependent is held rather than lost: ``blocked``.
-GATED_DEP_STATUSES = ("waiting", "blocked")
+#: ``parked`` is one of them because a planner ``cancel`` idles a node it may still
+#: `requeue`; treating it as unmet would settle every dependent `skipped` and throw
+#: away work the park exists to keep recoverable.
+GATED_DEP_STATUSES = ("waiting", "blocked", "parked")
 
 
 def schedule_dag(
@@ -231,7 +234,12 @@ def reconcile_dag(
                     changed = True
                 elif any(s in GATED_DEP_STATUSES for s in settled):
                     status[nid] = "blocked"
-                    results[nid] = NodeRun("blocked", "a dependency is awaiting human action")
+                    held = (
+                        "a dependency is parked"
+                        if any(s == "parked" for s in settled)
+                        else "a dependency is awaiting human action"
+                    )
+                    results[nid] = NodeRun("blocked", held)
                     changed = True
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:

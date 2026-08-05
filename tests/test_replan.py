@@ -551,6 +551,40 @@ def test_failed_lifecycle_carries_preserved_resume_without_retry_edit() -> None:
     assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3, "attempts": 1}
 
 
+def test_a_parked_lifecycle_node_stays_parked_and_keeps_its_preserved_checkpoint() -> None:
+    """A park survives the transition: carried, still parked, still on its branch.
+
+    The node is what a later `requeue` adopts, so the checkpoint has to travel with
+    it — and no continuation budget is spent, because the harness is not the one
+    deciding to keep going.
+    """
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "Continue",
+        "parked": True,
+    }
+    resume = {
+        "branch": "feature/parked",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    result = {
+        "round": 3,
+        "results": {"work": {"status": "parked", "outcome": "not-completed", "resume": resume}},
+    }
+
+    carried = next_round(_plan(work), result)
+
+    assert carried["tasks"][0]["parked"] is True
+    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3}
+    assert "attempts" not in carried["tasks"][0]["resume"]
+
+
 def _preserved_failure(resume: dict[str, object], *, round_number: int = 3) -> dict[str, object]:
     return {
         "round": round_number,

@@ -38,6 +38,33 @@ def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
     raise AssertionError(f"condition did not appear in {path}")
 
 
+def _records(text: str) -> list[dict]:
+    """Every whole journal record in ``text``, tolerating one torn trailing line.
+
+    The journal appends whole newline-terminated records and documents "at worst,
+    one torn trailing line", so that is the one thing a poll of a live log may skip
+    and the one thing it must not mistake for a record that is not there.
+    """
+    lines = text.splitlines()
+    if lines and not text.endswith("\n"):
+        lines.pop()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+def _started_in(events: Path, round_number: int) -> list[str]:
+    """Every node one round dispatched, in journalled order.
+
+    A node the harness never launched leaves no `node-started`, which is the only
+    honest way to say a parked node was *not* redispatched: its result payload looks
+    the same either way.
+    """
+    return [
+        record["node"]
+        for record in _records(events.read_text(encoding="utf-8"))
+        if record.get("round") == round_number and record.get("kind") == "node-started"
+    ]
+
+
 def _wait_for_event(events: Path, kind: str, node: str, timeout: float = 30) -> None:
     """Wait until one journaled event carries both ``kind`` and ``node``.
 
@@ -1119,6 +1146,321 @@ def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
     # The next round dispatched the amended brief, not the one the run was launched with.
     assert len(delivered) >= 2, delivered
     assert "Re-run the sweep against the corrected fixture." in delivered[-1]
+
+    subprocess.run(
+        ["just", "stop", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _drive_to_round_two(run_id: str, runs: Path, next_plan: Path) -> None:
+    """Answer surfaces until the orchestrator's own transition wrote the next round."""
+    transition_deadline = deadline(300)
+    while time.monotonic() < transition_deadline and not next_plan.is_file():
+        boundary = _next_surface(run_id, runs, 10)
+        if boundary.get("status") == "finished":
+            break
+        if boundary.get("surface") is None:
+            continue
+        subprocess.run(
+            ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+            cwd=REPO_ROOT,
+            input=json.dumps({"completion": False, "message": "continue", "reason": "observed"}),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=e2e_timeout(30),
+        )
+    _wait_for(next_plan, lambda text: bool(text.strip()), 120)
+
+
+def test_real_cli_cancel_parks_a_running_lifecycle_and_a_later_round_requeues_it(
+    tmp_path: Path, onejudge_bin: str, bare_origin
+) -> None:
+    """The arc `drop` and `retry` could not express: stop for now, resume later.
+
+    `drop` refuses to remove the last unresolved publication anchor and `retry`
+    demands an immediate successor, so a planner with a live node it merely wanted
+    idle had no edit to send — which is how a duplicate recovery path came to run
+    beside it. `cancel` parks the node instead: the dispatch stops cooperatively and
+    its branch is preserved exactly as a drop preserves one, the anchor stays in the
+    graph, and the node is carried across the round boundary without being
+    relaunched until a `requeue` puts it back on the frontier.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-park")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    runs = tmp_path / "park-runs"
+    base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base_path = tmp_path / "park-base.yaml"
+    base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    provider = Rendezvous.at(tmp_path, "park")
+    # The note is prose to the harness and a rendezvous to the deterministic backend,
+    # which parses the whole task it receives. That is what holds round *two* open:
+    # a release path is one-shot, so the carried node's second dispatch needs a
+    # rendezvous the first one never named, and planner context is the one thing
+    # that reaches a carried node's task without changing what the round did.
+    second_round = Rendezvous.at(tmp_path, "second-round")
+    plan = tmp_path / "park-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 7,
+                "name": "park-and-resume",
+                "tasks": [
+                    {
+                        "id": "lifecycle",
+                        "repo": str(canonical),
+                        "execution_checkout": str(canonical),
+                        "persona": "engineer",
+                        # Held on its *second* turn, after the first has written and
+                        # pushed the change: a cancel before that has nothing to
+                        # preserve, and the preserved branch is the subject here.
+                        "task": (
+                            f"slow-branch {tmp_path / 'park.ticks'} write-change"
+                            f"{provider.sentinels(1)}"
+                        ),
+                        # Deliberately unpinned: the branch a `requeue` resumes has to
+                        # be the one the park preserved and the transition carried,
+                        # not one the plan named up front.
+                        "title": "feat: write the change this journey parks and resumes",
+                        "verify_cmd": ["test", "-f", "CHANGE.txt"],
+                    },
+                    {
+                        "id": "stacked",
+                        "repo": str(canonical),
+                        "task": "No diff",
+                        "expects_no_diff": True,
+                        "deps": ["lifecycle"],
+                    },
+                    {
+                        "id": "carried",
+                        "persona": "engineer",
+                        "task": "should-fail no-assessment",
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            "--detach",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base_path),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    run_id = str(json.loads(launched.stdout)["run_id"])
+    run_dir = runs / run_id
+    _wait_for(run_dir / "events.jsonl", lambda text: bool(text.strip()), LIVE_PROCESS_TIMEOUT)
+    events = run_dir / "events.jsonl"
+    provider.wait(LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "node-failed", "carried", LIVE_PROCESS_TIMEOUT)
+
+    # Unchanged: the node is the only publication anchor its stacked dependent has,
+    # so `drop` still refuses it — which is exactly the corner `cancel` exists for.
+    assert "last unresolved publication anchor" in _rejected(
+        run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "detach"}]
+    )
+    assert "pending or running" in _rejected(run_id, runs, [{"op": "cancel", "id": "carried"}])
+    assert "existing node id" in _rejected(run_id, runs, [{"op": "cancel", "id": "ghost"}])
+    assert "requires a parked node" in _rejected(
+        run_id, runs, [{"op": "requeue", "id": "lifecycle"}]
+    )
+
+    # Both while the lifecycle is still held: once it settles, this round has nothing
+    # running and closes, and a note submitted after that has no live round to reach.
+    _reply(
+        run_id,
+        runs,
+        [
+            {"op": "cancel", "id": "lifecycle"},
+            {
+                "op": "context",
+                "id": "carried",
+                "note": f"hold the next attempt here:{second_round.sentinels(0)}",
+            },
+        ],
+    )
+    provider.let_go()
+    _wait_for(
+        events,
+        lambda text: '"kind": "node-settled"' in text and '"status": "parked"' in text,
+        timeout=LIVE_PROCESS_TIMEOUT,
+    )
+
+    _wait_for(run_dir / "round-01" / "result.json", lambda text: bool(text.strip()), 120)
+    round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    parked_result = round_one["results"]["lifecycle"]
+    assert parked_result["status"] == "parked"
+    branch = parked_result["branch"]
+    checkpoint = parked_result["resume"]["checkpoint"]
+    # Held, not lost: the stacked dependent is blocked rather than skipped, which is
+    # what a `cancelled` node would have made it. (This round's own state is `failed`
+    # because `carried` failed; a park alone leaves a round `waiting`, which the
+    # pending-park journey below asserts.)
+    assert round_one["results"]["stacked"]["status"] == "blocked"
+    # The branch the cancelled dispatch preserved is real, survives in the registered
+    # checkout, and carries the incomplete provenance a resume has to clear.
+    assert gitops.is_ancestor(canonical, checkpoint, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
+    projection = project_run(events, RunId(run_dir.name), 1)
+    assert projection.node_states["lifecycle"] == "parked"
+    parked_task = next(node for node in projection.plan["tasks"] if node["id"] == "lifecycle")
+    assert parked_task["parked"] is True
+
+    # The transition folds the executed graph, so the park reaches the next round.
+    next_plan = run_dir / "round-02" / "plan.json"
+    _drive_to_round_two(run_id, runs, next_plan)
+    carried_plan = json.loads(next_plan.read_text(encoding="utf-8"))
+    carried_by_id = {task["id"]: task for task in carried_plan["tasks"]}
+    # Still parked, and still on the branch its cancelled dispatch preserved: the
+    # checkpoint is what a requeue has to adopt rather than cut a fresh branch from.
+    assert carried_by_id["lifecycle"]["parked"] is True
+    assert carried_by_id["lifecycle"]["resume"]["checkpoint"] == checkpoint
+    assert carried_by_id["lifecycle"]["resume"]["branch"] == branch
+
+    # Round two is executing — the carried node is held at the rendezvous the note
+    # delivered — and the parked node has still not been dispatched a second time.
+    second_round.wait(LIVE_PROCESS_TIMEOUT)
+    assert _started_in(events, 2) == ["carried"]
+
+    # `requeue` puts it back on the frontier, amended, and a normal dispatch takes it
+    # from there — adopting the carried checkpoint rather than starting over.
+    _reply(run_id, runs, [{"op": "requeue", "id": "lifecycle", "amend": {"max_turns": 8}}])
+    # Released only once the requeued node is in flight: the round stays open on it
+    # from here, and letting the held node go any earlier could settle the round
+    # between the reconciler's commit and its next scheduling pass.
+    _wait_for(events, lambda _text: "lifecycle" in _started_in(events, 2), LIVE_PROCESS_TIMEOUT)
+    second_round.let_go()
+    _wait_for(run_dir / "round-02" / "result.json", lambda text: bool(text.strip()), 180)
+    round_two = json.loads((run_dir / "round-02" / "result.json").read_text(encoding="utf-8"))
+    requeued = round_two["results"]["lifecycle"]
+    assert requeued["status"] == "done", requeued
+    assert requeued["outcome"] == "merged"
+    assert requeued["branch"] == branch
+    # The preserved work is what got published. A resume that could not adopt the
+    # named branch settles `resume-failed`, so `merged` on that pin is the proof, and
+    # the change the cancelled dispatch had already made is on the base.
+    assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
+    # The requeue released the stacked dependent too: it was blocked behind the park
+    # rather than skipped, so the anchor finishing is what let it run.
+    assert sorted(_started_in(events, 2)) == ["carried", "lifecycle", "stacked"]
+    assert round_two["results"]["stacked"]["status"] == "done"
+    resumed = [
+        record
+        for record in _records(events.read_text(encoding="utf-8"))
+        if record.get("round") == 2 and record.get("kind") == "branch-discovered"
+    ]
+    assert [record["detail"]["resumed"] for record in resumed] == [True]
+
+    subprocess.run(
+        ["just", "stop", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_real_cli_cancel_parks_a_node_before_it_is_ever_dispatched(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """A node parked while pending is never dispatched, and settles `parked` anyway."""
+    runs = tmp_path / "runs"
+    base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base_path = tmp_path / "pending-park-base.yaml"
+    base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    prompts = tmp_path / "never-dispatched.jsonl"
+    plan = tmp_path / "pending-park-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 7,
+                "name": "pending-park",
+                "concurrency": 4,
+                "tasks": [
+                    {
+                        "id": "hold",
+                        "persona": "engineer",
+                        "task": (
+                            f"slow-branch {tmp_path / 'hold.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'pending-park').sentinels(0)}"
+                        ),
+                    },
+                    {"id": "approve", "kind": "human", "task": "Approve the release"},
+                    {
+                        "id": "unstarted",
+                        "persona": "engineer",
+                        "task": f"complete-now record-task={prompts}",
+                        "deps": ["approve"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            "--detach",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base_path),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    run_id = str(json.loads(launched.stdout)["run_id"])
+    run_dir = runs / run_id
+    events = run_dir / "events.jsonl"
+    Rendezvous.at(tmp_path, "pending-park").wait(LIVE_PROCESS_TIMEOUT)
+    _wait_for(events, lambda text: '"kind": "human-waiting"' in text)
+
+    _reply(run_id, runs, [{"op": "cancel", "id": "unstarted"}])
+    # Parked before it was dispatched, so attesting the human action that gated it
+    # releases nothing: the node stays held rather than starting.
+    _reply(run_id, runs, [{"op": "attest", "ref": "approve"}])
+    assert "already parked" in _rejected(run_id, runs, [{"op": "cancel", "id": "unstarted"}])
+
+    Rendezvous.at(tmp_path, "pending-park").let_go()
+    _wait_for(run_dir / "round-01" / "result.json", lambda text: bool(text.strip()), 120)
+    payload = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    assert payload["results"]["unstarted"]["status"] == "parked"
+    assert payload["results"]["hold"]["status"] == "done"
+    assert payload["state"] == "waiting"
+    assert not prompts.exists()
+    assert _started_in(events, 1) == ["hold"]
 
     subprocess.run(
         ["just", "stop", run_id, "--runs-dir", str(runs)],

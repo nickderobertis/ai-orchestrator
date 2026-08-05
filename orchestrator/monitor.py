@@ -1159,7 +1159,7 @@ def run_state(
     ok = bool(payload.get("ok"))
     counts = ", ".join(
         f"{sum(1 for item in payload['results'].values() if item.get('status') == status)} {status}"
-        for status in ("done", "waiting", "blocked", "failed", "skipped")
+        for status in ("done", "waiting", "blocked", "parked", "failed", "skipped")
         if any(item.get("status") == status for item in payload["results"].values())
     )
     complete = state == COMPLETE_STATE and ok

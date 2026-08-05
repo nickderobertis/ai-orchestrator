@@ -190,6 +190,11 @@ class GraphNode:
     direct: PlanNode | None = None
     lifecycle: RepoPlanNode | None = None
     definition: dict[str, Any] = field(default_factory=dict)
+    #: Idled by a planner ``cancel`` and not to be dispatched. Carried on the node
+    #: definition rather than derived from a status, because that is what survives
+    #: the round transition into a continuation launch — a status is per round, and
+    #: a parked node must stay parked until a ``requeue`` says otherwise.
+    parked: bool = False
 
     @property
     def human(self) -> bool:
@@ -250,7 +255,10 @@ class GraphResult:
         statuses = {r.status for r in self.results.values()}
         if statuses & {"failed", "skipped", "cancelled"}:
             return "failed"
-        if statuses & {"waiting", "blocked"}:
+        # `parked` is deliberately on the held side rather than the failed one: the
+        # planner stopped this node, its work is preserved, and a `requeue` picks it
+        # up. Reporting it as a failure would send a reader looking for a defect.
+        if statuses & {"waiting", "blocked", "parked"}:
             return "waiting"
         return "complete"
 
@@ -422,6 +430,21 @@ def _contains_field(tasks: list[Any], field: str, *, include_steps: bool = False
     return False
 
 
+def _parse_parked(nid: str, raw: Mapping[str, Any]) -> bool:
+    """Validate the planner-parked flag a ``cancel`` writes onto a node.
+
+    Deliberately not gated on the plan's declared schema version, for the reason
+    `parse_node_context` states about ``context``: the field is written onto a
+    *running* graph by a live edit and then carried forward, so refusing it against
+    the version the graph was launched with would make a committed edit unreplayable
+    rather than protect an older plan from a field it never uses.
+    """
+    value = raw.get("parked", False)
+    if not isinstance(value, bool):
+        raise PlanError(f"task {nid!r} 'parked' must be a boolean")
+    return value
+
+
 def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
     kind = raw.get("kind", "agent")
     if kind not in NODE_KINDS:
@@ -429,6 +452,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
     deps = raw.get("deps", [])
     if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
         raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
+    parked = _parse_parked(nid, raw)
     if kind == "human":
         if "/" in nid:
             raise PlanError(
@@ -444,7 +468,14 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
                 f"human task {nid!r} cannot set {', '.join(map(repr, present))}: "
                 "it names action for a person, not work the harness runs"
             )
-        return GraphNode(id=nid, kind="human", task=task, deps=list(deps), definition=dict(raw))
+        return GraphNode(
+            id=nid,
+            kind="human",
+            task=task,
+            deps=list(deps),
+            definition=dict(raw),
+            parked=parked,
+        )
     context = parse_node_context(nid, raw)
     if raw.get("repo") is not None:
         node = parse_repo_node(nid, raw)
@@ -469,6 +500,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
             repo=node.repo,
             lifecycle=node,
             definition=dict(raw),
+            parked=parked,
         )
     direct = parse_agent_node(nid, raw)
     direct.task = compose_task_context(direct.task, context)
@@ -479,6 +511,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
         deps=list(deps),
         direct=direct,
         definition=dict(raw),
+        parked=parked,
     )
 
 
@@ -545,9 +578,15 @@ def run_graph(
     }
     guard = threading.Lock()
     cancellations = {node.id: threading.Event() for node in graph.tasks}
+    #: Nodes a ``cancel`` idled: either carried in parked by the launch plan, or
+    #: parked mid-round by the reconciler. `settle` reads it to tell a park's
+    #: cooperative cancellation from a drop's or a retry's, which stop the same
+    #: dispatch the same way but mean different things about the node.
+    parked = {node.id for node in graph.tasks if node.parked}
     frontier = {nid: run.status for nid, run in (replayed_runs or {}).items()} | {
         nid: "running" for nid in already_started
     }
+    frontier.update({nid: "parked" for nid in parked if nid not in frontier})
     attestations: list[str] = []
     round_started = time.monotonic()
     budget_surfaced = False
@@ -586,11 +625,12 @@ def run_graph(
                 replace(node.lifecycle, stack_bases=anchors), **lifecycle_args
             )
             if cancellations[nid].is_set() and not result.ok:
-                run = NodeRun("cancelled", "cancelled cooperatively", result)
+                status, detail = _cancelled_status(nid, parked)
+                run = NodeRun(status, detail, result)
                 node_log.append(
                     "node-settled",
                     detail={
-                        "status": "cancelled",
+                        "status": status,
                         "outcome": result.outcome,
                         TERMINAL_NODE_RESULT_FIELD: cast(
                             Any, _run_payload(node, run, dependents.get(nid, []))
@@ -666,11 +706,12 @@ def run_graph(
             session=direct.session or f"dispatch-{direct.persona}",
         )
         if cancellations[nid].is_set():
-            run = NodeRun("cancelled", "cancelled cooperatively", report)
+            status, detail = _cancelled_status(nid, parked)
+            run = NodeRun(status, detail, report)
             node_log.append(
                 "node-settled",
                 detail={
-                    "status": "cancelled",
+                    "status": status,
                     TERMINAL_NODE_RESULT_FIELD: cast(
                         Any, _run_payload(node, run, dependents.get(nid, []))
                     ),
@@ -775,6 +816,16 @@ def run_graph(
 
     actual = dict(replayed_runs or {})
     actual.update({nid: NodeRun("running") for nid in already_started if nid not in actual})
+    # A node the launch plan carries in parked is settled before the scheduler sees
+    # it, so no dispatch is prepared for it and this round records it exactly as the
+    # round that parked it did — including the branch its preserved work is on.
+    actual.update(
+        {
+            nid: NodeRun("parked", PARKED_DETAIL, None, _parked_payload(nodes[nid]))
+            for nid in parked
+            if nid not in actual
+        }
+    )
 
     def on_settled(nid: str, run: NodeRun) -> None:
         frontier[nid] = run.status
@@ -874,6 +925,29 @@ def run_graph(
                         if status.get(dropped) != "running":
                             status.pop(dropped, None)
                             actual.pop(dropped, None)
+                    case "node-parked":
+                        idled = operation["node"]
+                        # Recorded before the signal, so a worker that observes the
+                        # cancellation has already been told which kind it is.
+                        parked.add(idled)
+                        cancellations[idled].set()
+                        if status.get(idled) != "running":
+                            # Nothing is in flight to settle it, so the park *is* its
+                            # settlement; a running node settles `parked` in `settle`.
+                            status[idled] = frontier[idled] = "parked"
+                            actual[idled] = NodeRun(
+                                "parked", PARKED_DETAIL, None, _parked_payload(nodes[idled])
+                            )
+                    case "node-requeued":
+                        requeued = operation["node"]
+                        parked.discard(requeued)
+                        # A fresh signal, never a reset of the old one: the dispatch the
+                        # park cancelled may still be unwinding and must keep seeing the
+                        # event it was cancelled with.
+                        cancellations[requeued] = threading.Event()
+                        status[requeued] = "pending"
+                        frontier.pop(requeued, None)
+                        actual.pop(requeued, None)
             # `skipped` and `blocked` are *derived*: the scheduler writes them when a
             # dependency settled unmet or waiting, and nothing else produces them. An
             # edit that changes eligibility — a reparent off a blocking dep, an attest
@@ -923,6 +997,45 @@ def run_graph(
         external_status=lambda: cross_dag.reconcile_edges(external_deps, dependents),
     )
     return _collect(nodes, runs, [node for node in started_order if node in nodes])
+
+
+#: What a node's result says when the planner idled it rather than losing it.
+PARKED_DETAIL = "parked by planner"
+
+
+def _cancelled_status(nid: str, parked: Iterable[str]) -> tuple[str, str]:
+    """How a cooperatively cancelled node settled, and why.
+
+    One signal stops a dispatch, and three different decisions raise it — a drop, a
+    retry, a park. Only the last leaves a node the graph still holds, so only the
+    last settles `parked`; the other two keep the `cancelled` they always had.
+    """
+    if nid in parked:
+        return "parked", f"cancelled cooperatively; {PARKED_DETAIL}"
+    return "cancelled", "cancelled cooperatively"
+
+
+def _parked_payload(node: GraphNode) -> GraphResultItem:
+    """The recorded result for a node parked with no dispatch of its own to report.
+
+    A running node parks with its dispatch's own result, which already names the
+    branch its preserved work is on. A node parked before it started, or carried in
+    parked by a later round's plan, has none — so the branch is read from the node
+    itself, which is where the transition put the preserved checkpoint.
+    """
+    item: dict[str, Any] = {
+        "kind": node.kind,
+        "status": "parked",
+        "task": node.task,
+        "error": PARKED_DETAIL,
+    }
+    if node.repo is not None:
+        item["repo"] = node.repo
+    resume = node.definition.get("resume")
+    branch = resume.get("branch") if isinstance(resume, Mapping) else node.definition.get("branch")
+    if isinstance(branch, str) and branch:
+        item["branch"] = branch
+    return cast(GraphResultItem, item)
 
 
 def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphResultItem:
@@ -1144,6 +1257,10 @@ _HEADLINE = {
     "waiting": "awaiting human action",
     "failed": "some nodes did not complete",
 }
+#: `waiting` covers two different holds. A parked round with no ready human action
+#: is held by the planner's own `cancel`, and saying "awaiting human action" would
+#: send a reader looking for an action nobody has to take.
+_PARKED_HEADLINE = "awaiting planner requeue of parked node(s)"
 
 
 def first_line(task: str) -> str:
@@ -1152,14 +1269,19 @@ def first_line(task: str) -> str:
 
 
 def render_counts(counts: Counter[str]) -> str:
-    keys = ["done", "waiting", "blocked", "failed", "skipped"]
+    keys = ["done", "waiting", "blocked", "parked", "failed", "skipped"]
     keys.extend(sorted(set(counts) - set(keys)))
     return ", ".join(f"{counts[key]} {key}" for key in keys if counts[key])
 
 
 def render_summary(results: dict[str, NodeResult], state: str, actions: list[HumanAction]) -> str:
     counts = Counter(r.status for r in results.values())
-    lines = [f"plan: {_HEADLINE[state]} ({render_counts(counts)})"]
+    headline = (
+        _PARKED_HEADLINE
+        if state == "waiting" and not actions and counts["parked"]
+        else _HEADLINE[state]
+    )
+    lines = [f"plan: {headline} ({render_counts(counts)})"]
     for nid, result in results.items():
         label = f"  {nid} [human]" if result.kind == "human" else f"  {nid}"
         line = f"{label}: {result.status}"

@@ -8,8 +8,16 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
-The current tracked-plan contract is schema version 6 (`"schema_version": 6`).
+The current tracked-plan contract is schema version 7 (`"schema_version": 7`).
 Plans that omit the version retain version-1 behavior for compatibility.
+
+Version 7 adds the optional boolean node `parked`, written by a live `cancel` and
+cleared by a live `requeue`. A parked node is carried across the round transition
+and into a continuation launch **without being dispatched**, which is what makes
+"stop for now, maybe resume later" a state rather than a lost node. Like `context`
+below it is not refused on a plan that declares an earlier version, and for the
+same reason: it is attached to a running graph. See [Live graph
+edits](#live-graph-edits).
 
 Version 6 adds the optional node `context`: a list of planner notes rendered as a
 trailing `## Planner context` section of every task that node dispatches. Unlike
@@ -281,6 +289,8 @@ The accepted commands are:
 | `drop` | `id`; `dependents`: `"drop"` or `"detach"` | Remove the node and recursively drop its dependents, or detach its direct dependents. |
 | `reparent` | `id`; `deps`: list of dependency references | Replace an unstarted node's dependencies. |
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
+| `cancel` | `id` | Park a pending or running node: cancel its dispatch cooperatively and hold it out of every later round until a `requeue`. |
+| `requeue` | `id`; optional `amend`: partial node overrides | Return a parked node to the desired frontier, optionally amending it (for example `max_turns`, or a `resume` pin onto the preserved branch). |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
 | `context` | `id`; `note` | Attach one planner note to the node's next dispatch, without cancelling or restarting anything. |
@@ -307,7 +317,10 @@ Every delta is validated against the live frontier before commit. The resulting
 graph must still satisfy the normal plan schema: ids and referenced dependencies
 must exist, and dependencies cannot form a cycle or self-edge. `reparent` cannot
 change a started node; `retry` requires a running, failed, or cancelled target and
-a new replacement id; `attest` requires a ready waiting human action; `context`
+a new replacement id; `cancel` requires a node that is pending or running and not
+already parked, so a settled or unknown node is refused by name; `requeue` requires
+a parked node and refuses an `amend` that rewrites `id` or `deps`, which are `add`'s
+and `reparent`'s to change; `attest` requires a ready waiting human action; `context`
 requires a node that can still be dispatched, so a note aimed at a node that
 already settled `done` is refused rather than accepted into nothing. `drop` must
 state the dependents' fate and cannot remove the last publication anchor while an
@@ -371,6 +384,33 @@ direct dispatch stops; a lifecycle dispatch preserves commits already made on
 its branch with incomplete provenance before it settles `cancelled` (publication
 already in its commit phase may finish). Verify and publish preserved lifecycle
 work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstreams).
+
+### Parking a node, and picking it up again
+
+`drop` removes a node and refuses to remove the last unresolved publication anchor;
+`retry` demands an immediate successor. Neither says *stop for now*. `cancel` does:
+it raises the same cooperative cancellation signal, preserving the branch exactly as
+a drop does and leaving the publication anchor in the graph, and settles the node
+`parked` instead of `cancelled`.
+
+Parked is a held state, not a failed one. The round settles without the node, its
+dependents settle `blocked` rather than `skipped`, and the round's own state is
+`waiting`. The flag lives on the node definition, so the [plan of
+record](#the-plan-of-record-is-the-graph-the-round-executed) carries it through the
+transition and the continuation launch **never redispatches it** — a parked
+lifecycle node also carries its preserved checkpoint forward, so a later `requeue`
+adopts that branch rather than cutting a fresh one. `just results` reports the node
+as `parked` and names the preserved branch.
+
+`requeue` puts it back on the desired frontier, and the next reconciler pass
+dispatches it through normal adoption:
+
+```json
+{"version":1,"commands":[{"op":"requeue","id":"sweep","amend":{"max_turns":32}}]}
+```
+
+An `amend` mapping is merged onto the node before it is redispatched, which is where
+a raised turn budget or an explicit `resume` pin onto the preserved branch goes.
 
 ## Node shapes
 
@@ -531,8 +571,13 @@ Each node settles once per round:
 - `waiting`: a ready human node or lifecycle human step needs action. Its
   `human_actions` entry includes the exact `task`, direct `unblocks`, and whether
   it unblocks workstream publication.
-- `blocked`: execution is transitively gated by a waiting human. `blocked_by`
-  contains the ready top-level or `NODE_ID/STEP_ID` human references.
+- `blocked`: execution is transitively gated by a waiting human, or by a parked
+  dependency. `blocked_by` contains the ready top-level or `NODE_ID/STEP_ID` human
+  references.
+- `parked`: a planner `cancel` idled the node. Its dispatch was cancelled
+  cooperatively and its branch preserved, its publication anchor stays in the graph,
+  and no later round dispatches it until a `requeue`. See [Parking a node, and
+  picking it up again](#parking-a-node-and-picking-it-up-again).
 - `failed`: an executed agent or lifecycle failed.
 - `failed` with outcome `infrastructure-failure`: a recognized provider or
   harness failure, ENOSPC, OOM kill, or failed scratch-capacity preflight
@@ -550,11 +595,12 @@ Each node settles once per round:
   over a simultaneous waiting path, so such a descendant is skipped, not blocked.
 
 The result's top-level `state` is `failed` if any node failed or skipped,
-otherwise `waiting` if any node waits or is blocked, otherwise `complete`. `ok` is
-true only for `complete`. Human and JSON output carry the same facts. Exit status
-is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for invalid plan, ledger,
-configuration, or command input. Recorded result schema v5 adds the terminal
-`infrastructure-failure` and successful `already-integrated` outcome values.
+otherwise `waiting` if any node waits, is blocked, or is parked, otherwise
+`complete`. `ok` is true only for `complete`. Human and JSON output carry the same
+facts. Exit status is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for
+invalid plan, ledger, configuration, or command input. Recorded result schema v5
+adds the terminal `infrastructure-failure` and successful `already-integrated`
+outcome values.
 
 ## Recorded rounds
 

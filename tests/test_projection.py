@@ -222,6 +222,8 @@ def test_every_compiled_edit_operation_kind_has_a_replay_handler() -> None:
         {"kind": "human-attested", "node": "approve", "detail": {"ref": "approve"}},
         {"kind": "completion-requested", "detail": {"reason": "done"}},
         {"kind": "context-added", "node": "a", "detail": {"note": "the gate is green"}},
+        {"kind": "node-parked", "node": "a", "detail": {}},
+        {"kind": "node-requeued", "node": "a", "detail": {"amend": {"max_turns": 3}}},
         {"kind": "node-dropped", "node": "b", "detail": {"dependents": "drop"}},
     ]
     assert {operation["kind"] for operation in operations} == EDIT_OPERATION_KINDS
@@ -273,6 +275,84 @@ def test_running_drop_replays_terminal_handoff_after_atomic_removal(status: str)
     assert projection.node_states == {}
 
 
+def test_running_park_replays_as_a_held_node_the_plan_still_carries() -> None:
+    """A park keeps the node, its flag, and its `parked` settlement across replay."""
+    events = [
+        _event(
+            "node-added", 1, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event("round-started", 2, detail={"plan": {"schema_version": 3}}),
+        _event("node-started", 3, node="work"),
+        _event(
+            "edit-committed",
+            4,
+            detail={"operations": [{"kind": "node-parked", "node": "work", "detail": {}}]},
+        ),
+        _event("node-settled", 5, node="work", detail={"status": "parked"}),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert projection.node_states == {"work": "parked"}
+    assert projection.plan["tasks"] == [
+        {"id": "work", "persona": "p", "task": "Work", "parked": True}
+    ]
+    assert node_statuses(projection).status == {"work": "parked"}
+
+
+def test_requeue_replays_as_an_unparked_node_free_to_start_again() -> None:
+    events = [
+        _event(
+            "node-added", 1, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event("round-started", 2, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            3,
+            detail={"operations": [{"kind": "node-parked", "node": "work", "detail": {}}]},
+        ),
+        _event(
+            "edit-committed",
+            4,
+            detail={
+                "operations": [
+                    {
+                        "kind": "node-requeued",
+                        "node": "work",
+                        "detail": {"amend": {"max_turns": 8}},
+                    }
+                ]
+            },
+        ),
+        _event("node-started", 5, node="work"),
+        _event("node-settled", 6, node="work", detail={"status": "done"}),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert projection.node_states == {"work": "done"}
+    assert projection.plan["tasks"] == [
+        {"id": "work", "persona": "p", "task": "Work", "max_turns": 8}
+    ]
+
+
+def test_a_dependent_of_a_parked_node_is_served_as_blocked_by_it() -> None:
+    events = [
+        _event(
+            "node-added", 1, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event(
+            "node-added", 2, detail={"definition": {"id": "after", "persona": "p", "task": "After"}}
+        ),
+        _event("edge-added", 3, detail={"from": "work", "to": "after"}),
+        _event("round-started", 4, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            5,
+            detail={"operations": [{"kind": "node-parked", "node": "work", "detail": {}}]},
+        ),
+    ]
+    served = node_statuses(project_round(events, RunId("r"), 1))
+    assert served.status == {"work": "parked", "after": "blocked"}
+    assert served.gated_by == {"after": ["work"]}
+
+
 @pytest.mark.parametrize(
     ("operation", "message"),
     [
@@ -282,6 +362,8 @@ def test_running_drop_replays_terminal_handoff_after_atomic_removal(status: str)
         ({"kind": "edge-added", "detail": {"from": 1, "to": "a"}}, "endpoints"),
         ({"kind": "edge-removed", "detail": {"from": "a", "to": "b"}}, "absent edge"),
         ({"kind": "node-dropped", "node": "missing"}, "unknown node"),
+        ({"kind": "node-parked", "node": "missing"}, "node-parked references an unknown"),
+        ({"kind": "node-requeued", "node": "a"}, "not parked"),
         ({"kind": "human-attested", "node": "a", "detail": {"ref": "a"}}, "currently waiting"),
         ({"kind": "future-edit"}, "unknown committed"),
     ],

@@ -311,6 +311,161 @@ def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
     assert set(lifecycle_result.results) == {"keep"}
 
 
+@pytest.mark.parametrize("value", ["yes", 1, None])
+def test_a_non_boolean_parked_flag_is_refused_by_name(value: object) -> None:
+    """The flag decides whether a node is ever dispatched, so it is validated."""
+    with pytest.raises(PlanError, match="'parked' must be a boolean"):
+        parse_graph({"tasks": [{"id": "x", "persona": "p", "task": "x", "parked": value}]})
+
+
+def test_cancel_parks_a_running_lifecycle_node_and_holds_its_dependents() -> None:
+    """A park stops the dispatch exactly as a drop does, and keeps the node.
+
+    The distinction is the whole point: the same cooperative signal, the same
+    preserved branch, but the node stays in the graph as `parked` rather than
+    leaving it as `cancelled`, so its dependents are held rather than skipped and
+    the round settles `waiting` rather than `failed`.
+    """
+    graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "repo", "repo": "acme/widget", "persona": "engineer", "task": "Wait"},
+                {"id": "after", "task": "No diff", "expects_no_diff": True, "deps": ["repo"]},
+            ],
+        }
+    )
+    pump = _EditingPump([EditCommand("cancel", {"op": "cancel", "id": "repo"})], wait_ticks=1)
+
+    def lifecycle_runner(
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
+    ) -> LifecycleResult:
+        assert cancel is not None and cancel.wait(1)
+        return _lifecycle(outcome="not-completed", branch="feature/parked")
+
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lifecycle_runner,
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert result.results["repo"].status == "parked"
+    assert result.results["repo"].error == "cancelled cooperatively; parked by planner"
+    assert result.results["after"].status == "blocked"
+    assert result.state == "waiting"
+    payload = graph_payload(result)
+    assert payload["results"]["repo"]["branch"] == "feature/parked"
+    assert payload["state"] == "waiting"
+    assert "parked" in result.summary()
+
+
+def test_cancel_parks_a_pending_node_without_ever_dispatching_it() -> None:
+    dispatched: list[str] = []
+
+    graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+                {"id": "pending", "persona": "engineer", "task": "Never runs", "deps": ["keep"]},
+            ],
+        }
+    )
+    pump = _EditingPump([EditCommand("cancel", {"op": "cancel", "id": "pending"})])
+
+    def runner(node: PlanNode, **_kwargs) -> Report:
+        dispatched.append(node.id)
+        return _report(node.persona)
+
+    result = run_graph(
+        graph,
+        agent_runner=runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert dispatched == []
+    assert result.results["pending"].status == "parked"
+    assert result.results["pending"].error == "parked by planner"
+    assert pump.outcomes == [(1, True, "applied cancel")]
+
+
+def test_a_launch_plan_carrying_a_parked_node_holds_it_without_relaunching() -> None:
+    """What the round transition produces: parked in the plan, parked in the round."""
+    dispatched: list[str] = []
+    graph = parse_graph(
+        {
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "tasks": [
+                {
+                    "id": "repo",
+                    "repo": "acme/widget",
+                    "persona": "engineer",
+                    "task": "Carried",
+                    "parked": True,
+                    "resume": {
+                        "branch": "feature/parked",
+                        "base_branch": "main",
+                        "pr_base": "main",
+                        "checkpoint": "0" * 40,
+                        "mode": "retry",
+                    },
+                },
+                {"id": "other", "task": "No diff", "expects_no_diff": True},
+            ],
+        }
+    )
+
+    def lifecycle_runner(node: RepoPlanNode, **_kwargs) -> LifecycleResult:
+        dispatched.append(node.id)
+        return _lifecycle()
+
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lifecycle_runner,
+    )
+    assert dispatched == []
+    assert result.results["repo"].status == "parked"
+    assert result.results["other"].status == "done"
+    # The preserved branch is read off the carried checkpoint, so the view that
+    # reports the park still names the branch a `requeue` would adopt.
+    assert graph_payload(result)["results"]["repo"]["branch"] == "feature/parked"
+
+
+def test_requeue_returns_a_parked_node_to_the_frontier_with_its_amendments() -> None:
+    turns: list[int | None] = []
+    graph = parse_graph(
+        {
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "tasks": [
+                {"id": "sweep", "persona": "engineer", "task": "Sweep", "parked": True},
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+            ],
+        }
+    )
+    pump = _EditingPump(
+        [EditCommand("requeue", {"op": "requeue", "id": "sweep", "amend": {"max_turns": 32}})],
+        wait_ticks=1,
+    )
+
+    def runner(node: PlanNode, **_kwargs) -> Report:
+        turns.append(node.max_turns)
+        return _report(node.persona)
+
+    result = run_graph(
+        graph,
+        agent_runner=runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert turns == [32]
+    assert result.results["sweep"].status == "done"
+    assert pump.outcomes == [(1, True, "applied requeue")]
+
+
 def test_retry_of_a_dropped_node_is_rejected_and_reconciliation_continues() -> None:
     graph = parse_graph(
         {

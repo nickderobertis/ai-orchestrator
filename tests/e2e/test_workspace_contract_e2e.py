@@ -368,12 +368,16 @@ def test_dag_state_contract_checker_requires_every_projected_state_to_be_servabl
     """A state the strict fold can produce but the API cannot serve is a broken read."""
     checkout = _dag_state_contract_checkout(tmp_path)
     projection = checkout / "orchestrator/projection.py"
-    projection.write_text(
-        projection.read_text().replace(
-            'NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]',
-            'NodeState = Literal["running", "done", "failed", "waiting", "paused"]',
-        )
+    original = projection.read_text()
+    broken = original.replace(
+        'NodeState = Literal["running", "done", "failed", "waiting", "parked", "cancelled"]',
+        'NodeState = Literal["running", "done", "failed", "waiting", "paused"]',
     )
+    # A substitution that quietly matched nothing would leave this asserting that a
+    # *correct* contract fails the checker, which is how adding a state to `NodeState`
+    # turned this test red for a reason that had nothing to do with the checker.
+    assert broken != original, "the NodeState literal moved; restate it here"
+    projection.write_text(broken)
 
     result = _dag_state_contract_run(checkout)
 
