@@ -443,6 +443,25 @@ run ledger and the views built on it.
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the
 [ownership rule](#your-loop-as-planner) above.
+
+Those views also stop guessing at what is *running*. A node the ledger records as
+started now reports which side of the conversation is serving it, on which harness
+identity, and for how long — with an anomalous duration for that role flagged, and a
+node nothing is driving flagged as `PARKED` in its own right. All of it is proven
+from the dispatch ownership registry, never from `ps` output matched by pattern: the
+`ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into every process a dispatch
+starts, plus the owner lock a live dispatcher holds. `just status` carries the host's
+load averages with that same attribution, and **`just host`** is the whole-host
+view — per live dispatch, its owning session, run/node, role, turn age, and load
+contribution. Miscounting live dispatches from `ps`, and missing a judge turn wedged
+for nearly two hours, are what these replace.
+**`just recoverable`** is the other half of that: every preserved-but-unpublished
+branch across the registered identities, where it lives, why its workstream stopped,
+whether it carries an incomplete-step marker, and the exact command that lands it —
+`just repo-recover` for incomplete provenance, `just integrate` for a complete
+branch, with the fetch included when the publication checkout does not have the
+branch. Reach for it instead of diffing clones by hand. Every one of these views is
+read-only and safe beside live work.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command (or compatibility `next-round` attestation). Keep operational
 syntax and result contracts in
