@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 #: One complete codex-shaped turn. Token accounting is not decoration here: a
@@ -46,6 +47,28 @@ TURN: tuple[dict[str, object], ...] = (
 )
 
 
+#: The per-side selection `scripts/oneharness-agent.sh` applies to the agent turn.
+#: It deliberately beats `ONEHARNESS_HARNESSES`, so a journey that sets only the
+#: latter while this one is exported picks the *dispatch's* identity and spawns the
+#: paid provider it meant to replace.
+WORKER_SIDE_SELECTION = "ORCHESTRATOR_WORKER_HARNESSES"
+
+
+def unpinned_worker_side(environment: Mapping[str, str]) -> dict[str, str]:
+    """Copy ``environment`` with the agent side's harness pin removed.
+
+    This repository runs its own suite from inside a dispatch, and a dispatch
+    exports `ORCHESTRATOR_WORKER_HARNESSES` to pin the identity its worker runs on.
+    The wrapper applies that pin over any `ONEHARNESS_HARNESSES` a journey sets —
+    which is correct for a real dispatch and catastrophic here, because the pinned
+    identity is a *variant*, no `ONEHARNESS_BIN_*` spelling reaches a variant, and
+    the journey therefore spends a real paid turn while its double sits unused.
+    Observed, not theorized: two `just smoke` runs billed a live subscription this
+    way before the pin was found.
+    """
+    return {key: value for key, value in environment.items() if key != WORKER_SIDE_SELECTION}
+
+
 def provider_environment(
     *,
     attempt_log: Path,
@@ -59,7 +82,7 @@ def provider_environment(
     smoke, which is exactly what these journeys must never spend.
     """
     return {
-        **os.environ,
+        **unpinned_worker_side(os.environ),
         # Selected rather than assumed: the fallback chain's first candidate is a
         # paid Claude subscription, and no journey may reach one.
         "ONEHARNESS_HARNESSES": "codex",

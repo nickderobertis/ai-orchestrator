@@ -482,6 +482,28 @@ smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)
 Both lines name the *identity* rather than the harness, because a chain's two
 Claude subscriptions are one harness and differ only by variant.
 
+`tests/e2e/test_smoke_fallback_e2e.py` drives that whole path for real — the
+recipe, the wrapper, the chain, the classifier, and the history the verdict is read
+back out of — with both candidates replaced at oneharness's own `ONEHARNESS_BIN_*`
+seam. Two things make that journey possible to write safely, and both are easy to
+get wrong:
+
+- **Drop the dispatch's harness pin.** This repository runs its own suite from
+  inside a dispatch, which exports `ORCHESTRATOR_WORKER_HARNESSES`;
+  `scripts/oneharness-agent.sh` applies it *over* any `ONEHARNESS_HARNESSES` the
+  journey sets, by design. A journey that inherits it runs on the pinned identity.
+- **Name bare identities, never variants.** `ONEHARNESS_BIN_*` keys on a harness
+  id and there is no spelling of it that reaches a variant —
+  `ONEHARNESS_BIN_CLAUDE_CODE` leaves `claude-code:alternate` resolving to the real
+  `claude`.
+
+Together they are a money hazard rather than a style point: a journey that misses
+either one spawns a live subscription with its double sitting unused, and a billed
+run and a free one look identical from the assertions. `fake_codex.py`'s
+`unpinned_worker_side` is the single source for the first, and
+`test_no_smoke_journey_inherits_the_dispatch_s_harness_pin` holds every smoke
+journey's environment to both.
+
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
 `--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
