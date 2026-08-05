@@ -179,30 +179,44 @@ def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> Non
 
 @pytest.mark.reads_docs
 def test_task_prose_contract_tracks_docs_and_agent_tasks_in_example() -> None:
+    """Every shipped example's task prose is the sequence `lifecycle` parses by.
+
+    Globbed rather than listed, for the same reason the schema-version gate is: an
+    example added later is a file an operator copies, so it has to track
+    `TASK_REQUIRED_SECTIONS` without anyone remembering to name it here.
+    """
     root = Path(__file__).parents[1]
     docs = (root / "docs/orchestration.md").read_text(encoding="utf-8")
     agents = (root / "AGENTS.md").read_text(encoding="utf-8")
-    example = json.loads((root / "examples/tracked-graph.example.json").read_text(encoding="utf-8"))
     expected = [*TASK_REQUIRED_SECTIONS, *TASK_OPTIONAL_SECTIONS]
     for section in expected:
         assert f"## {section}" in docs
         assert f"`## {section}`" in agents or section == "Additional info"
 
-    agent_tasks = []
-    for node in example["tasks"]:
-        if node.get("kind", "agent") == "agent":
-            agent_tasks.extend(
-                step["task"]
-                for step in node.get("steps", [])
-                if step.get("kind", "agent") == "agent"
+    examples = sorted((root / "examples").glob("*.json"))
+    assert len(examples) >= 5, examples
+    for path in examples:
+        example = json.loads(path.read_text(encoding="utf-8"))
+        agent_tasks = []
+        for node in example["tasks"]:
+            if node.get("kind", "agent") == "agent":
+                agent_tasks.extend(
+                    step["task"]
+                    for step in node.get("steps", [])
+                    if step.get("kind", "agent") == "agent"
+                )
+                if "task" in node and "steps" not in node:
+                    agent_tasks.append(node["task"])
+        assert agent_tasks, path.name
+        for task in agent_tasks:
+            headings = re.findall(r"(?m)^## ([^\n]+)$", task)
+            assert headings[: len(TASK_REQUIRED_SECTIONS)] == list(TASK_REQUIRED_SECTIONS), (
+                path.name
             )
-            if "task" in node and "steps" not in node:
-                agent_tasks.append(node["task"])
-    assert agent_tasks
-    for task in agent_tasks:
-        headings = re.findall(r"(?m)^## ([^\n]+)$", task)
-        assert headings[: len(TASK_REQUIRED_SECTIONS)] == list(TASK_REQUIRED_SECTIONS)
-        assert headings[len(TASK_REQUIRED_SECTIONS) :] in ([], list(TASK_OPTIONAL_SECTIONS))
+            assert headings[len(TASK_REQUIRED_SECTIONS) :] in (
+                [],
+                list(TASK_OPTIONAL_SECTIONS),
+            ), path.name
 
 
 def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:
