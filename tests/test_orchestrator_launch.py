@@ -442,8 +442,8 @@ def test_orchestrate_cli_prints_run_id(
     assert received["round_budget"] == 21600
     assert received["launcher"] == "codex"
     assert received["launcher_session_id"] == "sess-2"
-    # `just orchestrate` offers the same option as dispatch/run-plan/repo-task and,
-    # like repo-task, defaults it to the container-appropriate no-approval mode.
+    # `just orchestrate` offers the same option as `just run-plan` and, like it,
+    # defaults it to the container-appropriate no-approval mode.
     assert received["oneharness_mode"] == "bypass"
     main_orchestrate(
         [str(plan), "--detach", "--runs-dir", str(tmp_path / "runs"), "--oneharness-mode", "auto"]

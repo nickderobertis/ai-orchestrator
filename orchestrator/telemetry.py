@@ -16,7 +16,7 @@ import json
 import math
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,7 +56,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 9
+TELEMETRY_SCHEMA_VERSION = 10
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
@@ -1185,6 +1185,46 @@ def _item_native(item: GraphResultItem) -> _NativeTelemetry | None:
         [link for part in parts for link in part.sessions],
         any(part.invalid for part in parts),
     )
+
+
+def _item_session_groups(item: Mapping[str, Any]) -> list[list[SessionLink]]:
+    """One group per onejudge report this recorded result carries.
+
+    Deliberately *not* `_item_native`, which sums a lifecycle's steps into one node
+    total: a group is one dispatch, and folding a workstream's steps together would
+    claim its third step's judge supervised its first step's worker.
+    """
+    groups: list[list[SessionLink]] = []
+    for payload in [item, *(step for step in item.get("steps", []) if isinstance(step, dict))]:
+        native = _native_telemetry(payload.get("telemetry"))
+        if native is not None and native.sessions:
+            groups.append(native.sessions)
+    return groups
+
+
+def native_session_groups(events: Sequence[Event]) -> list[list[SessionLink]]:
+    """Every recorded dispatch's own session linkage, read from a run's journal.
+
+    onejudge knows which oneharness sessions one dispatch produced and records it on
+    the report; the journal carries that report on the record that settled the node
+    or step. Reading it here — rather than from `result.json` — answers for a live
+    round too, which is the one a viewer is watching.
+
+    Groups are deduplicated by the sessions they name: a node's result is journalled
+    at settlement and again in the round result, and one dispatch must not become two.
+    """
+    groups: list[list[SessionLink]] = []
+    seen: set[frozenset[str]] = set()
+    for event in events:
+        result = event.detail.get(TERMINAL_NODE_RESULT_FIELD)
+        if not isinstance(result, Mapping):
+            continue
+        for group in _item_session_groups(result):
+            key = frozenset(link["session_id"] for link in group)
+            if key not in seen:
+                seen.add(key)
+                groups.append(group)
+    return groups
 
 
 def _party_usage(summaries: list[_SessionSummary], role: str) -> UsageValues:

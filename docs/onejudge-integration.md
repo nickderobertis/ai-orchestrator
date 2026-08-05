@@ -277,14 +277,14 @@ one can be the stronger author while another is the stronger reviewer. Say so pe
 dispatch:
 
 ```sh
-just dispatch engineer "…" --worker-harness codex --judge-harness claude-code:alternate
-just repo-task <repo> engineer "…" --worker-harness codex:alternate --judge-harness codex
+just run-plan plan.json --worker-harness codex --judge-harness claude-code:alternate
 just orchestrate plan.json --worker-harness codex --judge-harness claude-code:alternate2
 ```
 
 Both flags take an identity exactly as a config's `harnesses` chain writes one,
-comma-separated for a fallback chain of the operator's own. `just run-plan` and
-`just repo-plan` take them too, since they share the lifecycle option group.
+comma-separated for a fallback chain of the operator's own. They reach every
+dispatch a plan makes, direct and lifecycle alike — including a plan holding a
+single node, which is how one subtask is run.
 
 Neither flag is oneharness's `ONEHARNESS_HARNESSES`, and that is the whole point:
 that variable is process-wide **and beats config**, so exporting it to move the
@@ -309,8 +309,8 @@ environment, so every round's workers and judges inherit the same choice.
 before anything is dispatched, and names every selectable identity when it refuses:
 
 ```
-$ just dispatch engineer "…" --worker-harness opencode
-dispatch: --worker-harness 'opencode': 'opencode' is not a harness oneharness.toml
+$ just run-plan plan.json --worker-harness opencode
+run-plan: --worker-harness 'opencode': 'opencode' is not a harness oneharness.toml
 configures; select from claude-code:alternate, claude-code:alternate2, codex,
 codex:alternate, claude-code:primary
 ```
@@ -817,17 +817,17 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   reported action, `just next-round RUN --complete-human NODE[/STEP]` records an
   attestation and releases only its dependents. Completed direct agents and
   lifecycle steps are not dispatched again.
-- **Prefer the one-command wrapper.** Use
-  `just repo-task-auto <repo> <persona> "<task>"`. It sets the dispatch
-  environment and reports the branch's commit delta after the run, making
-  stranded work visible. Use `just repo-task` or `orchestrator-repo-task` when
-  the wrapper is unavailable.
+- **Run one subtask as a one-node plan.** There is no separate single-dispatch
+  command: a plan holding one direct node or one lifecycle node goes through the
+  same executor, ledger, and progress views as a wide DAG, so no piece of running
+  work is invisible to them. See `examples/single-node-direct.plan.json` and
+  `examples/single-node-lifecycle.plan.json`.
 - **Inspect a `not-completed` branch.** This status commonly means the agent hit
   the turn cap at the moment it finished, not that its work failed or vanished.
   Agents commit incrementally, and the lifecycle preserves those commits on the
   branch. Check its commit delta before deciding whether to recover or redispatch.
-  The wrapper prints `just repo-recover <branch> --repo <checkout>`; that command
-  verifies and publishes the preserved branch through its registered workflow.
+  `just repo-recover <branch> --repo <checkout>` verifies and publishes the
+  preserved branch through its registered workflow.
 - **Choose publication from identity type and workflow.** Omitted type is inferred
   from authenticated GitHub login versus normalized origin owner; pass
   `--repo-type` when that cannot resolve. Team defaults to a ready-for-review open

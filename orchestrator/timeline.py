@@ -39,13 +39,13 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NamedTuple, NotRequired, TypedDict
 
 from .config import ConfigError
-from .conversations import DagConversation, run_conversations
+from .conversations import DagConversation, dispatch_start, parse_stamp, run_conversations
 from .history import HistoryError
 from .journal import JOURNAL_NAME, Detail, Event, EventKind
 from .monitor import DetailSnapshot, load_snapshot, summarize
@@ -60,6 +60,7 @@ from .read_model import (
     make_servable,
 )
 from .runs import NodeId, RunId, validate_run_id
+from .telemetry import native_session_groups
 
 TimelineScope = Literal["run"]
 
@@ -156,6 +157,19 @@ _TERMINAL_CONVERSATION_STATES = frozenset({"completed", "failed", "stopped"})
 #: The transport role of a nested lint run, which nests under the dispatch it ran in.
 _LLMLINT_ROLE = "llmlint"
 
+#: The step id `orchestrator.lifecycle.run_repo_task` synthesizes for a workstream
+#: that was given one `(persona, task)` rather than a step DAG. It is a name for the
+#: node itself, so serving a span for it manufactured a container that held most of a
+#: node's time, linked no log, and meant nothing. A plan that *declares* a step with
+#: this id keeps its span like any other declared step.
+_SYNTHESIZED_STEP_ID = "main"
+
+#: How many lock waits a rollup names individually. The rollup exists because a real
+#: run records thousands, and one bar spanning the whole contention window says only
+#: "this node contended sometime"; the largest few say when the run actually stalled.
+#: Bounded so the payload stays sized by the graph rather than by contention.
+ROLLUP_INTERVAL_LIMIT = 20
+
 
 class TimelineReference(TypedDict):
     """Where one item's heavy content lives, so the payload can omit it."""
@@ -187,6 +201,13 @@ class TimelineEvent(TypedDict):
     reference: NotRequired[TimelineReference]
 
 
+class TimelineInterval(TypedDict):
+    """One discrete wait a rollup absorbed, so a client can render it as itself."""
+
+    started_at: str
+    ended_at: str
+
+
 class TimelineSpan(TypedDict):
     """One interval of recorded work, and the events observed inside it.
 
@@ -194,8 +215,8 @@ class TimelineSpan(TypedDict):
     in-flight run looks like, not an error. ``parent_id`` links spans into the tree
     the recorded nesting implies; a span with no parent is run-level.
 
-    ``count`` and ``total_duration_ms`` appear only on a ``rollup`` span, and the
-    role pair only on a ``dispatch`` one.
+    ``count``, ``total_duration_ms`` and ``intervals`` appear only on a ``rollup``
+    span, and the role pair and ``dispatch_id`` only on a ``dispatch`` one.
     """
 
     id: str
@@ -211,8 +232,10 @@ class TimelineSpan(TypedDict):
     status: NotRequired[str]
     count: NotRequired[int]
     total_duration_ms: NotRequired[int]
+    intervals: NotRequired[list[TimelineInterval]]
     agent_role: NotRequired[str]
     transport_role: NotRequired[str]
+    dispatch_id: NotRequired[str]
     reference: NotRequired[TimelineReference]
     detail: NotRequired[VerificationDetail]
 
@@ -243,17 +266,12 @@ def _normalize(value: object) -> str | None:
     """One recorded timestamp string as RFC 3339 UTC, or ``None`` when unparseable.
 
     History writes its own timestamps and this API promises UTC with an offset, so a
-    naive or non-UTC stamp is converted rather than passed through.
+    naive or non-UTC stamp is converted rather than passed through. The parse is
+    `conversations.parse_stamp`, which is the one reading every consumer of a
+    recorded stamp shares.
     """
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).isoformat()
+    parsed = parse_stamp(value)
+    return parsed.isoformat() if parsed is not None else None
 
 
 def _reference(kind: TimelineReferenceKind, value: object) -> TimelineReference | None:
@@ -365,6 +383,7 @@ class _Assembly:
         status: str | None = None,
         agent_role: str | None = None,
         transport_role: str | None = None,
+        dispatch_id: str | None = None,
         reference: TimelineReference | None = None,
     ) -> str:
         span: TimelineSpan = {
@@ -389,6 +408,8 @@ class _Assembly:
             span["agent_role"] = agent_role
         if transport_role is not None:
             span["transport_role"] = transport_role
+        if dispatch_id is not None:
+            span["dispatch_id"] = dispatch_id
         if reference is not None:
             span["reference"] = reference
         self._spans[span_id] = span
@@ -463,24 +484,64 @@ def _scoped_key(event: Event, kind: TimelineSpanKind) -> tuple[str, ...]:
     return (kind, str(event.round), str(event.node or ""), step)
 
 
+class _Wait(NamedTuple):
+    """One absorbed wait: how long it lasted, and when the record closing it was made.
+
+    Ordered longest-last by the ``seconds`` it carries, which is what lets a rollup
+    keep the largest few by dropping its minimum.
+    """
+
+    seconds: float
+    at: float
+
+
 @dataclass
 class _Rollup:
-    """What one rollup span has absorbed so far, accumulated across the pass."""
+    """What one rollup span has absorbed so far, accumulated across the pass.
+
+    ``waits`` keeps only the longest few, because a client renders those and the
+    payload must not grow with contention. Each is derived from the record's own
+    elapsed seconds ending at the moment it was recorded: a lock wait is journalled
+    once it has been served, so the record's ``at`` is when the waiting stopped.
+    """
 
     span_id: str
     count: int = 0
     seconds: float = 0.0
+    waits: list[_Wait] = field(default_factory=list)
 
-    def absorb(self, seconds: float) -> None:
+    def absorb(self, seconds: float, at: float) -> None:
         self.count += 1
         self.seconds += seconds
+        if seconds <= 0:
+            return
+        self.waits.append(_Wait(seconds, at))
+        if len(self.waits) > ROLLUP_INTERVAL_LIMIT:
+            self.waits.remove(min(self.waits))
+
+    def intervals(self) -> list[TimelineInterval]:
+        """The kept waits as intervals, oldest first, dropping any unplaceable one.
+
+        Ordered by when each wait *began*, like every other span in this payload —
+        the waits kept are of different lengths, so ordering them by the moment they
+        were recorded would hand a client a list it has to sort again to draw.
+        """
+        found: list[TimelineInterval] = []
+        for wait in self.waits:
+            start, end = _stamp(wait.at - wait.seconds), _stamp(wait.at)
+            if start is not None and end is not None:
+                found.append({"started_at": start, "ended_at": end})
+        return sorted(found, key=lambda interval: (interval["started_at"], interval["ended_at"]))
 
 
 class _Fold:
     """The journal pass, kept as an object so the span table is threaded once."""
 
-    def __init__(self, assembly: _Assembly) -> None:
+    def __init__(self, assembly: _Assembly, declared_steps: Mapping[str, frozenset[str]]) -> None:
         self.assembly = assembly
+        #: Step ids each node's own plan definition declares, so a step the lifecycle
+        #: synthesized can be told from one the plan asked for.
+        self._declared_steps = declared_steps
         #: The running aggregate behind each rollup span, keyed like the span itself.
         self._rollups: dict[tuple[str, ...], _Rollup] = {}
         #: Scoped spans still open at each locator, innermost last. A record made
@@ -563,6 +624,10 @@ class _Fold:
                     or "settled",
                     reference=_artifact_reference(detail),
                 )
+            case "step-started" | "step-settled" if (
+                node is not None and step is not None and not self._serves_step(node, step)
+            ):
+                return
             case "step-started" if node is not None and step is not None:
                 self.assembly.open(
                     _step_key(event.round, node, step),
@@ -621,6 +686,17 @@ class _Fold:
                 self._close_scoped(event, at, kind="human-wait", status="attested")
             case _:  # pragma: no cover - _SPAN_BOUNDARY_KINDS admits nothing else
                 return
+
+    def _serves_step(self, node: str, step: str) -> bool:
+        """Whether this step is one the plan asked for rather than one synthesized.
+
+        A workstream given a single ``(persona, task)`` runs as one `Step("main")`, and
+        a span for it is a container the plan never described: it holds the node's
+        whole dispatch, links no log of its own, and reads as "Phase: main". Its
+        children attach to the node instead. A plan that declares a step by that name
+        keeps its span, because then the step really is part of the recorded graph.
+        """
+        return step != _SYNTHESIZED_STEP_ID or step in self._declared_steps.get(node, frozenset())
 
     def _open_scoped(
         self,
@@ -716,11 +792,13 @@ class _Fold:
                 )
             )
             self._rollups[key] = rollup
-        rollup.absorb(_seconds(event.detail))
+        rollup.absorb(_seconds(event.detail), event.at)
         span = self.assembly.get(rollup.span_id)
         span["ended_at"] = at
         span["count"] = rollup.count
         span["total_duration_ms"] = round(rollup.seconds * 1000)
+        if intervals := rollup.intervals():
+            span["intervals"] = intervals
 
     def event(self, event: Event, index: int, at: str) -> None:
         """Record one ordinary journal record as an event inside its span."""
@@ -746,9 +824,28 @@ class _Fold:
         self.assembly.add_event(span_id, item)
 
 
+def _declared_steps(events: Sequence[Event]) -> dict[str, frozenset[str]]:
+    """The step ids each node's journalled plan definition declares, by node id."""
+    declared: dict[str, frozenset[str]] = {}
+    for event in events:
+        definition = event.detail.get("definition")
+        if not isinstance(definition, Mapping):
+            continue
+        node = definition.get("id")
+        steps = definition.get("steps")
+        if not isinstance(node, str) or not node or not isinstance(steps, list):
+            continue
+        declared[node] = frozenset(
+            step_id
+            for step in steps
+            if isinstance(step, Mapping) and isinstance(step_id := step.get("id"), str) and step_id
+        )
+    return declared
+
+
 def _fold_journal(assembly: _Assembly, events: Sequence[Event]) -> None:
     """Apply the journal in recorded order: boundaries open/close, the rest nest."""
-    fold = _Fold(assembly)
+    fold = _Fold(assembly, _declared_steps(events))
     for index, event in enumerate(events):
         at = _stamp(event.at)
         if at is None:
@@ -759,6 +856,18 @@ def _fold_journal(assembly: _Assembly, events: Sequence[Event]) -> None:
             fold.boundary(event, index, at)
         else:
             fold.event(event, index, at)
+
+
+def _conversation_start(conversation: DagConversation) -> str | None:
+    """When a dispatched session began working, as this API spells a timestamp.
+
+    The rule itself lives in `conversations.dispatch_start`, because the linkage that
+    pairs a supervisor with the dispatch it supervised orders sessions by the same
+    answer — two starts for one session would pair transcripts one way and draw them
+    another.
+    """
+    started = dispatch_start(conversation)
+    return started.isoformat() if started is not None else None
 
 
 def _conversation_end(conversation: DagConversation, started_at: str) -> str | None:
@@ -880,7 +989,7 @@ def _fold_conversations(assembly: _Assembly, conversations: Sequence[DagConversa
     for position, conversation in enumerate(ordered):
         transcript = conversation["conversation"]
         attribution = conversation["attribution"]
-        started_at = _normalize(transcript["startedAt"])
+        started_at = _conversation_start(conversation)
         if started_at is None:
             continue
         conversation_id = transcript["id"]
@@ -899,6 +1008,11 @@ def _fold_conversations(assembly: _Assembly, conversations: Sequence[DagConversa
             status=transcript["state"],
             agent_role=attribution["agentRole"],
             transport_role=attribution["transportRole"],
+            # One onejudge dispatch is several oneharness sessions, and the served key
+            # that groups them is the id of the one they hang off: the agent session
+            # itself for the dispatch, and its own id for the supervisor and lint runs
+            # that ran inside it.
+            dispatch_id=attribution.get("parentConversationId", conversation_id),
             reference=reference,
         )
         for turn in transcript["turns"]:
@@ -974,7 +1088,9 @@ def assemble(
     return spans
 
 
-def _conversations(run_id: RunId, oneharness_bin: str) -> list[DagConversation]:
+def _conversations(
+    run_id: RunId, oneharness_bin: str, events: Sequence[Event]
+) -> list[DagConversation]:
     """Every conversation of the run; an absent or unreadable store yields none.
 
     The journal and the snapshot answer most of what a timeline is for, so a machine
@@ -982,7 +1098,11 @@ def _conversations(run_id: RunId, oneharness_bin: str) -> list[DagConversation]:
     gets the recorded graph rather than a failed request.
     """
     try:
-        return run_conversations(run_id, oneharness_bin=oneharness_bin)
+        return run_conversations(
+            run_id,
+            oneharness_bin=oneharness_bin,
+            native_groups=native_session_groups(events),
+        )
     except (HistoryError, ConfigError):
         return []
 
@@ -1023,7 +1143,9 @@ def run_timeline(
                 known_node_ids.add(definition_id)
     if node_id is not None and node_id not in known_node_ids:
         raise InvalidRunId("node_id does not name a node in this run")
-    spans = assemble(events, _conversations(validated, oneharness_bin), load_snapshot(run_dir))
+    spans = assemble(
+        events, _conversations(validated, oneharness_bin, events), load_snapshot(run_dir)
+    )
     if node_id is not None:
         spans = [span for span in spans if span.get("node_id") == node_id]
     elif scope == "run":

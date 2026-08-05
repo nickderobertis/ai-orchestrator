@@ -141,6 +141,77 @@ timeline; and a transcript is fetched by id only for the item that is open. A no
 the run has recorded nothing for says so, and a timeline read that fails is
 reported where the timeline would have been rather than leaving an empty pane.
 
+## Screens: seeing the app while it changes
+
+The operator iterates on this surface visually, and a polish problem at one width is
+invisible until somebody starts the app by hand at that width. `just dag-ui-screens`
+removes that step:
+
+```sh
+just dag-ui-screens                       # every surface at every viewport
+just dag-ui-screens --grep "at 390x844"   # one width; extra arguments reach Playwright
+```
+
+It boots the browser tier's own stack — `apps/dag-ui/screenshots.config.ts` reuses
+`playwright.config.ts` wholesale, so the fixture server, Vite, the free ports and the
+throwaway fixture directory are all chosen exactly as they are for the e2e run — drives
+`e2e/gallery.screens.spec.ts`, and prints the gallery it wrote: one PNG per surface per
+viewport, plus an `index.html` contact sheet that puts every viewport of one surface in
+a row. Galleries land under the gitignored `apps/dag-ui/.screenshots/`, one
+directory per invocation, because the gallery is the one thing the Playwright configs do
+not already keep apart — so two operators, or two agents, capturing at the same time
+neither collide nor dirty the tree. `scripts/dag-ui-screens.sh` is that path's one
+source: the spec is handed it in `DAG_UI_SCREENSHOT_DIR` and refuses to run without one,
+so there is no second place a gallery can land.
+
+The **viewport matrix** is declared once, in `e2e/viewports.ts`, and used twice: the
+gallery captures at every entry, and `e2e/dag-ui-navigation.spec.ts` drives the journeys
+whose outcome depends on width at the widest and narrowest of them.
+
+Each entry's name is what a captured file and a journey title are called, so the table
+below reads in the same words the gallery does. `scripts/check-dag-state-contract.py`
+reconciles it with that declaration, so a width can neither reach the gallery without
+reaching this table nor be promised here without being photographed.
+
+| Viewport | What it stands for |
+| --- | --- |
+| 1920x1080 | a full desktop screen |
+| 1440x900 | a large laptop |
+| 1280x800 | a common laptop |
+| 1024x768 | the smallest desktop layout still in use |
+| 390x844 | a phone — the only entry where the shell's two columns stop fitting |
+
+The **surfaces** are declared once too, as `SURFACES` in `e2e/gallery.screens.spec.ts`,
+and each one names the PNG it writes at every viewport — so the table below is also how
+to find a capture in the gallery directory. `scripts/check-dag-state-contract.py`
+reconciles it with that declaration for the same reason it reconciles the matrix: a
+surface can neither be photographed without being listed here nor promised here without
+being photographed.
+
+| Captured file | What it shows |
+| --- | --- |
+| `01-run-list-overall` | the run list beside the overall view |
+| `02-graph` | the graph |
+| `03-node-timeline` | the node view's timeline tab |
+| `04-node-item-detail` | the node view with a timeline item open |
+| `05-conversation` | an open conversation |
+
+The tier asserts nothing beyond having reached each surface with its real reads landed:
+it is the operator's eyes, and `e2e/dag-ui-navigation.spec.ts` is what holds the
+behaviour it photographs.
+
+## Getting around: what scrolls and what stays put
+
+The shell is exactly one viewport tall and every region inside it scrolls on its own,
+which fails silently: a region that overflows its container reports nothing, it just
+puts content where no scroll can reach it. `e2e/dag-ui-navigation.spec.ts` holds that
+arrangement to what an operator can actually do — the run list scrolls and pages the
+next runs in, the working area scrolls without moving the run list, a graph → node →
+timeline item walk comes back the way it went, a deep link opens what it names at phone
+width, and Escape leaves the node view. Each journey ends by asserting the *document*
+does not scroll, because a document taller than the window is the signature of a region
+that has put its content out of reach.
+
 ## Verification
 
 ```sh
@@ -157,6 +228,13 @@ the executor's own journal writers, serves it through the actual read API, and
 `playwright.config.ts` starts both that server and Vite. Only the paid harness'
 history store is recorded, through the same `tests/e2e/fake_oneharness.py`
 subprocess the Python e2e suite uses.
+
+The gallery spec lives beside the journeys because it drives the same surfaces against
+the same stack, but it asserts nothing and writes images, so `playwright.config.ts`
+ignores `*.screens.spec.ts` and `screenshots.config.ts` runs nothing else. The journey
+files themselves are ordered: Playwright collects test files in name order, and
+`dag-ui.spec.ts`'s last journeys deliberately take the served runs away one at a time,
+so `dag-ui-navigation.spec.ts` is named to sort ahead of it.
 
 Everything that tier does not share with another run of itself is chosen per
 run: `playwright.config.ts` asks the kernel for its ports and makes its own fixture

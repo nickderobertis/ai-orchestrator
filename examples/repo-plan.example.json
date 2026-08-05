@@ -7,7 +7,7 @@
       "repo": "nickderobertis/some-service",
       "repo_type": "team",
       "persona": "engineer",
-      "task": "Add a POST /health endpoint that returns build metadata, with tests that drive real requests. Keep the change scoped to the endpoint.",
+      "task": "## What\nAdd a `POST /health` endpoint that returns build metadata, with tests that drive real requests. Keep the change scoped to the endpoint.\n\n## Why\nOperators currently learn a deploy is unhealthy from user reports, because nothing exposes build metadata to poll.\n\n## Acceptance criteria\n- `POST /health` returns the build metadata contract, proven by tests that drive real requests.\n- One failure path is proven alongside the happy path.\n- Nothing outside the endpoint and its tests changes.",
       "done_when": "real requests prove the endpoint response and validation behavior, and the repository's full gate passes",
       "title": "feat(api): add /health endpoint"
     },
@@ -17,7 +17,8 @@
       "repo_type": "team",
       "merge_policy": "auto",
       "persona": "docs-writer",
-      "task": "Document the new /health endpoint (request/response, examples). Verify every example against the API.",
+      "task": "## What\nDocument the new `/health` endpoint: its request, its response, and worked examples.\n\n## Why\nOperators are being asked to poll an endpoint that appears in no documentation, so each of them has to read the service source to learn its response shape.\n\n## Acceptance criteria\n- The request and response are documented with field names and types.\n- Every example was run against the API and behaves as written.\n- The documented contract matches the endpoint as implemented, not as proposed.",
+      "done_when": "all task acceptance criteria are met and every documented example was verified against the running API",
       "title": "docs(api): document /health"
     },
     {
@@ -25,7 +26,8 @@
       "repo": "nickderobertis/some-client",
       "repo_type": "team",
       "persona": "engineer",
-      "task": "Add a typed health() method to the client that calls GET /health, with a test against a real local server.",
+      "task": "## What\nAdd a typed `health()` method to the client that calls `GET /health`, with a test against a real local server.\n\n## Why\nEvery consumer of the new endpoint is otherwise left to hand-roll the request and its response type, which is where the contract drifts first.\n\n## Acceptance criteria\n- `health()` returns the build metadata as a declared type rather than an untyped mapping.\n- A test drives it against a real local server rather than a mocked transport.\n- One failure response is covered alongside the happy path.",
+      "done_when": "all task acceptance criteria are met, the method is typed at its boundary, and the repository's full gate passes",
       "deps": ["api"],
       "title": "feat(client): add health() method"
     },
@@ -39,7 +41,7 @@
         {
           "id": "impl",
           "persona": "engineer",
-          "task": "Implement a read-only /admin dashboard page that surfaces the health metadata, with tests that render the page and drive real requests.",
+          "task": "## What\nImplement a read-only `/admin` dashboard page that surfaces the health metadata, with tests that render the page and drive real requests.\n\n## Why\nOperators can poll the endpoint but have nowhere to see its metadata without a terminal, which is what keeps on-call reading raw JSON during an incident.\n\n## Acceptance criteria\n- The rendered dashboard exposes every field the health contract returns.\n- Tests render the page and drive real requests rather than asserting on internal state.\n- Access control is covered: an unauthorized viewer is refused, and a test proves it.",
           "done_when": "the rendered dashboard exposes every health field through real requests, access control is covered, and the full gate passes"
         },
         {

@@ -70,8 +70,8 @@ ACTIVITY_NAME = "agent.activity"
 class Locator(TypedDict, total=False):
     """Where in the tracked graph the turn publishing these summaries is running.
 
-    Every key is optional because a bare `just dispatch` has no graph position at
-    all, and `orchestrator.labels` omits rather than empties the ones it has none
+    Every key is optional because an untracked lifecycle run has no graph position
+    at all, and `orchestrator.labels` omits rather than empties the ones it has none
     for. `tests/test_activity.py` drift-gates this against the labels that module
     can actually produce, since the two sides of this contract are written in
     different languages in different processes.
@@ -105,7 +105,7 @@ def _locator(raw: str | None) -> Locator:
     The wire format is ``key=value`` pairs separated by commas, with no escape — so
     a pair this cannot read is dropped rather than guessed at, exactly as
     `orchestrator.labels.parse_labels` drops one. A dispatch with no graph position
-    (a bare `just dispatch`) legitimately yields nothing.
+    (an untracked lifecycle run) legitimately yields nothing.
     """
     located: dict[str, str] = {}
     for chunk in (raw or "").split(","):

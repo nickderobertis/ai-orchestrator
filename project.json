@@ -5,7 +5,7 @@
   "tags": ["scope:workspace"],
   "targets": {
     "lint-llm-diff": {
-      "command": "./scripts/llmlint-diff.sh",
+      "command": "./scripts/llmlint-judge.sh",
       "options": { "cwd": "." }
     },
     "check-nx-cache": {

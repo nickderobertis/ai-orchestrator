@@ -290,9 +290,9 @@ class Rounds:
         self.launched.append(launch)
         return launch
 
-    def run_plan(self, run_id: str, recipe: str = "run-plan") -> RecordedLaunch:
+    def run_plan(self, run_id: str) -> RecordedLaunch:
         plan = self.plan(run_id)
-        return self.spawn(run_id, 1, recipe, str(plan), "--run", run_id, *self.common)
+        return self.spawn(run_id, 1, "run-plan", str(plan), "--run", run_id, *self.common)
 
     def unrecorded(self, run_id: str) -> Launch:
         """Launch the `--no-record` path, which claims no round and writes no ledger."""
@@ -372,23 +372,18 @@ def _assert_settled(launch: RecordedLaunch) -> None:
     assert _read(launch.round_dir / "status.json")["status"] == "completed"
 
 
-# Two independent axes of the same journey, deliberately not crossed. The recipe
-# decides which entry point detaches — `repo-plan` is the deprecated alias for the same
-# executor, so it gets the same protection and the same proof. The signal decides what
-# ending a turn actually sends: a harness turn tears its group down with SIGTERM, a
-# Ctrl-C sends SIGINT, and a lost terminal sends SIGHUP, all three documented in
-# `TEARDOWN_SIGNALS` and none of which may reach a round that left the group.
-@pytest.mark.parametrize(
-    ("recipe", "teardown"),
-    [("run-plan", teardown) for teardown in TEARDOWN_SIGNALS] + [("repo-plan", signal.SIGTERM)],
-    ids=lambda value: value if isinstance(value, str) else value.name,
-)
+# The signal decides what ending a turn actually sends: a harness turn tears its
+# group down with SIGTERM, a Ctrl-C sends SIGINT, and a lost terminal sends SIGHUP,
+# all three documented in `TEARDOWN_SIGNALS` and none of which may reach a round
+# that left the group. `run-plan` is the one entry point that detaches, so it is
+# the only recipe this journey has to protect.
+@pytest.mark.parametrize("teardown", TEARDOWN_SIGNALS, ids=lambda value: value.name)
 def test_a_round_survives_the_teardown_of_its_launching_turn(
-    rounds: Rounds, recipe: str, teardown: signal.Signals
+    rounds: Rounds, teardown: signal.Signals
 ) -> None:
     """Ending the launching turn must leave a dispatching round running."""
-    run_id = f"survives-{recipe}-{teardown.name}"
-    launch = rounds.run_plan(run_id, recipe=recipe)
+    run_id = f"survives-run-plan-{teardown.name}"
+    launch = rounds.run_plan(run_id)
 
     _assert_survived_teardown(launch, launch.teardown_launching_turn(teardown))
     _assert_settled(launch)

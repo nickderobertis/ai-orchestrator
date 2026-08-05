@@ -37,7 +37,9 @@ place based on its task performance:
 
 ```sh
 just new-persona <name> --persona-dir scratch/personas
-just dispatch <name> "<task>" --persona-dir scratch/personas
+# Then run a one-node plan naming that persona (see
+# examples/single-node-direct.plan.json):
+just run-plan scratch/draft.plan.json --persona-dir scratch/personas
 ```
 
 Once proven, add it to this catalog through the orchestrator's isolated
