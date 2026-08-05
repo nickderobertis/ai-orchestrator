@@ -215,7 +215,7 @@ def _own_round(run_dir: str, ready: MPEvent, release: MPEvent) -> None:
 
 
 def _join(process: multiprocessing.Process) -> None:
-    process.join(15)
+    process.join(e2e_timeout(15))
     assert not process.is_alive(), f"child {process.pid} did not finish"
     assert process.exitcode == 0
 
