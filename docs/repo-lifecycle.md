@@ -280,7 +280,7 @@ publication selection:
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "tasks": [
     {
       "id": "self",
