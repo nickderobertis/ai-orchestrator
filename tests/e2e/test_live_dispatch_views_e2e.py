@@ -390,6 +390,31 @@ def test_an_overrunning_turn_is_flagged_anomalous_and_a_quiet_host_says_so(
     assert "ownership stamp whose scratch directory a dispatcher still holds" in quiet, quiet
 
 
+def test_the_view_thresholds_refuse_a_value_they_cannot_judge_against(
+    tmp_path: Path, scratch_root: Path
+) -> None:
+    """A threshold that is not a number is a usage error, not a silently odd view.
+
+    Both knobs decide whether a planner is told a turn is anomalous or a node
+    undriven, so a value neither view could judge against has to fail loudly rather
+    than resolve to some default the caller did not ask for.
+    """
+    for command, flag in (
+        (["just", "host"], "--outlier-multiple"),
+        (["just", "status", "any-run"], "--undriven-after"),
+    ):
+        refused = subprocess.run(
+            [*command, "--runs-dir", str(tmp_path / "runs"), flag, "-1"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(180),
+            env={**os.environ, "TMPDIR": str(scratch_root)},
+        )
+        assert refused.returncode == 2, (flag, refused.stdout, refused.stderr)
+        assert flag in refused.stderr, (flag, refused.stderr)
+
+
 def test_an_unreadable_process_table_is_reported_as_unknown_not_as_nothing(
     tmp_path: Path, scratch_root: Path
 ) -> None:

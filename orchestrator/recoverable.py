@@ -35,19 +35,20 @@ import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import gitops
 from .config import ConfigError
 from .provenance import is_incomplete_marker
 from .registry import Registry, RegistryError
 from .runs import as_result_payload, latest_round, load_mapping
-from .workspace import CLONE_DIR_NAME, RUNS_DIR_NAME, IdentityKey, normalize_repo
-
-#: Where lifecycle run clones live, and the one place a branch can exist that no
-#: registered checkout has. `orchestrator.workspace` builds run roots under this same
-#: path; the layout is restated as a read rather than reimplemented as a write.
-DEFAULT_WORKSPACE_ROOT = Path.home() / ".ai-orchestrator" / "worktrees"
+from .workspace import (
+    CLONE_DIR_NAME,
+    DEFAULT_WORKTREE_ROOT,
+    RUNS_DIR_NAME,
+    IdentityKey,
+    normalize_repo,
+)
 
 
 @dataclass(frozen=True)
@@ -186,7 +187,16 @@ def _stopped_because(runs_dir: Path, branch: str) -> str | None:
     return None if newest is None else newest[1]
 
 
-def _tip(repo: Path, branch: str, base: str) -> tuple[str, str, float | None, bool] | None:
+class BranchTip(NamedTuple):
+    """What one preserved branch's base-relative history says about itself."""
+
+    sha: str
+    subject: str
+    committed_at: float | None
+    incomplete: bool
+
+
+def _tip(repo: Path, branch: str, base: str) -> BranchTip | None:
     """The branch tip's short sha, subject, commit time, and whether it is incomplete.
 
     The incompleteness question is asked of the whole base-relative history rather
@@ -202,7 +212,7 @@ def _tip(repo: Path, branch: str, base: str) -> tuple[str, str, float | None, bo
     if not commits:
         return None
     incomplete = any(is_incomplete_marker(commit.message) for commit in messages)
-    return commits[0].sha, commits[0].subject, stamp, incomplete
+    return BranchTip(commits[0].sha, commits[0].subject, stamp, incomplete)
 
 
 def _base_ref(repo: Path, publication: Path) -> str:
@@ -229,7 +239,7 @@ def collect(
 ) -> list[RecoverableBranch]:
     """Every preserved, unpublished branch across registered identities, newest first."""
     registry = registry or Registry()
-    root = workspace_root or DEFAULT_WORKSPACE_ROOT
+    root = workspace_root or DEFAULT_WORKTREE_ROOT
     found: dict[tuple[str, str], RecoverableBranch] = {}
     for entry in sorted(registry.entries.values(), key=lambda item: item.path):
         checkout = Path(entry.path).expanduser()
@@ -253,17 +263,17 @@ def collect(
                 )
                 if described is None:
                     continue
-                sha, subject, committed_at, incomplete = described
+
                 found[key] = RecoverableBranch(
                     branch=branch,
                     identity=identity.identity,
                     checkout=repo,
                     publication_checkout=publication,
                     in_publication_checkout=gitops.branch_exists(publication, branch),
-                    tip_sha=sha,
-                    tip_subject=subject,
-                    tip_committed_at=committed_at,
-                    incomplete=incomplete,
+                    tip_sha=described.sha,
+                    tip_subject=described.subject,
+                    tip_committed_at=described.committed_at,
+                    incomplete=described.incomplete,
                     stopped_because=(
                         _stopped_because(runs_dir, branch)
                         or (
@@ -326,8 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         "--workspace",
         type=Path,
         default=None,
-        help="lifecycle worktree root to search for run clones "
-        f"(default: {DEFAULT_WORKSPACE_ROOT})",
+        help=f"lifecycle worktree root to search for run clones (default: {DEFAULT_WORKTREE_ROOT})",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)

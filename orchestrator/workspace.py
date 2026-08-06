@@ -75,6 +75,11 @@ RunToken = NewType("RunToken", str)
 #: an earlier layout created alongside it are never mistaken for run roots — and
 #: are never reaped, since nothing here claims to own them.
 RUNS_DIR_NAME = "runs"
+#: Where every lifecycle run root lives when no caller names one. This module owns
+#: the layout underneath it, so it owns the default too: `lifecycle`, `recover`, and
+#: the read-only `recoverable` view all have to agree on the tree they are walking,
+#: and three literals spelling one path is how they stop agreeing.
+DEFAULT_WORKTREE_ROOT = Path.home() / ".ai-orchestrator" / "worktrees"
 CLONE_DIR_NAME = ".clone"
 OWNER_RECORD_NAME = "owner.json"
 #: Keep a small, useful crash history without allowing abandoned clones to grow

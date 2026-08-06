@@ -51,7 +51,14 @@ from .verify import (
     format_merge_path_record,
     resolve_gate_template,
 )
-from .workspace import IdentityKey, RepoRef, RepositoryType, Workspace, WorkspaceError
+from .workspace import (
+    DEFAULT_WORKTREE_ROOT,
+    IdentityKey,
+    RepoRef,
+    RepositoryType,
+    Workspace,
+    WorkspaceError,
+)
 
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # What a recovery publishes when no commit on the preserved branch names the change.
@@ -207,7 +214,7 @@ def recover_repo(
     ref = RepoRef(owner, name, entry.origin)
     # Recovery shares the lifecycle root so it can adopt the exact tree a killed
     # dispatch left behind, including edits that never became a Git object.
-    recovery_root = Path(workspace_root or Path.home() / ".ai-orchestrator" / "worktrees")
+    recovery_root = Path(workspace_root or DEFAULT_WORKTREE_ROOT)
     workspace = Workspace(recovery_root, resolver=lambda _spec: clone)
     target = base or gitops.default_branch(clone)
     for field_name, value in (("branch", branch), ("base", target)):

@@ -284,3 +284,29 @@ def test_a_branch_its_base_already_carries_does_not_appear(
     # The registry itself is intact and the view ran clean, so an empty answer is an
     # observation rather than a failure to look.
     assert Registry(home / "repos.json").entries
+
+
+def test_a_registry_it_cannot_read_is_reported_as_a_usage_error(tmp_path, monkeypatch) -> None:
+    """A registry this view cannot read fails loudly instead of listing nothing.
+
+    An empty answer from this view means "every branch across every identity has
+    reached its base", and a planner acts on that. A run it could not perform has to
+    be distinguishable from one that genuinely found nothing, so the failure reports
+    on stderr and exits 2 rather than printing the empty state.
+    """
+    home = tmp_path / "orchestrator-home"
+    home.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
+    (home / "repos.json").write_text("{not json at all", encoding="utf-8")
+
+    completed = subprocess.run(
+        ["uv", "run", "orchestrator-recoverable", "--runs-dir", str(tmp_path / "runs")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        env={**os.environ, "AI_ORCHESTRATOR_HOME": str(home)},
+    )
+
+    assert completed.returncode == 2, completed.stdout
+    assert completed.stderr.startswith("recoverable: "), completed.stderr

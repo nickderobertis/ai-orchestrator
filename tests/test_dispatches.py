@@ -15,6 +15,7 @@ from orchestrator import REPO_ROOT
 from orchestrator.dispatches import (
     _ALTERNATE_CLAUDE_DIRS,
     _ALTERNATE_CODEX_DIR,
+    _ROLE_EVIDENCE,
     DISPATCH_ROLES,
 )
 from orchestrator.labels import PERSONA_AGENT_ROLES, AgentRole
@@ -42,3 +43,18 @@ def test_the_alternate_credential_directories_match_their_one_source() -> None:
     for directory in _ALTERNATE_CLAUDE_DIRS:
         assert f" {directory}" in claude, directory
     assert f'"$HOME/{_ALTERNATE_CODEX_DIR}"' in codex, _ALTERNATE_CODEX_DIR
+
+
+def test_every_role_evidence_names_a_file_this_repository_actually_has() -> None:
+    """The wrapper scripts and harness configs a turn is recognised by still exist.
+
+    `_ROLE_EVIDENCE` matches on filenames rather than importing them, because it is
+    reading another process's command line and a path is all it has. That makes each
+    entry a restatement, and a renamed wrapper or config would silently stop being
+    recognised — every turn it served would report as "role unknown" with nothing
+    failing. This is what fails instead.
+    """
+    known = {path.name for path in REPO_ROOT.glob("oneharness*.toml")}
+    known |= {path.name for path in (REPO_ROOT / "scripts").iterdir() if path.is_file()}
+    missing = [evidence for evidence, _ in _ROLE_EVIDENCE if evidence not in known]
+    assert not missing, f"role evidence names files this repository does not have: {missing}"
