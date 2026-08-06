@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from leak_guard import REAPER_SCRIPT
+from leak_guard import DRAIN_SECONDS_ENV, REAPER_SCRIPT
 from leak_reaper import SESSION_TOKEN_ENV
 from process_tree import (
     await_orphaned,
@@ -112,7 +112,14 @@ def _run_session(directory: Path, test_file: Path, *extra: str) -> subprocess.Po
         # The session's own working directory, so everything it starts inherits it
         # and "survived its temp directory" is a claim about a real path.
         cwd=directory,
-        env={**os.environ, "PYTHONPATH": str(TESTS_DIR)},
+        # Every one of these sessions leaks deliberately and holds its tree for ten
+        # minutes, so the drain ceiling has nothing to wait for; the default one is
+        # sized for a real dispatch's teardown and would only be paid in full.
+        env={
+            **os.environ,
+            "PYTHONPATH": str(TESTS_DIR),
+            DRAIN_SECONDS_ENV: "1",
+        },
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )

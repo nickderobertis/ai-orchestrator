@@ -39,7 +39,6 @@
       "!{workspaceRoot}/orchestrator/integrate.py",
       "!{workspaceRoot}/orchestrator/next_round.py",
       "!{workspaceRoot}/orchestrator/recover.py",
-      "!{workspaceRoot}/orchestrator/replan.py",
       "!{workspaceRoot}/orchestrator/results.py",
       "!{workspaceRoot}/orchestrator/smoke.py",
       "!{workspaceRoot}/orchestrator/status.py",
