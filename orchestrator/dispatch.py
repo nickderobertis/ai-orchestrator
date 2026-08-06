@@ -408,6 +408,19 @@ def recordable_provider_failure(attribution: ProviderFailure | None) -> bool:
     return "structured_error" in attribution
 
 
+def recorded_provider_failure(attribution: ProviderFailure | None) -> ProviderFailure | None:
+    """The attribution a `Report` may carry, which is only recordable evidence.
+
+    The raised path decides this at the `except` and re-raises what does not qualify,
+    so a watchdog-observed death is the one refusal that reaches a consumer as a
+    *returned* `Report`. Filtering it here rather than at each of the four sites that
+    read `report.failure_attribution` keeps one rule: a report that carries an
+    attribution at all is asserting provider evidence, and the journal, the recorded
+    result, `just status`, and the read API can serve it without re-deciding.
+    """
+    return attribution if recordable_provider_failure(attribution) else None
+
+
 @dataclass(frozen=True)
 class WatchdogSignal:
     """A typed liveness decision and the process identity needed for cleanup.
@@ -1159,7 +1172,9 @@ def run_onejudge(
                         outcome_detail=signal.detail,
                         max_turns=turn_cap,
                         agent_exit_status=agent_exit_status(agent_status_dir),
-                        failure_attribution=classify_provider_failure(worker_detail, side="agent"),
+                        failure_attribution=recorded_provider_failure(
+                            classify_provider_failure(worker_detail, side="agent")
+                        ),
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
