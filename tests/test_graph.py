@@ -23,6 +23,7 @@ from orchestrator.gitops import GitError
 from orchestrator.goals import register_run
 from orchestrator.graph import (
     GraphNode,
+    GraphResult,
     HumanAction,
     _replay_node_run,
     first_line,
@@ -41,11 +42,13 @@ from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
 from orchestrator.runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     ArtifactPaths,
+    GraphPayload,
     GraphResultItem,
     NodeId,
     ResumePayload,
     RunId,
     StepResultPayload,
+    result_state,
 )
 from orchestrator.verify import VerifyResult
 
@@ -405,6 +408,34 @@ def test_cancel_parks_a_running_direct_agent_and_keeps_it_in_the_graph() -> None
     assert result.results["after"].status == "blocked"
     assert result.state == "waiting"
     assert "parked" in result.summary()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("parked", "waiting"), ("cancelled", "failed"), ("skipped", "failed"), ("done", "complete")],
+)
+def test_a_round_reads_the_same_whether_it_is_live_or_recomputed(
+    status: str, expected: str
+) -> None:
+    """One rule, two readers: the running round and its payload read back.
+
+    `GraphResult.state` answers while the round is in memory; `runs.result_state`
+    answers from a payload that never recorded a `state` — which is every payload
+    written before that key existed. Two copies of "which statuses fail a round"
+    drifted once already over `cancelled`, so the constants are shared and this is
+    what holds the two answers to each other.
+    """
+    payload: GraphPayload = cast(
+        "GraphPayload",
+        {
+            "ok": status == "done",
+            "started_order": ["node"],
+            "results": {"node": {"status": status}},
+        },
+    )
+
+    assert result_state(payload) == expected
+    assert GraphResult({"node": NodeRun(status, None, None)}, ["node"]).state == expected
 
 
 def test_cancel_parks_a_pending_node_without_ever_dispatching_it() -> None:

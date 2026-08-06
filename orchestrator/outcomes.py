@@ -38,6 +38,14 @@ SUCCESSFUL_LIFECYCLE_OUTCOMES = frozenset[LifecycleOutcome](
 #: scoped to the statuses rather than to dependencies for that reason — it answers
 #: both questions, exactly as `HELD_STATUSES` does for the other side of the split.
 LOST_STATUSES = ("failed", "skipped")
+#: Node statuses that fail the round holding them. `cancelled` joins the lost ones
+#: here and only here: a cancelled node has left the graph, so it is never a
+#: *dependency* status, but the round that cancelled it did not complete. One
+#: constant for the same reason `HELD_STATUSES` is one — the in-process
+#: `GraphResult.state` and the state `runs.result_state` derives from a recorded
+#: payload have to answer identically, and a payload written before `state` was
+#: recorded is read by the second alone.
+FAILED_ROUND_STATUSES = (*LOST_STATUSES, "cancelled")
 #: Node statuses that mean work is held rather than lost. As a *dependency* status
 #: this settles the dependent `blocked`; as a *node* status anywhere in a round it
 #: settles the round `waiting`. Those are one rule — a round is still waiting for

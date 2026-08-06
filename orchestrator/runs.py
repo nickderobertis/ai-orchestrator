@@ -26,7 +26,7 @@ from .config import ConfigError
 from .config import load_mapping as load_mapping
 from .coordination import advisory_lock, atomic_json
 from .merge import MergePolicy
-from .outcomes import HELD_STATUSES, LOST_STATUSES, STATUS_DISPLAY_ORDER
+from .outcomes import FAILED_ROUND_STATUSES, HELD_STATUSES, STATUS_DISPLAY_ORDER
 from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -793,7 +793,7 @@ def result_state(result: GraphPayload) -> str:
     if isinstance(state, str) and state:
         return state
     statuses = set(status_counts(result))
-    if statuses & set(LOST_STATUSES):
+    if statuses & set(FAILED_ROUND_STATUSES):
         return "failed"
     if statuses & set(HELD_STATUSES):
         return "waiting"
