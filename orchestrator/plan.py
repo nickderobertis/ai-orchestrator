@@ -27,7 +27,7 @@ from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .cli_contract import ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .dispatch import Report, dispatch, incomplete_detail
-from .outcomes import HELD_STATUSES, UNMET_DEP_STATUSES
+from .outcomes import HELD_STATUSES, LOST_STATUSES
 
 
 class PlanError(Exception):
@@ -213,7 +213,7 @@ def reconcile_dag(
                 settled = [status[d] for d in deps[nid]]
                 if any(s in ("pending", "running") for s in settled):
                     continue
-                if any(s in UNMET_DEP_STATUSES for s in settled):
+                if any(s in LOST_STATUSES for s in settled):
                     status[nid] = "skipped"
                     results[nid] = NodeRun("skipped", "a dependency did not complete")
                     changed = True

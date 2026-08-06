@@ -63,6 +63,13 @@ class RetryPayload(TypedDict):
     node: dict[str, Any]
 
 
+# llmlint: ignore[names_match_behavior] `cancel` names what it does to the *dispatch* —
+# it raises the same cooperative cancellation signal `drop` and `retry` do — and the
+# node it leaves behind is `parked`, which is the status, not the op. The pair
+# `cancel`/`requeue` is the planner vocabulary this change was specified to add and is
+# what AGENTS.md's one-execution-path rule and docs/orchestration.md's edit table both
+# name; renaming the op here alone would leave the planner-facing contract saying one
+# thing and the wire another.
 class CancelPayload(TypedDict):
     """Park a pending or running node without naming a successor."""
 

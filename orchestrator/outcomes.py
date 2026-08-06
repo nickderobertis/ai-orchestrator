@@ -32,10 +32,12 @@ SUCCESSFUL_LIFECYCLE_OUTCOMES = frozenset[LifecycleOutcome](
     {"merged", ALREADY_INTEGRATED_OUTCOME, "pr-open"}
 )
 
-#: Node statuses that mean a dependent can never run: its prerequisite is lost.
-#: A dependent behind one settles `skipped`, not `blocked`; the run itself has
-#: them failed. `orchestrator.projection.node_statuses` reads these.
-UNMET_DEP_STATUSES = ("failed", "skipped")
+#: Node statuses that mean the work is gone rather than held. As a *dependency*
+#: status the dependent can never run and settles `skipped`, not `blocked`; as a
+#: *node* status anywhere in a round it settles the round `failed`. The name is
+#: scoped to the statuses rather than to dependencies for that reason — it answers
+#: both questions, exactly as `HELD_STATUSES` does for the other side of the split.
+LOST_STATUSES = ("failed", "skipped")
 #: Node statuses that mean work is held rather than lost. As a *dependency* status
 #: this settles the dependent `blocked`; as a *node* status anywhere in a round it
 #: settles the round `waiting`. Those are one rule — a round is still waiting for

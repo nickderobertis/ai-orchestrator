@@ -362,6 +362,51 @@ def test_cancel_parks_a_running_lifecycle_node_and_holds_its_dependents() -> Non
     assert "parked" in result.summary()
 
 
+def test_cancel_parks_a_running_direct_agent_and_keeps_it_in_the_graph() -> None:
+    """The commonest node kind, and the one the planner rule reaches for `cancel` on.
+
+    A direct dispatch has no branch to preserve, so the whole difference between a
+    park and the `cancelled` a drop leaves is the node itself: the same cooperative
+    signal stops the same worker, but the node stays in the graph, its dependent is
+    held rather than skipped, and the round settles `waiting` rather than `failed`.
+    """
+    dispatched: list[str] = []
+    graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "direct", "persona": "engineer", "task": "Wait"},
+                {"id": "after", "persona": "engineer", "task": "Follows", "deps": ["direct"]},
+            ],
+        }
+    )
+    pump = _EditingPump([EditCommand("cancel", {"op": "cancel", "id": "direct"})], wait_ticks=1)
+
+    def runner(
+        node: PlanNode,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
+        dispatched.append(node.id)
+        assert cancel is not None and cancel.wait(1)
+        return _report(node.persona, completed=False)
+
+    result = run_graph(
+        graph,
+        agent_runner=runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+
+    assert dispatched == ["direct"]
+    assert result.results["direct"].status == "parked"
+    assert result.results["direct"].error == "cancelled cooperatively; parked by planner"
+    assert result.results["after"].status == "blocked"
+    assert result.state == "waiting"
+    assert "parked" in result.summary()
+
+
 def test_cancel_parks_a_pending_node_without_ever_dispatching_it() -> None:
     dispatched: list[str] = []
 

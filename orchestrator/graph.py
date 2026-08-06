@@ -81,8 +81,8 @@ from .outcomes import (
     HELD_STATUSES,
     INFRASTRUCTURE_FAILURE_OUTCOME,
     LIFECYCLE_OUTCOMES,
+    LOST_STATUSES,
     NODE_OUTCOMES,
-    UNMET_DEP_STATUSES,
 )
 from .plan import (
     NODE_KINDS,
@@ -257,7 +257,7 @@ class GraphResult:
     @property
     def state(self) -> str:
         statuses = {r.status for r in self.results.values()}
-        if statuses & {*UNMET_DEP_STATUSES, "cancelled"}:
+        if statuses & {*LOST_STATUSES, "cancelled"}:
             return "failed"
         # `parked` is deliberately on the held side rather than the failed one: the
         # planner stopped this node, its work is preserved, and a `requeue` picks it
