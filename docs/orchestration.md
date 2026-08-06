@@ -12,8 +12,16 @@ surfaces, and a place in the DAG UI. See
 `examples/single-node-lifecycle.plan.json`. Old lifecycle-only plan mappings —
 no `schema_version`, lifecycle nodes only — are still accepted unchanged.
 
-The current tracked-plan contract is schema version 6 (`"schema_version": 6`).
+The current tracked-plan contract is schema version 7 (`"schema_version": 7`).
 Plans that omit the version retain version-1 behavior for compatibility.
+
+Version 7 adds the optional boolean node `parked`, written by a live `cancel` and
+cleared by a live `requeue`. A parked node is carried across the round transition
+and into a continuation launch **without being dispatched**, which is what makes
+"stop for now, maybe resume later" a state rather than a lost node. Like `context`
+below it is not refused on a plan that declares an earlier version, and for the
+same reason: it is attached to a running graph. See [Live graph
+edits](#live-graph-edits).
 
 Version 6 adds the optional node `context`: a list of planner notes rendered as a
 trailing `## Planner context` section of every task that node dispatches. Unlike
@@ -285,6 +293,8 @@ The accepted commands are:
 | `drop` | `id`; `dependents`: `"drop"` or `"detach"` | Remove the node and recursively drop its dependents, or detach its direct dependents. |
 | `reparent` | `id`; `deps`: list of dependency references | Replace an unstarted node's dependencies. |
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
+| `cancel` | `id` | Park a pending or running node: cancel its dispatch cooperatively and hold it out of every later round until a `requeue`. |
+| `requeue` | `id`; optional `amend`: partial node overrides | Return a parked node to the desired frontier, optionally amending it (for example `max_turns`, or a `resume` pin onto the preserved branch). |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
 | `context` | `id`; `note` | Attach one planner note to the node's next dispatch, without cancelling or restarting anything. |
@@ -311,7 +321,10 @@ Every delta is validated against the live frontier before commit. The resulting
 graph must still satisfy the normal plan schema: ids and referenced dependencies
 must exist, and dependencies cannot form a cycle or self-edge. `reparent` cannot
 change a started node; `retry` requires a running, failed, or cancelled target and
-a new replacement id; `attest` requires a ready waiting human action; `context`
+a new replacement id; `cancel` requires a node that is pending or running and not
+already parked, so a settled or unknown node is refused by name; `requeue` requires
+a parked node and refuses an `amend` that rewrites `id` or `deps`, which are `add`'s
+and `reparent`'s to change; `attest` requires a ready waiting human action; `context`
 requires a node that can still be dispatched, so a note aimed at a node that
 already settled `done` is refused rather than accepted into nothing. `drop` must
 state the dependents' fate and cannot remove the last publication anchor while an
@@ -375,6 +388,37 @@ direct dispatch stops; a lifecycle dispatch preserves commits already made on
 its branch with incomplete provenance before it settles `cancelled` (publication
 already in its commit phase may finish). Verify and publish preserved lifecycle
 work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstreams).
+
+### Parking a node, and picking it up again
+
+`drop` removes a node and refuses to remove the last unresolved publication anchor;
+`retry` demands an immediate successor. Neither says *stop for now*. `cancel` does:
+it raises the same cooperative cancellation signal, preserving the branch exactly as
+a drop does and leaving the publication anchor in the graph, and settles the node
+`parked` instead of `cancelled`.
+
+Parked is a held state, not a failed one. The round settles without the node, its
+dependents settle `blocked` rather than `skipped`, and the round's own state is
+`waiting`. The flag lives on the node definition, so the [plan of
+record](#the-plan-of-record-is-the-graph-the-round-executed) carries it through the
+transition and the continuation launch **never redispatches it** — a parked
+lifecycle node also carries its preserved checkpoint forward, so a later `requeue`
+adopts that branch rather than cutting a fresh one. `just results` reports the node
+as `parked` and names the preserved branch.
+
+`requeue` puts it back on the desired frontier, and the next reconciler pass
+dispatches it through normal adoption:
+
+```json
+{"version":1,"commands":[{"op":"requeue","id":"sweep","amend":{"max_turns":32}}]}
+```
+
+An `amend` mapping is merged onto the node before it is redispatched, which is where
+a raised turn budget or an explicit `resume` pin onto the preserved branch goes. It is
+validated as the node it produces, so a malformed pin is refused at submission rather
+than at the next dispatch. Omit it to requeue the node exactly as it was parked: the
+compiled `node-requeued` operation then carries no `amend` at all, so "amended
+nothing" and "amended with nothing" are one record rather than two.
 
 ## Node shapes
 
@@ -538,8 +582,13 @@ Each node settles once per round:
 - `waiting`: a ready human node or lifecycle human step needs action. Its
   `human_actions` entry includes the exact `task`, direct `unblocks`, and whether
   it unblocks workstream publication.
-- `blocked`: execution is transitively gated by a waiting human. `blocked_by`
-  contains the ready top-level or `NODE_ID/STEP_ID` human references.
+- `blocked`: execution is transitively gated by a waiting human, or by a parked
+  dependency. `blocked_by` contains the ready top-level or `NODE_ID/STEP_ID` human
+  references.
+- `parked`: a planner `cancel` idled the node. Its dispatch was cancelled
+  cooperatively and its branch preserved, its publication anchor stays in the graph,
+  and no later round dispatches it until a `requeue`. See [Parking a node, and
+  picking it up again](#parking-a-node-and-picking-it-up-again).
 - `failed`: an executed agent or lifecycle failed.
 - `failed` with outcome `infrastructure-failure`: a recognized provider or
   harness failure, ENOSPC, OOM kill, or failed scratch-capacity preflight
@@ -557,11 +606,12 @@ Each node settles once per round:
   over a simultaneous waiting path, so such a descendant is skipped, not blocked.
 
 The result's top-level `state` is `failed` if any node failed or skipped,
-otherwise `waiting` if any node waits or is blocked, otherwise `complete`. `ok` is
-true only for `complete`. Human and JSON output carry the same facts. Exit status
-is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for invalid plan, ledger,
-configuration, or command input. Recorded result schema v5 adds the terminal
-`infrastructure-failure` and successful `already-integrated` outcome values.
+otherwise `waiting` if any node waits, is blocked, or is parked, otherwise
+`complete`. `ok` is true only for `complete`. Human and JSON output carry the same
+facts. Exit status is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for
+invalid plan, ledger, configuration, or command input. Recorded result schema v5
+adds the terminal `infrastructure-failure` and successful `already-integrated`
+outcome values.
 
 ## Recorded rounds
 
@@ -721,8 +771,8 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
-The journal record contract is schema version 8, pinned by
-`tests/golden/static-round-events-v8.json`; bump both together. Version 6 is
+The journal record contract is schema version 10, pinned by
+`tests/golden/static-round-events-v10.json`; bump both together. Version 6 is
 additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
 `conflict-resolution-finished` kinds, and an optional `command` beside
 `edit-committed`'s `operations`. A v5 journal therefore still replays — its
@@ -733,8 +783,13 @@ rule on it. Version 8 is additive inside a record rather than in the kind
 vocabulary: an `edit-committed` may compile a `context-added` operation, and the
 golden pins the whole compiled vocabulary because strict replay refuses an
 operation kind it cannot fold — the version is what makes a v8 note skippable to a
-v7 reader instead of corruption in a healthy round. Every supported version stays
-readable; a reader skips records from a
+v7 reader instead of corruption in a healthy round. Version 9 adds
+`planner-surface-queued`, recorded when a surface is *sent* rather than when it is
+delivered. Version 10 is additive inside a record for the same reason v8 was: an
+`edit-committed` may compile the `node-parked` and `node-requeued` operations a
+[`cancel` and its `requeue`](#parking-a-node-and-picking-it-up-again) produce, so a
+park written at v10 has to be skippable by a v9 reader rather than met as
+corruption. Every supported version stays readable; a reader skips records from a
 version it does not know rather than failing the round it is observing.
 
 **A record's readability and its claim on a sequence number are different
@@ -940,6 +995,67 @@ stuck. `--once` — and every non-terminal invocation — always exits 0 after o
 pass; only follow mode encodes completion in its status. A completed graph reads
 the same either way (`graph complete`), because that detail is about the run and
 not about how it was being watched. Exit 2 is an unresolvable run or bad input.
+
+### What is running right now, and on what
+
+`just runs` and `just status` answer from the run ledger, and the ledger stops at the
+node: it records that a dispatch started and that it settled, and between those two a
+turn on this host runs for 600-2000 seconds. A planner needing more than that had one
+tool — matching `ps` output by pattern — which is how six live dispatches were counted
+where there were two and a judge turn wedged for 1h54m was missed entirely.
+
+`orchestrator/dispatches.py` is the answer that does not guess, and its candidate set
+is the ownership registry the scratch sweep already trusts: the
+`ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into the environment of
+everything a dispatch starts, paired with the owner lock a live dispatcher holds for
+that scratch directory's whole scope. A process counts as this harness's only when
+both agree. Command lines are read only *after* that, to tell one turn from another
+inside a dispatch that owns them all — an agent turn, its judge, and an llmlint tier
+are three invocations of one harness under one stamp, distinguished by the config each
+names. The harness identity serving a turn is read the same way: oneharness selects it
+by falling through a chain, and the credential directory it hands the provider
+(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) is where that selection becomes observable.
+
+What that buys each view:
+
+* **`just status <run-id>`** adds the live role, harness, and turn age to each
+  in-flight node, flags a turn past a generous multiple of its role's typical duration
+  as `ANOMALOUS` (a judge's threshold is fifteen minutes; a worker's is over an hour),
+  and flags a node the ledger records as running that no live dispatch is driving as
+  `UNDRIVEN`. That label is deliberately not `parked`: this vocabulary already has a
+  `parked` node state and it means the opposite — a node the planner idled with
+  `cancel`, whose work is preserved and which `requeue` resumes. Its header carries the host's load averages with the runs and nodes
+  producing them, so a slow host names its cause instead of being reconstructed later.
+* **`just runs`** carries the live/parked distinction per row: how many dispatches
+  carry that run's stamp, or that none do.
+* **`just host`** is the whole-host view, across every planner sharing it: per live
+  dispatch, its owning session, run/node, role, turn age, and load contribution.
+
+Both flags are *positive* claims and are made only where they can be proven. The
+node-level `UNDRIVEN` needs two things beyond "the registry saw nothing for this node":
+the registry must have seen at least one live dispatch, which shows this reader is
+looking at the scratch root the dispatchers write into, and the run's launch must be
+observably working, which distinguishes one node losing its dispatch from the whole
+run stopping — the second is already reported one level up by
+`orchestrator/liveness.py`. Every other uncertainty resolves toward "still working",
+and a view that can observe nothing reports exactly what it reported before any of
+this existed.
+
+### Preserved work that has not been published
+
+`just recoverable` lists every branch across the registered repository identities that
+holds commits no `origin` ref has — from a registered checkout or from a retained
+lifecycle run clone, which is the one place a killed dispatch's branch can be. Each
+row names where the branch lives, its tip and age, why the workstream stopped (from
+the round result that named it), whether it carries an incomplete-step provenance
+marker, and the exact command that lands it: `just repo-recover` for incomplete
+provenance, `just integrate` for a complete branch. When the publication checkout does
+not have the branch, the suggested command starts with the ref-only fetch that brings
+it there — aiming `integrate`, which reads local branches only, at a branch the
+canonical checkout never had is the invocation this exists to stop. A branch that
+merged, or that its base has since reached, drops out on that evidence rather than by
+a name-shaped guess. The view opens repositories to read and writes nothing, so it is
+safe beside live dispatches.
 
 ### When an attach returns
 

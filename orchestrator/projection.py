@@ -33,9 +33,8 @@ from .journal import (
     Event,
     parse_event,
 )
+from .outcomes import HELD_STATUSES, LOST_STATUSES
 from .plan import (
-    GATED_DEP_STATUSES,
-    UNMET_DEP_STATUSES,
     PlanError,
     parse_cross_dag_dependency,
 )
@@ -50,7 +49,7 @@ class ProjectionError(ValueError):
 # plain strings by the codebase string-status convention (no canonical enum to source from); this
 # strict-reader view is drift-gated where it matters — round-finished folding rejects any state that
 # disagrees with the recorded result, so a status the executor emits but omits here cannot project.
-NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
+NodeState = Literal["running", "done", "failed", "waiting", "parked", "cancelled"]
 
 #: The states a node can *settle* in — `NodeState` minus the one that means it has
 #: not. Named here rather than restated at each reader so a strict fold and a
@@ -72,6 +71,7 @@ NodeStatus = Literal[
     "done",
     "not-completed",
     "failed",
+    "parked",
     "cancelled",
     "unknown",
 ]
@@ -453,6 +453,30 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
             builder.edges = [edge for edge in builder.edges if node not in edge]
             builder.states.pop(node, None)
             builder.results.pop(node, None)
+        case "node-parked":
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("node-parked references an unknown node")
+            definition = next(item for item in builder.nodes if item["id"] == node)
+            definition["parked"] = True
+            # A running node keeps `running` here: its own `node-settled` records the
+            # park, and overwriting the state first would make that settlement look
+            # like one with no start behind it.
+            if builder.states.get(node) != "running":
+                builder.states[node] = "parked"
+        case "node-requeued":
+            amend = detail.get("amend", {})
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("node-requeued references an unknown node")
+            definition = next(item for item in builder.nodes if item["id"] == node)
+            if not definition.pop("parked", False):
+                raise ProjectionError("node-requeued target is not parked")
+            if not isinstance(amend, dict) or {"id", "deps"} & set(amend):
+                raise ProjectionError("node-requeued amendments must be a mapping without id/deps")
+            definition.update(amend)
+            # The node is on the frontier again, so a fresh dispatch of it this round
+            # is a legal first start rather than the second one it would look like.
+            builder.states.pop(node, None)
+            builder.results.pop(node, None)
         case "context-added":
             note = detail.get("note")
             if not isinstance(node, str) or node not in builder.node_ids:
@@ -514,7 +538,7 @@ def node_statuses(projection: RoundProjection) -> RoundNodeStatuses:
 
     A round still in flight has neither, so the last step re-derives those same two
     gates from the plan the projection already validated, using the scheduler's own
-    `UNMET_DEP_STATUSES` / `GATED_DEP_STATUSES`. Without it every node held behind a
+    `LOST_STATUSES` / `HELD_STATUSES`. Without it every node held behind a
     human action reads as `pending` for as long as the run is live — which is exactly
     when an operator is reading it.
 
@@ -546,8 +570,7 @@ def node_statuses(projection: RoundProjection) -> RoundNodeStatuses:
         node: [
             dep
             for dep in deps[node]
-            if status.get(dep)
-            in (UNMET_DEP_STATUSES if status[node] == "skipped" else GATED_DEP_STATUSES)
+            if status.get(dep) in (LOST_STATUSES if status[node] == "skipped" else HELD_STATUSES)
         ]
         for node in order
         if status[node] in {"blocked", "skipped"}
@@ -574,10 +597,10 @@ def _derive_gates(
             settled = [status[dep] for dep in deps[node] if dep in status]
             if any(state in ("pending", "running") for state in settled):
                 continue
-            if any(state in UNMET_DEP_STATUSES for state in settled):
+            if any(state in LOST_STATUSES for state in settled):
                 status[node] = "skipped"
                 changed = True
-            elif any(state in GATED_DEP_STATUSES for state in settled):
+            elif any(state in HELD_STATUSES for state in settled):
                 status[node] = "blocked"
                 changed = True
 
@@ -597,7 +620,7 @@ def _fold_node_result(builder: _RoundBuilder, event: Event) -> None:
     match status:
         case "done":
             state = "complete"
-        case "waiting":
+        case "waiting" | "parked":
             state = "waiting"
         case _:
             state = "failed"

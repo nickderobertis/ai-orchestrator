@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "goal": {
     "text": "Understand how the scheduler picks the next runnable node"
   },

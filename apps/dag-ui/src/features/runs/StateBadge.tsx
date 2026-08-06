@@ -53,6 +53,9 @@ const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
   done: SETTLED,
   failed: LOST,
   "not-completed": LOST,
+  // Parked is a planner decision to idle a node whose work is preserved, so it is
+  // neither lost nor decided by a dependency — it reads as held, like `waiting`.
+  parked: undefined,
   pending: undefined,
   running: "border-info bg-info-surface text-info",
   skipped: DEPENDENCY_DECIDED,
