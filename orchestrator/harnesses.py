@@ -205,7 +205,7 @@ def resolve_model_override(value: str, side: HarnessSide, *, harness: str | None
     return model
 
 
-def harness_override_env(
+def dispatch_override_env(
     *,
     worker: str | None = None,
     judge: str | None = None,

@@ -525,20 +525,23 @@ def test_an_unconfigured_identity_refuses_the_dispatch_before_it_starts(
     assert dispatched.turns == []
 
 
-def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
+def test_run_plan_carries_each_sides_provider_and_model_into_both_node_kinds(
     tmp_path: Path,
     bare_origin,
     onejudge_bin: str,
     oneharness_bin: str,
 ) -> None:
-    """One round, both node kinds, the providers each side was told to use.
+    """One round, both node kinds, the provider AND model each side was told to use.
 
     `just run-plan` builds its own runners for direct agents and for lifecycle
-    workstreams, so a selection that reached only one of them would leave half a
-    graph supervised by a provider nobody chose. This drives the real recorded
-    executor over a real git checkout: the direct node dispatches, the lifecycle
-    node clones, works in its worktree, passes its gate and merges — every turn of
-    both through the real wrapper and the real oneharness.
+    workstreams, so a choice that reached only one of them would leave half a
+    graph supervised by a provider or a tier nobody chose — and the lifecycle half
+    is threaded through a different chain of calls (`make_repo_runner` →
+    `run_repo_task` → the workstream environment every step of the branch runs in)
+    than the direct one. This drives the real recorded executor over a real git
+    checkout: the direct node dispatches, the lifecycle node clones, works in its
+    worktree, passes its gate and merges — every turn of both through the real
+    wrapper and the real oneharness.
     """
     origin = bare_origin()
     checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
@@ -555,7 +558,7 @@ def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
                     {
                         "id": "direct",
                         "persona": "engineer",
-                        "task": "record which provider ran this direct node",
+                        "task": "record what ran this direct node",
                         "project_dir": str(target),
                         "max_turns": 1,
                     },
@@ -563,7 +566,7 @@ def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
                         "id": "workstream",
                         "repo": str(checkout),
                         "persona": "engineer",
-                        "task": "record which provider ran this lifecycle node",
+                        "task": "record what ran this lifecycle node",
                         "recorded_gate": ["true"],
                         "max_turns": 1,
                     },
@@ -583,9 +586,13 @@ def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
             "--workspace",
             str(tmp_path / "worktrees"),
             "--worker-harness",
-            "codex",
+            WORKER_CHOICE,
+            "--worker-model",
+            WORKER_MODEL,
             "--judge-harness",
-            "claude-code:primary",
+            JUDGE_CHOICE,
+            "--judge-model",
+            JUDGE_MODEL,
             "--format",
             "json",
         ],
@@ -605,7 +612,13 @@ def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
     assert len(dispatched.side(WORKER_MARKER)) >= 2
     assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
     assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}
-    assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
+    assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {JUDGE_CHOICE}
+    # ...on the model it was given, over the one each config pins for that identity.
+    # Asserted across every turn of both node kinds rather than per node: a forward
+    # dropped on the lifecycle path leaves its steps carrying the identity's
+    # configured model, so the set would gain a second value here.
+    assert {_spawned_model(turn) for turn in dispatched.side(WORKER_MARKER)} == {WORKER_MODEL}
+    assert {_spawned_model(turn) for turn in dispatched.side(JUDGE_MARKER)} == {JUDGE_MODEL}
 
 
 def test_a_one_node_plan_runs_a_whole_workstream_on_the_providers_it_was_given(

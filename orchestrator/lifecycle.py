@@ -42,8 +42,8 @@ from .gitops import GitError
 from .harnesses import (
     JUDGE_SIDE,
     WORKER_SIDE,
+    dispatch_override_env,
     harness_option_help,
-    harness_override_env,
     model_option_help,
 )
 from .ids import GraphId
@@ -1677,7 +1677,7 @@ def run_repo_task(
     repository has not configured costs nothing but the message that says so.
     """
     log: NodeSink = journal if journal is not None else NullNodeJournal()
-    harness_env = harness_override_env(
+    override_env = dispatch_override_env(
         worker=worker_harness,
         judge=judge_harness,
         worker_model=worker_model,
@@ -1831,9 +1831,9 @@ def run_repo_task(
         # One environment for every dispatch and every gate run of this workstream:
         # its shared build cache plus its comparison identity, so a worker's own
         # gate and the publication rebuild judge the same base. Each side's harness
-        # selection rides along here too, so every step of the workstream — and any
-        # relaunch of one — supervises and works on the providers it was given.
-        workstream_env = {**cache_env, **comparison_env(pr_base), **harness_env}
+        # and model choice rides along here too, so every step of the workstream — and
+        # any relaunch of one — supervises and works on what it was given.
+        workstream_env = {**cache_env, **comparison_env(pr_base), **override_env}
         gate_template = selection.gate
         if recorded_gate is not None:
             resolved_recorded_gate = recorded_gate

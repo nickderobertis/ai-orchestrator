@@ -48,7 +48,7 @@ from .goals import (
     parse_goal,
     register_run,
 )
-from .harnesses import harness_override_env
+from .harnesses import dispatch_override_env
 from .journal import (
     JOURNAL_NAME,
     TERMINAL_NODE_RESULT_FIELD,
@@ -1390,9 +1390,10 @@ def main(argv: list[str] | None = None) -> int:
         plan_mapping = load_mapping(args.plan)
         graph = parse_graph(plan_mapping)
         validate_graph_repo_aliases(graph)
-        # Refuse an unconfigured harness before the round is claimed: every node of
-        # it would otherwise fail one at a time on the same correctable value.
-        harness_override_env(
+        # Refuse an unconfigured harness, or an unpairable model, before the round is
+        # claimed: every node of it would otherwise fail one at a time on the same
+        # correctable value.
+        dispatch_override_env(
             worker=args.worker_harness,
             judge=args.judge_harness,
             worker_model=args.worker_model,

@@ -30,8 +30,8 @@ from orchestrator.harnesses import (
     WORKER_SIDE,
     HarnessSide,
     configured_harnesses,
+    dispatch_override_env,
     harness_option_help,
-    harness_override_env,
     model_option_help,
 )
 from orchestrator.labels import LABEL_ENV
@@ -43,13 +43,13 @@ AGENT_WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 def test_no_override_leaves_the_environment_exactly_as_it_was() -> None:
     """The default path has to stay byte-identical: no variable, no wrapper change."""
-    assert harness_override_env() == {}
-    assert harness_override_env(worker=None, judge=None) == {}
-    assert harness_override_env(worker=None, judge=None, worker_model=None, judge_model=None) == {}
+    assert dispatch_override_env() == {}
+    assert dispatch_override_env(worker=None, judge=None) == {}
+    assert dispatch_override_env(worker=None, judge=None, worker_model=None, judge_model=None) == {}
 
 
 def test_each_side_carries_its_own_variable() -> None:
-    env = harness_override_env(worker="codex", judge="claude-code:primary")
+    env = dispatch_override_env(worker="codex", judge="claude-code:primary")
 
     assert env == {
         WORKER_HARNESS_ENV: "codex",
@@ -58,12 +58,12 @@ def test_each_side_carries_its_own_variable() -> None:
 
 
 def test_one_side_alone_leaves_the_other_side_unset() -> None:
-    assert harness_override_env(judge="codex") == {JUDGE_HARNESS_ENV: "codex"}
-    assert harness_override_env(worker="codex") == {WORKER_HARNESS_ENV: "codex"}
+    assert dispatch_override_env(judge="codex") == {JUDGE_HARNESS_ENV: "codex"}
+    assert dispatch_override_env(worker="codex") == {WORKER_HARNESS_ENV: "codex"}
 
 
 def test_an_override_may_name_a_fallback_chain_of_its_own() -> None:
-    env = harness_override_env(worker="claude-code:alternate2, codex:alternate")
+    env = dispatch_override_env(worker="claude-code:alternate2, codex:alternate")
 
     assert env == {WORKER_HARNESS_ENV: "claude-code:alternate2,codex:alternate"}
 
@@ -80,7 +80,7 @@ def test_both_committed_configs_are_selectable_in_their_own_order() -> None:
 @pytest.mark.parametrize("value", ["opencode", "claude-code", "codex:alternate3", "", "codex,"])
 def test_an_unconfigured_identity_is_refused_by_name(value: str) -> None:
     with pytest.raises(ConfigError) as excinfo:
-        harness_override_env(worker=value)
+        dispatch_override_env(worker=value)
 
     message = str(excinfo.value)
     assert WORKER_SIDE.option in message
@@ -93,7 +93,7 @@ def test_an_unconfigured_identity_is_refused_by_name(value: str) -> None:
 def test_each_side_is_validated_against_its_own_config() -> None:
     """A judge value is judged by the judge config, whatever the worker config says."""
     with pytest.raises(ConfigError) as excinfo:
-        harness_override_env(judge="opencode")
+        dispatch_override_env(judge="opencode")
 
     assert JUDGE_SIDE.config.name in str(excinfo.value)
     assert JUDGE_SIDE.option in str(excinfo.value)
@@ -114,7 +114,7 @@ def test_an_unreadable_config_is_reported_at_the_boundary(tmp_path: Path) -> Non
 
 def test_each_side_carries_its_own_model_variable() -> None:
     """The model half of the seam: one value per side, beside its own identity."""
-    env = harness_override_env(
+    env = dispatch_override_env(
         worker="codex",
         judge="claude-code:primary",
         worker_model="gpt-5.6-sol",
@@ -131,7 +131,7 @@ def test_each_side_carries_its_own_model_variable() -> None:
 
 def test_one_side_may_take_a_model_while_the_other_takes_none() -> None:
     """The run this seam was built for: the judge moved off the tier its config pins."""
-    env = harness_override_env(judge="claude-code:primary", judge_model="claude-opus-5")
+    env = dispatch_override_env(judge="claude-code:primary", judge_model="claude-opus-5")
 
     assert env == {
         JUDGE_HARNESS_ENV: "claude-code:primary",
@@ -141,7 +141,7 @@ def test_one_side_may_take_a_model_while_the_other_takes_none() -> None:
 
 def test_a_model_may_name_a_chain_within_one_harness_family() -> None:
     """A fallback chain is still addressable: one provider, several of its identities."""
-    env = harness_override_env(
+    env = dispatch_override_env(
         worker="claude-code:alternate,claude-code:primary", worker_model="claude-opus-5"
     )
 
@@ -169,7 +169,7 @@ def test_a_model_without_its_sides_harness_override_is_refused(
     candidate that cannot run, not one whose task the provider rejected.
     """
     with pytest.raises(ConfigError) as excinfo:
-        harness_override_env(**unpaired)
+        dispatch_override_env(**unpaired)
 
     message = str(excinfo.value)
     assert side.model_option in message
@@ -180,7 +180,7 @@ def test_a_model_without_its_sides_harness_override_is_refused(
 def test_a_model_over_a_chain_spanning_two_harness_families_is_refused() -> None:
     """One model name cannot be right for a Claude identity and a codex one at once."""
     with pytest.raises(ConfigError) as excinfo:
-        harness_override_env(worker="claude-code:primary,codex", worker_model="claude-opus-5")
+        dispatch_override_env(worker="claude-code:primary,codex", worker_model="claude-opus-5")
 
     message = str(excinfo.value)
     assert WORKER_SIDE.model_option in message
@@ -190,7 +190,7 @@ def test_a_model_over_a_chain_spanning_two_harness_families_is_refused() -> None
 def test_an_empty_model_is_refused_rather_than_exported_as_one() -> None:
     """An empty `ONEHARNESS_MODEL` selects nothing; it must not look like a choice."""
     with pytest.raises(ConfigError, match="name the model"):
-        harness_override_env(worker="codex", worker_model="   ")
+        dispatch_override_env(worker="codex", worker_model="   ")
 
 
 def test_a_model_value_is_taken_as_given_rather_than_checked_against_a_list() -> None:
@@ -200,7 +200,7 @@ def test_a_model_value_is_taken_as_given_rather_than_checked_against_a_list() ->
     configures, so an unconfigured one must refuse. A model name is handed to the
     harness the operator named in the same breath, where an unknown one fails loudly.
     """
-    env = harness_override_env(worker="codex", worker_model=" no-such-model-9000 ")
+    env = dispatch_override_env(worker="codex", worker_model=" no-such-model-9000 ")
 
     assert env[WORKER_MODEL_ENV] == "no-such-model-9000"
 

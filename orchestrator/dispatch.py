@@ -58,8 +58,8 @@ from .goals import Goal, graph_identities, register_run, update_run_owner
 from .harnesses import (
     JUDGE_SIDE,
     WORKER_SIDE,
+    dispatch_override_env,
     harness_option_help,
-    harness_override_env,
     model_option_help,
 )
 from .labels import LABEL_ENV, LabelError, merge_labels, semantic_agent_labels
@@ -1131,7 +1131,7 @@ def _agent_run_context(
         if oneharness_mode == "bypass" and use_llmlint_wrapper:
             env["LLMLINT_ONEHARNESS_BIN"] = str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
     env.update(
-        harness_override_env(
+        dispatch_override_env(
             worker=worker_harness,
             judge=judge_harness,
             worker_model=worker_model,
@@ -1301,9 +1301,10 @@ def launch_orchestrator(
         validate_session_id(launcher_session_id)
     except LaunchError as exc:
         raise DispatchError(str(exc)) from exc
-    # Same reason: a run told to use a harness nobody configured must refuse to
-    # start rather than dispatch its first round onto a different provider.
-    harness_env = harness_override_env(
+    # Same reason: a run told to use a harness nobody configured, or a model no
+    # identity was named with, must refuse to start rather than dispatch its first
+    # round onto a different provider or die on one that rejects the model.
+    override_env = dispatch_override_env(
         worker=worker_harness,
         judge=judge_harness,
         worker_model=worker_model,
@@ -1434,7 +1435,7 @@ def launch_orchestrator(
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
     process_env["ONEHARNESS_MODE"] = oneharness_mode
-    process_env.update(harness_env)
+    process_env.update(override_env)
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     try:
