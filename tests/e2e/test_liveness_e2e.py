@@ -45,9 +45,13 @@ from orchestrator.runs import RunId
 #: owner is doing nothing either, so the *only* difference from the parked case is
 #: the live child — which is what the parked decision must turn on.
 _BUSY = (
+    # The CHILD writes the ready file from inside its own payload, so readiness
+    # means the child is past exec and visible to liveness scans - a parent-side
+    # write can land in the fork-to-exec window where the scan sees no stamp.
     "import subprocess, sys, time\n"
-    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])\n"
-    "open(sys.argv[1], 'w').write('ready\\n')\n"
+    "child = subprocess.Popen([sys.executable, '-c',\n"
+    "    'import sys, time; open(sys.argv[1], \\'w\\').write(\\'ready\\\\n\\'); time.sleep(600)',\n"
+    "    sys.argv[1]])\n"
     "time.sleep(600)\n"
 )
 
@@ -263,6 +267,8 @@ def test_just_runs_reports_a_parked_launch_and_never_a_busy_one(
     assert "PARKED" not in _runs(runs, parked_after=60)
 
 
+# Asserts over every visible run's liveness; concurrent tests' runs pollute it.
+@pytest.mark.single_threaded
 def test_the_views_name_a_live_concurrent_run_and_never_a_parked_one(
     tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
