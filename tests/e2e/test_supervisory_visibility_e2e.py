@@ -289,7 +289,7 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
             "pid"
         ]
         live_view = _status(run_id, runs, tmp_path / "history")
-        assert f"{run_id}: driver alive (pid {owner})" in live_view, live_view
+        assert f"{run_id}: driver running (pid {owner})" in live_view, live_view
         assert "phase " in live_view and "last model request " in live_view, live_view
         assert "harness history write failed" not in live_view, live_view
 

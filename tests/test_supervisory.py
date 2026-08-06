@@ -289,7 +289,7 @@ def test_a_harness_that_refused_the_history_write_is_named_in_the_driver_line(
     )
     line = driver_indicator(run_dir)
     assert line is not None
-    assert "driver alive" in line
+    assert "driver running" in line
     assert "harness history write failed" in line
     assert "lacks complete v1.0 telemetry" in line
     assert f"{run_dir.name}/{CAPTURE_DIR}/" in line

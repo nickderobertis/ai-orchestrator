@@ -639,6 +639,17 @@ def main(argv: list[str] | None = None) -> int:
                 for path in args.runs_dir.iterdir()
                 if path.is_dir() and (run_id is None or path.name == run_id)
             ):
+                # The tier above the nodes: whether the process driving this run still
+                # holds its pid, which part of its loop the run's own state places it
+                # in, and how long since it last made a model request. Reported for
+                # every unfinished launch, including one the lines below also call
+                # stopped — the phase and the request age are what say *when* it
+                # stopped. It leads the run's block deliberately: what follows is the
+                # stopped verdict and then the surface that verdict explains, and that
+                # pair has to stay adjacent or it reads as a run waiting on a person
+                # who is being waited on by nothing.
+                if (driver := driver_indicator(run_dir)) is not None:
+                    indicators.append(f"{run_dir.name}: {driver}")
                 # Reported before the channel indicators and independently of them: a
                 # run that lost its round or its orchestrator leaves its last planner
                 # surface in place, so it would otherwise still read as "waiting on me".
@@ -653,13 +664,6 @@ def main(argv: list[str] | None = None) -> int:
                 parked = parked_indicator(run_dir, parked_after=args.parked_after)
                 if parked is not None:
                     indicators.append(f"{run_dir.name}: {parked}")
-                # The tier above the nodes: whether the process driving this run still
-                # holds its pid, which part of its loop the run's own state places it
-                # in, and how long since it last made a model request. Reported for
-                # every unfinished launch, including one already named dead above —
-                # the phase and the request age are what say *when* it stopped.
-                if (driver := driver_indicator(run_dir)) is not None:
-                    indicators.append(f"{run_dir.name}: {driver}")
                 stopped = dead is not None or parked is not None
                 # A second live orchestrator on a shared identity is the one piece of
                 # machine state this view could not previously report: it belongs to

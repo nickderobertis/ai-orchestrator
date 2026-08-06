@@ -253,10 +253,17 @@ def _mutate(run_dir: Path, session: str, apply: Callable[[CaptureRecord], None])
     orchestrator turn because its summary file went missing, or because its run id
     was longer than a filename, would trade the thing being recorded for the record
     of it. Only `open_capture` is loud, at the seam that chose the name.
+
+    An absent capture is answered before the lock rather than inside it. This runs on
+    the orchestrator's own turn boundary, and a `run-plan` driven outside `just
+    orchestrate` has no capture at all — so the common case must not pay for a lock
+    file, a wait, and an fsync to discover there is nothing to write.
     """
     try:
         path = capture_path(run_dir, session)
     except CaptureError:
+        return False
+    if not path.is_file():
         return False
     try:
         with advisory_lock(f"supervisory-capture:{path}"):
@@ -457,7 +464,10 @@ class DriverState:
                 f"DRIVER DEAD ({pid} is gone) — phase {where}, {elapsed}; "
                 "nothing is driving this run"
             )
-        liveness = "alive" if self.alive else "finished"
+        # "running", never "alive": these views already use a bare ` alive ` to name a
+        # *node*, and a run-level line wearing the same word made the node's own row
+        # unfindable in the output an operator (and a test) selects lines from.
+        liveness = "running" if self.alive else "stopped"
         return f"driver {liveness} ({pid}) — phase {where}, {elapsed}"
 
 
