@@ -44,9 +44,9 @@ from .registry import Registry, RegistryError
 from .runs import as_result_payload, latest_round, load_mapping
 from .workspace import (
     CLONE_DIR_NAME,
-    DEFAULT_WORKTREE_ROOT,
     RUNS_DIR_NAME,
     IdentityKey,
+    default_worktree_root,
     normalize_repo,
 )
 
@@ -239,7 +239,7 @@ def collect(
 ) -> list[RecoverableBranch]:
     """Every preserved, unpublished branch across registered identities, newest first."""
     registry = registry or Registry()
-    root = workspace_root or DEFAULT_WORKTREE_ROOT
+    root = workspace_root or default_worktree_root()
     found: dict[tuple[str, str], RecoverableBranch] = {}
     for entry in sorted(registry.entries.values(), key=lambda item: item.path):
         checkout = Path(entry.path).expanduser()
@@ -336,7 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         "--workspace",
         type=Path,
         default=None,
-        help=f"lifecycle worktree root to search for run clones (default: {DEFAULT_WORKTREE_ROOT})",
+        help="lifecycle worktree root to search for run clones "
+        f"(default: {default_worktree_root()})",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)

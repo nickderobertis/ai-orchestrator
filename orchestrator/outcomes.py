@@ -31,3 +31,22 @@ LIFECYCLE_OUTCOMES: frozenset[LifecycleOutcome] = frozenset(get_args(LifecycleOu
 SUCCESSFUL_LIFECYCLE_OUTCOMES = frozenset[LifecycleOutcome](
     {"merged", ALREADY_INTEGRATED_OUTCOME, "pr-open"}
 )
+
+#: Node statuses that mean a dependent can never run: its prerequisite is lost.
+#: A dependent behind one settles `skipped`, not `blocked`; the run itself has
+#: them failed. `orchestrator.projection.node_statuses` reads these.
+UNMET_DEP_STATUSES = ("failed", "skipped")
+#: Node statuses that mean work is held rather than lost. As a *dependency* status
+#: this settles the dependent `blocked`; as a *node* status anywhere in a round it
+#: settles the round `waiting`. Those are one rule — a round is still waiting for
+#: exactly the reasons a dependent is still blocked — and two copies of it would let
+#: an in-process round state and the same round's state recomputed from its recorded
+#: payload drift apart. `parked` is one of them because a planner `cancel` idles a
+#: node it may still `requeue`; treating it as unmet would settle every dependent
+#: `skipped` and throw away the work the park exists to keep recoverable.
+HELD_STATUSES = ("waiting", "blocked", "parked")
+#: The order every view renders per-status counts in, most-settled first. One list,
+#: because a reader comparing `just runs`, `just monitor`, and a round summary is
+#: comparing the same run — and a status missing from one of them reads as a node
+#: that is not there rather than as a view that never learned the word.
+STATUS_DISPLAY_ORDER = ("done", "waiting", "blocked", "parked", "failed", "skipped")

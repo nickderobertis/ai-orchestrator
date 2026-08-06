@@ -26,6 +26,7 @@ from .config import ConfigError
 from .config import load_mapping as load_mapping
 from .coordination import advisory_lock, atomic_json
 from .merge import MergePolicy
+from .outcomes import HELD_STATUSES, STATUS_DISPLAY_ORDER, UNMET_DEP_STATUSES
 from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -776,15 +777,25 @@ def status_counts(result: GraphPayload) -> Counter[str]:
     return Counter(item.get("status", "unknown") for item in result["results"].values())
 
 
+def render_status_counts(counts: Counter[str]) -> str:
+    """Render per-status counts in the one order every view reports them in.
+
+    A status the display order has never heard of is still rendered, after the ones
+    it has: a view that silently drops one is claiming the run has no such node.
+    """
+    keys = [*STATUS_DISPLAY_ORDER, *sorted(set(counts) - set(STATUS_DISPLAY_ORDER))]
+    return ", ".join(f"{counts[key]} {key}" for key in keys if counts[key])
+
+
 def result_state(result: GraphPayload) -> str:
     """Return recorded state, or derive it for older payloads."""
     state = result.get("state")
     if isinstance(state, str) and state:
         return state
     statuses = set(status_counts(result))
-    if statuses & {"failed", "skipped"}:
+    if statuses & set(UNMET_DEP_STATUSES):
         return "failed"
-    if statuses & {"waiting", "blocked", "parked"}:
+    if statuses & set(HELD_STATUSES):
         return "waiting"
     return "complete"
 
@@ -805,10 +816,7 @@ def human_actions(result: GraphPayload) -> list[HumanActionPayload]:
 
 def status_summary(result: GraphPayload) -> str:
     """Render stable per-status counts, waiting actions, and follow-ups."""
-    counts = status_counts(result)
-    keys = ["done", "waiting", "blocked", "parked", "failed", "skipped"]
-    keys.extend(sorted(set(counts) - set(keys)))
-    summary = ", ".join(f"{counts[key]} {key}" for key in keys if key in counts)
+    summary = render_status_counts(status_counts(result))
     waiting = [
         f"{action['ref']}: {_first_line(action['task'])} -> {_downstream(action)}"
         for action in human_actions(result)

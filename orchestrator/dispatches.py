@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, get_args
 
 from .coordination import proc_root
-from .labels import LABEL_ENV, MAX_VALUE_CODEPOINTS, AgentRole, parse_labels
+from .labels import LABEL_ENV, MAX_VALUE_CODEPOINTS, SMOKE_LABEL, AgentRole, parse_labels
 from .redaction import redact
 from .scratch import (
     AGENT_STATUS_DIR_ENV,
@@ -123,9 +123,6 @@ _ALTERNATE_CLAUDE_DIRS: Mapping[str, str] = {
     ".claude-alt2": "claude-code:alternate2",
 }
 _ALTERNATE_CODEX_DIR = ".codex-alt"
-#: The label `orchestrator.smoke` stamps so it can find its own history record. It is
-#: also the only thing that names that dispatch's role, which has no persona.
-SMOKE_LABEL = "smoke"
 #: The provider executables an identity can be reported for. A stamped process that
 #: is neither is some other part of the dispatch — a shell, `git`, `uv`, a gate — and
 #: says nothing about which subscription is serving the turn.

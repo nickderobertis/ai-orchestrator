@@ -19,6 +19,7 @@ live process, one with a live child and one without.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import os
 import signal
@@ -240,6 +241,19 @@ def _line(output: str, run_id: str) -> str:
     return next(line for line in output.splitlines() if run_id in line)
 
 
+def _beneath(output: str, row: str) -> list[str]:
+    """The indented indicator lines one row owns, in the order the view printed them.
+
+    A row carries several independent indicators and the view is free to gain
+    another, so what a caller asserts on is which line appears under *this* run —
+    never which offset it landed at, which is a claim about the neighbours.
+    """
+    following = output.split(row, 1)[1].splitlines()[1:]
+    return [
+        line.strip() for line in itertools.takewhile(lambda line: line.startswith(" "), following)
+    ]
+
+
 def test_just_runs_reports_a_parked_launch_and_never_a_busy_one(
     tmp_path: Path, sleeper: list[subprocess.Popen[bytes]]
 ) -> None:
@@ -315,12 +329,15 @@ def test_the_views_name_a_live_concurrent_run_and_never_a_parked_one(
 
     # Each working run is told about the other, by pid, with the identity they share.
     for run_id, other in (("busy-one", "busy-two"), ("busy-two", "busy-one")):
-        beneath = listed.split(f"* {run_id}  ACTIVE", 1)[1].splitlines()[1]
-        assert beneath.strip() == (
-            f"CONCURRENT: run '{other}' is LIVE (owner pid {owners[other]} on "
-            f"{socket.gethostname()}) goal 'Goal for {other}'; shared identities: local/shared"
-        )
-        assert "parked-run" not in beneath
+        beneath = _beneath(listed, f"* {run_id}  ACTIVE")
+        assert (
+            beneath.count(
+                f"CONCURRENT: run '{other}' is LIVE (owner pid {owners[other]} on "
+                f"{socket.gethostname()}) goal 'Goal for {other}'; shared identities: local/shared"
+            )
+            == 1
+        ), beneath
+        assert not [line for line in beneath if "parked-run" in line], beneath
     # The parked launch is reported as stopped, and never as a second run at work.
     assert "PARKED" in _line(listed, "parked-run")
     assert "CONCURRENT" not in _line(listed, "parked-run")
