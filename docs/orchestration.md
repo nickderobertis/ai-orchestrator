@@ -767,8 +767,8 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
-The journal record contract is schema version 8, pinned by
-`tests/golden/static-round-events-v8.json`; bump both together. Version 6 is
+The journal record contract is schema version 10, pinned by
+`tests/golden/static-round-events-v10.json`; bump both together. Version 6 is
 additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
 `conflict-resolution-finished` kinds, and an optional `command` beside
 `edit-committed`'s `operations`. A v5 journal therefore still replays — its
@@ -779,8 +779,13 @@ rule on it. Version 8 is additive inside a record rather than in the kind
 vocabulary: an `edit-committed` may compile a `context-added` operation, and the
 golden pins the whole compiled vocabulary because strict replay refuses an
 operation kind it cannot fold — the version is what makes a v8 note skippable to a
-v7 reader instead of corruption in a healthy round. Every supported version stays
-readable; a reader skips records from a
+v7 reader instead of corruption in a healthy round. Version 9 adds
+`planner-surface-queued`, recorded when a surface is *sent* rather than when it is
+delivered. Version 10 is additive inside a record for the same reason v8 was: an
+`edit-committed` may compile the `node-parked` and `node-requeued` operations a
+[`cancel` and its `requeue`](#parking-a-node-and-picking-it-up-again) produce, so a
+park written at v10 has to be skippable by a v9 reader rather than met as
+corruption. Every supported version stays readable; a reader skips records from a
 version it does not know rather than failing the round it is observing.
 
 **A record's readability and its claim on a sequence number are different
