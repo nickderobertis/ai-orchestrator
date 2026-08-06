@@ -922,6 +922,45 @@ owner, exactly as an interrupted round is, so `just runs` reports
 and the work is reclaimable. `complete` on the channel is a completion verdict and
 does not stop scheduling; `just stop` is what ends a run.
 
+### Adopting a run whose driver died
+
+A run whose orchestrator process is gone is not over — its journal, its round
+ledger, its channel, and every preserved branch and stack anchor recorded against
+it are all intact. What it has lost is the thing driving it.
+
+```sh
+just orchestrate --adopt <run-id>            # attach a fresh driver to that run
+just orchestrate --adopt <run-id> --detach   # the same, unattended
+```
+
+Adoption keeps everything the run owns and replaces only the driver. It re-reads
+the launch parameters the run recorded (`orchestrator/relaunch.json` — the plan,
+the runs root, the base config, the harness routing, the round budget), registers
+the new process as the owner, reopens the channel, and drives the next round from
+the journal-folded plan of record with `--recover`, so the round its predecessor
+left claimed is reclaimed rather than replaced. The run id, the journal, and the
+anchors are the ones it already had; minting a new run id and pinning a resume was
+what stranded publication anchors before this existed.
+
+Three things refuse it, and none of them has a `--force`: adopting takes over
+ongoing work rather than ending it, which is exactly the case where a second
+opinion is worth more than an override.
+
+* **A run this session did not launch.** Ownership is the same rule `just stop`
+  keeps, including `unknown` never being yours.
+* **A run something is still driving** — a live launched orchestrator, or a round
+  still in flight. End it with `just stop <run-id>` first if that is what you mean.
+* **A run with no relaunch record**, which is every run launched before adoption
+  existed. There is nothing to replay, so it is refused rather than started on
+  guessed parameters.
+
+Each adoption takes a conversation of its own (`orchestrator-<run-id>-adoptN`) and
+never resumes the dead driver's: a relaunch that asked the harness for a session it
+no longer had is what burned whole lineages on `No conversation found`. The dead
+driver's `report.json` and `stderr.log` move aside to `report.pre-adopt-N.json` and
+`stderr.pre-adopt-N.log` rather than being truncated — they are the evidence of how
+it died, and the first thing to read after adopting.
+
 ## Monitoring a live run
 
 `just runs` says where a round *ended* and `just history-show` says everything

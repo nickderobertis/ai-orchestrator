@@ -46,6 +46,12 @@ from onejudge_sdk import (
 )
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from .adopt import (
+    RELAUNCH_SCHEMA_VERSION,
+    RelaunchRecord,
+    read_relaunch_record,
+    write_relaunch_record,
+)
 from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_RUN_ID_ENV,
@@ -65,8 +71,12 @@ from .launch import (
     LAUNCHER_KINDS,
     LaunchError,
     LaunchInfo,
+    RunOwner,
+    caller_identity,
     generate_launch_id,
     launch_info,
+    read_launch_link,
+    read_run_owner,
     resolve_launcher_kind,
     select_launch,
     validate_session_id,
@@ -82,7 +92,15 @@ from .provider_failure import (
     resolve_identity,
 )
 from .redaction import redact
-from .runs import ArtifactPaths, resolve_run_dir, slugify, validate_run_id
+from .runs import (
+    ArtifactPaths,
+    latest_round,
+    launch_claims_a_live_owner,
+    resolve_run_dir,
+    round_appears_in_flight,
+    slugify,
+    validate_run_id,
+)
 from .scratch import (
     AGENT_ACTIVITY_NAME,
     AGENT_STATUS_DIR_ENV,
@@ -1467,6 +1485,305 @@ def launch_orchestrator(
         channel_dir = create_channel(run_dir, heartbeat_interval=heartbeat_interval)
     except ChannelError as exc:
         raise DispatchError(str(exc)) from exc
+    # Stamped once, here: nested dispatches inherit ONEHARNESS_HISTORY_LABELS and layer
+    # their node labels over it (run_onejudge -> merge_labels), so every worker, judge,
+    # and check-in conversation carries the launch join without stamping each one.
+    repository_identity = next(iter(sorted(str(item) for item in graph_identities(graph))), "")
+    launch_link, launch_labels = _launch_provenance(
+        launcher=launcher,
+        session_id=launcher_session_id,
+        repository_identity=repository_identity,
+    )
+    pid = _start_orchestrator_process(
+        run_dir=run_dir,
+        runs_root=root,
+        plan=plan,
+        channel_dir=channel_dir,
+        base_path=base_path,
+        onejudge_bin=onejudge_bin,
+        skill_provider=skill_provider,
+        max_turns=max_turns,
+        turn_timeout=turn_timeout,
+        cwd=cwd,
+        acknowledge_concurrent=acknowledge_concurrent,
+        round_budget=round_budget,
+        oneharness_mode=oneharness_mode,
+        harness_env=harness_env,
+        launch_labels=launch_labels,
+        session_suffix="",
+        recover=False,
+    )
+    update_run_owner(run_dir.name, run_dir, pid)
+    write_relaunch_record(
+        run_dir,
+        _relaunch_record(
+            plan=plan,
+            base_path=base_path,
+            onejudge_bin=onejudge_bin,
+            cwd=cwd,
+            max_turns=max_turns,
+            turn_timeout=turn_timeout,
+            heartbeat_interval=heartbeat_interval,
+            acknowledge_concurrent=acknowledge_concurrent,
+            oneharness_mode=oneharness_mode,
+            adoptions=0,
+            round_budget=round_budget,
+            worker_harness=worker_harness,
+            judge_harness=judge_harness,
+            skill_provider=skill_provider,
+        ),
+    )
+    raw_plan_name = plan_mapping.get("name")
+    plan_name = slugify(
+        raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
+    )
+    launch: LaunchRecord = {
+        "schema_version": 3,
+        "run_id": run_dir.name,
+        "channel_id": run_dir.name,
+        "plan_name": plan_name,
+        "goal": goal,
+        "commands": {
+            "channel_next": f"just channel-next {run_dir.name}",
+            "monitor": f"just monitor {run_dir.name}",
+        },
+        # Built by `launch.launch_info`, which owns this on-disk shape together with
+        # `launch.read_launch_link`; tests/test_orchestrator_launch.py round-trips the two.
+        "launch": launch_link,
+    }
+    atomic_json(run_dir / LAUNCH_RECORD_NAME, launch)
+    (run_dir / "planner.md").write_text(
+        "# Planner launch\n\n"
+        f"- Run id: `{run_dir.name}`\n"
+        f"- Channel id: `{run_dir.name}`\n"
+        f"- Next surface: `just channel-next {run_dir.name}`\n"
+        f"- Monitor: `just monitor {run_dir.name}`\n",
+        encoding="utf-8",
+    )
+    return run_dir.name
+
+
+#: What a run's own records must say before a second driver may take it over. Both
+#: are "may be live" answers rather than proofs of death — the same asymmetry `stop`
+#: keeps — so an owner this host cannot probe keeps its run, and only a driver this
+#: host can see is gone is replaced.
+def _live_driver(run_dir: Path) -> str | None:
+    """Why this run still has something driving it, or ``None`` when nothing does."""
+    if launch_claims_a_live_owner(run_dir):
+        return "its launched orchestrator process is still running"
+    latest = latest_round(run_dir)
+    if latest is not None and round_appears_in_flight(latest[1]):
+        return f"round-{latest[0]:02d} is still in flight"
+    return None
+
+
+def adopt_orchestrator(
+    run_id: str,
+    *,
+    runs_dir: str | Path = "runs",
+    heartbeat_interval: float | None = None,
+    launcher: str | None = None,
+    launcher_session_id: str | None = None,
+) -> str:
+    """Attach a fresh orchestrator process to an orphaned run, keeping its ledger.
+
+    Everything the run already owns stays exactly where it is: the run id, the
+    journal, the round ledger, the channel, and every preserved branch and stack
+    anchor recorded against it. What changes is who is driving — a new detached
+    onejudge process, registered as the owner, running its own conversation and
+    reclaiming the round its predecessor left claimed.
+
+    Three refusals guard it, in the order a planner needs them. A run this session did
+    not launch belongs to another planner (``unknown`` included, per the ownership
+    rule) and is refused by name — there is deliberately no ``--force`` here, because
+    unlike a stop, adopting takes over *ongoing* work rather than ending it. A run
+    something is still driving is refused with what is driving it, since a second
+    driver on one ledger is the race this whole harness is arranged to prevent. And a
+    run with no relaunch record cannot be replayed at all, so it is refused rather
+    than started on guessed parameters.
+    """
+    root = Path(runs_dir).resolve()
+    validated = validate_run_id(run_id)
+    run_dir = root / validated
+    if not run_dir.is_dir():
+        raise DispatchError(f"no recorded run {validated!r} under {root}")
+    caller = caller_identity()
+    owner = read_run_owner(run_dir)
+    if not owner.is_(caller):
+        mine = caller.label if caller is not None else "this session has no launcher provenance"
+        raise DispatchError(
+            f"refusing to adopt {validated}: it was launched by {_describe_owner(owner)}, "
+            f"not by you ({mine}). Confirm with its planner before taking it over."
+        )
+    if (driving := _live_driver(run_dir)) is not None:
+        raise DispatchError(
+            f"refusing to adopt {validated}: {driving}. Adoption replaces a dead driver; "
+            f"end this one first with: just stop {validated} --runs-dir {root}"
+        )
+    try:
+        record = read_relaunch_record(run_dir)
+    except ConfigError as exc:
+        raise DispatchError(f"cannot adopt {validated}: {exc}") from exc
+    plan = Path(record["plan"])
+    if not plan.is_file():
+        raise DispatchError(f"cannot adopt {validated}: its recorded plan no longer exists: {plan}")
+    harness_env = harness_override_env(
+        worker=record.get("worker_harness"), judge=record.get("judge_harness")
+    )
+    interval = record["heartbeat_interval"] if heartbeat_interval is None else heartbeat_interval
+    plan_mapping = load_yaml(plan)
+    from .graph import parse_graph, validate_graph_repo_aliases
+    from .plan import PlanError
+
+    try:
+        graph = parse_graph(plan_mapping)
+        validate_graph_repo_aliases(graph)
+    except PlanError as exc:
+        raise DispatchError(f"cannot adopt {validated}: invalid plan: {exc}") from exc
+    generation = record["adoptions"] + 1
+    # The dead driver's own report and stderr are moved aside rather than truncated:
+    # they are the evidence of *how* it died, which is the first thing a planner asks
+    # after an adoption, and `launch_claims_a_live_owner` reads a nonempty report as
+    # "this launch already reported" — so leaving it would make the new driver's own
+    # liveness unreadable.
+    orchestrator_dir = run_dir / "orchestrator"
+    for name, suffix in (("report", "json"), ("stderr", "log")):
+        previous = orchestrator_dir / f"{name}.{suffix}"
+        if previous.exists():
+            previous.replace(orchestrator_dir / f"{name}.pre-adopt-{generation}.{suffix}")
+    # Re-registered before the process starts, exactly as a launch is: the reservation
+    # is what the concurrency guard reads, and an adoption that spawned first would be
+    # a live driver nothing had reserved.
+    register_run(
+        run_id=validated,
+        run_dir=run_dir,
+        goal=graph.goal,
+        identities=graph_identities(graph),
+        pid=os.getpid(),
+        # An orphaned run's own registration may still be in the index — its owner is
+        # gone, but a sweep only drops it once this host proves that. Adoption has
+        # already proven exactly that above, so acknowledging is the honest value
+        # rather than a way past a guard.
+        acknowledge_concurrent=True,
+        report=lambda notice: print(f"orchestrate: {notice}", file=sys.stderr),
+    )
+    try:
+        channel_dir = create_channel(run_dir, heartbeat_interval=interval)
+    except ChannelError as exc:
+        raise DispatchError(str(exc)) from exc
+    link = read_launch_link(run_dir)
+    launch_labels = (
+        {"launch_id": link.launch_id, "launcher": link.launcher or "unknown"}
+        if link is not None
+        else {}
+    )
+    pid = _start_orchestrator_process(
+        run_dir=run_dir,
+        runs_root=root,
+        plan=plan,
+        channel_dir=channel_dir,
+        base_path=record["base_path"],
+        onejudge_bin=record["onejudge_bin"],
+        skill_provider=record.get("skill_provider"),
+        max_turns=record["max_turns"],
+        turn_timeout=record["turn_timeout"],
+        cwd=record["cwd"],
+        acknowledge_concurrent=record["acknowledge_concurrent"],
+        round_budget=record.get("round_budget"),
+        oneharness_mode=record["oneharness_mode"],
+        harness_env=harness_env,
+        launch_labels=launch_labels,
+        # Never the dead driver's conversation. A relaunch that resumed it asks the
+        # harness for a session it no longer has, and that loop is what burned whole
+        # lineages on "No conversation found" instead of driving the run.
+        session_suffix=f"-adopt{generation}",
+        recover=True,
+    )
+    update_run_owner(validated, run_dir, pid)
+    write_relaunch_record(run_dir, {**record, "adoptions": generation})
+    return validated
+
+
+def _describe_owner(owner: RunOwner) -> str:
+    """Name a run's owner for an adoption refusal, without printing its session id."""
+    if owner.identity is None:
+        return "no recorded launcher (unknown is not the same as yours)"
+    return f"another planner ({owner.identity.label})"
+
+
+def _relaunch_record(
+    *,
+    plan: Path,
+    base_path: str | Path,
+    onejudge_bin: str,
+    cwd: str | Path,
+    max_turns: int,
+    turn_timeout: int,
+    heartbeat_interval: float,
+    acknowledge_concurrent: bool,
+    oneharness_mode: str,
+    adoptions: int,
+    round_budget: float | None,
+    worker_harness: str | None,
+    judge_harness: str | None,
+    skill_provider: Mapping[str, Any] | None,
+) -> RelaunchRecord:
+    """The parameters this launch leaves for a driver that may replace it."""
+    record: RelaunchRecord = {
+        "schema_version": RELAUNCH_SCHEMA_VERSION,
+        "plan": str(plan),
+        "base_path": str(base_path),
+        "onejudge_bin": onejudge_bin,
+        "cwd": str(cwd),
+        "max_turns": max_turns,
+        "turn_timeout": turn_timeout,
+        "heartbeat_interval": float(heartbeat_interval),
+        "acknowledge_concurrent": acknowledge_concurrent,
+        "oneharness_mode": oneharness_mode,
+        "adoptions": adoptions,
+    }
+    if round_budget is not None:
+        record["round_budget"] = float(round_budget)
+    if worker_harness is not None:
+        record["worker_harness"] = worker_harness
+    if judge_harness is not None:
+        record["judge_harness"] = judge_harness
+    if skill_provider is not None:
+        record["skill_provider"] = dict(skill_provider)
+    return record
+
+
+# llmlint: ignore[structural_pattern_matching] provider_kind is first validated as the
+# discriminator, then each open-ended provider mapping receives variant-specific checks.
+def _start_orchestrator_process(
+    *,
+    run_dir: Path,
+    runs_root: Path,
+    plan: Path,
+    channel_dir: Path,
+    base_path: str | Path,
+    onejudge_bin: str,
+    skill_provider: Mapping[str, Any] | None,
+    max_turns: int,
+    turn_timeout: int,
+    cwd: str | Path,
+    acknowledge_concurrent: bool,
+    round_budget: float | None,
+    oneharness_mode: str,
+    harness_env: Mapping[str, str],
+    launch_labels: Mapping[str, str],
+    session_suffix: str,
+    recover: bool,
+) -> int:
+    """Spawn one detached orchestrator onejudge process for a prepared run directory.
+
+    Shared by the first launch and by every adoption that replaces a dead driver, so
+    the second orchestrator of a run is started exactly as the first was — same plan,
+    same runs root, same harness routing — with only two things deliberately
+    different. ``session_suffix`` gives an adoption a conversation of its own, because
+    resuming the dead driver's is the failure mode that stranded these runs in the
+    first place; ``recover`` lets it reclaim the round its predecessor left claimed.
+    """
     config = build_effective_config(load_yaml(base_path), {}, max_turns=max_turns)
     # The live planner's supervisor verdict is the completion authority. Standalone
     # simulated-model eval/assessment calls do not belong on this command relay.
@@ -1514,9 +1831,9 @@ def launch_orchestrator(
             ],
         },
     }
-    config["session"] = f"orchestrator-{run_dir.name}"
+    config["session"] = f"orchestrator-{run_dir.name}{session_suffix}"
     effective = run_dir / "orchestrator" / "effective.onejudge.yaml"
-    effective.parent.mkdir()
+    effective.parent.mkdir(exist_ok=True)
     effective.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     worker_base = load_yaml(base_path)
     worker_provider_kind = worker_skill.get("kind")
@@ -1527,26 +1844,27 @@ def launch_orchestrator(
     report_path = effective.parent / "report.json"
     stderr_path = effective.parent / "stderr.log"
     round_budget_arg = "" if round_budget is None else f" {ROUND_BUDGET_OPTION} {round_budget:g}"
+    adopted = (
+        " This run was ADOPTED from a driver that died: its ledger, journal, and any "
+        "preserved branches are intact, and `--recover` reclaims the round its "
+        "predecessor left claimed. Do not mint a new run id."
+        if recover
+        else ""
+    )
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
-        f"`just run-plan {plan} --run {run_dir.name} --runs-dir {root} --base {worker_base_path} "
+        f"`just run-plan {plan} --run {run_dir.name} --runs-dir {runs_root} "
+        f"--base {worker_base_path} "
         f"--provider {worker_provider_kind}"
         f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}"
+        f"{' --recover' if recover else ''}"
         f"{round_budget_arg}` for each required "
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
+        f"{adopted}"
     )
     resolved_onejudge = _resolve_onejudge(onejudge_bin, os.environ)["path"]
     command = [resolved_onejudge, "run", str(effective), "--task", task, "--format", "json"]
-    # Stamped once, here: nested dispatches inherit ONEHARNESS_HISTORY_LABELS and layer
-    # their node labels over it (run_onejudge -> merge_labels), so every worker, judge,
-    # and check-in conversation carries the launch join without stamping each one.
-    repository_identity = next(iter(sorted(str(item) for item in graph_identities(graph))), "")
-    launch_link, launch_labels = _launch_provenance(
-        launcher=launcher,
-        session_id=launcher_session_id,
-        repository_identity=repository_identity,
-    )
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
     process_env["ONEHARNESS_MODE"] = oneharness_mode
@@ -1557,7 +1875,7 @@ def launch_orchestrator(
         process_env[LABEL_ENV] = merge_labels(
             process_env.get(LABEL_ENV),
             {
-                **launch_labels,
+                **dict(launch_labels),
                 "run_id": run_dir.name,
                 **semantic_agent_labels("orchestrator"),
             },
@@ -1590,44 +1908,28 @@ def launch_orchestrator(
             "started": datetime.now(UTC).isoformat(),
         },
     )
-    update_run_owner(run_dir.name, run_dir, proc.pid)
-    raw_plan_name = plan_mapping.get("name")
-    plan_name = slugify(
-        raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
-    )
-    launch: LaunchRecord = {
-        "schema_version": 3,
-        "run_id": run_dir.name,
-        "channel_id": run_dir.name,
-        "plan_name": plan_name,
-        "goal": goal,
-        "commands": {
-            "channel_next": f"just channel-next {run_dir.name}",
-            "monitor": f"just monitor {run_dir.name}",
-        },
-        # Built by `launch.launch_info`, which owns this on-disk shape together with
-        # `launch.read_launch_link`; tests/test_orchestrator_launch.py round-trips the two.
-        "launch": launch_link,
-    }
-    atomic_json(run_dir / LAUNCH_RECORD_NAME, launch)
-    (run_dir / "planner.md").write_text(
-        "# Planner launch\n\n"
-        f"- Run id: `{run_dir.name}`\n"
-        f"- Channel id: `{run_dir.name}`\n"
-        f"- Next surface: `just channel-next {run_dir.name}`\n"
-        f"- Monitor: `just monitor {run_dir.name}`\n",
-        encoding="utf-8",
-    )
-    return run_dir.name
+    return proc.pid
 
 
 def main_orchestrate(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Launch a live-supervised orchestrator and watch it until it settles"
     )
-    parser.add_argument("plan", type=Path)
+    parser.add_argument(
+        "plan",
+        type=Path,
+        nargs="?",
+        help="plan file to launch; omitted when --adopt names an existing run",
+    )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--run-id")
+    parser.add_argument(
+        "--adopt",
+        metavar="RUN_ID",
+        help="attach a fresh orchestrator to an existing run whose driver is dead, "
+        "keeping its run id, journal, ledger, and anchors; refuses a run this session "
+        "did not launch and one something is still driving",
+    )
     parser.add_argument("--base", type=Path, default=BASE_CONFIG)
     parser.add_argument("--onejudge-bin", default="onejudge")
     parser.add_argument("--acknowledge-concurrent", action="store_true")
@@ -1696,28 +1998,45 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not math.isfinite(args.parked_after) or args.parked_after <= 0:
         parser.error("--parked-after must be a positive, finite number of seconds")
+    # An adoption replays the parameters its launch recorded, so a second set given on
+    # this command line would be silently ignored. Saying so is the difference between
+    # a planner who knows which plan is about to be driven and one who does not.
+    if args.adopt and args.plan is not None:
+        parser.error("--adopt drives the run's recorded plan; do not also pass a plan file")
+    if not args.adopt and args.plan is None:
+        parser.error("a plan file is required unless --adopt names an existing run")
     # Detected from the ambient session so the ordinary launch is attributable without
     # the planner remembering two flags: an unattributable run is one no planner can
     # tell from another planner's. Explicit values still win; see `select_launch`.
     selected = select_launch(launcher=args.launcher, session_id=args.launcher_session)
     try:
         skill = {"kind": "command", "command": args.skill_command} if args.skill_command else None
-        launched = launch_orchestrator(
-            args.plan,
-            runs_dir=args.runs_dir,
-            run_id=args.run_id,
-            base_path=args.base,
-            onejudge_bin=args.onejudge_bin,
-            skill_provider=skill,
-            heartbeat_interval=args.heartbeat_interval,
-            acknowledge_concurrent=args.acknowledge_concurrent,
-            round_budget=args.round_budget,
-            oneharness_mode=args.oneharness_mode,
-            worker_harness=args.worker_harness,
-            judge_harness=args.judge_harness,
-            launcher=selected.launcher,
-            launcher_session_id=selected.session_id,
-        )
+        if args.adopt:
+            launched = adopt_orchestrator(
+                args.adopt,
+                runs_dir=args.runs_dir,
+                heartbeat_interval=args.heartbeat_interval
+                if args.heartbeat_interval != DEFAULT_HEARTBEAT_INTERVAL
+                else None,
+            )
+            print(f"orchestrate: adopted {launched}", file=sys.stderr)
+        else:
+            launched = launch_orchestrator(
+                args.plan,
+                runs_dir=args.runs_dir,
+                run_id=args.run_id,
+                base_path=args.base,
+                onejudge_bin=args.onejudge_bin,
+                skill_provider=skill,
+                heartbeat_interval=args.heartbeat_interval,
+                acknowledge_concurrent=args.acknowledge_concurrent,
+                round_budget=args.round_budget,
+                oneharness_mode=args.oneharness_mode,
+                worker_harness=args.worker_harness,
+                judge_harness=args.judge_harness,
+                launcher=selected.launcher,
+                launcher_session_id=selected.session_id,
+            )
         print(
             (args.runs_dir.resolve() / launched / LAUNCH_RECORD_NAME)
             .read_text(encoding="utf-8")
