@@ -1177,6 +1177,15 @@ def _drive_to_round_two(run_id: str, runs: Path, next_plan: Path) -> None:
     _wait_for(next_plan, lambda text: bool(text.strip()), 120)
 
 
+def _read_only_view(command: list[str]) -> str:
+    """Run one read-only planner view CLI and return what it printed."""
+    completed = subprocess.run(
+        command, cwd=REPO_ROOT, text=True, capture_output=True, timeout=e2e_timeout(120)
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
 def test_real_cli_cancel_parks_a_running_lifecycle_and_a_later_round_requeues_it(
     tmp_path: Path, onejudge_bin: str, bare_origin
 ) -> None:
@@ -1328,6 +1337,14 @@ def test_real_cli_cancel_parks_a_running_lifecycle_and_a_later_round_requeues_it
     parked_task = next(node for node in projection.plan["tasks"] if node["id"] == "lifecycle")
     assert parked_task["parked"] is True
 
+    # The view a planner reaches for after a park, driven as the real CLI against this
+    # recorded round. It would silently omit the node if `parked` fell out of the status
+    # vocabulary it renders over, and the branch a `requeue` resumes — or `repo-recover`
+    # publishes — is the one thing a parked row has to name.
+    results_view = _read_only_view(["just", "results", run_id, "--runs-dir", str(runs)])
+    assert "lifecycle  parked" in results_view, results_view
+    assert f"Preserved branch: {branch}" in results_view, results_view
+
     # The transition folds the executed graph, so the park reaches the next round.
     next_plan = run_dir / "round-02" / "plan.json"
     _drive_to_round_two(run_id, runs, next_plan)
@@ -1467,5 +1484,12 @@ def test_real_cli_cancel_parks_a_node_before_it_is_ever_dispatched(
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        check=False,
+        check=True,
+        timeout=e2e_timeout(120),
     )
+    # The run ledger, read as the real CLI once the launch no longer holds its pid —
+    # which is when a row reports its round summary rather than what the orchestrator
+    # is waiting on. `parked` is a counted status there, so a park is a row a planner
+    # can see rather than a node that quietly vanished from the tally.
+    listed = _read_only_view(["just", "runs", "--runs-dir", str(runs)])
+    assert "1 parked" in listed, listed
