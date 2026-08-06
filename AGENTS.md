@@ -504,7 +504,17 @@ concurrent e2e load has started the selected harness and had it die, which reads
 a launch-path outage and once cost a publication that had already passed its gate.
 A genuinely broken launch path fails every attempt and still fails, and a recorded
 turn that violates the contract fails on the first. A passing run says how many
-launches it took. It is deliberately outside `just gate`. The pre-push hook runs it
+launches it took. The record it judges is the **selected** candidate's: a
+`fallback` chain records every candidate it attempts, so an identity that refused
+the turn with a classified `quota` or `auth` failure — or was skipped outright — is
+the chain working, and the smoke names it in the pass rather than failing on it.
+Anything else is still a launch failure: the selected record breaking the contract,
+a candidate failing for a reason the chain does not move past, a candidate whose
+record does not back the reason it names — one that identifies no harness, or that
+carries a turn somebody was billed for — or every candidate refusing. See [The
+record a fallback chain is judged
+by](docs/onejudge-integration.md#the-record-a-fallback-chain-is-judged-by).
+It is deliberately outside `just gate`. The pre-push hook runs it
 only when the pushed diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
