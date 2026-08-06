@@ -454,6 +454,12 @@ def main() -> int:
                                 # expected outcome, not an orchestrator failure.
                                 '"name": "eligibility"',
                                 '"name": "rejection"',
+                                # A parked node holds its round `waiting`, and one of
+                                # these journeys also carries a node that fails by
+                                # design; both are the subject, not an orchestrator
+                                # failure.
+                                '"name": "park-and-resume"',
+                                '"name": "pending-park"',
                                 "lifecycle-worker-death-retry",
                                 "provider-errors",
                                 "infrastructure-",
@@ -484,7 +490,11 @@ def main() -> int:
                     )
                 elif orchestrator_turn == 1 and any(
                     name in plan_text
-                    for name in ('"name": "planner-context"', '"name": "carried-edits"')
+                    for name in (
+                        '"name": "planner-context"',
+                        '"name": "carried-edits"',
+                        '"name": "park-and-resume"',
+                    )
                 ):
                     # The transition an orchestrator drives after the planner's
                     # continuing verdict: no attestation, no edits file, just the

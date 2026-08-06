@@ -19,6 +19,7 @@ live process, one with a live child and one without.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import os
 import signal
@@ -45,9 +46,13 @@ from orchestrator.runs import RunId
 #: owner is doing nothing either, so the *only* difference from the parked case is
 #: the live child — which is what the parked decision must turn on.
 _BUSY = (
+    # The CHILD writes the ready file from inside its own payload, so readiness
+    # means the child is past exec and visible to liveness scans - a parent-side
+    # write can land in the fork-to-exec window where the scan sees no stamp.
     "import subprocess, sys, time\n"
-    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])\n"
-    "open(sys.argv[1], 'w').write('ready\\n')\n"
+    "child = subprocess.Popen([sys.executable, '-c',\n"
+    "    'import sys, time; open(sys.argv[1], \\'w\\').write(\\'ready\\\\n\\'); time.sleep(600)',\n"
+    "    sys.argv[1]])\n"
     "time.sleep(600)\n"
 )
 
@@ -236,6 +241,19 @@ def _line(output: str, run_id: str) -> str:
     return next(line for line in output.splitlines() if run_id in line)
 
 
+def _beneath(output: str, row: str) -> list[str]:
+    """The indented indicator lines one row owns, in the order the view printed them.
+
+    A row carries several independent indicators and the view is free to gain
+    another, so what a caller asserts on is which line appears under *this* run —
+    never which offset it landed at, which is a claim about the neighbours.
+    """
+    following = output.split(row, 1)[1].splitlines()[1:]
+    return [
+        line.strip() for line in itertools.takewhile(lambda line: line.startswith(" "), following)
+    ]
+
+
 def test_just_runs_reports_a_parked_launch_and_never_a_busy_one(
     tmp_path: Path, sleeper: list[subprocess.Popen[bytes]]
 ) -> None:
@@ -263,6 +281,8 @@ def test_just_runs_reports_a_parked_launch_and_never_a_busy_one(
     assert "PARKED" not in _runs(runs, parked_after=60)
 
 
+# Asserts over every visible run's liveness; concurrent tests' runs pollute it.
+@pytest.mark.single_threaded
 def test_the_views_name_a_live_concurrent_run_and_never_a_parked_one(
     tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -309,12 +329,15 @@ def test_the_views_name_a_live_concurrent_run_and_never_a_parked_one(
 
     # Each working run is told about the other, by pid, with the identity they share.
     for run_id, other in (("busy-one", "busy-two"), ("busy-two", "busy-one")):
-        beneath = listed.split(f"* {run_id}  ACTIVE", 1)[1].splitlines()[1]
-        assert beneath.strip() == (
-            f"CONCURRENT: run '{other}' is LIVE (owner pid {owners[other]} on "
-            f"{socket.gethostname()}) goal 'Goal for {other}'; shared identities: local/shared"
-        )
-        assert "parked-run" not in beneath
+        beneath = _beneath(listed, f"* {run_id}  ACTIVE")
+        assert (
+            beneath.count(
+                f"CONCURRENT: run '{other}' is LIVE (owner pid {owners[other]} on "
+                f"{socket.gethostname()}) goal 'Goal for {other}'; shared identities: local/shared"
+            )
+            == 1
+        ), beneath
+        assert not [line for line in beneath if "parked-run" in line], beneath
     # The parked launch is reported as stopped, and never as a second run at work.
     assert "PARKED" in _line(listed, "parked-run")
     assert "CONCURRENT" not in _line(listed, "parked-run")

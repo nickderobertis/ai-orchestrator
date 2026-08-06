@@ -38,6 +38,8 @@
       "Bash(just runs:*)",
       "Bash(just monitor:*)",
       "Bash(just status:*)",
+      "Bash(just recoverable:*)",
+      "Bash(just host:*)",
       "Bash(just channel-next:*)",
       "Bash(just channel-reply:*)",
       "Bash(just history:*)",

@@ -660,6 +660,18 @@ def log_delta(cwd: str | Path, base: str, branch: str) -> list[Commit]:
     return commits
 
 
+def committed_at(cwd: str | Path, ref: str) -> float | None:
+    """When ``ref``'s commit was made, as a Unix timestamp, or ``None`` if unreadable.
+
+    The committer date rather than the author date: a preserved branch is dated by
+    when its work was last written down, and rebasing or amending it moves that
+    forward while leaving the author date at the original keystroke.
+    """
+    proc = _git(["log", "-1", "--format=%ct", ref], cwd=cwd, check=False)
+    value = proc.stdout.strip()
+    return float(value) if proc.returncode == 0 and value.isdigit() else None
+
+
 def commit_detail(cwd: str | Path, sha: str) -> str:
     """Return the durable human-readable commit metadata and patch for ``sha``."""
     return _git(

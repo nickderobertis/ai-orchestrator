@@ -47,6 +47,12 @@ def render(run: str, runs_dir: Path) -> str:
         lines.append(f"{node}  {item['status']}  {outcome}")
         if failure := _failure_line(item.get("failure_attribution")):
             lines.append(f"  {failure}")
+        # A parked node is idle, not lost: the branch its cancelled dispatch preserved
+        # is what a `requeue` resumes and what `just repo-recover` publishes, so the
+        # view that reports the park has to name it rather than leave it to be dug out.
+        if item["status"] == "parked":
+            branch = item.get("branch")
+            lines.append(f"  Preserved branch: {branch or 'none (parked before it started)'}")
         detail_id = GraphId(str(run_id), number, node)
         lines.append(f"  Detail: just history-show {detail_id} --runs-dir {runs_dir}")
         failed = item["status"] in {"failed", "blocked", "cancelled"} or item.get("ok") is False

@@ -91,10 +91,12 @@ from .runs import (
     latest_round,
     launch_claims_a_live_owner,
     load_mapping,
+    render_status_counts,
     resolve_supervision_run,
     result_state,
     round_appears_in_flight,
     rounds,
+    status_counts,
     validate_run_id,
 )
 
@@ -1157,11 +1159,7 @@ def run_state(
         )
     state = result_state(payload)
     ok = bool(payload.get("ok"))
-    counts = ", ".join(
-        f"{sum(1 for item in payload['results'].values() if item.get('status') == status)} {status}"
-        for status in ("done", "waiting", "blocked", "failed", "skipped")
-        if any(item.get("status") == status for item in payload["results"].values())
-    )
+    counts = render_status_counts(status_counts(payload))
     complete = state == COMPLETE_STATE and ok
     return RunState(
         run_id,

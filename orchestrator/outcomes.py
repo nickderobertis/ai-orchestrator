@@ -31,3 +31,32 @@ LIFECYCLE_OUTCOMES: frozenset[LifecycleOutcome] = frozenset(get_args(LifecycleOu
 SUCCESSFUL_LIFECYCLE_OUTCOMES = frozenset[LifecycleOutcome](
     {"merged", ALREADY_INTEGRATED_OUTCOME, "pr-open"}
 )
+
+#: Node statuses that mean the work is gone rather than held. As a *dependency*
+#: status the dependent can never run and settles `skipped`, not `blocked`; as a
+#: *node* status anywhere in a round it settles the round `failed`. The name is
+#: scoped to the statuses rather than to dependencies for that reason — it answers
+#: both questions, exactly as `HELD_STATUSES` does for the other side of the split.
+LOST_STATUSES = ("failed", "skipped")
+#: Node statuses that fail the round holding them. `cancelled` joins the lost ones
+#: here and only here: a cancelled node has left the graph, so it is never a
+#: *dependency* status, but the round that cancelled it did not complete. One
+#: constant for the same reason `HELD_STATUSES` is one — the in-process
+#: `GraphResult.state` and the state `runs.result_state` derives from a recorded
+#: payload have to answer identically, and a payload written before `state` was
+#: recorded is read by the second alone.
+FAILED_ROUND_STATUSES = (*LOST_STATUSES, "cancelled")
+#: Node statuses that mean work is held rather than lost. As a *dependency* status
+#: this settles the dependent `blocked`; as a *node* status anywhere in a round it
+#: settles the round `waiting`. Those are one rule — a round is still waiting for
+#: exactly the reasons a dependent is still blocked — and two copies of it would let
+#: an in-process round state and the same round's state recomputed from its recorded
+#: payload drift apart. `parked` is one of them because a planner `cancel` idles a
+#: node it may still `requeue`; treating it as unmet would settle every dependent
+#: `skipped` and throw away the work the park exists to keep recoverable.
+HELD_STATUSES = ("waiting", "blocked", "parked")
+#: The order every view renders per-status counts in, most-settled first. One list,
+#: because a reader comparing `just runs`, `just monitor`, and a round summary is
+#: comparing the same run — and a status missing from one of them reads as a node
+#: that is not there rather than as a view that never learned the word.
+STATUS_DISPLAY_ORDER = ("done", "waiting", "blocked", "parked", "failed", "skipped")

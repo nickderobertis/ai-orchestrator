@@ -481,6 +481,7 @@ export const nodeStateSchema = z.enum([
   "done",
   "failed",
   "waiting",
+  "parked",
   "cancelled",
 ]);
 /**
@@ -503,6 +504,7 @@ export const nodeStatusSchema = z.enum([
   "done",
   "not-completed",
   "failed",
+  "parked",
   "cancelled",
   "unknown",
 ]);

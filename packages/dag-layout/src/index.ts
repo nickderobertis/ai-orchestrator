@@ -28,6 +28,7 @@ export const DAG_NODE_STATES = [
   "done",
   "not-completed",
   "failed",
+  "parked",
   "cancelled",
   "unknown",
 ] as const;
@@ -100,6 +101,7 @@ const STATUS_STYLE: Readonly<Record<DagNodeState, StatusStyleToken>> = {
   done: "success",
   "not-completed": "danger",
   failed: "danger",
+  parked: "muted",
   cancelled: "muted",
   unknown: "neutral",
 };

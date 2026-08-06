@@ -63,8 +63,14 @@ from .runs import NodeId, RunId, StepId
 # when a surface is *sent* rather than when it is delivered. A v8 reader skips it and
 # sees exactly what it saw before — which is the gap it closes, because until v9 an
 # update nobody read was indistinguishable from an update nobody sent.
-SCHEMA_VERSION = 9
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
+#
+# v10 is additive inside a record, for the same reason v8 was: an `edit-committed`
+# may now compile `node-parked` and `node-requeued` operations, the planner's park
+# and resume of one node. Strict replay refuses a committed operation it cannot fold,
+# so a park written at v10 must be skippable by a v9 reader as an unknown version
+# rather than met as corruption in a round that is otherwise healthy.
+SCHEMA_VERSION = 10
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")

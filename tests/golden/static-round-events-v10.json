@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "state_changing_kinds": [
     "node-added",
     "edge-added",
@@ -86,6 +86,8 @@
       "human-attested",
       "node-added",
       "node-dropped",
+      "node-parked",
+      "node-requeued",
       "reparent",
       "retry-requested"
     ]

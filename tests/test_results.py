@@ -83,3 +83,42 @@ def test_main_succeeds_for_failed_run_and_rejects_missing_run(tmp_path: Path, ca
 
     assert main(["missing", "--runs-dir", str(runs)]) == 2
     assert "no completed round" in capsys.readouterr().err
+
+
+def test_render_names_the_branch_a_parked_node_preserved(tmp_path: Path) -> None:
+    """A park is idle, not lost, so the view has to say where the work is."""
+    runs = tmp_path / "runs"
+    round_dir = runs / "parked" / "round-01"
+    round_dir.mkdir(parents=True)
+    (round_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "ok": False,
+                "state": "waiting",
+                "started_order": ["work"],
+                "results": {
+                    "work": {
+                        "kind": "agent",
+                        "status": "parked",
+                        "task": "Sweep",
+                        "outcome": "not-completed",
+                        "branch": "feature/preserved",
+                        "error": "cancelled cooperatively; parked by planner",
+                    },
+                    "never-started": {
+                        "kind": "agent",
+                        "status": "parked",
+                        "task": "Later",
+                        "error": "parked by planner",
+                    },
+                },
+            }
+        )
+    )
+
+    output = render("parked", runs)
+
+    assert "work  parked  not-completed" in output
+    assert "Preserved branch: feature/preserved" in output
+    assert "Preserved branch: none (parked before it started)" in output

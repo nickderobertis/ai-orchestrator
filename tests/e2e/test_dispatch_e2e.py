@@ -415,7 +415,15 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         )
         if barrier.exists():
             for agent_pid_path in candidates:
-                candidate = ProcessId(int(agent_pid_path.read_text(encoding="utf-8")))
+                # The glob is over the shared `/tmp` this host's other dispatches also
+                # write into, so a candidate can be another dispatch's file — one still
+                # being written, already gone, or deliberately malformed by a
+                # concurrent test. Only a pid in *this* process's tree is this
+                # journey's worker, and reaching that check is what the guard protects.
+                try:
+                    candidate = ProcessId(int(agent_pid_path.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    continue
                 if candidate in descendants:
                     agent_pid = candidate
                     break
