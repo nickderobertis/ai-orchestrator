@@ -1337,15 +1337,13 @@ def test_real_cli_cancel_parks_a_running_lifecycle_and_a_later_round_requeues_it
     parked_task = next(node for node in projection.plan["tasks"] if node["id"] == "lifecycle")
     assert parked_task["parked"] is True
 
-    # The two read-only views a planner reaches for after a park, driven as real CLIs
-    # against this recorded round. Both render the park from the same result, and both
-    # would silently omit it if `parked` fell out of the status vocabulary they count
-    # over — the branch a `requeue` resumes is the one thing a parked row must name.
+    # The view a planner reaches for after a park, driven as the real CLI against this
+    # recorded round. It would silently omit the node if `parked` fell out of the status
+    # vocabulary it renders over, and the branch a `requeue` resumes — or `repo-recover`
+    # publishes — is the one thing a parked row has to name.
     results_view = _read_only_view(["just", "results", run_id, "--runs-dir", str(runs)])
     assert "lifecycle  parked" in results_view, results_view
     assert f"Preserved branch: {branch}" in results_view, results_view
-    listed = _read_only_view(["just", "runs", "--runs-dir", str(runs)])
-    assert "1 parked" in listed, listed
 
     # The transition folds the executed graph, so the park reaches the next round.
     next_plan = run_dir / "round-02" / "plan.json"
@@ -1486,5 +1484,12 @@ def test_real_cli_cancel_parks_a_node_before_it_is_ever_dispatched(
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        check=False,
+        check=True,
+        timeout=e2e_timeout(120),
     )
+    # The run ledger, read as the real CLI once the launch no longer holds its pid —
+    # which is when a row reports its round summary rather than what the orchestrator
+    # is waiting on. `parked` is a counted status there, so a park is a row a planner
+    # can see rather than a node that quietly vanished from the tally.
+    listed = _read_only_view(["just", "runs", "--runs-dir", str(runs)])
+    assert "1 parked" in listed, listed
