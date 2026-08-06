@@ -60,8 +60,12 @@ MAX_CAPTURED_TURN_CHARS = 800
 #: Session names reach the filesystem, so they are validated rather than sanitized: the
 #: two producers (`orchestrator-<run-id>`, `check-in-<run-id>-<round>`) already satisfy
 #: this, and anything else is a caller bug that must be loud instead of writing a
-#: capture under a name no reader will look for.
-_SESSION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+#: capture under a name no reader will look for. The bound is the filesystem's own,
+#: less the extension, rather than an arbitrary one — a run id is only bounded by what
+#: its own directory name can carry, so a shorter cap here would refuse a run this
+#: harness had already created.
+MAX_SESSION_NAME_CHARS = 250
+_SESSION_NAME = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_SESSION_NAME_CHARS - 1}}}\Z")
 
 #: How oneharness reports a history write it could not complete. Owned here because
 #: two readers need the same answer: `graph` classifies a dispatch that died this way
@@ -175,8 +179,8 @@ def bounded_note(raw: str) -> str:
 def validate_session(session: str) -> str:
     if not isinstance(session, str) or _SESSION_NAME.match(session) is None:
         raise CaptureError(
-            f"supervisory session name {session!r} must be 1-128 ASCII letters/digits/"
-            "dot/underscore/hyphen starting alphanumeric"
+            f"supervisory session name {session!r} must be 1-{MAX_SESSION_NAME_CHARS} ASCII "
+            "letters/digits/dot/underscore/hyphen starting alphanumeric"
         )
     return session
 
@@ -244,11 +248,16 @@ def _existing(path: Path) -> CaptureRecord | None:
 def _mutate(run_dir: Path, session: str, apply: Callable[[CaptureRecord], None]) -> bool:
     """Read-modify-write one capture under its own lock; ``False`` when there is none.
 
-    Silent on a missing or unreadable capture by design: capture is an *addition* to
-    a dispatch, and failing a live orchestrator turn because its summary file went
-    missing would trade the thing being recorded for the record of it.
+    Silent on a missing or unreadable capture by design — including a session this
+    scheme cannot name: capture is an *addition* to a dispatch, and failing a live
+    orchestrator turn because its summary file went missing, or because its run id
+    was longer than a filename, would trade the thing being recorded for the record
+    of it. Only `open_capture` is loud, at the seam that chose the name.
     """
-    path = capture_path(run_dir, session)
+    try:
+        path = capture_path(run_dir, session)
+    except CaptureError:
+        return False
     try:
         with advisory_lock(f"supervisory-capture:{path}"):
             try:

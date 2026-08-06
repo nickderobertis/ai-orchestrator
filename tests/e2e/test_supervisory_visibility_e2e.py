@@ -190,7 +190,7 @@ def _drain(run_id: str, runs: Path) -> dict[str, object]:
 @pytest.mark.load_sensitive
 @pytest.mark.xdist_group("load_sensitive")
 def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
-    tmp_path: Path, onejudge_bin: str
+    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
@@ -210,15 +210,15 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
     captures = run_dir / CAPTURE_DIR
     driver_capture = captures / f"orchestrator-{run_id}.json"
 
-    # The driver's own capture exists from the moment it was launched, and grows a
-    # bounded turn per orchestrator turn — the record that used to exist nowhere.
+    # The driver's own capture exists from the moment it was launched — before it has
+    # finished a turn, which is exactly the window in which it used to be invisible.
     _wait_for(driver_capture.is_file, seconds=60, what="the driver's capture")
-    _wait_for(
-        lambda: bool(json.loads(driver_capture.read_text(encoding="utf-8"))["turns"]),
-        seconds=120,
-        what="a captured orchestrator turn",
-    )
-    assert hold.arrived()
+    opened = json.loads(driver_capture.read_text(encoding="utf-8"))
+    assert opened["agent_role"] == "orchestrator"
+    assert opened["finished_at"] is None
+    # The capture lands at launch, before `run-plan` has dispatched anything, so this
+    # waits for the node rather than sampling whether it has started yet.
+    hold.wait(180)
 
     # A check-in whose harness refused the history write: the session oneharness never
     # recorded is still captured, and the refusal itself is recorded with it.
@@ -241,19 +241,27 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
     # the refusal is what stays true once it has happened, so it is what is asserted.
     assert "lacks complete v1.0 telemetry" in recorded["history_failure"]
 
-    # Served: run-scope spans for both supervisory roles, over the real read API.
+    # Served: run-scope spans for both supervisory roles, over the real read API. The
+    # store starts empty, which is exactly what a run whose harness refused every
+    # history write leaves behind.
     store = tmp_path / "history-store.json"
-    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path, store)))
+    binary = _oneharness_bin(tmp_path, store)
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    app = create_app(runs, oneharness_bin=str(binary))
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
-        spans = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()[
-            "spans"
-        ]
-        by_role = {
-            span["agent_role"]: span
-            for span in spans
-            if span["kind"] == "dispatch" and "agent_role" in span
-        }
+
+        def _by_role() -> dict[str, dict[str, object]]:
+            spans = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()[
+                "spans"
+            ]
+            return {
+                str(span["agent_role"]): span
+                for span in spans
+                if span["kind"] == "dispatch" and "agent_role" in span
+            }
+
+        by_role = _by_role()
         assert sorted(by_role) == ["check-in", "orchestrator"]
         driver_span = by_role["orchestrator"]
         # Still driving: an open-ended span is what a live supervisory session is.
@@ -265,15 +273,37 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
             "reviewing-results",
             "surfacing",
         }
-        assert driver_span["detail"]["output_tail"]
         check_in_span = by_role["check-in"]
         assert check_in_span["round"] == 1
         failure = next(
-            event for event in check_in_span["events"] if event["kind"] == "history-write-failed"
+            event
+            for event in check_in_span["events"]  # type: ignore[attr-defined]
+            if event["kind"] == "history-write-failed"
         )
         assert "lacks complete v1.0 telemetry" in failure["status"]
         # No transcript exists for either, so neither invents a reference to one.
         assert all("reference" not in span for span in by_role.values())
+
+        # `just status` names the live driver: pid liveness, phase, last-request age.
+        owner = json.loads((run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8"))[
+            "pid"
+        ]
+        live_view = _status(run_id, runs, tmp_path / "history")
+        assert f"{run_id}: driver alive (pid {owner})" in live_view, live_view
+        assert "phase " in live_view and "last model request " in live_view, live_view
+        assert "harness history write failed" not in live_view, live_view
+
+        # The node was held so far, so the driver's first turn had not ended. Let it
+        # finish one: the relay records a bounded turn as each orchestrator turn ends,
+        # which is what gives a capture-backed span its transcript.
+        hold.let_go()
+        _drain(run_id, runs)
+        _wait_for(
+            lambda: bool(json.loads(driver_capture.read_text(encoding="utf-8"))["turns"]),
+            seconds=60,
+            what="a captured orchestrator turn",
+        )
+        assert _by_role()["orchestrator"]["detail"]["output_tail"]  # type: ignore[index]
 
         # And with history present, the recorded transcript wins and resolves.
         store.write_text(
@@ -282,35 +312,19 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         served = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()[
             "spans"
         ]
-        recorded_driver = next(
+        drivers = [
             span
             for span in served
             if span["kind"] == "dispatch" and span.get("agent_role") == "orchestrator"
-        )
-        assert recorded_driver["reference"]["kind"] == "conversation"
-        conversation_id = recorded_driver["reference"]["value"]
+        ]
+        # The capture stood down rather than drawing the same session twice.
+        assert len(drivers) == 1
+        assert drivers[0]["reference"]["kind"] == "conversation"
+        conversation_id = drivers[0]["reference"]["value"]
         resolved = client.get(f"/api/v2/runs/{run_id}/conversations/{conversation_id}")
         assert resolved.status_code == 200
         assert resolved.json()["conversation"]["id"] == conversation_id
         assert resolved.json()["attribution"]["agentRole"] == "orchestrator"
-        # The capture stood down rather than drawing the same session twice.
-        assert [
-            span["id"]
-            for span in served
-            if span["kind"] == "dispatch" and span.get("agent_role") == "orchestrator"
-        ] == [recorded_driver["id"]]
-
-    # `just status` names the live driver: pid liveness, phase, last-request age.
-    owner = json.loads((run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8"))[
-        "pid"
-    ]
-    live_view = _status(run_id, runs, tmp_path / "history")
-    assert f"{run_id}: driver alive (pid {owner})" in live_view, live_view
-    assert "phase " in live_view and "last model request " in live_view, live_view
-    assert "harness history write failed" not in live_view, live_view
-
-    hold.let_go()
-    _drain(run_id, runs)
 
     # And marks it explicitly once it is gone: the state four stranded runs were in.
     with suppress(ProcessLookupError, PermissionError):

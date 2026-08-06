@@ -168,9 +168,14 @@ def test_a_capture_this_scheme_did_not_write_is_skipped_not_served(tmp_path: Pat
 
 
 def test_a_session_name_the_filesystem_cannot_carry_is_refused(tmp_path: Path) -> None:
-    for name in ("", "../escape", "with space", "-leading"):
+    run_dir = tmp_path / "run-4"
+    for name in ("", "../escape", "with space", "-leading", "a" * 251):
         with pytest.raises(CaptureError):
-            capture_path(tmp_path / "run-4", name)
+            capture_path(run_dir, name)
+    # A live turn is never failed by one, though: capture is an addition to a
+    # dispatch, and the dispatch is the thing worth keeping.
+    assert record_turn(run_dir, "a" * 251, "a turn") is False
+    assert close_capture(run_dir, "a" * 251, status="failed") is False
 
 
 @pytest.mark.parametrize(
@@ -288,6 +293,46 @@ def test_a_harness_that_refused_the_history_write_is_named_in_the_driver_line(
     assert "harness history write failed" in line
     assert "lacks complete v1.0 telemetry" in line
     assert f"{run_dir.name}/{CAPTURE_DIR}/" in line
+
+
+def test_records_damaged_after_they_were_written_degrade_rather_than_raise(
+    tmp_path: Path,
+) -> None:
+    """Every input here is a file another process — or a disk — can have replaced."""
+    run_dir = tmp_path / "run-damaged"
+    _launch(run_dir)
+    _round(run_dir, 2, status="{ not json")
+    corrupt_round = driver_state(run_dir)
+    assert corrupt_round is not None
+    assert (corrupt_round.phase, corrupt_round.round) == ("driving-round", 2)
+
+    session = f"orchestrator-{run_dir.name}"
+    open_capture(run_dir, session=session, agent_role="orchestrator")
+    # Turns recorded in a shape this scheme never wrote are dropped, not served, and
+    # an unparseable stamp contributes nothing to the last-request answer.
+    capture_path(run_dir, session).write_text(
+        json.dumps(
+            {
+                "schema_version": CAPTURE_SCHEMA_VERSION,
+                "session": session,
+                "agent_role": "orchestrator",
+                "started_at": "2026-08-06T10:00:00+00:00",
+                "status": "running",
+                "round": True,
+                "turns": ["not a turn", {"at": "whenever", "text": "unplaceable"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = load_captures(run_dir)[0]
+    assert captured.round is None
+    assert [turn["text"] for turn in captured.turns] == ["unplaceable"]
+    assert driver_state(run_dir) is not None
+
+    # A capture replaced by something unreadable stops accepting writes, silently.
+    capture_path(run_dir, session).write_text("{", encoding="utf-8")
+    assert record_turn(run_dir, session, "a turn nothing can hold") is False
+    assert load_captures(run_dir) == []
 
 
 def test_a_driver_with_nothing_timeable_still_reports_its_phase(tmp_path: Path) -> None:
