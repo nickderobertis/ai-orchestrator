@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import REPO_ROOT
+from .activity import live_activity
 from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_ENDPOINTS,
@@ -130,6 +131,20 @@ from .workspace import Workspace
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
+#: How long a dispatched node may record nothing before the planner is told about
+#: it. A first turn on this host routinely runs 600-2000 seconds, so this sits well
+#: past a working node's quiet stretch and well short of the round budget: what it
+#: is for is the node that is neither working nor failed — the one that used to sit
+#: invisible until a planner went looking with an ad-hoc monitor of its own.
+DEFAULT_STALL_AFTER_SECONDS = 2_400.0
+#: The environment default for that threshold, so a whole run can be launched with a
+#: different one without every command in it repeating the flag.
+STALL_AFTER_ENV = "ORCHESTRATOR_STALL_AFTER_SECONDS"
+STALL_AFTER_OPTION = "--stall-after"
+#: How often the watcher actually looks. The scheduler ticks every 50ms and the
+#: look costs a scratch-root scan, so it is throttled to something a stall of tens
+#: of minutes cannot hide inside.
+STALL_POLL_SECONDS = 15.0
 
 _INFRASTRUCTURE_FAILURE_PATTERNS = (
     re.compile(r"(?:\[Errno 28\]|ENOSPC|No space left on device)", re.IGNORECASE),
@@ -557,6 +572,7 @@ def run_graph(
     replayed_order: list[str] | None = None,
     proposal_pump: ProposalSink | None = None,
     round_budget: float | None = DEFAULT_ROUND_BUDGET,
+    stall_after: float | None = DEFAULT_STALL_AFTER_SECONDS,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -601,6 +617,15 @@ def run_graph(
     attestations: list[str] = []
     round_started = time.monotonic()
     budget_surfaced = False
+    #: When each in-flight dispatch was handed to its runner, so a node that has
+    #: published nothing at all still has an age the planner can be told.
+    dispatched_at: dict[str, float] = {}
+    #: The activity timestamp each node was last reported stalled at. Keyed that way
+    #: rather than by node alone so a worker that wakes up, works, and goes quiet
+    #: again is reported the second time — while one that simply stays quiet is
+    #: reported once.
+    stalls_reported: dict[str, float] = {}
+    stalls_checked_at = time.monotonic()
 
     def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
         """Run one already-started node to its outcome, journaling how it settled."""
@@ -795,6 +820,8 @@ def run_graph(
     def run_one(nid: str) -> NodeRun:
         node = nodes[nid]
         frontier[nid] = "running"
+        if not node.human:
+            dispatched_at[nid] = time.time()
         node_log = NodeJournal(sink=log, node=NodeId(nid), run_id=run_id, round=round_number)
         if node.human:
             run = NodeRun("waiting", "awaiting human action")
@@ -866,6 +893,7 @@ def run_graph(
 
     def on_settled(nid: str, run: NodeRun) -> None:
         frontier[nid] = run.status
+        dispatched_at.pop(nid, None)
         if proposal_pump is None or not isinstance(run.payload, Report):
             return
         if run.payload.assessment and run.payload.assessment.strip().lower() != "none":
@@ -1001,11 +1029,56 @@ def run_graph(
             # this round, never while the append that makes it one could still fail.
             proposal_pump.record_outcome(claimed.seq, applied=True, reason=f"applied {command.op}")
 
+    def surface_stalls() -> None:
+        """Tell the planner about a dispatch that is neither working nor failed.
+
+        The round already surfaces a node that *fails* and a round that overruns its
+        whole budget. What sat between them was the quiet worker: dispatched,
+        recorded as running, and producing nothing — which reads to every view
+        exactly like a healthy first turn, and which a planner therefore only ever
+        found by going and looking. This is that look, made by the round itself.
+
+        Non-blocking on purpose. A stall is evidence, not a verdict: the planner
+        decides whether to `cancel`, `retry`, or wait, and a blocking surface would
+        stop the round's other workers to ask.
+        """
+        nonlocal stalls_checked_at
+        if proposal_pump is None or stall_after is None or run_id is None:
+            return
+        now = time.monotonic()
+        if now - stalls_checked_at < STALL_POLL_SECONDS:
+            return
+        stalls_checked_at = now
+        # Degrades to the dispatch time alone when nothing published, which is the
+        # picture every view had before streaming existed — and is still enough to
+        # say "this node has recorded nothing at all for 40 minutes".
+        published = live_activity(str(run_id))
+        wall = time.time()
+        for nid, started in list(dispatched_at.items()):
+            recent = published.get((str(round_number), nid))
+            last = max(started, recent.at) if recent is not None else started
+            age = wall - last
+            if age < stall_after or stalls_reported.get(nid) == last:
+                continue
+            stalls_reported[nid] = last
+            heard = (
+                recent.describe(now=wall)
+                if recent is not None
+                else "nothing recorded since it was dispatched"
+            )
+            proposal_pump.propose(
+                nid,
+                f"no activity for {int(age)}s (threshold {stall_after:g}s); "
+                f"last activity: {heard}. The dispatch has not failed — decide "
+                "whether to cancel it, retry it, or let it run.",
+            )
+
     def observe_tick() -> None:
         nonlocal budget_surfaced
         cross_dag.reconcile_edges(external_deps, dependents)
         if proposal_pump is not None:
             proposal_pump.persist_replies()
+        surface_stalls()
         if (
             not budget_surfaced
             and round_budget is not None
@@ -1379,6 +1452,30 @@ def _plan_of_record(
     return folded, folded_graph
 
 
+def _resolved_stall_after(requested: float | None, environ: Mapping[str, str]) -> float:
+    """The stall threshold this round uses: the flag, then the environment, then the default.
+
+    The environment is read here rather than as the flag's `default` so that a value
+    a launch exported for the whole run is validated the same way an explicit flag
+    is. A run left with an unusable one would otherwise silently watch nothing,
+    which is the exact failure the watcher exists to end.
+    """
+    value = requested
+    if value is None and (configured := environ.get(STALL_AFTER_ENV)):
+        try:
+            value = float(configured)
+        except ValueError as exc:
+            raise PlanError(
+                f"${STALL_AFTER_ENV} must be a positive finite number of seconds, "
+                f"got {configured!r}"
+            ) from exc
+    if value is None:
+        return DEFAULT_STALL_AFTER_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        raise PlanError(f"'{STALL_AFTER_OPTION}' must be a positive finite number")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a tracked graph of direct agents, repo lifecycle nodes, and human actions."
@@ -1421,6 +1518,15 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"outer liveness budget for this round (default: {DEFAULT_ROUND_BUDGET:g})",
     )
+    parser.add_argument(
+        STALL_AFTER_OPTION,
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="surface a non-blocking planner update for a dispatch that has recorded "
+        f"nothing for this long (default: ${STALL_AFTER_ENV}, else "
+        f"{DEFAULT_STALL_AFTER_SECONDS:g})",
+    )
     add_lifecycle_args(parser)
     args = parser.parse_args(argv)
 
@@ -1435,6 +1541,7 @@ def main(argv: list[str] | None = None) -> int:
             raise PlanError("'--concurrency' must be a positive integer")
         if not math.isfinite(args.round_budget) or args.round_budget <= 0:
             raise PlanError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
+        args.stall_after = _resolved_stall_after(args.stall_after, os.environ)
         run_dir = (
             None
             if args.no_record
@@ -1755,6 +1862,7 @@ def _run_round(
             concurrency=args.concurrency,
             proposal_pump=proposal_pump,
             round_budget=args.round_budget,
+            stall_after=args.stall_after,
         )
     finally:
         if proposal_pump is not None:

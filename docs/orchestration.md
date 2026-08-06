@@ -163,6 +163,34 @@ appends `planner-surfaced`. A reader of the journal can therefore tell "nothing 
 sent" from "updates were sent and nobody read them", which the delivered-only
 record could not express.
 
+### A worker that goes quiet
+
+The pacemaker says what the run is doing on a schedule; the round itself says when
+one of its workers stops doing anything. While a round executes, it watches every
+in-flight dispatch and surfaces a **non-blocking** proposal for one that has
+recorded nothing past a threshold — naming the node, what was last heard from it,
+and how long ago:
+
+```
+quiet-worker: no activity for 2611s (threshold 2400s); last activity: nothing
+recorded since it was dispatched. The dispatch has not failed — decide whether to
+cancel it, retry it, or let it run.
+```
+
+"Last activity" is the live stream a dispatch publishes (`orchestrator/activity.py`),
+falling back to when the round dispatched the node when nothing has published at
+all — which is itself the answer for a worker that died before its first turn. The
+threshold defaults to 2400 seconds, comfortably past the 600-2000 second first turns
+this host runs; set it per round with `just run-plan --stall-after SECONDS`, or for a
+whole run by exporting `ORCHESTRATOR_STALL_AFTER_SECONDS` before `just orchestrate`,
+which every round of that run inherits.
+
+It is non-blocking because a stall is evidence rather than a verdict: the planner
+decides whether to `cancel` the node, `retry` it, or let it run, and a blocking
+surface would stop the round's other workers to ask. A node is reported once per
+quiet stretch — a worker that wakes up, works, and goes quiet again is reported
+again; one that simply stays quiet is not repeated.
+
 #### The claim is a lease on the dispatch, not a lock held until someone reads
 
 The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
