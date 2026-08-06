@@ -701,12 +701,12 @@ declaration turns every replayed commit's gate into a failure instead of a savin
 Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
 replays as a failure, and a tree the suite would fail can no longer replay a pass.
 
-#### Four workers, and the one test that cannot have any
+#### Four workers, and the tests that cannot have any
 
 The suite waits on subprocesses rather than on compute — a serial run holds one
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
-`orchestrator:test-recipes`, and `just test-e2e` all run `-n 4 --dist load`.
+`orchestrator:test-recipes`, and `just test-e2e` all run `-n 4 --dist loadgroup`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its
@@ -742,6 +742,25 @@ execnet's receiver thread, which blocks nothing and dies of the default
 disposition the handler just restored. It fails at `-n 1` too: the constraint is
 the process, not the load. So it is marked `single_threaded` and scheduled into a
 serial invocation rather than rewritten to survive a worker.
+
+`loadgroup` is `load` plus one thing: a test carrying `@pytest.mark.xdist_group`
+runs on the worker its group runs on, and everything else still distributes by
+load. `tests/e2e/test_contention_e2e.py` is one such group, declared once for the
+module through this repository's own `load_sensitive` marker, which
+`tests/conftest.py` translates. Its journeys each start several real lifecycle
+processes and wait for a readiness handshake between them, so two of them in flight
+at once contend for the same cores and the same advisory locks — and what fails is
+the handshake, a `_queue.Empty` on a readiness wait, on a subset that rotates per
+run. That is the one constraint this suite has that lives *between* tests rather
+than inside one, which is why no assertion inside any of them can express it and
+why the answer is the distribution rather than a longer timeout. The bound on what
+it costs is already measured above: `--dist loadfile` — every file a group — was
+331s against `load`'s 322s, and this groups one module rather than all of them.
+
+Neither marker is a place to put "this was flaky once". `single_threaded` names a
+subject that is the process; `load_sensitive` names a handshake between processes
+the test itself starts. A test that is merely slow, or that races something it does
+not own, is a test to fix.
 
 #### Two invocations, two tasks, one floor
 

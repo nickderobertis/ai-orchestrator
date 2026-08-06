@@ -697,13 +697,22 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   that one total to the declared floor. Nothing else may name a floor, and a
   measuring tier that did not write its data fails the combine rather than
   lowering the total silently.
-- **The suite runs across four xdist workers** (`-n 4 --dist load`), chosen from
-  measurement rather than from `auto`: it is latency-bound, its floor is its
+- **The suite runs across four xdist workers** (`-n 4 --dist loadgroup`), chosen
+  from measurement rather than from `auto`: it is latency-bound, its floor is its
   longest single test, and the curve is flat past four while this host also runs
   live dispatches. A test whose subject is a process-wide or machine-wide
-  resource declares that as a scheduling constraint — `single_threaded` today —
-  never as a loosened assertion. See [Four workers, and the one test that cannot
-  have any](docs/repo-lifecycle.md#four-workers-and-the-one-test-that-cannot-have-any).
+  resource declares that as a scheduling constraint — never as a loosened
+  assertion, and never as a per-run solo re-proof by hand. Two markers carry
+  those constraints. `single_threaded` names a test whose subject is the process
+  itself; it is selected out of the parallel tier into `orchestrator:test-serial`.
+  `load_sensitive` names a journey that races several real processes and waits on
+  a readiness handshake between them, where the constraint is *between* tests
+  rather than inside one: the whole family declares one xdist group, so the
+  distribution never has two of them in flight at once. Both are registered in
+  `pyproject.toml` with their reason, and `tests/test_nx_cache_scope.py` fails a
+  new journey of that shape that does not join the family. See [Four workers, and
+  the tests that cannot have
+  any](docs/repo-lifecycle.md#four-workers-and-the-tests-that-cannot-have-any).
 - **Tests are realistic, not mocked.** The e2e suite drives the *real* `onejudge`
   CLI as a subprocess through the same `dispatch`/`run-plan` code the orchestrator
   uses. Only the paid model/harness is faked — via onejudge's own `command`

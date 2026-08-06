@@ -9,6 +9,7 @@ attribute the worker but whether there is a window at all.
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -200,6 +201,21 @@ def is_running(pid: int) -> bool:
     # The parenthesized comm field may itself contain spaces, so state is read
     # relative to its closing delimiter rather than by field index.
     return raw[raw.rfind(")") + 2 :].split(" ", 1)[0] != "Z"
+
+
+def consumed_cpu_seconds(pid: int) -> float:
+    """Return the CPU time ``pid`` has accumulated so far, in seconds.
+
+    A process parked for its supervisor and a process spinning in an empty loop are
+    the same from outside: same state, same tree, same markers on disk. The only
+    place the difference shows is where the kernel accounts the time, so a test that
+    means "waits without working" has to read it here.
+    """
+    raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    # Read relative to the comm field's closing delimiter, exactly as `is_running`
+    # does: the parenthesized name may itself contain spaces.
+    fields = raw[raw.rfind(")") + 2 :].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
 
 
 def await_orphaned(pid: int, *, timeout: float = 30.0) -> bool:

@@ -1112,7 +1112,9 @@ def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_pat
         # the tail is the part that names the failure, so that is what survives.
         'python3 -c "print(\'noise \' * 400)" >"$dir/agent.stderr"\n'
         'printf "claude: no conversation found with session id 0dd\\n" >>"$dir/agent.stderr"\n'
-        'printf "%s\\n" "$$" >"$dir/agent.failed"\nwhile :; do :; done\n',
+        # Parks exactly as the wrapper does, and idles exactly as the wrapper does:
+        # a double that spun here would hold a core of this host for the whole test.
+        'printf "%s\\n" "$$" >"$dir/agent.failed"\nwhile :; do sleep 0.05; done\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
