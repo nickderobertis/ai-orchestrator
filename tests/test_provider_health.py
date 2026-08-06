@@ -134,6 +134,35 @@ def test_probe_keeps_all_configured_identities_and_renders_unknown(tmp_path: Pat
     assert "claude-code:alternate: unknown" in shown
 
 
+def test_a_second_probe_inside_the_window_reuses_the_answer(tmp_path: Path) -> None:
+    """The read API is polled; one probe per poll is the storm the memo prevents.
+
+    Asserted by counting spawns rather than by timing: a cache that always missed
+    would serve identical snapshots and pass every other test here, because each
+    one clears the memo between probes.
+    """
+    spawns: list[Path] = []
+
+    def counting_read(_bin: str, cwd: Path) -> str:
+        spawns.append(cwd)
+        return json.dumps({"schema_version": "0.1", "identities": []})
+
+    first = probe(cwd=tmp_path, read_usage=counting_read)
+    second = probe(cwd=tmp_path, read_usage=counting_read)
+    assert len(spawns) == 1, spawns
+    assert second == first
+
+    # A different working directory is a different question, so it does ask again,
+    # and dropping the memo makes the original one askable again too.
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    probe(cwd=other, read_usage=counting_read)
+    assert len(spawns) == 2, spawns
+    provider_health.forget_probes()
+    probe(cwd=tmp_path, read_usage=counting_read)
+    assert len(spawns) == 3, spawns
+
+
 @pytest.mark.parametrize(
     "answer",
     ["", "not json at all", '{"identities": "not a list"}'],
