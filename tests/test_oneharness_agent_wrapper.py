@@ -25,6 +25,7 @@ import pytest
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
+from orchestrator.labels import LABEL_ENV, format_labels, parse_labels
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
@@ -52,7 +53,11 @@ def _run_wrapper(
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" > "$ONEHARNESS_ENV2_FILE"\n'
         'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n'
-        'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n',
+        'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n'
+        # The labels oneharness would stamp on the session this turn becomes, read
+        # where oneharness reads them: the environment of the process it is spawned
+        # in. Derived from the argv path so every existing caller records them too.
+        'printf \'%s\\n\' "${ONEHARNESS_HISTORY_LABELS-}" > "$ONEHARNESS_ARGS_FILE.labels"\n',
         encoding="utf-8",
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -92,6 +97,17 @@ def _run_wrapper(
 
 def _selection(tmp_path: Path) -> str:
     return (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+
+
+def _raw_labels(tmp_path: Path) -> str:
+    """The exact ONEHARNESS_HISTORY_LABELS value the spawned oneharness was given."""
+    return (tmp_path / "oneharness-argv.labels").read_text(encoding="utf-8").strip()
+
+
+def _stamped_labels(tmp_path: Path) -> dict[str, str]:
+    """The history labels the spawned oneharness would have recorded, parsed."""
+    raw = _raw_labels(tmp_path)
+    return parse_labels(raw) if raw else {}
 
 
 def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
@@ -657,6 +673,75 @@ def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> N
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(
         tmp_path / "home" / ".claude-alt"
     )
+
+
+def test_the_judge_side_is_not_stamped_with_the_worker_semantic_role(tmp_path: Path) -> None:
+    """Only the judge side drops `agent_role`, and it drops nothing else.
+
+    A dispatch exports one `ONEHARNESS_HISTORY_LABELS` for the whole conversation,
+    and oneharness merges labels CLI > env > config — so the worker's `agent_role`
+    outranked oneharness.judge.toml's own `agent_role = "judge"` and every supervisor
+    session was recorded as a worker. This is the boundary that knows which side it
+    is, so it is the boundary that must not stamp one side with the other's role.
+    """
+    judge_config = tmp_path / "oneharness.judge.toml"
+    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    dispatched = {LABEL_ENV: "run_id=demo,node=api,step=main,agent_role=worker,persona=engineer"}
+
+    judge, _ = _run_wrapper(tmp_path, ["run", "--config", str(judge_config)], env=dispatched)
+    assert judge.returncode == 0, judge.stderr
+    assert _stamped_labels(tmp_path) == {
+        "run_id": "demo",
+        "node": "api",
+        "step": "main",
+        "persona": "engineer",
+    }
+
+    agent, _ = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "work"], env=dispatched)
+    assert agent.returncode == 0, agent.stderr
+    assert _stamped_labels(tmp_path)["agent_role"] == "worker"
+
+
+def test_the_judge_side_rewrite_hands_oneharness_only_contract_shaped_labels(
+    tmp_path: Path,
+) -> None:
+    """What this branch rewrites is checked against the same contract Python writes.
+
+    The inherited value comes from whatever invoked the dispatch, so a pair that
+    violates oneharness's label contract must not survive a rewrite this side made —
+    it would turn a value oneharness refuses into one this wrapper produced. The
+    Python parser is the authority on which pairs those are, so the two are compared
+    rather than the shell's answer being restated here.
+    """
+    judge_config = tmp_path / "oneharness.judge.toml"
+    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    inherited = (
+        "run_id=demo,agent_role=worker,-leading=hyphen,empty=,"
+        "no-separator,node=api,over" + "long" * 80 + "=value"
+    )
+
+    judge, _ = _run_wrapper(
+        tmp_path, ["run", "--config", str(judge_config)], env={LABEL_ENV: inherited}
+    )
+
+    assert judge.returncode == 0, judge.stderr
+    expected = parse_labels(inherited)
+    expected.pop("agent_role")
+    assert expected == {"run_id": "demo", "node": "api"}
+    # The exported *string*, not what a lenient reader can still parse out of it:
+    # dropping a malformed pair is the whole claim, and every reader here drops one.
+    assert _raw_labels(tmp_path) == format_labels(expected)
+
+
+def test_the_judge_side_leaves_a_dispatch_with_no_labels_unlabelled(tmp_path: Path) -> None:
+    """An empty label list is not a value oneharness accepts, so none is exported."""
+    judge_config = tmp_path / "oneharness.judge.toml"
+    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+
+    for labels in ({}, {LABEL_ENV: "agent_role=worker"}):
+        judge, _ = _run_wrapper(tmp_path, ["run", "--config", str(judge_config)], env=labels)
+        assert judge.returncode == 0, judge.stderr
+        assert _raw_labels(tmp_path) == ""
 
 
 def test_judge_side_accepts_inline_config_path(tmp_path: Path) -> None:

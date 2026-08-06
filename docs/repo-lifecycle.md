@@ -94,12 +94,14 @@ a worktree under its own run root and gets its own. A name that repeated across
 runs would ask the harness to resume a conversation it filed under a directory
 that no longer exists, which fails before the first turn.
 
-`just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
+`just run-plan <plan.json>` runs one, over a plan holding a single lifecycle node
+(`examples/single-node-lifecycle.plan.json`); it is the only executor, so there is
+no second path a single workstream can take. The node's `repo` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
 shown by `just repos`. It selects the publication repository identity and checkout.
-For self-dispatch safety, `--execution-checkout` likewise accepts a path or alias
-and cuts the task worktree from that exact clone while keeping `<repo>`'s publication
-workflow and post-merge fast-forward.
+For self-dispatch safety, the node's `execution_checkout` likewise accepts a path or
+alias and cuts the task worktree from that exact clone while keeping `repo`'s
+publication workflow and post-merge fast-forward.
 
 Before resolving or cloning the target, lifecycle dispatch checks free space on
 the filesystem backing Python's temporary directory. It refuses to start below
@@ -179,8 +181,8 @@ unless the run supplies `--repo-type`. Conflicting legacy
 entries fail with every alias/path/workflow and the exact migration command; no
 workflow is selected implicitly.
 
-`--repo-type` on `register-repo` persists. The same option on `repo-task`,
-`repo-recover`, or `run-plan` is run-only. A plan node's `repo_type` beats the
+`--repo-type` on `register-repo` persists. The same option on `repo-recover` or
+`run-plan` is run-only. A plan node's `repo_type` beats the
 command option, which beats stored or inferred type. Change stored type with
 `just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
 also normalizes workflow to `remote`.
@@ -276,13 +278,23 @@ into spurious `init` commits and mass deletions. Develop those subsystems agains
 **isolated clone** (its own `.git`) while preserving the canonical checkout as the
 publication selection:
 
-```sh
-just repo-task /path/to/ai-orchestrator engineer - \
-  --execution-checkout /path/to/ai-orchestrator-isolated
+```json
+{
+  "schema_version": 6,
+  "tasks": [
+    {
+      "id": "self",
+      "repo": "/path/to/ai-orchestrator",
+      "execution_checkout": "/path/to/ai-orchestrator-isolated",
+      "persona": "engineer",
+      "task": "## What\n…\n\n## Why\n…\n\n## Acceptance criteria\n- …"
+    }
+  ]
+}
 ```
 
 The branch is pushed and locally merged because the shared identity is local, then
-the positional canonical checkout is fast-forwarded. Recovery is cheap because no
+the node's `repo` canonical checkout is fast-forwarded. Recovery is cheap because no
 data is lost: `git config core.bare false` restores the checkout, and the agent's
 real work is intact at its last commit *before* the `init`-commit corruption.
 
@@ -410,16 +422,52 @@ back to `main`. `just sync` discovers the same branch; `just sync <branch>
 ### One judged diff, one verdict
 
 A gate tier can end in a judge that is not reproducible — this repository's
-llmlint tier does — so its verdict is memoized: `just lint-llm-diff` records the
-judged findings and status in the cached Nx `workspace:lint-llm-diff` target,
-keyed on the whole workspace content, the resolved base **commit**, and the judge
-configuration fingerprint. Ask the same question twice and you get the recorded
-answer rather than a second roll of the dice.
+llmlint tier does — so the judge *run* is cached: `just lint-llm-diff` drives the
+cached Nx `workspace:lint-llm-diff` target, keyed on the whole workspace content,
+the resolved base **commit**, and the judge configuration fingerprint. Ask the same
+question twice and Nx replays the first run's own terminal output rather than
+rolling the dice again. The target's command is `scripts/llmlint-judge.sh`, which
+validates the base, stamps `role=llmlint` on the harness session, judges the diff
+with `llmlint --diff --diff-base <sha> -v`, and exits with the judge's own status —
+that last part is what leaves the caching decision entirely to Nx. The script owns
+the rest of how it runs; read it there rather than trusting a second copy of it
+here. Nothing writes a verdict record: `-v` makes
+the terminal report complete — every rule itemized, plus the `llmlint history <id>`
+pointer — and replaying that report *is* replaying the verdict.
+
+A green elides exactly one thing, and it is a size constraint rather than a taste
+one. `-v` also prints the oneharness debug view, of which two lines — one
+serialized judge call each, every judged file's content inside the prompt — are
+214KB of a 226KB run. Nx replays a cache hit as one burst and exits, and a burst
+larger than one pipe buffer loses its tail; through `scripts/nx.sh`, whose
+redaction filter is a pipe, a 226KB replay arrives cut off at ~64KB, taking the
+per-rule verdicts, the summary, and the history pointer with it. So the target
+keeps every diagnostic line on a green — including the pointer, which is where
+those payloads are retrievable in full — and elides only the payloads, naming each
+elision and its size. A failure prints all of it: failures are never cached, so
+they stream out as the judge produces them and never face a replay.
+
+**Only a green is cached.** Nx caches successful tasks only, so findings (llmlint
+exit 1) and a toolchain that never reached a verdict (exit >= 2) fail the tier and
+leave nothing behind: a red re-judges on every run of an unchanged tree. This tier
+used to work the other way. The target recorded its findings and status into a
+declared output, exited 0 so Nx would store a failure too, and a second script
+replayed both — a bespoke protocol whose only purpose was smuggling a red past
+Nx's success-only cache. On 2026-08-03 it cost more than it bought: two concurrent
+invocations shared one `.nx/llmlint-diff` directory, the second one's `rm -rf`
+preamble unlinked the first's report mid-append, and Nx cached `status=1` with a
+zero-byte report under the real key. `--skip-nx-cache` — the documented re-judge
+lever — could not displace the poisoned entry, and `main` stayed blocked until a
+full `nx reset`. Caching the run directly gets non-caching of broken runs, output
+replay, and race-freedom from Nx for free. The trade is explicit and was the
+operator's call: a branch working through a red pays an honest re-roll each time,
+and every roll lands in `llmlint history` (retained at `history.max_runs` in
+`llmlint.yml`).
 
 That only holds while the key is a function of the judged question alone, so
 `scripts/llmlint-fingerprint.sh` resolves the llmlint version *and* the merged
 config through `scripts/llmlint-runtime-env.sh` — the one environment
-`scripts/llmlint-diff.sh` also judges under. One helper, sourced by both ends, is
+`scripts/llmlint-judge.sh` also judges under. One helper, sourced by both ends, is
 the whole mechanism: neither end can read a value the other did not.
 
 `LLMLINT_ONEHARNESS_BIN` is the input that actually varied. `llmlint config`
@@ -465,18 +513,23 @@ in the lifecycle rewrites `HOME` or `XDG_CACHE_HOME` for a dispatch, and
 plugin content it was judged with can only move together. Across hosts it means
 two machines can be running different judges under identical pins, which the
 fingerprint reports as a miss rather than hides. `rm -rf ~/.cache/llmlint/plugins`
-refetches; expect it to invalidate every recorded verdict.
+refetches; expect it to invalidate every cached run.
 
-**The recorded verdict for exactly that content, base commit, and judge
-configuration is authoritative, and the worker's gate is where it is paid for.**
+**The cached green for exactly that content, base commit, and judge configuration
+is authoritative, and the worker's gate is where it is paid for.**
 The merge-path gate — the `pre-push` hook, which is the only verifier the
 lifecycle now runs — looks up the same key and replays what the worker cleared.
 That is the only assignment consistent with the invariant that *a dispatched
 change is not done until its own gate is green*: an agent can only clear findings
 it was shown, so a verdict that first appears after the agent has settled can
-neither be cleared nor appealed. Replay is not leniency — a recorded **failure**
-replays as a failure, the hook rejects the push, and the run ends `gate-failed`
-even where a fresh roll would have passed.
+neither be cleared nor appealed.
+
+A worker that settled **red** is judged again on the merge path, because nothing
+was stored for it. That is not a way past the gate: the hook runs the same tier
+over the same content and base, findings still reject the push, and the run still
+ends `gate-failed`. What it costs is a second roll of a non-deterministic judge on
+work that already failed once — the accepted price of the trade above, and the one
+direction where the two paths no longer share an answer.
 
 Keeping the key equal across the two runs is what makes this hold, and the
 comparison base is the part that used to drift. A worker left to discover its own
@@ -496,7 +549,10 @@ will actually land: the base advanced after the worker settled and the merge
 changed what is being published, so the worker's clearance never covered it. To
 keep that honest rather than silent, a passing `just gate` reports which base
 commit was judged and whether the verdict was judged now or replayed from the
-record — green is always a claim about one specific base commit.
+cache — green is always a claim about one specific base commit. That provenance is
+read out of Nx's own cache reporting, not out of a side-channel marker; the
+journeys below assert both wordings, so an Nx upgrade that renames the line fails
+the suite instead of quietly calling every run freshly judged.
 
 None of that is provable from one checkout, which is where this went wrong once:
 `tests/e2e/test_llmlint_cache_e2e.py` asks twice from the same tree, and
@@ -505,15 +561,16 @@ tier's recipe from both callers instead — a worker worktree carrying the
 `LLMLINT_ONEHARNESS_BIN` a dispatch inherits, and a detached scratch worktree
 rebuilt by a squash merge carrying only the comparison identity a publishing push
 does, both cut from one clone — and counts how many times the judge was rolled for
-one content and one base. The answer has to be once. Run it against the fingerprint
-as it stood before `2ba9685` and it is twice, in both directions: the primary
-journey sees the merge path re-judge work that had already been cleared, and the
-failed-gate journey watches a recorded **failure** get overruled by a fresh pass.
-The three invalidations are asserted across the two paths for the same reason,
-because a fix that made them agree by hashing less would replay a verdict for a
-tree nobody judged. The publishing push those verdicts gate is not restaged there;
+one content and one base. For a green the answer has to be once. Run it against the
+fingerprint as it stood before `2ba9685` and it is twice: the merge path re-judges
+work that had already been cleared. The failed-gate journey asserts the other
+half — a red is rolled again on the merge path and still rejected — so the cost of
+the trade is stated by the suite rather than assumed. The three invalidations are
+asserted across the two paths for the same reason, because a fix that made them
+agree by hashing less would replay a verdict for a tree nobody judged. The
+publishing push those verdicts gate is not restaged there;
 `tests/e2e/test_gate_verdict_consistency_e2e.py` already drives it through the real
-lifecycle.
+lifecycle against its own miniature gate.
 
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
@@ -521,6 +578,16 @@ Forcing a real re-judge is deliberately **per tier and per invocation**:
 just lint-llm-diff origin/main --skip-nx-cache   # re-judge the llmlint tier
 just test --skip-nx-cache                        # re-run the test tier
 ```
+
+Know its limit before planning a rescue around it: under this Nx, `--skip-nx-cache`
+neither reads nor writes the cache. It buys one fresh look and leaves the stored
+run exactly where it was, so a **wrong green** an operator disagrees with sticks —
+the next ordinary invocation replays the same entry — until the tree, the base
+commit, or the judge configuration moves. `./scripts/nx.sh reset` is the blunt
+instrument that does clear it, at the cost of every other cached target for this
+repository. Go through the wrapper: it is what points `NX_CACHE_DIRECTORY` at the
+per-repository shared cache root these entries actually live in, so a bare
+`nx reset` would clear Nx's default location and leave the stale green in place.
 
 An ambient global Nx cache skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`) is
 reported and ignored by that recipe and by `scripts/check-nx-cache.sh`. Exporting
@@ -844,9 +911,11 @@ publication. Both failed attempts retain their underlying dispatch or harness
 detail in the node journal's drafting-fallback event and in the lifecycle
 follow-up surfaced to the planner.
 
-Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
-accepts old lifecycle-only files unchanged. See
-`examples/tracked-graph.example.json` and `examples/repo-plan.example.json`.
+Run these nodes with `just run-plan`, the one executor; it still accepts old
+lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
+`examples/repo-plan.example.json`, and the one-node forms in
+`examples/single-node-lifecycle.plan.json` and
+`examples/single-node-direct.plan.json`.
 
 ## Several onejudge on ONE PR: workstreams
 
@@ -1047,8 +1116,8 @@ enables auto-merge, and local single-owner omission uses direct merge. For an
 older stacked preserved commit without the base trailer, pass the ledger's values
 explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
 fast-forwards the root publication checkout after a merge into a non-root base.
-`repo-task-auto` prints this
-command when it reports `not-completed`.
+A node that settles `not-completed` names its preserved branch in the round result,
+which is what this command takes.
 
 Local recovery performs its base sync, recovery attestation, gated branch push,
 and gated direct merge inside one FIFO turn. A content conflict dequeues the turn,

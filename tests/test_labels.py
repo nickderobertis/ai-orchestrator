@@ -113,7 +113,7 @@ def test_merge_labels_with_no_inherited_value() -> None:
 
 
 def test_graph_labels_omits_absent_components() -> None:
-    # A bare `just dispatch` has no run/node; empty values would break the contract.
+    # An untracked lifecycle run has no run/node; empty values would break the contract.
     assert graph_labels() == {}
     assert graph_labels(run_id="r", round_number=0) == {"run_id": "r", "round": "0"}
     assert graph_labels(run_id="r", round_number=2, node="api", step="impl") == {
@@ -168,7 +168,7 @@ def test_history_labels_main_reports_invalid_inherited_value(
     assert "history label value" in capsys.readouterr().err
 
 
-#: How `scripts/llmlint-diff.sh` writes the second opinion of this contract that it
+#: How `scripts/llmlint-judge.sh` writes the second opinion of this contract that it
 #: applies to the rendered value before exporting it. That opinion exists because the
 #: renderer is reached through `PATH` and can be replaced — which is what
 #: `tests/e2e/test_llmlint_cache_e2e.py::test_the_recipe_refuses_unusable_harness_history_labels`
@@ -183,10 +183,10 @@ _RECIPE_GUARD = re.compile(
 @cache
 def _recipe_guard_program() -> str:
     """The recipe's label guard as a runnable bash program over ``$1``."""
-    source = (REPO_ROOT / "scripts" / "llmlint-diff.sh").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "scripts" / "llmlint-judge.sh").read_text(encoding="utf-8")
     guard = _RECIPE_GUARD.search(source)
     assert guard is not None, (
-        "scripts/llmlint-diff.sh no longer states its label guard as `key=`, `value=` and a "
+        "scripts/llmlint-judge.sh no longer states its label guard as `key=`, `value=` and a "
         "`[[ ... ]]` condition; lift its new form here so the two opinions stay reconciled"
     )
     return f"labels=\"$1\"\nkey='{guard['key']}'\nvalue='{guard['value']}'\n{guard['condition']}\n"
@@ -196,7 +196,7 @@ def _guard_accepts(labels: str) -> bool:
     """Whether the recipe would export ``labels`` rather than refuse them."""
     return (
         subprocess.run(
-            ["bash", "-c", _recipe_guard_program(), "llmlint-diff-guard", labels], check=False
+            ["bash", "-c", _recipe_guard_program(), "llmlint-judge-guard", labels], check=False
         ).returncode
         == 0
     )

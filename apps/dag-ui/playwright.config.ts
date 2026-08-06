@@ -113,6 +113,10 @@ export const FIXTURE_WORKSPACE = session.workspace;
 
 export default defineConfig({
   testDir: "./e2e",
+  // The gallery lives beside the journeys because it drives the same surfaces against
+  // the same stack, but it asserts nothing and writes images; `screenshots.config.ts`
+  // selects it, and `just dag-ui-screens` is when it runs.
+  testIgnore: "**/*.screens.spec.ts",
   globalTeardown: "./e2e/global-teardown.ts",
   // One server serves one run directory, and the live-update journeys change what it
   // is serving, so the journeys share that state and must not run against each other.

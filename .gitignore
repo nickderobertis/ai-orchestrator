@@ -12,8 +12,6 @@ __pycache__/
 htmlcov/
 test-results/
 playwright-report/
-# `just dag-ui-screens` writes a gallery for a reviewer to read, not an artifact.
-.screens/
 .mypy_cache/
 .ruff_cache/
 
@@ -29,6 +27,11 @@ dist/
 # points; keep any local scratch out of the tree)
 /scratch/
 /runs/
+
+# Screenshot galleries (`just dag-ui-screens`). One directory per invocation, so two
+# concurrent runs never write into each other's; they are evidence to look at, not
+# repository content, and nothing here is ever compared against a checked-in image.
+/apps/dag-ui/.screenshots/
 
 # Preserved command output (scripts/preserved-log.sh). Deliberately per-worktree
 # and deliberately ignored: it is diagnostic evidence, not repository content.

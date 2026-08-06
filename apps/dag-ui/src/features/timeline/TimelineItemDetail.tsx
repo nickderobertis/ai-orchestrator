@@ -65,7 +65,7 @@ export function TimelineItemDetail({
   return (
     <section aria-label="Timeline item detail" className="timeline-detail">
       <ScrollArea className="h-full">
-        <div className="p-[22px]">
+        <div className="p-[22px] max-sm:p-3">
           {row === undefined ? (
             <div className="detail-placeholder">
               <ListTree size={30} />

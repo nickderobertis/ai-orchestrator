@@ -845,18 +845,35 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         blind.mkdir()
         dispatch_env["AI_ORCHESTRATOR_PROC_ROOT"] = str(blind)
     held = Rendezvous.at(tmp_path, "dispatch")
+    plan = tmp_path / "sweep-window.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "solo",
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now: survive a concurrent scratch sweep{held.sentinels()}"
+                        ),
+                        "project_dir": str(project_dir),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     report_path = tmp_path / "dispatch-report.json"
     report_stream = report_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [
             "just",
-            "dispatch",
-            "engineer",
-            f"complete-now: survive a concurrent scratch sweep{held.sentinels()}",
+            "run-plan",
+            str(plan),
+            "--no-record",
             "--base",
             str(command_base()),
-            "--project-dir",
-            str(project_dir),
             "--onejudge-bin",
             onejudge_bin,
             "--format",
@@ -918,10 +935,13 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     )
     # The report is parsed out of the swept-past directory, so its survival is the
     # dispatch's own evidence that nothing removed the tree underneath it.
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["schema_version"] == 5
-    assert report["stopped_early"] is False
-    assert report["transcript"]["messages"]
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 5
+    # A settled node with a verdict and usage is a report that was read whole out of
+    # the swept-past directory; a truncated one cannot produce either.
+    node = payload["results"]["solo"]
+    assert node["status"] == "done" and node["completed"] is True
+    assert node["verdicts"] and node["usage"]
     assert list(scratch.glob(WATCHDOG_PATTERN)) == []
 
 
@@ -976,6 +996,28 @@ def test_dry_run_recipe_and_recorded_round_transition_sweep(tmp_path: Path) -> N
     assert not candidate.exists()
 
 
+def _one_node_lifecycle_plan(tmp_path: Path, repo: Path) -> Path:
+    """The plan file one lifecycle dispatch is expressed as."""
+    plan = tmp_path / "one-node.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "solo",
+                        "repo": str(repo),
+                        "persona": "engineer",
+                        "task": "must not dispatch",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan
+
+
 def test_lifecycle_cli_refuses_dispatch_when_scratch_capacity_is_insufficient(
     tmp_path: Path,
 ) -> None:
@@ -984,10 +1026,9 @@ def test_lifecycle_cli_refuses_dispatch_when_scratch_capacity_is_insufficient(
     result = subprocess.run(
         [
             "just",
-            "repo-task",
-            str(repo),
-            "engineer",
-            "must not dispatch",
+            "run-plan",
+            str(_one_node_lifecycle_plan(tmp_path, repo)),
+            "--no-record",
         ],
         cwd=REPO_ROOT,
         env={**os.environ, MIN_FREE_BYTES_ENV: str(2**63 - 1)},
@@ -996,10 +1037,10 @@ def test_lifecycle_cli_refuses_dispatch_when_scratch_capacity_is_insufficient(
     )
 
     assert result.returncode == 1
-    assert str(Path(os.environ.get("TMPDIR", "/tmp")).resolve()) in result.stderr
-    assert "bytes free" in result.stderr
-    assert "just sweep-scratch" in result.stderr
-    assert MIN_FREE_BYTES_ENV in result.stderr
+    assert str(Path(os.environ.get("TMPDIR", "/tmp")).resolve()) in result.stdout
+    assert "bytes free" in result.stdout
+    assert "just sweep-scratch" in result.stdout
+    assert MIN_FREE_BYTES_ENV in result.stdout
 
 
 def test_lifecycle_dispatch_honors_valid_scratch_capacity_override(
@@ -1049,14 +1090,14 @@ def test_lifecycle_recipe_rejects_invalid_capacity_configuration(
     repo = tmp_path / "target"
     repo.mkdir()
     result = subprocess.run(
-        ["just", "repo-task", str(repo), "engineer", "must not dispatch"],
+        ["just", "run-plan", str(_one_node_lifecycle_plan(tmp_path, repo)), "--no-record"],
         cwd=REPO_ROOT,
         env={**os.environ, MIN_FREE_BYTES_ENV: value},
         text=True,
         capture_output=True,
     )
     assert result.returncode == 1
-    assert MIN_FREE_BYTES_ENV in result.stderr and message in result.stderr
+    assert MIN_FREE_BYTES_ENV in result.stdout and message in result.stdout
 
 
 def test_sweep_recipe_rejects_nonfinite_or_negative_age(tmp_path: Path) -> None:

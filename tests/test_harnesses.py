@@ -27,6 +27,7 @@ from orchestrator.harnesses import (
     harness_option_help,
     harness_override_env,
 )
+from orchestrator.labels import LABEL_ENV
 
 #: The wrapper both variables above are resolved by, and the only place in this
 #: repository that exports a harness selection into a process's environment.
@@ -117,7 +118,10 @@ def test_the_selection_seam_names_every_variable_the_wrapper_reads_or_exports() 
     wrapper = AGENT_WRAPPER.read_text(encoding="utf-8")
     exported = set(re.findall(r"^\s*export ([A-Za-z_][A-Za-z0-9_]*)=", wrapper, re.MULTILINE))
 
-    assert exported == {PROCESS_WIDE_HARNESS_ENV}
+    # The history labels are the wrapper's other per-side rewrite — the judge side
+    # drops the worker's `agent_role` — and carry no selection. Named exhaustively
+    # rather than filtered, so a selection arriving under a fourth name still fails.
+    assert exported == {PROCESS_WIDE_HARNESS_ENV, LABEL_ENV}
     for variable in HARNESS_SELECTION_ENV:
         assert variable in wrapper
     # Every selection variable is distinct and the pair is a subset of the whole, so a

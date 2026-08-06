@@ -2,24 +2,29 @@
 
 # llmlint: ignore-file[e2e_not_mocked] the smoke test crosses the real oneharness
 # and Codex boundary. Deterministic history behavior uses oneharness's shipped mock
-# harness at that paid-provider seam. The lifecycle slice uses the repository's
-# sanctioned make_writing_dispatch paid-harness seam and FakeGitHub PR/CI decision
-# seam while driving real git, lifecycle commits/merge, journal, snapshots, and
-# public CLIs; the real dispatch boundary is exercised here and in test_dispatch_e2e.py.
+# harness at that paid-provider seam, and the two refusal journeys stand in for the
+# codex binary itself because no test can exhaust a real subscription on demand; the
+# chain, the config, the classifier and the CLI stay real. The lifecycle
+# slice uses the repository's sanctioned make_writing_dispatch paid-harness seam and
+# FakeGitHub PR/CI decision seam while driving real git, lifecycle commits/merge,
+# journal, snapshots, and public CLIs; the real dispatch boundary is exercised here
+# and in test_dispatch_e2e.py.
 
 from __future__ import annotations
 
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fakes import FakeGitHub, make_writing_dispatch
 from mock_oneharness import run_mock_oneharness
 from waits import deadline as e2e_deadline
@@ -27,6 +32,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
+from orchestrator.harnesses import WORKER_SIDE, configured_harnesses
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import result_payload, run_repo_task
 from orchestrator.merge import GitHubMergeStrategy
@@ -42,6 +48,60 @@ GRAPH_LABELS = (
     "node=history-turns",
     "step=record",
 )
+#: Every codex identity the agent config's chain names, in its own order — read from
+#: that chain rather than restated, so a third one added there is pinned here too. The
+#: smoke pins the family because the later identities exist to absorb the first one's
+#: exhausted quota; pinning one made the deterministic gate red for four days on a tree
+#: that was fine, which is judging the operator's credits rather than the code.
+CODEX_IDENTITIES = tuple(
+    identity
+    for identity in configured_harnesses(WORKER_SIDE.config)
+    if identity == "codex" or identity.startswith("codex:")
+)
+SMOKE_PROMPT = "Reply with exactly oneharness-codex-smoke and do nothing else."
+#: Codex names the moment a spent subscription comes back; the skip repeats it, so an
+#: operator reading a skipped gate knows how long they are without this journey.
+CODEX_RESET_AT = re.compile(r'try again at ([^."]+)')
+#: One refusal from a spent subscription, verbatim from this host's primary identity,
+#: and the moment it named — the one thing an operator needs off a skipped gate.
+RECORDED_CODEX_RESET = "Aug 8th, 2026 8:07 AM"
+RECORDED_CODEX_REFUSAL = (
+    "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+    f"to purchase more credits or try again at {RECORDED_CODEX_RESET}."
+)
+#: A codex whose subscription is spent: the recorded refusal above, streamed the way
+#: codex streams it, and codex's own non-zero exit.
+REFUSING_CODEX = """
+import json
+import os
+
+message = os.environ["SMOKE_CODEX_REFUSAL"]
+print(json.dumps({"type": "thread.started", "thread_id": "exhausted-codex"}))
+print(json.dumps({"type": "turn.started"}))
+print(json.dumps({"type": "error", "message": message}))
+print(json.dumps({"type": "turn.failed", "error": {"message": message}}))
+raise SystemExit(1)
+"""
+#: A codex that never gets as far as a turn.
+BROKEN_CODEX = """
+import sys
+
+print("codex: cannot load the model runtime", file=sys.stderr)
+raise SystemExit(2)
+"""
+#: A codex family nobody logged in. It refuses exactly as a spent one does — the whole
+#: chain falls through and nothing runs — and the reason is the only thing separating
+#: "wait four days" from "run `codex login`".
+UNAUTHENTICATED_CODEX = """
+import json
+
+message = "401 Unauthorized: you are not logged in. Run `codex login` to authenticate."
+print(json.dumps({"type": "thread.started", "thread_id": "unauthenticated-codex"}))
+print(json.dumps({"type": "turn.started"}))
+print(json.dumps({"type": "error", "message": message}))
+print(json.dumps({"type": "turn.failed", "error": {"message": message}}))
+raise SystemExit(1)
+"""
 MOCK_CODEX_STDOUT = "\n".join(
     (
         json.dumps({"type": "turn.started"}),
@@ -171,8 +231,62 @@ def _watch(
     )
 
 
-def test_real_oneharness_codex_smoke(oneharness_bin: str, tmp_path: Path) -> None:
-    """Intentionally cross the real oneharness-to-Codex provider boundary once."""
+def _install_fake_codex_on_path(tmp_path: Path, body: str) -> str:
+    """Write a codex stand-in and return the PATH that finds it before the paid binary.
+
+    `ONEHARNESS_BIN_CODEX` names the base harness alone — a variant keeps resolving the
+    real binary, which reaches a paid provider and, against a fresh CODEX_HOME, clones
+    codex's plugin repository over the network. Every identity resolves the bare name
+    `codex`, so the seam that covers the whole family is the PATH they resolve it on.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    fake = bin_dir / "codex"
+    fake.write_text(f"#!/usr/bin/env python3{body}", encoding="utf-8")
+    fake.chmod(0o755)
+    return f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+
+
+def _ensure_isolated_codex_alt_home(tmp_path: Path) -> str:
+    """Create a throwaway alternate Codex home, pinned off the real one.
+
+    Creating it is the point: an absent CODEX_HOME fails the candidate before it reaches
+    its binary, so a journey handed a path that does not exist would prove a startup
+    error rather than the refusal it is about.
+    """
+    home = tmp_path / "codex-alt"
+    home.mkdir(parents=True, exist_ok=True)
+    return str(home)
+
+
+def _ensure_codex_alt_home() -> str:
+    """Ensure the real alternate Codex home through scripts/codex-alt-home.sh.
+
+    Every dispatch reaches that helper through a wrapper; this turn drives the CLI
+    directly, so it sources the helper rather than re-deriving the path — and the
+    filesystem side effect the helper documents — a second way.
+    """
+    derived = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; ensure_codex_alt_home "$2"; printf %s "$ORCHESTRATOR_CODEX_ALT_HOME"',
+            "bash",
+            str(REPO_ROOT / "scripts" / "codex-alt-home.sh"),
+            "test_real_oneharness_codex_smoke",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(15),
+    )
+    assert derived.returncode == 0, derived.stderr
+    return derived.stdout
+
+
+def _codex_smoke_turn(
+    oneharness_bin: str, tmp_path: Path, **overrides: str
+) -> subprocess.CompletedProcess[str]:
+    """Run one agent-side turn pinned to the codex family, as the smoke journey does."""
     environment = os.environ.copy()
     for inherited in (
         "MOCK_STDOUT",
@@ -183,25 +297,157 @@ def test_real_oneharness_codex_smoke(oneharness_bin: str, tmp_path: Path) -> Non
         environment.pop(inherited, None)
     environment.update(
         {
-            "ONEHARNESS_HARNESSES": "codex",
+            "ONEHARNESS_HARNESSES": ",".join(CODEX_IDENTITIES),
             "ONEHARNESS_HISTORY_DIR": str(tmp_path / "history"),
         }
     )
-
-    completed = _run_record(
+    if "ORCHESTRATOR_CODEX_ALT_HOME" not in overrides:
+        environment["ORCHESTRATOR_CODEX_ALT_HOME"] = _ensure_codex_alt_home()
+    environment.update(overrides)
+    return _run_record(
         oneharness_bin,
-        config=REPO_ROOT / "oneharness.toml",
+        config=WORKER_SIDE.config,
         name="real-oneharness-codex-smoke",
         environment=environment,
         mock_harness=False,
-        prompt="Reply with exactly oneharness-codex-smoke and do nothing else.",
+        prompt=SMOKE_PROMPT,
     )
 
+
+def _refusal_text(candidate: Mapping[str, Any]) -> str:
+    """Everything one attempted candidate said, as one searchable blob."""
+    return "".join(str(candidate.get(field) or "") for field in ("stdout", "stderr", "error"))
+
+
+def _exhausted_codex_quota(completed: subprocess.CompletedProcess[str]) -> str | None:
+    """Name the exhausted identities when *every* pinned one refused on spent quota.
+
+    The chain's own classifier decides this, not a second reading of the prose: the
+    `fallback` block reports one `fell_through` reason per identity it moved past, and
+    every pinned identity appearing there with `quota` is the whole condition — nothing
+    was left to run it. `None` for anything else, so a launch that breaks, a family
+    nobody authenticated, a violated contract and a wrong answer all still fail the
+    caller loudly; none of those resolve by waiting.
+    """
+    if completed.returncode == 0:
+        return None
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    refused = {
+        str(entry.get("harness")): entry.get("reason")
+        for entry in (report.get("fallback") or {}).get("fell_through") or ()
+    }
+    if refused != dict.fromkeys(CODEX_IDENTITIES, "quota"):
+        return None
+    resets = sorted(
+        {
+            match.group(1).strip()
+            for candidate in report.get("results") or ()
+            if (match := CODEX_RESET_AT.search(_refusal_text(candidate)))
+        }
+    )
+    return f"every pinned codex identity is out of quota ({', '.join(CODEX_IDENTITIES)})" + (
+        f"; it resets at {' / '.join(resets)}" if resets else ""
+    )
+
+
+def _smoke_verdict(completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """Skip a codex family with nothing left to spend; return the report otherwise.
+
+    The gate's contract is that it judges this tree, not the operator's remaining
+    credits — but only spent quota is the environment's to answer for, so everything
+    else raises out of here and fails the caller.
+    """
+    exhausted = _exhausted_codex_quota(completed)
+    if exhausted is not None:
+        pytest.skip(exhausted)
     assert completed.returncode == 0, completed.stderr
-    result = json.loads(completed.stdout)["results"][0]
-    assert result["harness"] == "codex"
+    report: dict[str, Any] = json.loads(completed.stdout)
+    return report
+
+
+def _smoke_outcome(completed: subprocess.CompletedProcess[str]) -> str:
+    """What the smoke's own verdict does with this turn, without doing it to the caller.
+
+    A journey that let `_smoke_verdict` skip *it* would report the very mistake it
+    exists to catch as a skipped test — the one outcome a gate reads as nothing to see.
+    """
+    try:
+        _smoke_verdict(completed)
+    except pytest.skip.Exception as skipped:
+        return f"skipped: {skipped}"
+    except AssertionError as failure:
+        return f"failed: {failure}"
+    return "passed"
+
+
+def test_real_oneharness_codex_smoke(oneharness_bin: str, tmp_path: Path) -> None:
+    """Intentionally cross the real oneharness-to-Codex provider boundary once.
+
+    Pinned to the codex *family* rather than to one identity: `codex:alternate` exists
+    precisely to absorb an exhausted primary quota, so serving the turn from it is the
+    chain working, not a degraded result.
+    """
+    report = _smoke_verdict(_codex_smoke_turn(oneharness_bin, tmp_path))
+
+    served = report["fallback"]["ran"]
+    assert served in CODEX_IDENTITIES, report["fallback"]
+    result = next(item for item in report["results"] if item["harness_id"] == served)
     assert result["status"] == "ok"
     assert "oneharness-codex-smoke" in result["text"]
+
+
+def test_a_codex_family_with_no_quota_left_reports_the_environment(
+    oneharness_bin: str, tmp_path: Path
+) -> None:
+    """A whole family refusing is an environment state, and the smoke says so.
+
+    Exhausting every real subscription on demand is not something a test can do, so the
+    refusal is recorded and replayed from the binary each identity resolves — the paid
+    provider and nothing else. The chain, the config, the classifier, the report and
+    the smoke's own decision are all real.
+    """
+    completed = _codex_smoke_turn(
+        oneharness_bin,
+        tmp_path,
+        PATH=_install_fake_codex_on_path(tmp_path, REFUSING_CODEX),
+        ORCHESTRATOR_CODEX_ALT_HOME=_ensure_isolated_codex_alt_home(tmp_path),
+        SMOKE_CODEX_REFUSAL=RECORDED_CODEX_REFUSAL,
+    )
+
+    attempted = [item["harness_id"] for item in json.loads(completed.stdout)["results"]]
+    # The whole point of pinning the family: every later identity really was asked.
+    assert attempted == list(CODEX_IDENTITIES)
+    reason = _smoke_outcome(completed)
+    assert reason.startswith("skipped: "), reason
+    for identity in CODEX_IDENTITIES:
+        assert identity in reason
+    assert RECORDED_CODEX_RESET in reason
+
+
+def test_a_codex_failure_that_is_not_spent_quota_still_fails(
+    oneharness_bin: str, tmp_path: Path
+) -> None:
+    """The skip covers spent quota only; every other refusal is this host's to fix.
+
+    Both near misses are here because each pins a different half of the reading. A
+    launch that breaks outright stops the chain at its first candidate. A family nobody
+    authenticated refuses in the *shape* of a spent one — nothing runs, every identity
+    falls through — and only the reason separates waiting for a reset from logging in.
+    """
+    for label, body in (("broken", BROKEN_CODEX), ("unauthenticated", UNAUTHENTICATED_CODEX)):
+        completed = _codex_smoke_turn(
+            oneharness_bin,
+            tmp_path / label,
+            PATH=_install_fake_codex_on_path(tmp_path / label, body),
+            ORCHESTRATOR_CODEX_ALT_HOME=_ensure_isolated_codex_alt_home(tmp_path / label),
+        )
+
+        outcome = _smoke_outcome(completed)
+
+        assert outcome.startswith("failed: "), f"{label}: {outcome}"
 
 
 def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) -> None:
@@ -375,7 +621,7 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert json.loads(indexed.stdout)["schema_version"] == 9
+    assert json.loads(indexed.stdout)["schema_version"] == 10
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()

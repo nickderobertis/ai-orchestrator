@@ -246,7 +246,7 @@ export const runSummarySchema = openObject({
 
 export const runListSchema = openObject({
   api_version: z.literal(2),
-  telemetry_schema_version: z.literal(9),
+  telemetry_schema_version: z.literal(10),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
   next_cursor: z.string().min(1).optional(),
@@ -507,15 +507,26 @@ export const conversationToolEventSchema = openObject({
   name: z.string().nullable().optional(),
   output: z.string().nullable().optional(),
 });
+/**
+ * `timestamp` is when the record was *written*, which is when the turn finished.
+ * The five optional timing fields are the turn's own measurements, present exactly
+ * when the history record carried them: a harness that measures no wall interval
+ * records `startedAt`/`finishedAt` as null and only a `durationMs`.
+ */
 export const conversationTurnSchema = openObject({
   assistant: z.string().nullable(),
+  durationMs: usageValue.optional(),
   failureKind: z.string().nullable(),
+  finishedAt: timestamp.nullable().optional(),
   harness: z.string(),
   id: z.string(),
   model: z.string().nullable(),
+  modelMs: usageValue.optional(),
   reasoning: z.string().nullable(),
+  startedAt: timestamp.nullable().optional(),
   status: z.string(),
   timestamp,
+  toolMs: usageValue.optional(),
   tools: z.array(conversationToolEventSchema),
   unknown: arbitraryRecord,
   usage: conversationUsageSchema,
@@ -603,7 +614,7 @@ export const nodeDetailSchema = openObject({
 });
 export const runDetailSchema = openObject({
   api_version: z.literal(2),
-  telemetry_schema_version: z.literal(9),
+  telemetry_schema_version: z.literal(10),
   observed_at: timestamp,
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),
@@ -654,11 +665,20 @@ export const timelineEventSchema = openObject({
   reference: timelineReferenceSchema.optional(),
 });
 /**
+ * One discrete wait a `rollup` span absorbed, so a client can draw the stalls a run
+ * actually took instead of one bar across the whole contention window.
+ */
+export const timelineIntervalSchema = openObject({
+  started_at: timestamp,
+  ended_at: timestamp,
+});
+/**
  * One interval of recorded work. `ended_at` is null for work the recorded stream
  * never closed — an in-flight run, not an error — and `parent_id` links spans into
- * the tree the recorded nesting implies. `count` and `total_duration_ms` appear only
- * on a `rollup` span, which stands in for thousands of high-frequency records, and
- * the role pair only on a `dispatch` one.
+ * the tree the recorded nesting implies. `count`, `total_duration_ms` and
+ * `intervals` appear only on a `rollup` span, which stands in for thousands of
+ * high-frequency records, and the role pair and `dispatch_id` — the key that groups
+ * the several oneharness sessions of one onejudge dispatch — only on a `dispatch` one.
  */
 export const timelineSpanSchema = openObject({
   id: z.string().min(1),
@@ -674,8 +694,10 @@ export const timelineSpanSchema = openObject({
   status: z.string().min(1).optional(),
   count: counter.optional(),
   total_duration_ms: counter.optional(),
+  intervals: z.array(timelineIntervalSchema).optional(),
   agent_role: agentRoleSchema.optional(),
   transport_role: transportRoleSchema.optional(),
+  dispatch_id: z.string().min(1).optional(),
   reference: timelineReferenceSchema.optional(),
   detail: openObject({
     ok: z.boolean().optional(),
@@ -772,6 +794,7 @@ export type TimelineReferenceKind = z.infer<typeof timelineReferenceKindSchema>;
 export type TimelineSpanKind = z.infer<typeof timelineSpanKindSchema>;
 export type TimelineReference = z.infer<typeof timelineReferenceSchema>;
 export type TimelineEvent = z.infer<typeof timelineEventSchema>;
+export type TimelineInterval = z.infer<typeof timelineIntervalSchema>;
 export type TimelineSpan = z.infer<typeof timelineSpanSchema>;
 export type RunTimeline = z.infer<typeof runTimelineSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;

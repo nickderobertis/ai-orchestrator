@@ -59,6 +59,7 @@ from orchestrator.launch import (
 from orchestrator.monitor import DetailSnapshot, save_snapshot, snapshot_path
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
+from orchestrator.timeline import ROLLUP_INTERVAL_LIMIT
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 LAUNCH_ID = "a" * 32
@@ -1282,7 +1283,7 @@ def test_a_transcript_holding_unpaired_surrogates_serves_rather_than_500s(
 def test_run_that_recorded_no_event_serves_a_null_last_event(tmp_path: Path) -> None:
     """A just-launched run has no last event; the API says null, never an empty string.
 
-    A prepared round with no journal is exactly what a `repo-plan` run looks like the
+    A prepared round with no journal is exactly what a run predating the journal looks like the
     moment it launches. The empty string this used to serve failed the published
     contract's non-empty-string rule, and because the client validates the whole list
     in one parse, those runs took every healthy run in the response down with them.
@@ -2554,3 +2555,351 @@ def test_timeline_survives_a_skewed_clock_a_half_pair_and_a_session_still_speaki
     assert dispatch["parent_id"] == node_span["id"]
     assert dispatch["reference"] == {"kind": "conversation", "value": "live-native"}
     assert "a transcript body that must never reach the timeline payload" not in response.text
+
+
+#: The waits a contended node records for this journey. More than the rollup names
+#: individually, with distinct lengths, so "the largest few" is observable.
+_RECORDED_WAITS = tuple(round(0.5 + index * 0.25, 2) for index in range(ROLLUP_INTERVAL_LIMIT + 6))
+
+
+def _dispatch_shapes_run(runs_dir: Path, run_id: str) -> Path:
+    """A run holding both step shapes, a two-session dispatch, and real contention.
+
+    `api` is the ordinary workstream: one `(persona, task)`, which the lifecycle runs
+    as a synthesized `main` step. `docs` declares its own steps, so the step it ran is
+    part of the graph the plan described. The pair is what separates "a step span the
+    plan asked for" from "a container the reader invented".
+    """
+    run_dir = runs_dir / run_id
+    prepare_round(
+        run_dir,
+        {
+            "tasks": [
+                {"id": "api", "repo": "acme/app", "task": "ship"},
+                {
+                    "id": "docs",
+                    "repo": "acme/app",
+                    "steps": [
+                        {"id": "implement", "task": "write"},
+                        {"id": "review", "task": "read"},
+                    ],
+                },
+            ]
+        },
+    )
+    journal = open_journal(run_dir, RunId(run_id), 1)
+    api, docs = NodeId("api"), NodeId("docs")
+    journal.append(
+        "node-added",
+        detail={"definition": {"id": "api", "persona": "engineer", "task": "ship"}},
+    )
+    journal.append(
+        "node-added",
+        detail={
+            "definition": {
+                "id": "docs",
+                "repo": "acme/app",
+                "steps": [
+                    {"id": "implement", "persona": "engineer", "task": "write"},
+                    {"id": "review", "persona": "engineer", "task": "read"},
+                ],
+            }
+        },
+    )
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=api, detail={"node_kind": "lifecycle"})
+    journal.append("step-started", node=api, step=StepId("main"), detail={"step_kind": "agent"})
+    journal.append_batch(
+        [
+            JournalOperation(
+                kind="lock-wait", detail={"identity": "merge:acme/app", "seconds": seconds}
+            )
+            for seconds in _RECORDED_WAITS
+        ],
+        node=api,
+    )
+    journal.append("step-settled", node=api, step=StepId("main"), detail={"status": "done"})
+    journal.append(
+        "node-settled",
+        node=api,
+        detail={
+            "status": "done",
+            "result": {
+                "status": "done",
+                # onejudge's own linkage: the two oneharness sessions this one
+                # dispatch produced, and which of them was which side.
+                "telemetry": {
+                    "sessions": [
+                        {
+                            "session_id": "api-worker",
+                            "role": "agent",
+                            "turn_index": 0,
+                            "started_at": "2026-07-19T00:00:00Z",
+                            "finished_at": "2026-07-19T00:10:00Z",
+                        },
+                        {
+                            "session_id": "api-judge",
+                            "role": "judge",
+                            "turn_index": 1,
+                            "started_at": "2026-07-19T00:10:00Z",
+                            "finished_at": "2026-07-19T00:12:00Z",
+                        },
+                    ]
+                },
+            },
+        },
+    )
+    journal.append("node-started", node=docs, detail={"node_kind": "lifecycle"})
+    journal.append(
+        "step-started", node=docs, step=StepId("implement"), detail={"step_kind": "agent"}
+    )
+    journal.append("step-settled", node=docs, step=StepId("implement"), detail={"status": "done"})
+    return run_dir
+
+
+def _dispatch_shapes_history(tmp_path: Path, run_id: str, base: datetime) -> Path:
+    """A store recording the two turn shapes a real host writes, and a mislabelled judge.
+
+    The worker's first turn carries oneharness' native per-turn timing. The judge's
+    single turn is the claude-code shape: no wall interval at all, only a measured
+    `duration_ms` — and it is stamped `agent_role=worker`, exactly as the ~3.5k
+    supervisor sessions this host already holds are.
+    """
+
+    def at(seconds: float) -> str:
+        return _recorded_at(base, seconds).replace("+00:00", "Z")
+
+    records = {
+        "api-worker": [
+            {
+                "schema_version": "1.1",
+                "timestamp": at(600),
+                "started_at": at(0),
+                "finished_at": at(600),
+                "duration_ms": 600_000,
+                "model_ms": 400_000,
+                "tool_ms": 150_000,
+            },
+            # A turn whose record measured nothing: its timing keys must stay absent
+            # rather than be served as zero or null.
+            {"schema_version": "1.1", "timestamp": at(660)},
+            # A turn whose recorded timing is not timing at all. No schema version,
+            # because a versioned record with a malformed present field is refused
+            # outright by the telemetry reader — this is the older, unversioned shape
+            # that reaches the transcript mapper as the only judge of it.
+            {
+                "timestamp": at(680),
+                "started_at": "whenever",
+                "duration_ms": "quick",
+                "model_ms": -1,
+            },
+        ],
+        "api-judge": [
+            {
+                "schema_version": "1.1",
+                "timestamp": at(720),
+                "started_at": None,
+                "finished_at": None,
+                "duration_ms": 120_000,
+            }
+        ],
+        # The lint run the worker drove: a third session of the same dispatch, which
+        # onejudge's two-party linkage does not name at all.
+        "api-lint": [{"schema_version": "1.1", "timestamp": at(300)}],
+        "docs-worker": [{"schema_version": "1.1", "timestamp": at(800)}],
+    }
+    labels = {
+        "api-worker": {"node": "api", "step": "main", "role": "agent", "agent_role": "worker"},
+        # The mis-stamp under test: transport judge, semantic label "worker".
+        "api-judge": {"node": "api", "step": "main", "role": "judge", "agent_role": "worker"},
+        "api-lint": {"node": "api", "role": "llmlint", "agent_role": "worker"},
+        "docs-worker": {
+            "node": "docs",
+            "step": "implement",
+            "role": "agent",
+            "agent_role": "worker",
+        },
+    }
+    names = {
+        "api-worker": "engineer-ship",
+        "api-judge": "you-are-a-careful-evaluator-of-work",
+        "api-lint": "llmlint-diff-api",
+        "docs-worker": "engineer-document",
+    }
+    sessions = []
+    for session_id, turns in records.items():
+        record = tmp_path / f"{session_id}.jsonl"
+        record.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "session": session_id,
+                        "name": names[session_id],
+                        "project": str(tmp_path),
+                        "harness": "claude-code",
+                        "model": "claude",
+                        "prompt": "go",
+                        "text": "done",
+                        "status": "ok",
+                        "session_id": session_id,
+                        **turn,
+                    }
+                )
+                + "\n"
+                for turn in turns
+            ),
+            encoding="utf-8",
+        )
+        sessions.append(
+            {
+                "id": session_id,
+                "name": names[session_id],
+                "project": str(tmp_path),
+                "started": str(turns[0]["timestamp"]),
+                "path": str(record),
+                "labels": {
+                    "run_id": run_id,
+                    "round": "1",
+                    "persona": "engineer",
+                    **labels[session_id],
+                },
+            }
+        )
+    store = tmp_path / "dispatch-shapes-store.json"
+    store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
+    return store
+
+
+def test_the_timeline_describes_each_dispatch_as_the_work_it_actually_did(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What an operator reads off a node: whose turn it was, and how long it took.
+
+    Every claim here was wrong in a way no client could repair. A judge session
+    stamped with its worker's role read as a second worker; a span opened when its
+    first turn *ended*, so a one-turn session — and every claude-code session, which
+    measures a duration and no wall interval — was a sliver; thousands of lock waits
+    became one bar across the whole run; and a node's time sat under a `main` step
+    the plan never asked for.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _dispatch_shapes_run(runs, "shapes")
+    # History and the journal are written by different processes against one wall
+    # clock, so the sessions are placed relative to the journal this fixture just
+    # wrote; pinned literals would put every dispatch before the run that made it.
+    clock = datetime.now(UTC)
+    monkeypatch.setenv(
+        "FAKE_ONEHARNESS_STORE", str(_dispatch_shapes_history(tmp_path, "shapes", clock))
+    )
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+        detail = client.get("/api/v2/runs/shapes").json()
+        spans = [
+            *client.get("/api/v2/runs/shapes/timeline?node_id=api").json()["spans"],
+            *client.get("/api/v2/runs/shapes/timeline?node_id=docs").json()["spans"],
+        ]
+        one = client.get("/api/v2/runs/shapes/conversations/api-judge").json()
+
+        # The linkage is read from the journal, but this route never needed one: a
+        # journal it cannot read costs the transcript nothing but its native parent,
+        # which the labels still answer. It must not start failing the read.
+        journal = run_dir / JOURNAL_NAME
+        recorded = journal.read_text(encoding="utf-8")
+        journal.write_text(recorded + '{"kind":"bogus"}\n', encoding="utf-8")
+        degraded = client.get("/api/v2/runs/shapes/conversations/api-judge")
+        assert degraded.status_code == 200
+        assert degraded.json()["conversation"]["turns"][0]["durationMs"] == 120_000
+        assert client.get("/api/v2/runs/shapes/timeline?scope=run").status_code == 409
+        journal.write_text(recorded, encoding="utf-8")
+
+    conversations = {item["conversation"]["id"]: item for item in detail["conversations"]}
+    dispatches = {span["reference"]["value"]: span for span in spans if span["kind"] == "dispatch"}
+    by_node: dict[str, list[dict[str, object]]] = {}
+    for span in spans:
+        by_node.setdefault(str(span.get("node_id")), []).append(span)
+
+    # The transport role is what a supervisor session *is*, whatever it was stamped
+    # with — on the transcript, on the node's session links, and on the span.
+    judge = conversations["api-judge"]["attribution"]
+    assert (judge["transportRole"], judge["agentRole"]) == ("judge", "judge")
+    assert judge["inferred"] is True
+    assert one["attribution"]["agentRole"] == "judge"
+    api_node = next(node for node in detail["run"]["nodes"] if node["node"] == "api")
+    assert {link["session_id"]: link["agent_role"] for link in api_node["sessions"]} == {
+        "api-worker": "worker",
+        "api-judge": "judge",
+        # Lint stays the worker's own verification activity, told apart by transport.
+        "api-lint": "worker",
+    }
+    assert dispatches["api-judge"]["agent_role"] == "judge"
+
+    # One onejudge dispatch, two oneharness sessions: the supervisor names the
+    # dispatch it supervised, and both spans carry the same grouping key.
+    assert judge["parentConversationId"] == "api-worker"
+    assert "parentConversationId" not in conversations["api-worker"]["attribution"]
+    assert dispatches["api-judge"]["dispatch_id"] == dispatches["api-worker"]["dispatch_id"]
+    assert dispatches["api-worker"]["dispatch_id"] == "api-worker"
+    # The lint run is the same dispatch's third session, and onejudge's two-party
+    # linkage never names it — so the labels and the recorded order have to.
+    assert dispatches["api-lint"]["dispatch_id"] == "api-worker"
+    assert conversations["api-lint"]["attribution"]["parentConversationId"] == "api-worker"
+
+    # A turn carries its own measured timing, and only what its record measured —
+    # in this API's own RFC 3339 UTC spelling, whatever spelling history recorded.
+    first, second, malformed = conversations["api-worker"]["conversation"]["turns"]
+    assert (first["startedAt"], first["finishedAt"]) == (
+        _recorded_at(clock, 0),
+        _recorded_at(clock, 600),
+    )
+    assert (first["durationMs"], first["modelMs"], first["toolMs"]) == (600_000, 400_000, 150_000)
+    assert not {"startedAt", "finishedAt", "durationMs", "modelMs", "toolMs"} & set(second)
+    assert not {"started_at", "duration_ms", "model_ms"} & set(second["unknown"])
+    # Timing that is not a measurement is never served as one — and never vanishes
+    # either: it stays where every other key this mapper did not consume stays.
+    assert not {"startedAt", "durationMs", "modelMs"} & set(malformed)
+    assert malformed["unknown"]["started_at"] == "whenever"
+    assert malformed["unknown"]["duration_ms"] == "quick"
+    assert malformed["unknown"]["model_ms"] == -1
+
+    # A span covers its first turn's work: from the turn's own start where the harness
+    # measured one, and from `timestamp - duration_ms` where it measured only a
+    # duration, which is every claude-code session.
+    assert dispatches["api-worker"]["started_at"] == _recorded_at(clock, 0)
+    assert _width_ms(dispatches["api-worker"]) >= 600_000
+    assert dispatches["api-judge"]["started_at"] == _recorded_at(clock, 600)
+    assert _width_ms(dispatches["api-judge"]) == 120_000
+
+    # The contention window is not one wait: the rollup keeps its count and total and
+    # names the largest few, so a client can draw the stalls that actually happened.
+    rollup = next(span for span in by_node["api"] if span["kind"] == "rollup")
+    assert rollup["count"] == len(_RECORDED_WAITS)
+    assert rollup["total_duration_ms"] == round(sum(_RECORDED_WAITS) * 1000)
+    intervals = rollup["intervals"]
+    assert len(intervals) == ROLLUP_INTERVAL_LIMIT
+    widths = [_width_ms(interval) / 1000 for interval in intervals]
+    assert sorted(widths) == sorted(_RECORDED_WAITS)[-ROLLUP_INTERVAL_LIMIT:]
+    assert [interval["started_at"] for interval in intervals] == sorted(
+        interval["started_at"] for interval in intervals
+    )
+
+    # The synthesized `main` step is not a phase of anything: the node's dispatches
+    # hang off the node itself. A node whose plan declared its steps keeps them.
+    assert [span["kind"] for span in by_node["api"] if span["kind"] == "step"] == []
+    node_span = next(span for span in by_node["api"] if span["kind"] == "node")
+    assert dispatches["api-worker"]["parent_id"] == node_span["id"]
+    declared = next(span for span in by_node["docs"] if span["kind"] == "step")
+    assert (declared["label"], declared["step_id"]) == ("implement", "implement")
+    assert dispatches["docs-worker"]["parent_id"] == declared["id"]
+
+
+def _recorded_at(base: datetime, seconds: float) -> str:
+    """One fixture instant, in the RFC 3339 UTC spelling this API serves."""
+    return (base + timedelta(seconds=seconds)).isoformat()
+
+
+def _width_ms(span: dict[str, object]) -> float:
+    """How wide one served interval is, in milliseconds."""
+    started, ended = str(span["started_at"]), str(span["ended_at"])
+    return (datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds() * 1000

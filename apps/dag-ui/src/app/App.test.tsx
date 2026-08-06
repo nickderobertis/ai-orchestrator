@@ -1197,7 +1197,7 @@ describe("DAG application", () => {
     // silently rendered from whatever survived.
     sources[0]?.emit(
       "snapshot",
-      { ...runList, telemetry_schema_version: 10 },
+      { ...runList, telemetry_schema_version: 11 },
       "5",
     );
     expect(await screen.findByRole("alert")).toBeInTheDocument();

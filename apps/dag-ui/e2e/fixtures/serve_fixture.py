@@ -64,15 +64,15 @@ HISTORY_RUN = "dag-ui-history"
 #: journalled as a node settlement, so a live round cannot produce them.
 OUTCOMES_RUN = "dag-ui-outcomes"
 #: A run whose result was recorded with no authoritative journal behind it, as every
-#: `repo-plan` run is. Its statuses can only be counted from the telemetry index.
+#: run predating the journal is. Its statuses can only be counted from the telemetry index.
 LEGACY_RUN = "dag-ui-legacy"
 #: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
 #: several graphs, and the navigation has to gather them under that one session.
 SIBLING_RUN = "dag-ui-sibling"
 UNATTRIBUTED_RUN = "dag-ui-unattributed"
 #: A run whose round is prepared but which has journalled nothing yet — what every
-#: run looks like for its first moments, and what the served `repo-plan*` runs on an
-#: operator's machine look like permanently. Its `last_event` is null.
+#: run looks like for its first moments, and what a run predating the journal looks
+#: like permanently. Its `last_event` is null.
 EVENTLESS_RUN = "dag-ui-eventless"
 #: One node whose recorded work is hundreds of sessions, which is what a long-running
 #: node really looks like and what the old detail panel rendered one block at a time.
@@ -659,11 +659,11 @@ _LEGACY_TASKS: list[dict[str, Any]] = [
 def _write_legacy_run(runs_dir: Path) -> None:
     """A recorded result with no authoritative journal behind it at all.
 
-    This is what every ``repo-plan`` run on an operator's machine looks like
-    permanently, and what a run predating the journal looks like forever. The strict
-    fold has nothing to fold, so the per-node status derivation cannot run and the
-    run list falls back to counting the tolerant telemetry index — whose statuses are
-    an open string, and whose words the navigation therefore has to be able to show.
+    This is what a run predating the journal looks like on an operator's machine,
+    permanently. The strict fold has nothing to fold, so the per-node status
+    derivation cannot run and the run list falls back to counting the tolerant
+    telemetry index — whose statuses are an open string, and whose words the
+    navigation therefore has to be able to show.
     """
     from orchestrator.runs import prepare_round, write_result
 

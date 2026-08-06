@@ -50,7 +50,7 @@ export NX_USE_LOCAL=true
 preserved_log_open "$(dirname -- "$script_dir")" nx || exit 1
 log=$PRESERVED_LOG
 if bunx nx "$@" 2>&1 | redact_secrets >"$log"; then
-  # llmlint: ignore[tool_output_is_signal] Explicit debug output lets the cache-contract check inspect Nx's success evidence; default successful invocations still emit one line.
+  # llmlint: ignore[tool_output_is_signal] Explicit debug output lets the cache-contract check inspect Nx's success evidence, and lets `just lint-llm-diff` show the judge report Nx replayed; default successful invocations still emit one line.
   if [[ "${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}" == "1" ]]; then cat "$log"; fi
   printf 'nx: requested targets succeeded\n'
   exit 0

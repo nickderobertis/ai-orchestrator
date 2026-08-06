@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
-from typing import Any, NotRequired, TypedDict
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any, NamedTuple, NotRequired, TypedDict
 
 from .history import (
     HistoryError,
@@ -64,6 +65,15 @@ _CONSUMED_RECORD_KEYS = frozenset(
     }
 )
 
+#: snake_case history timing key -> the ``ConversationTurn`` field it becomes, split
+#: by what the value is. A turn used to carry only ``timestamp``, which is when the
+#: record was *written*, so a reader had no width for a turn at all and these
+#: measurements sat unread in ``turn.unknown``. They are consumed *per record* rather
+#: than listed above, because a value this mapper cannot serve as timing has to stay
+#: where every other unconsumed key does.
+_TIMESTAMP_KEYS = {"started_at": "startedAt", "finished_at": "finishedAt"}
+_DURATION_KEYS = {"duration_ms": "durationMs", "model_ms": "modelMs", "tool_ms": "toolMs"}
+
 #: snake_case history usage key -> camelCase ``ConversationUsage`` key.
 _USAGE_KEYS = {
     "input_tokens": "inputTokens",
@@ -98,7 +108,12 @@ class ConversationToolEvent(TypedDict):
 
 
 class ConversationTurn(TypedDict):
-    """``@oneharness/ui`` ``ConversationTurn``."""
+    """``@oneharness/ui`` ``ConversationTurn``.
+
+    The five timing fields are optional in the pinned declaration and are emitted
+    exactly when the record carries them — a present ``null`` is preserved, since
+    that is what a harness reporting no measured wall interval records.
+    """
 
     id: str
     user: str
@@ -112,6 +127,11 @@ class ConversationTurn(TypedDict):
     usage: ConversationUsage
     tools: list[ConversationToolEvent]
     unknown: dict[str, Any]
+    startedAt: NotRequired[str | None]
+    finishedAt: NotRequired[str | None]
+    durationMs: NotRequired[float | None]
+    modelMs: NotRequired[float | None]
+    toolMs: NotRequired[float | None]
 
 
 class Conversation(TypedDict):
@@ -143,6 +163,7 @@ class Attribution(TypedDict):
     launchId: NotRequired[str]
     persona: NotRequired[str]
     round: NotRequired[int]
+    parentConversationId: NotRequired[str]
     finishedAt: NotRequired[str | None]
     inferred: NotRequired[bool]
 
@@ -231,18 +252,54 @@ def _tools(record: Mapping[str, Any]) -> list[ConversationToolEvent]:
     return tools
 
 
-def _unknown(record: Mapping[str, Any]) -> dict[str, Any]:
+def _unknown(record: Mapping[str, Any], consumed: frozenset[str]) -> dict[str, Any]:
     return {
-        key: value
-        for key, value in record.items()
-        if isinstance(key, str) and key not in _CONSUMED_RECORD_KEYS
+        key: value for key, value in record.items() if isinstance(key, str) and key not in consumed
     }
+
+
+def _timing(record: Mapping[str, Any], turn: ConversationTurn) -> frozenset[str]:
+    """Copy the record's own measured timing onto the turn; report what it consumed.
+
+    A malformed value is never *served* as timing: this is a trust boundary, and a
+    turn whose width came from a string would be a rendered lie about the run. It is
+    not dropped either — an unconsumed key stays in ``turn.unknown`` with everything
+    else this mapper did not understand, which is the promise that keeps a recorded
+    field visible rather than silently gone.
+    """
+    consumed: set[str] = set()
+    for key, field in _TIMESTAMP_KEYS.items():
+        if key not in record:
+            continue
+        raw = record[key]
+        # Served in this API's own RFC 3339 UTC spelling, parsed rather than copied:
+        # a recorded value that is not a timestamp would reach a client as one and
+        # fail its whole payload, so it stays unconsumed instead.
+        stamp = parse_stamp(raw)
+        if raw is None or stamp is not None:
+            # `field` is reconciled against ConversationTurn by check-dag-state-contract,
+            # which mypy cannot see through a dict lookup.
+            turn[field] = stamp.isoformat() if stamp is not None else None  # type: ignore[literal-required]
+            consumed.add(key)
+    for key, field in _DURATION_KEYS.items():
+        if key not in record:
+            continue
+        raw = record[key]
+        if raw is None or (
+            isinstance(raw, (int, float))
+            and not isinstance(raw, bool)
+            and math.isfinite(raw)
+            and raw >= 0
+        ):
+            turn[field] = raw  # type: ignore[literal-required]
+            consumed.add(key)
+    return frozenset(consumed)
 
 
 def _turn(session_key: str, index: int, record: Mapping[str, Any]) -> ConversationTurn:
     status = record.get("status")
     status_text = status if isinstance(status, str) else "unknown"
-    return {
+    turn: ConversationTurn = {
         "id": f"{session_key}-{index}",
         "user": _first_str(record, "prompt", ""),
         "assistant": _str_or_none(record.get("text")),
@@ -254,8 +311,10 @@ def _turn(session_key: str, index: int, record: Mapping[str, Any]) -> Conversati
         "failureKind": _str_or_none(record.get("failure_kind")),
         "usage": _usage(record.get("usage")),
         "tools": _tools(record),
-        "unknown": _unknown(record),
+        "unknown": {},
     }
+    turn["unknown"] = _unknown(record, _CONSUMED_RECORD_KEYS | _timing(record, turn))
+    return turn
 
 
 def _harnesses(records: list[dict[str, Any]]) -> list[str]:
@@ -343,8 +402,185 @@ def dag_conversation(session: HistorySession, records: list[dict[str, Any]]) -> 
     }
 
 
+def _native_parents(groups: Sequence[Sequence[Mapping[str, Any]]]) -> dict[str, str]:
+    """Child session id -> the agent session of the same onejudge dispatch.
+
+    One onejudge dispatch is two oneharness sessions, and onejudge itself records
+    which: each group is one report's own ``telemetry.sessions`` linkage, already
+    validated by the collector that read it. The agent side is the dispatch — the
+    supervisor exists to review it — so every other session in the group hangs off it.
+    """
+    parents: dict[str, str] = {}
+    for group in groups:
+        ordered = sorted(group, key=lambda link: _turn_index(link.get("turn_index")))
+        parent = next(
+            (
+                str(link["session_id"])
+                for link in ordered
+                if link.get("role") == "agent" and link.get("session_id")
+            ),
+            None,
+        )
+        if parent is None:
+            continue
+        for link in ordered:
+            session_id = link.get("session_id")
+            if isinstance(session_id, str) and session_id and session_id != parent:
+                parents[session_id] = parent
+    return parents
+
+
+def _turn_index(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+class _Locator(NamedTuple):
+    """Where in the graph one conversation says it ran, as its labels name it."""
+
+    run_id: str | None
+    node_id: str | None
+    step_id: str | None
+
+
+class _Candidate(NamedTuple):
+    """One dispatch a supervised session could have run under, and when it began."""
+
+    started: datetime
+    conversation: DagConversation
+
+
+def _locator(attribution_value: Attribution) -> _Locator:
+    return _Locator(
+        attribution_value.get("runId"),
+        attribution_value.get("nodeId"),
+        attribution_value.get("stepId"),
+    )
+
+
+def parse_stamp(value: object) -> datetime | None:
+    """One recorded timestamp as an aware UTC datetime, or ``None`` when unusable.
+
+    History writes its own timestamps in its own spellings, so every reader that
+    orders or compares them has to agree on one: a naive stamp is read as UTC and an
+    offset one is converted, which is also what the read API promises to serve.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return (parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)).astimezone(UTC)
+
+
+def dispatch_start(conversation_value: DagConversation) -> datetime | None:
+    """When a dispatched session actually began working.
+
+    A transcript's ``startedAt`` is its first record's ``timestamp``, and a history
+    record is written when its turn *finishes* — so reading it as a start places a
+    whole session at the moment its first turn ended. The first turn's own
+    ``startedAt`` is the answer where a harness measured one; otherwise the turn is
+    placed by subtracting its measured duration from when it was recorded, which is
+    the only wall interval a claude-code session reports at all. With neither, the
+    recorded start stands, since a session has to be placed somewhere.
+    """
+    transcript = conversation_value["conversation"]
+    recorded = parse_stamp(transcript["startedAt"])
+    turns = transcript["turns"]
+    if not turns:
+        return recorded
+    first = turns[0]
+    if (started := parse_stamp(first.get("startedAt"))) is not None:
+        return started
+    duration = first.get("durationMs")
+    finished = parse_stamp(first["timestamp"]) or recorded
+    if (
+        finished is None
+        or not isinstance(duration, (int, float))
+        or isinstance(duration, bool)
+        or not math.isfinite(duration)
+        or duration < 0
+    ):
+        return recorded
+    return finished - timedelta(milliseconds=duration)
+
+
+def _ends_at(conversation_value: DagConversation) -> datetime | None:
+    """When a transcript stopped, or ``None`` while it is still speaking."""
+    finished = parse_stamp(conversation_value["attribution"].get("finishedAt"))
+    if finished is not None:
+        return finished
+    stamps = [
+        stamp
+        for turn in conversation_value["conversation"]["turns"]
+        if (stamp := parse_stamp(turn["timestamp"])) is not None
+    ]
+    return max(stamps) if stamps else None
+
+
+def _labelled_parent(child: DagConversation, candidates: Sequence[DagConversation]) -> str | None:
+    """The dispatch a supervised session ran under, by labels and recorded order.
+
+    The fallback for history recorded before onejudge linked its own sessions. It is
+    exact about labels and never guesses across them: the child's run and node must
+    match, and its step too when it carries one. Among those, the containing dispatch
+    wins, and a child that falls in none of them takes the most recent earlier one —
+    history and the journal are written by different processes and disagree by
+    milliseconds, which is not a reason to orphan a transcript.
+    """
+    wanted = _locator(child["attribution"])
+    started = dispatch_start(child)
+    if wanted.run_id is None or wanted.node_id is None or started is None:
+        return None
+    matches = [
+        _Candidate(start, candidate)
+        for candidate in candidates
+        if candidate["attribution"]["transportRole"] == "agent"
+        and (found := _locator(candidate["attribution"])).run_id == wanted.run_id
+        and found.node_id == wanted.node_id
+        and (wanted.step_id is None or found.step_id == wanted.step_id)
+        and (start := dispatch_start(candidate)) is not None
+        and start <= started
+    ]
+    containing = [
+        candidate
+        for candidate in matches
+        if (end := _ends_at(candidate.conversation)) is None or started <= end
+    ]
+    pool = containing or matches
+    if not pool:
+        return None
+    return max(pool, key=lambda found: found.started).conversation["conversation"]["id"]
+
+
+def link_parents(
+    conversations: list[DagConversation],
+    native_groups: Sequence[Sequence[Mapping[str, Any]]] = (),
+) -> None:
+    """Name each supervised session's own dispatch, in place.
+
+    A judge or lint session is not a sibling of the worker it supervised: it is the
+    other half of one onejudge dispatch. Serving that parent is what lets a reader
+    group "one onejudge session" from its two oneharness ones without re-deriving the
+    pairing from names and timestamps.
+    """
+    native = _native_parents(native_groups)
+    by_id = {item["conversation"]["id"]: item for item in conversations}
+    for child in conversations:
+        if child["attribution"]["transportRole"] == "agent":
+            continue
+        parent = native.get(child["conversation"]["id"])
+        if parent is None or parent not in by_id:
+            parent = _labelled_parent(child, conversations)
+        if parent is not None and parent != child["conversation"]["id"]:
+            child["attribution"]["parentConversationId"] = parent
+
+
 def run_conversations(
-    run_id: RunId, *, oneharness_bin: str = "oneharness"
+    run_id: RunId,
+    *,
+    oneharness_bin: str = "oneharness",
+    native_groups: Sequence[Sequence[Mapping[str, Any]]] = (),
 ) -> list[DagConversation]:
     """Every labelled conversation that acted on ``run_id``, oldest session first.
 
@@ -352,6 +588,11 @@ def run_conversations(
     orchestrator session named ``orchestrator-<run_id>`` (whose own dispatch predates
     graph labels). A missing history store degrades to an empty list rather than
     failing the read: the projection and telemetry views do not depend on it.
+
+    ``native_groups`` is onejudge's own per-dispatch session linkage, read from the
+    run's recorded results by the caller that already holds them. It is the authority
+    for `attribution.parentConversationId`; a caller with none gets the labelled
+    fallback, which is all history recorded before that linkage existed can offer.
     """
     try:
         sessions = all_sessions(oneharness_bin=oneharness_bin)
@@ -371,4 +612,5 @@ def run_conversations(
         except HistoryError:
             continue
         conversations.append(dag_conversation(session, records))
+    link_parents(conversations, native_groups)
     return conversations

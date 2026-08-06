@@ -26,10 +26,6 @@
         "{workspaceRoot}/uv.lock"
       ]
     },
-    "screens": {
-      "command": "cd apps/dag-ui && bunx playwright test --config screens.config.ts",
-      "cache": false
-    },
     "typecheck": {
       "command": "bunx tsc -p apps/dag-ui/tsconfig.json --noEmit"
     },

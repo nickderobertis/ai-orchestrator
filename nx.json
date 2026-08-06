@@ -124,9 +124,6 @@
         {
           "runtime": "./scripts/llmlint-fingerprint.sh"
         }
-      ],
-      "outputs": [
-        "{workspaceRoot}/.nx/llmlint-diff"
       ]
     },
     "bootstrap": {
