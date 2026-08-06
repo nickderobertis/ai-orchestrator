@@ -332,6 +332,44 @@ def test_requeue_replays_as_an_unparked_node_free_to_start_again() -> None:
     ]
 
 
+def test_a_requeue_that_amended_nothing_replays_with_the_node_untouched() -> None:
+    """The record the writer now omits `amend` from still folds, and changes nothing.
+
+    A bare requeue carries no amendment, so the served plan has to show the node
+    exactly as it was parked — released, and otherwise identical. This is the read
+    side of that omission: a reader that required the key would refuse the record,
+    and one that defaulted it to something other than "no amendment" would serve a
+    node the planner never asked for.
+    """
+    events = [
+        _event(
+            "node-added",
+            1,
+            detail={"definition": {"id": "work", "persona": "p", "task": "Work", "max_turns": 4}},
+        ),
+        _event("round-started", 2, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            3,
+            detail={"operations": [{"kind": "node-parked", "node": "work", "detail": {}}]},
+        ),
+        _event(
+            "edit-committed",
+            4,
+            detail={"operations": [{"kind": "node-requeued", "node": "work", "detail": {}}]},
+        ),
+    ]
+
+    projection = project_round(events, RunId("r"), 1)
+
+    assert projection.plan["tasks"] == [
+        {"id": "work", "persona": "p", "task": "Work", "max_turns": 4}
+    ]
+    # Released to the frontier: no state at all, which is what a node that has not
+    # started this round looks like.
+    assert projection.node_states == {}
+
+
 def test_a_dependent_of_a_parked_node_is_served_as_blocked_by_it() -> None:
     events = [
         _event(

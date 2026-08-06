@@ -414,7 +414,11 @@ dispatches it through normal adoption:
 ```
 
 An `amend` mapping is merged onto the node before it is redispatched, which is where
-a raised turn budget or an explicit `resume` pin onto the preserved branch goes.
+a raised turn budget or an explicit `resume` pin onto the preserved branch goes. It is
+validated as the node it produces, so a malformed pin is refused at submission rather
+than at the next dispatch. Omit it to requeue the node exactly as it was parked: the
+compiled `node-requeued` operation then carries no `amend` at all, so "amended
+nothing" and "amended with nothing" are one record rather than two.
 
 ## Node shapes
 

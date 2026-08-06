@@ -385,9 +385,13 @@ def apply_edit(
             target = by_id[node_id]
             del target["parked"]
             target.update(amend)
-            events.append(
-                {"kind": "node-requeued", "node": node_id, "detail": {"amend": dict(amend)}}
-            )
+            # `amend` is optional on the wire, so it is optional in the record: a bare
+            # requeue that carried `"amend": {}` would say the planner amended the node
+            # with nothing, and every reader of the journal — including one older than
+            # this operation — would have to know that the empty mapping means the same
+            # as its absence. Omitted when empty, verbatim when not.
+            detail: dict[str, Any] = {"amend": dict(amend)} if amend else {}
+            events.append({"kind": "node-requeued", "node": node_id, "detail": detail})
         case "attest":
             ref = item.get("ref")
             if not isinstance(ref, str) or states.get(ref) != "waiting":

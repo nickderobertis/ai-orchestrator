@@ -18,7 +18,7 @@ from orchestrator.channel import QueuedCommand, create_channel
 from orchestrator.config import ConfigError
 from orchestrator.coordination import atomic_json
 from orchestrator.dispatch import DispatchError, Report
-from orchestrator.edits import EditCommand
+from orchestrator.edits import EditCommand, EditError, apply_edit
 from orchestrator.gitops import GitError
 from orchestrator.goals import register_run
 from orchestrator.graph import (
@@ -37,7 +37,14 @@ from orchestrator.graph import (
     run_graph,
 )
 from orchestrator.journal import JournalError, NodeSink, open_journal
-from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult, result_payload
+from orchestrator.lifecycle import (
+    LifecycleResult,
+    RepoPlanNode,
+    Resume,
+    Step,
+    StepResult,
+    result_payload,
+)
 from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
 from orchestrator.runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
@@ -540,6 +547,113 @@ def test_requeue_returns_a_parked_node_to_the_frontier_with_its_amendments() -> 
     assert turns == [32]
     assert result.results["sweep"].status == "done"
     assert pump.outcomes == [(1, True, "applied requeue")]
+
+
+def test_a_requeue_can_pin_the_resume_the_next_dispatch_adopts() -> None:
+    """The amendment a planner reaches for when the park is being picked up elsewhere.
+
+    A node parked before it ever ran has no checkpoint of its own to carry, and one
+    parked after a dispatch carries the branch that dispatch preserved. Either way the
+    planner may know a *different* branch is the one to continue — work recovered by
+    hand, or a checkpoint from an earlier round — and `requeue`'s `amend` is where
+    that is said. The pin has to survive the amendment as a validated `Resume` and
+    reach the dispatch, because a pin that were dropped would silently cut a fresh
+    branch and leave the preserved work behind.
+    """
+    pin = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "a1b2c3d",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    graph = parse_graph(
+        {
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "tasks": [
+                {
+                    "id": "repo",
+                    "repo": "acme/widget",
+                    "persona": "engineer",
+                    "task": "Continue",
+                    "parked": True,
+                },
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+            ],
+        }
+    )
+    pump = _EditingPump(
+        [EditCommand("requeue", {"op": "requeue", "id": "repo", "amend": {"resume": pin}})],
+        wait_ticks=1,
+    )
+    adopted: list[Resume | None] = []
+
+    def lifecycle_runner(node: RepoPlanNode, **_kwargs) -> LifecycleResult:
+        adopted.append(node.resume)
+        return _lifecycle(branch="feature/preserved")
+
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lifecycle_runner,
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+
+    assert adopted == [
+        Resume(
+            branch="feature/preserved",
+            base_branch="main",
+            pr_base="main",
+            checkpoint="a1b2c3d",
+            mode="retry",
+        )
+    ]
+    assert result.results["repo"].status == "done"
+    assert pump.outcomes == [(1, True, "applied requeue")]
+
+
+def test_a_requeue_whose_pin_is_not_a_resume_is_refused_by_name() -> None:
+    """The amendment is validated as the node it produces, not merged unchecked.
+
+    A pin that names no checkpoint would otherwise reach the graph and fail at
+    dispatch, one round later and one layer down from the planner who sent it.
+    """
+    graph = parse_graph(
+        {
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "tasks": [
+                {
+                    "id": "repo",
+                    "repo": "acme/widget",
+                    "persona": "engineer",
+                    "task": "Continue",
+                    "parked": True,
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(EditError, match="resume 'checkpoint' must be a Git commit SHA"):
+        apply_edit(
+            graph,
+            EditCommand(
+                "requeue",
+                {
+                    "op": "requeue",
+                    "id": "repo",
+                    "amend": {
+                        "resume": {
+                            "branch": "feature/preserved",
+                            "base_branch": "main",
+                            "pr_base": "main",
+                        }
+                    },
+                },
+            ),
+            states={"repo": "parked"},
+            attestations=(),
+        )
 
 
 def test_retry_of_a_dropped_node_is_rejected_and_reconciliation_continues() -> None:

@@ -436,6 +436,55 @@ def test_cancel_parks_a_running_node_and_requeue_returns_it_amended() -> None:
     assert root.direct.max_turns == 32
 
 
+def test_a_bare_requeue_records_no_amendment_and_a_real_one_survives_verbatim() -> None:
+    """`amend` is optional on the wire, so it is optional in the compiled record.
+
+    A bare requeue that recorded `"amend": {}` would be saying the planner amended
+    the node with nothing, and every reader of the journal — including one written
+    against the operation before this — would have to know that the empty mapping
+    means what its absence means. Both spellings of "no amendment" therefore compile
+    to the same record. The nonempty form has to round-trip untouched in the same
+    breath, nesting included: that mapping is what the node's next dispatch is built
+    from, so a reader that flattened or dropped part of it would resume different
+    work than the planner asked for.
+    """
+    parked, _ = apply_edit(
+        _graph(),
+        EditCommand("cancel", {"op": "cancel", "id": "root"}),
+        states={"root": "running"},
+        attestations=(),
+    )
+
+    for envelope in ({"op": "requeue", "id": "root"}, {"op": "requeue", "id": "root", "amend": {}}):
+        resumed, events = apply_edit(
+            parked, EditCommand("requeue", envelope), states={"root": "parked"}, attestations=()
+        )
+        assert events == [{"kind": "node-requeued", "node": "root", "detail": {}}], envelope
+        root = next(node for node in resumed.tasks if node.id == "root")
+        assert not root.parked
+        # Nothing but the park was touched: a bare requeue amends no field.
+        assert root.definition == {"id": "root", "persona": "engineer", "task": "Root"}
+
+    pin = {
+        "branch": "feature/sweep",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "a1b2c3d",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    _, amended = apply_edit(
+        parked,
+        EditCommand("requeue", {"op": "requeue", "id": "root", "amend": {"resume": pin}}),
+        states={"root": "parked"},
+        attestations=(),
+    )
+
+    assert amended == [
+        {"kind": "node-requeued", "node": "root", "detail": {"amend": {"resume": pin}}}
+    ]
+
+
 def test_cancel_is_refused_for_a_settled_unknown_or_already_parked_node() -> None:
     graph = _graph()
     with pytest.raises(EditError, match="cancel requires an existing node id"):
