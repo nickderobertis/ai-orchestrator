@@ -9,12 +9,12 @@
 from __future__ import annotations
 
 import json
-import pytest
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 from rendezvous import Rendezvous
 from waits import deadline
