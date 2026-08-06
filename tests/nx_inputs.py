@@ -28,6 +28,19 @@ CODE_WORKSPACE = "codeWorkspace"
 RECIPE_WORKSPACE = "recipeWorkspace"
 #: The key `workspace:check-nx-cache` is memoized on: what that script reads.
 NX_CACHE_CHECK = "nxCacheCheck"
+#: The key `dag-ui:test` is memoized on beyond its own project: the part of this
+#: repository's Python the browser tier actually runs — the read API server and
+#: everything its import reaches, plus the fixture stack that feeds it. The tier
+#: used to name all of `orchestrator/**/*`, which charged two and a half minutes of
+#: vitest and Playwright to every edit of a command-side module the served process
+#: never loads.
+DAG_UI_SERVER_SURFACE = "dagUiServerSurface"
+
+#: The browser tier: vitest, the Playwright journeys, and the isolation config that
+#: runs two of them at once.
+BROWSER_SCOPED = "test"
+#: The project that tier belongs to.
+BROWSER_PROJECT = "dag-ui"
 
 #: The tier that runs the bulk of the Python suite across xdist workers.
 CODE_SCOPED = "test"

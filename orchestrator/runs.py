@@ -566,6 +566,63 @@ def write_next_plan(run_dir: Path, plan: dict[str, Any]) -> tuple[int, Path]:
         return number, round_dir
 
 
+def _settle_from_the_journal(run_dir: Path, number: int, round_dir: Path) -> bool:
+    """Write back what the journal recorded about a round the ledger did not.
+
+    Returns whether the round is now recorded as finished. The caller must hold the
+    ledger lock. An owner can die between `round-finished` and `result.json`, and the
+    authoritative stream is what says which of those happened — so this is a repair,
+    not a decision: it only ever makes the ledger say what the journal already does.
+    """
+    from .journal import JOURNAL_NAME, read_events
+
+    plan_path = round_dir / "plan.json"
+    replayed = None
+    events_path = run_dir / JOURNAL_NAME
+
+    has_terminal_event = any(
+        event.round == number and event.kind == "round-finished"
+        for event in read_events(events_path)
+    )
+    if events_path.exists() and (not plan_path.exists() or has_terminal_event):
+        from .projection import ProjectionError, project_run
+
+        try:
+            replayed = project_run(events_path, RunId(run_dir.name), number)
+        except ProjectionError as exc:
+            raise ConfigError(f"cannot replay authoritative event log: {exc}") from exc
+    if not plan_path.exists() and replayed is not None:
+        _write_json(plan_path, replayed.plan)
+    if replayed is None or replayed.result is None:
+        return False
+    _write_json(round_dir / "result.json", replayed.result)
+    atomic_json(round_dir / "status.json", _round_status("completed"))
+    return True
+
+
+def settle_finished_round(run_dir: Path) -> None:
+    """Record the latest round as finished when only its journal says it is.
+
+    Idempotent, and a no-op for a round that is still running. Public because a
+    transition can end without claiming anything — every node of the last round is
+    done or dropped — and the repair `prepare_round` would have performed on the way
+    to the next round is owed to the ledger just the same. That includes the journal's
+    own torn trailing line, which is otherwise repaired by the writer a claimed round
+    opens; it is reconciled before the ledger lock is taken, so this never holds the
+    two locks in an order no other caller does.
+    """
+    from .journal import open_journal
+
+    latest = latest_round(run_dir)
+    if latest is None or (latest[1] / "result.json").exists():
+        return
+    open_journal(run_dir, RunId(run_dir.name), latest[0])
+    with advisory_lock(f"ledger:{run_dir.resolve()}"):
+        latest = latest_round(run_dir)
+        if latest is not None and not (latest[1] / "result.json").exists():
+            _settle_from_the_journal(run_dir, *latest)
+
+
 def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False) -> ClaimedRound:
     """Use a pending plan-only round when identical, otherwise create the next round."""
     with advisory_lock(f"ledger:{run_dir.resolve()}"):
@@ -574,26 +631,7 @@ def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False)
             number, round_dir = latest
             if not (round_dir / "result.json").exists():
                 plan_path = round_dir / "plan.json"
-                replayed = None
-                events_path = run_dir / "events.jsonl"
-                from .journal import read_events
-
-                has_terminal_event = any(
-                    event.round == number and event.kind == "round-finished"
-                    for event in read_events(events_path)
-                )
-                if events_path.exists() and (not plan_path.exists() or has_terminal_event):
-                    from .projection import ProjectionError, project_run
-
-                    try:
-                        replayed = project_run(events_path, RunId(run_dir.name), number)
-                    except ProjectionError as exc:
-                        raise ConfigError(f"cannot replay authoritative event log: {exc}") from exc
-                if not plan_path.exists() and replayed is not None:
-                    _write_json(plan_path, replayed.plan)
-                if replayed is not None and replayed.result is not None:
-                    _write_json(round_dir / "result.json", replayed.result)
-                    atomic_json(round_dir / "status.json", _round_status("completed"))
+                if _settle_from_the_journal(run_dir, number, round_dir):
                     latest = None
                 if latest is None:
                     number = number + 1

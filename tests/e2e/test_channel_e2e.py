@@ -465,6 +465,18 @@ def test_a_check_in_that_leaves_a_predecessors_update_in_place_is_not_a_success(
     attempts = (channel / "check-in-dispatches.txt").read_text().splitlines()
     assert attempts[:2] == ["success", "missing-surface"], attempts
     hold.let_go()
+    # Ended rather than abandoned, as every other journey in this file ends the run it
+    # launched. Releasing the held worker only unblocks the orchestrator; it does not
+    # stop it, so this was the one test that left a live `onejudge run` for teardown to
+    # race — and the leak sweep reported that still-working process against a test that
+    # had already passed, whenever the box was loaded enough that it had not finished
+    # on its own. The planner's own verdict is what ends a run, so it is what ends this.
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        if boundary["surface"]["kind"] != "heartbeat":
+            break
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified stale surface"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
 def test_completed_check_in_without_surface_is_logged_and_retried(

@@ -34,6 +34,13 @@ from orchestrator.watchdog import ProcessId, process_group_is_running, terminate
 
 REAPER_SCRIPT = Path(__file__).with_name("leak_reaper.py")
 
+#: Shortens `ResourceLeakGuard.drain_seconds` for one session. Set only by the
+#: journeys in `tests/e2e/test_leak_guard_e2e.py`, which run a real pytest session
+#: that leaks *on purpose*: they already know the tree is not going anywhere, and
+#: waiting out a ceiling sized for a real teardown would make one deliberate leak the
+#: longest test in the suite. It can only make the guard report sooner, never miss.
+DRAIN_SECONDS_ENV = "ORCHESTRATOR_LEAK_GUARD_DRAIN_SECONDS"
+
 
 class ResourceLeak(AssertionError):
     """A test left one of its own registered resources alive."""
@@ -264,6 +271,17 @@ class ResourceLeakGuard:
 
     popen: PopenFactory = subprocess.Popen
     grace_seconds: float = 5.0
+    #: The ceiling on waiting for swept descendants to finish going away, kept apart
+    #: from `grace_seconds` because they answer different questions. `grace_seconds`
+    #: bounds a signal this guard *sent*: it terminated the group, so a process that
+    #: has not gone by then gets SIGKILL, and being generous there only delays the
+    #: escalation. Nothing signals a swept descendant — it is leaving because its own
+    #: supervisor is — so the only question left is whether it is going at all, and
+    #: five seconds answered that with the box's load rather than with the tree's
+    #: state, failing a passing test whenever a `onejudge run` teardown ran long.
+    #: The wait is paid only while something is still there, and it ends the moment
+    #: the set drains, so the ceiling costs nothing on the ordinary path.
+    drain_seconds: float = 60.0
     processes: list[subprocess.Popen[Any]] = field(default_factory=list)
     worktrees: set[Path] = field(default_factory=set)
     #: The session whose descendants this guard may sweep, and the pid it may not.
@@ -278,12 +296,18 @@ class ResourceLeakGuard:
 
     @classmethod
     def for_test(
-        cls, popen: PopenFactory, session: SessionGuard, *, grace_seconds: float = 5.0
+        cls,
+        popen: PopenFactory,
+        session: SessionGuard,
+        *,
+        grace_seconds: float = 5.0,
+        drain_seconds: float = 60.0,
     ) -> ResourceLeakGuard:
         """Build a guard that also owns everything this test is about to start."""
         return cls(
             popen=popen,
             grace_seconds=grace_seconds,
+            drain_seconds=drain_seconds,
             session=session,
             inherited=session.sampler.claimed() | session.excluded(),
         )
@@ -312,13 +336,13 @@ class ResourceLeakGuard:
         A tree that was told to stop takes a moment to go, and the last thing to
         leave is often a process whose whole job is to outlive the others. Reporting
         that instant as a leak would turn every ordinary teardown into a flake, so
-        the sweep waits the same grace the registered groups get — and pays that wait
-        only when there is something to wait for.
+        the condition here is the *empty set*, and `drain_seconds` only bounds how
+        long it may take to get there.
         """
         survivors = self._survivors()
-        deadline = time.monotonic() + self.grace_seconds
+        deadline = time.monotonic() + self.drain_seconds
         while survivors and time.monotonic() < deadline:
-            time.sleep(0.1)
+            time.sleep(0.05)
             survivors = self._survivors()
         return survivors
 
@@ -492,7 +516,12 @@ def resource_leak_guard(
     """Reap complete subprocess trees and report test-owned resource leaks."""
     original_popen = subprocess.Popen
     e2e_test = "e2e" in Path(str(request.node.path)).parts
-    guard = ResourceLeakGuard.for_test(original_popen, session_leak_guard)
+    requested = os.environ.get(DRAIN_SECONDS_ENV)
+    guard = ResourceLeakGuard.for_test(
+        original_popen,
+        session_leak_guard,
+        **({"drain_seconds": float(requested)} if requested else {}),
+    )
 
     def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
         # Replaces `subprocess.Popen` for every caller in the process, so it has to

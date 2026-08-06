@@ -22,6 +22,10 @@ with**, so `executed_plan` folds it from the run's journal rather than re-readin
 round-scoped rule: a `retry` replacement's id exists only in the executed graph, so
 the launch file can neither recognise the merged replacement as done nor keep the
 branch pin it carried. docs/orchestration.md has the planner-facing account.
+
+That rule is about *transitions*, not about one command: `plan_for_the_next_round`
+is what `run-plan` folds through when it is pointed at a run whose latest round has
+already finished, so a re-run of the launch file cannot start the next round from it.
 """
 
 from __future__ import annotations
@@ -36,9 +40,16 @@ from typing import Any
 from .config import ConfigError, load_yaml
 from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
+from .plan import parse_cross_dag_dependency
 from .runs import NodeId, RunId, StackBasePayload
 
-__all__ = ["executed_plan", "next_round", "round_context", "round_supersessions"]
+__all__ = [
+    "executed_plan",
+    "next_round",
+    "plan_for_the_next_round",
+    "round_context",
+    "round_supersessions",
+]
 
 
 def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +139,58 @@ def round_context(run_dir: Path, round_number: int) -> dict[str, list[str]]:
             if isinstance(nid, str) and isinstance(note, str) and note.strip():
                 collected.setdefault(nid, []).append(note)
     return collected
+
+
+def plan_for_the_next_round(run_dir: Path) -> dict[str, Any] | None:
+    """The graph a *new* round on an already-recorded run must execute, or ``None``.
+
+    ``run-plan`` is handed a plan file, and for a run with no finished round that
+    file *is* the round. For a run whose latest round has finished it is only that
+    round's launch record: every live edit the reconciler committed lives in the
+    journal and not in the file, so re-running the file re-dispatches work that
+    already merged and discards the planner's accepted edits — a `retry`'s
+    replacement id, an amended `task`, a branch pin, a `drop`. This derives what
+    `next-round` derives with no edits of its own: the executed plan of record,
+    folded from the journal and carried forward through the round's own result.
+
+    ``None`` means this invocation is not a transition at all — there is no recorded
+    round yet, or the latest one has not finished — which is the reuse and
+    ``--recover`` case where the launch record is still the round to run.
+
+    A round whose result was never written is still finished when its journal says
+    so: an owner can die between `round-finished` and `result.json`, and that is one
+    of the transitions this exists to fold. `prepare_round` writes the missing
+    result out of the same projection immediately afterwards.
+    """
+    from .journal import JOURNAL_NAME
+    from .projection import ProjectionError, project_run
+    from .runs import latest_round, load_mapping
+
+    latest = latest_round(run_dir)
+    if latest is None:
+        return None
+    number, round_dir = latest
+    plan_path, result_path = round_dir / "plan.json", round_dir / "result.json"
+    launch = load_mapping(plan_path) if plan_path.is_file() else None
+    if result_path.is_file():
+        result = load_mapping(result_path)
+    else:
+        try:
+            projected = project_run(run_dir / JOURNAL_NAME, RunId(run_dir.name), number)
+        except (ProjectionError, ConfigError, OSError):
+            return None
+        if projected.result is None:
+            return None
+        result = dict(projected.result)
+        launch = dict(projected.plan) if launch is None else launch
+    if launch is None:
+        return None
+    return next_round(
+        executed_plan(run_dir, number, launch),
+        result,
+        carried_context=round_context(run_dir, number),
+        superseded=round_supersessions(run_dir, number),
+    )
 
 
 def next_round(
@@ -302,15 +365,48 @@ def next_round(
     for node in add:  # brand-new work
         _emit(node)
 
+    def _watches_through(nid: str, seen: frozenset[str] = frozenset()) -> list[str]:
+        """Cross-DAG watches that outlive the node this transition carried out.
+
+        A `run:<id>#<node>` reference is a **watch**, not a one-shot prerequisite: once
+        its upstream settles `done` the consumer keeps reporting `upstream-modified`
+        for planner review, and an upstream that stops being resolvable blocks it
+        again. Both stop the moment the reference leaves the graph, so it passes to
+        whatever still depends on the consumer — the same way an unresolved
+        publication anchor passes through a removed gate above, and for the same
+        reason: the edge outlives the node that consumed it.
+        """
+        if nid in seen:
+            return []
+        source = prior_tasks.get(nid)
+        if not isinstance(source, dict):
+            return []
+        found: list[str] = []
+        for dep in source.get("deps") or []:
+            if not isinstance(dep, str) or dep in kept_ids:
+                continue
+            if parse_cross_dag_dependency(dep) is not None:
+                found.append(dep)
+            else:
+                found.extend(_watches_through(dep, seen | {nid}))
+        return found
+
     # A dep that is no longer in the round is satisfied (merged) or intentionally
-    # gone — drop it so the node runs against the updated base.
+    # gone — drop it so the node runs against the updated base. A cross-DAG reference
+    # is neither: it names no node of this graph, so it was never "in the round" to
+    # begin with, and stripping it as satisfied ends the watch it exists to be.
     for node in next_tasks:
         if "deps" in node:
             previous_deps = node["deps"]
             anchors = list(node.get("stack_bases") or [])
+            watches: list[str] = []
             for dep in previous_deps:
                 if dep in kept_ids:
                     continue
+                if parse_cross_dag_dependency(dep) is not None:
+                    watches.append(dep)
+                    continue
+                watches.extend(_watches_through(dep))
                 for anchor in _anchors_through(dep):
                     anchors = [
                         existing
@@ -320,7 +416,8 @@ def next_round(
                     anchors.append(anchor)
             if anchors:
                 node["stack_bases"] = anchors
-            node["deps"] = [d for d in previous_deps if d in kept_ids]
+            kept = [d for d in previous_deps if d in kept_ids]
+            node["deps"] = kept + [w for w in dict.fromkeys(watches) if w not in kept]
 
     plan: dict[str, Any] = {"concurrency": prev_plan.get("concurrency", 4), "tasks": next_tasks}
     if "schema_version" in prev_plan:
