@@ -32,6 +32,7 @@ import pytest
 from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
+from history_store import write_worker_session
 from rendezvous import Rendezvous
 from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
@@ -83,6 +84,7 @@ from orchestrator.provenance import (
 from orchestrator.provider_health import failure_rollups
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
+from orchestrator.relaunch import RELAUNCH_MARK
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
@@ -762,6 +764,81 @@ def test_an_empty_death_after_committed_work_relaunches_onto_the_preserved_branc
     # and the work that finished afterwards reach the base together.
     assert _has_file(origin, "main", "partial.txt")
     assert _has_file(origin, "main", "finished.txt")
+
+
+def test_a_relaunch_starts_a_fresh_seeded_session_and_never_resumes_the_dead_one(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    """The relaunch after a provider death takes a conversation of its own.
+
+    Reusing the name asks the identity that just refused for a session it may no
+    longer hold, and `No conversation found with session ID ...` is another death,
+    which earns another relaunch — the loop that spent whole lineages without a turn
+    of work. So the second dispatch is a *new* conversation, and the dead one is read
+    back out of oneharness history and carried forward as prompt text instead.
+
+    The history store here is the real one: the dying dispatch records a session in
+    oneharness' own line format, and the seed is read back through the real
+    `oneharness history` CLI, exactly as production reads it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-seeded-relaunch")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    history_dir = tmp_path / "history"
+    store = history_dir / "seeded-relaunch-project"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    dispatched: list[tuple[str, str]] = []
+
+    def dying_then_working(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        dispatched.append((session, task))
+        worktree = Path(project_dir)
+        if len(dispatched) == 1:
+            # What the dead conversation leaves behind: a real recorded session,
+            # under the very name this dispatch ran as.
+            write_worker_session(
+                store / "dying-dispatch-20260806T120000Z-1.jsonl",
+                project=worktree,
+                name=session,
+                prompt="Measure the lifecycle cost and write cost-report.txt.",
+            )
+            return _launch_death(persona)
+        (worktree / "cost-report.txt").write_text("measured\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: report lifecycle cost")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "seeded-relaunch-worktrees"),
+        branch="feature/seeded-relaunch",
+        dispatch_fn=dying_then_working,
+        recorded_gate=["true"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert len(dispatched) == 2, dispatched
+    (dead_session, _), (fresh_session, relaunched_task) = dispatched
+    # A new conversation, not the dead one — and the dead name is never asked for again.
+    assert fresh_session != dead_session
+    assert fresh_session == f"{dead_session}{RELAUNCH_MARK}1"
+    assert [session for session, _ in dispatched].count(dead_session) == 1
+    # And the work continues from what the dead conversation recorded, carried as
+    # prompt text rather than as a session to resume.
+    assert "Prior session context (bounded)" in relaunched_task
+    assert "Measure the lifecycle cost and write cost-report.txt." in relaunched_task
+    assert "Implemented the unified view." in relaunched_task
+    assert "NOT being resumed" in relaunched_task
+    # The original task is still the task; the seed is context in front of it.
+    assert relaunched_task.endswith(
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n"
+    )
+    assert _has_file(origin, "main", "cost-report.txt")
 
 
 @pytest.mark.parametrize(

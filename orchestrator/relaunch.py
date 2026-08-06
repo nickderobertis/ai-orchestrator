@@ -80,7 +80,9 @@ def transcript_seed(session: str, *, oneharness_bin: str = "oneharness") -> str 
     a precondition for it.
     """
     try:
-        recorded = [item for item in all_sessions(oneharness_bin=oneharness_bin) if item.name == session]
+        recorded = [
+            item for item in all_sessions(oneharness_bin=oneharness_bin) if item.name == session
+        ]
     except HistoryError:
         return None
     for item in recorded:  # newest first; the first one that has any turns wins
