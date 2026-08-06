@@ -1240,6 +1240,66 @@ def test_a_parked_wrapper_stays_parked_through_a_month_of_naps_and_a_clock_windo
     assert not (status_dir / "agent.done").exists()
 
 
+#: The loop headers that cannot decide to stop. Anything else — `while [ ... ]`,
+#: `until`, `for` over a finite list — is a termination condition by construction.
+_UNCONDITIONAL_LOOP_HEADERS = ("while :; do", "while true; do")
+
+
+def _parked_wait_source() -> list[str]:
+    """What the wrapper runs after recording a failed turn: code lines, no comments.
+
+    The failure branch's last act is the park, so the block is everything between
+    the marker write and the branch's own `fi`. Both anchors are unique and are
+    asserted to be, because a scan that silently matched nothing would pass.
+    """
+    lines = WRAPPER.read_text(encoding="utf-8").splitlines()
+    marks = [
+        i for i, line in enumerate(lines) if line.strip().startswith("write_status agent.failed")
+    ]
+    assert len(marks) == 1, f"expected one agent.failed write to anchor the park, got {len(marks)}"
+    closes = [i for i in range(marks[0], len(lines)) if lines[i] == "fi"]
+    assert closes, "the failure branch that parks the wrapper is never closed"
+    return [
+        stripped
+        for line in lines[marks[0] + 1 : closes[0]]
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    ]
+
+
+def test_the_parked_wait_is_written_as_a_loop_with_no_termination_condition() -> None:
+    """No bound at all, which is the half no finite observation can reach.
+
+    The behavioural test above outlasts a park that counts its naps or watches the
+    clock, but only up to its own sizes: an hour-long deadline still passes it, and
+    waiting one out is not something a suite can do. So the loop is also read. The
+    shape required is the narrowest one that cannot stop on its own — an
+    unconditional header, one `sleep` inside it, and nothing after it in the branch
+    — which is what rejects a clock check, a `timeout`, a counter, or a `break`
+    without needing to enumerate them.
+
+    This is a source assertion, so it constrains how the park is written and not
+    only what it does: a legitimate rewrite into another shape fails here and should
+    update this test alongside it.
+    """
+    block = _parked_wait_source()
+
+    assert block[0] in _UNCONDITIONAL_LOOP_HEADERS, (
+        f"the parked wait opens with {block[0]!r}; it must be one of "
+        f"{list(_UNCONDITIONAL_LOOP_HEADERS)}, because every other header is a "
+        "condition the wait can stop on"
+    )
+    assert block[-1] == "done", (
+        f"the parked wait ends with {block[-1]!r} rather than closing its loop; "
+        "nothing may follow the park in the failure branch, or the wrapper has a "
+        "way back out to the turn's own exit"
+    )
+    body = block[1:-1]
+    assert len(body) == 1 and re.fullmatch(r"sleep \S+", body[0]), (
+        f"the parked wait's body is {body}; it must be a single sleep, so that no "
+        "clock check, counter, or break can end the wait the dispatcher is meant to"
+    )
+
+
 def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -> None:
     """An OOM kill and an ordinary non-zero exit must not read the same."""
     status_dir = tmp_path / "orchestrator-watchdog-4" / "agent"
