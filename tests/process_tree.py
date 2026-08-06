@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 
-LIFETIME = 600
+LIFETIME = LIFETIME_SECONDS
 # How long the intermediate stays before orphaning the worker. A real dispatch's
 # parent lives for minutes while its children work, which is what lets a watcher
 # see them at all; a parent that vanished the instant it forked would model
@@ -61,10 +61,18 @@ if "--root-exits" not in sys.argv[2:]:
 '''
 
 
-def write_orphaning_tree(directory: Path) -> Path:
-    """Write the tree script into ``directory`` and return its path."""
+def write_orphaning_tree(directory: Path, *, lifetime: float = 600) -> Path:
+    """Write the tree script into ``directory`` and return its path.
+
+    ``lifetime`` is how long the orphaned worker stays. The default outlasts any
+    journey that asks whether a leak is *reported*; a journey about a tree that goes
+    away on its own has to name one that does.
+    """
     script = directory / "orphaning_tree.py"
-    script.write_text(_SOURCE.replace("LINGER_SECONDS", repr(LINGER)), encoding="utf-8")
+    script.write_text(
+        _SOURCE.replace("LINGER_SECONDS", repr(LINGER)).replace("LIFETIME_SECONDS", repr(lifetime)),
+        encoding="utf-8",
+    )
     return script
 
 

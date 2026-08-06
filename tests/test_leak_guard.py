@@ -13,6 +13,7 @@ import leak_reaper
 import pytest
 from leak_guard import ResourceLeak, ResourceLeakGuard, SessionGuard
 from process_tree import (
+    LINGER,
     await_orphaned,
     await_reaped,
     await_recorded_pid,
@@ -84,7 +85,7 @@ def test_guard_sweeps_a_descendant_its_popen_hook_never_saw(
     """The layer that catches what registration cannot: a tree started elsewhere."""
     marker = tmp_path / "worker.pid"
     guard = ResourceLeakGuard.for_test(
-        resource_leak_guard.popen, session_leak_guard, grace_seconds=0.5
+        resource_leak_guard.popen, session_leak_guard, grace_seconds=0.5, drain_seconds=0.5
     )
     # Started through the unpatched constructor and detaching twice over, so neither
     # the guard's registration nor a walk from a recorded root can reach the worker.
@@ -100,6 +101,32 @@ def test_guard_sweeps_a_descendant_its_popen_hook_never_saw(
         guard.finish()
 
     assert await_reaped(worker)
+
+
+def test_guard_waits_out_a_descendant_that_is_still_going_away(
+    tmp_path: Path, resource_leak_guard: ResourceLeakGuard, session_leak_guard: SessionGuard
+) -> None:
+    """A slow teardown is not a leak, and the two budgets are not the same budget.
+
+    The sweep used to wait `grace_seconds` — the window a group gets after this guard
+    has *signalled* it. Nothing signals a swept descendant: it is leaving because its
+    own supervisor is, so the five seconds answered with the box's load rather than
+    with the tree, and a healthy `onejudge run` teardown was reported against a test
+    that had already passed. The worker here outlives that grace many times over and
+    still goes on its own, well inside the drain the sweep actually owes it.
+    """
+    marker = tmp_path / "worker.pid"
+    guard = ResourceLeakGuard.for_test(
+        resource_leak_guard.popen, session_leak_guard, grace_seconds=0.2, drain_seconds=30
+    )
+    tree = write_orphaning_tree(tmp_path, lifetime=LINGER + 3)
+    resource_leak_guard.popen([sys.executable, str(tree), str(marker), "--worker-detaches"])
+    worker = await_recorded_pid(marker)
+    assert await_orphaned(worker), "the worker never reparented away from its tree"
+
+    guard.finish()
+
+    assert not is_running(worker)
 
 
 #: A stable two-level tree: the root stays, so its child stays a descendant of it

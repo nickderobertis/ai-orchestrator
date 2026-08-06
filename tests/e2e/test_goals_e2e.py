@@ -337,6 +337,13 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     assert resumed.returncode == 1, resumed.stderr
     events = runs / "B" / "events.jsonl"
     assert "upstream-modified" in events.read_text(encoding="utf-8")
+    # And the reason it could still be reported: `consume` finished in round 1, so the
+    # transition carried it *out* — and passed its `run:A#produce` watch to the node
+    # that still depends on it. A watch removed with the satisfied dependency ids
+    # would leave round 2 with nothing watching A, and no event above to find.
+    carried = json.loads((runs / "B" / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert [task["id"] for task in carried["tasks"]] == ["pause"]
+    assert carried["tasks"][0]["deps"] == ["run:A#produce"]
 
     hold.let_go()
     upstream_out, upstream_err = upstream.communicate(timeout=10)
