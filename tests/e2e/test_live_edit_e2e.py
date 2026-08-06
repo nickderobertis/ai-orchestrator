@@ -1328,6 +1328,10 @@ def test_real_cli_cancel_parks_a_running_lifecycle_and_a_later_round_requeues_it
     # because `carried` failed; a park alone leaves a round `waiting`, which the
     # pending-park journey below asserts.)
     assert round_one["results"]["stacked"]["status"] == "blocked"
+    # And says which of the two holds it. "awaiting human action" would send the
+    # planner looking for an attestation to make; the release here is its own
+    # `requeue`, so the detail has to name the park.
+    assert round_one["results"]["stacked"]["error"] == "a dependency is parked"
     # The branch the cancelled dispatch preserved is real, survives in the registered
     # checkout, and carries the incomplete provenance a resume has to clear.
     assert gitops.is_ancestor(canonical, checkpoint, branch)
@@ -1493,3 +1497,10 @@ def test_real_cli_cancel_parks_a_node_before_it_is_ever_dispatched(
     # can see rather than a node that quietly vanished from the tally.
     listed = _read_only_view(["just", "runs", "--runs-dir", str(runs)])
     assert "1 parked" in listed, listed
+    # And `just monitor`, the third view built on the same recorded round: its state
+    # line counts every node status, so a park it did not know the word for would be
+    # dropped from the tally and read as a node that is not in the graph.
+    watched = _read_only_view(["just", "monitor", "--once", run_id, "--runs-dir", str(runs)])
+    assert watched.splitlines()[-1].endswith(f"{run_id} round-01 waiting: 2 done, 1 parked"), (
+        watched
+    )

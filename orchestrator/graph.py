@@ -78,9 +78,11 @@ from .lifecycle import (
     validate_repo_aliases,
 )
 from .outcomes import (
+    HELD_STATUSES,
     INFRASTRUCTURE_FAILURE_OUTCOME,
     LIFECYCLE_OUTCOMES,
     NODE_OUTCOMES,
+    UNMET_DEP_STATUSES,
 )
 from .plan import (
     NODE_KINDS,
@@ -107,6 +109,7 @@ from .runs import (
     NodeId,
     RunId,
     prepare_round,
+    render_status_counts,
     resolve_run_dir,
     round_abandonment_guard,
     status_summary,
@@ -253,12 +256,12 @@ class GraphResult:
     @property
     def state(self) -> str:
         statuses = {r.status for r in self.results.values()}
-        if statuses & {"failed", "skipped", "cancelled"}:
+        if statuses & {*UNMET_DEP_STATUSES, "cancelled"}:
             return "failed"
         # `parked` is deliberately on the held side rather than the failed one: the
         # planner stopped this node, its work is preserved, and a `requeue` picks it
         # up. Reporting it as a failure would send a reader looking for a defect.
-        if statuses & {"waiting", "blocked", "parked"}:
+        if statuses & set(HELD_STATUSES):
             return "waiting"
         return "complete"
 
@@ -1268,12 +1271,6 @@ def first_line(task: str) -> str:
     return line[:80] + ("..." if len(line) > 80 else "")
 
 
-def render_counts(counts: Counter[str]) -> str:
-    keys = ["done", "waiting", "blocked", "parked", "failed", "skipped"]
-    keys.extend(sorted(set(counts) - set(keys)))
-    return ", ".join(f"{counts[key]} {key}" for key in keys if counts[key])
-
-
 def render_summary(results: dict[str, NodeResult], state: str, actions: list[HumanAction]) -> str:
     counts = Counter(r.status for r in results.values())
     headline = (
@@ -1281,7 +1278,7 @@ def render_summary(results: dict[str, NodeResult], state: str, actions: list[Hum
         if state == "waiting" and not actions and counts["parked"]
         else _HEADLINE[state]
     )
-    lines = [f"plan: {headline} ({render_counts(counts)})"]
+    lines = [f"plan: {headline} ({render_status_counts(counts)})"]
     for nid, result in results.items():
         label = f"  {nid} [human]" if result.kind == "human" else f"  {nid}"
         line = f"{label}: {result.status}"
