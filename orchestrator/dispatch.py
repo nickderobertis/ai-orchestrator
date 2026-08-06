@@ -52,6 +52,7 @@ from .adopt import (
     read_relaunch_record,
     write_relaunch_record,
 )
+from .boundary import ATTEMPTS_LOG_ENV, attempts_log
 from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_RUN_ID_ENV,
@@ -1871,6 +1872,10 @@ def _start_orchestrator_process(
     process_env.update(harness_env)
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
+    # Where the orchestrator's own harness wrapper records a post-round request it
+    # had to ask twice. Exported here so the wrapper never has to know a run
+    # directory layout, and so the next round can fold it into `events.jsonl`.
+    process_env[ATTEMPTS_LOG_ENV] = str(attempts_log(run_dir))
     try:
         process_env[LABEL_ENV] = merge_labels(
             process_env.get(LABEL_ENV),

@@ -950,6 +950,41 @@ owner, exactly as an interrupted round is, so `just runs` reports
 and the work is reclaimable. `complete` on the channel is a completion verdict and
 does not stop scheduling; `just stop` is what ends a run.
 
+### Retrying the requests a round boundary depends on
+
+A round boundary is where an orchestration is most fragile and least busy: the
+round has just finished, its work is recorded, and the only thing left is the
+orchestrator asking its provider what to do next — with the quota that round just
+spent. One refusal there used to kill the process that owned the whole run.
+
+Two requests are now retried with bounded backoff before the process is allowed to
+die, under one policy (`orchestrator/boundary.py`):
+
+* **The orchestrator's own post-round turn**, in `scripts/oneharness-orchestrator.sh`.
+  Only an attempt that produced *no* stdout is asked again — onejudge parses that
+  wrapper's stdout as exactly one document, so an attempt that answered has already
+  answered, whatever its exit status. A streamed turn passes straight through
+  unbuffered.
+* **The heartbeat check-in launch**, and only for a classified provider refusal. A
+  check-in that ran and simply did its job badly is a different failure, still
+  deferred to the pacemaker's next interval by its own lease.
+
+Each attempt takes a conversation of its own (`…#relaunchN`), for the same reason a
+lifecycle relaunch does — see
+[repo-lifecycle.md](repo-lifecycle.md#a-death-that-left-no-work-is-not-charged-to-the-work-budget).
+Three
+attempts by default, five seconds apart and doubling to a two-minute ceiling;
+`ORCHESTRATOR_BOUNDARY_ATTEMPTS` and `ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS` change
+both, and an unusable value falls back to the default rather than disabling the
+recovery it configures.
+
+Every retry reaches `events.jsonl` as a `boundary-retried` record carrying the role,
+the attempt number, the budget, and a bounded redacted reason. The wrapper's own
+retries happen between rounds with no journal open anywhere, so it appends them to
+`orchestrator/boundary-attempts.jsonl` and the *next* round folds them in — which is
+why a retry that saved a run is visible in the run's own record rather than only to
+whoever tails a log.
+
 ### Adopting a run whose driver died
 
 A run whose orchestrator process is gone is not over — its journal, its round

@@ -69,8 +69,13 @@ from .runs import NodeId, RunId, StepId
 # and resume of one node. Strict replay refuses a committed operation it cannot fold,
 # so a park written at v10 must be skippable by a v9 reader as an unknown version
 # rather than met as corruption in a round that is otherwise healthy.
-SCHEMA_VERSION = 10
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION})
+# v11 is additive in the kind vocabulary: `boundary-retried` joined it, recorded
+# when a request a round *boundary* depends on — the orchestrator's own post-round
+# turn, or a heartbeat check-in launch — was refused and asked again. A v10 reader
+# skips it as unknown and sees exactly what it saw before, which is the gap it
+# closes: a retry that saved a run used to leave no trace in the run's own record.
+SCHEMA_VERSION = 11
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -114,6 +119,10 @@ EventKind = Literal[
     # them, and it is written at send time whether or not delivery ever happens.
     "planner-surface-queued",
     "planner-surfaced",
+    # A request the round boundary depends on was refused and asked again. It
+    # belongs to the round rather than to any node — nothing was executing when it
+    # happened, which is exactly why its absence used to end the run.
+    "boundary-retried",
     "node-started",
     "node-settled",
     "step-started",
@@ -190,6 +199,7 @@ ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
         "concurrent-acknowledged",
         "planner-surface-queued",
         "planner-surfaced",
+        "boundary-retried",
     }
 )
 GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset(

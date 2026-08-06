@@ -20,12 +20,19 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import REPO_ROOT
 from .activity import live_activity
+from .boundary import (
+    BoundaryAttempt,
+    RetryPolicy,
+    drain_attempts,
+    retry_boundary_request,
+)
 from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_ENDPOINTS,
@@ -61,6 +68,7 @@ from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     Event,
     EventKind,
+    JournalError,
     JournalOperation,
     JournalSink,
     NodeJournal,
@@ -108,6 +116,7 @@ from .plan import (
 )
 from .provider_failure import journalled
 from .registry import Registry
+from .relaunch import relaunch_session
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     ClaimedRound,
@@ -1626,6 +1635,12 @@ def _run_round(
         run_id = RunId(run_dir.name)
         round_number = round_record.number
         journal = open_journal(run_dir, run_id, round_number)
+        # Folded here because there is nowhere else it can be: the orchestrator's own
+        # post-round request happens between rounds, with no journal open anywhere,
+        # and a retry that saved this run would otherwise be visible only to whoever
+        # tails a log. The round that follows it is the first thing recording again.
+        for retried in drain_attempts(run_dir):
+            journal.append("boundary-retried", detail=cast(Any, retried.detail()))
         for acknowledgement in acknowledgements:
             journal.append(
                 "concurrent-acknowledged",
@@ -1791,26 +1806,56 @@ def _run_round(
                 f"{validated_run_id} MESSAGE --runs-dir "
                 f"{shlex.quote(str(run_dir.parent.resolve()))}"
             )
-            report = dispatch(
-                "check-in",
-                task,
-                base_path=args.base_config,
-                persona_dir=args.persona_dir,
-                cwd=args.cwd or REPO_ROOT,
-                onejudge_bin=args.onejudge_bin,
-                provider=args.provider,
-                oneharness_mode=args.oneharness_mode,
-                worker_harness=args.worker_harness,
-                judge_harness=args.judge_harness,
-                labels={
-                    "run_id": validated_run_id,
-                    "round": str(round_number),
-                    "agent_role": "check-in",
-                    "persona": "check-in",
-                },
-                session=f"check-in-{validated_run_id}-{round_number}",
-                max_turns=1,
-                timeout=dispatch_timeout,
+            attempted = 0
+
+            def launch() -> Report:
+                nonlocal attempted
+                attempted += 1
+                return dispatch(
+                    "check-in",
+                    task,
+                    base_path=args.base_config,
+                    persona_dir=args.persona_dir,
+                    cwd=args.cwd or REPO_ROOT,
+                    onejudge_bin=args.onejudge_bin,
+                    provider=args.provider,
+                    oneharness_mode=args.oneharness_mode,
+                    worker_harness=args.worker_harness,
+                    judge_harness=args.judge_harness,
+                    labels={
+                        "run_id": validated_run_id,
+                        "round": str(round_number),
+                        "agent_role": "check-in",
+                        "persona": "check-in",
+                    },
+                    # Each attempt is its own conversation, for the reason a lifecycle
+                    # relaunch is: the identity that just refused may no longer hold
+                    # the one before it, and asking for it is another refusal.
+                    session=relaunch_session(
+                        f"check-in-{validated_run_id}-{round_number}", attempted - 1
+                    ),
+                    max_turns=1,
+                    timeout=dispatch_timeout,
+                )
+
+            def journal_retry(retried: BoundaryAttempt) -> None:
+                # Same policy the pump keeps for its own surfaces: a journal that
+                # cannot take the record must not be what stops the recovery.
+                with suppress(JournalError, OSError):
+                    journal.append("boundary-retried", detail=cast(Any, retried.detail()))
+
+            report = retry_boundary_request(
+                launch,
+                role="check-in",
+                policy=RetryPolicy.from_environment(),
+                # Only a classified provider refusal. A check-in that ran and simply
+                # did its job badly is a different failure, already deferred to the
+                # next interval by the pacemaker's own lease.
+                retryable=lambda exc: (
+                    isinstance(exc, DispatchError)
+                    and recordable_provider_failure(exc.failure_attribution)
+                ),
+                report=journal_retry,
             )
             written = _surface_written_at()
             if not report.completed or written is None or written == before:

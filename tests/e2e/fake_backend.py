@@ -316,6 +316,20 @@ def main() -> int:
                 attempts = channel_dir / "check-in-dispatches.txt"
                 fail_once_value = os.environ.get("FAKE_CHECK_IN_FAIL_ONCE")
                 fail_once = Path(fail_once_value) if fail_once_value else None
+                # The other way a check-in launch fails: the provider refuses it, in
+                # the words a real one uses. That is the transient the boundary retry
+                # is for, and it is deliberately distinct from the generic failure
+                # above, which the pacemaker still defers to its next interval.
+                refuse_once_value = os.environ.get("FAKE_CHECK_IN_PROVIDER_REFUSE_ONCE")
+                refuse_once = Path(refuse_once_value) if refuse_once_value else None
+                if refuse_once is not None and not refuse_once.exists():
+                    refuse_once.write_text("refused\n", encoding="utf-8")
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("provider-refused\n")
+                    sys.stderr.write(
+                        PROVIDER_REFUSALS["agent-attributed-provider-failure"][1] + "\n"
+                    )
+                    return 1
                 skip_surface_value = os.environ.get("FAKE_CHECK_IN_SKIP_SURFACE_ONCE")
                 skip_surface = Path(skip_surface_value) if skip_surface_value else None
                 # Leave a predecessor's queued update untouched exactly once: the

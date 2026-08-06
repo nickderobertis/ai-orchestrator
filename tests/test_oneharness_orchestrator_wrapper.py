@@ -10,6 +10,7 @@ downstream binary, exactly as the agent wrapper's tests do.
 
 from __future__ import annotations
 
+import json
 import stat
 import subprocess
 from pathlib import Path
@@ -225,3 +226,130 @@ def test_orchestrator_wrapper_rejects_an_inaccessible_alternate_codex_home(
     assert proc.returncode == 2
     assert "oneharness-orchestrator: alternate Codex home is not an accessible" in proc.stderr
     assert argv == []
+
+
+def _retrying_wrapper(
+    tmp_path: Path,
+    *,
+    body: str,
+    attempts: str = "3",
+    argv: list[str] | None = None,
+    attempts_log: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Drive the real wrapper with a stub oneharness whose behaviour ``body`` decides.
+
+    The stub counts its own invocations in a file, which is what makes "asked
+    again" observable at the only boundary that can show it: the wrapper is what
+    onejudge runs, and a retry is a second child process, not a return value.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'count=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 ))\n'
+        'printf \'%s\' "$count" > "$STUB_COUNT"\n' + body,
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    environment = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "STUB_COUNT": str(tmp_path / "stub-count"),
+        "ORCHESTRATOR_BOUNDARY_ATTEMPTS": attempts,
+        # Nothing here waits for real seconds: the policy under test is "how many
+        # times", and a real backoff would only make the suite slower.
+        "ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS": "0",
+    }
+    if attempts_log is not None:
+        environment["ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG"] = str(attempts_log)
+    return subprocess.run(
+        ["bash", str(WRAPPER), *(argv or ["run", "--prompt", "probe"])],
+        text=True,
+        capture_output=True,
+        env=environment,
+    )
+
+
+def _stub_invocations(tmp_path: Path) -> int:
+    counter = tmp_path / "stub-count"
+    return int(counter.read_text(encoding="utf-8")) if counter.is_file() else 0
+
+
+def test_a_post_round_request_that_produced_nothing_is_asked_again(tmp_path: Path) -> None:
+    """The refusal that orphaned two runs in one night is retried, not fatal.
+
+    The first attempt exits non-zero with an empty stdout — a harness that never
+    reached the turn — and the second answers. What the caller receives is the
+    successful answer and a zero status, so onejudge sees one turn rather than a
+    dead process.
+    """
+    log = tmp_path / "boundary-attempts.jsonl"
+    proc = _retrying_wrapper(
+        tmp_path,
+        body=(
+            'if [ "$count" -eq 1 ]; then echo "quota exhausted" >&2; exit 1; fi\n'
+            "printf '{\"ok\":true}'\n"
+        ),
+        attempts_log=log,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == '{"ok":true}'
+    assert _stub_invocations(tmp_path) == 2
+    # And the retry is recorded where the next round folds it into the journal.
+    recorded = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert len(recorded) == 1
+    assert (recorded[0]["role"], recorded[0]["attempt"], recorded[0]["attempts"]) == (
+        "orchestrator",
+        1,
+        3,
+    )
+
+
+def test_an_attempt_that_answered_is_never_asked_twice(tmp_path: Path) -> None:
+    """A failing turn that produced output has already answered onejudge.
+
+    onejudge parses this process's stdout as exactly one document, so a second
+    attempt appended to a partial answer would corrupt it. Non-zero is therefore
+    not on its own a reason to retry — producing nothing is.
+    """
+    log = tmp_path / "boundary-attempts.jsonl"
+    proc = _retrying_wrapper(
+        tmp_path,
+        body="printf '{\"partial\":true}'\nexit 1\n",
+        attempts_log=log,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stdout == '{"partial":true}'
+    assert _stub_invocations(tmp_path) == 1
+    assert not log.exists()
+
+
+def test_the_retry_budget_is_bounded_and_the_last_failure_stands(tmp_path: Path) -> None:
+    """A genuinely broken launch path fails every attempt and still fails."""
+    log = tmp_path / "boundary-attempts.jsonl"
+    proc = _retrying_wrapper(
+        tmp_path,
+        body='echo "harness cannot start" >&2\nexit 2\n',
+        attempts="2",
+        attempts_log=log,
+    )
+
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert _stub_invocations(tmp_path) == 2
+    assert [json.loads(line)["attempt"] for line in log.read_text().splitlines()] == [1]
+
+
+def test_a_streamed_turn_is_never_buffered_by_the_retry(tmp_path: Path) -> None:
+    """A caller that streams owns its stdout shape, so it passes straight through."""
+    proc = _retrying_wrapper(
+        tmp_path,
+        body='echo "died" >&2\nexit 1\n',
+        argv=["run", "--stream", "--prompt", "probe"],
+    )
+
+    assert proc.returncode == 1
+    assert _stub_invocations(tmp_path) == 1

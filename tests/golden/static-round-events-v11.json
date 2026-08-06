@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 11,
   "state_changing_kinds": [
     "node-added",
     "edge-added",
@@ -14,6 +14,7 @@
     "round-finished"
   ],
   "audit_kinds": [
+    "boundary-retried",
     "branch-discovered",
     "cleanup-deferred",
     "concurrent-acknowledged",
