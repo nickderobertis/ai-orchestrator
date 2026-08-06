@@ -422,6 +422,7 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         time.sleep(0.02)
     assert agent_pid is not None, "agent worker did not reach the provider barrier"
     orphan_pid = int(barrier.read_text(encoding="utf-8"))
+    killed_at = time.monotonic()
     os.kill(agent_pid, signal.SIGTERM)
     stdout, stderr = process.communicate(timeout=5)
 
@@ -460,7 +461,12 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
     node_failed = next(event for event in events if event["kind"] == "node-failed")
     assert node_failed["detail"]["outcome"] == "worker-died"
     assert node_failed["detail"].get("failure_attribution") == attribution
-    assert time.monotonic() - started < 5
+    # Promptness is the watchdog's own reaction, so it is measured from the kill.
+    # Anchoring it at `started` folded in launching a Python process tree and waiting
+    # for it to reach the provider barrier — setup the rendezvous loop above already
+    # allows ten seconds for, which made a five-second total a bound the box could
+    # fail on its own while the watchdog did its job in milliseconds.
+    assert time.monotonic() - killed_at < 5, time.monotonic() - killed_at
     deadline = time.monotonic() + 2
     while Path(f"/proc/{orphan_pid}").exists() and time.monotonic() < deadline:
         time.sleep(0.02)
