@@ -153,7 +153,9 @@ Escape key. It is a **timeline over a transcript**, both projected from
 - the node's **task, completion criteria, dependencies, PR and gate result** are
   tabs beside the timeline, one selection away rather than a wall of blocks. Six
   names do not fit every width, so below the breakpoint they wrap onto a second
-  row rather than hiding the ones past the edge behind a scroller.
+  row rather than hiding the ones past the edge behind a scroller — down to the
+  phone, where the same names need four rows and 170px of an 844px screen, and
+  the strip scrolls again so the timeline the view opens on has room to be drawn.
 
 Nothing in either surface grows with the size of the run. A run of eight or more
 consecutive same-kind siblings arrives as one grouped row, and a conversation

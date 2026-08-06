@@ -504,9 +504,9 @@ p {
   justify-content: flex-start;
   margin: 0 20px;
   /* Six named readings do not fit a laptop's working area; they scroll rather than
-     widening the view that holds them, and below the breakpoint they wrap instead
-     (see the media query at the foot of this file). The design system sizes the list
-     to its own content, so the ceiling has to be stated here. */
+     widening the view that holds them, and between the breakpoint and the phone they
+     wrap instead (see the media queries at the foot of this file). The design system
+     sizes the list to its own content, so the ceiling has to be stated here. */
   min-width: 0;
   scrollbar-width: none;
 }
@@ -1052,7 +1052,9 @@ pre {
      them hides whichever readings are past the edge behind an affordance nothing
      announces. They wrap instead, which costs one row of height and leaves every
      reading named and reachable. The design system fixes the row's height for a
-     single line, so releasing that is what lets the second one exist. */
+     single line, so releasing that is what lets the second one exist. Only down to
+     the phone: four rows buy the same reachability at four times the price, and the
+     rule at the foot of this file takes the scroller back there. */
   .node-tabs > [role="tablist"] {
     flex-wrap: wrap;
     height: auto;
@@ -1121,9 +1123,26 @@ pre {
     padding: 5px 14px 6px;
   }
 
+  /* The collapsed line is the view a node opens on, and at this width its legend
+     needs five rows of the region before a single bar is drawn — more than the share
+     that holds the whole plot on a laptop. It takes three quarters here so the line
+     and its clock are whole on arrival; the reading below keeps the rest and scrolls,
+     which is what a reading does anyway. */
+  .node-execution {
+    grid-template-rows: fit-content(75%) minmax(0, 1fr);
+  }
+
+  /* Wrapping earns its extra row between this width and the breakpoint above, where
+     six names need two. Here they need four, and 170px of an 844px screen spent on
+     names is what left the compact line — the whole reason the view opens on a
+     timeline — drawn below the fold of its own region. They scroll again, which is
+     how the strip behaves at every width above the breakpoint, and every name stays
+     reachable by drag, by swipe and by the arrow keys the tab set answers. */
   .node-tabs > [role="tablist"] {
     max-width: calc(100% - 28px);
+    flex-wrap: nowrap;
     margin: 0 14px;
+    overflow-x: auto;
   }
 
   .overall-hero {

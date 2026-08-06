@@ -8,6 +8,7 @@ import {
   OFFLINE_UI_URL,
   STALLED_UI_URL,
 } from "../playwright.config";
+import { PHONE } from "./viewports";
 
 /**
  * The DAG Observatory driven end to end against a real `orchestrator/server.py`
@@ -1559,12 +1560,14 @@ test("keeps the timeline's clock readable when its lanes outgrow the view", asyn
       (element) => element.scrollHeight > element.clientHeight,
     );
 
-  // The laptop the layout is designed against, and the compact size below its
-  // breakpoint: ten lanes and a reading do not both fit the second one at any share
-  // of it, so the two viewports state different things about the expanded plot.
+  // The laptop the layout is designed against, the compact size below its breakpoint,
+  // and the phone the matrix ends at: ten lanes and a reading do not both fit the
+  // last two at any share of them, so the viewports state different things about the
+  // expanded plot. The collapsed one they all state the same thing about.
   for (const viewport of [
     { width: 1400, height: 900, expandedFits: true },
     { width: 800, height: 700, expandedFits: false },
+    { width: PHONE.width, height: PHONE.height, expandedFits: false },
   ]) {
     await page.setViewportSize(viewport);
     await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
