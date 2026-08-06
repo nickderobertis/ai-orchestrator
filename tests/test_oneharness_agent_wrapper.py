@@ -1149,6 +1149,97 @@ def test_a_wrapper_awaiting_recovery_consumes_no_cpu_while_it_waits(tmp_path: Pa
     assert not (status_dir / "agent.done").exists()
 
 
+#: What the parked wrapper asks for in one nap, so a nap count reads as parked time.
+_PARKED_NAP_SECONDS = 3600
+#: Naps watched before the wait is taken to be uncounted — a month of parked time.
+_PARKED_NAPS_WATCHED = 720
+#: Real time watched alongside them, which the stub's stopped clock cannot supply.
+_PARKED_CLOCK_WINDOW_SECONDS = 2.0
+
+
+def test_a_parked_wrapper_stays_parked_through_a_month_of_naps_and_a_clock_window(
+    tmp_path: Path,
+) -> None:
+    """The wait must end when the dispatcher reaps the tree, and on nothing else.
+
+    A single long nap costs no CPU either, so the CPU measurement above cannot tell
+    it from a loop of them, and a wrapper that fell out of its wait would hand the
+    dispatcher a turn reporting success markers it never wrote. Stubbing `sleep` to
+    return at once makes each next iteration observable but stops the clock, so a
+    bound on how many times it sleeps and a bound on the clock surface differently:
+    the first as the wrapper leaving mid-nap, the second only by being outlasted in
+    real time. Both are watched here, each covering the bounds below its own size.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-parked-loop" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
+    # This process is the only one that runs these stubs, so user execute is the
+    # whole grant they need.
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    naps = tmp_path / "naps"
+    sleep_stub = bin_dir / "sleep"
+    # Recorded before returning, and returning immediately: the wrapper's own
+    # pre-park poll asks for 0.5s naps through this same stub, so the durations are
+    # what separate its heartbeat loop from the parked one.
+    sleep_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$1" >>{shlex.quote(str(naps))}\nexit 0\n',
+        encoding="utf-8",
+    )
+    sleep_stub.chmod(sleep_stub.stat().st_mode | stat.S_IXUSR)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            patience = time.monotonic() + 30
+            parked_naps: list[str] = []
+            parked_since: float | None = None
+            while True:
+                parked_for = 0.0 if parked_since is None else time.monotonic() - parked_since
+                assert process.poll() is None, (
+                    f"the wrapper left its wait after {len(parked_naps)} naps and "
+                    f"{parked_for:.1f}s parked, instead of awaiting recovery; the parked "
+                    "wait has an exit condition of its own"
+                )
+                assert time.monotonic() < patience, (
+                    f"the parked wrapper napped only {len(parked_naps)} of "
+                    f"{_PARKED_NAPS_WATCHED} times in 30s; it is "
+                    "not re-entering its wait"
+                )
+                time.sleep(0.02)
+                recorded = naps.read_text(encoding="utf-8") if naps.exists() else ""
+                parked_naps = [
+                    line for line in recorded.splitlines() if line == str(_PARKED_NAP_SECONDS)
+                ]
+                if parked_since is None:
+                    if not parked_naps:
+                        continue
+                    parked_since = time.monotonic()
+                elif (
+                    len(parked_naps) >= _PARKED_NAPS_WATCHED
+                    and parked_for >= _PARKED_CLOCK_WINDOW_SECONDS
+                ):
+                    break
+            still_waiting = process.poll() is None
+        finally:
+            process.kill()
+
+    assert still_waiting, "the wrapper left its wait once the observations were over"
+    assert (status_dir / "agent.failed").exists()
+    assert not (status_dir / "agent.done").exists()
+
+
 def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -> None:
     """An OOM kill and an ordinary non-zero exit must not read the same."""
     status_dir = tmp_path / "orchestrator-watchdog-4" / "agent"
