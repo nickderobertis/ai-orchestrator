@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 from rendezvous import Rendezvous
 from waits import deadline
@@ -1186,6 +1187,8 @@ def _read_only_view(command: list[str]) -> str:
     return completed.stdout
 
 
+# Parks and requeues against the live process registry other workers mutate.
+@pytest.mark.single_threaded
 def test_real_cli_cancel_parks_a_running_lifecycle_and_a_later_round_requeues_it(
     tmp_path: Path, onejudge_bin: str, bare_origin
 ) -> None:
