@@ -1,4 +1,4 @@
-"""Which provider each side of one dispatch actually ran on.
+"""Which provider — and which model — each side of one dispatch actually ran on.
 
 These journeys drive the real `orchestrator-run-plan` console script — the one
 executor, over plans holding a single direct node, a single lifecycle node, or
@@ -36,6 +36,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.harnesses import (
+    DISPATCH_SELECTION_ENV,
     JUDGE_HARNESS_ENV,
     PROCESS_WIDE_HARNESS_ENV,
     WORKER_HARNESS_ENV,
@@ -52,6 +53,13 @@ WORKER_MARKER = "You are one worker in a larger orchestrated effort"
 #: against them rather than merely chosen to differ by inspection.
 WORKER_CHOICE = "codex"
 JUDGE_CHOICE = "claude-code:primary"
+#: The model each side is told to run, chosen to be a name no config could have
+#: supplied: `oneharness.toml` pins `claude-opus-5` on every Claude identity and
+#: `gpt-5.6-sol` on both Codex ones, and `oneharness.judge.toml` pins
+#: `claude-sonnet-5`, so reading either sentinel back proves the override beat the
+#: model that side's config declares for the identity it landed on.
+WORKER_MODEL = "side-selection-worker-model"
+JUDGE_MODEL = "side-selection-judge-model"
 #: The process-wide value the two journeys below state for themselves: a third
 #: identity, which is what makes "the side ignored its own selection" observable.
 #: It is only a sentinel while it is a value nobody else could have supplied, so
@@ -72,6 +80,7 @@ with open(os.environ["SELECTION_RECORD"], "a") as record:
         "bin": {name!r},
         "claude_config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
         "harnesses": os.environ.get("ONEHARNESS_HARNESSES"),
+        "model": os.environ.get("ONEHARNESS_MODEL"),
         "worker_override": os.environ.get({worker_env!r}),
         "judge_override": os.environ.get({judge_env!r}),
         # What oneharness would stamp on the session this turn becomes, read where
@@ -154,11 +163,13 @@ def _provider_environment(tmp_path: Path, oneharness_bin: str) -> tuple[Path, di
         "XDG_STATE_HOME": str(tmp_path / "state"),
     }
     environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
-    # Whatever process-wide selection reached this process is not part of any
+    # Whatever harness or model choice reached this process is not part of any
     # journey's claim, so no journey inherits one: each states its own value, and a
     # journey that states none genuinely runs with none. Dropped here, before the
-    # per-journey `env` is layered on, so a stated value is the only one there is.
-    environment.pop(PROCESS_WIDE_HARNESS_ENV, None)
+    # per-journey `env` is layered on, so a stated value is the only one there is —
+    # by every name one can arrive under, which is what the one list names.
+    for inherited in DISPATCH_SELECTION_ENV:
+        environment.pop(inherited, None)
     return record, environment
 
 
@@ -299,6 +310,87 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
     assert {turn["claude_config_dir"] for turn in judge_turns} == {None}
 
 
+def test_each_side_runs_the_model_it_was_given_over_the_one_its_config_pins(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The run this half of the seam exists for: one author, a reviewer at another tier.
+
+    `oneharness.judge.toml` pins the cheaper supervisor model on every Claude identity
+    by design, so putting the judge on a subscription is not the same as putting it on
+    a model. Both sentinels below are names no config declares, read at the provider
+    oneharness spawned — so each side ran the model this journey named rather than the
+    one its config would have chosen, and neither side ran the other's.
+    """
+    dispatched = _dispatch(
+        tmp_path,
+        onejudge_bin,
+        oneharness_bin,
+        extra_args=(
+            "--worker-harness",
+            WORKER_CHOICE,
+            "--worker-model",
+            WORKER_MODEL,
+            "--judge-harness",
+            JUDGE_CHOICE,
+            "--judge-model",
+            JUDGE_MODEL,
+        ),
+    )
+
+    assert dispatched.process.returncode == 0, dispatched.process.stderr
+    worker_turns = dispatched.side(WORKER_MARKER)
+    judge_turns = dispatched.side(JUDGE_MARKER)
+    assert worker_turns, dispatched.turns
+    assert judge_turns, dispatched.turns
+    # What oneharness put on the provider's own argv: the model the turn ran on.
+    assert {_spawned_model(turn) for turn in worker_turns} == {WORKER_MODEL}
+    assert {_spawned_model(turn) for turn in judge_turns} == {JUDGE_MODEL}
+    # ...and the process-wide variable everything that side then runs inherits.
+    assert {turn["model"] for turn in worker_turns} == {WORKER_MODEL}
+    assert {turn["model"] for turn in judge_turns} == {JUDGE_MODEL}
+
+
+def _spawned_model(turn: Mapping[str, Any]) -> str | None:
+    """The model oneharness put on the spawned provider's command line, if any."""
+    argv = list(turn["argv"])
+    return argv[argv.index("--model") + 1] if "--model" in argv else None
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "reason"),
+    [
+        # A model with no identity beside it: the value would reach every candidate in
+        # that side's configured chain, including another provider's.
+        (("--judge-model", JUDGE_MODEL), "also pass --judge-harness"),
+        # ...and an identity chain that spans two providers, where one model name
+        # cannot be right for both.
+        (
+            ("--worker-harness", "claude-code:primary,codex", "--worker-model", WORKER_MODEL),
+            "spans claude-code and codex",
+        ),
+    ],
+)
+def test_an_unpairable_model_refuses_the_dispatch_before_it_starts(
+    tmp_path: Path,
+    onejudge_bin: str,
+    oneharness_bin: str,
+    extra_args: tuple[str, ...],
+    reason: str,
+) -> None:
+    """Refused where the harness options are, and for the same reason.
+
+    A fallback chain moves past a candidate that cannot run, not one whose task the
+    provider rejected — so a model in front of the wrong identity kills the dispatch
+    rather than degrading it. Making that unconstructable is worth a refusal here.
+    """
+    dispatched = _dispatch(tmp_path, onejudge_bin, oneharness_bin, extra_args=extra_args)
+
+    assert dispatched.process.returncode == 2, dispatched.process.stdout
+    assert reason in dispatched.process.stderr
+    # Nothing was spawned: the refusal happens before any provider is selected.
+    assert dispatched.turns == []
+
+
 def test_a_dispatch_never_stamps_the_worker_role_on_its_own_supervisor(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
@@ -403,6 +495,10 @@ def test_with_no_selection_at_all_both_sides_resolve_their_configured_chains(
     assert {turn["harnesses"] for turn in judge_turns} == {None}
     assert {turn["worker_override"] for turn in dispatched.turns} == {None}
     assert {turn["judge_override"] for turn in dispatched.turns} == {None}
+    # The model half of the same default path: neither side names one, so neither the
+    # variable nor the flag exists and each identity keeps the model its config pins.
+    assert {turn["model"] for turn in dispatched.turns} == {None}
+    assert {_spawned_model(turn) for turn in dispatched.turns} == {"gpt-5.6-sol"}
 
 
 @pytest.mark.parametrize(

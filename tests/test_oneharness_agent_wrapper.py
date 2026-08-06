@@ -25,7 +25,12 @@ from process_tree import consumed_cpu_seconds
 
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
-from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
+from orchestrator.harnesses import (
+    JUDGE_HARNESS_ENV,
+    JUDGE_MODEL_ENV,
+    WORKER_HARNESS_ENV,
+    WORKER_MODEL_ENV,
+)
 from orchestrator.labels import LABEL_ENV, format_labels, parse_labels
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
@@ -54,6 +59,7 @@ def _run_wrapper(
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" > "$ONEHARNESS_ENV2_FILE"\n'
         'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n'
+        'printf \'%s\\n\' "${ONEHARNESS_MODEL-}" > "$ONEHARNESS_MODEL_FILE"\n'
         'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n'
         # The labels oneharness would stamp on the session this turn becomes, read
         # where oneharness reads them: the environment of the process it is spawned
@@ -72,6 +78,7 @@ def _run_wrapper(
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
             "ONEHARNESS_ENV2_FILE": str(tmp_path / "oneharness-env2"),
             "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
+            "ONEHARNESS_MODEL_FILE": str(tmp_path / "oneharness-model"),
             "ONEHARNESS_CODEX_ENV_FILE": str(tmp_path / "oneharness-codex-env"),
             **({"HOME": str(tmp_path / "home")} if include_home else {}),
             **(
@@ -98,6 +105,11 @@ def _run_wrapper(
 
 def _selection(tmp_path: Path) -> str:
     return (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+
+
+def _model(tmp_path: Path) -> str:
+    """The exact ONEHARNESS_MODEL the spawned oneharness inherited from this branch."""
+    return (tmp_path / "oneharness-model").read_text(encoding="utf-8").strip()
 
 
 def _raw_labels(tmp_path: Path) -> str:
@@ -532,6 +544,105 @@ def test_a_side_without_its_own_selection_resolves_exactly_as_before(tmp_path: P
     judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env={WORKER_HARNESS_ENV: "codex"})
     assert judge.returncode == 0, judge.stderr
     assert _selection(tmp_path) == ""
+
+
+def test_each_side_runs_the_model_it_was_given_on_that_turn_and_in_its_environment(
+    tmp_path: Path,
+) -> None:
+    """Both layers, because oneharness's two are not equally strong.
+
+    The exported `ONEHARNESS_MODEL` is what everything this side then runs inherits,
+    but a config's per-harness `model` beats it — and every config this repository
+    ships pins one — so the flag on this turn's own argv is what makes the turn honor
+    the choice. A branch carrying only the variable would leave the identity's
+    configured model in place, which is exactly the no-op this seam exists to end.
+    """
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={WORKER_HARNESS_ENV: "claude-code:primary", WORKER_MODEL_ENV: "claude-opus-5"},
+    )
+
+    assert agent.returncode == 0, agent.stderr
+    assert _model(tmp_path) == "claude-opus-5"
+    assert argv[argv.index("--model") + 1] == "claude-opus-5"
+    assert argv.count("--model") == 1
+
+    judge, judge_argv = _run_wrapper(
+        tmp_path,
+        _judge_argv(tmp_path),
+        env={JUDGE_HARNESS_ENV: "claude-code:primary", JUDGE_MODEL_ENV: "claude-sonnet-5"},
+    )
+
+    assert judge.returncode == 0, judge.stderr
+    assert _model(tmp_path) == "claude-sonnet-5"
+    assert judge_argv[judge_argv.index("--model") + 1] == "claude-sonnet-5"
+    # Still exactly the caller's own config: choosing a side's model must not change
+    # which config that side is judged from.
+    assert judge_argv.count("--config") == 1
+
+
+def test_neither_side_leaks_its_model_into_the_other(tmp_path: Path) -> None:
+    """The same isolation the identities have, one layer down."""
+    both = {
+        WORKER_HARNESS_ENV: "codex",
+        WORKER_MODEL_ENV: "gpt-5.6-sol",
+        JUDGE_HARNESS_ENV: "claude-code:primary",
+        JUDGE_MODEL_ENV: "claude-opus-5",
+    }
+
+    agent, argv = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"], env=both)
+    assert agent.returncode == 0, agent.stderr
+    assert _model(tmp_path) == "gpt-5.6-sol"
+    assert "claude-opus-5" not in argv
+
+    judge, judge_argv = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=both)
+    assert judge.returncode == 0, judge.stderr
+    assert _model(tmp_path) == "claude-opus-5"
+    assert "gpt-5.6-sol" not in judge_argv
+
+
+def test_a_side_without_a_model_of_its_own_runs_exactly_as_before(tmp_path: Path) -> None:
+    """The no-op the default path depends on: no flag, no variable, nothing to inherit."""
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={JUDGE_HARNESS_ENV: "claude-code:primary", JUDGE_MODEL_ENV: "claude-opus-5"},
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert "--model" not in argv
+    assert _model(tmp_path) == ""
+
+    judge, judge_argv = _run_wrapper(
+        tmp_path,
+        _judge_argv(tmp_path),
+        env={WORKER_HARNESS_ENV: "codex", WORKER_MODEL_ENV: "gpt-5.6-sol"},
+    )
+    assert judge.returncode == 0, judge.stderr
+    assert "--model" not in judge_argv
+    assert _model(tmp_path) == ""
+
+
+@pytest.mark.parametrize("caller_model", [["--model", "claude-opus-5"], ["--model=claude-opus-5"]])
+def test_a_side_model_beside_a_callers_own_stops_the_turn_here(
+    tmp_path: Path, caller_model: list[str]
+) -> None:
+    """oneharness reads a repeated --model as a fan-out, so a second cannot override.
+
+    onejudge passes none today, and this is the boundary a hand-set variable arrives
+    at: appending here would run the turn once per model rather than on the one the
+    operator named, so which of the two was meant has to be corrected, not guessed.
+    """
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe", *caller_model],
+        env={WORKER_HARNESS_ENV: "codex", WORKER_MODEL_ENV: "gpt-5.6-sol"},
+    )
+
+    assert agent.returncode == 2
+    assert WORKER_MODEL_ENV in agent.stderr
+    assert "already names --model" in agent.stderr
+    assert argv == []
 
 
 def test_a_selection_the_side_cannot_honor_stops_the_turn_here(tmp_path: Path) -> None:

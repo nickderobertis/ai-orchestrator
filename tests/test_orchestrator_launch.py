@@ -17,7 +17,12 @@ from orchestrator.dispatch import (
     launch_orchestrator,
     main_orchestrate,
 )
-from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
+from orchestrator.harnesses import (
+    JUDGE_HARNESS_ENV,
+    JUDGE_MODEL_ENV,
+    WORKER_HARNESS_ENV,
+    WORKER_MODEL_ENV,
+)
 from orchestrator.labels import LABEL_ENV, parse_labels
 from orchestrator.launch import (
     LAUNCH_RECORD_NAME,
@@ -177,15 +182,21 @@ def test_launch_carries_each_sides_selection_to_every_dispatch_of_the_run(
     _, default_env, _ = _capture_launch_env(monkeypatch, tmp_path)
     assert WORKER_HARNESS_ENV not in default_env
     assert JUDGE_HARNESS_ENV not in default_env
+    assert WORKER_MODEL_ENV not in default_env
+    assert JUDGE_MODEL_ENV not in default_env
 
     _, chosen_env, _ = _capture_launch_env(
         monkeypatch,
         tmp_path / "chosen",
         worker_harness="codex",
         judge_harness="claude-code:alternate",
+        judge_model="claude-opus-5",
     )
     assert chosen_env[WORKER_HARNESS_ENV] == "codex"
     assert chosen_env[JUDGE_HARNESS_ENV] == "claude-code:alternate"
+    # The model rides the same seam, and only for the side that named one.
+    assert chosen_env[JUDGE_MODEL_ENV] == "claude-opus-5"
+    assert WORKER_MODEL_ENV not in chosen_env
 
 
 def test_launch_rejects_an_unconfigured_side_selection(tmp_path: Path) -> None:
@@ -198,6 +209,10 @@ def test_launch_rejects_an_unconfigured_side_selection(tmp_path: Path) -> None:
     # provider nobody configured must not exist at all.
     with pytest.raises(ConfigError, match="--worker-harness"):
         launch_orchestrator(plan, runs_dir=tmp_path / "runs", worker_harness="opencode")
+    assert not (tmp_path / "runs").exists()
+    # Same boundary for the model: an unpairable one is refused before the run exists.
+    with pytest.raises(ConfigError, match="--judge-model"):
+        launch_orchestrator(plan, runs_dir=tmp_path / "runs", judge_model="claude-opus-5")
     assert not (tmp_path / "runs").exists()
 
 
@@ -453,6 +468,8 @@ def test_orchestrate_cli_prints_run_id(
     # chains the configs already declare.
     assert received["worker_harness"] is None
     assert received["judge_harness"] is None
+    assert received["worker_model"] is None
+    assert received["judge_model"] is None
     main_orchestrate(
         [
             str(plan),
@@ -462,10 +479,13 @@ def test_orchestrate_cli_prints_run_id(
             "codex",
             "--judge-harness",
             "claude-code:alternate",
+            "--judge-model",
+            "claude-opus-5",
         ]
     )
     assert received["worker_harness"] == "codex"
     assert received["judge_harness"] == "claude-code:alternate"
+    assert received["judge_model"] == "claude-opus-5"
 
 
 def test_orchestrate_cli_reports_launch_error(

@@ -55,7 +55,13 @@ from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES, ROUND_BUDGE
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
-from .harnesses import JUDGE_SIDE, WORKER_SIDE, harness_option_help, harness_override_env
+from .harnesses import (
+    JUDGE_SIDE,
+    WORKER_SIDE,
+    harness_option_help,
+    harness_override_env,
+    model_option_help,
+)
 from .labels import LABEL_ENV, LabelError, merge_labels, semantic_agent_labels
 from .launch import (
     KNOWN_LAUNCHERS,
@@ -1097,6 +1103,8 @@ def _agent_run_context(
     oneharness_mode: str | None,
     worker_harness: str | None = None,
     judge_harness: str | None = None,
+    worker_model: str | None = None,
+    judge_model: str | None = None,
     use_llmlint_wrapper: bool = True,
 ) -> tuple[str | Path, dict[str, str]]:
     """Compute the (cwd, env) for the onejudge run, mutating `config` as needed.
@@ -1109,10 +1117,12 @@ def _agent_run_context(
     Bypass also tells llmlint to use the container boundary instead of asking its
     nested read-only judge to create a network namespace unavailable on this host.
 
-    `worker_harness` / `judge_harness` select each conversation side's provider
-    (see `orchestrator.harnesses`). Only that wrapper resolves a side, so naming
+    `worker_harness` / `judge_harness` select each conversation side's provider,
+    and `worker_model` / `judge_model` the model it runs on (see
+    `orchestrator.harnesses`). Only that wrapper resolves a side, so naming
     one also pins it as `provider.bin` — a run whose cwd would have discovered the
-    config on its own would otherwise ignore the selection it was given.
+    config on its own would otherwise ignore the selection it was given. A model is
+    refused without its own side's harness override, so the pin above covers both.
     """
     run_cwd: str | Path = cwd
     env: dict[str, str] = {}
@@ -1120,7 +1130,14 @@ def _agent_run_context(
         env["ONEHARNESS_MODE"] = oneharness_mode
         if oneharness_mode == "bypass" and use_llmlint_wrapper:
             env["LLMLINT_ONEHARNESS_BIN"] = str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
-    env.update(harness_override_env(worker=worker_harness, judge=judge_harness))
+    env.update(
+        harness_override_env(
+            worker=worker_harness,
+            judge=judge_harness,
+            worker_model=worker_model,
+            judge_model=judge_model,
+        )
+    )
     if project_dir is not None:
         run_cwd = project_dir
     if project_dir is not None or worker_harness is not None or judge_harness is not None:
@@ -1153,6 +1170,8 @@ def dispatch(
     oneharness_mode: str | None = None,
     worker_harness: str | None = None,
     judge_harness: str | None = None,
+    worker_model: str | None = None,
+    judge_model: str | None = None,
     use_llmlint_wrapper: bool = True,
     labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
@@ -1169,8 +1188,10 @@ def dispatch(
 
     `worker_harness` and `judge_harness` pick each conversation side's provider
     independently; either is validated against its own config before anything runs
-    and refused when it names an identity this repository has not configured. With
-    neither set, both sides resolve exactly as they always have.
+    and refused when it names an identity this repository has not configured.
+    `worker_model` / `judge_model` pick the model that side runs on, and are refused
+    without that side's own harness override. With none of them set, both sides
+    resolve exactly as they always have.
     """
     base = load_yaml(base_path)
     try:
@@ -1199,6 +1220,8 @@ def dispatch(
         oneharness_mode=oneharness_mode,
         worker_harness=worker_harness,
         judge_harness=judge_harness,
+        worker_model=worker_model,
+        judge_model=judge_model,
         use_llmlint_wrapper=use_llmlint_wrapper,
     )
     process_env = {**context_env, **(env or {})}
@@ -1245,6 +1268,8 @@ def launch_orchestrator(
     oneharness_mode: str = DEFAULT_ONEHARNESS_MODE,
     worker_harness: str | None = None,
     judge_harness: str | None = None,
+    worker_model: str | None = None,
+    judge_model: str | None = None,
     launcher: str | None = None,
     launcher_session_id: str | None = None,
 ) -> str:
@@ -1264,10 +1289,11 @@ def launch_orchestrator(
     without prompting — every command outside `.claude/settings.json`, which would
     leave the orchestrator unable to run the very commands its persona mandates.
 
-    ``worker_harness`` / ``judge_harness`` reach every dispatch of the run the same
-    way: validated here, then carried in the launched process's environment, which
-    each round's workers and their judges inherit. The orchestrator's own harness
-    chain is unaffected — it is a third role with its own config and wrapper.
+    ``worker_harness`` / ``judge_harness`` and ``worker_model`` / ``judge_model``
+    reach every dispatch of the run the same way: validated here, then carried in the
+    launched process's environment, which each round's workers and their judges
+    inherit. The orchestrator's own harness and model are unaffected — it is a third
+    role with its own config and wrapper, and neither variable pair is read there.
     """
     # Validate launcher provenance up front so a bad value fails before any side effect.
     try:
@@ -1277,7 +1303,12 @@ def launch_orchestrator(
         raise DispatchError(str(exc)) from exc
     # Same reason: a run told to use a harness nobody configured must refuse to
     # start rather than dispatch its first round onto a different provider.
-    harness_env = harness_override_env(worker=worker_harness, judge=judge_harness)
+    harness_env = harness_override_env(
+        worker=worker_harness,
+        judge=judge_harness,
+        worker_model=worker_model,
+        judge_model=judge_model,
+    )
     plan = Path(plan_path).resolve()
     if not plan.is_file():
         raise DispatchError(f"plan does not exist: {plan}")
@@ -1528,6 +1559,18 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         help=f"{harness_option_help(JUDGE_SIDE)}; applies to every dispatch of the run",
     )
     parser.add_argument(
+        WORKER_SIDE.model_option,
+        default=None,
+        metavar="MODEL",
+        help=f"{model_option_help(WORKER_SIDE)}; applies to every dispatch of the run",
+    )
+    parser.add_argument(
+        JUDGE_SIDE.model_option,
+        default=None,
+        metavar="MODEL",
+        help=f"{model_option_help(JUDGE_SIDE)}; applies to every dispatch of the run",
+    )
+    parser.add_argument(
         "--skill-command",
         nargs="+",
         help="command-provider argv for the orchestrator agent (primarily for deterministic tests)",
@@ -1568,6 +1611,8 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             oneharness_mode=args.oneharness_mode,
             worker_harness=args.worker_harness,
             judge_harness=args.judge_harness,
+            worker_model=args.worker_model,
+            judge_model=args.judge_model,
             launcher=selected.launcher,
             launcher_session_id=selected.session_id,
         )

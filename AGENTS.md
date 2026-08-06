@@ -368,6 +368,20 @@ oneharness's own `ONEHARNESS_HARNESSES` cannot express this: it is process-wide
 and beats config, so it moves both sides at once. See [Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
+An identity is not a tier, so the same two commands take `--worker-model` /
+`--judge-model` beside them: every config here pins a model **per identity**, and the
+judge's pins the cheaper supervisor one on all three of its Claude variants by design,
+so moving that side onto a subscription does not move it onto a model. Either is
+refused before dispatch unless that side's own harness override is set and names one
+harness family, because a model belongs to the provider it was written for; the model
+*value* is deliberately unchecked, since an unknown one fails loudly at the harness
+just named while an unconfigured identity would route credentials this repository
+alone configures. The wrapper exports `ONEHARNESS_MODEL` into that side's process, so
+everything it then runs inherits the choice — a worker's own gate included — but an
+inherited value loses to a config's per-harness `model` and so does not re-tier
+`llmlint`; what moves that tier is the harness selection the same dispatch exports.
+See [Choosing a model per side](docs/onejudge-integration.md#choosing-a-model-per-side).
+
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
 directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
 `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` → `$HOME/.claude-alt2`), and all three
