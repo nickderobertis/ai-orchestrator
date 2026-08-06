@@ -23,7 +23,9 @@ modes it can be asked for are the two the smoke has to tell apart:
   the smoke must stop on it after one paid turn instead of buying the same
   verdict twice more.
 
-Keep this deterministic and stdlib-only — it is spawned as a subprocess.
+Keep the spawned path deterministic and stdlib-only — this file *is* the provider
+binary. The environment helpers below run only in the test process, so the one that
+must name a product constant imports it there rather than respelling it here.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 #: One complete codex-shaped turn. Token accounting is not decoration here: a
@@ -46,6 +49,31 @@ TURN: tuple[dict[str, object], ...] = (
 )
 
 
+def unpinned_worker_side(environment: Mapping[str, str]) -> dict[str, str]:
+    """Copy ``environment`` with the agent side's harness pin removed.
+
+    This repository runs its own suite from inside a dispatch, and a dispatch
+    exports the per-side worker selection to pin the identity its worker runs on.
+    `scripts/oneharness-agent.sh` applies that pin over any `ONEHARNESS_HARNESSES` a
+    journey sets — which is correct for a real dispatch and catastrophic here,
+    because the pinned identity is a *variant*, no `ONEHARNESS_BIN_*` spelling
+    reaches a variant, and the journey therefore spends a real paid turn while its
+    double sits unused. Observed, not theorized: two `just smoke` runs billed a live
+    subscription this way before the pin was found.
+
+    The variable is named by `orchestrator.harnesses`, which declares it, rather
+    than respelled here: a rename that moved the product constant while a copy in
+    this file went on stripping the old name would strip nothing, and every journey
+    would go back to spending that turn — with a green run and a billed one looking
+    identical from the assertions. The import is deferred because this file is also
+    *spawned* as the provider binary, and that path stays stdlib-only; only the test
+    process ever calls this helper.
+    """
+    from orchestrator.harnesses import WORKER_HARNESS_ENV
+
+    return {key: value for key, value in environment.items() if key != WORKER_HARNESS_ENV}
+
+
 def provider_environment(
     *,
     attempt_log: Path,
@@ -59,7 +87,7 @@ def provider_environment(
     smoke, which is exactly what these journeys must never spend.
     """
     return {
-        **os.environ,
+        **unpinned_worker_side(os.environ),
         # Selected rather than assumed: the fallback chain's first candidate is a
         # paid Claude subscription, and no journey may reach one.
         "ONEHARNESS_HARNESSES": "codex",
@@ -67,6 +95,21 @@ def provider_environment(
         "FAKE_CODEX_ATTEMPT_LOG": str(attempt_log),
         "FAKE_CODEX_UNAVAILABLE_ATTEMPTS": str(unavailable_attempts),
         "FAKE_CODEX_OMIT_USAGE": "1" if omit_usage else "",
+    }
+
+
+def uninstalled_provider_environment() -> dict[str, str]:
+    """Point a real `just smoke` at a codex binary that is not installed.
+
+    The same narrowing and the same dropped pin as `provider_environment`, for the
+    same reason: what makes a journey about a launch that cannot start cost nothing
+    is the selection alone. Keeping the dispatch's pin would resolve a paid variant
+    that starts perfectly well, and the journey would buy a turn to prove it.
+    """
+    return {
+        **unpinned_worker_side(os.environ),
+        "ONEHARNESS_HARNESSES": "codex",
+        "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
     }
 
 

@@ -36,9 +36,19 @@ computed from the declared inputs before the command runs and deliberately does
 not include ambient environment. Running the whole suite three times would prove
 the same thing about the same hashes, twenty-two minutes more slowly.
 
-llmlint: ignore-file[e2e_not_mocked] Nothing is faked here. The only substitution
-is `PYTEST_ADDOPTS`, which shortens the command the real target runs without
-touching the cache key this journey is about.
+The browser tier is keyed the same way and for the same reason. `dag-ui:test` is
+vitest plus two Playwright configs, and it named all of `orchestrator/**/*` while
+running one door into it — the fixture server Playwright starts, which imports the
+read API — so every commit to a command-side module the served process never loads
+charged a real browser. `dagUiServerSurface` states what that door reaches, and
+both halves are proved below.
+
+llmlint: ignore-file[e2e_not_mocked] Nothing is faked here. The only substitutions
+shorten what a real target *runs* without touching the declared inputs these
+journeys are about: `PYTEST_ADDOPTS` for the Python tiers, and `Checkout.shorten`
+for the browser tier, which has no such lever and would otherwise spend half an
+hour of vitest and Playwright proving something about hashes computed before its
+command starts.
 """
 
 from __future__ import annotations
@@ -51,7 +61,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED, SERIAL_SCOPED
+from nx_inputs import (
+    BROWSER_PROJECT,
+    BROWSER_SCOPED,
+    CODE_SCOPED,
+    COVERAGE_SCOPED,
+    SERIAL_SCOPED,
+)
 from nx_workspace import copy_checkout, requires_workspace_install
 
 from orchestrator import REPO_ROOT
@@ -81,12 +97,32 @@ PYTHON_WITNESS = "orchestrator/lifecycle.py"
 FRONT_END_WITNESS = "apps/dag-ui/vite.config.ts"
 #: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
 FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
+#: Python the browser tier's fixture server imports, so editing it must re-run that
+#: tier — and Python nothing the served process loads imports, so editing that one
+#: must replay it. `orchestrator.status` is a command-side verb: `just status`
+#: renders with it and no HTTP route reaches it.
+SERVED_WITNESS = "orchestrator/timeline.py"
+UNSERVED_WITNESS = "orchestrator/status.py"
+#: The two files outside `orchestrator/` the browser tier runs: the fixture server
+#: Playwright starts, and the harness history store that server shells out to.
+FIXTURE_SERVER_WITNESS = "apps/dag-ui/e2e/fixtures/serve_fixture.py"
+FAKE_HARNESS_WITNESS = "tests/e2e/fake_oneharness.py"
+#: The browser tier itself: vitest plus two Playwright configs.
+BROWSER_TIER = f"{BROWSER_PROJECT}:{BROWSER_SCOPED}"
 #: The project every Python tier belongs to, and the two tiers the code suite runs
 #: in. They share `codeWorkspace` and are separate Nx tasks, so neither waits for
 #: the other and each has to notice everything the suite reads on its own.
 PROJECT = "orchestrator"
 CODE_TIER = f"{PROJECT}:{CODE_SCOPED}"
 SERIAL_TIER = f"{PROJECT}:{SERIAL_SCOPED}"
+#: The uncached tier that combines what those two measured and judges the floor.
+COVERAGE_TIER = f"{PROJECT}:{COVERAGE_SCOPED}"
+#: What every journey below shortens the Python suite to. The claim under test is
+#: the *key*, computed from the declared inputs before the command runs.
+COLLECT_ONLY = "--collect-only --no-cov -q"
+#: The coverage journey keeps measurement on, because a restored data file is what
+#: it is about; only the selection is shortened.
+COLLECT_ONLY_MEASURED = "--collect-only -q"
 #: Where this host publishes the resolved fixture lockfile that check shares. The
 #: journeys below run under an isolated `XDG_CACHE_HOME`, so the resolution is
 #: carried across rather than paid again — sharing a cache is what it is for.
@@ -100,15 +136,17 @@ class Checkout:
     root: Path
     cache: Path
 
-    def ran_the_command(self, target: str, *nx_args: str) -> bool:
-        """Run ``target`` through the real wrapper; False when Nx replayed a verdict."""
+    def run(
+        self, target: str, *nx_args: str, addopts: str = COLLECT_ONLY
+    ) -> subprocess.CompletedProcess[str]:
+        """Run ``target`` through the real wrapper and hand back what Nx reported."""
         # Cache replay is this journey's whole claim, so an ambient global cache skip
         # is dropped for the same reason scripts/check-nx-cache.sh drops it:
         # `--skip-nx-cache` on one invocation is the supported way to force one tier
         # to re-run, and a global export would silently answer a different question.
         skips = {"NX_SKIP_NX_CACHE", "NX_DISABLE_NX_CACHE"}
         ambient = {key: value for key, value in os.environ.items() if key not in skips}
-        result = subprocess.run(
+        return subprocess.run(
             ["./scripts/nx.sh", "run", target, *nx_args],
             cwd=self.root,
             env={
@@ -119,12 +157,16 @@ class Checkout:
                 # building the copy as a distinct project.
                 "UV_NO_SYNC": "1",
                 "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
-                "PYTEST_ADDOPTS": "--collect-only --no-cov -q",
+                "PYTEST_ADDOPTS": addopts,
             },
             check=False,
             text=True,
             capture_output=True,
         )
+
+    def ran_the_command(self, target: str, *nx_args: str, addopts: str = COLLECT_ONLY) -> bool:
+        """Run ``target`` through the real wrapper; False when Nx replayed a verdict."""
+        result = self.run(target, *nx_args, addopts=addopts)
         assert result.returncode == 0, result.stdout + result.stderr
         return CACHE_HIT not in result.stdout
 
@@ -158,6 +200,23 @@ class Checkout:
         text = path.read_text(encoding="utf-8")
         assert old in text, f"{relative} no longer contains the text this journey edits"
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def shorten(self, project_root: str, target: str) -> None:
+        """Replace one target's command, leaving the inputs that key it untouched.
+
+        The same substitution `PYTEST_ADDOPTS` makes for the Python tiers, reached
+        the only way a target with no such lever offers: the browser tier is vitest
+        and two Playwright configs — two and a half minutes, five servers, a real
+        browser — and the four runs the journeys below need would prove the same
+        thing about the same hashes half an hour more slowly. Nx computes a task's
+        hash from its declared inputs, which is what these journeys are about, and
+        this leaves every one of them exactly as the repository declares it.
+        """
+        path = self.root / project_root / "project.json"
+        project = json.loads(path.read_text(encoding="utf-8"))
+        assert target in project["targets"], f"{project_root} declares no {target} target"
+        project["targets"][target]["command"] = "true"
+        path.write_text(f"{json.dumps(project, indent=2)}\n", encoding="utf-8")
 
     def append(self, relative: str, line: str) -> None:
         """Change a file's content without changing what it means.
@@ -360,6 +419,92 @@ def test_editing_a_front_end_project_replays_the_python_code_tier(checkout: Chec
     assert not checkout.ran_the_command("orchestrator:test"), (
         f"changing {FRONT_END_WITNESS} must not re-run a tier whose tests never open it"
     )
+
+
+def test_editing_python_the_browser_tier_never_loads_replays_it(checkout: Checkout) -> None:
+    """The case this narrowing exists for: backend churn stops paying for a browser.
+
+    The tier reaches this repository's Python through one door — the fixture server
+    Playwright starts, which imports the read API — and most commits here touch
+    modules that door never opens. Keyed on all of `orchestrator/**/*`, every one of
+    them charged vitest and two Playwright configs for a verdict that could not have
+    differed.
+    """
+    checkout.shorten(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
+
+    assert checkout.ran_the_command(BROWSER_TIER)
+    assert not checkout.ran_the_command(BROWSER_TIER), (
+        "an unchanged tree must replay its recorded verdict rather than re-run"
+    )
+
+    checkout.append(UNSERVED_WITNESS, "# nx cache scope journey")
+
+    assert not checkout.ran_the_command(BROWSER_TIER), (
+        f"changing {UNSERVED_WITNESS} must not re-run a tier that never loads it"
+    )
+
+
+def test_the_browser_tier_still_re_runs_on_everything_it_does_load(checkout: Checkout) -> None:
+    """The other half of the claim, and the half that keeps the narrowing sound.
+
+    A key that covers less than its check reads fails *open*: the tier would report
+    a pass for a served contract it never exercised. So each of the three things it
+    genuinely runs — a module the read API imports, the fixture that builds and
+    serves the run directory, and the fake harness that fixture shells out to — has
+    to still miss.
+    """
+    checkout.shorten(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
+    assert checkout.ran_the_command(BROWSER_TIER)
+
+    for witness in (SERVED_WITNESS, FIXTURE_SERVER_WITNESS, FAKE_HARNESS_WITNESS):
+        checkout.append(witness, "# nx cache scope journey")
+        assert checkout.ran_the_command(BROWSER_TIER), (
+            f"changing {witness} must re-run the browser tier that runs it"
+        )
+
+
+def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
+    checkout: Checkout,
+) -> None:
+    """A cache hit has to hand the floor the measurement it stood in for.
+
+    The two measuring tiers are cached and the tier that judges the floor is not, so
+    on every replayed commit the combine runs against data no run in this checkout
+    produced. That only works because each measuring tier declares its data file as
+    an Nx output and Nx restores it — an `outputs` declaration that fell off, or a
+    tier that stopped writing the file it names, would leave the combine with
+    nothing and turn a saving into a failed gate.
+
+    `PYTEST_ADDOPTS` shortens the selection but, unlike every journey above, leaves
+    measurement on: a restored data file is the whole subject. The floor itself is
+    lowered in this copy for the same reason — a collect-only selection covers a
+    fraction of the package, and `tests/test_coverage_gate.py` is where the declared
+    floor's own value is proven at the real boundary.
+    """
+    checkout.edit("pyproject.toml", "fail_under = 95", "fail_under = 0")
+    measured = {CODE_TIER: ".coverage.parallel", SERIAL_TIER: ".coverage.serial"}
+    for tier in measured:
+        assert checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED)
+    for tier, data_file in measured.items():
+        assert (checkout.root / data_file).is_file(), f"{tier} measured nothing to combine"
+        (checkout.root / data_file).unlink()
+
+    for tier, data_file in measured.items():
+        assert not checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED), (
+            f"{tier} re-ran on an unchanged tree, so this proves nothing about replay"
+        )
+        assert (checkout.root / data_file).is_file(), (
+            f"{tier} replayed its verdict without restoring {data_file}, so the floor "
+            "is combined from data the cache dropped"
+        )
+
+    combined = checkout.run(COVERAGE_TIER, addopts=COLLECT_ONLY_MEASURED)
+
+    assert combined.returncode == 0, combined.stdout + combined.stderr
+    assert CACHE_HIT in combined.stdout, (
+        f"{COVERAGE_TIER} re-ran a measuring tier, so the combine never saw a replay"
+    )
+    assert "TOTAL" in combined.stdout, combined.stdout + combined.stderr
 
 
 def test_the_cross_worktree_cache_check_replays_until_its_own_fixture_moves(

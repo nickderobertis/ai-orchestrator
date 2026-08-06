@@ -647,6 +647,24 @@ it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
 real `scripts/nx.sh` in both, so `nxCacheCheck` carries that fixture, those
 scripts, and the root manifest — and nothing else.
 
+`dag-ui:test` — vitest plus two Playwright configs, around two and a half minutes
+of real browser — is narrowed the same way. It used to name all of
+`orchestrator/**/*`, which is far more than it runs: the tier reaches this
+repository's Python through exactly one door, the fixture server
+`apps/dag-ui/e2e/fixtures/serve_fixture.py` that Playwright starts, and that
+server imports the read API. So `dagUiServerSurface` carries the package minus the
+command-side verbs nothing served imports — `integrate`, `next_round`, `recover`,
+`replan`, `results`, `smoke`, `status`, `stop` — plus the two files outside it the
+fixture runs: `tests/e2e/fake_oneharness.py` and `scripts/oneharness-stream.py`.
+That second one is a read the blanket key never covered at all, which is the usual
+shape of a coarse key: wide enough to look safe, and still missing something.
+
+Where a literal cannot be told from a read the key is deliberately the wider one —
+the fixture records `.githooks/pre-push` as a journal detail *value* and never
+opens it, and the key carries it anyway. The two errors are not symmetric. A key
+wider than its reads costs one run nobody needed; a key narrower than them is the
+false green above.
+
 Each half of every one of those claims is load bearing. A key must still invalidate
 on what its tier reads, and must still replay on what it does not; a key that
 covers less than its check reads fails *open*, which is the false green above. That
@@ -663,11 +681,22 @@ real tool the whole tree copies the tree first, and copying is itself a read.
 
 `tests/test_nx_cache_scope.py` holds every declaration to its globs — that nothing
 but documentation and the front end falls outside the code key, that the recipe key
-covers every module routing a test into it and stays inside the code key, and that
-the cache-check key carries every `$root/` path its script names. `tests/e2e/
-test_nx_cache_scope_e2e.py` then proves each one against real Nx over a copy of
-this checkout: for every key, an edit inside it must miss and an edit outside it
-must replay.
+covers every module routing a test into it and stays inside the code key, that the
+cache-check key carries every `$root/` path its script names, and that every
+repository file the browser tier's fixture stack imports or names is part of
+`dagUiServerSurface`. That last one is the browser tier's `conftest.py`: a runtime
+guard cannot see an import, so the reads are reconciled from the fixture's own
+import closure, and a fixture that starts loading Python outside the surface fails
+with the named input it has to widen. `tests/e2e/test_nx_cache_scope_e2e.py` then
+proves each one against real Nx over a copy of this checkout: for every key, an
+edit inside it must miss and an edit outside it must replay.
+
+One more thing has to hold for a replayed test verdict to be usable, and it is
+proved in the same place: the measuring tiers declare their coverage data files as
+Nx `outputs`, so a cache hit **restores** `.coverage.parallel` and `.coverage.serial`
+rather than leaving the uncached combine with nothing. Delete both, replay both
+tiers, and `orchestrator:coverage` still combines and reports — a dropped `outputs`
+declaration turns every replayed commit's gate into a failure instead of a saving.
 
 Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
 replays as a failure, and a tree the suite would fail can no longer replay a pass.

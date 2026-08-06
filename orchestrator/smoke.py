@@ -14,13 +14,21 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
 
 from . import REPO_ROOT
-from .history import HistoryError, HistorySession, SessionId, all_sessions, session_records
+from .history import HistoryError, HistorySession, SessionId, all_sessions
 from .labels import format_labels
 from .scratch import AGENT_STATUS_DIR_ENV
-from .telemetry import HistoryRecord, history_session_launch_failure
+from .telemetry import (
+    NO_LAUNCH_RECORD_FAILURE,
+    HistoryRecord,
+    history_record_fallthrough_failure,
+    history_record_fallthrough_reason,
+    history_record_identity,
+    history_session_launch_failure,
+    is_turn_record,
+    session_turn_records,
+)
 
 TASK = "Reply with exactly: smoke-ok"
 TIMEOUT_SECONDS = 120
@@ -34,11 +42,26 @@ RETRY_BACKOFF_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
+class FellThrough:
+    """One candidate the fallback chain moved past on its way to the selected one."""
+
+    #: The variant-qualified identity, not the harness: a chain's two Claude
+    #: subscriptions are one harness and differ only here.
+    identity: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class SmokeResult:
-    harness: str
+    #: The identity the chain selected, named the same way for the same reason.
+    identity: str
     cost_usd: int | float | None
     #: How many real turns this smoke had to launch to record one.
     attempts: int = 1
+    #: The candidates the chain refused before the one that ran, in the order it
+    #: tried them. Reported rather than swallowed: which identity is out of quota
+    #: is the operator's business even when the launch path is healthy.
+    fell_through: tuple[FellThrough, ...] = ()
 
 
 def _timeout_seconds() -> int:
@@ -113,9 +136,9 @@ def _stored_sessions(history_dir: Path) -> list[HistorySession]:
     for path in history_dir.rglob("*.jsonl"):
         try:
             records = [
-                cast(HistoryRecord, value)
+                value
                 for line in path.read_text(encoding="utf-8").splitlines()
-                if isinstance((value := json.loads(line)), dict) and value.get("type") == "run"
+                if isinstance((value := json.loads(line)), dict) and is_turn_record(value)
             ]
         except (OSError, json.JSONDecodeError):
             continue
@@ -142,6 +165,57 @@ def _stored_sessions(history_dir: Path) -> list[HistorySession]:
     return sessions
 
 
+def _selected(records: list[HistoryRecord]) -> tuple[tuple[FellThrough, ...], HistoryRecord]:
+    """Split a chain's records into the candidates it refused and the one it ran.
+
+    `run_mode = "fallback"` records every candidate it attempts, in priority order,
+    and stops at the first that can actually run the task — so the launch path's
+    outcome is the LAST record, and the ones before it are the chain doing its job.
+    Judging them all alike is what failed this smoke for a healthy launch while one
+    subscription's weekly quota was gone.
+
+    A candidate that failed for any other reason is not one the chain moved past:
+    it either ran and broke, or it broke in a way nobody classified, and both are
+    the launch breakage this smoke exists to report.
+
+    A candidate's own word for what happened to it is not taken on trust, because
+    these records come out of a store nothing here wrote and each one reaches both
+    the verdict and the operator's report. One that claims it stepped aside while
+    naming no identity, or while carrying a turn somebody was billed for, is
+    reported rather than believed.
+    """
+    *candidates, selected = records
+    fell_through: list[FellThrough] = []
+    for candidate in candidates:
+        reason = history_record_fallthrough_reason(candidate)
+        if reason is None:
+            raise HistoryError(
+                f"real harness candidate {history_record_identity(candidate)} failed "
+                f"unclassified with status {candidate.get('status')!r} and exit code "
+                f"{candidate.get('exit_code')!r}; the fallback chain only moves past a "
+                "candidate it could not run at all, so this is a launch failure"
+            )
+        unsupported = history_record_fallthrough_failure(candidate)
+        if unsupported is not None:
+            raise HistoryError(
+                f"real harness candidate {history_record_identity(candidate)} was recorded "
+                f"as {reason} but {unsupported}; the fallback chain only moves past a "
+                "candidate that ran nothing, so this is a launch failure"
+            )
+        fell_through.append(FellThrough(history_record_identity(candidate), reason))
+    exhausted = history_record_fallthrough_reason(selected)
+    if exhausted is not None:
+        refused = ", ".join(
+            f"{entry.identity} ({entry.reason})"
+            for entry in [*fell_through, FellThrough(history_record_identity(selected), exhausted)]
+        )
+        raise HistoryError(
+            f"real harness fallback chain had no candidate left to run the task: {refused}; "
+            "restore one of these identities, then rerun"
+        )
+    return tuple(fell_through), selected
+
+
 def _validate_history(
     history_dir: Path, smoke_id: str, *, sessions: list[HistorySession] | None = None
 ) -> SmokeResult:
@@ -162,16 +236,18 @@ def _validate_history(
     if len(matches) != 1:
         raise HistoryError(f"expected one smoke history session, found {len(matches)}")
     session = matches[0]
-    records = cast(list[HistoryRecord], session_records(session))
-    prompts = [record.get("prompt") for record in records]
-    if not prompts or any(prompt != TASK or not prompt for prompt in prompts):
+    records = session_turn_records(session)
+    if not records:
+        raise HistoryError(f"real harness history {NO_LAUNCH_RECORD_FAILURE}")
+    fell_through, selected = _selected(records)
+    if selected.get("prompt") != TASK:
         raise HistoryError("real harness did not receive the dispatched task")
-    failure = history_session_launch_failure(session)
+    failure = history_session_launch_failure(session, [selected])
     if failure is not None:
         raise HistoryError(f"real harness history {failure}")
-    # The launch contract above already proved every record names its harness.
-    harness = str(records[-1].get("harness"))
-    usage = records[-1].get("usage", {})
+    # The launch contract above already proved the selected record names its harness.
+    identity = history_record_identity(selected)
+    usage = selected.get("usage", {})
     cost = usage.get("cost_usd") if isinstance(usage, dict) else None
     valid_cost = (
         cost
@@ -181,15 +257,19 @@ def _validate_history(
         and cost >= 0
         else None
     )
-    return SmokeResult(harness=harness, cost_usd=valid_cost)
+    return SmokeResult(identity=identity, cost_usd=valid_cost, fell_through=fell_through)
 
 
 def run_smoke() -> SmokeResult:
-    """Run one real harness turn and validate its isolated history record.
+    """Run one real harness turn and validate the record of the harness it selected.
 
     Only the *launch* is retried. What a recorded turn says is this repository's own
     contract, so a record that violates it is the regression this smoke exists to
     report — on the first turn, rather than paying for the same verdict three times.
+
+    "The" record is the selected candidate's: under `run_mode = "fallback"` a chain
+    that refused an exhausted subscription and ran the next identity has a healthy
+    launch path, and its refusal record is evidence of that rather than against it.
     """
     smoke_id = str(uuid.uuid4())
     timeout_seconds = _timeout_seconds()
@@ -242,8 +322,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     rendered_cost = f"${result.cost_usd:.6f}" if result.cost_usd is not None else "unreported"
+    # Named on its own line, before the verdict: the chain selecting a working
+    # identity is what this smoke passed on, and an operator reading a pass still
+    # wants to know which subscription is gone and why.
+    for entry in result.fell_through:
+        print(
+            f"smoke: fell through {entry.identity} ({entry.reason}); "
+            "the fallback chain handed the turn to the next identity"
+        )
     # Reported rather than smoothed into an ordinary pass: only the operator can
     # act on a host that killed a launch.
     retried = f" after {result.attempts} attempts" if result.attempts > 1 else ""
-    print(f"smoke: passed via {result.harness} (recorded cost: {rendered_cost}){retried}")
+    print(f"smoke: passed via {result.identity} (recorded cost: {rendered_cost}){retried}")
     return 0
