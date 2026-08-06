@@ -16,12 +16,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from collections.abc import Sequence
 from pathlib import Path
 
 from .config import ConfigError
-from .dispatches import LiveDispatch, live_dispatches, load_averages
+from .dispatches import (
+    OUTLIER_TURN_MULTIPLE,
+    LiveDispatch,
+    live_dispatches,
+    load_averages,
+)
 from .launch import caller_identity, read_run_owner
 from .runs import validate_run_id
 
@@ -109,14 +115,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--format", choices=("human", "json"), default="human")
     parser.add_argument(
+        "--outlier-multiple",
+        type=float,
+        default=OUTLIER_TURN_MULTIPLE,
+        metavar="N",
+        help="flag a turn running past this multiple of its role's typical duration "
+        f"as anomalous (default: {OUTLIER_TURN_MULTIPLE:g})",
+    )
+    parser.add_argument(
         "--scratch-root",
         type=Path,
         default=None,
         help="the scratch root dispatches write into (default: this process's TMPDIR)",
     )
     args = parser.parse_args(argv)
+    if not math.isfinite(args.outlier_multiple) or args.outlier_multiple < 0:
+        parser.error("--outlier-multiple must be a non-negative, finite number")
     now = time.time()
-    dispatches = live_dispatches(root=args.scratch_root)
+    dispatches = live_dispatches(root=args.scratch_root, outlier_multiple=args.outlier_multiple)
     if args.format == "json":
         print(
             json.dumps(

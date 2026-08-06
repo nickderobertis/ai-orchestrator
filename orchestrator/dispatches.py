@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, get_args
 
 from .coordination import proc_root
-from .labels import LABEL_ENV, MAX_VALUE_CODEPOINTS, parse_labels
+from .labels import LABEL_ENV, MAX_VALUE_CODEPOINTS, AgentRole, parse_labels
 from .redaction import redact
 from .scratch import (
     AGENT_STATUS_DIR_ENV,
@@ -49,14 +49,14 @@ from .scratch import (
     watchdog_has_a_live_owner,
 )
 
-#: What a dispatched process may be serving. The first five are the roles a planner
-#: asks about by name; ``orchestrator`` and ``check-in`` complete the set
-#: `orchestrator.labels.AgentRole` can stamp, so a dispatch is never reported as a
-#: role it is not.
-DispatchRole = Literal[
-    "worker", "judge", "llmlint", "pr-author", "smoke", "orchestrator", "check-in"
-]
-DISPATCH_ROLES: frozenset[str] = frozenset(get_args(DispatchRole))
+#: What a dispatched process may be serving. Built *from* `orchestrator.labels`'
+#: `AgentRole` rather than restating it, because that is the vocabulary a dispatch
+#: actually stamps: a role added there has to arrive here, and a copy would report it
+#: as "role unknown" with nothing failing. The two extras are turns rather than
+#: dispatch roles — an llmlint tier and a smoke run carry no `agent_role` label of
+#: their own and are recognised from the invocation and the `smoke` label instead.
+DispatchRole = AgentRole | Literal["llmlint", "smoke"]
+DISPATCH_ROLES: frozenset[str] = frozenset(get_args(AgentRole)) | {"llmlint", "smoke"}
 
 #: How long a turn of each role ordinarily runs on this host. These are not budgets
 #: and nothing is stopped for exceeding one: they are the scale a duration is read
@@ -109,6 +109,13 @@ _ROLE_EVIDENCE: tuple[tuple[str, DispatchRole], ...] = (
 #: `oneharness.toml` maps into that variant's child alone. The value is a path
 #: derived from ``HOME``, so the identity is read from the directory *name* rather
 #: than from a literal this repository would have to keep in step with a host.
+#:
+#: `scripts/claude-alt-config-dir.sh` and `scripts/codex-alt-home.sh` are those names'
+#: one source, and this module cannot read them: it runs in a view process that never
+#: sourced either wrapper, so it has to recognise the directory a *dispatched* process
+#: was given. `tests/test_dispatches.py` is therefore the drift gate — renaming one
+#: there without renaming it here would make every alternate2 turn report as
+#: `claude-code:primary`, a wrong positive claim nothing else would catch.
 _CLAUDE_CONFIG_ENV = "CLAUDE_CONFIG_DIR"
 _CODEX_HOME_ENV = "CODEX_HOME"
 _ALTERNATE_CLAUDE_DIRS: Mapping[str, str] = {
@@ -144,6 +151,10 @@ class LiveTurn:
     role: DispatchRole | None
     harness: str | None
     started_at: float | None
+    #: The multiple of its role's typical duration this turn is judged against. Held
+    #: per turn rather than read from the module constant at each call site, so a view
+    #: told to use a different threshold uses it everywhere it renders that turn.
+    outlier_multiple: float = OUTLIER_TURN_MULTIPLE
 
     def age(self, *, now: float) -> float | None:
         return None if self.started_at is None else max(0.0, now - self.started_at)
@@ -154,7 +165,7 @@ class LiveTurn:
     def is_outlier(self, *, now: float) -> bool:
         """Whether this turn has run past a generous multiple of its role's scale."""
         age = self.age(now=now)
-        return age is not None and age > self.typical_seconds() * OUTLIER_TURN_MULTIPLE
+        return age is not None and age > self.typical_seconds() * self.outlier_multiple
 
     def describe(self, *, now: float) -> str:
         role = self.role or "role unknown"
@@ -166,7 +177,7 @@ class LiveTurn:
         timing = f"turn running {elapsed // 60}m{elapsed % 60:02d}s"
         if self.is_outlier(now=now):
             typical = int(self.typical_seconds())
-            timing += f" — ANOMALOUS, past {OUTLIER_TURN_MULTIPLE:g}x the {typical}s typical for it"
+            timing += f" — ANOMALOUS, past {self.outlier_multiple:g}x the {typical}s typical for it"
         return f"{role} on {harness}, {timing}"
 
 
@@ -391,7 +402,12 @@ def _harness_identity(record: _ProcessRecord) -> str | None:
     return _ALTERNATE_CLAUDE_DIRS.get(configured, "claude-code:primary")
 
 
-def _turn(records: Sequence[_ProcessRecord], dispatch_role: DispatchRole | None) -> LiveTurn:
+def _turn(
+    records: Sequence[_ProcessRecord],
+    dispatch_role: DispatchRole | None,
+    *,
+    outlier_multiple: float,
+) -> LiveTurn:
     """The turn these processes are serving: its role, its harness, and when it began.
 
     The role a *command line* names wins over the one the dispatch was launched under,
@@ -410,11 +426,16 @@ def _turn(records: Sequence[_ProcessRecord], dispatch_role: DispatchRole | None)
     harnesses = [identity for record in records if (identity := _harness_identity(record))]
     starts = [record.started_at for record in (serving or records) if record.started_at is not None]
     return LiveTurn(
-        role=role, harness=next(iter(harnesses), None), started_at=max(starts, default=None)
+        role=role,
+        harness=next(iter(harnesses), None),
+        started_at=max(starts, default=None),
+        outlier_multiple=outlier_multiple,
     )
 
 
-def _dispatch(status_dir: Path, records: Sequence[_ProcessRecord]) -> LiveDispatch:
+def _dispatch(
+    status_dir: Path, records: Sequence[_ProcessRecord], *, outlier_multiple: float
+) -> LiveDispatch:
     labels = _labels(records)
     recorded_role = labels.get("agent_role")
     dispatch_role: DispatchRole | None = (
@@ -437,14 +458,16 @@ def _dispatch(status_dir: Path, records: Sequence[_ProcessRecord]) -> LiveDispat
         step=_bounded(labels.get("step")),
         persona=_bounded(labels.get("persona")),
         launcher=_bounded(labels.get("launcher")),
-        turn=_turn(records, dispatch_role),
+        turn=_turn(records, dispatch_role, outlier_multiple=outlier_multiple),
         runnable=sum(1 for record in records if record.state in _LOADED_STATES),
         cpu_seconds=sum(record.cpu_seconds for record in records),
         processes=len(records),
     )
 
 
-def live_dispatches(*, root: Path | None = None) -> list[LiveDispatch] | None:
+def live_dispatches(
+    *, root: Path | None = None, outlier_multiple: float = OUTLIER_TURN_MULTIPLE
+) -> list[LiveDispatch] | None:
     """Every dispatch on this host a live dispatcher still owns, newest turn first.
 
     ``None`` means the ownership registry could not be consulted, which every caller
@@ -464,7 +487,7 @@ def live_dispatches(*, root: Path | None = None) -> list[LiveDispatch] | None:
         # the sweep has not yet reaped — out of a picture of what is running.
         if not watchdog_has_a_live_owner(status_dir.parent):
             continue
-        found.append(_dispatch(status_dir, records))
+        found.append(_dispatch(status_dir, records, outlier_multiple=outlier_multiple))
     return sorted(found, key=lambda item: (-(item.turn.started_at or 0.0), str(item.status_dir)))
 
 

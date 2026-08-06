@@ -178,6 +178,11 @@ def _dispatch(
         start_new_session=True,
     )
     processes.append(process)
+    # Torn down on the same stack that owns this dispatch's scratch, and pushed after
+    # it, so the callback runs *before* the directory is released: the wrapper exits on
+    # its own the moment its status directory disappears, and once it has, its provider
+    # has reparented to init and the tree walk cannot reach it any more.
+    stack.callback(_kill_tree, process)
     return status_dir
 
 
@@ -318,6 +323,101 @@ def test_the_views_report_the_role_harness_and_turn_age_of_a_live_dispatch(
     assert row["run_id"] == run_dir.name and row["round"] == "1"
     assert row["turn_age_seconds"] >= 0 and row["turn_is_outlier"] is False
     assert row["processes"] >= 1
+    assert "ANOMALOUS" not in host, host
+
+
+def test_an_overrunning_turn_is_flagged_anomalous_and_a_quiet_host_says_so(
+    tmp_path: Path,
+    oneharness_bin: str,
+    scratch_root: Path,
+    processes: list[subprocess.Popen[bytes]],
+) -> None:
+    """The wedged-turn flag, and the two things `just host` says when it sees nothing.
+
+    The anomalous flag is the reason these views exist — a judge turn ran for 1h54m
+    unnoticed — so it is driven against a turn that is genuinely running rather than
+    left to be believed. Waiting out a real multiple of a worker's typical duration is
+    not a test, so the threshold is moved instead, through the same kind of documented
+    knob `--parked-after` and `--undriven-after` already are.
+    """
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "overrunning"
+    run_dir.mkdir(parents=True)
+    _launch(run_dir, os.getpid(), ("slow",))
+    with ExitStack() as stack:
+        _dispatch(tmp_path, oneharness_bin, stack, processes, run_id=run_dir.name, node="slow")
+        _await_live(scratch_root, "slow")
+
+        flagged = _view(
+            ["just", "host", "--runs-dir", str(runs_dir), "--outlier-multiple", "0"],
+            scratch_root,
+        )
+        flagged_json = json.loads(
+            _view(
+                [
+                    "just",
+                    "host",
+                    "--runs-dir",
+                    str(runs_dir),
+                    "--outlier-multiple",
+                    "0",
+                    "--format",
+                    "json",
+                ],
+                scratch_root,
+            )
+        )
+        # A scratch root no dispatch ever wrote into: the registry answered, and the
+        # answer is that nothing is running.
+        (tmp_path / "quiet").mkdir()
+        quiet = _view(
+            [
+                "just",
+                "host",
+                "--runs-dir",
+                str(runs_dir),
+                "--scratch-root",
+                str(tmp_path / "quiet"),
+            ],
+            scratch_root,
+        )
+
+    assert "ANOMALOUS, past 0x the" in flagged, flagged
+    assert next(item for item in flagged_json["dispatches"] if item["node"] == "slow")[
+        "turn_is_outlier"
+    ], flagged_json
+    assert "Live dispatches: none." in quiet, quiet
+    assert "ownership stamp whose scratch directory a dispatcher still holds" in quiet, quiet
+
+
+def test_an_unreadable_process_table_is_reported_as_unknown_not_as_nothing(
+    tmp_path: Path, scratch_root: Path
+) -> None:
+    """`just host` never turns "I could not look" into "nothing is running".
+
+    Driven through `AI_ORCHESTRATOR_PROC_ROOT`, the procfs seam every liveness probe
+    in this harness already reads, pointed at a directory that cannot show this
+    process. That is the one condition under which no ownership proof is available at
+    all, and reporting it as an empty host is the confident wrong answer these views
+    exist to stop giving.
+    """
+    completed = subprocess.run(
+        ["just", "host", "--runs-dir", str(tmp_path / "runs")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        env={
+            **os.environ,
+            "TMPDIR": str(scratch_root),
+            "AI_ORCHESTRATOR_PROC_ROOT": str(tmp_path / "no-procfs"),
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Live dispatches: unknown" in completed.stdout, completed.stdout
+    assert "procfs could not be read" in completed.stdout, completed.stdout
+    assert "Live dispatches: none" not in completed.stdout, completed.stdout
 
 
 def test_a_node_whose_dispatch_died_is_flagged_while_its_sibling_keeps_running(
@@ -358,24 +458,24 @@ def test_a_node_whose_dispatch_died_is_flagged_while_its_sibling_keeps_running(
             )
             _await_live(scratch_root, "alive")
             _await_live(scratch_root, "dying")
-            both = _view(
-                [
-                    "just",
-                    "status",
-                    run_dir.name,
-                    "--runs-dir",
-                    str(runs_dir),
-                    "--undriven-after",
-                    "0",
-                ],
-                scratch_root,
-            )
-            assert "PARKED" not in both, both
+            both = _view(_status_command(run_dir, runs_dir), scratch_root)
+            assert "UNDRIVEN" not in both, both
             # Kill the dispatch and release its ownership lock, which together are
             # what a dispatcher's death leaves behind.
             _kill_tree(processes[-1])
 
-        after = _view(_status_command(run_dir, runs_dir), scratch_root)
+            after = _view(_status_command(run_dir, runs_dir), scratch_root)
+            listed = _view(["just", "runs", "--runs-dir", str(runs_dir)], scratch_root)
+            assert "1 live dispatch(es)" in listed, listed
+
+    # Both of this run's dispatches are gone now, while another run's is still live.
+    # That is the other half of the per-row distinction: the registry can see live
+    # dispatches, and none of them is this run's.
+    with ExitStack() as elsewhere:
+        _dispatch(tmp_path, oneharness_bin, elsewhere, processes, run_id="other-run", node="x")
+        _await_live(scratch_root, "x")
+        emptied = _view(["just", "runs", "--runs-dir", str(runs_dir)], scratch_root)
+    assert "no live dispatch carries this run's ownership stamp" in emptied, emptied
 
     dying_line = next(line for line in after.splitlines() if " dying " in line)
     alive_line = next(line for line in after.splitlines() if " alive " in line)
