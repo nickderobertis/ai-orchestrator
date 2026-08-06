@@ -34,6 +34,19 @@
       "{workspaceRoot}/tests/e2e/waits.py",
       "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py"
     ],
+    "dagUiServerSurface": [
+      "{workspaceRoot}/orchestrator/**/*.py",
+      "!{workspaceRoot}/orchestrator/integrate.py",
+      "!{workspaceRoot}/orchestrator/next_round.py",
+      "!{workspaceRoot}/orchestrator/recover.py",
+      "!{workspaceRoot}/orchestrator/results.py",
+      "!{workspaceRoot}/orchestrator/smoke.py",
+      "!{workspaceRoot}/orchestrator/status.py",
+      "!{workspaceRoot}/orchestrator/stop.py",
+      "{workspaceRoot}/tests/e2e/fake_oneharness.py",
+      "{workspaceRoot}/scripts/oneharness-stream.py",
+      "{workspaceRoot}/.githooks/pre-push"
+    ],
     "nxCacheCheck": [
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/scripts/check-nx-cache.sh",
@@ -124,9 +137,6 @@
         {
           "runtime": "./scripts/llmlint-fingerprint.sh"
         }
-      ],
-      "outputs": [
-        "{workspaceRoot}/.nx/llmlint-diff"
       ]
     },
     "bootstrap": {

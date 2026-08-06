@@ -15,11 +15,17 @@ import uuid
 from pathlib import Path
 
 import pytest
-from fake_codex import provider_environment
+from fake_codex import provider_environment, uninstalled_provider_environment
 from harness_records import (
+    AUTH_REFUSAL,
+    CLAUDE_ALTERNATE2_RECORD,
     CLAUDE_RECORD,
     CODEX_RECORD,
+    QUOTA_REFUSAL,
+    RATE_LIMITED_RECORD,
+    SKIPPED_CANDIDATE,
     reported_usage,
+    smoke_history_chain,
     smoke_history_record,
 )
 from waits import timeout as e2e_timeout
@@ -49,6 +55,25 @@ def _record(
     )
     path = project / f"smoke-{suffix}-20260725T000000Z-{history_id}.jsonl"
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+
+def _chain(
+    history_dir: Path, smoke_id: str, *shapes: dict[str, object], suffix: str = "chain"
+) -> None:
+    """Persist one session recording every candidate a fallback chain attempted.
+
+    One file, because that is how oneharness stores one turn's chain: the candidates
+    it refused and the one it selected are records of the same session, in the order
+    it tried them.
+    """
+    project = history_dir / "tmp-smoke-target"
+    project.mkdir(parents=True, exist_ok=True)
+    history_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{smoke_id}-{suffix}"))
+    path = project / f"smoke-{suffix}-20260725T000000Z-{history_id}.jsonl"
+    path.write_text(
+        smoke_history_chain(*shapes, smoke_id=smoke_id, session=f"smoke-{suffix}"),
+        encoding="utf-8",
+    )
 
 
 def _usage(**overrides: object) -> dict[str, object]:
@@ -122,15 +147,15 @@ def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> No
     whatever it is set to — so it guarded nothing, and dropping the narrowing spends a
     real turn and passes the smoke. The second half of this test's name is therefore
     asserted rather than assumed, in oneharness' own words for having run nothing.
+
+    The selection is built rather than spelled inline for the same reason it is in
+    the journeys above: a dispatch's `ORCHESTRATOR_WORKER_HARNESSES` beats the
+    narrowing, and inheriting it here would launch a paid identity that starts.
     """
     result = subprocess.run(
         ["just", "smoke"],
         cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "ONEHARNESS_HARNESSES": "codex",
-            "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
-        },
+        env=uninstalled_provider_environment(),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(300),
@@ -246,7 +271,7 @@ def test_validation_command_rejects_a_session_that_never_reached_a_harness(tmp_p
     ("harness", "shape", "rendered_cost"),
     [
         ("codex", CODEX_RECORD, "unreported"),
-        ("claude-code", CLAUDE_RECORD, "$0.063882"),
+        ("claude-code:alternate", CLAUDE_RECORD, "$0.063882"),
     ],
 )
 def test_validation_command_accepts_each_real_harness_record_shape(
@@ -260,6 +285,122 @@ def test_validation_command_accepts_each_real_harness_record_shape(
 
     assert result.returncode == 0, result.stderr
     assert f"smoke: passed via {harness} (recorded cost: {rendered_cost})" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("case", "refusal", "selected", "reported"),
+    [
+        (
+            "quota",
+            QUOTA_REFUSAL,
+            CLAUDE_ALTERNATE2_RECORD,
+            (
+                "fell through claude-code:alternate (quota)",
+                "passed via claude-code:alternate2 (recorded cost: $0.063882)",
+            ),
+        ),
+        (
+            "auth",
+            AUTH_REFUSAL,
+            CODEX_RECORD,
+            (
+                "fell through claude-code:alternate2 (auth)",
+                "passed via codex (recorded cost: unreported)",
+            ),
+        ),
+        (
+            "skipped",
+            SKIPPED_CANDIDATE,
+            CODEX_RECORD,
+            (
+                "fell through claude-code:alternate (skipped)",
+                "passed via codex (recorded cost: unreported)",
+            ),
+        ),
+    ],
+)
+def test_validation_command_passes_a_chain_that_fell_through_a_refused_candidate(
+    tmp_path: Path,
+    case: str,
+    refusal: dict[str, object],
+    selected: dict[str, object],
+    reported: tuple[str, str],
+) -> None:
+    """The public command reads the launch path's outcome off the selected record.
+
+    The quota case is the shape this host writes today: `claude-code:alternate` is
+    out of weekly quota, the chain hands the turn to `claude-code:alternate2`, and
+    both records land in one session. Failing on the refusal blocked every push
+    whose diff selects this smoke, for a launch path that was working.
+
+    An unauthenticated identity and one the chain never started are the same story
+    with the other two shapes a candidate can step aside in: an auth refusal names
+    a failure kind, and a skipped candidate names none at all — it has no exit code,
+    no duration, and a null for every counter, so nothing but its status says what
+    became of it.
+    """
+    smoke_id = f"fell-through-{case}"
+    _chain(tmp_path, smoke_id, refusal, selected, suffix=case)
+
+    result = _validate(tmp_path, smoke_id)
+
+    assert result.returncode == 0, result.stderr
+    for line in reported:
+        assert f"smoke: {line}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("case", "shapes", "diagnostic"),
+    [
+        (
+            "selected-failed",
+            (QUOTA_REFUSAL, {**CODEX_RECORD, "status": "error"}),
+            "records status 'error' with exit code 0",
+        ),
+        (
+            "selected-unaccounted",
+            (QUOTA_REFUSAL, {**CODEX_RECORD, "usage": None}),
+            "reports no token accounting",
+        ),
+        (
+            "unclassified-candidate",
+            (RATE_LIMITED_RECORD, CODEX_RECORD),
+            "real harness candidate claude-code:alternate failed unclassified",
+        ),
+        (
+            "chain-exhausted",
+            (QUOTA_REFUSAL, AUTH_REFUSAL),
+            "no candidate left to run the task: claude-code:alternate (quota), "
+            "claude-code:alternate2 (auth)",
+        ),
+        (
+            "candidate-was-billed",
+            (
+                {**QUOTA_REFUSAL, "usage": reported_usage(QUOTA_REFUSAL, input_tokens=1200)},
+                CODEX_RECORD,
+            ),
+            "candidate claude-code:alternate was recorded as quota but reports "
+            "input_tokens 1200 that was billed for",
+        ),
+        (
+            "nameless-candidate",
+            ({**QUOTA_REFUSAL, "harness_id": "", "harness": ""}, CODEX_RECORD),
+            "was recorded as quota but does not name the identity it was written for",
+        ),
+    ],
+)
+def test_validation_command_still_fails_a_chain_that_did_not_run_the_task(
+    tmp_path: Path, case: str, shapes: tuple[dict[str, object], ...], diagnostic: str
+) -> None:
+    """Falling through excuses the candidate, never the launch path's own outcome."""
+    smoke_id = f"chain-{case}"
+    _chain(tmp_path, smoke_id, *shapes, suffix=case)
+
+    result = _validate(tmp_path, smoke_id)
+
+    assert result.returncode == 1
+    assert diagnostic in result.stderr
+    assert "rerun 'just smoke'" in result.stderr
 
 
 def test_validation_command_rejects_multiple_matching_sessions(tmp_path: Path) -> None:

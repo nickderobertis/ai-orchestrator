@@ -277,14 +277,14 @@ one can be the stronger author while another is the stronger reviewer. Say so pe
 dispatch:
 
 ```sh
-just dispatch engineer "…" --worker-harness codex --judge-harness claude-code:alternate
-just repo-task <repo> engineer "…" --worker-harness codex:alternate --judge-harness codex
+just run-plan plan.json --worker-harness codex --judge-harness claude-code:alternate
 just orchestrate plan.json --worker-harness codex --judge-harness claude-code:alternate2
 ```
 
 Both flags take an identity exactly as a config's `harnesses` chain writes one,
-comma-separated for a fallback chain of the operator's own. `just run-plan` and
-`just repo-plan` take them too, since they share the lifecycle option group.
+comma-separated for a fallback chain of the operator's own. They reach every
+dispatch a plan makes, direct and lifecycle alike — including a plan holding a
+single node, which is how one subtask is run.
 
 Neither flag is oneharness's `ONEHARNESS_HARNESSES`, and that is the whole point:
 that variable is process-wide **and beats config**, so exporting it to move the
@@ -309,8 +309,8 @@ environment, so every round's workers and judges inherit the same choice.
 before anything is dispatched, and names every selectable identity when it refuses:
 
 ```
-$ just dispatch engineer "…" --worker-harness opencode
-dispatch: --worker-harness 'opencode': 'opencode' is not a harness oneharness.toml
+$ just run-plan plan.json --worker-harness opencode
+run-plan: --worker-harness 'opencode': 'opencode' is not a harness oneharness.toml
 configures; select from claude-code:alternate, claude-code:alternate2, codex,
 codex:alternate, claude-code:primary
 ```
@@ -447,6 +447,81 @@ Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; every other pushed diff
 skips it.
+
+### The record a fallback chain is judged by
+
+`run_mode = "fallback"` records **every candidate it attempts**, in priority order,
+and stops at the first that can actually run the task — so one turn can leave
+several records in one session, and only the last of them is the launch path's
+outcome. The smoke judges that one: it is held to the whole bar above, and the
+records ahead of it are read as the chain doing its job. Holding all of them to
+that bar is what failed this smoke for weeks of healthy launches while
+`claude-code:alternate`'s weekly quota was gone and `claude-code:alternate2` served
+every turn — and, because the pre-push hook selects this smoke for any diff
+touching `scripts/`, it blocked publication of work that had already passed its
+gate.
+
+A candidate only counts as fallen through when its own record says it never ran the
+task: `failure_kind` of `quota` or `auth`
+(`orchestrator.telemetry.FALLTHROUGH_FAILURE_KINDS`), or a `skipped` status, which
+carries no exit code, no duration, and no accounting at all. `rate_limit` is
+deliberately not in that set — oneharness stops the chain on one, because that
+record carries work the provider already billed for (see
+`tests/e2e/test_quota_fallthrough_e2e.py`) — so a `rate_limit` record ahead of
+another describes something the chain does not do, and fails the smoke as an
+unclassified candidate failure. A chain whose *every* candidate refused fails too,
+naming each identity and its reason so the operator knows which subscription to
+restore.
+
+A candidate's own word for what became of it is checked rather than believed. These
+records are read back out of a store nothing in the smoke wrote, and each one
+reaches both the verdict and the operator's report, so a record must *back* the
+reason it names: it has to identify the harness it was written for, and it has to
+show that nothing was spent — no successful turn, and every counter it reports at
+zero (`orchestrator.telemetry.history_record_fallthrough_failure`). Absent
+accounting is not evidence of spend and is accepted: a skipped candidate records a
+null for every counter, and so does an auth refusal on this host. A refusal that
+names no identity would otherwise be reported as "an unidentified harness fell
+through", and one carrying billed tokens is a candidate that ran — excusing either
+as fallback is the launch breakage this smoke exists to name. For the same reason
+only a `type: "run"` line can stand in for the selected candidate: a store also
+holds an index whose lines wrap a record inside an envelope that names no harness
+of its own, and the verdict is read off the session's *last* turn.
+
+A pass names the fallen-through candidates on their own lines, above the verdict:
+
+```
+smoke: fell through claude-code:alternate (quota); the fallback chain handed the turn to the next identity
+smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)
+```
+
+Both lines name the *identity* rather than the harness, because a chain's two
+Claude subscriptions are one harness and differ only by variant.
+
+`tests/e2e/test_smoke_fallback_e2e.py` drives that whole path for real — the
+recipe, the wrapper, the chain, the classifier, and the history the verdict is read
+back out of — with both candidates replaced at oneharness's own `ONEHARNESS_BIN_*`
+seam. Two things make that journey possible to write safely, and both are easy to
+get wrong:
+
+- **Drop the dispatch's harness pin.** This repository runs its own suite from
+  inside a dispatch, which exports `ORCHESTRATOR_WORKER_HARNESSES`;
+  `scripts/oneharness-agent.sh` applies it *over* any `ONEHARNESS_HARNESSES` the
+  journey sets, by design. A journey that inherits it runs on the pinned identity.
+- **Name bare identities, never variants.** `ONEHARNESS_BIN_*` keys on a harness
+  id and there is no spelling of it that reaches a variant —
+  `ONEHARNESS_BIN_CLAUDE_CODE` leaves `claude-code:alternate` resolving to the real
+  `claude`.
+
+Together they are a money hazard rather than a style point: a journey that misses
+either one spawns a live subscription with its double sitting unused, and a billed
+run and a free one look identical from the assertions. `fake_codex.py`'s
+`unpinned_worker_side` is the single source for the first, and
+`test_no_smoke_journey_inherits_the_dispatch_s_harness_pin` holds both — over the
+three builders (`chain_environment`, `provider_environment`,
+`uninstalled_provider_environment`) that are every environment a smoke journey
+launches through. Build the selection there rather than spelling one inline in a
+journey, which is how a launch would escape that guard.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
@@ -742,17 +817,17 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   reported action, `just next-round RUN --complete-human NODE[/STEP]` records an
   attestation and releases only its dependents. Completed direct agents and
   lifecycle steps are not dispatched again.
-- **Prefer the one-command wrapper.** Use
-  `just repo-task-auto <repo> <persona> "<task>"`. It sets the dispatch
-  environment and reports the branch's commit delta after the run, making
-  stranded work visible. Use `just repo-task` or `orchestrator-repo-task` when
-  the wrapper is unavailable.
+- **Run one subtask as a one-node plan.** There is no separate single-dispatch
+  command: a plan holding one direct node or one lifecycle node goes through the
+  same executor, ledger, and progress views as a wide DAG, so no piece of running
+  work is invisible to them. See `examples/single-node-direct.plan.json` and
+  `examples/single-node-lifecycle.plan.json`.
 - **Inspect a `not-completed` branch.** This status commonly means the agent hit
   the turn cap at the moment it finished, not that its work failed or vanished.
   Agents commit incrementally, and the lifecycle preserves those commits on the
   branch. Check its commit delta before deciding whether to recover or redispatch.
-  The wrapper prints `just repo-recover <branch> --repo <checkout>`; that command
-  verifies and publishes the preserved branch through its registered workflow.
+  `just repo-recover <branch> --repo <checkout>` verifies and publishes the
+  preserved branch through its registered workflow.
 - **Choose publication from identity type and workflow.** Omitted type is inferred
   from authenticated GitHub login versus normalized origin owner; pass
   `--repo-type` when that cannot resolve. Team defaults to a ready-for-review open

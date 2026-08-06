@@ -70,8 +70,8 @@ def run_detached(entry: Entry, argv: list[str] | None, label: str) -> int:
     """Run a round-owning CLI entry point outside the launching turn's reach.
 
     Wired only at process entry points, never inside ``main`` itself: ``next-round``
-    and the deprecated ``repo-plan`` alias call the executor in-process, and unit
-    tests call it directly, so forking there would fork the *caller*.
+    calls the executor in-process, and unit tests call it directly, so forking there
+    would fork the *caller*.
     """
     # Anything buffered here would otherwise be flushed twice, once per process.
     sys.stdout.flush()

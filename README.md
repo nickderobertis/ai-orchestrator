@@ -22,11 +22,12 @@ just bootstrap          # install the adopted onejudge SDK/CLI + sync the Python
 just check              # deterministic gate (format, lint, types, personas, tests)
 just gate               # complete pre-push gate, including llmlint
 
-# Dispatch one subtask with a persona (task passed over the CLI):
-just dispatch engineer "Add a /health endpoint and test it."
-
 # Run one recorded graph mixing agents, repos, and human gates:
 just run-plan examples/tracked-graph.example.json
+
+# One subtask is a one-node plan — the same executor, the same ledger:
+just run-plan examples/single-node-direct.plan.json
+just run-plan examples/single-node-lifecycle.plan.json
 
 # After doing a reported human action, attest it and release its dependents:
 just next-round <run-id> --complete-human release-approval
@@ -37,9 +38,9 @@ just integrate claude/api claude/docs --push
 # Verify and publish a lifecycle-preserved branch through its registered workflow:
 just repo-recover ai-orchestrator/engineer/abc123 --repo /path/to/checkout
 
-# Self-dispatch from a safety clone while publishing through the canonical identity:
-just repo-task /path/to/canonical engineer - \
-  --execution-checkout /path/to/safety-clone
+# Self-dispatch from a safety clone while publishing through the canonical identity
+# (set `execution_checkout` on the lifecycle node in the plan file):
+just run-plan self-dispatch.plan.json
 
 # Deliberately change publication policy for every alias of one repository identity:
 just migrate-repo-workflow local/ai-orchestrator --workflow local

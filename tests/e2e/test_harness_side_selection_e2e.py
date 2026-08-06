@@ -1,9 +1,10 @@
 """Which provider each side of one dispatch actually ran on.
 
-These journeys drive the real `orchestrator-dispatch` and `orchestrator-run-plan`
-console scripts, the real onejudge CLI, the real `scripts/oneharness-agent.sh`,
-and the real oneharness — every party that decides a selection, plus real git for
-the lifecycle node.
+These journeys drive the real `orchestrator-run-plan` console script — the one
+executor, over plans holding a single direct node, a single lifecycle node, or
+both — the real onejudge CLI, the real `scripts/oneharness-agent.sh`, and the real
+oneharness: every party that decides a selection, plus real git for the lifecycle
+node.
 
 The one thing they replace is the paid provider itself, this repository's
 designated external seam: a fake `codex` and a fake `claude` earlier on PATH than
@@ -39,6 +40,7 @@ from orchestrator.harnesses import (
     PROCESS_WIDE_HARNESS_ENV,
     WORKER_HARNESS_ENV,
 )
+from orchestrator.labels import parse_labels
 
 #: onejudge's own framing of a supervisor turn — how a recorded turn says which
 #: side of the conversation it belongs to.
@@ -72,6 +74,9 @@ with open(os.environ["SELECTION_RECORD"], "a") as record:
         "harnesses": os.environ.get("ONEHARNESS_HARNESSES"),
         "worker_override": os.environ.get({worker_env!r}),
         "judge_override": os.environ.get({judge_env!r}),
+        # What oneharness would stamp on the session this turn becomes, read where
+        # oneharness reads it: the environment of the provider it spawned.
+        "history_labels": os.environ.get("ONEHARNESS_HISTORY_LABELS"),
         "argv": sys.argv[1:],
     }}) + "\\n")
 PROMPT = " ".join(sys.argv[1:])
@@ -206,26 +211,45 @@ def _dispatch(
     extra_args: tuple[str, ...] = (),
     env: Mapping[str, str] | None = None,
 ) -> Dispatched:
-    """Run one real dispatch with both paid providers replaced on PATH."""
+    """Run one real dispatch with both paid providers replaced on PATH.
+
+    A single dispatch is a one-node plan: the tracked graph is the only executor,
+    so `orchestrator-run-plan` over a plan holding one direct agent node is what an
+    operator runs for one subtask, and what these journeys drive.
+    """
     target = tmp_path / "target"
     target.mkdir(exist_ok=True)
     record, environment = _provider_environment(tmp_path, oneharness_bin)
     environment.update(env or {})
+    plan = tmp_path / "one-node.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "side-selection",
+                        "persona": "engineer",
+                        "task": "record which provider ran this side",
+                        "project_dir": str(target),
+                        "max_turns": 1,
+                        # oneharness resumes whatever harness a stored session was
+                        # bound to, so a name of this test's own keeps the selection
+                        # under test the only one.
+                        "session": f"side-selection-{tmp_path.name}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     process = subprocess.run(
         [
-            str(Path(onejudge_bin).with_name("orchestrator-dispatch")),
-            "engineer",
-            "record which provider ran this side",
-            "--project-dir",
-            str(target),
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
             "--cwd",
             str(target),
-            "--max-turns",
-            "1",
-            # oneharness resumes whatever harness a stored session was bound to, so
-            # a name of this test's own keeps the selection under test the only one.
-            "--session",
-            f"side-selection-{tmp_path.name}",
             "--onejudge-bin",
             onejudge_bin,
             *extra_args,
@@ -273,6 +297,36 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
     # A masked CLAUDE_CONFIG_DIR is what distinguishes the primary account from the
     # alternate2 one the ambient value named; both run the same binary.
     assert {turn["claude_config_dir"] for turn in judge_turns} == {None}
+
+
+def test_a_dispatch_never_stamps_the_worker_role_on_its_own_supervisor(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The semantic role a real dispatch stamps reaches only the side it describes.
+
+    A dispatch exports one `ONEHARNESS_HISTORY_LABELS` for the whole conversation,
+    and oneharness merges labels CLI > env > project file — so the worker's
+    `agent_role` outranked `oneharness.judge.toml`'s own `agent_role = "judge"` and
+    every supervisor session in the store was recorded as its worker's role. Read at
+    the provider oneharness spawned, which is where the recording is decided: this
+    is the real dispatch, the real wrapper, and the real oneharness label merge.
+    """
+    dispatched = _dispatch(tmp_path, onejudge_bin, oneharness_bin)
+
+    assert dispatched.process.returncode == 0, dispatched.process.stderr
+    worker_labels = [_labels(turn) for turn in dispatched.side(WORKER_MARKER)]
+    judge_labels = [_labels(turn) for turn in dispatched.side(JUDGE_MARKER)]
+    assert worker_labels and judge_labels, dispatched.turns
+    assert all(labels.get("agent_role") == "worker" for labels in worker_labels)
+    assert all("agent_role" not in labels for labels in judge_labels)
+    # Only that one key: a judge session must still name the persona and the dispatch
+    # it supervised, or nothing could group the two sides of one conversation.
+    assert all(labels.get("persona") == "engineer" for labels in judge_labels)
+
+
+def _labels(turn: Mapping[str, Any]) -> dict[str, str]:
+    recorded = turn.get("history_labels")
+    return parse_labels(recorded) if isinstance(recorded, str) else {}
 
 
 def test_without_either_flag_a_process_wide_selection_still_moves_both_sides(
@@ -458,30 +512,45 @@ def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
     assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
 
 
-def test_repo_task_runs_a_whole_workstream_on_the_providers_it_was_given(
+def test_a_one_node_plan_runs_a_whole_workstream_on_the_providers_it_was_given(
     tmp_path: Path, bare_origin, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    """The lifecycle entry point an operator reaches for one change, end to end.
+    """The lifecycle plan an operator reaches for one change, end to end.
 
-    `just repo-task` clones, works in an isolated worktree, verifies with the
+    One lifecycle node clones, works in an isolated worktree, verifies with the
     identity's own gate and merges — several dispatches on one branch. All of them
-    have to run the pair this command was given, and the merge is what proves the
+    have to run the pair this run was given, and the merge is what proves the
     selection did not just parse but carried a real workstream through.
     """
     origin = bare_origin()
     checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
     record, environment = _provider_environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "workstream.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "workstream",
+                        "repo": str(checkout),
+                        "persona": "engineer",
+                        "task": "record which provider ran this workstream",
+                        "max_turns": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     process = subprocess.run(
         [
-            str(Path(onejudge_bin).with_name("orchestrator-repo-task")),
-            str(checkout),
-            "engineer",
-            "record which provider ran this workstream",
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
             "--workspace",
             str(tmp_path / "worktrees"),
-            "--max-turns",
-            "1",
             "--worker-harness",
             "codex",
             "--judge-harness",
@@ -498,7 +567,7 @@ def test_repo_task_runs_a_whole_workstream_on_the_providers_it_was_given(
     dispatched = _recorded_turns(record, process)
 
     assert process.returncode == 0, process.stderr
-    assert json.loads(process.stdout)["outcome"] == "merged"
+    assert json.loads(process.stdout)["results"]["workstream"]["outcome"] == "merged"
     assert dispatched.side(WORKER_MARKER), dispatched.turns
     assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
     assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}

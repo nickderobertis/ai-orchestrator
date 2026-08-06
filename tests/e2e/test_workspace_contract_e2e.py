@@ -238,6 +238,8 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "packages/telemetry-client/src/index.ts",
         "tests/golden/run-detail-v2.json",
         "apps/dag-ui/vite.config.ts",
+        "apps/dag-ui/e2e/viewports.ts",
+        "apps/dag-ui/e2e/gallery.screens.spec.ts",
         "docs/dag-ui.md",
         "docs/dag-ui/design.md",
         "docs/dag-ui/oneharness-ui-contract.d.ts",
@@ -479,6 +481,50 @@ def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -
 
 
 @pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_dag_ui_viewport_matrix_drift(
+    tmp_path: Path,
+) -> None:
+    """A width the gallery captures but the operator table never names must fail.
+
+    The screenshot tier and the navigation journeys share one declared matrix, and
+    `docs/dag-ui.md` restates it as the table an operator reads before capturing.
+    """
+    checkout = _dag_state_contract_checkout(tmp_path)
+    viewports = checkout / "apps/dag-ui/e2e/viewports.ts"
+    moved = viewports.read_text().replace("sized(1024, 768)", "sized(1024, 760)")
+    assert "sized(1024, 760)" in moved, "the matrix no longer declares the size this moves"
+    viewports.write_text(moved)
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "DAG UI viewport matrix" in result.stderr
+    assert "1024x760" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_dag_ui_surface_drift(
+    tmp_path: Path,
+) -> None:
+    """A surface the gallery photographs but the operator table never names must fail.
+
+    Each entry names the PNG it writes at every viewport, and `docs/dag-ui.md` lists
+    those names as how to find a capture in the gallery it just wrote.
+    """
+    checkout = _dag_state_contract_checkout(tmp_path)
+    surfaces = checkout / "apps/dag-ui/e2e/gallery.screens.spec.ts"
+    renamed = surfaces.read_text().replace('"06-conversation"', '"06-transcript"')
+    assert '"06-transcript"' in renamed, "SURFACES no longer declares the capture this renames"
+    surfaces.write_text(renamed)
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "DAG UI screenshot surfaces" in result.stderr
+    assert "06-transcript" in result.stderr
+
+
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_dag_ui_documented_port_drift(
     tmp_path: Path,
 ) -> None:
@@ -513,7 +559,8 @@ if [[ "${ECHO_COMMAND:-}" == "$(basename "$0")" ]]; then echo "$ECHO_LINE"; fi
 if [[ "${BLOCK_COMMAND:-}" == "$(basename "$0")" ]]; then
   while [[ ! -e "$BLOCK_UNTIL" ]]; do sleep 0.05; done
 fi
-if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" ]]; then
+invocation="$(basename "$0") $*"
+if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" || "${FAIL_INVOCATION:-}" == "$invocation" ]]; then
   echo "$(basename "$0"): captured failure detail" >&2
   exit 9
 fi
@@ -566,9 +613,8 @@ def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
     checkout, trace = _recipe_checkout(tmp_path)
     shutil.copy2(ROOT / "scripts/comparison-base.sh", checkout / "scripts/comparison-base.sh")
-    verdict = checkout / "scripts/llmlint-verdict.sh"
-    verdict.write_text((checkout / "scripts/nx.sh").read_text())
-    verdict.chmod(0o755)
+    # The recipe only checks that llmlint is installed before handing the tier to
+    # Nx; the traced `scripts/nx.sh` double above is what stands in for the run.
     llmlint = checkout / "bin/llmlint"
     llmlint.write_text((checkout / "scripts/nx.sh").read_text())
     llmlint.chmod(0o755)
@@ -751,6 +797,135 @@ def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
         process.communicate(timeout=60)
 
     assert process.returncode == 0
+
+
+def _screens_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """A recipe checkout `just dag-ui-screens` runs in, with only Playwright doubled.
+
+    `scripts/dag-ui-screens.sh` is the real file, because what is under test is the
+    directory it chooses and the path it reports — not what the browser tier does once
+    it has one. The `apps/dag-ui` directory has to exist because the script runs
+    Playwright from inside it.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    screens = checkout / "scripts/dag-ui-screens.sh"
+    shutil.copy2(ROOT / "scripts/dag-ui-screens.sh", screens)
+    screens.chmod(0o755)
+    (checkout / "apps/dag-ui").mkdir(parents=True)
+    bunx = checkout / "bin/bunx"
+    bunx.write_text((checkout / "scripts/nx.sh").read_text())
+    bunx.chmod(0o755)
+    # Provisioned already, so the real `workspace-install.sh` this script heals
+    # through exits without reaching for Bun.
+    _mark_nx_installed(checkout)
+    return checkout, trace
+
+
+@pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_gives_every_invocation_a_gallery_of_its_own(
+    tmp_path: Path,
+) -> None:
+    """Two operators capturing at once must not photograph into one directory.
+
+    The browser configs already choose their ports and fixture directory per run; the
+    gallery is the one thing they do not know about, so this recipe owns it.
+    """
+    checkout, trace = _screens_checkout(tmp_path)
+
+    first = _recipe_run(checkout, trace, "dag-ui-screens")
+    second = _recipe_run(checkout, trace, "dag-ui-screens", "--grep", "at 390x844")
+
+    galleries = []
+    for result in (first, second):
+        assert result.returncode == 0, result.stderr
+        reported = re.search(r"gallery at (\S+)/index\.html", result.stdout)
+        assert reported is not None, result.stdout
+        galleries.append(Path(reported.group(1)))
+    assert galleries[0] != galleries[1]
+    for gallery in galleries:
+        assert gallery.is_dir()
+        assert gallery.parent == checkout / "apps/dag-ui/.screenshots"
+    # And whatever the caller added reaches Playwright, so one width can be recaptured.
+    assert trace.read_text().splitlines() == [
+        "bunx playwright test --config screenshots.config.ts",
+        "bunx playwright test --config screenshots.config.ts --grep at 390x844",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_names_the_gallery_a_failed_capture_left(
+    tmp_path: Path,
+) -> None:
+    """A capture that dies part way through still says where its images are."""
+    checkout, trace = _screens_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens", fail_command="bunx")
+
+    assert result.returncode != 0
+    partial = re.search(r"whatever it managed is at (\S+)", result.stderr)
+    assert partial is not None, result.stderr
+    assert Path(partial.group(1)).is_dir()
+    # And it says what went wrong and what to do, rather than only that it failed: the
+    # status Playwright exited with, and the recipe to rerun once that is addressed.
+    assert "exited 9" in result.stderr
+    assert "just dag-ui-screens" in result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_stops_when_provisioning_fails(
+    tmp_path: Path,
+) -> None:
+    """A workspace that could not be provisioned must not be photographed anyway.
+
+    Playwright lives in `node_modules`, so a failed install is the one thing that makes
+    every capture below meaningless; the recipe owes the provisioner's own failure
+    rather than a screenful of missing-module noise after it.
+    """
+    checkout, trace = _screens_checkout(tmp_path)
+    install = checkout / "scripts/workspace-install.sh"
+    install.write_text((checkout / "scripts/nx.sh").read_text())
+    install.chmod(0o755)
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens", fail_command="workspace-install.sh")
+
+    assert result.returncode != 0
+    assert "workspace-install.sh: captured failure detail" in result.stderr
+    # Nothing was captured, and no gallery was left behind to look at.
+    assert "playwright" not in trace.read_text()
+    assert not (checkout / "apps/dag-ui/.screenshots").exists()
+
+
+@pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_reports_a_gallery_root_it_cannot_create(
+    tmp_path: Path,
+) -> None:
+    """Nowhere to write the images is a diagnosis, not a Playwright failure.
+
+    An `apps/dag-ui` the invoking user cannot write is what a read-only checkout, or one
+    owned by another operator, actually looks like from here.
+    """
+    checkout, trace = _screens_checkout(tmp_path)
+    readonly = checkout / "apps/dag-ui"
+    readonly.chmod(0o500)
+    try:
+        result = _recipe_run(checkout, trace, "dag-ui-screens")
+    finally:
+        readonly.chmod(0o700)
+
+    assert result.returncode != 0
+    assert "cannot create the gallery root" in result.stderr
+    # It named the repair rather than leaving the operator to infer one, and never
+    # started a capture that had nowhere to land — the trace is empty because the run
+    # stopped before reaching any command at all.
+    assert "permissions" in result.stderr
+    assert "playwright" not in (trace.read_text() if trace.exists() else "")
+
+
+def test_the_screenshot_gallery_root_is_ignored() -> None:
+    """A recipe an operator runs while iterating must not be able to dirty the tree."""
+    ignored = _run("git", "check-ignore", "apps/dag-ui/.screenshots/gallery-aBcD1234/index.html")
+
+    assert ignored.returncode == 0, ignored.stdout + ignored.stderr
 
 
 def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
@@ -1254,14 +1429,21 @@ def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> N
 def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
     checkout, trace = _gate_checkout(tmp_path)
 
+    # The llmlint tier alone, not the deterministic stages `just check` runs
+    # through the same Nx double: this asserts the *second* gate stage's log.
     result = _recipe_run(
-        checkout, trace, "gate", "origin", "main", fail_command="llmlint-verdict.sh"
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION="nx.sh run workspace:lint-llm-diff",
     )
 
     assert result.returncode != 0
     log = checkout / ".logs/gate-llmlint.log"
     assert f"full output: {log}" in result.stderr
-    assert "llmlint-verdict.sh: captured failure detail" in log.read_text()
+    assert "nx.sh: captured failure detail" in log.read_text()
 
 
 UPGRADE_MANIFEST = ("package.json", "bun.lock")

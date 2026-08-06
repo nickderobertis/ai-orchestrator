@@ -116,6 +116,7 @@ from .runs import (
     prepare_round,
     resolve_run_dir,
     round_abandonment_guard,
+    settle_finished_round,
     status_summary,
     validate_run_id,
     write_result,
@@ -1222,6 +1223,43 @@ def render_actions(actions: list[HumanAction]) -> list[str]:
     return lines
 
 
+def _plan_of_record(
+    run_dir: Path, plan_path: Path, supplied: dict[str, Any], graph: Graph
+) -> tuple[dict[str, Any], Graph] | None:
+    """Fold the graph a new round must run, or leave the supplied plan alone.
+
+    ``None`` means the transition has nothing left to schedule — every node of the
+    last round is done or dropped — which is a finished run rather than a failure.
+
+    Pointing `run-plan` at a run whose latest round has finished is a *transition*,
+    and the plan of record for one is the graph that round executed — not the file
+    the round was launched with. Re-reading that file starts the next round from a
+    graph the run left behind two rounds ago: nodes whose work has already merged are
+    dispatched again, and every live edit the planner committed is discarded. Only
+    `next-round` folded, so this closed the same hole on the command an orchestrator
+    reaches for to reclaim a run (`run-plan <plan> --run <id>`, with or without
+    ``--recover``).
+
+    `lifecycle.main_plan` is deliberately not folded here: that lifecycle-only
+    executor journals no authoritative stream, so there is nothing to fold from.
+    """
+    from .replan import plan_for_the_next_round
+
+    folded = plan_for_the_next_round(run_dir)
+    if folded is None or folded == supplied:
+        return supplied, graph
+    if not folded["tasks"]:
+        return None
+    print(
+        f"run-plan: {run_dir.name} already has a finished round; deriving the next one "
+        f"from the graph that round executed rather than from {plan_path}",
+        file=sys.stderr,
+    )
+    folded_graph = parse_graph(folded)
+    validate_graph_repo_aliases(folded_graph)
+    return folded, folded_graph
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a tracked graph of direct agents, repo lifecycle nodes, and human actions."
@@ -1283,8 +1321,21 @@ def main(argv: list[str] | None = None) -> int:
             if args.no_record
             else resolve_run_dir(args.runs_dir, plan_mapping, args.plan, args.run)
         )
-        acknowledgements = []
+        acknowledgements: list[ConcurrentAcknowledgement] = []
         if run_dir is not None:
+            # Before the run is registered, so the identities guarded and the graph
+            # journaled are the ones this round will actually execute.
+            transition = _plan_of_record(run_dir, args.plan, plan_mapping, graph)
+            if transition is None:
+                # The ledger is still owed what the journal already recorded, even
+                # though no round is claimed here to perform that repair on the way.
+                settle_finished_round(run_dir)
+                print(
+                    "All nodes are done or dropped; there is nothing to iterate.",
+                    file=sys.stderr,
+                )
+                return 0
+            plan_mapping, graph = transition
             acknowledgements = register_run(
                 run_id=run_dir.name,
                 run_dir=run_dir,
@@ -1650,24 +1701,9 @@ def print_continuation(
     print(f"  just next-round {run_id} [edits.json]{suffix}", file=sys.stderr)
 
 
-def main_repo_plan(argv: list[str] | None = None) -> int:
-    """Deprecated repo-plan alias routed through the canonical executor."""
-    print(
-        "repo-plan: deprecated; `just run-plan` is now the tracked graph executor and "
-        "accepts this plan unchanged.",
-        file=sys.stderr,
-    )
-    return main(argv)
-
-
 def main_cli(argv: list[str] | None = None) -> int:
     """`just run-plan` process entry point: detach from the launching turn first."""
     return run_detached(main, argv, "run-plan")
-
-
-def main_repo_plan_cli(argv: list[str] | None = None) -> int:
-    """`just repo-plan` process entry point: detach from the launching turn first."""
-    return run_detached(main_repo_plan, argv, "repo-plan")
 
 
 if __name__ == "__main__":  # pragma: no cover

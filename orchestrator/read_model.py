@@ -75,6 +75,7 @@ from .telemetry import (
     TimingQuality,
     TimingRecord,
     collect_run,
+    native_session_groups,
 )
 
 API_VERSION = 2
@@ -854,7 +855,11 @@ def run_detail(
         "run": telemetry.record(),
         "rounds": rounds,
         "conversations": (
-            run_conversations(validated, oneharness_bin=oneharness_bin)
+            run_conversations(
+                validated,
+                oneharness_bin=oneharness_bin,
+                native_groups=native_session_groups(events),
+            )
             if include_conversations
             else []
         ),
@@ -884,9 +889,19 @@ def run_conversation(
     except ConfigError as exc:
         raise InvalidRunId(str(exc)) from exc
     wanted = validate_conversation_id(conversation_id)
-    if contained_run_dir(runs_dir, validated) is None:
+    run_dir = contained_run_dir(runs_dir, validated)
+    if run_dir is None:
         raise RunNotFound(f"no recorded run {validated!r}")
-    for conversation in run_conversations(validated, oneharness_bin=oneharness_bin):
+    # The same linkage the detail view resolves, so one transcript describes itself
+    # identically however a client fetched it. A journal this route never needed
+    # before must not start failing it, so an unreadable one costs only the linkage.
+    try:
+        native_groups = native_session_groups(read_strict_events(run_dir / JOURNAL_NAME, validated))
+    except ProjectionError:
+        native_groups = []
+    for conversation in run_conversations(
+        validated, oneharness_bin=oneharness_bin, native_groups=native_groups
+    ):
         if conversation["conversation"]["id"] == wanted:
             make_servable(conversation)
             return conversation

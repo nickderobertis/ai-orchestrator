@@ -139,6 +139,55 @@ apply_side_selection() {
     export ONEHARNESS_HARNESSES="$value"
 }
 
+# Whether one `key=value` pair satisfies oneharness's history-label contract: a key
+# of 1-64 ASCII letters/digits/dot/underscore/hyphen starting alphanumeric, and a
+# non-empty value of at most 256 characters carrying no control character. The comma
+# the contract also forbids cannot survive the split below. This mirrors
+# orchestrator/labels.py, which is the validating *writer* of the same contract; this
+# is the boundary a value hand-set in the environment arrives at instead.
+valid_history_label() {
+    local pair=$1 key value
+    case "$pair" in
+        *=*) ;;
+        *) return 1 ;;
+    esac
+    key=${pair%%=*}
+    value=${pair#*=}
+    [[ $key =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || return 1
+    [ -n "$value" ] && [ "${#value}" -le 256 ] || return 1
+    [[ $value =~ [[:cntrl:]] ]] && return 1
+    return 0
+}
+
+# Drop one key from this process's ONEHARNESS_HISTORY_LABELS, keeping every other
+# valid pair in the order it arrived. A pair that violates the contract is dropped
+# rather than rewritten or passed on, matching how `orchestrator.labels.parse_labels`
+# treats an inherited value: what this rewrites is not this process's to correct, and
+# a rewrite must not hand oneharness a list it would refuse. The variable is unset
+# rather than left empty when nothing survives, because an empty list is not a value
+# oneharness accepts.
+drop_history_label() {
+    local key=$1 pair
+    local kept=''
+    local -a pairs
+    [ -n "${ONEHARNESS_HISTORY_LABELS-}" ] || return 0
+    # Split on commas alone, the wire format's one separator; an unquoted expansion
+    # would also glob, so a value containing `*` could become whatever the cwd holds.
+    IFS=',' read -r -a pairs <<<"$ONEHARNESS_HISTORY_LABELS"
+    for pair in "${pairs[@]}"; do
+        case "$pair" in
+            "$key="*) continue ;;
+        esac
+        valid_history_label "$pair" || continue
+        kept="${kept:+$kept,}$pair"
+    done
+    if [ -n "$kept" ]; then
+        export ONEHARNESS_HISTORY_LABELS="$kept"
+    else
+        unset ONEHARNESS_HISTORY_LABELS
+    fi
+}
+
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2
     exit 2
@@ -209,6 +258,16 @@ if [[ $caller_config == true ]]; then
         apply_side_selection ORCHESTRATOR_JUDGE_HARNESSES \
             "$ORCHESTRATOR_JUDGE_HARNESSES" "$caller_config_path" || exit "$?"
     fi
+    # The `agent_role` a dispatch stamps names the WORKER it dispatched, and this is
+    # the other side of that conversation. oneharness merges history labels
+    # CLI > env > project file, so that inherited value outranked
+    # oneharness.judge.toml's own `agent_role = "judge"` and every supervisor session
+    # in the store was recorded as its worker's role — which is what showed an
+    # operator a strict-evaluator transcript under a row labelled "worker". This
+    # branch is the one place that knows which side it is, so the key is dropped here
+    # and the judge config's own label stands. Every other inherited label locates the
+    # dispatch in the graph and is kept exactly as it arrived.
+    drop_history_label agent_role
     # Keep the portable indirection available while oneharness resolves config.
     # The judge's explicit primary variant does not consume it and masks
     # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project

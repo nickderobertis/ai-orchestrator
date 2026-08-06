@@ -18,13 +18,7 @@
     },
     "test": {
       "command": "cd apps/dag-ui && bunx vitest run --config vite.config.ts && bunx playwright test --config playwright.config.ts && bunx playwright test --config isolation.config.ts",
-      "inputs": [
-        "default",
-        "{workspaceRoot}/orchestrator/**/*",
-        "{workspaceRoot}/tests/e2e/fake_oneharness.py",
-        "{workspaceRoot}/pyproject.toml",
-        "{workspaceRoot}/uv.lock"
-      ]
+      "inputs": ["default", "dagUiServerSurface"]
     },
     "typecheck": {
       "command": "bunx tsc -p apps/dag-ui/tsconfig.json --noEmit"

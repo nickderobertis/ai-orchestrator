@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import signal
 import subprocess
@@ -44,8 +45,8 @@ from orchestrator.dispatch import (
     recordable_provider_failure,
     run_onejudge,
 )
-from orchestrator.dispatch import main as dispatch_main
 from orchestrator.graph import DEFAULT_ROUND_BUDGET
+from orchestrator.graph import main as graph_main
 from orchestrator.harnesses import JUDGE_HARNESS_ENV
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
@@ -294,10 +295,31 @@ def test_report_summary_lists_follow_ups() -> None:
     assert "follow-ups: - Add a missing test." in report.summary()
 
 
-def test_dispatch_main_unknown_persona_exit_2(capsys) -> None:
-    rc = dispatch_main(["no-such-persona", "do it", "--base", str(BASE_CONFIG)])
-    assert rc == 2
-    assert "unknown persona" in capsys.readouterr().err
+def test_one_node_plan_reports_an_unknown_persona_against_its_node(tmp_path, capsys) -> None:
+    """A single dispatch is a one-node plan, so its failure lands on that node.
+
+    The removed `just dispatch` printed this to stderr and exited 2. The plan path
+    keeps it addressable instead: the run fails, and the node that could not be
+    prepared names the persona and how to create it.
+    """
+    plan = tmp_path / "unknown-persona.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [{"id": "solo", "persona": "no-such-persona", "task": "do it"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = graph_main([str(plan), "--no-record", "--base", str(BASE_CONFIG), "--format", "json"])
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"]["solo"]["status"] == "failed"
+    assert "unknown persona 'no-such-persona'" in payload["results"]["solo"]["error"]
+    assert "just new-persona no-such-persona" in payload["results"]["solo"]["error"]
 
 
 def test_plan_main_bad_plan_exit_2(tmp_path, capsys) -> None:

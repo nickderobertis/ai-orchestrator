@@ -4,9 +4,13 @@
 # Tracked graph orchestration
 
 `just run-plan` turns one large task into one recorded hierarchical DAG. It is
-the canonical executor for direct onejudge work, full repository lifecycles, and
-explicit actions that only a person can complete. `just repo-plan` is a deprecated
-alias retained so old lifecycle-only plan files keep working.
+the **only** executor for direct onejudge work, full repository lifecycles, and
+explicit actions that only a person can complete: a single dispatch is a plan file
+holding one node, so every piece of running work has a journal, an ownership row,
+surfaces, and a place in the DAG UI. See
+`examples/single-node-direct.plan.json` and
+`examples/single-node-lifecycle.plan.json`. Old lifecycle-only plan mappings —
+no `schema_version`, lifecycle nodes only — are still accepted unchanged.
 
 The current tracked-plan contract is schema version 6 (`"schema_version": 6`).
 Plans that omit the version retain version-1 behavior for compatibility.
@@ -394,7 +398,10 @@ Cross-DAG edges resolve through the active-runs index and the upstream journal.
 An unknown or inactive run, unfinished node, or failed node leaves the consumer
 blocked. Once an upstream succeeds, the consumer records its journal sequence;
 if that journal later advances, the consumer emits a non-crashing
-`upstream-modified` event for planner review without rerunning work.
+`upstream-modified` event for planner review without rerunning work. The watch
+outlives the node that carried it: a transition keeps the reference rather than
+removing it as a satisfied dependency, and passes it to the dependents of a
+consumer it carried out — see [Replanning](#replanning).
 
 The planner writes every agent node and step `task` with this prose template:
 
@@ -866,10 +873,9 @@ does not stop scheduling; `just stop` is what ends a run.
 `just runs` says where a round *ended* and `just history-show` says everything
 about one thing in it. `just monitor` answers the question in between — "what is
 happening right now, across the whole run?" It is the standard first view for
-every recorded in-flight dispatch: both `run-plan` graphs and single
-`repo-task`/`repo-task-auto` lifecycle nodes (the auto wrapper records a
-monitorable run). It folds four stores that settle
-at different times into one ordered stream:
+every recorded in-flight dispatch, from a wide DAG down to a one-node plan — the
+one executor means there is no dispatch it cannot see. It folds four stores that
+settle at different times into one ordered stream:
 
 | Source | Read from | Reported when |
 | --- | --- | --- |
@@ -1083,6 +1089,16 @@ human gates (and other non-publication nodes), so attestation cannot silently cu
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
 
+A **cross-DAG reference is not a satisfied dependency id** and is never removed by
+that rule: `run:<id>#<node>` names no node of this graph, so it was never in the
+round to be satisfied. It stays on a node carried forward, and it passes through a
+consumer the transition carried out to whatever still depends on that consumer —
+the same pass-through the publication anchor above gets, for the same reason. A
+watch that its own consumer's completion silently ended would stop reporting
+`upstream-modified` and stop blocking on an upstream that became unresolvable,
+which is exactly what the reference is for. A consumer with no dependents leaves
+nothing to carry the watch, and it ends there.
+
 A failed lifecycle node whose preserved branch is carried forward is continued
 **automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**. The count is
 kept on the plan node's `resume.attempts` and settles the node out of the next
@@ -1130,6 +1146,22 @@ One case needs care and is handled explicitly: a live `retry` leaves the node it
 replaced in the executed graph, cancelled, so `round_supersessions` removes it at the
 transition exactly as an explicit `drop` would. A node recorded `done` — including
 `merged` — is never rescheduled; there is no case that reschedules one.
+
+The rule belongs to the **transition**, not to one command. `run-plan` therefore folds
+too: pointed at a run whose latest round has already finished, it derives the next
+round from that round's executed graph and says so on stderr, rather than starting it
+from the plan file it was handed. That covers a round the budget cancelled and a
+round whose owner died between `round-finished` and `result.json` — the journal says
+a round is over, so a re-run of the launch file is a transition however it is spelled.
+Without it the fold was one command wide: `run-plan runs/<id>/round-01/plan.json --run
+<id>` is what an orchestrator reaches for to reclaim a run it is already driving, and
+on `dag-observatory-ux-2` it started rounds 2 and 3 from the untouched round-1 launch
+file — re-dispatching merged work and discarding every accepted live edit, which cost
+two rounds of hand repair. `run-plan` still runs the file it is given whenever the
+latest round has *not* finished, which is the ordinary claim and `--recover`. The
+lifecycle-only plan executor (`lifecycle.main_plan`, kept for the old mappings and no
+longer a command) is excluded: it journals no authoritative stream, so there is
+nothing to fold from.
 
 ### Carried planner context
 

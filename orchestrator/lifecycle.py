@@ -1697,8 +1697,9 @@ def run_repo_task(
 
     ``journal`` is this node's scope in a tracked round: transitions are recorded
     against it as they happen, and every dispatch it makes is labelled with the
-    same coordinates. It defaults to a no-op, because a bare ``just repo-task``
-    belongs to no graph — and because observation must never decide an outcome.
+    same coordinates. It defaults to a no-op, because a `run_repo_task` reached
+    directly belongs to no graph — and because observation must never decide an
+    outcome.
 
     ``worker_harness`` / ``judge_harness`` select each conversation side's provider
     for every step of this workstream (see `orchestrator.harnesses`). They are
@@ -3226,12 +3227,6 @@ def make_repo_runner(
 # --- CLI -------------------------------------------------------------------
 
 
-def _read_task(value: str | None) -> str:
-    if value is None or value == "-":
-        return sys.stdin.read()
-    return value
-
-
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
@@ -3423,73 +3418,6 @@ def resume_payload(resume: Resume | None) -> ResumePayload | None:
     return payload
 
 
-def main_task(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Drive one subtask through a repo's lifecycle (clone→gate→PR/merge)."
-    )
-    parser.add_argument("repo", help="repo (name, owner/name, GitHub URL, or LOCAL path)")
-    parser.add_argument("persona", help="persona name (see personas/)")
-    parser.add_argument("task", nargs="?", default=None, help="the task ('-'/omitted reads stdin)")
-    parser.add_argument("--base-branch", default=None, help="branch to target (default: repo HEAD)")
-    parser.add_argument("--branch", default=None, help="feature branch name (default: derived)")
-    parser.add_argument("--title", default=None)
-    parser.add_argument(
-        "--execution-checkout",
-        type=Path,
-        default=None,
-        help=(
-            "exact isolated clone used to create the task worktree; publication identity and "
-            "workflow still come from REPO"
-        ),
-    )
-    parser.add_argument("--max-turns", type=int, default=None)
-    parser.add_argument("--done-when", default=None)
-    _add_common_args(parser)
-    args = parser.parse_args(argv)
-
-    registry = Registry()
-    try:
-        registry.repo_ref(args.repo)
-        if args.execution_checkout is not None:
-            registry.checkout_path(args.execution_checkout)
-        # Refuse an unconfigured harness here, where it is a usage error the
-        # operator can correct, rather than after a worktree has been cut.
-        harness_override_env(worker=args.worker_harness, judge=args.judge_harness)
-    except (RegistryError, ConfigError) as exc:
-        parser.error(str(exc))
-
-    result = run_repo_task(
-        args.repo,
-        _read_task(args.task),
-        args.persona,
-        workspace=Workspace(args.workspace),
-        base_branch=args.base_branch,
-        branch=args.branch,
-        title=args.title,
-        execution_checkout=args.execution_checkout,
-        repo_type=args.repo_type,
-        recorded_gate=None,
-        verify_via_ci=args.verify_via_ci,
-        merge_policy=args.merge_policy,
-        merge_method=args.merge_method,
-        oneharness_mode=args.oneharness_mode,
-        worker_harness=args.worker_harness,
-        judge_harness=args.judge_harness,
-        base_path=args.base_config,
-        persona_dir=args.persona_dir,
-        max_turns=args.max_turns,
-        done_when=args.done_when,
-        poll_interval=args.poll_interval,
-        publication_attempts=args.publication_attempts,
-        timeout=args.timeout,
-    )
-    rendered = (
-        json.dumps(_result_payload(result), indent=2) if args.format == "json" else result.summary()
-    )
-    _emit(rendered, args.output)
-    return 0 if result.ok else 1
-
-
 def main_plan(argv: list[str] | None = None) -> int:
     from .plan import PlanError
 
@@ -3523,6 +3451,10 @@ def main_plan(argv: list[str] | None = None) -> int:
     round_record: ClaimedRound | None = None
     if run_dir is not None:
         try:
+            # Deliberately not folded the way `run-plan` folds a transition into a new
+            # round (`graph._plan_of_record`): this lifecycle-only executor journals no
+            # authoritative stream, so there is no executed graph to fold from and the
+            # plan file it is handed is all there has ever been.
             round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
         except ConfigError as exc:
             print(f"repo-plan: could not claim run: {exc}", file=sys.stderr)
@@ -3597,4 +3529,4 @@ def _print_continuation(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main_task())
+    raise SystemExit(main_plan())

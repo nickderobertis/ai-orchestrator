@@ -66,7 +66,6 @@ from orchestrator.lifecycle import (
     Step,
     load_repo_plan,
     main_plan,
-    main_task,
     result_payload,
     run_repo_plan,
     run_repo_task,
@@ -108,6 +107,29 @@ _T = TypeVar("_T")
 # turn, the supervisor declines to release it, the agent takes its last — and the
 # same 3-segment exhaustion costs 15 processes instead of 147.
 EXHAUSTED_STEP_MAX_TURNS = 2
+
+
+def _one_node_lifecycle_plan(
+    tmp_path: Path, repo: Path, *, task: str, name: str = "one-node", **node: object
+) -> Path:
+    """Write the plan file one lifecycle dispatch is expressed as.
+
+    The removed `just repo-task` took these as positionals and flags; the tracked
+    graph is now the only executor, so a single workstream is a one-node plan.
+    """
+    plan = tmp_path / f"{name}.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {"id": "solo", "repo": str(repo), "persona": "engineer", "task": task} | node
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan
 
 
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
@@ -476,12 +498,13 @@ def test_redispatch_reclaims_a_worktree_a_killed_worker_left_dirty(
     assert not (abandoned / "node_modules").exists()
 
 
-def test_a_bare_repo_task_labels_the_sessions_its_dispatches_produce(
+def test_an_untracked_workstream_labels_the_sessions_its_dispatches_produce(
     tmp_path, bare_origin, command_base, personas_dir, monkeypatch
 ) -> None:
     """An untracked workstream's sessions still name the work they did.
 
-    A bare `just repo-task` belongs to no graph, and for that reason used to hand its
+    A `run_repo_task` reached outside a tracked round belongs to no graph, and for
+    that reason used to hand its
     dispatches no history labels at all — so every session it produced joined to
     nothing, and the telemetry that counts a node's turns could see the sessions and
     attribute none of them. The labels are read where oneharness reads them: the
@@ -867,6 +890,31 @@ def test_a_workstream_whose_relaunches_all_die_names_the_launch_path(tmp_path, b
     assert "just smoke" in result.detail
 
 
+class _CancelLandingDuringTheBackoff(threading.Event):
+    """A round cancellation that arrives while the relaunch backoff is waiting.
+
+    That window is the whole subject of the test below, and it used to be aimed at
+    from outside with a short ``threading.Timer``: a race the timer thread loses
+    whenever this host is busy, failing a green tree with no defect present. The
+    backoff performs the one ``wait`` on this event, so setting it from inside that
+    call puts the cancellation in the window by construction — no thread to starve
+    and no wall clock to read. Each wait records the interval it was asked for and
+    whether it returned woken (``True``) or expired (``False``).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.backoffs: list[float | None] = []
+        self.wakes: list[bool] = []
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.backoffs.append(timeout)
+        self.set()
+        woken = super().wait(timeout)
+        self.wakes.append(woken)
+        return woken
+
+
 def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_origin) -> None:
     """The round is already closing; the backoff must not hold the branch hostage.
 
@@ -877,24 +925,11 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-cancelled-backoff")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
-    waits: list[float] = []
-
-    class MeasuringEvent(threading.Event):
-        def wait(self, timeout: float | None = None) -> bool:
-            started = time.monotonic()
-            try:
-                return super().wait(timeout)
-            finally:
-                waits.append(time.monotonic() - started)
-
-    cancel = MeasuringEvent()
+    cancel = _CancelLandingDuringTheBackoff()
     launches: list[str] = []
 
     def dying_under_cancellation(persona: str, task: str, **_: object) -> Report:
         launches.append(persona)
-        # Cancellation lands while the backoff below is already waiting, which is
-        # the window the event has to be able to interrupt.
-        threading.Timer(0.05, cancel.set).start()
         return _launch_death(persona)
 
     result = run_repo_task(
@@ -907,10 +942,14 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
         recorded_gate=["true"],
         cancel=cancel,
     )
+
     assert result.outcome == "not-completed", result.detail
-    # Woken, not expired: the full backoff was never spent.
-    assert len(waits) == 1, waits
-    assert waits[0] < RELAUNCH_BACKOFF_SECONDS, waits
+    # The backoff was waited on the event rather than slept through, once, for the
+    # first relaunch's interval.
+    assert cancel.backoffs == [RELAUNCH_BACKOFF_SECONDS]
+    # Woken, not expired: the wait returned on the cancellation, so the full
+    # interval was never spent — whatever the host's speed.
+    assert cancel.wakes == [True]
     # And the cancelled round did not launch one more dispatch on the way out.
     assert launches == ["engineer"]
     # The round decided this stop, so it is reported as the cancellation it was —
@@ -2241,7 +2280,7 @@ def test_lifecycle_scopes_llmlint_wrapper_from_resolved_repository_identity(
 def test_every_dispatch_of_a_workstream_carries_the_side_selection_it_was_given(
     tmp_path, bare_origin
 ) -> None:
-    """One `just repo-task` choice has to reach every dispatch the workstream makes.
+    """One lifecycle node's choice has to reach every dispatch the workstream makes.
 
     A worker whose judge moved between its own turn and the PR-author's would be
     supervised by a provider the operator never chose, which is the same failure as
@@ -2346,16 +2385,17 @@ def test_an_unconfigured_selection_refuses_the_workstream_before_it_cuts_a_workt
     assert not worktrees.exists()
 
 
-def test_repo_task_cli_reports_an_unconfigured_selection_as_a_usage_error(
+def test_one_node_plan_reports_an_unconfigured_selection_as_a_usage_error(
     tmp_path, bare_origin, capsys
 ) -> None:
+    """Refused before the round is claimed, so no worktree and no ledger row exist."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
+    plan = _one_node_lifecycle_plan(tmp_path, canonical, task="task")
 
-    with pytest.raises(SystemExit) as excinfo:
-        main_task([str(canonical), "engineer", "task", "--worker-harness", "opencode"])
+    rc = graph_module.main([str(plan), "--no-record", "--worker-harness", "opencode"])
 
-    assert excinfo.value.code == 2
+    assert rc == 2
     stderr = capsys.readouterr().err
     assert "--worker-harness 'opencode'" in stderr
     assert "oneharness.toml" in stderr
@@ -2891,11 +2931,17 @@ def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
     github = FakeGitHub(origin)
     monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: github)
 
-    green_rc = main_task(
+    green_rc = graph_module.main(
         [
-            str(canonical),
-            "engineer",
-            "ci-iterate exercise authoritative CI",
+            str(
+                _one_node_lifecycle_plan(
+                    tmp_path,
+                    canonical,
+                    task="ci-iterate exercise authoritative CI",
+                    name="ci-green",
+                )
+            ),
+            "--no-record",
             "--verify-via-ci",
             "--workspace",
             str(tmp_path / "ci-worktrees"),
@@ -2909,7 +2955,7 @@ def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
             "json",
         ]
     )
-    green = json.loads(capsys.readouterr().out)
+    green = json.loads(capsys.readouterr().out)["results"]["solo"]
 
     assert green_rc == 0 and green["outcome"] == "merged", green["detail"]
     assert push_log.read_text(encoding="utf-8").splitlines()[:2] == ["RED", "GREEN"]
@@ -2941,11 +2987,17 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
     local_checkout = gitops.clone(local_origin, tmp_path / "local-ci-checkout")
     Registry().register(str(local_checkout), workflow="local", repo_type="single-owner")
 
-    rejected = main_task(
+    rejected = graph_module.main(
         [
-            str(local_checkout),
-            "engineer",
-            "complete-now write-change",
+            str(
+                _one_node_lifecycle_plan(
+                    tmp_path,
+                    local_checkout,
+                    task="complete-now write-change",
+                    name="local-ci-rejection",
+                )
+            ),
+            "--no-record",
             "--verify-via-ci",
             "--workspace",
             str(tmp_path / "local-cli-worktrees"),
@@ -2957,7 +3009,7 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
             "json",
         ]
     )
-    rejected_payload = json.loads(capsys.readouterr().out)
+    rejected_payload = json.loads(capsys.readouterr().out)["results"]["solo"]
     assert rejected == 1
     assert "remote GitHub/PR workflow" in rejected_payload["detail"]
 

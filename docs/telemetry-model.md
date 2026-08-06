@@ -147,7 +147,10 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
-Index version 10 widens `nodes[].failure` with the provider-refusal record: the
+Index version 10 carries two independent changes, which is why either one alone
+would have claimed the bump.
+
+It widens `nodes[].failure` with the provider-refusal record: the
 side that was refused, the harness, variant, and configured identity that refused
 it, the classified `cause`, a bounded `raw_tail` of what the harness printed, and
 whatever else it stated — a reset time, a dropped session id, a killed wait, its
@@ -157,6 +160,16 @@ additionally carry an optional `provider_health` snapshot, one entry per configu
 identity, an unanswered probe included as `unknown`. Every field is additive and
 omitted when nothing was recorded, so a version-9 reader parsing a failure that met
 no provider sees exactly the record it saw before.
+
+It also changes what a judge session is *served* as rather than what the
+index carries: a session whose transport `role` is `judge` reports
+`agent_role: "judge"` whatever its recorded label says. Dispatch used to stamp the
+worker's semantic role into the environment oneharness reads, which outranks the
+judge config's own label, so thousands of recorded supervisor sessions carry
+`agent_role=worker`. The stamping is fixed at the dispatch boundary and the read
+heals the history that already exists; a version-9 reader would attribute those
+sessions to the worker. The bump lands beside the read API's own additive
+`attribution.parentConversationId`, per-turn timing, and timeline `dispatch_id`.
 Index version 9 adds an optional `agent_role` to each `nodes[].sessions` entry:
 `role` remains the transport party oneharness recorded, and `agent_role` names
 what the dispatch was for, so a reader can tell a node's worker from its judge

@@ -60,12 +60,12 @@ protocol](docs/orchestration.md#live-graph-edits) to change the desired frontier
 ## What "agent" means here
 
 In this repo, an **agent** (or **subagent**) is a **dispatched onejudge process** —
-a coding agent run under a simulated-user supervisor via `just dispatch` /
-`just repo-task`, or as a worker launched by `just orchestrate`. This is the
-default sense of the word
-everywhere below and in requests to you. When a task says "use an agent," "have an
-agent do X," "dispatch an agent," or "spin up a subagent" — including for research
-or investigation, not just code changes — dispatch onejudge. Do **not** reach for
+a coding agent run under a simulated-user supervisor as a node of a plan launched
+by `just orchestrate` (or run directly by `just run-plan`). This is the default
+sense of the word everywhere below and in requests to you. When a task says "use
+an agent," "have an agent do X," "dispatch an agent," or "spin up a subagent" —
+including for research or investigation, not just code changes — dispatch
+onejudge. Do **not** reach for
 the host harness's own built-in subagent mechanism (its own agent/task/fork tool)
 unless the request names that mechanism explicitly. When the wording is ambiguous,
 dispatch onejudge.
@@ -352,12 +352,11 @@ quota that is left. Do not reorder these to restore the old isolation.
 
 Those files decide every run on this host, so pair the two sides differently for
 **one** dispatch with `--worker-harness` / `--judge-harness` rather than by editing
-a config concurrent runs also read. `just dispatch`, `just repo-task`, `just
-run-plan`, and `just orchestrate` all take them; each side is validated against its
-own config and refused by name when it is not one this repo configures, and with
-neither flag set nothing changes. oneharness's own `ONEHARNESS_HARNESSES` cannot
-express this: it is process-wide and beats config, so it moves both sides at once.
-See [Choosing a harness per
+a config concurrent runs also read. `just run-plan` and `just orchestrate` both
+take them; each side is validated against its own config and refused by name when
+it is not one this repo configures, and with neither flag set nothing changes.
+oneharness's own `ONEHARNESS_HARNESSES` cannot express this: it is process-wide
+and beats config, so it moves both sides at once. See [Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
@@ -394,9 +393,9 @@ with `onejudge init --force`.
 **Live dispatch** picks a harness via `oneharness.toml`'s fallback (alternate
 Claude subscription primary, codex secondary).
 The lifecycle *and the orchestrator process itself* dispatch in **`bypass`** mode by
-default — the no-approval mode; `just dispatch`, `just run-plan`, `just repo-task`,
-and `just orchestrate` all take the same `--oneharness-mode`. It is
-correct here because the **whole environment is a sandbox** (a container):
+default — the no-approval mode; `just run-plan` and `just orchestrate` both take
+the same `--oneharness-mode`. It is correct here because the **whole environment
+is a sandbox** (a container):
 codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
 namespaces this host disables, so `bypass` (no approvals, no inner sandbox) is the
 working no-approval mode and the container is the boundary. The **allowlister**
@@ -427,7 +426,10 @@ is the recorded mixed-graph executor driven internally by the dedicated
 orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
 over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
-does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
+does not invoke `run-plan` directly. There is no single-dispatch command: one
+subtask is a one-node plan (`examples/single-node-direct.plan.json`,
+`examples/single-node-lifecycle.plan.json`), so no running work falls outside the
+run ledger and the views built on it.
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the
@@ -464,7 +466,11 @@ attribution per node with the harness's own bounded output. See [Diagnosing a
 provider failure](docs/telemetry.md#diagnosing-a-provider-failure).
 `just telemetry-server` serves the read-only DAG API over a runs root and
 `just dag-ui` serves the browser view against it; both are read-only and mutate
-no run. Operational detail lives in [`docs/dag-ui.md`](docs/dag-ui.md).
+no run. `just dag-ui-screens` photographs every major surface of that view at every
+viewport in its declared matrix, against the browser tier's own fixture server rather
+than any real run, and prints the gitignored per-invocation gallery it wrote — which
+is how a change to this UI is checked across resolutions without starting it by hand.
+Operational detail lives in [`docs/dag-ui.md`](docs/dag-ui.md).
 Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch,
 harness scratch no live process still references, and conservatively stale known
 third-party scratch; omit `--dry-run` to reclaim it.
@@ -508,7 +514,17 @@ concurrent e2e load has started the selected harness and had it die, which reads
 a launch-path outage and once cost a publication that had already passed its gate.
 A genuinely broken launch path fails every attempt and still fails, and a recorded
 turn that violates the contract fails on the first. A passing run says how many
-launches it took. It is deliberately outside `just gate`. The pre-push hook runs it
+launches it took. The record it judges is the **selected** candidate's: a
+`fallback` chain records every candidate it attempts, so an identity that refused
+the turn with a classified `quota` or `auth` failure — or was skipped outright — is
+the chain working, and the smoke names it in the pass rather than failing on it.
+Anything else is still a launch failure: the selected record breaking the contract,
+a candidate failing for a reason the chain does not move past, a candidate whose
+record does not back the reason it names — one that identifies no harness, or that
+carries a turn somebody was billed for — or every candidate refusing. See [The
+record a fallback chain is judged
+by](docs/onejudge-integration.md#the-record-a-fallback-chain-is-judged-by).
+It is deliberately outside `just gate`. The pre-push hook runs it
 only when the pushed diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
@@ -524,13 +540,20 @@ finding stops being worth another gate cycle—landing with a justified line-sco
 suppression plus a tracked follow-up—is the planner's call from that surfaced
 report, never the worker's by suppressing.
 
-The judge behind that tier is non-deterministic, so its verdict is memoized: `just
+The judge behind that tier is non-deterministic, so the run itself is cached: `just
 lint-llm-diff` resolves the base ref to a commit and runs the cached Nx
 `workspace:lint-llm-diff` target (the root `project.json` — the check spans the
-whole tree, so it belongs to no single project). Re-running `just gate` on an
-unchanged tree against an unchanged base replays the recorded verdict instead of
-rolling the judge again, which is what stops one branch from being blocked by
-opposite verdicts on an identical diff. The key covers the whole workspace, the
+whole tree, so it belongs to no single project), whose command is
+`scripts/llmlint-judge.sh` — llmlint with `-v`, and nothing else. Re-running `just
+gate` on an unchanged tree against an unchanged base replays that run's own
+terminal output instead of rolling the judge again, which is what stops one branch
+from being blocked by opposite verdicts on an identical diff. `-v` is why replay
+loses nothing that matters: the report carries every rule and the `llmlint history
+<id>` pointer, and Nx replays it verbatim. A green elides one thing — the
+serialized judge calls `-v` also prints, ~214KB of a 226KB run — because Nx
+replays a hit as one burst and a burst past one pipe buffer arrives truncated;
+`llmlint history <id>` has them in full, and a failure is never cached and so
+prints everything. The key covers the whole workspace, the
 resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
 version plus the effective merged config, so a rule change in a plugin fetched from
 outside this repository still invalidates. That fingerprint resolves both of those
@@ -544,20 +567,23 @@ fails a quieter way too — because Nx scores a runtime input that exits non-zer
 *no contribution* rather than as an error, a fingerprint the caller's environment
 can break does not fail the tier, it drops the judge configuration out of the key
 and replays a verdict that configuration has moved on from. Because Nx caches
-successful tasks only,
-the target records its verdict — findings and judged status — into its declared
-output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure blocks
-`gate` and pre-push identically whether it was just judged or restored from cache.
-Only llmlint's own 0/1 verdicts are recorded: a tool that failed without judging
-propagates and stays uncached. A wrong verdict does stick:
-force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. That
-per-invocation flag is the only supported re-judge lever; an ambient global
+successful tasks only, **only a green is cached**: findings (llmlint exit 1) and a
+toolchain that never reached a verdict (exit >= 2) both fail the tier and re-judge
+on the next run. That is deliberate — the record/replay protocol that used to
+smuggle failures through Nx is gone, and with it the shared scratch directory a
+concurrent invocation could clear out from under an in-flight judge. A branch
+working through a red pays a fresh roll each time, and `llmlint history` (retained at
+`history.max_runs` in `llmlint.yml`) is where every roll lands. A wrong *green*
+still sticks: `just lint-llm-diff <base> --skip-nx-cache` re-judges but neither
+reads nor writes the cache, so the next ordinary run replays the same entry until
+the tree, the base commit, or the judge configuration moves. That per-invocation
+flag is the only supported re-judge lever; an ambient global
 `NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE` is reported and ignored by this tier,
 because it re-rolls the judge from every unrelated command and breaks the checks
 whose contract is cache replay. When a
 miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
-on an unchanged tree is a changed judge, not a changed diff. The recorded verdict
-for one content, base commit, and judge configuration is authoritative and the
+on an unchanged tree is a changed judge, not a changed diff. The cached green for
+one content, base commit, and judge configuration is authoritative and the
 worker's own gate pays for it: `verify.comparison_env` is that identity's one
 source, and the lifecycle exports it to every dispatch and every publishing push
 of a workstream so the `pre-push` hook replays what the worker cleared instead of
@@ -583,11 +609,17 @@ opens. Those two share one key because they read one tree; they are separate tas
 so each half reports its own failures and the one-second serial tier can be forced
 to re-run without the three-minute bulk.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
-scripts it builds its two worktrees from. A documentation edit stops charging eight
-minutes. No split may go stale silently: an undeclared test that opens this
-checkout's own documentation fails in `tests/conftest.py` and is told to carry
-`@pytest.mark.reads_docs`, and a `@pytest.mark.reads_recipes` test that opens
-anything outside its narrower key fails the same way. See
+scripts it builds its two worktrees from, and `dag-ui:test` — vitest plus two
+Playwright configs — onto `dagUiServerSurface`: the Python its fixture server
+actually runs, which is the read API and everything that import reaches, rather
+than all of `orchestrator/**/*`. A documentation edit stops charging eight
+minutes, and an edit to a command-side module the served process never loads stops
+charging a browser. No split may go stale silently: an undeclared test that opens
+this checkout's own documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`, a `@pytest.mark.reads_recipes` test that opens
+anything outside its narrower key fails the same way, and a fixture that starts
+importing Python outside the served surface fails in `tests/test_nx_cache_scope.py`
+and is told to widen that named input. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
@@ -599,22 +631,25 @@ back to the deterministic body and must never block publication.
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any
-repo or project. Use `just dispatch` for one direct-agent node, `just repo-task`
-for one lifecycle node, and `just orchestrate <plan.json>` by default for every
-multi-node tracked graph. Lifecycle
-nodes clone the target, work in an isolated worktree, verify with its gate, and
-publish. Dispatch smaller project work with a single task rather than doing it
-directly; only the slight-tweak exception above applies. This repo is one
+repo or project. A **plan file launched by `just orchestrate`** is the only way to
+dispatch: one subtask is a plan holding one node — one direct agent
+(`examples/single-node-direct.plan.json`) or one lifecycle node
+(`examples/single-node-lifecycle.plan.json`) — and a larger task is the same file
+with more nodes. Nothing about plan schema, personas, or node semantics changes
+with the node count, so a one-node run still gets a journal, an ownership row,
+planner surfaces, and a place in the DAG UI. Lifecycle nodes clone the target,
+work in an isolated worktree, verify with its gate, and publish. Dispatch smaller
+project work with a single-node plan rather than doing it directly; only the
+slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
 
 **Self-dispatch rule (this repo).** Never author working-tree changes in the shared
 canonical checkout: concurrent orchestrators use it and direct edits race them.
 Every change — including plans, personas, docs, and `AGENTS.md` — must be dispatched
 into an isolated worktree cut from the registered `local/ai-orchestrator-isolated`
-safety clone, with the canonical checkout retained as the positional publication
-repository and only fast-forwarded after integration. Pass `--execution-checkout`
-for `just repo-task`; in a plan launched by `just orchestrate`, set
-`execution_checkout` on each lifecycle node instead of passing a top-level flag.
+safety clone, with the canonical checkout retained as the node's `repo` publication
+repository and only fast-forwarded after integration. Set `execution_checkout` on
+each lifecycle node of the plan rather than passing a top-level flag.
 This does not restrict the narrow direct git operations above on finished
 dispatched work. Confirm `git config core.bare` is `false` before trusting a
 self-dispatch result.

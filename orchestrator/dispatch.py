@@ -17,7 +17,6 @@ import argparse
 import asyncio
 import contextlib
 import hashlib
-import json
 import math
 import os
 import re
@@ -1406,7 +1405,7 @@ def launch_orchestrator(
     whether anything waits here, and neither answer changes what owns the run.
 
     ``oneharness_mode`` is forwarded to the launched process as ``ONEHARNESS_MODE``
-    and defaults to ``bypass`` for the same reason `just repo-task` does: the
+    and defaults to ``bypass`` for the same reason a dispatching round does: the
     container is the sandbox, and claude-code's non-interactive default denies —
     without prompting — every command outside `.claude/settings.json`, which would
     leave the orchestrator unable to run the very commands its persona mandates.
@@ -1746,75 +1745,3 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         until_settled=True,
         parked_after=args.parked_after,
     )
-
-
-def _read_task(value: str | None) -> str:
-    """Resolve the task from the CLI arg, reading stdin when omitted or ``-``."""
-    if value is None or value == "-":
-        return sys.stdin.read()
-    return value
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Dispatch one subtask to onejudge with a persona.")
-    parser.add_argument("persona", help="persona name (see personas/)")
-    parser.add_argument(
-        "task", nargs="?", default=None, help="the task ('-' or omitted reads stdin)"
-    )
-    parser.add_argument("--base", type=Path, default=BASE_CONFIG)
-    parser.add_argument("--persona-dir", type=Path, default=PERSONA_DIR)
-    parser.add_argument(
-        "--project-dir", default=None, help="the target project dir (onejudge run cwd)"
-    )
-    parser.add_argument("--session", default=None)
-    parser.add_argument("--max-turns", type=int, default=None)
-    parser.add_argument("--done-when", default=None)
-    parser.add_argument("--cwd", default=None, help="working dir for onejudge (default: repo root)")
-    parser.add_argument("--onejudge-bin", default="onejudge")
-    parser.add_argument("--provider", default=None, choices=["oneharness", "command", "split"])
-    parser.add_argument(
-        "--oneharness-mode",
-        default=None,
-        choices=list(ONEHARNESS_MODES),
-        help="approval/sandbox mode for the harness (via ONEHARNESS_MODE); "
-        "use 'bypass' where codex's OS sandbox can't run",
-    )
-    parser.add_argument(
-        WORKER_SIDE.option, default=None, metavar="ID", help=harness_option_help(WORKER_SIDE)
-    )
-    parser.add_argument(
-        JUDGE_SIDE.option, default=None, metavar="ID", help=harness_option_help(JUDGE_SIDE)
-    )
-    parser.add_argument("--timeout", type=float, default=None)
-    parser.add_argument("--format", choices=["human", "json"], default="human")
-    parser.add_argument("-o", "--output", type=Path, default=None)
-    args = parser.parse_args(argv)
-
-    try:
-        report = dispatch(
-            args.persona,
-            _read_task(args.task),
-            base_path=args.base,
-            persona_dir=args.persona_dir,
-            session=args.session,
-            project_dir=args.project_dir,
-            max_turns=args.max_turns,
-            done_when=args.done_when,
-            cwd=args.cwd or REPO_ROOT,
-            onejudge_bin=args.onejudge_bin,
-            provider=args.provider,
-            oneharness_mode=args.oneharness_mode,
-            worker_harness=args.worker_harness,
-            judge_harness=args.judge_harness,
-            timeout=args.timeout,
-        )
-    except (DispatchError, ConfigError) as exc:
-        print(f"dispatch: {exc}", file=sys.stderr)
-        return EXIT_CONFIG_ERROR
-
-    rendered = json.dumps(report.raw, indent=2) if args.format == "json" else report.summary()
-    if args.output:
-        args.output.write_text(rendered + "\n", encoding="utf-8")
-    else:
-        print(rendered)
-    return report.exit_code

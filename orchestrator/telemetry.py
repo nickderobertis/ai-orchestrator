@@ -16,10 +16,11 @@ import json
 import math
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import Any, Literal, NotRequired, TypedDict, TypeGuard, cast
 
 from .config import ConfigError
 from .detail_snapshot import CheckRollup
@@ -151,8 +152,14 @@ class HistoryRecord(TypedDict, total=False):
     project: str
     timestamp: str
     harness: str
+    #: The variant-qualified identity, e.g. ``claude-code:alternate2``. Two records
+    #: in one session can name the same ``harness`` and differ only here, which is
+    #: exactly the case a fallback chain records.
+    harness_id: str
     prompt: str
     status: str
+    #: How oneharness classified a candidate's failure, when it classified one.
+    failure_kind: str | None
     exit_code: int
     duration_ms: int
     model_ms: int
@@ -794,7 +801,125 @@ def _launch_usage_failure(value: object) -> str | None:
     return None
 
 
-def history_session_launch_failure(session: HistorySession) -> str | None:
+#: What a session with no run record at all is reported as. Named because the
+#: caller that splits a chain into fallen-through candidates and a selected record
+#: has no record to hold to the bar below, and must still say this same thing.
+NO_LAUNCH_RECORD_FAILURE = "recorded no harness run"
+#: The failure kinds `run_mode = "fallback"` moves past. A candidate that could not
+#: run the task *at all* is recorded and handed on to the next identity, so these
+#: are the shape of a healthy chain rather than of a broken launch. `rate_limit` is
+#: deliberately absent: oneharness stops the chain on one, because that record
+#: carries work the provider already billed for — see
+#: `tests/e2e/test_quota_fallthrough_e2e.py`.
+FALLTHROUGH_FAILURE_KINDS: frozenset[str] = frozenset({"quota", "auth"})
+#: The status of a candidate the chain never even started, which spends nothing and
+#: classifies nothing; being skipped is its own reason.
+SKIPPED_STATUS = "skipped"
+#: The ``type`` a stored line carries when it is one harness turn.
+TURN_RECORD_TYPE = "run"
+#: What a record that names no harness at all is called where one is reported.
+UNIDENTIFIED_HARNESS = "an unidentified harness"
+
+
+def is_turn_record(value: Mapping[str, Any]) -> TypeGuard[HistoryRecord]:
+    """Narrow one stored history object to the turn-record shape readers assume.
+
+    A history store is an external input: nothing in this process wrote it, and a
+    launch verdict is read straight back out of it. Checking the tag here is what
+    makes reading one as a ``HistoryRecord`` a parse rather than an assertion — and
+    it is the check a chain needs most, because the verdict is read off the LAST
+    turn a session recorded, so a trailing line of any other kind would take its
+    place. The tag is required rather than merely not-an-event: a store also holds
+    an index whose lines wrap a record inside an envelope that names no harness of
+    its own, and one of those read as a turn is a launch failure out of thin air.
+
+    Only the envelope is decided here. What a turn *reported* stays with the callers
+    that judge it, because their diagnostics quote the value the harness actually
+    wrote: dropping a malformed counter as "not a record" would replace
+    "reports malformed input_tokens 'many'" with silence.
+    """
+    return value.get("type") == TURN_RECORD_TYPE
+
+
+def session_turn_records(session: HistorySession) -> list[HistoryRecord]:
+    """Read back every harness turn a session recorded, and nothing else.
+
+    A `run_mode = "fallback"` chain writes one of these per candidate it attempted,
+    in the order it tried them, so this list is the launch path's own account of
+    itself: the identities it moved past, and last, the one it selected.
+    """
+    return [value for value in session_records(session) if is_turn_record(value)]
+
+
+def history_record_identity(record: HistoryRecord) -> str:
+    """Name the identity a record was written for, as a chain selects identities.
+
+    `harness_id` rather than `harness`, because a chain's two Claude subscriptions
+    are one harness and differ only by variant: reporting the harness would say
+    "claude-code fell through to claude-code".
+    """
+    identity = record.get("harness_id")
+    if isinstance(identity, str) and identity:
+        return identity
+    harness = record.get("harness")
+    return harness if isinstance(harness, str) and harness else UNIDENTIFIED_HARNESS
+
+
+def history_record_fallthrough_reason(record: HistoryRecord) -> str | None:
+    """Why the fallback chain moved past this candidate, or ``None`` if it did not.
+
+    A reason here is evidence the chain worked, not evidence the launch path is
+    broken: the candidate refused the turn without running it and the next identity
+    was offered the same task.
+    """
+    kind = record.get("failure_kind")
+    if isinstance(kind, str) and kind in FALLTHROUGH_FAILURE_KINDS:
+        return kind
+    if record.get("status") == SKIPPED_STATUS:
+        return SKIPPED_STATUS
+    return None
+
+
+def history_record_fallthrough_failure(record: HistoryRecord) -> str | None:
+    """Why this record cannot be read as a candidate the chain merely stepped past.
+
+    ``history_record_fallthrough_reason`` reports the harness's own word for what
+    became of a candidate. This is the check that the record *backs* that word,
+    because both the verdict and what an operator is told are read out of a store
+    nothing in this process wrote: a refusal that names no identity would be
+    reported as "an unidentified harness fell through", and one carrying billed
+    tokens or a successful turn is a candidate that RAN — excusing that as fallback
+    is precisely the launch breakage the smoke exists to name.
+
+    Absent accounting is not evidence of spend, and demanding it would reject the
+    real thing: a skipped candidate records a null counter for every field, and an
+    auth refusal on this host does the same. A counter that IS reported must be a
+    valid count of zero.
+    """
+    if history_record_identity(record) == UNIDENTIFIED_HARNESS:
+        return "does not name the identity it was written for"
+    if record.get("status") == "ok":
+        return "records a successful turn"
+    usage = record.get("usage")
+    if usage is None:
+        return None
+    if not isinstance(usage, dict):
+        return f"reports malformed token accounting {usage!r}"
+    for key in USAGE_FIELDS:
+        raw = usage.get(key)
+        if raw is None:
+            continue
+        spent = _number(raw) if key == "cost_usd" else _non_negative_int(raw)
+        if spent is None:
+            return f"reports malformed {key} {raw!r}"
+        if spent:
+            return f"reports {key} {raw!r} that was billed for"
+    return None
+
+
+def history_session_launch_failure(
+    session: HistorySession, records: list[HistoryRecord] | None = None
+) -> str | None:
     """Why a session fails the real-harness launch contract, or ``None`` if it holds.
 
     This is the launch guard, deliberately weaker than ``validated_native_fields``.
@@ -813,12 +938,17 @@ def history_session_launch_failure(session: HistorySession) -> str | None:
     itself, so it never depends on what the provider reports), and well-formed
     token accounting. Optional values that ARE present are still validated —
     ``_summarize_session`` rejects malformed or contradictory timing.
+
+    ``records`` narrows the guard to a subset of the session's own records. A
+    fallback chain records every candidate it attempted, and only the one it
+    *selected* is held to this bar; the caller that made that distinction passes
+    the record it made it about, rather than having it re-read here.
     """
-    records = cast(list[HistoryRecord], session_records(session))
+    records = session_turn_records(session) if records is None else records
     # Raises on a malformed or self-contradictory value the harness did report.
     _summarize_session(session, records)
     if not records:
-        return "recorded no harness run"
+        return NO_LAUNCH_RECORD_FAILURE
     for record in records:
         schema_version = record.get("schema_version")
         if schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
@@ -1063,6 +1193,46 @@ def _item_native(item: GraphResultItem) -> _NativeTelemetry | None:
         [link for part in parts for link in part.sessions],
         any(part.invalid for part in parts),
     )
+
+
+def _item_session_groups(item: Mapping[str, Any]) -> list[list[SessionLink]]:
+    """One group per onejudge report this recorded result carries.
+
+    Deliberately *not* `_item_native`, which sums a lifecycle's steps into one node
+    total: a group is one dispatch, and folding a workstream's steps together would
+    claim its third step's judge supervised its first step's worker.
+    """
+    groups: list[list[SessionLink]] = []
+    for payload in [item, *(step for step in item.get("steps", []) if isinstance(step, dict))]:
+        native = _native_telemetry(payload.get("telemetry"))
+        if native is not None and native.sessions:
+            groups.append(native.sessions)
+    return groups
+
+
+def native_session_groups(events: Sequence[Event]) -> list[list[SessionLink]]:
+    """Every recorded dispatch's own session linkage, read from a run's journal.
+
+    onejudge knows which oneharness sessions one dispatch produced and records it on
+    the report; the journal carries that report on the record that settled the node
+    or step. Reading it here — rather than from `result.json` — answers for a live
+    round too, which is the one a viewer is watching.
+
+    Groups are deduplicated by the sessions they name: a node's result is journalled
+    at settlement and again in the round result, and one dispatch must not become two.
+    """
+    groups: list[list[SessionLink]] = []
+    seen: set[frozenset[str]] = set()
+    for event in events:
+        result = event.detail.get(TERMINAL_NODE_RESULT_FIELD)
+        if not isinstance(result, Mapping):
+            continue
+        for group in _item_session_groups(result):
+            key = frozenset(link["session_id"] for link in group)
+            if key not in seen:
+                seen.add(key)
+                groups.append(group)
+    return groups
 
 
 def _party_usage(summaries: list[_SessionSummary], role: str) -> UsageValues:

@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 // eslint-disable-next-line @nx/enforce-module-boundaries -- This verifies the package export as a consumer uses it.
 import {
   conversationSchema,
+  conversationTurnSchema,
   dagConversationSchema,
   launchProvenanceSchema,
   nodeConversationsSchema,
@@ -504,4 +505,118 @@ test("a package consumer parses a served run timeline through the export", () =>
   });
   expect(timeline.spans[0]?.ended_at).toBeNull();
   expect(timeline.spans[1]?.events[0]?.reference?.kind).toBe("conversation");
+});
+
+test("a package consumer reads one dispatch's two sessions, its turn timing, and its waits", () => {
+  const rollup = {
+    id: "rollup-lock-wait-1",
+    kind: "rollup",
+    label: "lock-wait",
+    started_at: "2026-07-26T12:00:00Z",
+    ended_at: "2026-07-26T12:04:00Z",
+    node_id: "build",
+    count: 1240,
+    total_duration_ms: 4200,
+    intervals: [
+      {
+        started_at: "2026-07-26T12:00:00Z",
+        ended_at: "2026-07-26T12:00:02Z",
+      },
+    ],
+    events: [],
+  };
+  const timeline = parseRunTimeline({
+    api_version: 2,
+    observed_at: "2026-07-26T12:00:00Z",
+    run_id: "run-1",
+    spans: [
+      {
+        id: "dispatch-judge-1",
+        kind: "dispatch",
+        label: "you-are-a-careful-evaluator",
+        started_at: "2026-07-26T12:02:00Z",
+        ended_at: "2026-07-26T12:04:00Z",
+        node_id: "build",
+        agent_role: "judge",
+        transport_role: "judge",
+        // The two oneharness sessions of one onejudge dispatch share this key; the
+        // supervisor's own span carries the agent session's id, not its own.
+        dispatch_id: "worker-1",
+        reference: { kind: "conversation", value: "judge-1" },
+        events: [],
+      },
+      rollup,
+    ],
+  });
+  expect(timeline.spans[0]?.dispatch_id).toBe("worker-1");
+  expect(timeline.spans[1]?.intervals?.[0]?.ended_at).toBe(
+    "2026-07-26T12:00:02Z",
+  );
+  // A wait the server could not place is refused rather than drawn somewhere.
+  expect(() =>
+    parseRunTimeline({
+      api_version: 2,
+      observed_at: "2026-07-26T12:00:00Z",
+      run_id: "run-1",
+      spans: [
+        {
+          ...rollup,
+          intervals: [{ started_at: "whenever", ended_at: "then" }],
+        },
+      ],
+    }),
+  ).toThrow();
+
+  const supervised = dagConversationSchema.parse({
+    conversation: {
+      canContinue: false,
+      harnesses: ["claude-code"],
+      id: "judge-1",
+      name: "you-are-a-careful-evaluator",
+      project: "repo",
+      startedAt: "2026-07-26T12:02:00Z",
+      state: "completed",
+      turns: [
+        {
+          assistant: "looks good",
+          failureKind: null,
+          harness: "claude-code",
+          id: "judge-1-0",
+          model: "claude",
+          reasoning: null,
+          status: "completed",
+          timestamp: "2026-07-26T12:04:00Z",
+          tools: [],
+          unknown: {},
+          usage: {},
+          user: "review",
+          // The claude-code shape: no measured wall interval, only a duration.
+          startedAt: null,
+          finishedAt: null,
+          durationMs: 120_000,
+          modelMs: 90_000,
+          toolMs: 0,
+        },
+      ],
+    },
+    attribution: {
+      runId: "run-1",
+      nodeId: "build",
+      launcher: "codex",
+      transportRole: "judge",
+      agentRole: "judge",
+      parentConversationId: "worker-1",
+    },
+  });
+  const turn = supervised.conversation.turns[0];
+  expect([turn?.startedAt, turn?.durationMs, turn?.modelMs]).toEqual([
+    null,
+    120_000,
+    90_000,
+  ]);
+  expect(supervised.attribution.parentConversationId).toBe("worker-1");
+  // A negative duration is not a measurement, whatever wrote it.
+  expect(() =>
+    conversationTurnSchema.parse({ ...turn, durationMs: -1 }),
+  ).toThrow();
 });

@@ -736,14 +736,19 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     assert replayed.returncode == 0, replayed.stderr
     assert json.loads((round_two / "plan.json").read_text()) == second_plan
     assert json.loads((round_two / "result.json").read_text()) == second
-    round_three = runs / "human-direct" / "round-03"
-    assert (round_three / "result.json").exists()
-    third = json.loads((round_three / "result.json").read_text())
-    (round_three / "result.json").unlink()
+    # The replay restores what the journal recorded and stops there. It does not open a
+    # third round from the file it was handed: the plan of record for a transition is
+    # the graph round 2 executed, and every node of that graph is done.
+    assert "nothing to iterate" in replayed.stderr
+    assert len(list((runs / "human-direct").glob("round-*"))) == 2
+
+    # And the narrower repair on its own: a round whose plan survived but whose result
+    # never reached the ledger is restored from the same stream.
+    (round_two / "result.json").unlink()
     result_only = _just("run-plan", str(replay_plan), "--run", "human-direct", "--recover", *common)
     assert result_only.returncode == 0, result_only.stderr
-    assert json.loads((round_three / "result.json").read_text()) == third
-    assert (runs / "human-direct" / "round-04" / "result.json").exists()
+    assert json.loads((round_two / "result.json").read_text()) == second
+    assert len(list((runs / "human-direct").glob("round-*"))) == 2
 
 
 def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
@@ -2522,6 +2527,10 @@ def test_recover_discards_only_a_torn_final_journal_line(
     assert events_path.read_bytes().startswith(durable)
     assert b'"seq":999' not in events_path.read_bytes()
     assert json.loads((round_dir / "result.json").read_text()) == json.loads(completed.stdout)
+    # Restored, not re-run: the round the journal already recorded is written back and
+    # the transition it implies has nothing left to schedule, so no second round opens
+    # to dispatch `work` over again.
+    assert len(list(run_dir.glob("round-*"))) == 1
 
 
 def test_legacy_direct_plan_and_recorded_ledger_still_run(
@@ -2830,10 +2839,15 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
         assert message in rejected.stderr
 
 
-def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
+def test_legacy_repo_plan_mapping_runs_through_the_canonical_executor(
     tmp_path: Path, bare_origin, command_base, onejudge_bin: str
 ) -> None:
-    """Old lifecycle-only plan mappings work through both command names."""
+    """Old lifecycle-only plan mappings still run unchanged.
+
+    The `repo-plan` alias that used to accept them is gone; the mappings themselves
+    are an external input a planner may still be carrying, so `run-plan` keeps
+    taking one with no schema version and no direct nodes.
+    """
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "legacy-repo-canonical")
     Registry().register(str(canonical), workflow="local")
@@ -2880,25 +2894,10 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
     assert canonical_payload["state"] == "complete"
     assert canonical_payload["results"]["legacy-repo"]["outcome"] == "merged"
 
-    alias_run = _just(
-        "repo-plan",
-        str(
-            write_plan(
-                "legacy-alias",
-                "complete-now write-unique-change: deprecated repo plan alias",
-            )
-        ),
-        *common,
-    )
-    assert alias_run.returncode == 0, alias_run.stderr
-    assert "deprecated" in alias_run.stderr
-    # The deprecated alias owns rounds through the same detaching entry point, and
-    # relays their exit status the same way; what detaching buys is proven by
+    # The one executor owns its rounds through the detaching entry point and relays
+    # their exit status; what detaching buys is proven by
     # tests/e2e/test_round_ownership_e2e.py.
-    assert re.search(r"repo-plan: round owner pid \d+ leads its own session", alias_run.stderr)
-    alias_payload = json.loads(alias_run.stdout)
-    assert alias_payload["state"] == "complete"
-    assert alias_payload["results"]["legacy-alias"]["outcome"] == "merged"
+    assert re.search(r"run-plan: round owner pid \d+ leads its own session", canonical_run.stderr)
     assert (
         subprocess.run(
             ["git", "-C", str(origin), "cat-file", "-e", "main:CHANGE.txt"],

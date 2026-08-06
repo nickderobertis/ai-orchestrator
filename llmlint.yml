@@ -11,6 +11,13 @@ files:
   exclude:
     - "**/.git/**"
 rationales: true
+# Findings and broken judge runs are not cached by the `lint-llm-diff` tier — Nx
+# caches successful tasks only — so a branch working through a red re-rolls the
+# judge each time, and `llmlint history` is the only durable account of what each
+# roll said. The default 100 records is one afternoon of that on a busy branch.
+history:
+  # llmlint: ignore[changed_behavior_has_e2e] A retention count is a logic-free config value read by llmlint itself, not behavior this repository implements; an e2e for it could only assert that llmlint honors its own documented setting.
+  max_runs: 200
 # No `agents` block: scripts/llmlint-oneharness.sh pins this tier to the dedicated
 # oneharness.llmlint.toml. It names the same five identities every role does, but
 # keeps its own priority order rather than inheriting the worker's
