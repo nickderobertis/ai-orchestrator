@@ -189,8 +189,12 @@ class InFlightDispatch:
         persona = f" {self.persona}" if self.persona else ""
         doing = f"; {self.activity.describe(now=now)}" if self.activity else ""
         if self.undriven:
+            # Deliberately not "parked": this same vocabulary already has a `parked`
+            # node state, and it means the opposite — a node the planner idled with
+            # `cancel`, whose work is preserved and which `requeue` resumes. This is a
+            # node nobody idled, whose dispatch is simply gone.
             live = (
-                "; PARKED (the ledger records this node running, and no live dispatch "
+                "; UNDRIVEN (the ledger records this node running, and no live dispatch "
                 "carries its ownership stamp) — inspect with: just host"
             )
         elif self.dispatch is not None:

@@ -20,8 +20,10 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from .config import ConfigError
 from .dispatches import LiveDispatch, live_dispatches, load_averages
 from .launch import caller_identity, read_run_owner
+from .runs import validate_run_id
 
 
 def _session(dispatch: LiveDispatch, runs_dir: Path) -> str:
@@ -31,10 +33,20 @@ def _session(dispatch: LiveDispatch, runs_dir: Path) -> str:
     `just runs`: the labels a dispatch carries name the launcher kind, and only the
     run's own record names the session. A dispatch with no run — an untracked
     lifecycle task — legitimately has neither.
+
+    The id is validated before it becomes a path component, because it is a *label* a
+    dispatched subprocess put in its own environment rather than a value this harness
+    read back from the ledger. `orchestrator.status` and `orchestrator.next_round`
+    already hold every run id they join on to that domain; one that does not belong to
+    it names no run whose owner could be read, so it reports as unknown.
     """
     if dispatch.run_id is None:
         return dispatch.launcher or "unknown"
-    return read_run_owner(runs_dir / dispatch.run_id).label(caller_identity())
+    try:
+        run_id = validate_run_id(dispatch.run_id)
+    except ConfigError:
+        return "unknown"
+    return read_run_owner(runs_dir / run_id).label(caller_identity())
 
 
 def render(dispatches: Sequence[LiveDispatch] | None, runs_dir: Path, *, now: float) -> str:

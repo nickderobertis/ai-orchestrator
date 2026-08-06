@@ -447,7 +447,8 @@ surfaces each has queued unread; `just runs --mine` narrows that to this session
 Those views also stop guessing at what is *running*. A node the ledger records as
 started now reports which side of the conversation is serving it, on which harness
 identity, and for how long — with an anomalous duration for that role flagged, and a
-node nothing is driving flagged as `PARKED` in its own right. All of it is proven
+node nothing is driving flagged `UNDRIVEN` (deliberately not `parked`, which is the
+node state a planner's own `cancel` produces). All of it is proven
 from the dispatch ownership registry, never from `ps` output matched by pattern: the
 `ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into every process a dispatch
 starts, plus the owner lock a live dispatcher holds. `just status` carries the host's

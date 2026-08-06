@@ -90,6 +90,28 @@ def _view(home: Path, runs_dir: Path, workspace_root: Path) -> list[dict[str, ob
     return rows
 
 
+def _text_view(home: Path, runs_dir: Path, workspace_root: Path) -> str:
+    """The command's *default* rendering — what an operator actually reads."""
+    completed = subprocess.run(
+        [
+            "uv",
+            "run",
+            "orchestrator-recoverable",
+            "--runs-dir",
+            str(runs_dir),
+            "--workspace",
+            str(workspace_root),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        env={**os.environ, "AI_ORCHESTRATOR_HOME": str(home)},
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
 def _row(rows: list[dict[str, object]], branch: str) -> dict[str, object]:
     matched = [row for row in rows if row["branch"] == branch]
     assert len(matched) == 1, f"expected exactly one row for {branch!r}, got {rows}"
@@ -159,6 +181,18 @@ def test_recoverable_names_the_right_verb_for_each_preserved_branch(
     assert interrupted_row["in_publication_checkout"] is True
     assert "git -C" not in str(refused_row["command"])
 
+    # The default rendering is what an operator reads, and it has to carry the same
+    # distinction: the provenance, the tip, where it lives, why it stopped, and the
+    # one command that lands it.
+    text = _text_view(home, tmp_path / "runs", tmp_path / "interrupted-worktrees")
+    assert "2 preserved unpublished branch(es):" in text, text
+    assert "preserved/interrupted" in text and "preserved/refused" in text, text
+    assert "incomplete step (lifecycle provenance marker)" in text, text
+    assert "Resume: just repo-recover preserved/interrupted" in text, text
+    assert "Resume: just integrate preserved/refused" in text, text
+    assert "Stopped because:" in text and "Tip: " in text and "m old)" in text, text
+    assert "NOT in the publication checkout" not in text, text
+
 
 def test_a_branch_only_in_an_execution_clone_carries_its_fetch(
     tmp_path, bare_origin, command_base, personas_dir, monkeypatch
@@ -206,6 +240,11 @@ def test_a_branch_only_in_an_execution_clone_carries_its_fetch(
     assert " && just integrate preserved/clone-only" in command
     assert str(row["checkout"]).startswith(str(workspace_root))
 
+    # The same warning has to be legible in the default rendering, because that is
+    # where the wrong `integrate` invocation was typed from.
+    text = _text_view(home, tmp_path / "runs", workspace_root)
+    assert "NOT in the publication checkout; the command below fetches it first" in text, text
+
 
 def test_a_branch_its_base_already_carries_does_not_appear(
     tmp_path, bare_origin, command_base, personas_dir, monkeypatch
@@ -238,6 +277,10 @@ def test_a_branch_its_base_already_carries_does_not_appear(
 
     rows = _view(home, tmp_path / "runs", tmp_path / "worktrees")
     assert not [row for row in rows if row["branch"] == "published/change"], rows
+    # And the empty state says so plainly rather than printing nothing at all.
+    assert "No preserved unpublished branches." in _text_view(
+        home, tmp_path / "runs", tmp_path / "worktrees"
+    )
     # The registry itself is intact and the view ran clean, so an empty answer is an
     # observation rather than a failure to look.
     assert Registry(home / "repos.json").entries

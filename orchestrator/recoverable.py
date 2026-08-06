@@ -95,10 +95,11 @@ class RecoverableBranch:
             # `integrate` only ever reads local branches, so the fetch is the caller's.
             # It is a ref-only import into the publication checkout, which is all that
             # checkout is ever allowed to receive.
-            fetch = (
-                f"git -C {publication} fetch {shlex.quote(str(self.checkout))} "
-                f"refs/heads/{self.branch}:refs/heads/{self.branch}"
-            )
+            # The refspec is quoted like every other interpolated value here: git
+            # permits `;`, `&`, `|`, `$` and backticks in a branch name, and this
+            # string is meant to be pasted into a shell.
+            refspec = shlex.quote(f"refs/heads/{self.branch}:refs/heads/{self.branch}")
+            fetch = f"git -C {publication} fetch {shlex.quote(str(self.checkout))} {refspec}"
             return f"{fetch} && {command}"
         return command
 

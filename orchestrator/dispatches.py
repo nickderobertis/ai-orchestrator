@@ -418,6 +418,9 @@ def _dispatch(status_dir: Path, records: Sequence[_ProcessRecord]) -> LiveDispat
     labels = _labels(records)
     recorded_role = labels.get("agent_role")
     dispatch_role: DispatchRole | None = (
+        # `DISPATCH_ROLES` is a runtime frozenset built from the Literal, so mypy
+        # cannot relate membership in it back to the Literal's members; the check is
+        # exactly the narrowing it cannot express.
         recorded_role if recorded_role in DISPATCH_ROLES else None  # type: ignore[assignment]
     )
     # `orchestrator.smoke` is the one dispatch with no persona to derive a role from:

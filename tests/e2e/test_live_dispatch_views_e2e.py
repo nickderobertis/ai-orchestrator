@@ -42,7 +42,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.journal import open_journal
-from orchestrator.runs import NodeId, RunId
+from orchestrator.runs import NodeId, RunId, write_result
 from orchestrator.scratch import AGENT_STATUS_DIR_NAME, owned_scratch_directory
 from orchestrator.watchdog import ProcessId, terminate_tree
 
@@ -194,6 +194,26 @@ def _await_live(scratch_root: Path, node: str) -> None:
     raise AssertionError(f"no live dispatch for node {node!r} ever became observable")
 
 
+def _record_round(run_dir: Path) -> None:
+    """Give this run one completed round, through the ledger's own result writer.
+
+    Without it `just runs` renders the run through its unrecorded-launch branch. A run
+    a planner is actually supervising has finished a round, so the row that carries the
+    live-dispatch line for a real supervision session is the recorded one.
+    """
+    round_dir = run_dir / "round-01"
+    round_dir.mkdir(exist_ok=True)
+    write_result(
+        round_dir,
+        {
+            "ok": True,
+            "state": "complete",
+            "started_order": ["seed"],
+            "results": {"seed": {"kind": "agent", "status": "done", "ok": True}},
+        },
+    )
+
+
 def _launch(run_dir: Path, pid: int, nodes: tuple[str, ...]) -> None:
     """Record a live launch and journal each node as started, through real writers."""
     journal = open_journal(run_dir, RunId(run_dir.name), 1)
@@ -258,12 +278,19 @@ def test_the_views_report_the_role_harness_and_turn_age_of_a_live_dispatch(
     run_dir = runs_dir / "live-truth"
     run_dir.mkdir(parents=True)
     _launch(run_dir, os.getpid(), ("build",))
+    _record_round(run_dir)
     with ExitStack() as stack:
         _dispatch(tmp_path, oneharness_bin, stack, processes, run_id=run_dir.name, node="build")
         _await_live(scratch_root, "build")
 
         status = _view(["just", "status", run_dir.name, "--runs-dir", str(runs_dir)], scratch_root)
         host = _view(["just", "host", "--runs-dir", str(runs_dir)], scratch_root)
+        host_json = json.loads(
+            _view(
+                ["just", "host", "--runs-dir", str(runs_dir), "--format", "json"],
+                scratch_root,
+            )
+        )
         listed = _view(["just", "runs", "--runs-dir", str(runs_dir)], scratch_root)
 
     # The role is the turn's, read from the wrapper the dispatch is running; the
@@ -277,10 +304,20 @@ def test_the_views_report_the_role_harness_and_turn_age_of_a_live_dispatch(
     assert "worker on claude-code:alternate2" in host, host
     assert "live-truth round-01 build" in host, host
     assert "Load:" in host, host
-    # The run listing surfaces the live/parked distinction from the same observation.
-    assert "1 live dispatch(es)" in listed, listed
+    # The run listing surfaces the live/undriven distinction from the same
+    # observation, on the recorded round-01 row a supervised run actually renders.
+    recorded_row = next(line for line in listed.splitlines() if line.startswith("* "))
+    assert run_dir.name in recorded_row and "round-01" in recorded_row, listed
+    assert "1 live dispatch(es): live-truth round-01 build worker on" in listed, listed
     # The header attributes this host's load to the runs and nodes producing it.
     assert "Load:" in status, status
+    # The machine-readable form of the same picture, which a tool joins on.
+    row = next(item for item in host_json["dispatches"] if item["node"] == "build")
+    assert host_json["observable"] is True
+    assert (row["role"], row["harness"]) == ("worker", "claude-code:alternate2")
+    assert row["run_id"] == run_dir.name and row["round"] == "1"
+    assert row["turn_age_seconds"] >= 0 and row["turn_is_outlier"] is False
+    assert row["processes"] >= 1
 
 
 def test_a_node_whose_dispatch_died_is_flagged_while_its_sibling_keeps_running(
@@ -342,7 +379,10 @@ def test_a_node_whose_dispatch_died_is_flagged_while_its_sibling_keeps_running(
 
     dying_line = next(line for line in after.splitlines() if " dying " in line)
     alive_line = next(line for line in after.splitlines() if " alive " in line)
-    assert "PARKED" in dying_line, after
+    # `UNDRIVEN`, deliberately not `parked`: that word is already the node state a
+    # planner's own `cancel` produces, and it means the opposite of this.
+    assert "UNDRIVEN" in dying_line, after
     assert "no live dispatch carries its ownership stamp" in dying_line, after
-    assert "PARKED" not in alive_line, after
+    assert "parked" not in dying_line.lower().replace("undriven", ""), after
+    assert "UNDRIVEN" not in alive_line, after
     assert "worker on claude-code:alternate2" in alive_line, after

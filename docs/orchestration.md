@@ -1010,7 +1010,9 @@ What that buys each view:
   in-flight node, flags a turn past a generous multiple of its role's typical duration
   as `ANOMALOUS` (a judge's threshold is fifteen minutes; a worker's is over an hour),
   and flags a node the ledger records as running that no live dispatch is driving as
-  `PARKED`. Its header carries the host's load averages with the runs and nodes
+  `UNDRIVEN`. That label is deliberately not `parked`: this vocabulary already has a
+  `parked` node state and it means the opposite — a node the planner idled with
+  `cancel`, whose work is preserved and which `requeue` resumes. Its header carries the host's load averages with the runs and nodes
   producing them, so a slow host names its cause instead of being reconstructed later.
 * **`just runs`** carries the live/parked distinction per row: how many dispatches
   carry that run's stamp, or that none do.
@@ -1018,7 +1020,7 @@ What that buys each view:
   dispatch, its owning session, run/node, role, turn age, and load contribution.
 
 Both flags are *positive* claims and are made only where they can be proven. The
-node-level `PARKED` needs two things beyond "the registry saw nothing for this node":
+node-level `UNDRIVEN` needs two things beyond "the registry saw nothing for this node":
 the registry must have seen at least one live dispatch, which shows this reader is
 looking at the scratch root the dispatchers write into, and the run's launch must be
 observably working, which distinguishes one node losing its dispatch from the whole
