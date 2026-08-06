@@ -61,6 +61,7 @@ from nx_inputs import (
     covers,
     named_input_globs,
 )
+from scheduling import LOAD_SENSITIVE_MARKER
 
 from orchestrator import REPO_ROOT
 
@@ -277,6 +278,45 @@ def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
 
     contracts = {pair for pairs in found.values() for pair in pairs}
     assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
+
+
+#: The signature of a journey that cannot be co-scheduled with another of its kind:
+#: it starts several real processes and waits for a readiness handshake between them
+#: over a multiprocessing queue. `_queue.Empty` on that wait, on a subset that
+#: rotates per run, is what two of them in flight at once produce.
+_READINESS_HANDSHAKE = ("import multiprocessing", ".Queue(")
+
+
+def test_every_multiprocess_readiness_journey_declares_its_scheduling_constraint() -> None:
+    """A new journey of that shape joins the family or says why it need not.
+
+    The constraint is between these tests rather than inside any one of them, so
+    nothing inside a new one fails when it is missing — it just makes a rotating
+    subset of the module flaky, which reads as a bad host rather than as a missing
+    declaration. Naming the shape is what keeps the family from going stale silently,
+    exactly as the tier keys above are kept from narrowing silently.
+    """
+    # Spelled once, by the plugin that acts on it. A scan hunting its own literal
+    # would keep passing through a rename that left the plugin grouping nothing.
+    declaration = f"pytest.mark.{LOAD_SENSITIVE_MARKER}"
+    manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert LOAD_SENSITIVE_MARKER in re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE), (
+        f"pytest must register {LOAD_SENSITIVE_MARKER!r} in [tool.pytest.ini_options] markers"
+    )
+
+    undeclared = []
+    declared = []
+    for module in sorted((REPO_ROOT / "tests" / "e2e").glob("test_*.py")):
+        source = module.read_text(encoding="utf-8")
+        if not all(fragment in source for fragment in _READINESS_HANDSHAKE):
+            continue
+        (declared if declaration in source else undeclared).append(module.name)
+
+    assert not undeclared, (
+        f"these journeys wait on a multiprocessing readiness handshake without declaring "
+        f"@{declaration}, so xdist may run two of them at once: {undeclared}"
+    )
+    assert declared, "the load-sensitive family is empty; this gate would pass vacuously"
 
 
 def _collected(selector: str) -> set[str]:

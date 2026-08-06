@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import time
 import tomllib
 from pathlib import Path
 
@@ -205,6 +208,363 @@ def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_pat
         assert data["projects"][str(root)] == {"hasTrustDialogAccepted": True}
 
 
+TRUST_SCRIPT = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
+#: One synthetic project entry per registered workspace, carrying the session state a
+#: real one accumulates. State is what makes an entry worth keeping, so these are never
+#: prune candidates and the measurement below is about the passes, not about pruning.
+_SYNTHETIC_ENTRY = {"hasTrustDialogAccepted": True, "history": ["a recorded session"]}
+
+
+def _measuring_jq(tools: Path, log: Path) -> None:
+    """Put a jq on PATH that records the byte count of every pass it serializes.
+
+    The defect this measures is not "jq ran" but "jq wrote the whole configuration
+    out again, several times, to decide something a parse already knew". Bytes
+    produced is that cost stated directly, and it is what grew without bound as the
+    file did.
+    """
+    _write_executable(
+        tools / "jq",
+        f"""#!/bin/sh
+captured=$(mktemp)
+/usr/bin/jq "$@" >"$captured"
+status=$?
+wc -c <"$captured" >>"{log}"
+cat "$captured"
+rm -f "$captured"
+exit "$status"
+""",
+    )
+
+
+def _serialized_bytes(log: Path) -> list[int]:
+    return [int(line) for line in log.read_text(encoding="utf-8").split()]
+
+
+def _mark_trust(
+    config: Path, *roots: Path | str, tools: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    path = f"{tools}:/usr/bin:/bin" if tools is not None else "/usr/bin:/bin"
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; shift; mark_alternate_claude_trust "$@"',
+            "test-trust",
+            str(TRUST_SCRIPT),
+            str(config),
+            *(str(root) for root in roots),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(config.parent), "PATH": path},
+    )
+
+
+def _large_config(config: Path, entries: int, **projects: dict[str, object]) -> None:
+    recorded: dict[str, object] = {
+        f"/synthetic/workspace-{index:06d}": _SYNTHETIC_ENTRY for index in range(entries)
+    }
+    recorded.update(projects)
+    config.write_text(
+        json.dumps({"theme": "dark", "projects": recorded}, indent=2), encoding="utf-8"
+    )
+
+
+def test_alternate_claude_trust_leaves_an_already_trusted_config_untouched(
+    tmp_path: Path,
+) -> None:
+    """Marking what is already trusted must cost a parse, not a rewrite.
+
+    Every dispatch marks its clone, its worktree, and its result, and this host's
+    configuration reached 34 MB and 167,958 entries. Deciding by reserializing made
+    each of those marks cost the size of a file that only grew, behind one host-wide
+    lock — so the decision to skip is measured here, not just the skip.
+    """
+    config = tmp_path / ".claude.json"
+    roots = (tmp_path / "clone", tmp_path / "worktree")
+    for root in roots:
+        root.mkdir()
+    _large_config(config, 20_000, **{str(root): {"hasTrustDialogAccepted": True} for root in roots})
+    log = tmp_path / "serialized"
+    tools = tmp_path / "tools"
+    _measuring_jq(tools, log)
+    before = config.stat()
+
+    result = _mark_trust(config, *roots, tools=tools)
+
+    assert result.returncode == 0, result.stderr
+    after = config.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    serialized = _serialized_bytes(log)
+    assert len(serialized) <= 1, f"the decision itself reserialized the configuration: {serialized}"
+    assert sum(serialized) < 4096, serialized
+    assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"] == []
+
+
+@pytest.mark.parametrize("entries", [4, 20_000])
+def test_alternate_claude_trust_writes_a_new_workspace_in_one_pass(
+    tmp_path: Path, entries: int
+) -> None:
+    """Adding a workspace writes the configuration once, whatever it already holds."""
+    config = tmp_path / ".claude.json"
+    _large_config(config, entries)
+    size = config.stat().st_size
+    log = tmp_path / "serialized"
+    tools = tmp_path / "tools"
+    _measuring_jq(tools, log)
+    roots = (tmp_path / "clone", tmp_path / "worktree")
+    for root in roots:
+        root.mkdir()
+
+    result = _mark_trust(config, *roots, tools=tools)
+
+    assert result.returncode == 0, result.stderr
+    serialized = _serialized_bytes(log)
+    assert len(serialized) == 2, f"expected one decision and one write, got {serialized}"
+    assert sum(serialized) <= size + 4096, serialized
+    projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
+    assert all(projects[str(root)]["hasTrustDialogAccepted"] is True for root in roots)
+    assert len(projects) == entries + len(roots)
+
+
+def test_alternate_claude_trust_drops_entries_whose_workspaces_are_gone(tmp_path: Path) -> None:
+    """A registered workspace that no longer exists leaves no entry behind.
+
+    Nothing else prunes this file, and the e2e suite alone registers hundreds of
+    throwaway clone and worktree paths per run — 165,858 dead pytest temporary paths
+    on this host in three days. An entry that carries session state is a different
+    thing and survives its path: losing a trust decision costs one dialog, losing a
+    recorded session costs the session.
+    """
+    config = tmp_path / ".claude.json"
+    # Everything this file holds besides `projects` belongs to Claude, not to us, and
+    # a rewriting pass is exactly where it would be lost.
+    untouched = {
+        "theme": "dark",
+        "numStartups": 41,
+        "tipsHistory": {"new-user-warmup": 3},
+        "cachedChangelog": ["a line", "another"],
+        "hasCompletedOnboarding": True,
+        "oauthAccount": None,
+    }
+    config.write_text(
+        json.dumps(
+            {**untouched, "projects": {"/vanished-with-state": dict(_SYNTHETIC_ENTRY)}},
+        ),
+        encoding="utf-8",
+    )
+    live = tmp_path / "live"
+    gone = tmp_path / "gone"
+    for root in (live, gone):
+        root.mkdir()
+    assert _mark_trust(config, live, gone).returncode == 0
+    gone.rmdir()
+
+    result = _mark_trust(config, live)
+
+    assert result.returncode == 0, result.stderr
+    recorded = json.loads(config.read_text(encoding="utf-8"))
+    assert {key: recorded[key] for key in untouched} == untouched
+    assert str(gone) not in recorded["projects"]
+    assert recorded["projects"][str(live)]["hasTrustDialogAccepted"] is True
+    assert recorded["projects"]["/vanished-with-state"] == _SYNTHETIC_ENTRY
+
+
+def _stale_entry_config(config: Path) -> str:
+    """Write a configuration holding one entry whose workspace is provably gone."""
+    gone = "/nonexistent-workspace-a-run-left-behind"
+    config.write_text(
+        json.dumps({"projects": {gone: {"hasTrustDialogAccepted": True}}}), encoding="utf-8"
+    )
+    return gone
+
+
+def test_alternate_claude_trust_keeps_an_entry_it_cannot_prove_is_gone(tmp_path: Path) -> None:
+    """An unreadable ancestor is not evidence that a workspace was removed.
+
+    A failed lookup and an absent path are the same answer from `test`, and treating
+    them as the same fact would drop the trust decision for a workspace that is
+    merely out of reach — costing a dialog nobody is there to answer.
+    """
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    enclosing = tmp_path / "unreadable"
+    unreachable = enclosing / "workspace"
+    unreachable.mkdir(parents=True)
+    live = tmp_path / "live"
+    live.mkdir()
+    assert _mark_trust(config, unreachable, live).returncode == 0
+    enclosing.chmod(0o000)
+
+    try:
+        result = _mark_trust(config, live)
+    finally:
+        enclosing.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
+    assert projects[str(unreachable)]["hasTrustDialogAccepted"] is True
+    assert projects[str(live)]["hasTrustDialogAccepted"] is True
+
+
+def test_alternate_claude_trust_reports_what_the_decision_pass_could_not_do(
+    tmp_path: Path,
+) -> None:
+    """A jq that fails for its own reasons must not read as a malformed file."""
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    _write_executable(
+        tools / "jq",
+        "#!/bin/sh\necho 'jq: error: cannot allocate memory' >&2\nexit 6\n",
+    )
+
+    result = _mark_trust(config, "/checkout", tools=tools)
+
+    assert result.returncode == 1
+    assert "jq exited 6" in result.stderr
+    assert "cannot allocate memory" in result.stderr
+    assert config.read_text(encoding="utf-8") == "{}"
+
+
+def test_alternate_claude_trust_refuses_a_decision_pass_that_decided_nothing(
+    tmp_path: Path,
+) -> None:
+    """A zero exit from something called `jq` is not a decision about this file."""
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    tools = tmp_path / "tools"
+    _write_executable(tools / "jq", "#!/bin/sh\nprintf 'not a decision\\n'\n")
+
+    result = _mark_trust(config, "/checkout", tools=tools)
+
+    assert result.returncode == 1
+    assert "answered 'not a decision' instead of a decision" in result.stderr
+    assert config.read_text(encoding="utf-8") == "{}"
+
+
+def test_alternate_claude_trust_reports_a_refused_stale_entry_temporary(tmp_path: Path) -> None:
+    """The second temporary is the stale-entry list, and it can fail on its own."""
+    config = tmp_path / ".claude.json"
+    gone = _stale_entry_config(config)
+    tools = tmp_path / "tools"
+    _write_executable(
+        tools / "mktemp",
+        f"""#!/bin/sh
+made=$(cat "{tmp_path}/made" 2>/dev/null || printf '0')
+made=$((made + 1))
+printf '%s\\n' "$made" >"{tmp_path}/made"
+[ "$made" -ge 2 ] && exit 24
+exec /usr/bin/mktemp "$@"
+""",
+    )
+
+    result = _mark_trust(config, tmp_path, tools=tools)
+
+    assert result.returncode == 1
+    assert "cannot create a temporary file" in result.stderr
+    assert json.loads(config.read_text(encoding="utf-8"))["projects"][gone] == {
+        "hasTrustDialogAccepted": True
+    }
+
+
+def test_alternate_claude_trust_reports_an_unwritable_stale_entry_list(tmp_path: Path) -> None:
+    """A stale-entry list that cannot be written must fail the call, not the config."""
+    config = tmp_path / ".claude.json"
+    gone = _stale_entry_config(config)
+    tools = tmp_path / "tools"
+    _write_executable(
+        tools / "mktemp",
+        f"""#!/bin/sh
+made=$(cat "{tmp_path}/made" 2>/dev/null || printf '0')
+made=$((made + 1))
+printf '%s\\n' "$made" >"{tmp_path}/made"
+path=$(/usr/bin/mktemp "$@") || exit 1
+[ "$made" -ge 2 ] && /usr/bin/chmod 000 "$path"
+printf '%s\\n' "$path"
+""",
+    )
+
+    result = _mark_trust(config, tmp_path, tools=tools)
+
+    assert result.returncode == 1
+    assert "cannot record the stale entries" in result.stderr
+    assert json.loads(config.read_text(encoding="utf-8"))["projects"][gone] == {
+        "hasTrustDialogAccepted": True
+    }
+    assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"] == []
+
+
+@pytest.mark.parametrize(
+    ("sent", "observed"),
+    [
+        (signal.SIGINT, 130),
+        # The two a dispatch teardown actually sends. A shell that only *sourced*
+        # this function carries no handler of its own for either, so it dies of the
+        # signal before it can report the status the function chose — what the
+        # function controls in every one of these cases is that its cleanup ran.
+        (signal.SIGTERM, -signal.SIGTERM),
+        (signal.SIGHUP, -signal.SIGHUP),
+    ],
+)
+def test_alternate_claude_trust_leaves_no_temporary_when_it_is_killed(
+    tmp_path: Path, sent: signal.Signals, observed: int
+) -> None:
+    """A dispatch killed mid-write leaves nothing beside the configuration.
+
+    259 abandoned copies totalling 3.9 GB had accumulated on this host from runs that
+    ended between creating the temporary and moving it into place. Every signal that
+    ends one of these calls is covered, because cleanup that runs on the ordinary
+    return paths alone is exactly what produced them.
+    """
+    config = tmp_path / ".claude.json"
+    original = json.dumps({"theme": "dark", "projects": {}}, indent=2)
+    config.write_text(original, encoding="utf-8")
+    tools = tmp_path / "tools"
+    held = tmp_path / "held"
+    _write_executable(
+        tools / "chmod",
+        f"""#!/bin/sh
+printf 'held\\n' >"{held}"
+sleep 60
+""",
+    )
+
+    process = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" "$3"',
+            "test-trust",
+            str(TRUST_SCRIPT),
+            str(config),
+            str(tmp_path / "clone"),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+    )
+    try:
+        limit = time.monotonic() + 30
+        while not held.is_file() and time.monotonic() < limit:
+            time.sleep(0.02)
+        assert held.is_file(), "the call never reached the replacement it was to be killed during"
+        assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"]
+        # The whole group, which is what a dispatch teardown signals: the held
+        # replacement dies with the shell that is running it. The leak guard starts
+        # every test subprocess as its own group leader, so this pid names one.
+        os.killpg(process.pid, sent)
+        process.communicate(timeout=30)
+    finally:
+        process.kill()
+
+    assert process.returncode == observed
+    assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"] == []
+    assert json.loads(config.read_text(encoding="utf-8")) == {"theme": "dark", "projects": {}}
+
+
 def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{broken", encoding="utf-8")
@@ -254,27 +614,34 @@ def test_alternate_claude_trust_rejects_invalid_config_shape(tmp_path: Path, con
 
 
 def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) -> None:
+    """Two dispatches marking their own worktrees at once both land.
+
+    Real workspaces, because that is what a dispatch marks and because a registration
+    only outlives the directory it names for as long as the directory is there.
+    """
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
     script = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
     command = 'source "$1"; mark_alternate_claude_trust "$2" "$3"'
+    roots = (tmp_path / "first-concurrent-worktree", tmp_path / "second-concurrent-worktree")
+    for root in roots:
+        root.mkdir()
     processes = [
         subprocess.Popen(
-            ["bash", "-c", command, "test-trust", str(script), str(config), root],
+            ["bash", "-c", command, "test-trust", str(script), str(config), str(root)],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
         )
-        for root in ("/first-concurrent-worktree", "/second-concurrent-worktree")
+        for root in roots
     ]
 
     results = [process.communicate(timeout=10) for process in processes]
 
     assert [process.returncode for process in processes] == [0, 0], results
     projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
-    assert projects["/first-concurrent-worktree"]["hasTrustDialogAccepted"] is True
-    assert projects["/second-concurrent-worktree"]["hasTrustDialogAccepted"] is True
+    assert all(projects[str(root)]["hasTrustDialogAccepted"] is True for root in roots)
 
 
 def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_alive(
@@ -284,14 +651,19 @@ def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_aliv
     config.write_text("{}", encoding="utf-8")
     script = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for root in (first, second):
+        root.mkdir()
     caller = subprocess.Popen(
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /first; echo READY; read -r',
+            'source "$1"; mark_alternate_claude_trust "$2" "$3"; echo READY; read -r',
             "test-trust",
             str(script),
             str(config),
+            str(first),
         ],
         text=True,
         stdin=subprocess.PIPE,
@@ -306,10 +678,11 @@ def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_aliv
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /second',
+            'source "$1"; mark_alternate_claude_trust "$2" "$3"',
             "test-trust",
             str(script),
             str(config),
+            str(second),
         ],
         text=True,
         capture_output=True,
@@ -320,8 +693,8 @@ def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_aliv
     assert contender.returncode == 0, contender.stderr
     assert caller.poll() is None
     projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
-    assert projects["/first"]["hasTrustDialogAccepted"] is True
-    assert projects["/second"]["hasTrustDialogAccepted"] is True
+    assert projects[str(first)]["hasTrustDialogAccepted"] is True
+    assert projects[str(second)]["hasTrustDialogAccepted"] is True
     assert caller.stdin is not None
     caller.stdin.write("done\n")
     caller.stdin.flush()
@@ -592,6 +965,61 @@ def test_alternate_claude_trust_rejects_invalid_workspace_path(tmp_path: Path, r
     assert config.read_text(encoding="utf-8") == "{}"
 
 
+@pytest.mark.parametrize("recorded", [True, "trusted", 7, None, ["trusted"]])
+def test_alternate_claude_trust_normalizes_a_requested_entry_that_is_not_an_object(
+    tmp_path: Path, recorded: object
+) -> None:
+    """A requested root recorded as something other than an object still gets marked.
+
+    `+` is defined between objects, so an entry Claude wrote as a scalar or a list
+    cannot be merged into and would abort the write for every root in the same call.
+    It is replaced instead: the only thing such an entry could have held is the trust
+    decision being set right now, and every neighbouring entry survives untouched.
+    """
+    config = tmp_path / ".claude.json"
+    root = tmp_path / "clone"
+    root.mkdir()
+    neighbour = tmp_path / "neighbour"
+    neighbour.mkdir()
+    config.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "projects": {str(root): recorded, str(neighbour): dict(_SYNTHETIC_ENTRY)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _mark_trust(config, root)
+
+    assert result.returncode == 0, result.stderr
+    persisted = json.loads(config.read_text(encoding="utf-8"))
+    assert persisted["projects"][str(root)] == {"hasTrustDialogAccepted": True}
+    assert persisted["projects"][str(neighbour)] == _SYNTHETIC_ENTRY
+    assert persisted["theme"] == "dark"
+
+
+@pytest.mark.parametrize("root", ["", "relative/worktree"])
+def test_alternate_claude_trust_rejects_an_invalid_workspace_without_a_config(
+    tmp_path: Path, root: str
+) -> None:
+    """An absent configuration is not a reason to accept a path this can never mark.
+
+    Whether the file happens to exist is a fact about the host; whether the caller
+    named an absolute workspace is a fact about the call. Deciding the second one
+    only when the first one holds let a relative or empty root answer 0 — reporting a
+    root as trusted that no configuration ever recorded.
+    """
+    absent = tmp_path / ".claude.json"
+
+    result = _mark_trust(absent, root)
+
+    assert result.returncode == 2, result.stderr
+    assert f"workspace path must be a nonempty absolute path: '{root}'" in result.stderr
+    assert not absent.exists()
+
+
 @pytest.mark.parametrize(
     ("failure", "message"),
     [
@@ -663,89 +1091,46 @@ def test_alternate_claude_trust_tolerates_config_removed_under_lock(tmp_path: Pa
 
 
 def test_alternate_claude_trust_reports_jq_update_failure(tmp_path: Path) -> None:
+    """The pass that writes the update names the workspaces it could not add."""
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
     tools = tmp_path / "tools"
     _write_executable(
         tools / "jq",
-        '#!/bin/sh\n[ "$1" = --arg ] && exit 25\nexec /usr/bin/jq "$@"\n',
+        f"""#!/bin/sh
+passes=$(cat "{tmp_path}/passes" 2>/dev/null || printf '0')
+passes=$((passes + 1))
+printf '%s\\n' "$passes" >"{tmp_path}/passes"
+[ "$passes" -ge 2 ] && exit 25
+exec /usr/bin/jq "$@"
+""",
     )
 
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
-            "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
-            str(config),
-        ],
-        text=True,
-        capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
-    )
+    result = _mark_trust(config, "/checkout", tools=tools)
 
     assert result.returncode == 1
     assert "cannot add /checkout" in result.stderr
 
 
-def test_alternate_claude_trust_reports_comparison_read_failure(tmp_path: Path) -> None:
+def test_alternate_claude_trust_reports_cleanup_failure(tmp_path: Path) -> None:
+    """A failed call that cannot clear its own temporary says so and fails."""
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
     tools = tmp_path / "tools"
-    _write_executable(tools / "cmp", "#!/bin/sh\nexit 2\n")
-
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
-            "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
-            str(config),
-        ],
-        text=True,
-        capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
-    )
-
-    assert result.returncode == 1
-    assert (
-        result.stderr == f"alternate-claude-workspace-trust: cannot compare {config} with its "
-        "updated configuration; verify both files are readable, then retry\n"
-    )
-    assert config.read_text(encoding="utf-8") == "{}"
-
-
-def test_alternate_claude_trust_reports_cleanup_failure(tmp_path: Path) -> None:
-    config = tmp_path / ".claude.json"
-    config.write_text("{broken", encoding="utf-8")
-    tools = tmp_path / "tools"
     _write_executable(tools / "rm", "#!/bin/sh\nexit 26\n")
+    _write_executable(tools / "chmod", "#!/bin/sh\nexit 24\n")
 
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
-            "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
-            str(config),
-        ],
-        text=True,
-        capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
-    )
+    result = _mark_trust(config, "/checkout", tools=tools)
 
     assert result.returncode == 1
     assert (
         f"cannot remove temporary files for {config}; fix directory permissions, then retry"
         in result.stderr
     )
-    assert config.read_text(encoding="utf-8") == "{broken"
+    assert config.read_text(encoding="utf-8") == "{}"
 
 
-@pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])
+@pytest.mark.parametrize("failure", ["chmod", "final-mv"])
 def test_alternate_claude_trust_preserves_config_when_replacement_fails(
     tmp_path: Path, failure: str
 ) -> None:
@@ -757,8 +1142,7 @@ def test_alternate_claude_trust_preserves_config_when_replacement_fails(
     _write_executable(
         tools / "mv",
         """#!/bin/sh
-if { [ "$TEST_FAILURE" = intermediate-mv ] && case "$1" in *.next) true;; *) false;; esac; } ||
-   { [ "$TEST_FAILURE" = final-mv ] && [ "$2" = "$TEST_CONFIG" ]; }; then
+if [ "$TEST_FAILURE" = final-mv ] && [ "$2" = "$TEST_CONFIG" ]; then
   exit 23
 fi
 exec /usr/bin/mv "$@"

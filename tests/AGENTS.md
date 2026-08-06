@@ -56,4 +56,13 @@ Conventions for this repo's tests.
   worker count. Mark it `@pytest.mark.single_threaded` and it runs in
   `orchestrator:test-serial`, a tier of its own that blocks nothing and measures
   coverage into its own data file.
+- **A constraint between two tests is declared, not timed around.** A journey that
+  starts several real processes and waits for a readiness handshake between them
+  cannot be co-scheduled with another of its kind: they contend for the same cores
+  and the same advisory locks, and the handshake is what gives way. Mark it
+  `@pytest.mark.load_sensitive` and the whole family runs on one xdist worker under
+  `--dist loadgroup`, so no two are ever in flight at once. Scaling the hang guard
+  up instead only moves the failure; a solo re-proof by hand proves nothing about
+  the next run. `tests/test_nx_cache_scope.py` fails a new journey of that shape
+  that has not joined the family.
 - Every orchestrator verb needs a real e2e journey here before it is done.

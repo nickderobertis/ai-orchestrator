@@ -43,6 +43,13 @@ from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, RunId, prepare_round
 from orchestrator.workspace import Workspace, normalize_repo
 
+#: Every journey here starts several real lifecycle processes and waits for a
+#: readiness handshake between them. Two of them in flight at once contend for the
+#: same cores and the same advisory locks, and what fails is the handshake — a
+#: `_queue.Empty` on a readiness wait, on a rotating subset of the module. The
+#: constraint is between these tests, so it is declared once, for all of them.
+pytestmark = pytest.mark.load_sensitive
+
 PLAN = {
     "name": "owned run",
     "tasks": [{"id": "change", "repo": "/unused", "persona": "backend", "task": "x"}],

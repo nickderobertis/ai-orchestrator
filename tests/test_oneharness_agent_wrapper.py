@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from process_tree import consumed_cpu_seconds
 
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
@@ -1083,6 +1084,69 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
         "claude-code:alternate is out of quota; You've hit your session limit · "
         "resets 7pm (UTC); configure a usable fallback or retry after the stated reset time"
     )
+
+
+#: Long enough that a core pinned at 100% is unmistakable against the threshold
+#: below, and short enough to keep this a couple of seconds of the suite. This is a
+#: measurement window rather than a rendezvous: what is being observed is a rate.
+_PARKED_SAMPLE_SECONDS = 1.5
+#: A parked wrapper wakes once an hour. Anything approaching this is a spin.
+_PARKED_CPU_BUDGET_SECONDS = 0.1
+
+
+def test_a_wrapper_awaiting_recovery_consumes_no_cpu_while_it_waits(tmp_path: Path) -> None:
+    """Staying alive for the dispatcher must not cost a core for the whole window.
+
+    The contract is unchanged — the wrapper writes its markers and then stays in the
+    tree so the dispatcher can observe and recover it. What it must not do is spend
+    that window in an empty loop: this host runs every workstream's dispatches on the
+    same cores, and a failed turn used to hold one of them at 100% until the tree came
+    down.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-parked" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\necho 'harness refused' >&2\nexit 7\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while not (status_dir / "agent.failed").exists():
+                assert process.poll() is None, "the wrapper exited instead of awaiting recovery"
+                assert time.monotonic() < deadline, "the wrapper never recorded the failed turn"
+                time.sleep(0.02)
+            parked = consumed_cpu_seconds(process.pid)
+            time.sleep(_PARKED_SAMPLE_SECONDS)
+            burned = consumed_cpu_seconds(process.pid) - parked
+            still_waiting = process.poll() is None
+            recorded = {
+                name: (status_dir / name).read_text(encoding="utf-8").strip()
+                for name in ("agent.failed", "agent.failure", "agent.exit_code")
+            }
+        finally:
+            process.kill()
+
+    assert still_waiting, "the wrapper left before the dispatcher could recover it"
+    assert burned < _PARKED_CPU_BUDGET_SECONDS, (
+        f"the parked wrapper burned {burned:.2f}s of CPU in {_PARKED_SAMPLE_SECONDS:g}s of waiting"
+    )
+    assert recorded["agent.exit_code"] == "7"
+    assert recorded["agent.failure"] == "agent harness exited 7"
+    assert recorded["agent.failed"].isdigit()
+    assert not (status_dir / "agent.done").exists()
 
 
 def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -> None:
