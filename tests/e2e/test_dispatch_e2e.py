@@ -42,6 +42,7 @@ from orchestrator.channel import (
 from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, run_onejudge
 from orchestrator.graph import main as run_plan_main
+from orchestrator.runs import RECORDED_RESULT_SCHEMA_VERSION
 from orchestrator.watchdog import ProcessId, process_activity
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -716,7 +717,7 @@ def test_one_node_plan_cli_json_output(command_base, onejudge_bin, tmp_path, cap
     )
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     assert payload["results"]["solo"]["completed"] is True
 
 
@@ -1146,7 +1147,7 @@ def test_one_node_plan_applies_ordered_models_to_real_oneharness(
     argv = argv_path.read_text(encoding="utf-8").splitlines()
     assert argv[argv.index("--model") + 1] == "claude-opus-4-8"
     payload = json.loads(proc.stdout)
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     assert payload["results"]["solo"]["completed"] is True
     assert "telemetry" not in payload["results"]["solo"]
     config_env = env.copy()
