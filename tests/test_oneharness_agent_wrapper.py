@@ -1149,26 +1149,35 @@ def test_a_wrapper_awaiting_recovery_consumes_no_cpu_while_it_waits(tmp_path: Pa
     assert not (status_dir / "agent.done").exists()
 
 
-#: What the parked wrapper asks for in one nap, so a nap count reads as parked time.
+#: What the parked wrapper asks for in one nap, so a nap that came from the park is
+#: told apart from the 0.5s ones its pre-park poll asks for through the same stub.
 _PARKED_NAP_SECONDS = 3600
-#: Naps watched before the wait is taken to be uncounted — a month of parked time.
-_PARKED_NAPS_WATCHED = 720
-#: Real time watched alongside them, which the stub's stopped clock cannot supply.
-_PARKED_CLOCK_WINDOW_SECONDS = 2.0
+#: What the stub waits instead, compressing an hour by a factor of 360000 while
+#: still costing a fork. Returning outright compressed it further and turned this
+#: test into the busy loop the wrapper was fixed to stop being: a few thousand
+#: forks a second, on a host whose every other dispatch wants the same cores.
+_STUBBED_NAP_SECONDS = 0.01
+#: Naps watched, each one a re-entry the wrapper had no obligation to make.
+_PARKED_NAPS_WATCHED = 25
+#: Real time watched alongside them, which the stub's compressed clock cannot supply.
+_PARKED_CLOCK_WINDOW_SECONDS = 1.5
 
 
-def test_a_parked_wrapper_stays_parked_through_a_month_of_naps_and_a_clock_window(
+def test_a_parked_wrapper_stays_parked_across_repeated_naps_and_a_clock_window(
     tmp_path: Path,
 ) -> None:
-    """The wait must end when the dispatcher reaps the tree, and on nothing else.
+    """The real script, driven end to end, parks and keeps re-entering its wait.
 
     A single long nap costs no CPU either, so the CPU measurement above cannot tell
     it from a loop of them, and a wrapper that fell out of its wait would hand the
     dispatcher a turn reporting success markers it never wrote. Stubbing `sleep` to
-    return at once makes each next iteration observable but stops the clock, so a
-    bound on how many times it sleeps and a bound on the clock surface differently:
-    the first as the wrapper leaving mid-nap, the second only by being outlasted in
-    real time. Both are watched here, each covering the bounds below its own size.
+    return almost at once makes each next iteration observable but compresses the
+    clock, so a bound on how many times it sleeps and a bound on the clock surface
+    differently: the first as the wrapper leaving mid-nap, the second only by being
+    outlasted in real time. Both are watched, each reaching the bounds below its own
+    size — the sizes are small deliberately, because the test below rules out a
+    bound of any size by reading the loop, and this one need only prove the shape it
+    reads is what the wrapper really does.
     """
     status_dir = tmp_path / "orchestrator-watchdog-parked-loop" / "agent"
     status_dir.mkdir(parents=True)
@@ -1181,11 +1190,13 @@ def test_a_parked_wrapper_stays_parked_through_a_month_of_naps_and_a_clock_windo
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     naps = tmp_path / "naps"
     sleep_stub = bin_dir / "sleep"
-    # Recorded before returning, and returning immediately: the wrapper's own
-    # pre-park poll asks for 0.5s naps through this same stub, so the durations are
-    # what separate its heartbeat loop from the parked one.
+    # Recorded before waiting, so a nap counts the moment the wrapper asks for it.
+    # `command -p` reaches the real sleep rather than this stub, which is first on
+    # the wrapper's PATH and would otherwise call itself.
     sleep_stub.write_text(
-        f'#!/usr/bin/env bash\nprintf "%s\\n" "$1" >>{shlex.quote(str(naps))}\nexit 0\n',
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$1" >>{shlex.quote(str(naps))}\n'
+        f"command -p sleep {_STUBBED_NAP_SECONDS}\n",
         encoding="utf-8",
     )
     sleep_stub.chmod(sleep_stub.stat().st_mode | stat.S_IXUSR)
@@ -1281,6 +1292,10 @@ def test_the_parked_wait_is_written_as_a_loop_with_no_termination_condition() ->
     only what it does: a legitimate rewrite into another shape fails here and should
     update this test alongside it.
     """
+    # llmlint: ignore[tests_assert_real_behavior] The property is the absence of a
+    # termination condition at any size, and no finite observation reaches an
+    # hour-long bound — the loop's own source is the only evidence there is. The
+    # behavioural test above asserts everything about this park that can be observed.
     block = _parked_wait_source()
 
     assert block[0] in _UNCONDITIONAL_LOOP_HEADERS, (
