@@ -11,14 +11,19 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  Timeline,
+  useTimelineScrollSync,
 } from "@oneharness/ui";
 import {
   ArrowLeft,
   ExternalLink,
   OctagonPause,
   TriangleAlert,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Timestamp } from "../../lib/Timestamp";
+import { formatDuration } from "../../lib/time";
 import { isUnhealthy, type NodeView, recordedReason } from "../runs/run-model";
 import { StateBadge } from "../runs/StateBadge";
 import {
@@ -27,17 +32,25 @@ import {
   type NodeTab,
 } from "../runs/useUrlSelection";
 import { TimelineItemDetail } from "./TimelineItemDetail";
-import { TimelineRail } from "./TimelineRail";
-import { findRow, nodeTimeline } from "./timeline-model";
+import {
+  compactTimelineItems,
+  compactTimelineMarkers,
+  type DispatchGroup,
+  findRow,
+  nodeTimeline,
+  nodeTimelineV2,
+  type TimelineRow,
+} from "./timeline-model";
 
 /**
  * One node, read as what it did rather than as a column of stacked blocks.
  *
- * The graph is reduced to a breadcrumb, and the working area becomes master and
- * detail: the node's recorded spans and events in order on the left, and whichever
- * one is open expanded across the rest. The node's own task, criteria, dependencies,
- * PR and gate result stay one disclosure away rather than pushing that record down
- * the page.
+ * The graph is reduced to a breadcrumb, and the working area becomes a timeline over
+ * a transcript, locked to one clock: the plot stays pinned across the full width
+ * while the node's recorded work is read below it in order. Whatever the reader opens
+ * arrives in a panel over the right two thirds, so the reading it came from is still
+ * behind it. The node's own task, criteria, dependencies, PR and gate result are tabs
+ * beside the timeline rather than blocks pushing that record down the page.
  */
 export function NodeTimelineView({
   client,
@@ -68,20 +81,18 @@ export function NodeTimelineView({
     () => nodeTimeline(timeline, node.id),
     [timeline, node.id],
   );
-  const selected =
-    selectedItemId === undefined
-      ? undefined
-      : findRow(projected.rows, selectedItemId);
-
   // Escape is the way out of a full-screen view everywhere else, so it is the way
   // out of this one; the breadcrumb button is the visible half of the same exit.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onBack();
+      if (event.key === "Escape") {
+        if (selectedItemId !== undefined) onSelectItem();
+        else onBack();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onBack]);
+  }, [onBack, onSelectItem, selectedItemId]);
   const prUrl =
     node.detail?.publication === undefined
       ? (node.result?.pr ?? undefined)
@@ -226,24 +237,244 @@ export function NodeTimelineView({
               </p>
             </Card>
           ) : (
-            <div className="node-view-body">
-              <TimelineRail
-                onSelect={onSelectItem}
-                rows={projected.rows}
-                selectedId={selectedItemId}
-              />
-              <TimelineItemDetail
-                client={client}
-                conversationRevision={conversationRevision}
-                node={node}
-                row={selected}
-                runId={runId}
-              />
-            </div>
+            <NodeExecution
+              client={client}
+              conversationRevision={conversationRevision}
+              node={node}
+              onSelectItem={onSelectItem}
+              runId={runId}
+              selectedItemId={selectedItemId}
+              timeline={timeline}
+            />
           )}
         </TabsContent>
       </Tabs>
     </section>
+  );
+}
+
+function NodeExecution({
+  client,
+  conversationRevision,
+  node,
+  onSelectItem,
+  runId,
+  selectedItemId,
+  timeline,
+}: {
+  readonly client: TelemetryClient;
+  readonly conversationRevision?: number;
+  readonly node: NodeView;
+  readonly onSelectItem: (id?: string) => void;
+  readonly runId: string;
+  readonly selectedItemId?: string;
+  readonly timeline: RunTimeline;
+}) {
+  const projection = useMemo(
+    () => nodeTimelineV2(timeline, node.id),
+    [timeline, node.id],
+  );
+  const entries = useMemo(
+    () =>
+      projection.rows.map((row) => ({
+        id: row.id,
+        time: Date.parse(row.startedAt),
+      })),
+    [projection.rows],
+  );
+  const sync = useTimelineScrollSync(entries);
+  const [expanded, setExpanded] = useState(false);
+  const compactItems = useMemo(
+    () => compactTimelineItems(projection.items),
+    [projection.items],
+  );
+  const compactMarkers = useMemo(
+    () =>
+      compactTimelineMarkers(
+        projection.markers,
+        projection.items,
+        selectedItemId,
+      ),
+    [projection.items, projection.markers, selectedItemId],
+  );
+  // The plotted window, read the way the plot itself reads it. The transcript lists
+  // rows the plot has no lane for — a lifecycle step brackets its sessions rather
+  // than being one — so scrolling onto one can put the reading position outside the
+  // window; pinning it to the nearest edge keeps the cursor on screen instead of
+  // dropping it and leaving the reader with no mark at all.
+  const plotted = useMemo(
+    () => timeRange(projection.items),
+    [projection.items],
+  );
+  const cursor =
+    sync.cursor === undefined
+      ? undefined
+      : Math.min(Math.max(sync.cursor, plotted[0]), plotted[1]);
+  const selected =
+    selectedItemId === undefined
+      ? undefined
+      : findRow(projection.rows, selectedItemId);
+  const select = (id: string) => {
+    onSelectItem(id);
+    sync.scrollTo(id);
+  };
+  useEffect(() => {
+    if (selectedItemId !== undefined) sync.scrollTo(selectedItemId);
+  }, [selectedItemId, sync]);
+  return (
+    <div className="node-execution" data-expanded={expanded}>
+      <section
+        aria-label="Node timeline"
+        className="node-timeline-sticky"
+        data-testid="node-timeline"
+      >
+        <Timeline
+          axis={{ origin: plotted[0] }}
+          cursor={cursor}
+          expanded={expanded}
+          getFailureExcerpt={(item) =>
+            item.payload.rowKind === "span"
+              ? item.payload.span.detail?.output_tail
+              : undefined
+          }
+          items={expanded ? projection.items : compactItems}
+          lanes={projection.lanes}
+          markers={compactMarkers}
+          onExpandedChange={setExpanded}
+          onSelect={(entry) => select(entry.id)}
+          selectedId={selectedItemId}
+        />
+      </section>
+      <section
+        aria-label="Node transcript"
+        className="node-transcript"
+        ref={sync.containerRef}
+      >
+        {transcriptRuns(projection.rows).map((entry) => {
+          const items = entry.rows.map((row) => (
+            <TranscriptItem
+              key={row.id}
+              onOpen={select}
+              register={sync.register}
+              row={row}
+              selected={row.id === selectedItemId}
+            />
+          ));
+          return entry.dispatch === undefined ? (
+            <Fragment key={entry.id}>{items}</Fragment>
+          ) : (
+            <section
+              aria-label={entry.dispatch.label}
+              className="transcript-dispatch"
+              key={entry.id}
+            >
+              <h3>{entry.dispatch.label}</h3>
+              {items}
+            </section>
+          );
+        })}
+      </section>
+      {selected !== undefined && (
+        <aside aria-label="Item detail panel" className="node-detail-drawer">
+          <Button
+            aria-label="Close detail"
+            className="drawer-close"
+            onClick={() => onSelectItem()}
+            size="icon"
+            variant="ghost"
+          >
+            <X />
+          </Button>
+          <TimelineItemDetail
+            client={client}
+            conversationRevision={conversationRevision}
+            node={node}
+            row={selected}
+            runId={runId}
+          />
+        </aside>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The window the timeline plots, derived exactly as the plot derives it: the earliest
+ * start to the latest end of the items it is given.
+ */
+function timeRange(
+  items: readonly { start: number; end?: number | null }[],
+): readonly [number, number] {
+  const starts = items.map(({ start }) => start);
+  const ends = items.map((item) => item.end ?? item.start);
+  if (starts.length === 0) return [0, 1];
+  const first = Math.min(...starts);
+  const last = Math.max(...ends);
+  return [first, last > first ? last : first + 1];
+}
+
+/**
+ * The transcript in the order it is read: one entry per item, except that the
+ * sessions of one dispatch travel together so they can be nested under its name.
+ *
+ * The rows of a dispatch arrive consecutively — the projection lists an agent session
+ * and then the sessions recorded inside it — so a run of them is a group, and every
+ * other row is a group of one.
+ */
+function transcriptRuns(rows: readonly TimelineRow[]): readonly {
+  readonly id: string;
+  readonly dispatch?: DispatchGroup;
+  readonly rows: readonly TimelineRow[];
+}[] {
+  const runs: { id: string; dispatch?: DispatchGroup; rows: TimelineRow[] }[] =
+    [];
+  for (const row of rows) {
+    const open = runs.at(-1);
+    if (
+      row.dispatch !== undefined &&
+      open?.dispatch !== undefined &&
+      open.dispatch.id === row.dispatch.id
+    )
+      open.rows.push(row);
+    else runs.push({ id: row.id, dispatch: row.dispatch, rows: [row] });
+  }
+  return runs;
+}
+
+function TranscriptItem({
+  row,
+  selected,
+  register,
+  onOpen,
+}: {
+  readonly row: TimelineRow;
+  readonly selected: boolean;
+  readonly register: (id: string, element: HTMLElement | null) => void;
+  readonly onOpen: (id: string) => void;
+}) {
+  return (
+    <article
+      aria-label={row.displayLabel}
+      className="transcript-item"
+      data-dispatch-group={row.dispatch?.label}
+      data-selected={selected}
+      ref={(element) => register(row.id, element)}
+    >
+      <button
+        aria-label={`Open ${row.displayLabel}`}
+        onClick={() => onOpen(row.id)}
+        type="button"
+      >
+        <span className="eyebrow">{row.displayKind}</span>
+        <strong>{row.displayLabel}</strong>
+        <span className="transcript-facts">
+          <Timestamp at={row.startedAt} />
+          {row.durationMs !== null && ` · ${formatDuration(row.durationMs)}`}
+          {` · ${row.status ?? "recorded"}`}
+          {row.sessionName !== undefined && ` · ${row.sessionName}`}
+        </span>
+      </button>
+    </article>
   );
 }
 

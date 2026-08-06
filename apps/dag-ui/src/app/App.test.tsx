@@ -43,6 +43,29 @@ const railRow = (name: RegExp) =>
     { name },
   );
 
+/**
+ * The transcript entry a reader would open, named by the words it puts on screen.
+ *
+ * The transcript is where an operator lands and where every recorded item is
+ * listed in full; the timeline above it plots the same items and shows whichever
+ * of them fit the compact line, so a journey that is about opening one item asks
+ * the transcript for it rather than depending on that compaction.
+ */
+const openTranscript = async (name: RegExp) => {
+  // Re-queried through the region on every attempt, never held across one: moving
+  // between nodes remounts the whole view, and an element captured before that move
+  // is a detached node whose click reaches nothing and reports nothing. `waitFor`
+  // resolves to what its last attempt returned, which is the live element.
+  const entry = await waitFor(() =>
+    within(screen.getByRole("region", { name: "Node transcript" })).getByRole(
+      "button",
+      { name },
+    ),
+  );
+  await userEvent.click(entry);
+  await screen.findByRole("region", { name: "Timeline item detail" });
+};
+
 const detail = () =>
   screen.getByRole("region", { name: "Timeline item detail" });
 
@@ -89,21 +112,45 @@ describe("DAG application", () => {
     fireEvent.mouseEnter(worker);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Duration: 48.0 s");
     expect(screen.getByRole("tooltip")).toHaveTextContent("Status: completed");
+    // Every category is a lane of the legend, and the timeline opens on one compact
+    // line; expanding is what gives each of them a row of its own.
+    const legend = screen.getByRole("list", { name: "Timeline legend" });
+    expect(
+      within(legend)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "Worker",
+      "Judge",
+      "Lint",
+      "Orchestrator",
+      "Check-in",
+      "PR author",
+      "Verification",
+      "Publication",
+      "Lock waits",
+      "Human wait",
+    ]);
+    await userEvent.click(railRow(/^Expand timeline$/));
     expect(railRow(/^Judge/)).toBeInTheDocument();
     expect(railRow(/^Lint/)).toBeInTheDocument();
     expect(railRow(/^Check-in/)).toBeInTheDocument();
     expect(railRow(/^PR author/)).toBeInTheDocument();
-    expect(railRow(/lock-wait/)).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Timeline legend" })).toBeVisible();
+    expect(railRow(/^Lock waits/)).toBeInTheDocument();
+    await userEvent.click(railRow(/^Collapse timeline$/));
 
-    await userEvent.click(worker);
+    await userEvent.click(railRow(/engineer-dashboard/));
     await waitFor(() =>
       expect(window.location.search).toContain("event=dispatch-worker-session"),
     );
     expect(
       await within(detail()).findByText("Implementing the dashboard now"),
     ).toBeInTheDocument();
-    expect(within(detail()).getByText("Worker · engineer")).toBeInTheDocument();
+    // The conversation says which dispatch it belongs to, which role it played in
+    // it, and which persona it ran — a judge transcript is unreadable without them.
+    expect(
+      within(detail()).getByText("Dispatch 1 · Worker · engineer"),
+    ).toBeInTheDocument();
     expect(
       within(detail()).getAllByRole("button", { name: "Bash tool details" }),
     ).toHaveLength(1);
@@ -119,7 +166,9 @@ describe("DAG application", () => {
         .querySelector(".hljs-number"),
     ).toHaveTextContent("1");
 
-    // Escape is the keyboard way back to the graph.
+    // Escape closes on-demand detail first, preserving reading context; a second
+    // Escape returns to the graph.
+    await userEvent.keyboard("{Escape}");
     await userEvent.keyboard("{Escape}");
     expect(await screen.findByText("queued")).toBeInTheDocument();
     expect(window.location.search).not.toContain("node=");
@@ -260,14 +309,8 @@ describe("DAG application", () => {
     );
     const { client } = telemetryHarness();
     render(<App client={client} />);
-    // The rail reveals the row the address names, however deep it sits.
-    expect(
-      (
-        await screen.findAllByRole("button", { name: /conversation-turn/ })
-      ).some((button) =>
-        button.getAttribute("aria-describedby")?.includes("worker-session-0"),
-      ),
-    ).toBe(true);
+    // The address opens the matching long-form item in the detail panel.
+    expect(await screen.findByLabelText("Item detail panel")).toBeVisible();
     expect(
       await within(detail()).findByText("Implementing the dashboard now"),
     ).toBeInTheDocument();
@@ -278,9 +321,7 @@ describe("DAG application", () => {
     const { client } = telemetryHarness();
     render(<App client={client} />);
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: /just gate/ }),
-    );
+    await openTranscript(/just gate/);
     expect(
       await within(detail()).findByText("Verification record"),
     ).toBeVisible();
@@ -301,9 +342,7 @@ describe("DAG application", () => {
     // recorded for it rather than an empty pane.
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     window.dispatchEvent(new PopStateEvent("popstate"));
-    await userEvent.click(
-      await screen.findByRole("button", { name: /lock-wait/ }),
-    );
+    await openTranscript(/^Open Lock waits/);
     expect(
       await within(detail()).findByText("1240 records"),
     ).toBeInTheDocument();
@@ -342,27 +381,22 @@ describe("DAG application", () => {
     render(<App client={client} />);
 
     const rail = await screen.findByRole("region", { name: "Node timeline" });
+    // The lifecycle step brackets the sessions rather than being one of them, so it
+    // is the transcript that names it, not a lane plotted over its own contents.
+    const transcript = screen.getByRole("region", { name: "Node transcript" });
     expect(
-      within(rail).getByRole("button", {
-        name: /Phase: Supervised conversations/,
+      within(transcript).getByRole("button", {
+        name: /Lifecycle: Supervised conversations/,
       }),
     ).toBeInTheDocument();
-    // Two hundred conversations, and a rail a reader can take in at a glance.
     expect(
-      within(rail).getByRole("button", {
-        name: /204 grouped judge activities/,
-      }),
+      within(rail).getByRole("button", { name: "Expand timeline" }),
     ).toBeInTheDocument();
-    expect(within(rail).getAllByRole("button").length).toBeLessThan(12);
-
-    // Expanding the density cap hands out a page at a time.
     await userEvent.click(
-      within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
+      within(rail).getByRole("button", { name: "Expand timeline" }),
     );
-    const paged = within(rail).getAllByRole("button");
-    expect(paged.length).toBeLessThan(60);
     expect(
-      within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
+      within(rail).getByRole("button", { name: "Collapse timeline" }),
     ).toBeInTheDocument();
   });
 
@@ -394,11 +428,19 @@ describe("DAG application", () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
     render(<App client={client} />);
 
+    const transcript = await screen.findByRole("region", {
+      name: "Node transcript",
+    });
+    const retry = within(transcript).getByRole("article", {
+      name: /Worker \(engineer-dashboard\) · retry 1/,
+    });
+    // The retry is a second dispatch of the node, so it is grouped as its own.
+    expect(retry).toHaveAttribute("data-dispatch-group", "Dispatch 4");
     expect(
-      await screen.findByRole("button", {
-        name: /Worker \(engineer-dashboard\) · retry 1 · conversation 2/,
+      within(transcript).getByRole("article", {
+        name: "Worker (engineer-dashboard)",
       }),
-    ).toBeVisible();
+    ).toHaveAttribute("data-dispatch-group", "Dispatch 1");
   });
 
   test("names what a failed node's attempts did not record", async () => {
@@ -409,14 +451,12 @@ describe("DAG application", () => {
     // A gate that never reached an attestation, and a publication with no PR and
     // no observed checks: each absence is stated rather than left as a blank block
     // that reads like "all clear".
-    await userEvent.click(
-      await screen.findByRole("button", { name: /branch push/ }),
-    );
+    await openTranscript(/branch push/);
     expect(
       await within(detail()).findByText("No readable log was recorded."),
     ).toBeInTheDocument();
 
-    await userEvent.click(railRow(/publication/));
+    await userEvent.click(railRow(/^Publication/));
     expect(
       await within(detail()).findByText("No publication was recorded."),
     ).toBeInTheDocument();
@@ -566,16 +606,11 @@ describe("DAG application", () => {
       screen.queryByText("This node has no recorded timeline yet."),
     ).toBeNull();
 
-    // It arrives with no item named in the address, so the detail region says how
-    // to read one rather than standing empty beside a full rail.
+    // It arrives with no item named in the address, so the reading an operator
+    // lands on is the transcript itself rather than an empty pane beside a plot.
     release(Response.json(runTimeline(LIVE_RUN)));
-    const region = await screen.findByRole("region", {
-      name: "Timeline item detail",
-    });
     expect(
-      within(region).getByText(
-        "Select an item in the timeline to read what it recorded.",
-      ),
+      await screen.findByRole("region", { name: "Node transcript" }),
     ).toBeInTheDocument();
     expect(railRow(/engineer-dashboard/)).toBeInTheDocument();
   });
@@ -766,9 +801,7 @@ describe("DAG application", () => {
     // The lock-wait rollup has no dedicated rendering, so it is the item whose every
     // recorded field reaches the reader — including the two stamps the detail used to
     // print straight out of the journal.
-    await userEvent.click(
-      await screen.findByRole("button", { name: /lock-wait/ }),
-    );
+    await openTranscript(/^Open Lock waits/);
     expect(await within(detail()).findByText("Recorded at")).toBeVisible();
     expect(within(detail()).getByText("Duration")).toBeVisible();
     // Not one ISO stamp and not one raw second count anywhere in the pane.
@@ -828,9 +861,7 @@ describe("DAG application", () => {
         ),
       ).toBe(true),
     );
-    await userEvent.click(
-      await screen.findByRole("button", { name: /engineer-dashboard/ }),
-    );
+    await openTranscript(/engineer-dashboard/);
     await waitFor(() =>
       expect(
         paths().filter((url: string) => isConversation(new URL(url))),
@@ -1283,7 +1314,9 @@ test("serves the timeline of whichever run is selected", async () => {
   render(<App client={client} />);
   // The archive run's own recorded work, not the live run's.
   expect(
-    await screen.findByRole("button", { name: /engineer-archive/ }),
+    within(
+      await screen.findByRole("region", { name: "Node timeline" }),
+    ).getByRole("button", { name: /engineer-archive/ }),
   ).toBeInTheDocument();
   expect(runTimeline(HISTORY_RUN).spans).toHaveLength(3);
   cleanup();

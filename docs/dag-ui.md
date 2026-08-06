@@ -114,26 +114,53 @@ with a fresh snapshot.
 
 Opening a node replaces the graph with a view over the whole working area — the
 graph stays one breadcrumb away, reachable by pointer, by Tab, and under the
-Escape key. It is master and detail over `GET /api/v2/runs/{run_id}/timeline`:
+Escape key. It is a **timeline over a transcript**, both projected from
+`GET /api/v2/runs/{run_id}/timeline` and locked to one clock:
 
-- the **rail** lists what the node recorded, in order. Each row states its kind,
-  its time, its status and its duration; a span discloses the events and spans
-  inside it and starts collapsed. The node's own span is the subject of the view
-  rather than a row in it, so every row is one recorded activity.
-- the **detail region** takes the rest of the width and shows the opened item
-  expanded: a conversation turn through the package's `TurnCard`, a verification
-  as the gate attestation it recorded and the log it points at, a publication as
-  its PR and the checks observed on it, and anything else as the typed record the
-  timeline served.
-- the node's **task, completion criteria, dependencies, PR and gate result** stay
-  above the rail as an `Accordion`, one disclosure away rather than a wall of
-  stacked blocks.
+- the **timeline** is pinned across the full width and opens as one compact line
+  showing what dominated each moment. Expanding gives every category a row:
+  Worker, Judge, Lint, Orchestrator, Check-in, PR author, Verification,
+  Publication, Lock waits, Human wait. Those are the served `agent_role`,
+  `transport_role` and span-kind vocabulary rendered as words — an operator never
+  reads a served identifier such as `rollup` or `pr-drafting`, and the span kinds
+  that *hold* work rather than being work (a round, the node, a lifecycle step)
+  occupy no lane at all. A journal record is a moment rather than an interval, so
+  it is a **marker** — an icon on a full-height line over every lane. The axis
+  reads local wall-clock time and elapsed-from-start, and the compact line and the
+  expanded lanes always span the same window, so a moment does not move when the
+  view is collapsed. An aggregate is plotted at the total it carries, not across
+  the window its records happened to fall in. The compact line is sized to fit
+  whole at every width, because it is the view a node opens on. Ten expanded lanes
+  and a reading fit no viewport shorter than the laptop the layout is designed
+  against, so below that the region scrolls: the axis is painted inside the plot's
+  own clipping box, so it cannot be pinned above that fold, and collapsing is the
+  one-click way back to it.
+- the **transcript** below it is the long-form reading: one item per span and
+  event, in order, each with its summary inline. Scrolling it moves the
+  timeline's cursor and clicking a segment or a marker scrolls and focuses its
+  item; both directions are the package's `useTimelineScrollSync`. The selection
+  is in the address, so an item stays bookmarkable.
+- **detail on demand** slides in from the right over two thirds of the working
+  area, leaving the navigation alone. Escape and its own control close it. A
+  conversation renders the package's `ConversationTimeline` pinned above its
+  turns, each `TurnCard` carrying the role that spoke — Worker, Judge or Lint.
+- one **onejudge dispatch** — the agent session plus the judge and lint sessions
+  that supervised it — is one labelled group, nested in the transcript and named
+  on the conversation header. Schema 10 serves that identity as `dispatch_id`;
+  until this repository's read model emits it,
+  `src/features/timeline/timeline-model.ts` recovers the same grouping from the
+  nesting and roles schema 9 does serve.
+- the node's **task, completion criteria, dependencies, PR and gate result** are
+  tabs beside the timeline, one selection away rather than a wall of blocks. Six
+  names do not fit every width, so below the breakpoint they wrap onto a second
+  row rather than hiding the ones past the edge behind a scroller — down to the
+  phone, where the same names need four rows and 170px of an 844px screen, and
+  the strip scrolls again so the timeline the view opens on has room to be drawn.
 
-Nothing in the rail grows with the size of the run. A run of eight or more
-consecutive same-kind siblings arrives as one grouped row
-(`src/features/timeline/timeline-model.ts`), and each expanded level hands out
-`PAGE_SIZE` rows at a time, so the node whose recorded work is two hundred
-conversations reads as a handful of rows rather than two hundred.
+Nothing in either surface grows with the size of the run. A run of eight or more
+consecutive same-kind siblings arrives as one grouped row, and a conversation
+hands out `PAGE_SIZE` turns at a time, so the node whose recorded work is two
+hundred conversations reads as a handful of items rather than two hundred.
 
 The view reads only what it shows. The run detail is fetched for the selected run
 alone and with `include_conversations=false`; the ordered record comes from the
@@ -192,9 +219,10 @@ being photographed.
 | --- | --- |
 | `01-run-list-overall` | the run list beside the overall view |
 | `02-graph` | the graph |
-| `03-node-timeline` | the node view's timeline tab |
-| `04-node-item-detail` | the node view with a timeline item open |
-| `05-conversation` | an open conversation |
+| `03-node-collapsed` | the node view as it opens: the compact line over its transcript |
+| `04-node-expanded` | the same view with one row per category |
+| `05-node-item-detail` | a verification opened over that reading |
+| `06-conversation` | a conversation in the right panel |
 
 The tier asserts nothing beyond having reached each surface with its real reads landed:
 it is the operator's eyes, and `e2e/dag-ui-navigation.spec.ts` is what holds the
@@ -217,6 +245,7 @@ that has put its content out of reach.
 ```sh
 just check
 just gate
+just dag-ui-screens
 ```
 
 `just check` runs both tiers of the app's suite. Testing Library exercises the
@@ -248,12 +277,32 @@ unreachable-API journey has a real failure to observe, is held bound but unliste
 by the stall server (`serve_fixture.py --refuse-port`): leaving it merely free would
 let a concurrent run's own API server take it.
 
+That gallery is deliberately outside `just check`: its product is images a reviewer
+reads for clipping, overlap and reflow, which no selector describes. It is what found
+the tab list widening the working area past the viewport, the pinned timeline leaving
+the transcript no room at ten expanded lanes, and the document that scrolled out from
+under `scrollIntoView`. It went on to find the axis sliced through the middle of its own
+digits by the fold, the six tab names spilling past *both* edges of a scroller that
+could only ever reach one of them, and — once they wrapped — a second row of them
+drawn below the strip that was supposed to hold it. Each is now a journey, because
+a gallery only catches what someone looks at.
+
 Every ordinary run exercises that choice; only two overlapping runs exercise what
 it is for, so `isolation.config.ts` is one more Playwright run that starts no server
 of its own and launches two real runs of the tier at once, asserting each built and
 removed a fixture directory of its own. It is a separate config deliberately: a spec
 under the tier's own `testDir` would inherit the environment recording that run's
 choice, and the runs it launched would reuse it rather than choose their own.
+
+The fixture stamps the live run's own sessions from the same wall clock its
+journal is written with, and in the shape one claude-code dispatch really
+records: a worker that talks for a couple of minutes, the lint run it makes of
+its own work happening inside that dispatch, and the judge supervising it once it
+stops. That is what the node view has to survive — sessions stamped on a fixed
+calendar date sit hours from the spans they belong to, and every dispatch is then
+plotted as a sliver too narrow to see, let alone click, while the journeys pass
+anyway because a sliver still clears the design system's minimum bar width. The
+journeys therefore read a supervising session's width as a *share of the plot*.
 
 The fixture's `dag-ui-busy` run is the scale case: one node with two hundred
 recorded sessions, one of them thirty turns long, so the browser tier proves the

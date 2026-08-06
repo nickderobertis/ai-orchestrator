@@ -765,6 +765,13 @@ export type FailureClass = z.infer<typeof failureClassSchema>;
 export type Failure = z.infer<typeof failureSchema>;
 export type NodeState = z.infer<typeof nodeStateSchema>;
 export type NodeStatus = z.infer<typeof nodeStatusSchema>;
+/**
+ * The two closed role vocabularies a dispatch is served with. Exported so a consumer
+ * can key a table on them rather than restating their members as strings — which is
+ * what makes a role added here fail to compile there instead of falling through.
+ */
+export type AgentRole = z.infer<typeof agentRoleSchema>;
+export type TransportRole = z.infer<typeof transportRoleSchema>;
 export type UsageParty = z.infer<typeof usagePartySchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type SessionLink = z.infer<typeof sessionLinkSchema>;

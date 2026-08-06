@@ -41,6 +41,12 @@ body {
   /* Unlayered, so it wins over the package base layer's bundled-font declaration. */
   font-family: var(--font-sans);
   min-width: 320px;
+  /* The shell is exactly the viewport and every region inside it scrolls itself, so
+     the document is not a scrolling surface. This is the reader-facing half of that;
+     the regions that would otherwise overflow it clip themselves, because a script
+     can scroll a document `overflow: hidden` only stops a reader from scrolling. */
+  height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(
       circle at 72% 5%,
@@ -56,6 +62,7 @@ a {
 }
 
 .app-shell {
+  --sidebar-width: 280px;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   height: 100vh;
@@ -89,7 +96,13 @@ a {
 }
 
 .run-nav {
+  /* Clipped, not merely bounded: the run list scrolls inside its own scroll area, and
+     without this its full height reached the document — which then had somewhere to
+     scroll to, and the first `scrollIntoView` in the node transcript took the whole
+     shell with it. `overflow: hidden` on the document only stops a *reader* scrolling
+     it; a script still can. */
   min-height: 0;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--sidebar);
 }
@@ -382,22 +395,24 @@ p {
 }
 
 /*
- * The node view owns the whole working area: a compact head and summary above, then
- * master and detail. The rail is a fixed reading column and the detail takes every
- * remaining pixel, which is the point — a transcript turn is unreadable in a column
- * sized for a list of timestamps.
+ * The node view owns the whole working area: a compact head and its tabs above, then
+ * the timeline pinned over the transcript it is read against. Whatever the reader
+ * opens arrives in a panel over the right two thirds, which is the point — a
+ * transcript turn is unreadable in a column sized for a list of timestamps, and the
+ * reading it was opened from should still be there when the panel closes.
  *
  * A column, not a fixed list of rows, because the view has three children on a healthy
  * node and four on one that is in trouble. `grid-template-rows: auto auto minmax(0,
- * 1fr)` over a `display: contents` tab set could not describe both: with a problem
- * banner present the *tab strip* took the flexible row and stretched, and the panel
- * below it was pushed past the bottom of the shell — where nothing scrolls, because
- * every ancestor clips. The recorded timeline of every failed, blocked, skipped and
- * cancelled node was off screen and unreachable. A column sizes each child by what it
- * is instead of by where it landed.
+ * 1fr)` could not describe both: with a problem banner present the *tab strip* took
+ * the flexible row and stretched, and the panel below it was pushed past the bottom of
+ * the shell — where nothing scrolls, because every ancestor clips. The recorded
+ * timeline of every failed, blocked, skipped and cancelled node was off screen and
+ * unreachable. A column sizes each child by what it is instead of by where it landed.
  */
 .node-view {
   display: flex;
+  /* Zeroed on both axes: a flex item sizes to its content by default, so the view
+     itself has to be allowed to shrink as well as the strip inside it. */
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -406,9 +421,10 @@ p {
 
 .node-view-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 16px;
   padding: 10px 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -487,6 +503,11 @@ p {
      hid. */
   justify-content: flex-start;
   margin: 0 20px;
+  /* Six named readings do not fit a laptop's working area; they scroll rather than
+     widening the view that holds them, and between the breakpoint and the phone they
+     wrap instead (see the media queries at the foot of this file). The design system
+     sizes the list to its own content, so the ceiling has to be stated here. */
+  min-width: 0;
   scrollbar-width: none;
 }
 
@@ -501,17 +522,167 @@ p {
 }
 
 .node-timeline-panel {
+  min-width: 0;
   min-height: 0;
 }
 
-/* `height: 100%` is what bounds the rail: master and detail divide the panel they are
-   given, and without it the region is sized by whichever of them recorded more and
-   grows past the bottom of the view instead of scrolling inside it. */
-.node-view-body {
+/* `fit-content(<share>)`, which is the one track sizing that says what this layout
+   means: the plot takes the height it needs, up to a share of the working area, and
+   the reading takes the rest. A plain `auto` row grows to the element's unconstrained
+   height, and a flex column computes its free space from that same unclamped height —
+   both leave the reading overflowing the column it sits in, which then scrolls and
+   takes the plot that is supposed to stay pinned with it. */
+.node-execution {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(380px, 44%) minmax(0, 1fr);
-  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  /* The share is what the collapsed line needs at the narrowest width the layout
+     supports, where the ten lane names wrap the legend onto a second row: this is the
+     view an operator lands on, so it is the one view that has to be whole. Being
+     `fit-content`, a plot that needs less than its share still takes only what it
+     needs, and the reading keeps the rest. */
+  grid-template-rows: fit-content(60%) minmax(0, 1fr);
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Expanding is the reader asking for the lanes, so the plot may take more of the
+   working area — still bounded, because the reading it is read against is the other
+   half of the view and must not be squeezed to nothing.
+   The share is what the whole lane vocabulary needs on the laptop the layout is
+   designed against, so that reading fits without scrolling at all. A shorter viewport
+   cannot hold ten lanes and a reading at once whatever share is named, so its region
+   scrolls; the axis is painted inside the plot's own clipping box and cannot be
+   pinned above that fold, so reaching the clock there is a scroll rather than a
+   given. Collapsing is the other way back to it, and it is one click. */
+.node-execution[data-expanded="true"] {
+  grid-template-rows: fit-content(72%) minmax(0, 1fr);
+}
+
+.node-timeline-sticky {
+  z-index: 5;
+  min-height: 0;
+  overflow: auto;
+  /* A short viewport cannot hold the expanded lanes, so this region is sometimes the
+     one thing on the page with somewhere to scroll to. A thin bar is what says so;
+     without it a plot that continues below the fold and a plot that was cut off look
+     exactly alike. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  width: 100%;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+
+.node-transcript {
+  display: grid;
+  min-height: 0;
+  overflow: auto;
+  /* The reading scrolls; the plot above it does not. Without this, a wheel that
+     reaches the end of the transcript chains into whatever ancestor can still move
+     and takes the pinned timeline with it. */
+  overscroll-behavior: contain;
+  width: 100%;
+  gap: 10px;
+  padding: 18px 24px 24px;
+  align-content: start;
+}
+
+/* Room to bring the last item up to the top of the reading, as a spacer rather than
+   as bottom padding: padding is part of the scroller's own box, and half a viewport
+   of it made the box taller than the row it sits in — which is how the column came to
+   scroll and carry the pinned plot with it. */
+.node-transcript::after {
+  content: "";
+  display: block;
+  height: 50vh;
+}
+
+.transcript-item {
+  width: min(100%, 1100px);
+  margin-inline: auto;
+  scroll-margin-top: 190px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.transcript-item[data-selected="true"] {
+  border-color: var(--primary);
+}
+.transcript-item button {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.transcript-facts {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+/* One onejudge dispatch, read as one unit: its own name above, and the agent and
+   supervising sessions inside it indented so the nesting is visible rather than
+   merely stated. */
+.transcript-dispatch {
+  display: grid;
+  width: min(100%, 1100px);
+  margin-inline: auto;
+  gap: 10px;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.transcript-dispatch > h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.transcript-dispatch .transcript-item {
+  width: auto;
+  margin-inline: 0 0;
+}
+.transcript-dispatch .transcript-item + .transcript-item {
+  margin-left: 24px;
+}
+
+.node-detail-drawer {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  right: 0;
+  width: calc((100vw - var(--sidebar-width, 260px)) * 0.6667);
+  height: 100vh;
+  border-left: 1px solid var(--border);
+  background: var(--background);
+  box-shadow: -12px 0 35px rgb(0 0 0 / 18%);
+}
+.drawer-close {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+}
+.conversation-timeline-sticky {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  padding-bottom: 10px;
+  background: var(--background);
+}
+.node-timeline-sticky [data-testid="timeline-cursor"] {
+  pointer-events: none;
 }
 
 .timeline-rail {
@@ -532,6 +703,11 @@ p {
 .timeline-detail {
   min-width: 0;
   min-height: 0;
+}
+
+.node-detail-drawer .timeline-detail {
+  height: 100%;
+  overflow: hidden;
 }
 
 .rail-list {
@@ -691,6 +867,12 @@ p {
 .detail-title h2 {
   margin: 0;
   font-size: 19px;
+}
+
+/* The panel's own close control floats over its content, so the record's heading
+   keeps a lane clear for it rather than putting its status badge underneath. */
+.node-detail-drawer .detail-title {
+  padding-right: 40px;
 }
 
 .section-heading {
@@ -858,41 +1040,56 @@ pre {
 
 @media (max-width: 900px) {
   .app-shell {
+    --sidebar-width: 220px;
     grid-template-columns: 220px minmax(0, 1fr);
-  }
-
-  /* The rail gives up width first: it lists timestamps, and the detail region is
-     what has to stay readable. */
-  .node-view-body {
-    grid-template-columns: 200px minmax(0, 1fr);
   }
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  /* Below the breakpoint the six names stop fitting one row at all, and scrolling
+     them hides whichever readings are past the edge behind an affordance nothing
+     announces. They wrap instead, which costs one row of height and leaves every
+     reading named and reachable. The design system fixes the row's height for a
+     single line, so releasing that is what lets the second one exist. Only down to
+     the phone: four rows buy the same reachability at four times the price, and the
+     rule at the foot of this file takes the scroller back there. */
+  .node-tabs > [role="tablist"] {
+    flex-wrap: wrap;
+    height: auto;
+    overflow-x: visible;
+  }
+
+  /* Each name is sized to fill the single row the design system lays them out in, so
+     on a second row every one of them is still a whole row tall and the two together
+     are twice the strip that holds them — which is how the sixth reading came to be
+     drawn below its own tab strip and clipped away entirely. Wrapped, they take the
+     height of the name they carry, plus the padding that keeps each one a target a
+     finger can hit on the layout that needs two rows in the first place. */
+  .node-tabs > [role="tablist"] > [role="tab"] {
+    height: auto;
+    padding-block: 5px;
+  }
 }
 
 /*
  * The phone. Two full columns stop fitting here: a 220px navigation beside a 390px
- * screen leaves 170px of working area, which is narrower than the master column of
- * the node view alone — so the detail region sat entirely off the side of the screen,
- * and a restored bookmark opened a record nobody could see. The navigation keeps only
- * what a truncated run id needs, and master and detail stack instead of sharing a row.
+ * screen leaves 170px of working area, which is narrower than a reading of the node's
+ * transcript needs — so what an operator opened sat off the side of the screen, and a
+ * restored bookmark opened a record nobody could see. The navigation keeps only what a
+ * truncated run id needs, and every header row is allowed to wrap.
  */
 @media (max-width: 640px) {
   .app-shell {
     grid-template-columns: 160px minmax(0, 1fr);
   }
 
-  .node-view-body {
-    grid-template-rows: minmax(0, 38%) minmax(0, 1fr);
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* Stacked, the rail's edge is the one below it. */
-  .timeline-rail {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+  /* The drawer stops being two thirds of a working area that no longer has room for
+     one: at this width the reading it carries is the whole screen, and the transcript
+     it was opened from is one Escape away. */
+  .node-detail-drawer {
+    width: 100vw;
   }
 
   .metric-grid,
@@ -926,9 +1123,26 @@ pre {
     padding: 5px 14px 6px;
   }
 
+  /* The collapsed line is the view a node opens on, and at this width its legend
+     needs five rows of the region before a single bar is drawn — more than the share
+     that holds the whole plot on a laptop. It takes three quarters here so the line
+     and its clock are whole on arrival; the reading below keeps the rest and scrolls,
+     which is what a reading does anyway. */
+  .node-execution {
+    grid-template-rows: fit-content(75%) minmax(0, 1fr);
+  }
+
+  /* Wrapping earns its extra row between this width and the breakpoint above, where
+     six names need two. Here they need four, and 170px of an 844px screen spent on
+     names is what left the compact line — the whole reason the view opens on a
+     timeline — drawn below the fold of its own region. They scroll again, which is
+     how the strip behaves at every width above the breakpoint, and every name stays
+     reachable by drag, by swipe and by the arrow keys the tab set answers. */
   .node-tabs > [role="tablist"] {
     max-width: calc(100% - 28px);
+    flex-wrap: nowrap;
     margin: 0 14px;
+    overflow-x: auto;
   }
 
   .overall-hero {

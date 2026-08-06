@@ -78,8 +78,8 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "03-node-timeline",
-    title: "Node view, timeline tab",
+    name: "03-node-collapsed",
+    title: "Node view: the collapsed line over its transcript",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=dashboard`);
       await expect(
@@ -90,11 +90,28 @@ const SURFACES: readonly Surface[] = [
           .getByRole("region", { name: "Node timeline" })
           .getByRole("button", { name: /engineer-dashboard/ }),
       ).toBeVisible();
+      await expect(
+        page
+          .getByRole("region", { name: "Node transcript" })
+          .getByRole("article")
+          .first(),
+      ).toBeVisible();
     },
   },
   {
-    name: "04-node-item-detail",
-    title: "Node view with a timeline item open",
+    name: "04-node-expanded",
+    title: "Node view: one row per category",
+    open: async (page) => {
+      await page.goto(`/?run=${runs().live}&node=dashboard`);
+      const plot = page.getByRole("region", { name: "Node timeline" });
+      await plot.getByRole("button", { name: "Expand timeline" }).click();
+      // Photographed with the lanes drawn, not with the line they replaced.
+      await expect(plot.getByRole("button", { name: /^Judge/ })).toBeVisible();
+    },
+  },
+  {
+    name: "05-node-item-detail",
+    title: "Node view with a verification open over the reading",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=foundation`);
       await page
@@ -107,13 +124,13 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "05-conversation",
-    title: "An open conversation",
+    name: "06-conversation",
+    title: "A conversation in the right panel",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=dashboard`);
       await page
-        .getByRole("region", { name: "Node timeline" })
-        .getByRole("button", { name: /engineer-dashboard/ })
+        .getByRole("region", { name: "Node transcript" })
+        .getByRole("button", { name: /^Open Judge/ })
         .click();
       await expect(
         page

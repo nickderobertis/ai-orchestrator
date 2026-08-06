@@ -22,7 +22,7 @@
         "@ai-orchestrator/dag-layout": "workspace:*",
         "@ai-orchestrator/dag-model": "workspace:*",
         "@ai-orchestrator/telemetry-client": "workspace:*",
-        "@oneharness/ui": "0.10.0",
+        "@oneharness/ui": "0.11.0",
         "@radix-ui/react-accordion": "1.2.20",
         "@radix-ui/react-avatar": "1.2.6",
         "@radix-ui/react-collapsible": "1.1.20",
@@ -419,7 +419,7 @@
 
     "@nx/workspace": ["@nx/workspace@23.1.0", "", { "dependencies": { "@nx/devkit": "23.1.0", "@zkochan/js-yaml": "0.0.7", "chalk": "^4.1.0", "enquirer": "~2.3.6", "nx": "23.1.0", "picomatch": "4.0.4", "semver": "^7.6.3", "tslib": "^2.3.0", "yargs-parser": "21.1.1" } }, "sha512-cobC05wJX7c2bWJ6s3g0IOuu6YLCEPrmpkZdX4xPEtt3GX96BsDnBpqSaqdrKhmhaa16oIERisU3AozmxmV6DA=="],
 
-    "@oneharness/ui": ["@oneharness/ui@0.10.0", "", { "peerDependencies": { "@radix-ui/react-accordion": ">=1.2.0 <2", "@radix-ui/react-avatar": ">=1.2.0 <2", "@radix-ui/react-collapsible": ">=1.1.0 <2", "@radix-ui/react-dialog": ">=1.1.0 <2", "@radix-ui/react-label": ">=2.1.0 <3", "@radix-ui/react-popover": ">=1.1.0 <2", "@radix-ui/react-scroll-area": ">=1.2.0 <2", "@radix-ui/react-select": ">=2.2.0 <3", "@radix-ui/react-separator": ">=1.1.0 <2", "@radix-ui/react-slot": ">=1.2.0 <2", "@radix-ui/react-tabs": ">=1.1.0 <2", "@radix-ui/react-tooltip": ">=1.2.0 <2", "class-variance-authority": ">=0.7.0 <1", "clsx": ">=2.1.0 <3", "lucide-react": ">=0.468.0 <2", "react": ">=18.3.0 <20", "react-dom": ">=18.3.0 <20", "react-markdown": ">=10.0.0 <11", "rehype-highlight": ">=7.0.0 <8", "tailwind-merge": ">=3.0.0 <4", "tailwindcss": ">=4.0.0 <5", "tw-animate-css": ">=1.3.0 <2" } }, "sha512-u5V726a9Jmpcc/3P7aFnmrptlrVU8QKWwFjry1ZI2ty05j/BF5K3UFIpNm9Euv+bYLDvT8kgenqC/GDe9gLsaA=="],
+    "@oneharness/ui": ["@oneharness/ui@0.11.0", "", { "peerDependencies": { "@radix-ui/react-accordion": ">=1.2.0 <2", "@radix-ui/react-avatar": ">=1.2.0 <2", "@radix-ui/react-collapsible": ">=1.1.0 <2", "@radix-ui/react-dialog": ">=1.1.0 <2", "@radix-ui/react-label": ">=2.1.0 <3", "@radix-ui/react-popover": ">=1.1.0 <2", "@radix-ui/react-scroll-area": ">=1.2.0 <2", "@radix-ui/react-select": ">=2.2.0 <3", "@radix-ui/react-separator": ">=1.1.0 <2", "@radix-ui/react-slot": ">=1.2.0 <2", "@radix-ui/react-tabs": ">=1.1.0 <2", "@radix-ui/react-tooltip": ">=1.2.0 <2", "class-variance-authority": ">=0.7.0 <1", "clsx": ">=2.1.0 <3", "lucide-react": ">=0.468.0 <2", "react": ">=18.3.0 <20", "react-dom": ">=18.3.0 <20", "react-markdown": ">=10.0.0 <11", "rehype-highlight": ">=7.0.0 <8", "tailwind-merge": ">=3.0.0 <4", "tailwindcss": ">=4.0.0 <5", "tw-animate-css": ">=1.3.0 <2" } }, "sha512-JYEYYAZxfziRHlsFKwwkRAcQ/tFvKJHy02dVzXw5nK+kes12Szuy/KkZUI2HA75SCwWY9R+za5bkuKXtnFmvXQ=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.139.0", "", {}, "sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw=="],
 

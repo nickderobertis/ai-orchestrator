@@ -21,6 +21,6 @@ export default defineConfig({
   ...e2eConfig,
   testMatch: "**/*.screens.spec.ts",
   testIgnore: [],
-  // Five viewports across five surfaces, each waiting for real reads to settle.
+  // Five viewports across six surfaces, each waiting for real reads to settle.
   timeout: 120_000,
 });

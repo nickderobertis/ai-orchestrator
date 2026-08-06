@@ -26,9 +26,11 @@ const navigation = (page: Page): Locator =>
 const navigationViewport = (page: Page): Locator =>
   navigation(page).locator("[data-radix-scroll-area-viewport]");
 
-/** The node view's master rail and its detail region. */
-const rail = (page: Page): Locator =>
+/** The node view's pinned plot, the reading below it, and whatever is opened over it. */
+const timeline = (page: Page): Locator =>
   page.getByRole("region", { name: "Node timeline" });
+const transcript = (page: Page): Locator =>
+  page.getByRole("region", { name: "Node transcript" });
 const itemDetail = (page: Page): Locator =>
   page.getByRole("region", { name: "Timeline item detail" });
 
@@ -147,8 +149,8 @@ test("keeps a node the run reported a problem on readable", async ({
 
   const panel = page.locator(".node-timeline-panel");
   await expect(panel).toBeInViewport({ ratio: 1 });
-  await expect(rail(page)).toBeInViewport({ ratio: 1 });
-  await expect(itemDetail(page)).toBeInViewport({ ratio: 1 });
+  await expect(timeline(page)).toBeInViewport({ ratio: 1 });
+  await expect(transcript(page)).toBeInViewport({ ratio: 1 });
   // The panel begins where the tab strip ends rather than a stretched row below it.
   const tabs = await page.getByRole("tab", { name: "Timeline" }).boundingBox();
   const opened = await panel.boundingBox();
@@ -156,7 +158,7 @@ test("keeps a node the run reported a problem on readable", async ({
   await expectThePageItselfDoesNotScroll(page);
 
   // What it records is reachable, which is the whole point of the region being there.
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /missing verification log/ })
     .click();
   await expect(itemDetail(page)).toContainText("Verification record");
@@ -170,7 +172,7 @@ test("walks graph to node to timeline item and back, restoring each selection", 
   await expect(
     page.getByRole("region", { name: "Timeline for dashboard" }),
   ).toBeVisible();
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
   await expect(itemDetail(page)).toContainText(
@@ -179,15 +181,15 @@ test("walks graph to node to timeline item and back, restoring each selection", 
   await expect(page).toHaveURL(/event=dispatch-worker-session/);
 
   // Back once leaves the item and keeps the node: the reader stepped out of one
-  // moment of this node's execution, not out of the node.
+  // moment of this node's execution, not out of the node. The panel that carried it
+  // is gone, and the reading it was opened from is what is left on screen.
   await page.goBack();
   await expect(page).not.toHaveURL(/event=/);
   await expect(
     page.getByRole("region", { name: "Timeline for dashboard" }),
   ).toBeVisible();
-  await expect(itemDetail(page)).toContainText(
-    "Select an item in the timeline to read what it recorded.",
-  );
+  await expect(itemDetail(page)).toHaveCount(0);
+  await expect(transcript(page)).toBeVisible();
 
   // Back again leaves the node for the graph it was opened from.
   await page.goBack();
@@ -210,9 +212,10 @@ test("walks graph to node to timeline item and back, restoring each selection", 
 
 test("restores a deep-linked moment at a narrow viewport", async ({ page }) => {
   // The address names a run, a node and one recorded moment of it. At this width the
-  // shell's two columns leave the working area narrower than the node view's master
-  // column alone, and the detail region — the thing the address was pointing at — used
-  // to open entirely off the side of a screen that cannot scroll sideways.
+  // shell's two columns leave a working area 230px wide, and two thirds of that is
+  // narrower than any turn can be read in — so the panel the address was pointing at
+  // takes the screen here rather than a share of it, and the reading it covers is one
+  // Escape away.
   await open(
     page,
     PHONE,
@@ -225,7 +228,13 @@ test("restores a deep-linked moment at a narrow viewport", async ({ page }) => {
     "Implementing the dashboard now",
   );
   await expect(itemDetail(page)).toBeInViewport({ ratio: 1 });
-  await expect(rail(page)).toBeInViewport({ ratio: 1 });
+  expect(
+    (await page.getByLabel("Item detail panel").boundingBox())?.width,
+  ).toBe(PHONE.width);
+  await page.keyboard.press("Escape");
+  await expect(itemDetail(page)).toHaveCount(0);
+  await expect(timeline(page)).toBeInViewport({ ratio: 1 });
+  await expect(transcript(page)).toBeInViewport({ ratio: 1 });
   // Every tab of the node is reachable too: the strip scrolls rather than setting a
   // width the region around it cannot afford.
   await expect(page.getByRole("tab", { name: "Timeline" })).toBeInViewport();
@@ -239,13 +248,18 @@ for (const size of [DESKTOP, PHONE]) {
     page,
   }) => {
     await open(page, size, `/?run=${runs().live}&node=dashboard`);
-    await rail(page)
+    await timeline(page)
       .getByRole("button", { name: /engineer-dashboard/ })
       .click();
     await expect(itemDetail(page)).toContainText(
       "Implementing the dashboard now",
     );
 
+    // Escape closes what is open over the reading before it leaves the reading: one
+    // press puts the panel away, the next returns to the graph the node was opened
+    // from.
+    await page.keyboard.press("Escape");
+    await expect(itemDetail(page)).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(page.locator(".dag-node.state-running")).toContainText(
       "dashboard",

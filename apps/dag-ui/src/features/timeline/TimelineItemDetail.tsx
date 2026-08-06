@@ -1,4 +1,5 @@
 import type {
+  AgentRole,
   DagConversation,
   TimelineReference,
 } from "@ai-orchestrator/dag-model";
@@ -11,11 +12,13 @@ import {
   Button,
   Card,
   CardContent,
+  ConversationTimeline,
   ScrollArea,
   Separator,
   Skeleton,
   StatusBadge,
   TurnCard,
+  useTimelineScrollSync,
 } from "@oneharness/ui";
 import { ExternalLink, ListTree, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -23,7 +26,11 @@ import { Timestamp } from "../../lib/Timestamp";
 import { formatDuration } from "../../lib/time";
 import type { NodeView } from "../runs/run-model";
 import { PAGE_SIZE } from "./TimelineRail";
-import type { TimelineRow } from "./timeline-model";
+import {
+  dispatchRoleLabel,
+  LLMLINT_TRANSPORT,
+  type TimelineRow,
+} from "./timeline-model";
 import { useConversation } from "./useConversation";
 
 /**
@@ -68,10 +75,12 @@ export function TimelineItemDetail({
             <>
               <header className="detail-title">
                 <div>
+                  {/* The category the operator already read in the lane and the
+                      transcript, never the served identifier behind it. */}
                   <Badge className="mb-1" variant="outline">
-                    {row.kind}
+                    {row.displayKind}
                   </Badge>
-                  <h2>{row.label || row.kind}</h2>
+                  <h2>{row.displayLabel}</h2>
                   <p className="detail-when">
                     <Timestamp at={row.startedAt} />
                     {row.durationMs !== null &&
@@ -143,6 +152,14 @@ function Session({
   readonly transcript: Transcript;
 }) {
   const [visible, setVisible] = useState(PAGE_SIZE);
+  const availableTurns = transcript.conversation?.conversation.turns ?? [];
+  const turns: readonly Turn[] =
+    row.rowKind === "event"
+      ? availableTurns.filter(({ id }) => id === row.event.id)
+      : availableTurns;
+  const sync = useTimelineScrollSync(
+    turns.map((turn) => ({ id: turn.id, time: Date.parse(turn.timestamp) })),
+  );
   if (transcript.loading)
     return (
       <div aria-live="polite" className="loading-inline">
@@ -163,10 +180,7 @@ function Session({
       </Alert>
     );
   const { conversation, attribution } = transcript.conversation;
-  const turns: readonly Turn[] =
-    row.rowKind === "event"
-      ? conversation.turns.filter(({ id }) => id === row.event.id)
-      : conversation.turns;
+  const author = roleLabel(attribution.agentRole, attribution.transportRole);
   // The turns sit on the design system's own card surface rather than straight on
   // the page: `TurnCard` paints its own bubbles and nothing behind them.
   return (
@@ -174,8 +188,12 @@ function Session({
       <CardContent className="px-3">
         <header className="transcript-header">
           <div>
+            {/* The dispatch first, then this session's own role inside it: an
+                operator reading a judge transcript has to be able to see which
+                dispatch it supervised without leaving the panel. */}
             <p className="eyebrow">
-              {roleLabel(attribution.agentRole, attribution.transportRole)}
+              {row.dispatch === undefined ? "" : `${row.dispatch.label} · `}
+              {author}
               {attribution.persona ? ` · ${attribution.persona}` : ""}
             </p>
             <h4>{conversation.name}</h4>
@@ -183,6 +201,13 @@ function Session({
           <StatusBadge state={conversation.state} />
         </header>
         <Separator className="my-2.5" />
+        <div className="conversation-timeline-sticky">
+          <ConversationTimeline
+            cursor={sync.cursor}
+            onSelectTurn={sync.scrollTo}
+            turns={[...turns]}
+          />
+        </div>
         {/* llmlint: ignore[changed_behavior_has_e2e] the same unproducible state as
             above, from the other side: a served timeline names this turn, so only a
             history store rewritten between the two reads drops it. */}
@@ -192,9 +217,16 @@ function Session({
           </p>
         ) : (
           <>
-            {turns.slice(0, visible).map((turn) => (
-              <TurnCard key={turn.id} turn={turn} />
-            ))}
+            <div ref={sync.containerRef}>
+              {turns.slice(0, visible).map((turn) => (
+                <div
+                  key={turn.id}
+                  ref={(element) => sync.register(turn.id, element)}
+                >
+                  <TurnCard author={{ label: author }} turn={turn} />
+                </div>
+              ))}
+            </div>
             {turns.length > visible && (
               <Button
                 onClick={() => setVisible(visible + PAGE_SIZE)}
@@ -483,29 +515,23 @@ function isPublication(
 }
 
 type Attribution = DagConversation["attribution"];
-type AgentRole = Attribution["agentRole"];
 
 /**
- * Every semantic role the contract's closed `agentRole` enum admits.
+ * What this session is called, from the lane vocabulary that names it in the plot.
  *
- * Keyed by that enum rather than by `string`: the vocabulary is reconciled across
- * `orchestrator/labels.py`, the `dag-model` enum and the design contract by
- * `scripts/check-dag-state-contract.py`, so a role added there reaches this record
- * and fails to compile until it is given a word — rather than rendering as its own
- * raw identifier.
+ * The word is not chosen here: `dispatchRoleLabel` derives it from the lane the role
+ * is plotted in, so an opened conversation cannot head itself with one word while the
+ * segment that opened it carries another. The vocabulary is reconciled against
+ * `orchestrator/labels.py` by `scripts/check-dag-state-contract.py`, and it is keyed
+ * on the contract's closed `agentRole` enum, so a role added there fails to compile
+ * until it has been given a lane rather than rendering as its raw identifier.
  */
-const ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
-  worker: "Worker",
-  judge: "Judge",
-  "check-in": "Check-in",
-  "pr-author": "PR author",
-  orchestrator: "Orchestrator",
-};
-
 function roleLabel(
   agentRole: AgentRole,
   transportRole: Attribution["transportRole"],
 ): string {
   // Nested lint work is grouped under its worker, so its transport is what names it.
-  return transportRole === "llmlint" ? "Lint" : ROLE_LABELS[agentRole];
+  return dispatchRoleLabel(
+    transportRole === LLMLINT_TRANSPORT ? LLMLINT_TRANSPORT : agentRole,
+  );
 }
