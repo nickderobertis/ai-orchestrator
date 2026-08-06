@@ -37,6 +37,7 @@ from .provider_health import failure_rollups
 from .provider_health import probe as probe_provider_health
 from .provider_health import render as render_provider_health
 from .registry import Registry, RegistryError
+from .supervisory import driver_indicator
 from .telemetry import collect_run
 from .workspace import IdentityKey, RepositoryType, Workflow
 
@@ -652,6 +653,13 @@ def main(argv: list[str] | None = None) -> int:
                 parked = parked_indicator(run_dir, parked_after=args.parked_after)
                 if parked is not None:
                     indicators.append(f"{run_dir.name}: {parked}")
+                # The tier above the nodes: whether the process driving this run still
+                # holds its pid, which part of its loop the run's own state places it
+                # in, and how long since it last made a model request. Reported for
+                # every unfinished launch, including one already named dead above —
+                # the phase and the request age are what say *when* it stopped.
+                if (driver := driver_indicator(run_dir)) is not None:
+                    indicators.append(f"{run_dir.name}: {driver}")
                 stopped = dead is not None or parked is not None
                 # A second live orchestrator on a shared identity is the one piece of
                 # machine state this view could not previously report: it belongs to

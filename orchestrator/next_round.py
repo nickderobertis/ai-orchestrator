@@ -202,6 +202,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     from .goals import concurrent_indicator
     from .launch import UNKNOWN_OWNER, caller_identity, read_run_owner
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
+    from .supervisory import driver_indicator
 
     parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
@@ -287,6 +288,16 @@ def main_runs(argv: list[str] | None = None) -> int:
         for path in run_dirs
         if (indicator := run_indicator(path.name, observed)) is not None
     }
+    # And one layer above those dispatches: the process driving the run at all. A row
+    # that says ACTIVE says a pid was recorded; this says whether that pid is still
+    # there, which part of its loop the run's state places it in, and how long since
+    # its last model request — the three things a planner wondering why nothing is
+    # settling was previously left to infer.
+    driver = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := driver_indicator(path)) is not None
+    }
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
@@ -299,15 +310,21 @@ def main_runs(argv: list[str] | None = None) -> int:
         # is exactly the misreading that let a dead run look like live work.
         if run_id in abandoned:
             print(f"! {run_id}  {owner}  {abandoned[run_id]}")
+            if run_id in driver:
+                print(f"    {driver[run_id]}")
             continue
         if run_id in parked:
             print(f"! {run_id}  {owner}  {parked[run_id]}")
+            if run_id in driver:
+                print(f"    {driver[run_id]}")
             continue
         try:
             waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
         except (ChannelError, ConfigError, OSError):
             waiting = None
         print(f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})")
+        if run_id in driver:
+            print(f"    {driver[run_id]}")
         if run_id in live:
             print(f"    {live[run_id]}")
         if run_id in unread:
@@ -329,6 +346,8 @@ def main_runs(argv: list[str] | None = None) -> int:
                 waiting = None
         owner = f"[{ownership.get(run_id, 'unknown')}]"
         print(f"{marker}{run_id}  {owner}  round-{number:02d}  ({waiting or summary})")
+        if run_id in driver:
+            print(f"    {driver[run_id]}")
         if run_id in abandoned:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:

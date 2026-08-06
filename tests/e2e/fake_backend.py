@@ -327,11 +327,25 @@ def main() -> int:
                     and not stale.exists()
                     and (channel_dir / "heartbeat-surface.json").is_file()
                 )
+                # The upstream defect this repository captures around: a codex turn
+                # whose harness cannot complete its history write fails the write, so
+                # the session is simply absent from history. Forced once, on the
+                # side of the conversation that runs the supervisory tier.
+                history_value = os.environ.get("FAKE_CHECK_IN_HISTORY_WRITE_FAILS")
+                history_fails = Path(history_value) if history_value else None
                 if fail_once is not None and not fail_once.exists():
                     fail_once.write_text("failed\n", encoding="utf-8")
                     with attempts.open("a", encoding="utf-8") as stream:
                         stream.write("failed\n")
                     sys.stderr.write("fake_backend: forced first check-in failure\n")
+                    return 1
+                if history_fails is not None and not history_fails.exists():
+                    history_fails.write_text("history-write-failed\n", encoding="utf-8")
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("history-write-failed\n")
+                    sys.stderr.write(
+                        "could not write history: new history run lacks complete v1.0 telemetry\n"
+                    )
                     return 1
                 else:
                     with attempts.open("a", encoding="utf-8") as stream:

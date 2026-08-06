@@ -456,6 +456,14 @@ load averages with that same attribution, and **`just host`** is the whole-host
 view — per live dispatch, its owning session, run/node, role, turn age, and load
 contribution. Miscounting live dispatches from `ps`, and missing a judge turn wedged
 for nearly two hours, are what these replace.
+They also report the tier *above* those dispatches: one driver line per unfinished
+launch naming whether the orchestrator's recorded pid is still there, which part of
+its loop the run's own state places it in, and how long since its last model request.
+A driver this host has proved is gone reads `DRIVER DEAD … nothing is driving this
+run` — distinct from `PARKED`, which is a launch that still holds its pid. The same
+tier is served as run-scope timeline spans, from a bounded local capture when the
+harness refused to write its history; see [Seeing the supervisory
+tier](docs/telemetry.md#seeing-the-supervisory-tier).
 **`just recoverable`** is the other half of that: every preserved-but-unpublished
 branch across the registered identities, where it lives, why its workstream stopped,
 whether it carries an incomplete-step marker, and the exact command that lands it —

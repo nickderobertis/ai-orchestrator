@@ -41,6 +41,7 @@ from .runs import (
     round_appears_in_flight,
     validate_run_id,
 )
+from .supervisory import record_turn
 
 
 class ChannelError(Exception):
@@ -1353,6 +1354,15 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
                 print(json.dumps({"value": maximum, "reason": "live planner completed the run"}))
             return 0
         surfaced = _surface(request, run_id, round_number)
+        # One orchestrator turn just ended: this relay is invoked once per turn and is
+        # the only in-process view of one, so it is where the driver's bounded local
+        # capture gets its transcript. Recorded before the planner is asked anything,
+        # because a planner who never answers must not cost the turn its record.
+        record_turn(
+            channel_dir.parent,
+            f"orchestrator-{run_id}",
+            str(surfaced["surface"].get("message", "")),
+        )
         pending_path = channel_dir / "planner-pending.json"
         deferred_blocker = channel_dir / "deferred-blocker.json"
         if deferred_blocker.is_file():
