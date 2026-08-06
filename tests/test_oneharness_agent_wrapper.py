@@ -1149,6 +1149,172 @@ def test_a_wrapper_awaiting_recovery_consumes_no_cpu_while_it_waits(tmp_path: Pa
     assert not (status_dir / "agent.done").exists()
 
 
+#: What the parked wrapper asks for in one nap, so a nap that came from the park is
+#: told apart from the 0.5s ones its pre-park poll asks for through the same stub.
+_PARKED_NAP_SECONDS = 3600
+#: What the stub waits instead, compressing an hour by a factor of 360000 while
+#: still costing a fork. Returning outright compressed it further and turned this
+#: test into the busy loop the wrapper was fixed to stop being: a few thousand
+#: forks a second, on a host whose every other dispatch wants the same cores.
+_STUBBED_NAP_SECONDS = 0.01
+#: Naps watched, each one a re-entry the wrapper had no obligation to make.
+_PARKED_NAPS_WATCHED = 25
+#: Real time watched alongside them, which the stub's compressed clock cannot supply.
+_PARKED_CLOCK_WINDOW_SECONDS = 1.5
+
+
+def test_a_parked_wrapper_stays_parked_across_repeated_naps_and_a_clock_window(
+    tmp_path: Path,
+) -> None:
+    """The real script, driven end to end, parks and keeps re-entering its wait.
+
+    A single long nap costs no CPU either, so the CPU measurement above cannot tell
+    it from a loop of them, and a wrapper that fell out of its wait would hand the
+    dispatcher a turn reporting success markers it never wrote. Stubbing `sleep` to
+    return almost at once makes each next iteration observable but compresses the
+    clock, so a bound on how many times it sleeps and a bound on the clock surface
+    differently: the first as the wrapper leaving mid-nap, the second only by being
+    outlasted in real time. Both are watched, each reaching the bounds below its own
+    size — the sizes are small deliberately, because the test below rules out a
+    bound of any size by reading the loop, and this one need only prove the shape it
+    reads is what the wrapper really does.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-parked-loop" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
+    # This process is the only one that runs these stubs, so user execute is the
+    # whole grant they need.
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    naps = tmp_path / "naps"
+    sleep_stub = bin_dir / "sleep"
+    # Recorded before waiting, so a nap counts the moment the wrapper asks for it.
+    # `command -p` reaches the real sleep rather than this stub, which is first on
+    # the wrapper's PATH and would otherwise call itself.
+    sleep_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$1" >>{shlex.quote(str(naps))}\n'
+        f"command -p sleep {_STUBBED_NAP_SECONDS}\n",
+        encoding="utf-8",
+    )
+    sleep_stub.chmod(sleep_stub.stat().st_mode | stat.S_IXUSR)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            patience = time.monotonic() + 30
+            parked_naps: list[str] = []
+            parked_since: float | None = None
+            while True:
+                parked_for = 0.0 if parked_since is None else time.monotonic() - parked_since
+                assert process.poll() is None, (
+                    f"the wrapper left its wait after {len(parked_naps)} naps and "
+                    f"{parked_for:.1f}s parked, instead of awaiting recovery; the parked "
+                    "wait has an exit condition of its own"
+                )
+                assert time.monotonic() < patience, (
+                    f"the parked wrapper napped only {len(parked_naps)} of "
+                    f"{_PARKED_NAPS_WATCHED} times in 30s; it is "
+                    "not re-entering its wait"
+                )
+                time.sleep(0.02)
+                recorded = naps.read_text(encoding="utf-8") if naps.exists() else ""
+                parked_naps = [
+                    line for line in recorded.splitlines() if line == str(_PARKED_NAP_SECONDS)
+                ]
+                if parked_since is None:
+                    if not parked_naps:
+                        continue
+                    parked_since = time.monotonic()
+                elif (
+                    len(parked_naps) >= _PARKED_NAPS_WATCHED
+                    and parked_for >= _PARKED_CLOCK_WINDOW_SECONDS
+                ):
+                    break
+            still_waiting = process.poll() is None
+        finally:
+            process.kill()
+
+    assert still_waiting, "the wrapper left its wait once the observations were over"
+    assert (status_dir / "agent.failed").exists()
+    assert not (status_dir / "agent.done").exists()
+
+
+#: The loop headers that cannot decide to stop. Anything else — `while [ ... ]`,
+#: `until`, `for` over a finite list — is a termination condition by construction.
+_UNCONDITIONAL_LOOP_HEADERS = ("while :; do", "while true; do")
+
+
+def _parked_wait_source() -> list[str]:
+    """What the wrapper runs after recording a failed turn: code lines, no comments.
+
+    The failure branch's last act is the park, so the block is everything between
+    the marker write and the branch's own `fi`. Both anchors are unique and are
+    asserted to be, because a scan that silently matched nothing would pass.
+    """
+    lines = WRAPPER.read_text(encoding="utf-8").splitlines()
+    marks = [
+        i for i, line in enumerate(lines) if line.strip().startswith("write_status agent.failed")
+    ]
+    assert len(marks) == 1, f"expected one agent.failed write to anchor the park, got {len(marks)}"
+    closes = [i for i in range(marks[0], len(lines)) if lines[i] == "fi"]
+    assert closes, "the failure branch that parks the wrapper is never closed"
+    return [
+        stripped
+        for line in lines[marks[0] + 1 : closes[0]]
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    ]
+
+
+def test_the_parked_wait_is_written_as_a_loop_with_no_termination_condition() -> None:
+    """No bound at all, which is the half no finite observation can reach.
+
+    The behavioural test above outlasts a park that counts its naps or watches the
+    clock, but only up to its own sizes: an hour-long deadline still passes it, and
+    waiting one out is not something a suite can do. So the loop is also read. The
+    shape required is the narrowest one that cannot stop on its own — an
+    unconditional header, one `sleep` inside it, and nothing after it in the branch
+    — which is what rejects a clock check, a `timeout`, a counter, or a `break`
+    without needing to enumerate them.
+
+    This is a source assertion, so it constrains how the park is written and not
+    only what it does: a legitimate rewrite into another shape fails here and should
+    update this test alongside it.
+    """
+    # llmlint: ignore[tests_assert_real_behavior] The property is the absence of a
+    # termination condition at any size, and no finite observation reaches an
+    # hour-long bound — the loop's own source is the only evidence there is. The
+    # behavioural test above asserts everything about this park that can be observed.
+    block = _parked_wait_source()
+
+    assert block[0] in _UNCONDITIONAL_LOOP_HEADERS, (
+        f"the parked wait opens with {block[0]!r}; it must be one of "
+        f"{list(_UNCONDITIONAL_LOOP_HEADERS)}, because every other header is a "
+        "condition the wait can stop on"
+    )
+    assert block[-1] == "done", (
+        f"the parked wait ends with {block[-1]!r} rather than closing its loop; "
+        "nothing may follow the park in the failure branch, or the wrapper has a "
+        "way back out to the turn's own exit"
+    )
+    body = block[1:-1]
+    assert len(body) == 1 and re.fullmatch(r"sleep \S+", body[0]), (
+        f"the parked wait's body is {body}; it must be a single sleep, so that no "
+        "clock check, counter, or break can end the wait the dispatcher is meant to"
+    )
+
+
 def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -> None:
     """An OOM kill and an ordinary non-zero exit must not read the same."""
     status_dir = tmp_path / "orchestrator-watchdog-4" / "agent"
