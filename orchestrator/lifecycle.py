@@ -101,13 +101,13 @@ from .verify import (
 )
 from .workspace import (
     CACHE_ENV,
-    DEFAULT_WORKTREE_ROOT,
     IdentityKey,
     RepoRef,
     RepositoryType,
     Workflow,
     Workspace,
     WorkspaceError,
+    default_worktree_root,
     normalize_repo,
 )
 
@@ -3202,7 +3202,7 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=DEFAULT_WORKTREE_ROOT,
+        default=default_worktree_root(),
         help="root directory for isolated task worktrees",
     )
     parser.add_argument("--merge-policy", choices=MERGE_POLICIES, default=None)
