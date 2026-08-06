@@ -291,6 +291,22 @@ telemetry-server *args:
 status *args:
     @uv run orchestrator-status {{args}}
 
+# Show this host's load averages and every live dispatch producing it: owning
+# session, run/node, the role and harness serving its current turn, that turn's age,
+# and its load contribution. Read-only, and proven from the dispatch ownership
+# registry rather than from process names.
+# llmlint: ignore[tool_output_is_signal] the requested per-dispatch host inventory is this viewing command's product.
+host *args:
+    @uv run orchestrator-host "$@"
+
+# List every preserved-but-unpublished branch across the registered repository
+# identities, why its workstream stopped, and the exact command that lands it —
+# `just repo-recover` for an incomplete-provenance branch, `just integrate` for a
+# complete one. Read-only and safe to run while dispatches are live.
+# llmlint: ignore[tool_output_is_signal] the requested recovery inventory is this viewing command's product.
+recoverable *args:
+    @uv run orchestrator-recoverable "$@"
+
 # Scaffold a new persona: `just new-persona <name>`.
 new-persona *args:
     @uv run orchestrator-new-persona "$@"

@@ -107,6 +107,7 @@ from .workspace import (
     Workflow,
     Workspace,
     WorkspaceError,
+    default_worktree_root,
     normalize_repo,
 )
 
@@ -3201,7 +3202,7 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.home() / ".ai-orchestrator" / "worktrees",
+        default=default_worktree_root(),
         help="root directory for isolated task worktrees",
     )
     parser.add_argument("--merge-policy", choices=MERGE_POLICIES, default=None)

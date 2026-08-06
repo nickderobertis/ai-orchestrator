@@ -559,6 +559,8 @@ def test_dirty_retained_recovery_passes_the_gate_and_publishes_one_squash(
     assert len(gitops.log_messages(canonical, before, "main")) == 1
 
 
+# Scans the shared retained-worktree root concurrent lifecycles mutate.
+@pytest.mark.single_threaded
 def test_recovery_default_root_finds_the_lifecycle_retained_worktree(
     tmp_path: Path, bare_origin: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:

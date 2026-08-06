@@ -996,6 +996,67 @@ pass; only follow mode encodes completion in its status. A completed graph reads
 the same either way (`graph complete`), because that detail is about the run and
 not about how it was being watched. Exit 2 is an unresolvable run or bad input.
 
+### What is running right now, and on what
+
+`just runs` and `just status` answer from the run ledger, and the ledger stops at the
+node: it records that a dispatch started and that it settled, and between those two a
+turn on this host runs for 600-2000 seconds. A planner needing more than that had one
+tool — matching `ps` output by pattern — which is how six live dispatches were counted
+where there were two and a judge turn wedged for 1h54m was missed entirely.
+
+`orchestrator/dispatches.py` is the answer that does not guess, and its candidate set
+is the ownership registry the scratch sweep already trusts: the
+`ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into the environment of
+everything a dispatch starts, paired with the owner lock a live dispatcher holds for
+that scratch directory's whole scope. A process counts as this harness's only when
+both agree. Command lines are read only *after* that, to tell one turn from another
+inside a dispatch that owns them all — an agent turn, its judge, and an llmlint tier
+are three invocations of one harness under one stamp, distinguished by the config each
+names. The harness identity serving a turn is read the same way: oneharness selects it
+by falling through a chain, and the credential directory it hands the provider
+(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) is where that selection becomes observable.
+
+What that buys each view:
+
+* **`just status <run-id>`** adds the live role, harness, and turn age to each
+  in-flight node, flags a turn past a generous multiple of its role's typical duration
+  as `ANOMALOUS` (a judge's threshold is fifteen minutes; a worker's is over an hour),
+  and flags a node the ledger records as running that no live dispatch is driving as
+  `UNDRIVEN`. That label is deliberately not `parked`: this vocabulary already has a
+  `parked` node state and it means the opposite — a node the planner idled with
+  `cancel`, whose work is preserved and which `requeue` resumes. Its header carries the host's load averages with the runs and nodes
+  producing them, so a slow host names its cause instead of being reconstructed later.
+* **`just runs`** carries the live/parked distinction per row: how many dispatches
+  carry that run's stamp, or that none do.
+* **`just host`** is the whole-host view, across every planner sharing it: per live
+  dispatch, its owning session, run/node, role, turn age, and load contribution.
+
+Both flags are *positive* claims and are made only where they can be proven. The
+node-level `UNDRIVEN` needs two things beyond "the registry saw nothing for this node":
+the registry must have seen at least one live dispatch, which shows this reader is
+looking at the scratch root the dispatchers write into, and the run's launch must be
+observably working, which distinguishes one node losing its dispatch from the whole
+run stopping — the second is already reported one level up by
+`orchestrator/liveness.py`. Every other uncertainty resolves toward "still working",
+and a view that can observe nothing reports exactly what it reported before any of
+this existed.
+
+### Preserved work that has not been published
+
+`just recoverable` lists every branch across the registered repository identities that
+holds commits no `origin` ref has — from a registered checkout or from a retained
+lifecycle run clone, which is the one place a killed dispatch's branch can be. Each
+row names where the branch lives, its tip and age, why the workstream stopped (from
+the round result that named it), whether it carries an incomplete-step provenance
+marker, and the exact command that lands it: `just repo-recover` for incomplete
+provenance, `just integrate` for a complete branch. When the publication checkout does
+not have the branch, the suggested command starts with the ref-only fetch that brings
+it there — aiming `integrate`, which reads local branches only, at a branch the
+canonical checkout never had is the invocation this exists to stop. A branch that
+merged, or that its base has since reached, drops out on that evidence rather than by
+a name-shaped guess. The view opens repositories to read and writes nothing, so it is
+safe beside live dispatches.
+
 ### When an attach returns
 
 `--until-settled` is the third ending, and the one the foreground `just
