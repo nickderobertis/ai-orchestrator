@@ -16,7 +16,7 @@
       "inputs": ["wholeWorkspace"]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest -m 'not reads_docs and not reads_recipes and not single_threaded' -n 4 --dist load --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest -m 'not reads_docs and not reads_recipes and not single_threaded' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
       "options": { "cwd": "." },
       "outputs": ["{workspaceRoot}/.coverage.parallel"],
       "inputs": ["codeWorkspace"]
@@ -33,12 +33,12 @@
       "dependsOn": ["test", "test-serial"]
     },
     "test-docs": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_docs --no-cov -n 4 --dist load",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_docs --no-cov -n 4 --dist loadgroup",
       "options": { "cwd": "." },
       "inputs": ["wholeWorkspace"]
     },
     "test-recipes": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_recipes --no-cov -n 4 --dist load",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_recipes --no-cov -n 4 --dist loadgroup",
       "options": { "cwd": "." },
       "inputs": ["recipeWorkspace"]
     },

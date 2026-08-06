@@ -30,6 +30,7 @@
       "{workspaceRoot}/tests/leak_reaper.py",
       "{workspaceRoot}/tests/nx_inputs.py",
       "{workspaceRoot}/tests/process_tree.py",
+      "{workspaceRoot}/tests/scheduling.py",
       "{workspaceRoot}/tests/e2e/nx_workspace.py",
       "{workspaceRoot}/tests/e2e/waits.py",
       "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py"

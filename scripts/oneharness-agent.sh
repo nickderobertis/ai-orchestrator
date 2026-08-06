@@ -499,8 +499,12 @@ if [ "$exit_code" -ne 0 ]; then
         write_status agent.failure "agent harness exited $exit_code$capture"
     fi
     write_status agent.failed "$worker_pid"
+    # Stay alive so the dispatcher can observe this failure and recover the tree it
+    # is about to tear down — but do nothing while waiting. The empty loop this
+    # replaces pinned a whole core at 100% for the entire recovery window, on a host
+    # whose every other dispatch was competing for the same cores.
     while :; do
-        :
+        sleep 3600
     done
 fi
 write_status agent.done "$worker_pid"

@@ -84,7 +84,7 @@ test *nx_args:
 # is the tier that owns them.
 test-e2e:
     # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
-    @uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist load
+    @uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist loadgroup
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:

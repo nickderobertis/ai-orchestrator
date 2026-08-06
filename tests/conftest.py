@@ -41,6 +41,11 @@ from nx_inputs import (
     repository_relative,
 )
 
+# Re-exported for the same reason, and for one more: this hook has to run before
+# xdist's implementation of the same hook, so it belongs to a plugin the suite loads
+# rather than to a fixture module.
+from scheduling import pytest_collection_modifyitems  # noqa: F401
+
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops, provider_health
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX

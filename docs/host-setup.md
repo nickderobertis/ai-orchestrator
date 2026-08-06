@@ -156,6 +156,17 @@ directory was created — rerun the command above. (Session setup marks the git
 common directory's parent and the repository root, which are the same path in the
 canonical checkout.)
 
+Every dispatch marks its own clone, worktree, and result the same way, so this file
+is on the hot path of the whole harness and nothing else prunes it. Two properties
+keep it from becoming one: marking paths that are already trusted decides from a
+parse and never rewrites the file, and a mark that does write first drops every
+entry whose workspace is gone. Only an entry that records **nothing but** its trust
+decision is dropped that way — one carrying session state survives its path, since
+losing a trust decision costs one dialog and losing a recorded session costs the
+session. Left unpruned this reached 34 MB and 167,958 entries here in three days,
+165,858 of them dead throwaway test paths, and every mark paid that size behind one
+host-wide lock.
+
 ## 6. Install allowlister (nothing automates this)
 
 Session setup wires the hook but never installs the tool; a host without it gets
