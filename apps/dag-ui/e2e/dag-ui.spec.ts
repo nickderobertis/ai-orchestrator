@@ -1598,10 +1598,20 @@ test("keeps the timeline's clock readable when its lanes outgrow the view", asyn
     if (!viewport.expandedFits) {
       // Where the lanes cannot fit, the region scrolls rather than dropping what it
       // could not draw, and the clock is at the end of that scroll — whole, not the
-      // half-drawn line of digits the bottom edge used to leave.
-      await timeline(page).evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
-      });
+      // half-drawn line of digits the bottom edge used to leave. The wheel over the
+      // region is how an operator reaches that end, so it is what carries the journey
+      // there; a `scrollTop` written from script would prove the layout without ever
+      // proving the region really scrolls under one.
+      await timeline(page).hover();
+      await page.mouse.wheel(0, 10_000);
+      await expect
+        .poll(() =>
+          timeline(page).evaluate(
+            (element) =>
+              element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
     }
     expect(await clipped()).toBe(0);
     // Still the axis it was, not a stub of one: both ticks, each naming the wall
