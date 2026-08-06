@@ -27,6 +27,7 @@ from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .cli_contract import ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .dispatch import Report, dispatch, incomplete_detail
+from .outcomes import HELD_STATUSES, UNMET_DEP_STATUSES
 
 
 class PlanError(Exception):
@@ -151,22 +152,6 @@ class NodeRun:
     recorded: Mapping[str, Any] | None = None
 
 
-#: Dependency statuses that mean a dependent can never run, so the scheduler settles
-#: it ``skipped``.
-#:
-#: Public because the read model re-derives the same two gates for a round that has
-#: not finished — the scheduler journals nothing when it derives them, so a served
-#: graph that did not re-derive them would show every gated node as `pending` while
-#: the run itself has them held. Two copies of this rule would let those two answers
-#: drift; `orchestrator.projection.node_statuses` reads these.
-UNMET_DEP_STATUSES = ("failed", "skipped")
-#: Dependency statuses that mean a dependent is held rather than lost: ``blocked``.
-#: ``parked`` is one of them because a planner ``cancel`` idles a node it may still
-#: `requeue`; treating it as unmet would settle every dependent `skipped` and throw
-#: away work the park exists to keep recoverable.
-GATED_DEP_STATUSES = ("waiting", "blocked", "parked")
-
-
 def schedule_dag(
     node_ids: list[str],
     deps: dict[str, list[str]],
@@ -232,7 +217,7 @@ def reconcile_dag(
                     status[nid] = "skipped"
                     results[nid] = NodeRun("skipped", "a dependency did not complete")
                     changed = True
-                elif any(s in GATED_DEP_STATUSES for s in settled):
+                elif any(s in HELD_STATUSES for s in settled):
                     status[nid] = "blocked"
                     held = (
                         "a dependency is parked"

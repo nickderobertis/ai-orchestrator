@@ -33,9 +33,8 @@ from .journal import (
     Event,
     parse_event,
 )
+from .outcomes import HELD_STATUSES, UNMET_DEP_STATUSES
 from .plan import (
-    GATED_DEP_STATUSES,
-    UNMET_DEP_STATUSES,
     PlanError,
     parse_cross_dag_dependency,
 )
@@ -539,7 +538,7 @@ def node_statuses(projection: RoundProjection) -> RoundNodeStatuses:
 
     A round still in flight has neither, so the last step re-derives those same two
     gates from the plan the projection already validated, using the scheduler's own
-    `UNMET_DEP_STATUSES` / `GATED_DEP_STATUSES`. Without it every node held behind a
+    `UNMET_DEP_STATUSES` / `HELD_STATUSES`. Without it every node held behind a
     human action reads as `pending` for as long as the run is live — which is exactly
     when an operator is reading it.
 
@@ -572,7 +571,7 @@ def node_statuses(projection: RoundProjection) -> RoundNodeStatuses:
             dep
             for dep in deps[node]
             if status.get(dep)
-            in (UNMET_DEP_STATUSES if status[node] == "skipped" else GATED_DEP_STATUSES)
+            in (UNMET_DEP_STATUSES if status[node] == "skipped" else HELD_STATUSES)
         ]
         for node in order
         if status[node] in {"blocked", "skipped"}
@@ -602,7 +601,7 @@ def _derive_gates(
             if any(state in UNMET_DEP_STATUSES for state in settled):
                 status[node] = "skipped"
                 changed = True
-            elif any(state in GATED_DEP_STATUSES for state in settled):
+            elif any(state in HELD_STATUSES for state in settled):
                 status[node] = "blocked"
                 changed = True
 
