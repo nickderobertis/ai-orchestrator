@@ -24,6 +24,13 @@ exactly what the bulk reads. What keeps the narrowed keys honest is not this fil
 — a static scan cannot see every read — but `tests/conftest.py`, which fails a
 test the moment it opens something its own tier's key does not carry.
 
+The browser tier is keyed at its own scope for the same reason. `dag-ui:test` runs
+vitest and two Playwright configs against a fixture server that imports this
+repository's read API, and it used to name the whole `orchestrator/` package —
+which is far more Python than it loads. `dagUiServerSurface` states what that one
+door reaches, and because an import is a read no runtime guard can see, the
+declaration is held to the fixture's own import closure here.
+
 `coverage` is the one target here with nothing to keep honest, and deliberately:
 it combines what the measuring tiers wrote and compares that total to the declared
 floor, so it is uncached and there is no memo to be wrong about.
@@ -35,12 +42,17 @@ import ast
 import json
 import re
 import subprocess
+from pathlib import Path
 
+import pytest
 from conftest import READS_DOCS_MARKER, READS_RECIPES_MARKER
 from nx_inputs import (
+    BROWSER_PROJECT,
+    BROWSER_SCOPED,
     CODE_SCOPED,
     CODE_WORKSPACE,
     COVERAGE_SCOPED,
+    DAG_UI_SERVER_SURFACE,
     DOCS_SCOPED,
     NX_CACHE_CHECK,
     RECIPE_SCOPED,
@@ -53,6 +65,12 @@ from nx_inputs import (
 from orchestrator import REPO_ROOT
 
 WHOLE_WORKSPACE = "wholeWorkspace"
+#: The browser tier's project root. Its own key covers everything under here; what
+#: the narrowed named input has to state is what these files reach *outside* it.
+DAG_UI_ROOT = f"apps/{BROWSER_PROJECT}"
+#: The one door from that tier into this repository's Python: Playwright starts this
+#: fixture server, and it imports the read API the journeys drive.
+DAG_UI_FIXTURE = f"{DAG_UI_ROOT}/e2e/fixtures/serve_fixture.py"
 
 #: Every one of these runs from the workspace root against the whole tree — ruff
 #: over `.`, shellcheck over `scripts/`, persona validation over `personas/`, and
@@ -123,6 +141,31 @@ def _effective_inputs(project_root: str, target: str) -> list[str]:
         glob.replace("{workspaceRoot}/", "").replace("{projectRoot}/", f"{project_root}/")
         for glob in resolved
     ]
+
+
+def _named_repository_paths(text: str, tracked: frozenset[str]) -> set[str]:
+    """Every tracked repository path ``text`` names as a literal.
+
+    Two shapes, because a file names a repository path both ways: joined onto the
+    root at the call site, and written as a bare relative literal something else
+    joins later. Reading only the first shape missed every path a fixture copies
+    from a tuple — which is where the front-end reads live.
+
+    The two are trusted differently, and have to be. A literal joined onto the root
+    *is* a repository path, so a directory named that way counts as everything under
+    it. A bare literal is only a repository path when it happens to look like one,
+    and a single word that happens to match a directory — a node called
+    `orchestrator`, a label called `tests` — is a coincidence, not a read; expanding
+    those swept the whole tree into one browser fixture's reads.
+    """
+    named: set[str] = set()
+    for match in re.finditer(r'(?:REPO_ROOT|ROOT)\s*/\s*"([^"]+)"(\s*/\s*"[^"]+")*', text):
+        rooted = "/".join(re.findall(r'"([^"]+)"', match.group(0)))
+        named |= {path for path in tracked if path == rooted or path.startswith(f"{rooted}/")}
+    named |= {
+        match.group(1) for match in re.finditer(r'"([^"\n]+)"', text) if match.group(1) in tracked
+    }
+    return named
 
 
 def _is_documentation(relative: str) -> bool:
@@ -357,19 +400,7 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     tracked = _tracked()
     read: set[str] = set()
     for source in sorted(REPO_ROOT.joinpath("tests").rglob("*.py")):
-        text = source.read_text(encoding="utf-8")
-        # Two shapes, because a suite names a repository path both ways: joined onto
-        # the root at the call site, and listed as a bare relative literal a helper
-        # joins later. Reading only the first shape missed every path a fixture
-        # copies from a tuple — which is where the front-end reads live.
-        candidates = {
-            "/".join(re.findall(r'"([^"]+)"', match.group(0)))
-            for match in re.finditer(r'(?:REPO_ROOT|ROOT)\s*/\s*"([^"]+)"(\s*/\s*"[^"]+")*', text)
-        }
-        candidates |= {match.group(1) for match in re.finditer(r'"([^"\n]+)"', text)}
-        for candidate in candidates:
-            if candidate in tracked or any(path.startswith(f"{candidate}/") for path in tracked):
-                read.add(candidate)
+        read |= _named_repository_paths(source.read_text(encoding="utf-8"), tracked)
 
     # A guard that found nothing would pass silently forever.
     assert {"AGENTS.md", "justfile", "scripts/session-setup.sh"} <= read, read
@@ -517,3 +548,117 @@ def test_the_nx_cache_check_key_covers_every_repository_path_that_check_reads() 
     # pass the assertion above and replay nothing.
     assert not covers(globs, "AGENTS.md")
     assert not covers(globs, "orchestrator/lifecycle.py")
+
+
+def _orchestrator_modules_imported_by(relative: str) -> set[str]:
+    """The `orchestrator` modules ``relative`` imports, transitively, as file paths.
+
+    An import is a read the file-read guards cannot see, and for this tier it is
+    nearly the whole read: the fixture server imports `orchestrator.server`, and
+    importing that compiles every module its own imports reach. Deferred imports
+    inside a function body count too — `ast.walk` finds them wherever they sit —
+    which errs towards a wider surface than a given run may execute, and wider is
+    the safe direction for a cache key.
+    """
+    package = REPO_ROOT / "orchestrator"
+    modules = {source.stem for source in package.glob("*.py")}
+
+    def imported(source: Path) -> set[str]:
+        found: set[str] = set()
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            match node:
+                case ast.Import():
+                    found |= {
+                        alias.name.split(".")[1]
+                        for alias in node.names
+                        if alias.name.startswith("orchestrator.")
+                    }
+                case ast.ImportFrom(level=1, module=str() as module):
+                    found.add(module.split(".")[0])
+                case ast.ImportFrom(level=1, module=None):
+                    found |= {alias.name for alias in node.names}
+                case ast.ImportFrom(level=0, module="orchestrator"):
+                    # `from orchestrator import REPO_ROOT` names a symbol, not a
+                    # module; only the ones that are modules contribute a file.
+                    found |= {alias.name for alias in node.names}
+                case ast.ImportFrom(level=0, module=str() as module) if module.startswith(
+                    "orchestrator."
+                ):
+                    found.add(module.split(".")[1])
+            # Importing any of them imports the package itself.
+        return found & modules
+
+    reached: set[str] = set()
+    pending = imported(REPO_ROOT / relative)
+    while pending:
+        current = pending.pop()
+        if current in reached:
+            continue
+        reached.add(current)
+        pending |= imported(package / f"{current}.py") - reached
+    return {f"orchestrator/{name}.py" for name in reached} | {"orchestrator/__init__.py"}
+
+
+@pytest.mark.reads_docs
+def test_the_browser_tier_is_keyed_on_the_python_it_runs_rather_than_all_of_it() -> None:
+    """`dag-ui:test` used to name all of `orchestrator/**/*`, and reads far less.
+
+    The tier is vitest plus two Playwright configs — two and a half minutes — and it
+    reaches this repository's Python through one door: the fixture server the
+    Playwright config starts, which imports the read API. Keyed on the whole
+    package, every edit to a command-side module the served process never loads
+    charged that. Keyed on what the door reaches, those edits replay.
+
+    Marked `reads_docs` because it reads the front-end project the code-only key
+    drops, which is the same reason the DAG contract checks live in that tier.
+    """
+    project = json.loads((REPO_ROOT / "apps/dag-ui/project.json").read_text(encoding="utf-8"))
+    assert project["targets"][BROWSER_SCOPED]["inputs"] == ["default", DAG_UI_SERVER_SURFACE], (
+        f"{BROWSER_PROJECT}:{BROWSER_SCOPED} must be keyed on its own project and on the "
+        "named input that states which of this repository's Python it runs"
+    )
+
+    globs = _effective_inputs(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
+    package = sorted(path for path in _tracked() if path.startswith("orchestrator/"))
+    excluded = [path for path in package if not covers(globs, path)]
+    assert excluded, (
+        "this key covers the whole package again, so the browser tier is back to "
+        "re-running on every edit to Python it never loads"
+    )
+    # The other half: the modules it does load have to still be in it.
+    assert covers(globs, "orchestrator/server.py")
+    assert covers(globs, "tests/e2e/fake_oneharness.py")
+
+
+@pytest.mark.reads_docs
+def test_every_repository_path_the_browser_tier_reads_is_part_of_its_key() -> None:
+    """The narrowing's own staleness guard: a new read must widen the named input.
+
+    A Python file the fixture stack starts importing, or a repository path one of
+    its journeys starts naming, is a file that can change what the browser tier
+    reports without changing its hash — the false green every key here exists to
+    prevent. The declaration is enforced against the globs Nx hashes rather than
+    against a restatement of them, so the two cannot drift apart.
+
+    A literal cannot always be told from a read: the fixture records
+    `.githooks/pre-push` as the *value* of a journal detail it never opens. The key
+    carries it anyway, because the two errors are not symmetric — a key wider than
+    the reads costs one browser run nobody needed, and a key narrower than them
+    reports a pass for a tree the tier never ran.
+    """
+    globs = _effective_inputs(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
+    tracked = _tracked()
+    read = _orchestrator_modules_imported_by(DAG_UI_FIXTURE)
+    for relative in sorted(path for path in tracked if path.startswith(f"{DAG_UI_ROOT}/")):
+        read |= _named_repository_paths((REPO_ROOT / relative).read_text(encoding="utf-8"), tracked)
+
+    # A guard that found nothing would pass silently forever. These are the two
+    # doors: the served API, and the harness history store its fixture shells to.
+    assert {"orchestrator/server.py", "tests/e2e/fake_oneharness.py"} <= read, sorted(read)
+    uncovered = sorted(path for path in read if not covers(globs, path))
+    assert not uncovered, (
+        f"the {BROWSER_PROJECT} browser tier reads these repository paths but "
+        f"nx.json's {DAG_UI_SERVER_SURFACE} does not carry them, so editing one "
+        f"replays a browser verdict for a tree that tier never ran against; widen "
+        f"that named input to cover them: {uncovered}"
+    )

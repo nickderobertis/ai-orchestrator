@@ -599,11 +599,17 @@ opens. Those two share one key because they read one tree; they are separate tas
 so each half reports its own failures and the one-second serial tier can be forced
 to re-run without the three-minute bulk.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
-scripts it builds its two worktrees from. A documentation edit stops charging eight
-minutes. No split may go stale silently: an undeclared test that opens this
-checkout's own documentation fails in `tests/conftest.py` and is told to carry
-`@pytest.mark.reads_docs`, and a `@pytest.mark.reads_recipes` test that opens
-anything outside its narrower key fails the same way. See
+scripts it builds its two worktrees from, and `dag-ui:test` — vitest plus two
+Playwright configs — onto `dagUiServerSurface`: the Python its fixture server
+actually runs, which is the read API and everything that import reaches, rather
+than all of `orchestrator/**/*`. A documentation edit stops charging eight
+minutes, and an edit to a command-side module the served process never loads stops
+charging a browser. No split may go stale silently: an undeclared test that opens
+this checkout's own documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`, a `@pytest.mark.reads_recipes` test that opens
+anything outside its narrower key fails the same way, and a fixture that starts
+importing Python outside the served surface fails in `tests/test_nx_cache_scope.py`
+and is told to widen that named input. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
