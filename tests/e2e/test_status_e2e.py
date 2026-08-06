@@ -22,8 +22,10 @@ from history_store import write_worker_session as _record
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.journal import open_journal
 from orchestrator.labels import graph_labels
+from orchestrator.next_round import main_runs
+from orchestrator.read_model import run_detail
 from orchestrator.registry import Registry
-from orchestrator.runs import NodeId, RunId
+from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.status import main as status_main
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -244,6 +246,95 @@ def _settled_run(runs_dir: Path, run_id: str, outcomes: dict[str, str]) -> None:
             journal.append("node-failed", node=NodeId(node), detail={"status": "failed"})
         else:
             journal.append("node-settled", node=NodeId(node), detail={"status": status})
+
+
+def test_failed_dispatch_with_missing_judge_history_is_explicit(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A supervisor whose harness never wrote history must not simply disappear.
+
+    Every history-derived view answers "who worked on this node" from the recorded
+    sessions, so a judge side that failed to write one reads exactly like a dispatch
+    that was never supervised. Saying so is the difference between "the run was
+    unsupervised" and "the judge harness could not record", which is what the outage
+    behind this work actually was.
+    """
+    runs_dir = tmp_path / "runs"
+    _settled_run(runs_dir, "missing-judge", {"work": "failed"})
+    round_dir = runs_dir / "missing-judge" / "round-01"
+    round_dir.mkdir()
+    (round_dir / "plan.json").write_text("{}\n", encoding="utf-8")
+    history_dir = tmp_path / "history"
+    store = history_dir / "project"
+    store.mkdir(parents=True)
+    _record(
+        store / "work-20260804T120000Z-123.jsonl",
+        project=tmp_path,
+        status="nonzero",
+        labels={
+            **graph_labels(run_id="missing-judge", round_number=1, node="work"),
+            "role": "agent",
+        },
+    )
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+
+    assert status_main(["missing-judge", "--runs-dir", str(runs_dir), "--all"]) == 0
+    shown = capsys.readouterr().out
+    assert "work judge_unrecorded — judge history is missing" in shown
+
+    # Read back through the same real history store the view above consulted: the
+    # marker is a fact about recorded sessions, so a scan that reads none proves
+    # nothing about a judge that is missing from the ones that exist.
+    served = run_detail(runs_dir, "missing-judge")
+    node = served["run"]["nodes"][0]
+    assert node["failure"]["judge_unrecorded"] is True
+    # The agent side is still served as the recorded session it is; only the
+    # supervisor beside it is marked absent.
+    assert [session["role"] for session in node["sessions"]] == ["agent"]
+
+
+def test_a_round_lost_to_one_refusing_identity_reads_as_one_line(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The incident this exists for: a whole round dying on one exhausted identity.
+
+    Three nodes died, so the planner views used to print three deaths that between
+    them named neither the refusing side nor the identity. Both views a planner
+    reads must instead state the one fact — and state it once, so a round that lost
+    thirty nodes is still one line to act on.
+    """
+    runs_dir = tmp_path / "runs"
+    journal = open_journal(runs_dir / "exhausted", RunId("exhausted"), 1)
+    attribution = {
+        "side": "judge",
+        "identity": "codex:primary",
+        "cause": "quota_mid_conversation",
+        "reset_time": "Aug 8",
+        "raw_tail": "provider error (respond): harness failed (quota)",
+    }
+    for node in ("build", "document", "verify"):
+        journal.append("node-started", node=NodeId(node))
+        journal.append(
+            "node-failed", node=NodeId(node), detail={"failure_attribution": attribution}
+        )
+    # One node that died to something else must not be folded into that line.
+    journal.append("node-started", node=NodeId("publish"))
+    journal.append("node-failed", node=NodeId("publish"), detail={"status": "failed"})
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(tmp_path / "history"))
+    rolled = "3 nodes failed on judge-side codex:primary quota mid conversation, resets Aug 8"
+
+    assert status_main(["exhausted", "--runs-dir", str(runs_dir), "--all"]) == 0
+    shown = capsys.readouterr().out
+    assert shown.count(rolled) == 1, shown
+    assert "quota" not in shown.replace(rolled, ""), shown
+
+    prepare_round(runs_dir / "exhausted", {"tasks": [{"id": "build", "task": "x"}]})
+    write_result(
+        runs_dir / "exhausted" / "round-01",
+        {"schema_version": 6, "ok": False, "started_order": [], "results": {}},
+    )
+    assert main_runs(["--runs-dir", str(runs_dir)]) == 0
+    assert rolled in capsys.readouterr().out
 
 
 def test_status_reports_every_settled_node_as_the_journal_recorded_it(

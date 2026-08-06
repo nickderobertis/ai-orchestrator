@@ -24,6 +24,12 @@ def _result(runs: Path) -> None:
                         "outcome": "gate-failed",
                         "ok": False,
                         "error": "gate failed",
+                        "failure_attribution": {
+                            "side": "judge",
+                            "identity": "codex",
+                            "cause": "quota_mid_conversation",
+                            "reset_time": "Aug 8",
+                        },
                         "artifacts": {"gate_log": "/tmp/gate.log"},
                         "steps": [
                             {
@@ -66,6 +72,7 @@ def test_render_lists_outcomes_detail_and_failure_artifacts(tmp_path: Path) -> N
     assert "Full logs: unavailable (node recorded no artifacts)" in output
     assert "good  done  completed" in output
     assert "just history-show graph:demo/1/bad" in output
+    assert "Provider: judge-side codex quota mid conversation, resets Aug 8" in output
 
 
 def test_main_succeeds_for_failed_run_and_rejects_missing_run(tmp_path: Path, capsys) -> None:

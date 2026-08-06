@@ -157,7 +157,58 @@ export const failureClassSchema = z.enum([
   "configuration",
   "unknown",
 ]);
-export const failureSchema = openObject({
+/**
+ * Which side of onejudge's two-party conversation the provider refused.
+ *
+ * `orchestrator/provider_failure.py`'s `ConversationSide` owns this vocabulary and
+ * `scripts/check-dag-state-contract.py` reconciles the three copies of it. A
+ * planner reading "quota" needs it first: the two sides prefer different
+ * identities, so a fix aimed at the wrong one changes nothing.
+ */
+export const conversationSideSchema = z.enum(["agent", "judge", "llmlint"]);
+
+/**
+ * Why the provider refused, closed so a client can switch on it exhaustively.
+ *
+ * `orchestrator/provider_failure.py`'s `ProviderFailureCause` owns this vocabulary and
+ * `scripts/check-dag-state-contract.py` reconciles the three copies of it.
+ * `quota_at_launch` fell through to the next identity in the chain;
+ * `quota_mid_conversation` could not, because the conversation was already bound
+ * to the identity that refused it.
+ */
+export const providerFailureCauseSchema = z.enum([
+  "quota_at_launch",
+  "quota_mid_conversation",
+  "stale_session_resume",
+  "rate_limit",
+  "harness_exit",
+]);
+
+/**
+ * A provider refusal, as served on a failure record.
+ *
+ * `orchestrator/provider_failure.py`'s `ProviderFailure` owns this shape and
+ * `scripts/check-dag-state-contract.py` reconciles all three copies of it. Every
+ * field is optional: only a failure that reached a provider carries any of them,
+ * and the evidence a harness gives varies.
+ */
+export const providerFailureSchema = openObject({
+  side: conversationSideSchema.optional(),
+  harness: z.string().optional(),
+  variant: z.string().optional(),
+  identity: z.string().optional(),
+  cause: providerFailureCauseSchema.optional(),
+  raw_tail: z.string().optional(),
+  reset_time: z.string().optional(),
+  missing_session_id: z.string().optional(),
+  wait_seconds: z.number().nonnegative().optional(),
+  failure_kind: z.string().optional(),
+  structured_error: arbitraryRecord.optional(),
+  judge_unrecorded: z.boolean().optional(),
+});
+
+/** The classification, plus whatever a provider refusal recorded beside it. */
+export const failureSchema = providerFailureSchema.extend({
   class: failureClassSchema,
   detail: z.string().optional(),
 });
@@ -214,6 +265,20 @@ export const runTelemetrySchema = openObject({
 });
 
 /**
+ * A read-only provider capacity snapshot, served beside a run list or detail.
+ *
+ * Every configured identity is present whether or not its probe answered — one that
+ * did not carries `availability.state = "unknown"` rather than being dropped, so a
+ * client can never mistake an unprobed identity for one that is not configured. The
+ * per-identity shape is upstream oneharness's and is deliberately not restated here.
+ */
+export const providerHealthSchema = openObject({
+  schema_version: z.union([z.string(), z.number()]).optional(),
+  observed_at: z.string().optional(),
+  identities: z.array(arbitraryRecord),
+});
+
+/**
  * A run's attribution to its launching session, on both the list row and the detail.
  *
  * It is omitted for a run that recorded no `launch_id`. `session_key` is the opaque,
@@ -250,6 +315,7 @@ export const runListSchema = openObject({
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
   next_cursor: z.string().min(1).optional(),
+  provider_health: providerHealthSchema.optional(),
 });
 
 const planStepSchema = openObject({
@@ -623,6 +689,7 @@ export const runDetailSchema = openObject({
   conversations: runConversationsSchema,
   node_details: z.record(z.string(), nodeDetailSchema).optional().default({}),
   launch: runLaunchSchema.optional(),
+  provider_health: providerHealthSchema.optional(),
 });
 
 export const timelineReferenceKindSchema = z.enum([

@@ -609,9 +609,9 @@ The result's top-level `state` is `failed` if any node failed or skipped,
 otherwise `waiting` if any node waits, is blocked, or is parked, otherwise
 `complete`. `ok` is true only for `complete`. Human and JSON output carry the same
 facts. Exit status is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for
-invalid plan, ledger, configuration, or command input. Recorded result schema v5
-adds the terminal `infrastructure-failure` and successful `already-integrated`
-outcome values.
+invalid plan, ledger, configuration, or command input. Recorded result schema v6
+adds structured provider failure attribution; schema v5 added the terminal
+`infrastructure-failure` and successful `already-integrated` outcome values.
 
 ## Recorded rounds
 

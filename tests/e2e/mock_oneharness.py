@@ -83,6 +83,11 @@ def main(argv: list[str]) -> int:
             # line is the only account a worker dying before its first turn leaves
             # behind, so emit a recognizable one here for the dispatcher to carry.
             print(BARRIER_DEATH_NOTICE, file=sys.stderr, flush=True)
+            # A refusal is the *other* thing that account can be, and only the
+            # harness's own words distinguish it from the generic death above.
+            refusal = os.environ.get("MOCK_AGENT_REFUSAL")
+            if refusal:
+                print(refusal, file=sys.stderr, flush=True)
             raise SystemExit(143)
 
         signal.signal(signal.SIGTERM, stop_descendant)

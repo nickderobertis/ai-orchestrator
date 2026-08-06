@@ -13,6 +13,9 @@ from .config import ConfigError
 from .detach import run_detached
 from .journal import open_journal
 from .plan import PlanError
+from .provider_health import failure_rollups
+from .provider_health import probe as probe_provider_health
+from .provider_health import render as render_provider_health
 from .replan import executed_plan, next_round, round_context, round_supersessions
 from .runs import (
     NodeId,
@@ -287,6 +290,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
+    print(render_provider_health(probe_provider_health(cwd=Path.cwd())))
     recorded = {row.run_id for row in rows}
     for run_id in sorted((active_launches | abandoned.keys()) - recorded):
         owner = f"[{ownership.get(run_id, 'unknown')}]"
@@ -342,6 +346,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         if run_id in concurrent:
             print(f"    {concurrent[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
+        for line in failure_rollups(args.runs_dir / run_id):
+            print(f"    {line}")
     return 0
 
 

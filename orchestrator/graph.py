@@ -37,7 +37,13 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_mapping
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .detach import run_detached
-from .dispatch import Report, dispatch, incomplete_detail
+from .dispatch import (
+    DispatchError,
+    Report,
+    dispatch,
+    incomplete_detail,
+    recordable_provider_failure,
+)
 from .edits import EditError, apply_edit
 from .goals import (
     ConcurrentAcknowledgement,
@@ -99,6 +105,7 @@ from .plan import (
     parse_node_context,
     reconcile_dag,
 )
+from .provider_failure import journalled
 from .registry import Registry
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
@@ -703,7 +710,32 @@ def run_graph(
         if "cancel" in inspect.signature(agent_runner).parameters:
             agent_args["cancel"] = cancellations[nid]
         direct = cast(PlanNode, node.direct)
-        report = agent_runner(direct, **agent_args)
+        try:
+            report = agent_runner(direct, **agent_args)
+        except DispatchError as exc:
+            if not recordable_provider_failure(exc.failure_attribution):
+                raise
+            item: GraphResultItem = {
+                "kind": "agent",
+                "status": "failed",
+                "task": node.task,
+                "error": str(exc),
+            }
+            if exc.failure_attribution:
+                item["failure_attribution"] = exc.failure_attribution
+            run = NodeRun("failed", str(exc), recorded=item)
+            node_log.append(
+                "node-failed",
+                detail={
+                    "detail": str(exc),
+                    **journalled(exc.failure_attribution),
+                    # Same invariance as `journalled`: a `TypedDict` is not a
+                    # `Mapping[str, DetailValue]` to a checker even when every value
+                    # it holds is one, and this is the shape the round records.
+                    TERMINAL_NODE_RESULT_FIELD: cast(dict[str, Any], item),
+                },
+            )
+            return run
         persist_report_artifacts(
             node_log,
             report,
@@ -751,6 +783,7 @@ def run_graph(
                 "detail": detail,
                 **({"outcome": report.outcome} if report.outcome else {}),
                 **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
+                **journalled(report.failure_attribution),
                 "turns": report.assistant_turns,
                 TERMINAL_NODE_RESULT_FIELD: cast(
                     Any, _run_payload(node, run, dependents.get(nid, []))
@@ -1230,6 +1263,11 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
                 # emit this additive report-v5 field; the telemetry CLI E2E injects the exact
                 # upstream payload at the persisted report boundary and exercises consumption.
                 **({"telemetry": report.telemetry} if report and report.telemetry else {}),
+                **(
+                    {"failure_attribution": report.failure_attribution}
+                    if report and report.failure_attribution
+                    else {}
+                ),
             }
         )
     item.update({"kind": result.kind, "status": result.status, "task": result.task})
