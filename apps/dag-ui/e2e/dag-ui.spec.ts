@@ -135,8 +135,8 @@ function changeServedRuns(args: string[]): void {
   );
 }
 
-/** The node view's master rail, once a node has been opened. */
-const rail = (page: Page): Locator =>
+/** The node view's pinned plot, once a node has been opened. */
+const timeline = (page: Page): Locator =>
   page.getByRole("region", { name: "Node timeline" });
 
 /** The node view's detail region: whichever timeline item is open, expanded. */
@@ -339,37 +339,41 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
 
   // The upstream plot distinguishes duration bars from instant icons and moves the
   // old row metadata into a compact hover tooltip.
-  const worker = rail(page).getByRole("button", { name: /engineer-dashboard/ });
+  const worker = timeline(page).getByRole("button", {
+    name: /engineer-dashboard/,
+  });
   await worker.hover();
   await expect(page.getByRole("tooltip")).toContainText("Duration:");
   await expect(page.getByRole("tooltip")).toContainText("Status: completed");
-  await expect(rail(page).getByRole("button")).not.toHaveCount(0);
+  await expect(timeline(page).getByRole("button")).not.toHaveCount(0);
   // And it says which session it was, served on the row rather than read out of a
   // transcript: every dispatch on this node read "dispatch" and nothing else, so
   // the worker, the judge that supervised it, and the lint run under it were three
   // rows a reader could not tell apart. Neither name contains its own role.
   await expect(worker).toHaveAccessibleName(/Worker \(engineer-dashboard\)/);
   await expect(
-    rail(page).getByRole("button", { name: "Expand timeline" }),
+    timeline(page).getByRole("button", { name: "Expand timeline" }),
   ).toBeVisible();
-  await rail(page).getByRole("button", { name: "Expand timeline" }).click();
+  await timeline(page).getByRole("button", { name: "Expand timeline" }).click();
   await expect(
-    rail(page).getByRole("button", { name: /^Judge/ }),
-  ).toBeVisible();
-  await expect(rail(page).getByRole("button", { name: /^Lint/ })).toBeVisible();
-  await expect(
-    rail(page).getByRole("button", { name: /^Check-in/ }),
+    timeline(page).getByRole("button", { name: /^Judge/ }),
   ).toBeVisible();
   await expect(
-    rail(page).getByRole("button", { name: /^PR author/ }),
+    timeline(page).getByRole("button", { name: /^Lint/ }),
+  ).toBeVisible();
+  await expect(
+    timeline(page).getByRole("button", { name: /^Check-in/ }),
+  ).toBeVisible();
+  await expect(
+    timeline(page).getByRole("button", { name: /^PR author/ }),
   ).toBeVisible();
   // The waits a node spent on a lock are plotted at the length they actually took —
   // ten seconds of a four-minute node — and neither stretched across the window the
   // journal happened to write them in nor collapsed to the instant that window is.
-  const lockWait = rail(page).getByRole("button", { name: /^Lock waits/ });
+  const lockWait = timeline(page).getByRole("button", { name: /^Lock waits/ });
   await expect(lockWait).toHaveAttribute("data-timeline-shape", "span");
   const lockWidth = (await lockWait.boundingBox())?.width ?? 0;
-  const plot = rail(page).getByLabel(/Timeline plot/);
+  const plot = timeline(page).getByLabel(/Timeline plot/);
   const plotWidth = (await plot.boundingBox())?.width ?? 1;
   expect(lockWidth / plotWidth).toBeLessThan(0.1);
   expect(lockWidth / plotWidth).toBeGreaterThan(0.02);
@@ -395,7 +399,9 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(
     page.getByRole("region", { name: "Timeline for dashboard" }),
   ).not.toContainText(/phase|rollup/i);
-  await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
+  await timeline(page)
+    .getByRole("button", { name: "Collapse timeline" })
+    .click();
   await expect(worker).toHaveAttribute("data-timeline-shape", "span");
   await expect(
     page.getByRole("list", { name: "Timeline legend" }),
@@ -486,7 +492,9 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect.poll(readingTop).toBe(0);
 
   // A span contains its events, and opening it discloses them: one turn here.
-  const turn = rail(page).getByRole("button", { name: /conversation-turn/ });
+  const turn = timeline(page).getByRole("button", {
+    name: /conversation-turn/,
+  });
   await expect(turn.first()).toBeVisible();
   await turn.first().click();
   await expect(itemDetail(page)).toContainText(
@@ -505,10 +513,10 @@ test("restores a bookmarked moment inside a session from the address alone", asy
   page,
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
-  const turn = rail(page)
+  const turn = timeline(page)
     .getByRole("button", { name: /conversation-turn/ })
     .first();
   await turn.click();
@@ -526,7 +534,7 @@ test("restores a bookmarked moment inside a session from the address alone", asy
   // The address alone reopens the moment: its marker is the pressed one among the
   // node's journal icons, and its item is the focused one in the transcript.
   await expect(
-    rail(page).locator('[data-selected="true"]'),
+    timeline(page).locator('[data-selected="true"]'),
   ).toHaveAccessibleName(/conversation-turn, marker/);
   await expect(
     page
@@ -542,9 +550,8 @@ test("keeps timeline, transcript, and nested judge conversation in time sync", a
   page,
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  const timeline = rail(page);
   const transcript = page.getByRole("region", { name: "Node transcript" });
-  const axis = timeline.getByTestId("timeline-axis");
+  const axis = timeline(page).getByTestId("timeline-axis");
   await expect(axis.locator("span")).toHaveCount(2);
   for (const tick of await axis.locator("span").allTextContents()) {
     expect(tick).toMatch(/\d{2}:\d{2}:\d{2}.*[+−]\d/u);
@@ -552,26 +559,29 @@ test("keeps timeline, transcript, and nested judge conversation in time sync", a
 
   // Scrolled the way a reader scrolls it — a wheel over the transcript — because the
   // cursor tracks the real scroll path, not a value written into `scrollTop`.
-  const timelineTop = (await timeline.boundingBox())?.y;
-  const cursor = timeline.getByTestId("timeline-cursor");
+  const timelineTop = (await timeline(page).boundingBox())?.y;
+  const cursor = timeline(page).getByTestId("timeline-cursor");
   const before = await cursor.getAttribute("style");
   await transcript.hover();
   await page.mouse.wheel(0, 400);
   await expect.poll(() => cursor.getAttribute("style")).not.toBe(before);
   // And the timeline stays exactly where it was while the reading moves under it.
-  expect((await timeline.boundingBox())?.y).toBe(timelineTop);
+  expect((await timeline(page).boundingBox())?.y).toBe(timelineTop);
 
-  await timeline.getByRole("button", { name: "Expand timeline" }).click();
-  const judge = timeline.getByRole("button", { name: /^Judge/ });
-  const lint = timeline.getByRole("button", { name: /^Lint/ });
+  await timeline(page).getByRole("button", { name: "Expand timeline" }).click();
+  const judge = timeline(page).getByRole("button", { name: /^Judge/ });
+  const lint = timeline(page).getByRole("button", { name: /^Lint/ });
   await expect(judge).toHaveAttribute("data-timeline-shape", "span");
   await expect(lint).toHaveAttribute("data-timeline-shape", "span");
   // Read as a share of the plot, not as pixels: a supervising session projected
   // against a window nothing else occupied still clears the minimum bar width the
   // design system paints, which is exactly the sliver this has to rule out. Each of
   // these ran half a minute of a four-minute node.
-  const plotWidth = (await timeline.getByLabel(/Timeline plot/).boundingBox())
-    ?.width;
+  const plotWidth = (
+    await timeline(page)
+      .getByLabel(/Timeline plot/)
+      .boundingBox()
+  )?.width;
   if (plotWidth === undefined) throw new Error("timeline plot has no bounds");
   for (const supervising of [judge, lint]) {
     expect((await supervising.boundingBox())?.width ?? 0).toBeGreaterThan(
@@ -612,11 +622,10 @@ test("scrolls the transcript to the journal record a marker names", async ({
   page,
 }) => {
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  const timeline = rail(page);
   const transcript = page.getByRole("region", { name: "Node transcript" });
   // A journal record occupies no lane: it is a marker over all of them, which is why
   // clicking one is the only way to reach an instant from the plot.
-  const markers = timeline.getByRole("button", { name: /, marker$/ });
+  const markers = timeline(page).getByRole("button", { name: /, marker$/ });
   await expect(markers.first()).toBeVisible();
   const marked = await markers.last().getAttribute("aria-label");
   if (marked === null) throw new Error("a marker carries no accessible name");
@@ -688,11 +697,11 @@ test("shows a verification and a publication as the records they are", async ({
 
   // The verification carries this push's own verdict and bounded output, then loads
   // the preserved log through its opaque artifact id without exposing a host path.
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /branch push/ })
     .click();
   await expect(
-    rail(page).getByRole("button", { name: /branch push/ }),
+    timeline(page).getByRole("button", { name: /branch push/ }),
   ).toHaveAttribute("data-timeline-shape", "span");
   await expect(itemDetail(page)).toContainText("Verification record");
   await expect(itemDetail(page)).toContainText("pre-push verification passed");
@@ -711,7 +720,7 @@ test("shows a verification and a publication as the records they are", async ({
   await page.getByRole("button", { name: "Close detail" }).click();
 
   // The publication carries the PR and the checks that were observed on it.
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /local\/example/ })
     .click();
   await expect(
@@ -755,7 +764,7 @@ test("states when a verification artifact is unavailable", async ({ page }) => {
     (response) =>
       response.url().includes("/artifacts/") && response.status() === 404,
   );
-  const failedVerification = rail(page).getByRole("button", {
+  const failedVerification = timeline(page).getByRole("button", {
     name: /missing verification log/,
   });
   await failedVerification.hover();
@@ -805,7 +814,7 @@ for (const scenario of [
     page,
   }) => {
     await openObservatory(page, `/?run=${runs().live}&node=${scenario.node}`);
-    await rail(page)
+    await timeline(page)
       .getByRole("button", { name: /example\/repo/ })
       .click();
     for (const href of scenario.expected) {
@@ -867,20 +876,22 @@ test("keeps a node of hundreds of recorded sessions scannable", async ({
   // The served run really did record hundreds of sessions on this node, which is
   // the shape that made the old detail panel unreadable.
   await openObservatory(page, `/?run=${runs().busy}&node=sweep`);
-  const rows = rail(page).getByRole("button");
+  const rows = timeline(page).getByRole("button");
   await expect(rows.first()).toBeVisible();
-  const grouped = rail(page).getByRole("button", {
+  const grouped = timeline(page).getByRole("button", {
     name: /grouped worker activities/,
   });
   await expect(grouped).toBeVisible();
   expect(
-    await rail(page).locator("[data-timeline-shape]").count(),
+    await timeline(page).locator("[data-timeline-shape]").count(),
   ).toBeLessThan(12);
-  await rail(page).getByRole("button", { name: "Expand timeline" }).click();
+  await timeline(page).getByRole("button", { name: "Expand timeline" }).click();
   await expect(
-    rail(page).getByRole("button", { name: "Collapse timeline" }),
+    timeline(page).getByRole("button", { name: "Collapse timeline" }),
   ).toBeVisible();
-  await rail(page).getByRole("button", { name: "Collapse timeline" }).click();
+  await timeline(page)
+    .getByRole("button", { name: "Collapse timeline" })
+    .click();
 
   // And one long session's own turns are handed out a page at a time in the panel,
   // so opening it does not render thirty of them at once either.
@@ -1183,7 +1194,7 @@ test("restores node tabs and moves between them from the keyboard", async ({
   await expect(page).toHaveURL(/tab=dependencies/);
 
   await page.getByRole("tab", { name: "Timeline" }).click();
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
   await expect(page).toHaveURL(/event=/);
@@ -1244,7 +1255,7 @@ test("reads every recorded moment as words rather than as its stamp", async ({
   // `approval` recorded work the run never closed, so its one item is shown as the
   // typed record it is — which is where two raw ISO strings used to reach the reader.
   await openObservatory(page, `/?run=${runs().live}&node=approval`);
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /approval/ })
     .click();
   await expect(itemDetail(page)).toContainText("Recorded at");
@@ -1264,7 +1275,7 @@ test("reads every recorded moment as words rather than as its stamp", async ({
 
   // Across a populated node, metadata stays in the visualization's hover detail.
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  const dashboardWorker = rail(page).getByRole("button", {
+  const dashboardWorker = timeline(page).getByRole("button", {
     name: /engineer-dashboard/,
   });
   await dashboardWorker.hover();
@@ -1462,14 +1473,14 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     overflowsX: false,
     overflowsY: false,
   });
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(280);
   // The plot keeps the full working width for its bars, and whatever is opened over
   // it takes two thirds of that width — enough to read a turn in.
-  expect(await width(rail(page))).toBeGreaterThan(380);
+  expect(await width(timeline(page))).toBeGreaterThan(380);
   expect((await width(itemDetail(page))) ?? 0).toBeCloseTo(
     (1400 - 280) * (2 / 3),
     -1,
@@ -1512,14 +1523,14 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     );
     await expect(label).toBeInViewport();
   }
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
   // Everything stays on screen: the navigation and the rail each give up width,
   // and the metrics wrap onto a second row instead of being squeezed.
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(220);
-  expect(await width(rail(page))).toBeGreaterThan(190);
+  expect(await width(timeline(page))).toBeGreaterThan(190);
   expect((await width(itemDetail(page))) ?? 0).toBeCloseTo(
     (800 - 220) * (2 / 3),
     -1,
@@ -1544,8 +1555,10 @@ test("keeps the timeline's clock readable when its lanes outgrow the view", asyn
 }) => {
   /** How far the axis falls outside the region that holds it, in pixels. */
   const clipped = async (): Promise<number> => {
-    const region = await rail(page).boundingBox();
-    const axis = await rail(page).getByTestId("timeline-axis").boundingBox();
+    const region = await timeline(page).boundingBox();
+    const axis = await timeline(page)
+      .getByTestId("timeline-axis")
+      .boundingBox();
     if (region === null || axis === null)
       throw new Error("the timeline has no bounds to read");
     return Math.max(
@@ -1556,7 +1569,7 @@ test("keeps the timeline's clock readable when its lanes outgrow the view", asyn
   };
   /** Whether the plot really is taller than the room it was given. */
   const overflowing = async (): Promise<boolean> =>
-    rail(page).evaluate(
+    timeline(page).evaluate(
       (element) => element.scrollHeight > element.clientHeight,
     );
 
@@ -1571,27 +1584,29 @@ test("keeps the timeline's clock readable when its lanes outgrow the view", asyn
   ]) {
     await page.setViewportSize(viewport);
     await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-    await expect(rail(page).getByTestId("timeline-axis")).toBeVisible();
+    await expect(timeline(page).getByTestId("timeline-axis")).toBeVisible();
     // The view an operator lands on is never cut: the collapsed plot is one line, and
     // the region holds it and its clock whole at every width — including the one
     // whose ten lane names wrap the legend onto a second row.
     expect(await overflowing()).toBe(false);
     expect(await clipped()).toBe(0);
 
-    await rail(page).getByRole("button", { name: "Expand timeline" }).click();
+    await timeline(page)
+      .getByRole("button", { name: "Expand timeline" })
+      .click();
     expect(await overflowing()).toBe(!viewport.expandedFits);
     if (!viewport.expandedFits) {
       // Where the lanes cannot fit, the region scrolls rather than dropping what it
       // could not draw, and the clock is at the end of that scroll — whole, not the
       // half-drawn line of digits the bottom edge used to leave.
-      await rail(page).evaluate((element) => {
+      await timeline(page).evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
     }
     expect(await clipped()).toBe(0);
     // Still the axis it was, not a stub of one: both ticks, each naming the wall
     // clock and the elapsed time the reader tracks lanes against.
-    const ticks = rail(page).getByTestId("timeline-axis").locator("span");
+    const ticks = timeline(page).getByTestId("timeline-axis").locator("span");
     await expect(ticks).toHaveCount(2);
     for (const tick of await ticks.allTextContents()) {
       expect(tick).toMatch(/\d{2}:\d{2}:\d{2}.*[+−]\d/u);
@@ -1613,7 +1628,7 @@ test("paints the design system's components in the application's dark palette", 
   // The node view's own cards are the package's Card, so their surface proves two
   // things at once: that the utilities its components are written in are generated
   // for this app at all, and that they resolve to the dark token rather than white.
-  await rail(page)
+  await timeline(page)
     .getByRole("button", { name: /engineer-dashboard/ })
     .click();
   const card = await backgroundColor(
@@ -1637,7 +1652,7 @@ test("paints the design system's components in the application's dark palette", 
 
   // And the application's own chrome is painted from the same token set rather than
   // a hand-picked palette beside it.
-  const panel = await backgroundColor(rail(page));
+  const panel = await backgroundColor(timeline(page));
   expect(panel).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
   expect(panel).toBe(await tokenColor(page, "--background"));
 
