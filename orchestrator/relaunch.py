@@ -57,18 +57,21 @@ def _rendered_turn(record: Any) -> str | None:
     """One recorded turn as a line of prompt context, or ``None`` when it carries none.
 
     Both halves are optional in a history record and either may be absent for a turn
-    that never completed — which is precisely the kind of turn this reads.
+    that never completed — which is precisely the kind of turn this reads. They are
+    bounded *separately* so a long prompt cannot consume the whole turn and leave the
+    answer out; the answer is usually the half worth carrying.
+
+    Redacted before the cut, never after, for the reason every other bounded record
+    here is: a credential split across the boundary would survive it.
     """
     if not isinstance(record, dict):
         return None
     parts = [
-        f"{label}: {' '.join(str(value).split())}"
+        f"{label}: {' '.join(redact(value).split())[: SEED_TURN_CHARS // 2]}"
         for label, key in (("asked", "prompt"), ("answered", "text"))
         if isinstance(value := record.get(key), str) and value.strip()
     ]
-    if not parts:
-        return None
-    return redact("\n".join(parts))[:SEED_TURN_CHARS]
+    return "\n".join(parts)[:SEED_TURN_CHARS] if parts else None
 
 
 def transcript_seed(session: str, *, oneharness_bin: str = "oneharness") -> str | None:
