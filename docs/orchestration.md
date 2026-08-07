@@ -376,12 +376,17 @@ concurrency slot without waiting for an unrelated event.
 lifecycle replacement node that carries both a `branch` pin and a `resume`
 checkpoint is refused at submission when the two name different branches: the
 lifecycle honours the checkpoint's branch and ignores the pin, so the planner
-would not get the branch it named. When the pin and the resume agree but the
+would not get the branch it named. A retry that states a `resume` and **no**
+`branch` is pinned to the resume's own branch, because naming a continuation is
+naming the branch it lives on. When the pin and the resume agree but the
 preserved work can no longer be resumed — it stopped being unattested-incomplete
-because a recovery or an attestation landed on it — the node settles
-`resume-failed` on the pinned branch with that reason, rather than moving to a
-freshly generated branch. Which branch a retry produces is a function of the
-envelope alone; resubmit without a `branch` pin to start the work fresh.
+because a recovery or an attestation landed on it, its branch is gone, or its
+checkpoint is not in the repository — the node settles `resume-failed` on the
+pinned branch with that reason, rather than moving to a freshly generated branch.
+Which branch a retry produces is a function of the envelope alone; resubmit with
+neither a `branch` pin nor a `resume` to start the work fresh. This is why an
+accepted `retry` cannot quietly re-derive the work somewhere else: the reconciler
+either honours the continuation the planner named or the dispatch says why not.
 
 Dropping or retrying a running node sets its cooperative cancellation signal. A
 direct dispatch stops; a lifecycle dispatch preserves commits already made on
@@ -1214,7 +1219,8 @@ watch that its own consumer's completion silently ended would stop reporting
 which is exactly what the reference is for. A consumer with no dependents leaves
 nothing to carry the watch, and it ends there.
 
-A failed lifecycle node whose preserved branch is carried forward is continued
+A failed **or cancelled** lifecycle node whose preserved branch is carried forward
+is continued
 **automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**. The count is
 kept on the plan node's `resume.attempts` and settles the node out of the next
 round once it is spent, exactly as a `drop` would: the failing result stands for

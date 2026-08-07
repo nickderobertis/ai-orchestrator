@@ -1182,16 +1182,41 @@ checkpoint and retries from a fresh worktree as before.
 
 Ordinary later rounds treat an unresolved lifecycle node the same way as a retry
 replacement: if its prior attempt recorded a committed retry checkpoint, the
-unchanged node resumes that branch automatically. A plan's explicit `branch`
-always takes precedence over inferred retry metadata. To deliberately discard a
-preserved attempt and start fresh, set `branch` to a new valid branch name in the
-retry edit. The opt-out belongs on `branch` because it is already the plan's
+unchanged node resumes that branch automatically. That covers a node the round
+**cancelled** as well as one that failed — a cooperative stop (a spent round
+budget, a live retry, a settled sibling) commits its partial work and leaves the
+same incomplete-step marker, so it is a checkpoint rather than a discarded
+attempt, and it spends the same bounded budget. To deliberately discard a
+preserved attempt and start fresh, set `branch` to a *different* valid branch name
+in the retry edit. The opt-out belongs on `branch` because it is already the plan's
 authoritative branch-routing field; a separate reset flag could conflict with it
-and create two sources of truth. The next `branch-discovered` event records
-`resumed: true` only for resume metadata, and `false` for an explicit fresh
-branch. That precedence covers preserved attempts only. A waiting workstream is
+and create two sources of truth. A `branch` naming the preserved branch itself is
+not an opt-out: the dispatch lands on those commits either way, so discarding the
+continuation only lost the record of it and the completed steps it carries. That
+precedence covers preserved attempts only. A waiting workstream is
 not choosing a branch, so an explicit `branch` never discards its pause resume
 and the human steps it already recorded as completed.
+
+**A `resume` the planner names is authoritative.** A `retry` that states one —
+through `just channel-reply` or a `next-round` edits file — is answering "continue
+*this* work", so the edit records it as the branch pin it already implies and
+nothing derived from the round's result overrules it. A pinned branch the lifecycle
+cannot adopt fails the dispatch as `resume-failed`, naming the pin and the reason;
+substituting a fresh branch for a pin the planner named is the defect that rule
+exists to prevent, because the edit is reported as applied and the work is then
+re-derived somewhere else. A continuation the harness carried forward on its own
+may still fall back to a fresh branch when the preserved work is no longer
+adoptable, and it says so where the round is read: `branch-discovered` carries
+`resume_declined` and the settled node's `detail` carries the same reason, beside
+the `retry_lineage` that records the abandoned branch and checkpoint.
+
+`branch-discovered` records the decision rather than leaving it to be inferred
+from a branch name: `resumed` says whether preserved work was adopted,
+`resumed_from` names the checkpoint commit it was adopted at, and
+`resume_declined` is the reason a requested continuation was not. The lifecycle
+that emits the event owns those names; this paragraph restates them, so
+`test_documented_branch_discovered_continuation_fields_track_the_producer` reads
+them off an event a real run emitted and fails when the two drift apart.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a
