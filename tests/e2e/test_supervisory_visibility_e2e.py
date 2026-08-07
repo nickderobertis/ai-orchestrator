@@ -190,6 +190,19 @@ def _wait_for(predicate: object, *, seconds: float, what: str) -> None:
 
 
 def _reply(run_id: str, runs: Path, value: dict[str, object]) -> None:
+    """Answer the relay, once it is actually there to be answered.
+
+    `channel-reply` writes to a FIFO the relay reads, so it only succeeds while that
+    relay is mid-exchange. Consuming a surface is not proof of that: the relay writes
+    `planner-pending.json` on its way to the FIFO and unlinks it once answered, so
+    that file *is* the readiness signal, and waiting for it is the precondition this
+    call already assumed rather than a weaker assertion.
+    """
+    _wait_for(
+        (runs / run_id / "channel" / "planner-pending.json").is_file,
+        seconds=120,
+        what="the relay waiting on a planner reply",
+    )
     subprocess.run(
         ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
@@ -489,14 +502,7 @@ def test_a_driver_that_finished_its_loop_stops_reporting_itself(
     )
 
     _drain(run_id, runs)
-    subprocess.run(
-        ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
-        cwd=REPO_ROOT,
-        input=json.dumps({"completion": True, "reason": "verified"}),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    _reply(run_id, runs, {"completion": True, "reason": "verified"})
     report = runs / run_id / "orchestrator" / "report.json"
     _wait_for(
         lambda: report.is_file() and report.stat().st_size > 0,
