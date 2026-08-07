@@ -32,8 +32,20 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
-RECORDED_RESULT_SCHEMA_VERSION = 6
-ResumeMode = Literal["pause", "retry"]
+RECORDED_RESULT_SCHEMA_VERSION = 7
+#: What a recorded continuation is a continuation *of*, which is what decides the
+#: preconditions the next round validates it against.
+#:
+#: ``pause`` — a human-gated workstream parked at a human step, which is why the plan
+#: parser requires one. ``retry`` — preserved *incomplete* work, and the one mode whose
+#: validation demands the branch still carry unattested incomplete provenance, so a
+#: branch already attested falls back to a fresh one instead of being continued
+#: silently. ``continue`` — a whole branch whose steps all settled and whose
+#: *publication* the merge path refused: it deliberately carries no incomplete marker
+#: (`just recoverable` offers `integrate` for exactly that shape), so it can be neither
+#: of the other two, and before this mode existed such a branch was recorded with no
+#: continuation at all and discarded by the next round's fold.
+ResumeMode = Literal["pause", "retry", "continue"]
 RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
 RETRY_DISPOSITIONS = frozenset(get_args(RetryDisposition))

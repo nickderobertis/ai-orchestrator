@@ -89,7 +89,13 @@ from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
 from orchestrator.relaunch import RELAUNCH_MARK
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
 from orchestrator.results import main as results_main
-from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.runs import (
+    RECORDED_RESULT_SCHEMA_VERSION,
+    NodeId,
+    RunId,
+    prepare_round,
+    write_result,
+)
 from orchestrator.verify import PRESERVED_GATE_LOG_ATTEMPTS, preserved_gate_log_dir
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
@@ -1686,7 +1692,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 6
+    assert first_result["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -1765,7 +1771,8 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 6 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
+    assert "round" not in unrecorded
 
 
 def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever(
@@ -8151,6 +8158,15 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
     assert sleeps == []
     assert github.status_polls == 2
     assert _tip(origin, "main") == before  # required check failed → nothing merged
+    # The branch is whole, pushed, and refused — so the round that follows has to be
+    # able to continue it rather than re-derive it beside this one.
+    assert result.resume is not None, result.detail
+    assert result.resume.branch == result.branch
+    assert result.resume.checkpoint == _tip(origin, result.branch)
+    assert result.resume.mode == "continue"
+    # The required checks refused this *content*, so a continuation that skipped the
+    # step as completed would push the identical tree back at them.
+    assert result.resume.completed_steps == ()
 
 
 def test_github_pending_required_check_keeps_polling_then_merges(tmp_path, bare_origin) -> None:

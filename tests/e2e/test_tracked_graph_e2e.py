@@ -34,7 +34,7 @@ from orchestrator.coordination import advisory_lock, git_lock_identity, lock_pat
 from orchestrator.journal import open_journal
 from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
-from orchestrator.runs import RunId
+from orchestrator.runs import RECORDED_RESULT_SCHEMA_VERSION, RunId
 
 
 def _lock_has_a_blocked_waiter(identity: str) -> bool:
@@ -106,7 +106,7 @@ def _recorded_owners(runs: Path) -> list[int]:
 @pytest.mark.parametrize(
     ("invalid_field", "invalid_value", "message"),
     [
-        ("mode", "unknown", "resume 'mode' must be 'pause' or 'retry'"),
+        ("mode", "unknown", "resume 'mode' must be one of 'continue', 'pause', 'retry'"),
         ("source_round", 0, "resume 'source_round' must be a positive integer"),
     ],
 )
@@ -787,7 +787,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
-    assert first["schema_version"] == 6 and first["round"] == 1
+    assert first["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
@@ -2746,7 +2746,8 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
-    assert direct_payload["schema_version"] == 6 and "round" not in direct_payload
+    assert direct_payload["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
+    assert "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 

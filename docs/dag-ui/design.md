@@ -362,7 +362,7 @@ interface PlanTaskResume {
   checkpoint: string;
   completed_steps?: string[];
   pr?: string | null;
-  mode?: "pause" | "retry";
+  mode?: "pause" | "retry" | "continue";
   source_round?: number;
   attempts?: number;
 }

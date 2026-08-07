@@ -562,7 +562,11 @@ each fork a round that claims a watchdog directory of its own and `exec`s under 
 the sweep judges a round owner or a publication driver by its own liveness rather
 than by the dispatch that started it — and still reaps that tree once it is gone. It
 is the *forked round* that re-`exec`s, never the parent relaying its exit status, and
-it is an `exec` because an inherited stamp cannot be shed in place. See [The successor
+it is an `exec` because an inherited stamp cannot be shed in place. The **driver**
+`orchestrate` launches is the tier above them and gets the same protection by the one
+route a *spawned* process can: its launcher claims the directory before the spawn and
+hands it over the instant the driver has a pid, and only when the launch carries a
+stamp to escape at all. See [The successor
 contract](docs/repo-lifecycle.md#the-successor-contract); never work around a kill
 here with `nohup`/`setsid` by hand. Every
 sweep names the families it examined and the families it could not, so `reclaimed

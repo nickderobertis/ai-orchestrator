@@ -348,7 +348,7 @@ export const planTaskResumeSchema = openObject({
   checkpoint: z.string().min(1),
   completed_steps: z.array(z.string()).optional(),
   pr: z.string().nullable().optional(),
-  mode: z.enum(["pause", "retry"]).optional(),
+  mode: z.enum(["pause", "retry", "continue"]).optional(),
   source_round: counter.positive().optional(),
   attempts: counter.optional(),
 });

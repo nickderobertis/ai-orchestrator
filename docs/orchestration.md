@@ -1428,6 +1428,14 @@ watch that its own consumer's completion silently ended would stop reporting
 which is exactly what the reference is for. A consumer with no dependents leaves
 nothing to carry the watch, and it ends there.
 
+Which failures leave a branch to carry forward is not a judgement the transition
+makes: every settlement that preserves committed work records the continuation, keyed
+on the outcome domain rather than on remembered endings — see [Preserved committed work
+implies a recorded
+continuation](repo-lifecycle.md#preserved-committed-work-implies-a-recorded-continuation).
+A gate rejection and a refused publication both reach the next round pinned to their
+branch with no planner edit.
+
 A failed **or cancelled** lifecycle node whose preserved branch is carried forward
 is continued **automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**.
 The count is

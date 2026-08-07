@@ -70,6 +70,8 @@ from .merge import (
 )
 from .outcomes import (
     ALREADY_INTEGRATED_OUTCOME,
+    PRESERVATION_ELIGIBLE_OUTCOMES,
+    REJECTED_CONTENT_OUTCOMES,
     SUCCESSFUL_LIFECYCLE_OUTCOMES,
     WAITING_HUMAN_OUTCOME,
     LifecycleOutcome,
@@ -627,7 +629,16 @@ def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     )
 
 
-def _preserve_failed_retry(
+#: The eligible outcome this recorder writes an incomplete marker for. Its settlement
+#: interrupted the workstream *mid-merge*, so the branch carries work no gate has cleared
+#: and nothing on it says so. Every other eligible outcome either already carries a
+#: marker a step wrote, or completed its steps and had only its publication refused —
+#: where an "(incomplete step)" marker would be a lie about the branch, and where `just
+#: recoverable` and `just integrate` depend on it not carrying one.
+_MARKED_BY_THIS_RECORDER: frozenset[LifecycleOutcome] = frozenset({"sync-conflict"})
+
+
+def _record_preserved_resume(
     result: LifecycleResult,
     *,
     worktree: Path,
@@ -636,28 +647,73 @@ def _preserve_failed_retry(
     pr_base: str,
     lead: Step,
 ) -> None:
-    """Record committed failed work so the next lifecycle retry resumes it."""
-    if result.outcome != "sync-conflict" or result.resume is not None:
+    """Record how to continue committed work this settlement left on the branch.
+
+    The invariant is "preserved committed work implies recorded resume", and it is
+    keyed on the *outcome domain* rather than on the handful of endings somebody
+    remembered: `replan` carries a preserved branch into the next round only when the
+    recorded result names one, so an unrecorded continuation silently discards a
+    finished branch and the round after re-derives hours of work. It cost a planner
+    three hand-written branch pins in one run — a merge-path gate rejection and a
+    publication that refused its own commit subject, both after every step had settled
+    ``done``. `orchestrator.outcomes.PRESERVATION_ELIGIBLE_OUTCOMES` is the classifying
+    set, and it is a subtraction so that an outcome nobody classifies is eligible.
+    Eligible is all it is: membership admits an outcome to the branch questions below,
+    which are what decide whether anything is actually recorded.
+
+    Reached from the one `finally` every exit passes through, and skipped wherever a
+    settlement recorded its own continuation — the cooperative cancel, the pause at a
+    human step, the workstream that did not complete — because those know things this
+    does not, above all which steps still have to run.
+
+    ``mode`` is read off the branch rather than chosen: ``retry`` is the mode whose
+    validation *demands* unattested incomplete provenance, so claiming it for a branch
+    that carries none produces a pin the next round declines in favour of a fresh
+    branch — which is the discarded work all over again. A branch with no marker is a
+    whole one, and `continue` is its mode.
+    """
+    if result.resume is not None or result.outcome not in PRESERVATION_ELIGIBLE_OUTCOMES:
         return
-    if not gitops.has_commits_ahead(worktree, remote_base):
+    # Everything below is a question about branch history, and this runs on the way out
+    # of a run that may have settled *because* that history stopped answering — a base
+    # ref a concurrent merge deleted is the one that reaches here. A continuation
+    # nothing can compute is one this run does not record; raising instead would replace
+    # the outcome the run actually reached with a failure of its own bookkeeping.
+    try:
+        if not gitops.has_commits_ahead(worktree, remote_base):
+            return
+        if gitops.unmerged_paths(worktree):
+            gitops.merge_abort(worktree)
+        if gitops.is_dirty(worktree):
+            # An uncommitted tree has no checkpoint to name, and committing one here
+            # would publish work under a message nothing chose. Step-level preservation
+            # is what commits a dirty tree; this only records what is already history.
+            return
+        if result.outcome in _MARKED_BY_THIS_RECORDER and not incomplete_commits(
+            worktree, remote_base, "HEAD"
+        ):
+            gitops.commit_empty(worktree, _incomplete_commit_message(lead, pr_base))
+        checkpoint = gitops.head_sha(worktree)
+        mode: ResumeMode = (
+            "retry" if unattested_incomplete(worktree, remote_base, "HEAD") else "continue"
+        )
+    except GitError:
         return
-    if gitops.unmerged_paths(worktree):
-        gitops.merge_abort(worktree)
-    if gitops.is_dirty(worktree):
-        return
-    if not incomplete_commits(worktree, remote_base, "HEAD"):
-        gitops.commit_empty(worktree, _incomplete_commit_message(lead, pr_base))
     result.resume = Resume(
         branch=result.branch,
         base_branch=root_base,
         pr_base=pr_base,
-        checkpoint=gitops.head_sha(worktree),
-        completed_steps=tuple(step.id for step in result.steps if step.status == "done"),
-        mode="retry",
+        checkpoint=checkpoint,
+        completed_steps=(
+            ()
+            if result.outcome in REJECTED_CONTENT_OUTCOMES
+            else tuple(step.id for step in result.steps if step.status == "done")
+        ),
+        mode=mode,
     )
 
 
-def _preserve_gate_failed_work(
+def _preserve_settled_branch(
     result: LifecycleResult,
     *,
     workspace: Workspace,
@@ -665,10 +721,31 @@ def _preserve_gate_failed_work(
     worktree: Path,
     remote_base: str,
 ) -> None:
-    """Hand rejected commits to the registered execution checkout before teardown."""
-    if result.outcome != "gate-failed" or not gitops.has_commits_ahead(worktree, remote_base):
+    """Hand a settled branch's commits to the execution checkout before teardown.
+
+    The run's own clone is disposable, so the checkout is where a recorded `Resume` has
+    to be able to find the branch again. Every eligible outcome that turns out to have
+    commits hands them over for that reason — the same two questions the recorder asks,
+    in the same order, so nothing is recorded that the checkout cannot then produce.
+    Only a merge-path *rejection* says so in its detail, because that
+    is the outcome whose whole point is that finished work was refused and is sitting
+    somewhere an operator has to be told about.
+
+    A base ref that stopped resolving — the failure that settles a run ``error`` in the
+    first place — leaves nothing to compare against, and this reports no handover rather
+    than raising over the outcome the run reached.
+    """
+    if result.outcome not in PRESERVATION_ELIGIBLE_OUTCOMES:
         return
-    if not workspace.mirror_branch(ref, result.branch):
+    try:
+        if not gitops.has_commits_ahead(worktree, remote_base):
+            return
+    except GitError:
+        return
+    mirrored = workspace.mirror_branch(ref, result.branch)
+    if result.outcome != "gate-failed":
+        return
+    if not mirrored:
         result.detail += (
             f"; could not preserve rejected work on branch {result.branch!r} in registered "
             f"execution checkout {result.execution_checkout}"
@@ -2753,7 +2830,7 @@ def run_repo_task(
         if declined and declined not in result.detail:
             result.detail = f"{result.detail}; {declined}" if result.detail else declined
         if worktree is not None:
-            _preserve_failed_retry(
+            _record_preserved_resume(
                 result,
                 worktree=worktree,
                 remote_base=f"origin/{result.pr_base}",
@@ -2761,7 +2838,7 @@ def run_repo_task(
                 pr_base=result.pr_base,
                 lead=lead,
             )
-            _preserve_gate_failed_work(
+            _preserve_settled_branch(
                 result,
                 workspace=workspace,
                 ref=ref,
@@ -3100,7 +3177,10 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         raise PlanError(f"task {nid!r} resume 'pr' must be a GitHub pull-request URL")
     mode = raw.get("mode", "pause")
     if mode not in RESUME_MODES:
-        raise PlanError(f"task {nid!r} resume 'mode' must be 'pause' or 'retry'")
+        raise PlanError(
+            f"task {nid!r} resume 'mode' must be one of "
+            f"{', '.join(repr(known) for known in sorted(RESUME_MODES))}"
+        )
     source_round = raw.get("source_round")
     if source_round is not None and (
         not isinstance(source_round, int) or isinstance(source_round, bool) or source_round < 1
