@@ -149,7 +149,7 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_harness_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep an enclosing dispatch's per-side choice — by any of its names — out of this suite.
 
     A dispatch launched with `--worker-harness` / `--judge-harness` — or with
