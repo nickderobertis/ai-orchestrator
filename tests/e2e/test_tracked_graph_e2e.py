@@ -2306,6 +2306,20 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     assert waiting["human_actions"][0]["ref"] == "waiting-lifecycle/approve"
     assert result["results"]["blocked"]["status"] == "blocked"
     assert result["results"]["no-change-lifecycle"]["outcome"] == "no-changes"
+    # Every agent step names the conversation it ran as, in the journal a planner
+    # reads. This is the only durable statement of *which* conversation a step took,
+    # and a relaunch's whole point is that it is a different one — so a `step-started`
+    # without it leaves the relaunched and the dead turn indistinguishable afterwards.
+    # No `relaunch` key here because nothing was relaunched: it is present only when
+    # it is non-zero, which is what keeps an ordinary step's record unchanged.
+    started = [
+        event
+        for event in records
+        if event["kind"] == "step-started" and event.get("node") == "waiting-lifecycle"
+    ]
+    assert [event.get("step") for event in started] == ["prepare"], started
+    assert started[0]["detail"]["session"].endswith(":prepare"), started[0]
+    assert "relaunch" not in started[0]["detail"], started[0]
 
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:

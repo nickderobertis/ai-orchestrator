@@ -131,7 +131,14 @@ record_boundary_attempt() {
     # The launch creates this directory, but the exported path is the contract and
     # this is what makes it one: a caller that named a log somewhere else gets the
     # record rather than a silent nothing the next round cannot fold.
-    log_dir=$(dirname -- "$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG")
+    # Checked like the clock below: an unchecked `dirname` that failed would leave
+    # `log_dir` empty and hand `mkdir -p ""` a failure about the wrong thing, which
+    # is a worse account of the missing record than saying the path could not be
+    # derived at all.
+    log_dir=$(dirname -- "$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG") && [ -n "$log_dir" ] || {
+        echo "oneharness-orchestrator: could not derive the directory of $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG, so this retry cannot be recorded and the next round cannot fold it into the run journal — point ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG at an ordinary path, or unset it" >&2
+        return 0
+    }
     mkdir_error=$(mkdir -p "$log_dir" 2>&1) || {
         # Printed at once, unlike the retry notices: this is not narration of a
         # recovery that worked, it is the durable record of one going missing, and a

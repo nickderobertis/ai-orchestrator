@@ -16,6 +16,10 @@ version — is the file as shipped, so an example that stops being runnable fail
 here rather than on an operator's first attempt.
 """
 
+# llmlint: ignore-file[e2e_not_mocked] Only the paid model backend is a double — onejudge's
+# own `command` provider pointed at tests/e2e/fake_backend.py, the suite-wide invariant, and
+# the one external dependency the free gate cannot run. `just orchestrate`, onejudge, the
+# channel, the ledger, the run journal, the clone, the gate, and the merge are all real.
 # llmlint: ignore-file[live_tier_compiles_and_requires_credential] the onejudge_bin fixture fails
 # fast unless the real adopted onejudge CLI is on PATH, and this journey drives it as a real
 # subprocess; per the documented suite invariant only the paid model backend is faked via
