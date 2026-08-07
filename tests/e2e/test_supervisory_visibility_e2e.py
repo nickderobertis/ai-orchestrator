@@ -538,6 +538,12 @@ def test_a_driver_that_finished_its_loop_stops_reporting_itself(
     assert driver["phase"] == "finished", driver
 
 
+# llmlint: ignore[tests_mirror_real_usage] The command under test is `just runs`, and it
+# is driven for real. What is staged is the run directory it reads, deliberately: a
+# parked launch is one that is alive with nothing running underneath it, which a real
+# `just orchestrate` is never in while it is still running — so producing this state
+# through that command is not merely slower, it is unreachable. The journeys that can
+# reach their state through the real interface (above) do.
 def _launched(runs: Path, run_id: str, *, pid: int) -> Path:
     """One run directory in the on-disk shape `just orchestrate` leaves behind."""
     run = runs / run_id

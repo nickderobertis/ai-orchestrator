@@ -586,6 +586,13 @@ def _captured_failure(captures: Sequence[SupervisoryCapture]) -> str | None:
     return max(recorded, key=lambda item: item[0])[1] if recorded else None
 
 
+# llmlint: ignore[changed_behavior_has_e2e] The phases a live journey can hold still
+# for are covered end to end (executing-run-plan, surfacing, finished). These three
+# cannot be: `starting` is the sub-second window before `run-plan` writes round-01, and
+# reaching `reviewing-results` or a non-live `driving-round` means catching a real
+# orchestrator between writing a result and opening the next round. Asserting them
+# through a journey would mean racing the driver and reporting the loser as a defect,
+# so they are proven against recorded round state in `tests/test_supervisory.py`.
 def _round_phase(run_dir: Path) -> tuple[SupervisoryPhase, int | None]:
     """The phase the latest recorded round places the driver in, and that round."""
     latest = latest_round(run_dir)
