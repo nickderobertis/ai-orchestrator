@@ -383,8 +383,9 @@ def test_records_damaged_after_they_were_written_degrade_rather_than_raise(
 
     session = f"orchestrator-{run_dir.name}"
     open_capture(run_dir, session=session, agent_role="orchestrator")
-    # Turns recorded in a shape this scheme never wrote are dropped, not served, and
-    # an unparseable stamp contributes nothing to the last-request answer.
+    # Turns recorded in a shape this scheme never wrote are dropped, and so is one
+    # nothing can place in time: a served turn becomes an event's `at` on a rendered
+    # timeline, where an unparseable stamp is a lie rather than a gap.
     capture_path(run_dir, session).write_text(
         json.dumps(
             {
@@ -394,14 +395,21 @@ def test_records_damaged_after_they_were_written_degrade_rather_than_raise(
                 "started_at": "2026-08-06T10:00:00+00:00",
                 "status": "running",
                 "round": True,
-                "turns": ["not a turn", {"at": "whenever", "text": "unplaceable"}],
+                "finished_at": "whenever",
+                "turns": [
+                    "not a turn",
+                    {"at": "whenever", "text": "unplaceable"},
+                    {"at": "2026-08-06T10:01:00+00:00", "text": "placeable"},
+                ],
             }
         ),
         encoding="utf-8",
     )
     captured = load_captures(run_dir)[0]
     assert captured.round is None
-    assert [turn["text"] for turn in captured.turns] == ["unplaceable"]
+    # An end nothing can parse reads as "not closed", which is the honest state.
+    assert captured.finished_at is None
+    assert [turn["text"] for turn in captured.turns] == ["placeable"]
     assert driver_state(run_dir) is not None
 
     # A capture replaced by something unreadable stops accepting writes, silently.

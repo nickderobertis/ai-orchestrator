@@ -330,6 +330,12 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _stamp_text(value: object) -> str | None:
+    """One recorded timestamp string, or ``None`` when it is not one."""
+    text = _text(value)
+    return text if text is not None and _parse(text) is not None else None
+
+
 def _turns(value: object) -> tuple[CapturedTurn, ...]:
     if not isinstance(value, list):
         return ()
@@ -339,7 +345,9 @@ def _turns(value: object) -> tuple[CapturedTurn, ...]:
             continue
         at = _text(item.get("at"))
         text = _text(item.get("text"))
-        if at is not None and text is not None:
+        # A turn nothing can place in time is dropped rather than served: it becomes an
+        # event's `at` on a rendered timeline, where an unparseable one is a lie.
+        if at is not None and text is not None and _parse(at) is not None:
             found.append({"at": at, "text": text[:MAX_CAPTURED_TURN_CHARS]})
     return tuple(found)
 
@@ -384,7 +392,9 @@ def _record(raw: Mapping[str, Any]) -> CaptureRecord | None:
         "agent_role": role,
         "started_at": started,
         "status": _text(raw.get("status")) or "running",
-        "finished_at": _text(raw.get("finished_at")),
+        # An end nothing can parse reads as "not closed", which is the honest state for
+        # a capture whose finish this scheme cannot place in time.
+        "finished_at": _stamp_text(raw.get("finished_at")),
         "turns": list(_turns(raw.get("turns"))),
     }
     if (persona := _text(raw.get("persona"))) is not None:

@@ -252,6 +252,10 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
     recorded = json.loads(check_in_capture.read_text(encoding="utf-8"))
     assert recorded["agent_role"] == "check-in"
     assert recorded["round"] == 1
+    # Recorded from the raised dispatch error, not from a returned report: a harness
+    # that refuses the write fails the dispatch outright, so the capture has to be
+    # closed on the way out rather than after a result nobody gets.
+    assert "onejudge failed" in recorded["history_failure"], recorded
     # The pacemaker retries this round's check-in, and the retry reuses this capture;
     # the refusal is what stays true once it has happened, so it is what is asserted.
     assert "lacks complete v1.0 telemetry" in recorded["history_failure"]
@@ -353,6 +357,17 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         assert resolved.status_code == 200
         assert resolved.json()["conversation"]["id"] == conversation_id
         assert resolved.json()["attribution"]["agentRole"] == "orchestrator"
+
+        # A capture torn by a partial write costs only itself: the run still serves the
+        # spans its other sources carry, which is the whole point of an optional source.
+        check_in_capture.write_text("{", encoding="utf-8")
+        after = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()
+        roles = {
+            span.get("agent_role")
+            for span in after["spans"]
+            if span["kind"] == "dispatch" and "agent_role" in span
+        }
+        assert roles == {"orchestrator"}, after
 
     # And marks it explicitly once it is gone: the state four stranded runs were in.
     with suppress(ProcessLookupError, PermissionError):
