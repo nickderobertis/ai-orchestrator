@@ -140,8 +140,12 @@ def _launch(tmp_path: Path, plan: Path, runs: Path, onejudge_bin: str) -> str:
     return str(json.loads(launched.stdout)["run_id"])
 
 
-def _complete(run_id: str, runs: Path, run_dir: Path) -> None:
-    """Answer the planner boundary and wait for the orchestrator's own report."""
+#: The surfaces a completion verdict answers. Anything else a round raises is an
+#: update the planner reads on the way to one of these.
+BOUNDARY_KINDS = ("milestone", "closeout")
+
+
+def _next_surface(run_id: str, runs: Path) -> dict[str, Any]:
     surfaced = subprocess.run(
         [
             "just",
@@ -157,7 +161,35 @@ def _complete(run_id: str, runs: Path, run_dir: Path) -> None:
         capture_output=True,
         check=True,
     )
-    assert json.loads(surfaced.stdout)["surface"]["kind"] in {"milestone", "closeout"}
+    return dict(json.loads(surfaced.stdout or "{}").get("surface") or {})
+
+
+def _await_boundary(run_id: str, runs: Path) -> dict[str, Any]:
+    """Read surfaces until the round's own boundary, which is what a verdict answers.
+
+    A node that settles with an assessment has it surfaced as a *non-blocking*
+    proposal, and the round does not wait on one — so whether it or the boundary
+    reaches the channel first is a matter of when the pump's service thread runs,
+    and under load it is the proposal. Reading exactly one surface and requiring it
+    to be the boundary therefore fails on a healthy run; worse, replying `completion`
+    to the proposal would spend the verdict on a surface nothing was waiting for and
+    leave the boundary unanswered. A planner reads past updates to the question.
+    """
+    wait = deadline(SETTLE_TIMEOUT)
+    while time.monotonic() < wait:
+        surface = _next_surface(run_id, runs)
+        if surface.get("kind") in BOUNDARY_KINDS:
+            return surface
+        assert surface, f"{run_id} raised no surface before its boundary"
+        # Only a non-blocking update may precede the boundary. A blocking one is the
+        # round asking something this journey did not expect, and is a real failure.
+        assert surface.get("blocking") is False, surface
+    raise AssertionError(f"{run_id} never reached a planner boundary")
+
+
+def _complete(run_id: str, runs: Path, run_dir: Path) -> None:
+    """Answer the planner boundary and wait for the orchestrator's own report."""
+    _await_boundary(run_id, runs)
     subprocess.run(
         ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
