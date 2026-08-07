@@ -150,7 +150,16 @@ dispatch onejudge.
    the progress views report as `PARKED` is alive and not working — no child process,
    no surface, no ledger write — so treat it as stopped and intervene rather than
    waiting on it; that liveness verdict is unrelated to a node the planner *parked*
-   with `cancel`, which is a deliberate idle. `channel-reply` refuses an edit it
+   with `cancel`, which is a deliberate idle. A run whose *driver* is dead but whose
+   ledger is intact is not lost and must not be relaunched under a new id: `just
+   orchestrate --adopt <run-id>` attaches a fresh orchestrator to it, keeping the run
+   id, journal, ledger, and anchors, and refuses another session's run, one something
+   is still driving, and one with no relaunch record — see [Adopting a run whose
+   driver died](docs/orchestration.md#adopting-a-run-whose-driver-died). Mid-round,
+   the round itself surfaces a **non-blocking** update for a dispatch that has
+   recorded nothing past its stall threshold; that is evidence to act on, not a
+   verdict, so decide between `cancel`, `retry`, and letting it run.
+   `channel-reply` refuses an edit it
    cannot apply, with the reason, and every edit it accepts reaches the graph; a
    non-zero reply is a rejection to correct, never a command to resend.
 
@@ -471,6 +480,14 @@ load averages with that same attribution, and **`just host`** is the whole-host
 view — per live dispatch, its owning session, run/node, role, turn age, and load
 contribution. Miscounting live dispatches from `ps`, and missing a judge turn wedged
 for nearly two hours, are what these replace.
+They also report the tier *above* those dispatches: one driver line per unfinished
+launch naming whether the orchestrator's recorded pid is still there, which part of
+its loop the run's own state places it in, and how long since anything of it was last observed doing something.
+A driver this host has proved is gone reads `DRIVER DEAD … nothing is driving this
+run` — distinct from `PARKED`, which is a launch that still holds its pid. The same
+tier is served as run-scope timeline spans, from a bounded local capture when the
+harness refused to write its history; see [Seeing the supervisory
+tier](docs/telemetry.md#seeing-the-supervisory-tier).
 **`just recoverable`** is the other half of that: every preserved-but-unpublished
 branch across the registered identities, where it lives, why its workstream stopped,
 whether it carries an incomplete-step marker, and the exact command that lands it —

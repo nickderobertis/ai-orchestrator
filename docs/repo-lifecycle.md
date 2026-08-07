@@ -94,6 +94,26 @@ a worktree under its own run root and gets its own. A name that repeated across
 runs would ask the harness to resume a conversation it filed under a directory
 that no longer exists, which fails before the first turn.
 
+**A relaunch is the one continuation that must not continue.** Every relaunch above
+follows a dispatch that died leaving nothing behind — on this host, a provider
+refusing the turn — and the conversation it died in is bound to the identity that
+refused. Reusing its name asks that identity for a session it may no longer hold,
+and `No conversation found with session ID ...` is another death, which earns
+another relaunch, which asks again; whole lineages have been spent on that loop
+without one turn of work. So relaunch *N* dispatches as `<session>#relaunchN`
+(`orchestrator/relaunch.py`), which is also what frees the fallback chain to run
+the turn on whichever identity still can — a fresh conversation carries no binding
+across harnesses.
+
+Continuity comes from context rather than from the session. The dead conversation's
+own recorded turns are read back out of oneharness history, bounded and redacted,
+and given to the relaunched dispatch as prompt text ahead of the task, stating
+plainly that the prior session is gone and cannot be resumed. A history read that
+finds nothing — including the death that happened before the first turn ever
+recorded — degrades to the task alone, because the seed improves a relaunch and is
+never a precondition for one. The turn-cap resume is deliberately *not* a relaunch
+and keeps its conversation: it is continuing work the harness still holds.
+
 `just run-plan <plan.json>` runs one, over a plan holding a single lifecycle node
 (`examples/single-node-lifecycle.plan.json`); it is the only executor, so there is
 no second path a single workstream can take. The node's `repo` is a GitHub
@@ -1182,16 +1202,54 @@ checkpoint and retries from a fresh worktree as before.
 
 Ordinary later rounds treat an unresolved lifecycle node the same way as a retry
 replacement: if its prior attempt recorded a committed retry checkpoint, the
-unchanged node resumes that branch automatically. A plan's explicit `branch`
-always takes precedence over inferred retry metadata. To deliberately discard a
-preserved attempt and start fresh, set `branch` to a new valid branch name in the
-retry edit. The opt-out belongs on `branch` because it is already the plan's
+unchanged node resumes that branch automatically. That covers a node the round
+**cancelled** as well as one that failed — a cooperative stop (a spent round
+budget, a live retry, a settled sibling) commits its partial work and leaves the
+same incomplete-step marker, so it is a checkpoint rather than a discarded
+attempt, and it spends the same bounded budget. To deliberately discard a
+preserved attempt and start fresh, set `branch` to a *different* valid branch name
+in the retry edit. The opt-out belongs on `branch` because it is already the plan's
 authoritative branch-routing field; a separate reset flag could conflict with it
-and create two sources of truth. The next `branch-discovered` event records
-`resumed: true` only for resume metadata, and `false` for an explicit fresh
-branch. That precedence covers preserved attempts only. A waiting workstream is
+and create two sources of truth. A `branch` naming the preserved branch itself is
+not an opt-out: the dispatch lands on those commits either way, so discarding the
+continuation only lost the record of it and the completed steps it carries. That
+precedence covers preserved attempts only. A waiting workstream is
 not choosing a branch, so an explicit `branch` never discards its pause resume
 and the human steps it already recorded as completed.
+
+**A `resume` the planner names is authoritative.** A `retry` that states one —
+through `just channel-reply` or a `next-round` edits file — is answering "continue
+*this* work", so the edit records it as the branch pin it already implies and
+nothing derived from the round's result overrules it. A pinned branch the lifecycle
+cannot adopt fails the dispatch as `resume-failed`, naming the pin and the reason;
+substituting a fresh branch for a pin the planner named is the defect that rule
+exists to prevent, because the edit is reported as applied and the work is then
+re-derived somewhere else.
+
+**A precondition the harness cannot even check is a resume failure too.** Adopting
+the preserved branch, resolving the checkpoint, reading the provenance over
+`origin/<pr-base>`, and querying a recorded draft are all git or GitHub calls that
+can fail outright rather than answer — a stacked `pr_base` a prerequisite's merge
+deleted from origin is the common one. Each raised straight past the resume
+reporting into the handler that wraps publication, so the node settled as
+`merge-path failure: publication of <branch>` — a phase the run stops well short
+of, since it never cuts a worktree. It now settles `resume-failed` with
+`cannot check whether <precondition> for branch <branch> at recorded checkpoint
+<sha>`, and `just results` renders that reason beside the status. Nothing falls
+back to a fresh branch on this path: an unanswered question is not evidence that
+the preserved work is unusable. A continuation the harness carried forward on its own
+may still fall back to a fresh branch when the preserved work is no longer
+adoptable, and it says so where the round is read: `branch-discovered` carries
+`resume_declined` and the settled node's `detail` carries the same reason, beside
+the `retry_lineage` that records the abandoned branch and checkpoint.
+
+`branch-discovered` records the decision rather than leaving it to be inferred
+from a branch name: `resumed` says whether preserved work was adopted,
+`resumed_from` names the checkpoint commit it was adopted at, and
+`resume_declined` is the reason a requested continuation was not. The lifecycle
+that emits the event owns those names; this paragraph restates them, so
+`test_documented_branch_discovered_continuation_fields_track_the_producer` reads
+them off an event a real run emitted and fails when the two drift apart.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a

@@ -639,6 +639,106 @@ def test_a_transition_survives_a_journal_it_cannot_fold(
     assert [task["id"] for task in carried["tasks"]] == ["iterate"], carried
 
 
+def test_a_transition_refuses_the_edits_it_cannot_interpret(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """`just next-round` refuses an edits file it cannot fully apply, by name.
+
+    Every other door a planner edits a graph through applies each edit or names its
+    refusal. This one used to read an unknown key as an absent one: a version-1 live
+    edit envelope — the shape `docs/orchestration.md` documents for `channel-reply`
+    — handed to this compatibility input derived the *unedited* round and exited 0.
+    The planner found out the edit had not applied when the round dispatched the
+    stale node definition, a full round of quota later. Refusal has to be visible at
+    the boundary, with nothing written behind it.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "unreadable-edits.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {"id": "settle", "persona": "engineer", "task": "complete-now: settle."},
+                    {
+                        "id": "iterate",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = (
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    ran = _just("run-plan", str(plan), "--run", "unreadable-edits", *common)
+    assert ran.returncode == 1, ran.stderr
+
+    run_dir = runs / "unreadable-edits"
+    journal = run_dir / "events.jsonl"
+    settled = journal.read_bytes()
+
+    envelope = tmp_path / "envelope.json"
+    envelope.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "commands": [
+                    {
+                        "op": "retry",
+                        "id": "iterate",
+                        "node": {
+                            "id": "iterate-corrected",
+                            "persona": "engineer",
+                            "task": "complete-now: corrected.",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    refused = _just("next-round", "unreadable-edits", str(envelope), "--plan-only", *common)
+    assert refused.returncode != 0, refused.stdout
+    # Named, not merely rejected: the two keys it could not read, and the one command
+    # that does apply them. A planner holding a valid envelope needs the door, not a
+    # vocabulary list.
+    assert "'commands'" in refused.stderr and "'version'" in refused.stderr, refused.stderr
+    assert "just channel-reply" in refused.stderr, refused.stderr
+    assert not (run_dir / "round-02").exists()
+    assert journal.read_bytes() == settled
+
+    # Not an envelope special case — any key this input cannot apply is refused the
+    # same way, because the failure is "asked for something and got silence".
+    typo = tmp_path / "typo.json"
+    typo.write_text(json.dumps({"dropp": ["iterate"]}), encoding="utf-8")
+    mistyped = _just("next-round", "unreadable-edits", str(typo), "--plan-only", *common)
+    assert mistyped.returncode != 0, mistyped.stdout
+    assert "'dropp'" in mistyped.stderr, mistyped.stderr
+    assert not (run_dir / "round-02").exists()
+    assert journal.read_bytes() == settled
+
+    # And the recognized legacy vocabulary is untouched: the same transition, with an
+    # edit this input has always spoken, derives exactly the round it always did.
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"retry": {"iterate": {"max_turns": 3}}}), encoding="utf-8")
+    accepted = _just("next-round", "unreadable-edits", str(legacy), "--plan-only", *common)
+    assert accepted.returncode == 0, accepted.stderr
+    derived = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert [task["id"] for task in derived["tasks"]] == ["iterate"], derived
+    assert derived["tasks"][0]["max_turns"] == 3, derived
+
+
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
@@ -2306,6 +2406,20 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     assert waiting["human_actions"][0]["ref"] == "waiting-lifecycle/approve"
     assert result["results"]["blocked"]["status"] == "blocked"
     assert result["results"]["no-change-lifecycle"]["outcome"] == "no-changes"
+    # Every agent step names the conversation it ran as, in the journal a planner
+    # reads. This is the only durable statement of *which* conversation a step took,
+    # and a relaunch's whole point is that it is a different one — so a `step-started`
+    # without it leaves the relaunched and the dead turn indistinguishable afterwards.
+    # No `relaunch` key here because nothing was relaunched: it is present only when
+    # it is non-zero, which is what keeps an ordinary step's record unchanged.
+    started = [
+        event
+        for event in records
+        if event["kind"] == "step-started" and event.get("node") == "waiting-lifecycle"
+    ]
+    assert [event.get("step") for event in started] == ["prepare"], started
+    assert started[0]["detail"]["session"].endswith(":prepare"), started[0]
+    assert "relaunch" not in started[0]["detail"], started[0]
 
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:

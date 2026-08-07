@@ -164,6 +164,58 @@ def test_drafted_body_validation(body, expected) -> None:
 
 
 @pytest.mark.reads_docs
+def test_documented_branch_discovered_continuation_fields_track_the_producer(
+    tmp_path, bare_origin
+) -> None:
+    """The prose names the continuation fields; the lifecycle decides what they are.
+
+    `docs/repo-lifecycle.md` tells a planner how to read `branch-discovered` — which
+    field says work was adopted, which names the commit, which carries the reason it
+    was not. That is a restatement of the event, so it needs a gate: the names come
+    from an event this run actually emitted, and each has to be documented. Renaming
+    or dropping one in the producer fails here rather than leaving the prose
+    describing a field nobody writes.
+    """
+    from orchestrator import gitops
+    from orchestrator.dispatch import Report
+    from orchestrator.journal import NodeJournal, open_journal
+    from orchestrator.runs import NodeId, RunId
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "canonical-branch-discovered")
+    install_pre_push_hook(publication)
+
+    def writing_dispatch(persona, task, *, project_dir, **_kw):
+        Path(project_dir, "documented.txt").write_text("documented\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    workspace = Workspace(
+        tmp_path / "ws-branch-discovered",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    journal = open_journal(tmp_path / "run-bd", RunId("run-bd"), 1)
+    result = run_repo_task(
+        str(origin),
+        "Document the continuation fields.",
+        "engineer",
+        workspace=workspace,
+        recorded_gate=["true"],
+        dispatch_fn=writing_dispatch,
+        journal=NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId("run-bd"), round=1),
+    )
+    assert result.outcome == "merged", result.detail
+
+    discovered = next(event for event in journal.events() if event.kind == "branch-discovered")
+    continuation = {"resumed", "resumed_from", "resume_declined"}
+    assert continuation <= set(discovered.detail), discovered.detail
+    docs = (Path(__file__).parents[1] / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
+    for field_name in sorted(continuation):
+        assert f"`{field_name}`" in docs
+
+
+@pytest.mark.reads_docs
 def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> None:
     """Make intentional contract copies fail together when the template changes."""
     root = Path(__file__).parents[1]
@@ -1986,6 +2038,23 @@ def test_one_node_plan_writes_output_file(monkeypatch, tmp_path) -> None:
     assert rc == 0 and '"outcome"' in out.read_text(encoding="utf-8")
 
 
+def _own_ledger(tmp_path) -> list[str]:
+    """Give a `main_plan` call its own run ledger instead of the relative default.
+
+    `--runs-dir` defaults to a relative ``runs``, which every test here resolves
+    against the one working directory pytest shares — so several tests claimed
+    rounds in a single ledger inside the checkout. Nothing serialized them: the
+    ledger lock lives under ``AI_ORCHESTRATOR_HOME``, and conftest's autouse
+    `_isolate_orchestrator_home` gives each test its own, so two tests holding
+    "the same" lock hold different files. Under the suite's four workers they
+    raced the window between creating a round directory and writing its
+    ``plan.json``, and the loser failed reading a plan that did not exist yet.
+    The claim itself is right, and so is exiting 2 when it cannot be made; what a
+    caller owes it is a ledger of its own, which is what the e2e journeys pass.
+    """
+    return ["--runs-dir", str(tmp_path / "runs")]
+
+
 def test_main_plan_bad_plan_exit_2(tmp_path, capsys) -> None:
     rc = lc.main_plan([str(tmp_path / "missing.json")])
     assert rc == 2 and "repo-plan:" in capsys.readouterr().err
@@ -2005,7 +2074,7 @@ def test_main_plan_happy(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    rc = lc.main_plan([plan_file, "--format", "json"])
+    rc = lc.main_plan([plan_file, "--format", "json", *_own_ledger(tmp_path)])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True and payload["results"]["a"]["outcome"] == "merged"
@@ -2025,7 +2094,7 @@ def test_main_plan_human_format(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    rc = lc.main_plan([plan_file])  # human format (default)
+    rc = lc.main_plan([plan_file, *_own_ledger(tmp_path)])  # human format (default)
     assert rc == 1  # not ok
     assert "repo-plan" in capsys.readouterr().out
 

@@ -26,12 +26,13 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import replace
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import NamedTuple, TypeVar, cast
 
 import pytest
 from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
+from history_store import write_worker_session
 from rendezvous import Rendezvous
 from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
@@ -50,6 +51,7 @@ from orchestrator.dispatch import (
 )
 from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
+from orchestrator.graph import main as run_plan_main
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.labels import parse_labels
@@ -66,6 +68,7 @@ from orchestrator.lifecycle import (
     Step,
     load_repo_plan,
     main_plan,
+    make_repo_runner,
     result_payload,
     run_repo_plan,
     run_repo_task,
@@ -83,7 +86,9 @@ from orchestrator.provenance import (
 from orchestrator.provider_health import failure_rollups
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
+from orchestrator.relaunch import RELAUNCH_MARK
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
+from orchestrator.results import main as results_main
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
@@ -250,6 +255,20 @@ def _has_file(origin: Path, ref: str, path: str) -> bool:
         ).returncode
         == 0
     )
+
+
+def _preserved_branch_clone(workspace: Path, branch: str) -> Path:
+    """The clone still holding a preserved branch, which is where it survives.
+
+    A dispatch that raised never reached publication, so its branch exists only in
+    the per-run clone the workstream worked in — retained for recovery rather than
+    pushed anywhere. This is the same place `just recoverable` looks for one.
+    """
+    for candidate in sorted(workspace.rglob(".git")):
+        clone = candidate.parent
+        if gitops.branch_exists(clone, branch):
+            return clone
+    raise AssertionError(f"no clone under {workspace} carries branch {branch!r}")
 
 
 def _tip(origin: Path, ref: str) -> str:
@@ -678,9 +697,11 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     canonical = gitops.clone(origin, tmp_path / "canonical-relaunched")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
     launches: list[str] = []
+    dispatched_tasks: list[str] = []
 
     def dying_then_working(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
         launches.append(persona)
+        dispatched_tasks.append(task)
         if len(launches) == 1:
             return _launch_death(persona)
         worktree = Path(project_dir)
@@ -705,6 +726,11 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     assert launches == ["engineer", "engineer"]
     # The relaunch waited rather than asking the same refusing provider at once.
     assert waits == [RELAUNCH_BACKOFF_SECONDS]
+    # A death before the first turn records no conversation, so there is nothing to
+    # seed the relaunch with — and the relaunched dispatch is given exactly the task,
+    # unchanged, which is the behaviour that existed before seeding did.
+    assert dispatched_tasks == [dispatched_tasks[0]] * 2
+    assert "Prior session context" not in dispatched_tasks[1]
     assert _has_file(origin, "main", "cost-report.txt")
 
 
@@ -762,6 +788,81 @@ def test_an_empty_death_after_committed_work_relaunches_onto_the_preserved_branc
     # and the work that finished afterwards reach the base together.
     assert _has_file(origin, "main", "partial.txt")
     assert _has_file(origin, "main", "finished.txt")
+
+
+def test_a_relaunch_starts_a_fresh_seeded_session_and_never_resumes_the_dead_one(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    """The relaunch after a provider death takes a conversation of its own.
+
+    Reusing the name asks the identity that just refused for a session it may no
+    longer hold, and `No conversation found with session ID ...` is another death,
+    which earns another relaunch — the loop that spent whole lineages without a turn
+    of work. So the second dispatch is a *new* conversation, and the dead one is read
+    back out of oneharness history and carried forward as prompt text instead.
+
+    The history store here is the real one: the dying dispatch records a session in
+    oneharness' own line format, and the seed is read back through the real
+    `oneharness history` CLI, exactly as production reads it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-seeded-relaunch")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    history_dir = tmp_path / "history"
+    store = history_dir / "seeded-relaunch-project"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    dispatched: list[tuple[str, str]] = []
+
+    def dying_then_working(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        dispatched.append((session, task))
+        worktree = Path(project_dir)
+        if len(dispatched) == 1:
+            # What the dead conversation leaves behind: a real recorded session,
+            # under the very name this dispatch ran as.
+            write_worker_session(
+                store / "dying-dispatch-20260806T120000Z-1.jsonl",
+                project=worktree,
+                name=session,
+                prompt="Measure the lifecycle cost and write cost-report.txt.",
+            )
+            return _launch_death(persona)
+        (worktree / "cost-report.txt").write_text("measured\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: report lifecycle cost")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "seeded-relaunch-worktrees"),
+        branch="feature/seeded-relaunch",
+        dispatch_fn=dying_then_working,
+        recorded_gate=["true"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert len(dispatched) == 2, dispatched
+    (dead_session, _), (fresh_session, relaunched_task) = dispatched
+    # A new conversation, not the dead one — and the dead name is never asked for again.
+    assert fresh_session != dead_session
+    assert fresh_session == f"{dead_session}{RELAUNCH_MARK}1"
+    assert [session for session, _ in dispatched].count(dead_session) == 1
+    # And the work continues from what the dead conversation recorded, carried as
+    # prompt text rather than as a session to resume.
+    assert "Prior session context (bounded)" in relaunched_task
+    assert "Measure the lifecycle cost and write cost-report.txt." in relaunched_task
+    assert "Implemented the unified view." in relaunched_task
+    assert "NOT being resumed" in relaunched_task
+    # The original task is still the task; the seed is context in front of it.
+    assert relaunched_task.endswith(
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n"
+    )
+    assert _has_file(origin, "main", "cost-report.txt")
 
 
 @pytest.mark.parametrize(
@@ -1976,6 +2077,13 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     assert fresh_discovered[0]["detail"]["branch"] == fresh_branch
     assert fresh_discovered[0]["detail"]["resumed"] is False
 
+    # Pinning the *preserved* branch is not the opt-out: the dispatch lands on those
+    # commits either way, so this continues them and records that it did — but only
+    # when the pin names the branch *this* round's result preserved. Round three
+    # moved the node to `fresh_branch`, so that is what round three preserved, and
+    # the pin below names the older branch instead: the harness holds no checkpoint
+    # for it, and continuing a branch it cannot say where to continue from is the
+    # one thing it must not claim. The dispatch still lands on the branch's commits.
     pin = tmp_path / "pin-existing.json"
     pin.write_text(
         json.dumps({"retry": {"change": {"branch": branch}}}),
@@ -2004,6 +2112,736 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     assert len(pinned_discovered) == 1
     assert pinned_discovered[0]["detail"]["branch"] == branch
     assert pinned_discovered[0]["detail"]["resumed"] is False
+    assert pinned_discovered[0]["detail"]["resumed_from"] == ""
+
+    # And the same pin once the round it names *has* preserved that branch: round
+    # four failed on it and recorded a checkpoint, so the identical edit now
+    # continues the work rather than landing on the commits without saying so.
+    # A branch pin is only ever a routing decision — this is the routing that means
+    # "keep going", and the journal has to be able to tell it from a fresh start.
+    continued_from = fourth["resume"]["checkpoint"]
+    assert next_round_main(["ordinary-resume", str(pin), "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    fifth = json.loads(
+        (runs_dir / "ordinary-resume" / "round-05" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    assert fifth["branch"] == branch
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "ordinary-resume" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    continued = [
+        event
+        for event in events
+        if event["round"] == 5
+        and event["kind"] == "branch-discovered"
+        and event["node"] == "change"
+    ]
+    assert len(continued) == 1
+    assert continued[0]["detail"]["branch"] == branch
+    assert continued[0]["detail"]["resumed"] is True
+    assert continued[0]["detail"]["resumed_from"] == continued_from
+    assert gitops.is_ancestor(canonical, continued_from, branch)
+
+
+#: Dispatches one round makes of a step that never completes: the first, plus every
+#: automatic in-round continuation of it. A journey whose provider must die for a
+#: whole round names this rather than a literal, so the constant stays its one source.
+_DISPATCHES_PER_ROUND = MAX_AUTOMATIC_STEP_RESUMES + 1
+
+
+class _DyingRun(NamedTuple):
+    """A recorded run whose first round lost its dispatch after it committed."""
+
+    runs_dir: Path
+    canonical: Path
+    run: str
+    common: list[str]
+    branch: str
+    checkpoint: str
+
+    def recorded(self, number: int, name: str) -> dict:
+        recorded = self.runs_dir / self.run / f"round-{number:02d}" / name
+        return json.loads(recorded.read_text(encoding="utf-8"))
+
+    def branch_discovered(self, round_number: int) -> dict:
+        events = [
+            json.loads(line)
+            for line in (self.runs_dir / self.run / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        discovered = [
+            event
+            for event in events
+            if event["round"] == round_number
+            and event["kind"] == "branch-discovered"
+            and event["node"] == "change"
+        ]
+        assert len(discovered) == 1, discovered
+        return discovered[0]["detail"]
+
+
+def _round_one_lost_its_dispatch(
+    tmp_path: Path, bare_origin, command_base, personas_dir, *, run: str
+) -> _DyingRun:
+    """Drive one real round whose provider dies after the worker commits its work.
+
+    The reported incident, reproduced through the real round CLI: every dispatch of
+    the round commits and is then killed by a provider fault at closeout, so the
+    round settles with finished work on a branch and no report that describes it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-{run}")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    latch = tmp_path / f"{run}.deaths"
+    plan_path = tmp_path / f"{run}.plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now write-change die-after-commit={latch} "
+                            f"die-times={_DISPATCHES_PER_ROUND}"
+                        ),
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    assert run_plan_main([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    first = json.loads((runs_dir / run / "round-01" / "result.json").read_text(encoding="utf-8"))[
+        "results"
+    ]["change"]
+    assert first["status"] == "failed"
+    assert first["outcome"] == "not-completed"
+    assert "harness failed (quota)" in first["detail"]
+    # The whole point of the journey: the dispatcher raised, so no report described
+    # what the worker left — and the branch is carrying it anyway.
+    assert first["resume"] is not None, first
+    return _DyingRun(
+        runs_dir=runs_dir,
+        canonical=canonical,
+        run=run,
+        common=common,
+        branch=first["branch"],
+        checkpoint=first["resume"]["checkpoint"],
+    )
+
+
+def test_a_dispatch_that_dies_after_committing_is_resumed_next_round(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A provider fault at closeout costs the turn, never the work it already did.
+
+    Three consecutive rounds of one real workstream were lost this way: the worker
+    committed a finished, gate-green change, the provider died before the turn was
+    reported, and because a raised dispatch never reached the step's own
+    preservation, the round recorded no continuation. Each next round then cut a
+    fresh branch beside the work and re-derived it.
+    """
+    lost = _round_one_lost_its_dispatch(
+        tmp_path, bare_origin, command_base, personas_dir, run="died-after-commit"
+    )
+    capsys.readouterr()
+    # Preserved where a later round looks for it, marked once as incomplete work.
+    assert gitops.is_ancestor(lost.canonical, lost.checkpoint, lost.branch)
+    assert len(incomplete_commits(lost.canonical, "origin/main", lost.branch)) == 1
+    assert lost.branch_discovered(1)["resumed"] is False
+    assert lost.branch_discovered(1)["resumed_from"] == ""
+
+    assert next_round_main([lost.run, "--runs-dir", str(lost.runs_dir), *lost.common]) == 0
+    capsys.readouterr()
+    second = lost.recorded(2, "result.json")["results"]["change"]
+
+    assert second["branch"] == lost.branch
+    assert second["outcome"] == "merged"
+    discovered = lost.branch_discovered(2)
+    assert discovered["branch"] == lost.branch
+    assert discovered["resumed"] is True
+    assert discovered["resumed_from"] == lost.checkpoint
+    assert discovered["resume_declined"] == ""
+    # The published change is the one the dying dispatch committed, not a
+    # reimplementation: nothing but that dispatch ever writes this file, and the
+    # base now carries it along with the attestation the marker required.
+    published = gitops.log_messages(lost.canonical, f"{lost.checkpoint}~1", "origin/main")
+    assert _has_file(lost.canonical, "main", "DIED.txt")
+    assert any(RECOVERY_TRAILER in commit.message for commit in published), published
+
+
+def test_a_retry_edit_that_pins_a_resume_continues_that_branch(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A planner's resume pin is honoured, and the journal says it was.
+
+    The reconciler accepted a `retry` naming a preserved branch and checkpoint, and
+    the dispatch it produced journaled a *new* branch with `resumed: false`: the pin
+    was applied and then silently not honoured, which is worse than refusing it,
+    because the planner is told the edit landed.
+    """
+    lost = _round_one_lost_its_dispatch(
+        tmp_path, bare_origin, command_base, personas_dir, run="pinned-resume"
+    )
+    capsys.readouterr()
+
+    # Exactly the envelope a planner writes after reading the round: continue this
+    # branch, from this commit.
+    edits = tmp_path / "pin.json"
+    edits.write_text(
+        json.dumps(
+            {
+                "retry": {
+                    "change": {
+                        "resume": {
+                            "branch": lost.branch,
+                            "base_branch": "main",
+                            "pr_base": "main",
+                            "checkpoint": lost.checkpoint,
+                            "completed_steps": [],
+                            "mode": "retry",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        next_round_main([lost.run, str(edits), "--runs-dir", str(lost.runs_dir), *lost.common]) == 0
+    )
+    capsys.readouterr()
+
+    pinned = lost.recorded(2, "plan.json")["tasks"][0]
+    # The pin travels as written, and as the branch pin it already was: the
+    # lifecycle refuses a pinned branch it cannot adopt rather than substituting one.
+    assert pinned["resume"]["checkpoint"] == lost.checkpoint
+    assert pinned["branch"] == lost.branch
+    second = lost.recorded(2, "result.json")["results"]["change"]
+    assert second["branch"] == lost.branch
+    discovered = lost.branch_discovered(2)
+    assert discovered["branch"] == lost.branch
+    assert discovered["resumed"] is True
+    assert discovered["resumed_from"] == lost.checkpoint
+    assert _has_file(lost.canonical, "main", "DIED.txt")
+
+
+def test_a_dispatch_that_dies_mid_edit_keeps_the_work_it_had_not_committed(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A provider that dies mid-edit costs the turn, not the uncommitted work.
+
+    The worse half of the same fault: the worker's change is on disk and was never
+    committed, so a dispatch that ended without a report took it down with the
+    worktree. It is committed under the incomplete-step marker here, the same as a
+    report that says it did not complete, and the round says in its own journal that
+    this is what happened rather than leaving a `step-started` with nothing to close
+    it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-died-dirty")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    latch = tmp_path / "died-dirty.deaths"
+    plan_path = tmp_path / "died-dirty.plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": f"complete-now write-change die-after-commit={latch} die-dirty",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        # The latch path makes this task's prose far too long to
+                        # synthesize a subject from, and the subject is not what is
+                        # under test here.
+                        "title": "feat: keep the work a dying dispatch had not committed",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = "died-dirty"
+
+    # One death, then the in-round continuation completes on what it left behind.
+    assert run_plan_main([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 0
+    capsys.readouterr()
+    settled = json.loads((runs_dir / run / "round-01" / "result.json").read_text(encoding="utf-8"))[
+        "results"
+    ]["change"]
+    assert settled["outcome"] == "merged"
+
+    events = [
+        json.loads(line)
+        for line in (runs_dir / run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    # The refused dispatch closes its own step, and says both why it stopped and
+    # that it left something behind — the two facts a reader needs to tell this from
+    # a node that hung. A quota refusal is recordable provider evidence, so it
+    # settles through the shared not-completed path carrying the attribution that
+    # names who refused, rather than as an unattributed raise.
+    died = [
+        event
+        for event in events
+        if event["kind"] == "step-settled" and event["detail"].get("preserved") is True
+    ]
+    assert len(died) == 1, died
+    assert died[0]["detail"]["status"] == "not-completed"
+    attribution = died[0]["detail"]["failure_attribution"]
+    # The cause is the one this path exists for: a worker that was already working
+    # when its provider refused is exactly the worker whose tree can hold authored
+    # work, so dropping it would trade one silent loss for another.
+    assert attribution["cause"] == "quota_mid_conversation", attribution
+    assert "harness failed (quota)" in attribution["raw_tail"], attribution
+
+    # The uncommitted change reached the base through the marker commit that saved
+    # it, and the publication carries the attestation that marker required.
+    assert _has_file(origin, "main", "DIED.txt")
+    published = gitops.log_messages(canonical, "origin/main~1", "origin/main")
+    assert any(RECOVERY_TRAILER in commit.message for commit in published), published
+
+
+@pytest.mark.parametrize(
+    ("label", "leaves", "markers"),
+    [
+        # The worker got its work committed before the harness died under it. Its marker
+        # is empty and asked base-relative, so a redispatch adds no second one.
+        ("committed", "", 1),
+        # The worse half, where the change is only on disk. This marker *carries* the
+        # files, so every dying dispatch has to write its own — the count is the point
+        # of the distinction, not an accident of it.
+        ("dirty", " die-dirty", _DISPATCHES_PER_ROUND),
+    ],
+)
+def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
+    tmp_path, bare_origin, command_base, personas_dir, capsys, label, leaves, markers
+) -> None:
+    """The other half of a dying dispatch: a cause that is not provider evidence.
+
+    A refusal the chain can classify becomes a report and settles through the shared
+    not-completed path. A cause it cannot — here an infrastructure failure that only
+    mentions a harness — has no report to settle through, so the dispatcher raises.
+    That arm has to commit what the worker left on its way out; before it did, this
+    was the case that discarded a finished change and let the next round start from
+    an empty branch. The failure itself still reaches the scheduler unchanged.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-died-unclassified-{label}")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    latch = tmp_path / f"died-unclassified-{label}.deaths"
+    plan_path = tmp_path / f"died-unclassified-{label}.plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        # Every dispatch of the round dies this way, so the round ends
+                        # with work on a branch and no report anywhere describing it.
+                        "task": (
+                            f"complete-now write-change die-after-commit={latch} "
+                            f"die-times={_DISPATCHES_PER_ROUND} die-unclassified{leaves}"
+                        ),
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "title": "feat: keep the work an unclassified death left behind",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = f"died-unclassified-{label}"
+
+    assert run_plan_main([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    settled = json.loads((runs_dir / run / "round-01" / "result.json").read_text(encoding="utf-8"))[
+        "results"
+    ]["change"]
+    # Loud, not silent: the node names the cause it died of rather than reporting a
+    # bare stop that a later round would answer by re-deriving the work.
+    assert settled["status"] == "failed"
+    assert "cannot write v0.3 history telemetry" in settled["detail"]
+
+    events = [
+        json.loads(line)
+        for line in (runs_dir / run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    # The raised dispatch closes its own step, and says both that it failed that way
+    # and that it left something behind — the two facts a reader needs to tell this
+    # from a node that hung.
+    died = [
+        event
+        for event in events
+        if event["kind"] == "step-settled" and event["detail"].get("outcome") == "dispatch-failed"
+    ]
+    assert died, [event["detail"] for event in events if event["kind"] == "step-settled"]
+    assert all(event["detail"]["preserved"] is True for event in died), died
+    assert all(event["detail"]["status"] == "not-completed" for event in died), died
+    assert "cannot write v0.3 history telemetry" in died[0]["detail"]["outcome_detail"]
+
+    # And the journal is describing something real: the branch carries the work under
+    # exactly one marker, so what the event says was preserved is what recovery finds.
+    preserved = _preserved_branch_clone(tmp_path / "workspace", settled["branch"])
+    ahead = gitops.log_messages(preserved, "origin/main", settled["branch"])
+    assert ahead, settled["branch"]
+    assert len(incomplete_commits(preserved, "origin/main", settled["branch"])) == markers
+    assert _has_file(preserved, settled["branch"], "DIED.txt")
+
+
+def test_a_retry_resume_that_cannot_be_adopted_is_refused_by_name(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A planner's pin is authoritative: it is honoured, or refused with the reason.
+
+    Substituting a fresh branch for a resume the planner named is the defect this
+    forbids — it reports the edit as applied and then re-derives the work somewhere
+    else. Both shapes of unadoptable are driven through the real round CLI: a
+    checkpoint the repository does not have, and a branch whose preserved work is no
+    longer unattested-incomplete.
+    """
+    lost = _round_one_lost_its_dispatch(
+        tmp_path, bare_origin, command_base, personas_dir, run="unadoptable-pin"
+    )
+    capsys.readouterr()
+
+    def pin(checkpoint: str) -> Path:
+        edits = tmp_path / f"pin-{checkpoint}.json"
+        edits.write_text(
+            json.dumps(
+                {
+                    "retry": {
+                        "change": {
+                            "resume": {
+                                "branch": lost.branch,
+                                "base_branch": "main",
+                                "pr_base": "main",
+                                "checkpoint": checkpoint,
+                                "completed_steps": [],
+                                "mode": "retry",
+                            }
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return edits
+
+    missing = "0" * 40
+    assert (
+        next_round_main(
+            [lost.run, str(pin(missing)), "--runs-dir", str(lost.runs_dir), *lost.common]
+        )
+        == 1
+    )
+    capsys.readouterr()
+    refused = lost.recorded(2, "result.json")["results"]["change"]
+    assert refused["outcome"] == "resume-failed"
+    assert missing in refused["detail"] and lost.branch in refused["detail"]
+    # The pinned branch, never a substitute: a fresh one is what this refuses to do.
+    assert refused["branch"] == lost.branch
+
+    # Now the preserved work stops being unattested-incomplete, the way it does once
+    # a recovery attests every marker on it. The pin is unchanged and still names it.
+    attesting = tmp_path / "attesting"
+    git("worktree", "add", str(attesting), lost.branch, cwd=lost.canonical)
+    gitops.commit_empty(
+        attesting,
+        "test: invalidate retry provenance\n\n"
+        + "\n".join(
+            f"{RECOVERY_TRAILER} {sha}"
+            for sha in sorted(incomplete_commits(attesting, "origin/main", "HEAD"))
+        ),
+    )
+    git("worktree", "remove", str(attesting), cwd=lost.canonical)
+
+    assert (
+        next_round_main(
+            [lost.run, str(pin(lost.checkpoint)), "--runs-dir", str(lost.runs_dir), *lost.common]
+        )
+        == 1
+    )
+    capsys.readouterr()
+    unattested = lost.recorded(3, "result.json")["results"]["change"]
+    assert unattested["outcome"] == "resume-failed"
+    assert "does not carry valid unattested incomplete provenance" in unattested["detail"]
+    assert f"pins branch {lost.branch!r}" in unattested["detail"]
+    assert unattested["branch"] == lost.branch
+    assert unattested["resume"] is None
+
+    # And the shape a reaped run leaves: the branch the pin names is gone from the
+    # only checkout that had it, so there is nothing to adopt. Naming that is the
+    # whole contract — a fresh branch here would report the pin as honoured.
+    git("branch", "-D", lost.branch, cwd=lost.canonical)
+    assert (
+        next_round_main(
+            [lost.run, str(pin(lost.checkpoint)), "--runs-dir", str(lost.runs_dir), *lost.common]
+        )
+        == 1
+    )
+    capsys.readouterr()
+    gone = lost.recorded(4, "result.json")["results"]["change"]
+    assert gone["outcome"] == "resume-failed"
+    assert f"branch {lost.branch!r} no longer exists locally or on origin" in gone["detail"]
+    assert gone["branch"] == lost.branch
+
+
+def test_a_resume_precondition_that_cannot_be_checked_settles_as_a_resume_failure(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A precondition the harness cannot evaluate is still a resume failure.
+
+    A precondition that *fails* has always said so. One whose own check raised —
+    here the stacked `pr_base` a prerequisite's merge deleted from origin, so the
+    provenance question cannot be asked at all — used to escape into the handler
+    that wraps publication, and the node settled as
+    ``merge-path failure: publication of <branch>``: a phase this run never reaches,
+    since it stops before the worktree is even cut. That misdirection sent a live
+    diagnosis into merge mechanics while the cause sat in the resume pin. The node
+    must name the precondition instead, and `just results` must show it.
+    """
+    lost = _round_one_lost_its_dispatch(
+        tmp_path, bare_origin, command_base, personas_dir, run="uncheckable-resume"
+    )
+    capsys.readouterr()
+
+    # The shape a merged stack leaves behind: the pin still names the prerequisite
+    # branch it was cut over, and origin no longer has it.
+    gone = "feature/prerequisite-already-merged"
+    pin = tmp_path / "pin-vanished-base.json"
+    pin.write_text(
+        json.dumps(
+            {
+                "retry": {
+                    "change": {
+                        "resume": {
+                            "branch": lost.branch,
+                            "base_branch": "main",
+                            "pr_base": gone,
+                            "checkpoint": lost.checkpoint,
+                            "completed_steps": [],
+                            "mode": "retry",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        next_round_main([lost.run, str(pin), "--runs-dir", str(lost.runs_dir), *lost.common]) == 1
+    )
+    capsys.readouterr()
+
+    refused = lost.recorded(2, "result.json")["results"]["change"]
+    assert refused["outcome"] == "resume-failed"
+    assert refused["detail"].startswith("resume-failed: cannot check whether "), refused["detail"]
+    # The precondition by name, and the ref that made it unanswerable.
+    assert "unattested incomplete provenance" in refused["detail"], refused["detail"]
+    assert f"origin/{gone}" in refused["detail"], refused["detail"]
+    assert lost.branch in refused["detail"] and lost.checkpoint in refused["detail"]
+    # And never the phase it did not reach.
+    assert "merge-path failure" not in refused["detail"], refused["detail"]
+    assert "publication of" not in refused["detail"], refused["detail"]
+    # Nothing was published or preserved anew: the pinned branch is untouched.
+    assert refused["branch"] == lost.branch and refused["pr"] is None
+
+    # The planner-facing view carries both halves — the status and the reason — so
+    # the diagnosis is the first thing read rather than the end of an archaeology.
+    assert results_main([lost.run, "--runs-dir", str(lost.runs_dir)]) == 0
+    rendered = capsys.readouterr().out
+    assert "change  failed  resume-failed" in rendered, rendered
+    assert "Reason: resume-failed: cannot check whether " in rendered, rendered
+    assert f"origin/{gone}" in rendered, rendered
+
+
+def test_a_cooperatively_cancelled_node_continues_its_branch_in_a_later_round(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A round-boundary stop is a checkpoint, not a discarded attempt.
+
+    A node the round cancelled — a sibling settled, a budget was spent, the planner
+    replaced something — commits its partial work and leaves an incomplete-step
+    marker exactly as a failure does. The next round read only `failed`, so it cut a
+    fresh branch beside work that was already on one. The stop is real here: the
+    round cancels the node once its first turn's work is committed and its second is
+    parked at a rendezvous.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cancel-rounds")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    runs_dir = tmp_path / "runs"
+    run = "cancelled-across-rounds"
+    run_dir = runs_dir / run
+    workspace_root = tmp_path / "workspace"
+    held = Rendezvous.at(tmp_path, "cancelled-round")
+    witness = tmp_path / "cancelled-round.ticks"
+    plan = {
+        "tasks": [
+            {
+                "id": "change",
+                "repo": str(canonical),
+                "persona": "engineer",
+                "task": f"slow-branch {witness} write-change{held.sentinels(1)}",
+                "verify_cmd": ["true"],
+                "workflow": "local",
+                "repo_type": "single-owner",
+                # The rendezvous paths make this task's prose far too long to
+                # synthesize a subject from, and what it publishes is not the
+                # subject under test.
+                "title": "feat: continue the cancelled workstream",
+            }
+        ]
+    }
+    _, round_dir = prepare_round(run_dir, plan)
+    journal = open_journal(run_dir, RunId(run), 1)
+    dispatching = make_repo_runner(
+        workspace=Workspace(workspace_root),
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        merge_policy=None,
+        merge_method="squash",
+        oneharness_mode="bypass",
+        poll_interval=0.05,
+        timeout=e2e_timeout(120),
+    )
+
+    def cancelled_mid_flight(
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
+    ) -> object:
+        """Stop the node the way a round does, once its work is on the branch."""
+        assert cancel is not None
+
+        def stop() -> None:
+            held.wait(e2e_timeout(60))
+            cancel.set()
+
+        stopper = threading.Thread(target=stop, daemon=True)
+        stopper.start()
+        try:
+            return dispatching(node, journal=journal, cancel=cancel)
+        finally:
+            held.let_go()
+            stopper.join(timeout=e2e_timeout(60))
+
+    result = run_graph(
+        parse_graph(plan),
+        agent_runner=lambda _node: (_ for _ in ()).throw(
+            AssertionError("this graph contains no direct agent")
+        ),
+        lifecycle_runner=cancelled_mid_flight,
+        journal=journal,
+        run_id=RunId(run),
+        round_number=1,
+    )
+    write_result(round_dir, graph_payload(result))
+    first = json.loads((round_dir / "result.json").read_text(encoding="utf-8"))["results"]["change"]
+
+    assert first["status"] == "cancelled"
+    branch, checkpoint = first["branch"], first["resume"]["checkpoint"]
+    assert first["resume"]["branch"] == branch
+    marker = incomplete_commits(canonical, "origin/main", branch)
+    assert len(marker) == 1, marker
+
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(workspace_root),
+        "--format",
+        "json",
+    ]
+    assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 0
+    capsys.readouterr()
+    second = json.loads((run_dir / "round-02" / "result.json").read_text(encoding="utf-8"))[
+        "results"
+    ]["change"]
+
+    assert second["branch"] == branch
+    assert second["outcome"] == "merged"
+    discovered = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["kind"] == "branch-discovered" and json.loads(line)["round"] == 2
+    ]
+    assert len(discovered) == 1
+    assert discovered[0]["detail"]["resumed"] is True
+    assert discovered[0]["detail"]["resumed_from"] == checkpoint
+    # Continued on the harness's own budget, not outside it: the cancelled node
+    # enters the same bounded count a failed one does, so a node the round keeps
+    # stopping still reaches the planner instead of looping.
+    # `test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever`
+    # drives that bound to its end.
+    continuation = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert continuation["tasks"][0]["resume"]["attempts"] == 1
+
+    # The marker is handled exactly as the recovery rules already require: the base
+    # takes one publication commit carrying the attestation trailer for the marker
+    # it cleared, and the marker commit itself stays branch state.
+    published = gitops.log_messages(canonical, f"{checkpoint}~1", "origin/main")
+    assert _has_file(origin, "main", "CHANGE.txt")
+    assert [commit.sha for commit in published if RECOVERY_TRAILER in commit.message] == [
+        published[0].sha
+    ]
+    assert all("(incomplete step)" not in commit.message for commit in published)
 
 
 def test_lifecycle_records_verified_change_already_integrated_on_base(
@@ -5536,6 +6374,14 @@ def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_or
 def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     tmp_path, bare_origin
 ) -> None:
+    """A continuation the harness cannot adopt falls back, and says so where it shows.
+
+    Falling back is allowed on this path — the harness carried this resume forward
+    itself, nobody pinned it — but doing it quietly is what leaves a reader inferring
+    a re-derivation from a branch name that changed. The reason reaches both places
+    that describe the round: the journal event that names the branch, and the
+    settled node's own detail.
+    """
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     first = run_repo_task(
@@ -5557,6 +6403,7 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     )
     workspace.remove_worktree(normalize_repo(str(origin)), recovery_worktree)
 
+    journal = open_journal(tmp_path / "fallback-run", RunId("fallback"), 1)
     second = run_repo_task(
         str(origin),
         "Complete on a safe branch.",
@@ -5565,6 +6412,7 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
         recorded_gate=["true"],
         resume=first.resume,
+        journal=NodeJournal(journal, NodeId("change"), RunId("fallback"), 1),
     )
 
     assert second.ok and second.branch != first.branch
@@ -5573,6 +6421,54 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     assert "does not carry valid unattested incomplete provenance" in (
         second.retry_lineage.reason or ""
     )
+    assert f"declined to resume branch {first.branch!r}" in second.detail
+    assert first.resume.checkpoint in second.detail
+    assert "does not carry valid unattested incomplete provenance" in second.detail
+    discovered = next(
+        event.detail for event in journal.events() if event.kind == "branch-discovered"
+    )
+    assert discovered["branch"] == second.branch
+    assert discovered["resumed"] is False
+    assert discovered["resumed_from"] == ""
+    assert discovered["resume_declined"].startswith(f"declined to resume branch {first.branch!r}")
+    assert discovered["resume_declined"] in second.detail
+
+    # And when the fresh start goes on to fail, the reason travels with *that*
+    # outcome too. A decline reported only on the runs that happen to succeed is
+    # the one a reader would never see, because a round that failed is the round
+    # they go looking at.
+    stopped = run_repo_task(
+        str(origin),
+        "Start fresh and stop short.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="unfinished.txt", completed=False),
+        recorded_gate=["true"],
+        resume=first.resume,
+    )
+    assert stopped.outcome == "not-completed"
+    assert "did not complete" in stopped.detail
+    assert f"declined to resume branch {first.branch!r}" in stopped.detail
+    assert first.resume.checkpoint in stopped.detail
+
+    # The third way a declined start ends: it reaches a human step and parks there.
+    # A workstream that is *waiting* is the one a planner reads most carefully — it is
+    # being asked to act on it — so the decline has to be in front of them at exactly
+    # that moment, not only on the runs that already finished.
+    paused = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[
+            Step("prepare", "engineer", "Start fresh and prepare a checkpoint."),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        recorded_gate=["true"],
+        resume=first.resume,
+        dispatch_fn=make_writing_dispatch(filename="awaiting.txt"),
+    )
+    assert paused.outcome == "waiting-human"
+    assert f"declined to resume branch {first.branch!r}" in paused.detail
+    assert first.resume.checkpoint in paused.detail
 
 
 def test_a_pinned_retry_resolves_to_the_pinned_branch_or_is_refused(tmp_path, bare_origin) -> None:

@@ -44,12 +44,22 @@ from .plan import parse_cross_dag_dependency
 from .runs import NodeId, RunId, StackBasePayload
 
 __all__ = [
+    "EDIT_KEYS",
     "executed_plan",
     "next_round",
     "plan_for_the_next_round",
     "round_context",
     "round_supersessions",
 ]
+
+#: The whole vocabulary of the between-rounds edits mapping (`just next-round RUN
+#: edits.json`, `just replan`). Anything else is refused by name rather than
+#: ignored — see `_reject_unrecognized_edits`.
+EDIT_KEYS = frozenset({"retry", "split", "add", "drop", "complete_human"})
+
+#: The version-1 live-edit envelope's own keys. It belongs to `channel-reply`, and
+#: naming it in the refusal is what points a planner at the door that applies it.
+_ENVELOPE_KEYS = frozenset({"version", "commands"})
 
 
 def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any]) -> dict[str, Any]:
@@ -212,11 +222,15 @@ def next_round(
     collects them; one leaves the graph exactly as an explicit ``drop`` would, but only
     when its replacement is present to carry the work — see the note at the removal.
     The result is validated via the canonical graph parser.
+
+    An ``edits`` mapping carrying any key outside `EDIT_KEYS` is refused rather than
+    partially applied, so nothing a planner asked for is silently dropped.
     """
     from .graph import parse_graph
     from .plan import PlanError
 
     edits = edits or {}
+    _reject_unrecognized_edits(edits)
     retry = _mapping_edit(edits, "retry")
     if not all(isinstance(nid, str) and isinstance(value, dict) for nid, value in retry.items()):
         raise PlanError("'retry' must map task ids to override mappings")
@@ -354,6 +368,7 @@ def next_round(
             results,
             completed_humans,
             retry_requested=tid in retry,
+            stated_resume=tid in retry and "resume" in retry[tid],
             source_round=prev_result.get("round"),
         ):
             continue
@@ -452,6 +467,36 @@ def _carry_context(
         node.pop("context", None)
 
 
+def _reject_unrecognized_edits(edits: Mapping[str, Any]) -> None:
+    """Refuse an edits mapping this derivation cannot fully interpret.
+
+    Every other way a planner edits a graph applies each edit or names its refusal:
+    `channel-reply` exits non-zero with the reason, and the reconciler journals
+    `edit-rejected`. This input used to be the exception — an unknown key was read
+    as an absent one, so a versioned live-edit envelope handed to `next-round`
+    derived the *unedited* round and exited 0. The planner learned the edit had not
+    applied only when the round dispatched the stale node definition. Silence is the
+    one answer a boundary that accepts planner decisions must never give.
+    """
+    from .plan import PlanError
+
+    unrecognized = sorted(key for key in edits if key not in EDIT_KEYS)
+    if not unrecognized:
+        return
+    named = ", ".join(repr(key) for key in unrecognized)
+    vocabulary = ", ".join(repr(key) for key in sorted(EDIT_KEYS))
+    # The envelope is the near miss worth naming: it is a *valid* set of edits sent
+    # to the wrong door, and the planner who wrote it wants those commands applied,
+    # not a vocabulary list. Only `channel-reply` speaks that schema.
+    envelope = (
+        "; this is the versioned live-edit envelope, which only 'just channel-reply' "
+        "applies — this input never has"
+        if _ENVELOPE_KEYS & set(unrecognized)
+        else ""
+    )
+    raise PlanError(f"unrecognized edit(s) {named}; this input applies only {vocabulary}{envelope}")
+
+
 def _mapping_edit(edits: dict[str, Any], field: str) -> dict[Any, Any]:
     from .plan import PlanError
 
@@ -527,6 +572,16 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
 #: different scales, so a change of heart about one is a change of heart about both.
 MAX_AUTOMATIC_ROUND_RESUMES = MAX_AUTOMATIC_STEP_RESUMES
 
+#: Settled states whose preserved branch the next round continues. ``cancelled``
+#: belongs here for the same reason ``failed`` does and was the harder case to see:
+#: a node the round stopped cooperatively — a spent round budget, a live retry, a
+#: sibling that settled — commits its partial work and leaves an incomplete-step
+#: marker exactly as a failure does, and reading only ``failed`` meant the next
+#: round cut a fresh branch beside work that was already on one. Continuing it
+#: spends the same bounded budget, so a node that keeps being cancelled still
+#: reaches the planner rather than looping.
+_PRESERVING_STATUSES = frozenset({"failed", "cancelled"})
+
 
 def _spent_attempts(nid: str, node: dict[str, Any]) -> int:
     """Automatic continuations this node already carries; reject an unusable count.
@@ -566,6 +621,7 @@ def _apply_lifecycle_resume(
     completed_humans: set[str],
     *,
     retry_requested: bool = False,
+    stated_resume: bool = False,
     source_round: object = None,
 ) -> bool:
     """Attach continuation metadata; return whether the node runs again at all.
@@ -586,21 +642,35 @@ def _apply_lifecycle_resume(
     if not isinstance(item, dict):
         return True
     status = item.get("status")
-    # An explicit branch is an intentional routing decision for a preserved
-    # attempt. It may pin a known branch or opt out by naming a fresh branch. A
-    # waiting workstream is not choosing a branch, so it keeps the pause
-    # metadata that carries its already completed steps.
-    if "branch" in node and status != "waiting":
-        node.pop("resume", None)
-        return True
     resume = item.get("resume")
+    # A ``retry`` that states its own resume is the planner naming the work to
+    # continue after reading the result, and nothing derived from that result may
+    # overrule it. It travels as written, pinned to its own branch.
+    if stated_resume:
+        stated = node.get("resume")
+        if isinstance(stated, dict):
+            node.setdefault("branch", stated.get("branch"))
+        return True
+    # An explicit branch is an intentional routing decision for a preserved
+    # attempt. Naming the preserved branch itself continues it — the dispatch
+    # lands on those commits either way, and dropping the continuation only cost
+    # the record of it and the completed steps it carries. Naming any other
+    # branch is the opt-out that starts the work fresh. A waiting workstream is
+    # not choosing a branch, so it keeps the pause metadata that carries its
+    # already completed steps.
+    pinned = node.get("branch")
+    if pinned is not None and status != "waiting":
+        preserved = resume.get("branch") if isinstance(resume, dict) else None
+        if pinned != preserved:
+            node.pop("resume", None)
+            return True
     waiting_steps = item.get("waiting_steps") or []
     prefix = f"{nid}/"
     completed_steps = sorted(
         ref.removeprefix(prefix) for ref in completed_humans if ref.startswith(prefix)
     )
-    retrying_preserved = retry_requested and status == "failed"
-    continuing_preserved = status == "failed" and resume is not None
+    retrying_preserved = retry_requested and status in _PRESERVING_STATUSES
+    continuing_preserved = status in _PRESERVING_STATUSES and resume is not None
     # A parked node is carried forward still parked, so nothing redispatches it here.
     # It carries its checkpoint anyway, because that is what a later `requeue` has to
     # adopt: the branch the cancelled dispatch preserved, not a fresh one. No

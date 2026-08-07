@@ -20,11 +20,19 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import REPO_ROOT
+from .activity import live_activity
+from .boundary import (
+    BoundaryAttempt,
+    RetryPolicy,
+    drain_attempts,
+    retry_boundary_request,
+)
 from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_ENDPOINTS,
@@ -60,6 +68,7 @@ from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     Event,
     EventKind,
+    JournalError,
     JournalOperation,
     JournalSink,
     NodeJournal,
@@ -107,6 +116,7 @@ from .plan import (
 )
 from .provider_failure import journalled
 from .registry import Registry
+from .relaunch import relaunch_session
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     ClaimedRound,
@@ -125,11 +135,32 @@ from .runs import (
     write_result,
 )
 from .scratch import capacity_failure_detail, sweep_scratch
+from .supervisory import (
+    HISTORY_WRITE_FAILURE_PATTERNS,
+    close_capture,
+    history_write_failure,
+    open_capture,
+    record_turn,
+)
 from .workspace import Workspace
 
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
+#: How long a dispatched node may record nothing before the planner is told about
+#: it. A first turn on this host routinely runs 600-2000 seconds, so this sits well
+#: past a working node's quiet stretch and well short of the round budget: what it
+#: is for is the node that is neither working nor failed — the one that used to sit
+#: invisible until a planner went looking with an ad-hoc monitor of its own.
+DEFAULT_STALL_AFTER_SECONDS = 2_400.0
+#: The environment default for that threshold, so a whole run can be launched with a
+#: different one without every command in it repeating the flag.
+STALL_AFTER_ENV = "ORCHESTRATOR_STALL_AFTER_SECONDS"
+STALL_AFTER_OPTION = "--stall-after"
+#: How often the watcher actually looks. The scheduler ticks every 50ms and the
+#: look costs a scratch-root scan, so it is throttled to something a stall of tens
+#: of minutes cannot hide inside.
+STALL_POLL_SECONDS = 15.0
 
 _INFRASTRUCTURE_FAILURE_PATTERNS = (
     re.compile(r"(?:\[Errno 28\]|ENOSPC|No space left on device)", re.IGNORECASE),
@@ -140,11 +171,10 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
     re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
-    re.compile(r"cannot write v[0-9]+(?:\.[0-9]+)* history telemetry", re.IGNORECASE),
-    re.compile(
-        r"new history (?:record|run) lacks complete v[0-9]+(?:\.[0-9]+)* telemetry",
-        re.IGNORECASE,
-    ),
+    # A harness that cannot complete its history write is the same no-dispatch failure
+    # it always was; the patterns now live in `supervisory`, because the capture that
+    # records the resulting missing session has to recognise exactly this string.
+    *HISTORY_WRITE_FAILURE_PATTERNS,
 )
 
 
@@ -557,6 +587,7 @@ def run_graph(
     replayed_order: list[str] | None = None,
     proposal_pump: ProposalSink | None = None,
     round_budget: float | None = DEFAULT_ROUND_BUDGET,
+    stall_after: float | None = DEFAULT_STALL_AFTER_SECONDS,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -601,6 +632,15 @@ def run_graph(
     attestations: list[str] = []
     round_started = time.monotonic()
     budget_surfaced = False
+    #: When each in-flight dispatch was handed to its runner, so a node that has
+    #: published nothing at all still has an age the planner can be told.
+    dispatched_at: dict[str, float] = {}
+    #: The activity timestamp each node was last reported stalled at. Keyed that way
+    #: rather than by node alone so a worker that wakes up, works, and goes quiet
+    #: again is reported the second time — while one that simply stays quiet is
+    #: reported once.
+    stalls_reported: dict[str, float] = {}
+    stalls_checked_at = time.monotonic()
 
     def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
         """Run one already-started node to its outcome, journaling how it settled."""
@@ -795,6 +835,8 @@ def run_graph(
     def run_one(nid: str) -> NodeRun:
         node = nodes[nid]
         frontier[nid] = "running"
+        if not node.human:
+            dispatched_at[nid] = time.time()
         node_log = NodeJournal(sink=log, node=NodeId(nid), run_id=run_id, round=round_number)
         if node.human:
             run = NodeRun("waiting", "awaiting human action")
@@ -866,6 +908,7 @@ def run_graph(
 
     def on_settled(nid: str, run: NodeRun) -> None:
         frontier[nid] = run.status
+        dispatched_at.pop(nid, None)
         if proposal_pump is None or not isinstance(run.payload, Report):
             return
         if run.payload.assessment and run.payload.assessment.strip().lower() != "none":
@@ -1001,11 +1044,69 @@ def run_graph(
             # this round, never while the append that makes it one could still fail.
             proposal_pump.record_outcome(claimed.seq, applied=True, reason=f"applied {command.op}")
 
+    def surface_stalls() -> None:
+        """Tell the planner about a dispatch that is neither working nor failed.
+
+        The round already surfaces a node that *fails* and a round that overruns its
+        whole budget. What sat between them was the quiet worker: dispatched,
+        recorded as running, and producing nothing — which reads to every view
+        exactly like a healthy first turn, and which a planner therefore only ever
+        found by going and looking. This is that look, made by the round itself.
+
+        Non-blocking on purpose. A stall is evidence, not a verdict: the planner
+        decides whether to `cancel`, `retry`, or wait, and a blocking surface would
+        stop the round's other workers to ask.
+        """
+        nonlocal stalls_checked_at
+        if proposal_pump is None or stall_after is None or run_id is None or round_number is None:
+            return
+        now = time.monotonic()
+        if now - stalls_checked_at < STALL_POLL_SECONDS:
+            return
+        stalls_checked_at = now
+        # Degrades to the dispatch time alone when nothing published, which is the
+        # picture every view had before streaming existed — and is still enough to
+        # say "this node has recorded nothing at all for 40 minutes".
+        published = live_activity(str(run_id))
+        wall = time.time()
+        for nid, started in list(dispatched_at.items()):
+            recent = published.get((str(round_number), nid))
+            last = max(started, recent.at) if recent is not None else started
+            age = wall - last
+            if age < stall_after or stalls_reported.get(nid) == last:
+                continue
+            # llmlint: ignore-block[changed_behavior_has_e2e] The stall surface is
+            # driven through the real recipe in tests/e2e/test_worker_stall_e2e.py,
+            # on the branch a real journey can reach: a dispatch that has published
+            # nothing. Everything keyed on a *published* summary — the re-report
+            # after a second quiet stretch, and the "now <what> (N events, Ns ago)"
+            # phrasing — needs live activity, which only `scripts/oneharness-stream.py`
+            # writes and only for an oneharness agent turn; every journey here
+            # dispatches through the deterministic command provider, which publishes
+            # none. That publication has its own journey in
+            # tests/e2e/test_agent_stream_e2e.py and its reader is proven against
+            # real summaries in tests/test_activity.py; what is left here is one
+            # comparison and one call to `NodeActivity.describe`.
+            stalls_reported[nid] = last
+            heard = (
+                recent.describe(now=wall)
+                if recent is not None
+                else "nothing recorded since it was dispatched"
+            )
+            # llmlint: ignore-end[changed_behavior_has_e2e]
+            proposal_pump.propose(
+                nid,
+                f"no activity for {int(age)}s (threshold {stall_after:g}s); "
+                f"last activity: {heard}. The dispatch has not failed — decide "
+                "whether to cancel it, retry it, or let it run.",
+            )
+
     def observe_tick() -> None:
         nonlocal budget_surfaced
         cross_dag.reconcile_edges(external_deps, dependents)
         if proposal_pump is not None:
             proposal_pump.persist_replies()
+        surface_stalls()
         if (
             not budget_surfaced
             and round_budget is not None
@@ -1379,6 +1480,30 @@ def _plan_of_record(
     return folded, folded_graph
 
 
+def _resolved_stall_after(requested: float | None, environ: Mapping[str, str]) -> float:
+    """The stall threshold this round uses: the flag, then the environment, then the default.
+
+    The environment is read here rather than as the flag's `default` so that a value
+    a launch exported for the whole run is validated the same way an explicit flag
+    is. A run left with an unusable one would otherwise silently watch nothing,
+    which is the exact failure the watcher exists to end.
+    """
+    value = requested
+    if value is None and (configured := environ.get(STALL_AFTER_ENV)):
+        try:
+            value = float(configured)
+        except ValueError as exc:
+            raise PlanError(
+                f"${STALL_AFTER_ENV} must be a positive finite number of seconds, "
+                f"got {configured!r}"
+            ) from exc
+    if value is None:
+        return DEFAULT_STALL_AFTER_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        raise PlanError(f"'{STALL_AFTER_OPTION}' must be a positive finite number")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a tracked graph of direct agents, repo lifecycle nodes, and human actions."
@@ -1421,6 +1546,15 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"outer liveness budget for this round (default: {DEFAULT_ROUND_BUDGET:g})",
     )
+    parser.add_argument(
+        STALL_AFTER_OPTION,
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="surface a non-blocking planner update for a dispatch that has recorded "
+        f"nothing for this long (default: ${STALL_AFTER_ENV}, else "
+        f"{DEFAULT_STALL_AFTER_SECONDS:g})",
+    )
     add_lifecycle_args(parser)
     args = parser.parse_args(argv)
 
@@ -1440,6 +1574,7 @@ def main(argv: list[str] | None = None) -> int:
             raise PlanError("'--concurrency' must be a positive integer")
         if not math.isfinite(args.round_budget) or args.round_budget <= 0:
             raise PlanError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
+        args.stall_after = _resolved_stall_after(args.stall_after, os.environ)
         run_dir = (
             None
             if args.no_record
@@ -1524,6 +1659,16 @@ def _run_round(
         run_id = RunId(run_dir.name)
         round_number = round_record.number
         journal = open_journal(run_dir, run_id, round_number)
+        # Folded here because there is nowhere else it can be: the orchestrator's own
+        # post-round request happens between rounds, with no journal open anywhere,
+        # and a retry that saved this run would otherwise be visible only to whoever
+        # tails a log. The round that follows it is the first thing recording again.
+        for retried in drain_attempts(run_dir):
+            # Same invariance as every other closed payload this journal records: a
+            # `dict[str, str | int | float]` is not a `Mapping[str, DetailValue]` to
+            # a checker even though every value in it is one, and `BoundaryAttempt`
+            # validated all of them on the way out of the log.
+            journal.append("boundary-retried", detail=cast(Any, retried.detail()))
         for acknowledgement in acknowledgements:
             journal.append(
                 "concurrent-acknowledged",
@@ -1689,31 +1834,100 @@ def _run_round(
                 f"{validated_run_id} MESSAGE --runs-dir "
                 f"{shlex.quote(str(run_dir.parent.resolve()))}"
             )
-            report = dispatch(
-                "check-in",
-                task,
-                base_path=args.base_config,
-                persona_dir=args.persona_dir,
-                cwd=args.cwd or REPO_ROOT,
-                onejudge_bin=args.onejudge_bin,
-                provider=args.provider,
-                oneharness_mode=args.oneharness_mode,
-                worker_harness=args.worker_harness,
-                judge_harness=args.judge_harness,
-                worker_model=args.worker_model,
-                judge_model=args.judge_model,
-                labels={
-                    "run_id": validated_run_id,
-                    "round": str(round_number),
-                    "agent_role": "check-in",
-                    "persona": "check-in",
-                },
-                session=f"check-in-{validated_run_id}-{round_number}",
-                max_turns=1,
-                timeout=dispatch_timeout,
+            attempted = 0
+
+            def surfaced(report: Report) -> bool:
+                """Whether this attempt actually put the update in front of the planner."""
+                written = _surface_written_at()
+                return report.completed and written is not None and written != before
+
+            def launch() -> Report:
+                nonlocal attempted
+                attempted += 1
+                # Each attempt is its own conversation, for the reason a lifecycle
+                # relaunch is: the identity that just refused may no longer hold
+                # the one before it, and asking for it is another refusal.
+                session = relaunch_session(
+                    f"check-in-{validated_run_id}-{round_number}", attempted - 1
+                )
+                # Opened before the dispatch, closed after it whichever way it ends: a
+                # check-in whose harness could not write history is the very session
+                # this capture exists for, and it cannot record itself once it is gone.
+                # One capture per *attempt* rather than per round, because a retry is a
+                # whole dispatch under a conversation of its own — and an attempt that
+                # died to the provider is exactly the turn a planner has to read
+                # afterwards, which a capture describing only the latest one would drop.
+                open_capture(
+                    run_dir,
+                    session=session,
+                    agent_role="check-in",
+                    persona="check-in",
+                    round_number=round_number,
+                )
+                try:
+                    report = dispatch(
+                        "check-in",
+                        task,
+                        base_path=args.base_config,
+                        persona_dir=args.persona_dir,
+                        cwd=args.cwd or REPO_ROOT,
+                        onejudge_bin=args.onejudge_bin,
+                        provider=args.provider,
+                        oneharness_mode=args.oneharness_mode,
+                        worker_harness=args.worker_harness,
+                        judge_harness=args.judge_harness,
+                        worker_model=args.worker_model,
+                        judge_model=args.judge_model,
+                        labels={
+                            "run_id": validated_run_id,
+                            "round": str(round_number),
+                            "agent_role": "check-in",
+                            "persona": "check-in",
+                        },
+                        session=session,
+                        max_turns=1,
+                        timeout=dispatch_timeout,
+                    )
+                except Exception as exc:
+                    close_capture(
+                        run_dir,
+                        session,
+                        status="failed",
+                        history_failure=history_write_failure(str(exc)),
+                    )
+                    raise
+                record_turn(run_dir, session, report.summary())
+                close_capture(
+                    run_dir,
+                    session,
+                    status="completed" if surfaced(report) else "failed",
+                    history_failure=history_write_failure(report.stderr),
+                )
+                return report
+
+            def journal_retry(retried: BoundaryAttempt) -> None:
+                # Same policy the pump keeps for its own surfaces: a journal that
+                # cannot take the record must not be what stops the recovery.
+                with suppress(JournalError, OSError):
+                    # `cast` for the reason the fold above uses one: the closed
+                    # attempt payload is every value the journal's own recursive
+                    # union admits, and a checker cannot derive that.
+                    journal.append("boundary-retried", detail=cast(Any, retried.detail()))
+
+            report = retry_boundary_request(
+                launch,
+                role="check-in",
+                policy=RetryPolicy.from_environment(),
+                # Only a classified provider refusal. A check-in that ran and simply
+                # did its job badly is a different failure, already deferred to the
+                # next interval by the pacemaker's own lease.
+                retryable=lambda exc: (
+                    isinstance(exc, DispatchError)
+                    and recordable_provider_failure(exc.failure_attribution)
+                ),
+                report=journal_retry,
             )
-            written = _surface_written_at()
-            if not report.completed or written is None or written == before:
+            if not surfaced(report):
                 raise RuntimeError("check-in agent did not surface a completed status update")
 
         proposal_pump = ProposalPump(
@@ -1766,6 +1980,7 @@ def _run_round(
             concurrency=args.concurrency,
             proposal_pump=proposal_pump,
             round_budget=args.round_budget,
+            stall_after=args.stall_after,
         )
     finally:
         if proposal_pump is not None:

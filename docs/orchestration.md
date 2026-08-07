@@ -163,6 +163,34 @@ appends `planner-surfaced`. A reader of the journal can therefore tell "nothing 
 sent" from "updates were sent and nobody read them", which the delivered-only
 record could not express.
 
+### A worker that goes quiet
+
+The pacemaker says what the run is doing on a schedule; the round itself says when
+one of its workers stops doing anything. While a round executes, it watches every
+in-flight dispatch and surfaces a **non-blocking** proposal for one that has
+recorded nothing past a threshold — naming the node, what was last heard from it,
+and how long ago:
+
+```
+quiet-worker: no activity for 2611s (threshold 2400s); last activity: nothing
+recorded since it was dispatched. The dispatch has not failed — decide whether to
+cancel it, retry it, or let it run.
+```
+
+"Last activity" is the live stream a dispatch publishes (`orchestrator/activity.py`),
+falling back to when the round dispatched the node when nothing has published at
+all — which is itself the answer for a worker that died before its first turn. The
+threshold defaults to 2400 seconds, comfortably past the 600-2000 second first turns
+this host runs; set it per round with `just run-plan --stall-after SECONDS`, or for a
+whole run by exporting `ORCHESTRATOR_STALL_AFTER_SECONDS` before `just orchestrate`,
+which every round of that run inherits.
+
+It is non-blocking because a stall is evidence rather than a verdict: the planner
+decides whether to `cancel` the node, `retry` it, or let it run, and a blocking
+surface would stop the round's other workers to ask. A node is reported once per
+quiet stretch — a worker that wakes up, works, and goes quiet again is reported
+again; one that simply stays quiet is not repeated.
+
 #### The claim is a lease on the dispatch, not a lock held until someone reads
 
 The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
@@ -376,12 +404,17 @@ concurrency slot without waiting for an unrelated event.
 lifecycle replacement node that carries both a `branch` pin and a `resume`
 checkpoint is refused at submission when the two name different branches: the
 lifecycle honours the checkpoint's branch and ignores the pin, so the planner
-would not get the branch it named. When the pin and the resume agree but the
+would not get the branch it named. A retry that states a `resume` and **no**
+`branch` is pinned to the resume's own branch, because naming a continuation is
+naming the branch it lives on. When the pin and the resume agree but the
 preserved work can no longer be resumed — it stopped being unattested-incomplete
-because a recovery or an attestation landed on it — the node settles
-`resume-failed` on the pinned branch with that reason, rather than moving to a
-freshly generated branch. Which branch a retry produces is a function of the
-envelope alone; resubmit without a `branch` pin to start the work fresh.
+because a recovery or an attestation landed on it, its branch is gone, or its
+checkpoint is not in the repository — the node settles `resume-failed` on the
+pinned branch with that reason, rather than moving to a freshly generated branch.
+Which branch a retry produces is a function of the envelope alone; resubmit with
+neither a `branch` pin nor a `resume` to start the work fresh. This is why an
+accepted `retry` cannot quietly re-derive the work somewhere else: the reconciler
+either honours the continuation the planner named or the dispatch says why not.
 
 Dropping or retrying a running node sets its cooperative cancellation signal. A
 direct dispatch stops; a lifecycle dispatch preserves commits already made on
@@ -922,6 +955,81 @@ owner, exactly as an interrupted round is, so `just runs` reports
 and the work is reclaimable. `complete` on the channel is a completion verdict and
 does not stop scheduling; `just stop` is what ends a run.
 
+### Retrying the requests a round boundary depends on
+
+A round boundary is where an orchestration is most fragile and least busy: the
+round has just finished, its work is recorded, and the only thing left is the
+orchestrator asking its provider what to do next — with the quota that round just
+spent. One refusal there used to kill the process that owned the whole run.
+
+Two requests are now retried with bounded backoff before the process is allowed to
+die, under one policy (`orchestrator/boundary.py`):
+
+* **The orchestrator's own post-round turn**, in `scripts/oneharness-orchestrator.sh`.
+  Only an attempt that produced *no* stdout is asked again — onejudge parses that
+  wrapper's stdout as exactly one document, so an attempt that answered has already
+  answered, whatever its exit status. A streamed turn passes straight through
+  unbuffered.
+* **The heartbeat check-in launch**, and only for a classified provider refusal. A
+  check-in that ran and simply did its job badly is a different failure, still
+  deferred to the pacemaker's next interval by its own lease.
+
+Each attempt takes a conversation of its own (`…#relaunchN`), for the same reason a
+lifecycle relaunch does — see
+[repo-lifecycle.md](repo-lifecycle.md#a-death-that-left-no-work-is-not-charged-to-the-work-budget).
+Three
+attempts by default, five seconds apart and doubling to a two-minute ceiling;
+`ORCHESTRATOR_BOUNDARY_ATTEMPTS` and `ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS` change
+both, and an unusable value falls back to the default rather than disabling the
+recovery it configures.
+
+Every retry reaches `events.jsonl` as a `boundary-retried` record carrying the role,
+the attempt number, the budget, and a bounded redacted reason. The wrapper's own
+retries happen between rounds with no journal open anywhere, so it appends them to
+`orchestrator/boundary-attempts.jsonl` and the *next* round folds them in — which is
+why a retry that saved a run is visible in the run's own record rather than only to
+whoever tails a log.
+
+### Adopting a run whose driver died
+
+A run whose orchestrator process is gone is not over — its journal, its round
+ledger, its channel, and every preserved branch and stack anchor recorded against
+it are all intact. What it has lost is the thing driving it.
+
+```sh
+just orchestrate --adopt <run-id>            # attach a fresh driver to that run
+just orchestrate --adopt <run-id> --detach   # the same, unattended
+```
+
+Adoption keeps everything the run owns and replaces only the driver. It re-reads
+the launch parameters the run recorded (`orchestrator/relaunch.json` — the plan,
+the runs root, the base config, each side's harness *and* model, the round budget),
+registers
+the new process as the owner, reopens the channel, and drives the next round from
+the journal-folded plan of record with `--recover`, so the round its predecessor
+left claimed is reclaimed rather than replaced. The run id, the journal, and the
+anchors are the ones it already had; minting a new run id and pinning a resume was
+what stranded publication anchors before this existed.
+
+Three things refuse it, and none of them has a `--force`: adopting takes over
+ongoing work rather than ending it, which is exactly the case where a second
+opinion is worth more than an override.
+
+* **A run this session did not launch.** Ownership is the same rule `just stop`
+  keeps, including `unknown` never being yours.
+* **A run something is still driving** — a live launched orchestrator, or a round
+  still in flight. End it with `just stop <run-id>` first if that is what you mean.
+* **A run with no relaunch record**, which is every run launched before adoption
+  existed. There is nothing to replay, so it is refused rather than started on
+  guessed parameters.
+
+Each adoption takes a conversation of its own (`orchestrator-<run-id>-adoptN`) and
+never resumes the dead driver's: a relaunch that asked the harness for a session it
+no longer had is what burned whole lineages on `No conversation found`. The dead
+driver's `report.json` and `stderr.log` move aside to `report.pre-adopt-N.json` and
+`stderr.pre-adopt-N.log` rather than being truncated — they are the evidence of how
+it died, and the first thing to read after adopting.
+
 ## Monitoring a live run
 
 `just runs` says where a round *ended* and `just history-show` says everything
@@ -1204,6 +1312,17 @@ human gates (and other non-publication nodes), so attestation cannot silently cu
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
 
+**An edits file this input cannot fully apply is refused, never partly applied.**
+The vocabulary is exactly `retry`, `split`, `add`, `drop`, and `complete_human`;
+any other top-level key exits non-zero naming it, and no round directory or ledger
+entry is written. The [version-1 live-edit envelope](#live-graph-edits) is the near
+miss that motivated this: `{"version": 1, "commands": [...]}` shares no key with
+that vocabulary, so `next-round` read the whole thing as *no edits*, derived the
+unedited round, and exited 0 — the planner learned the edit had not applied a full
+round of quota later, when the round dispatched the stale node definition. That
+envelope is `channel-reply`'s schema and stays there; `next-round`'s job is to
+refuse it by name and say which command applies it.
+
 A **cross-DAG reference is not a satisfied dependency id** and is never removed by
 that rule: `run:<id>#<node>` names no node of this graph, so it was never in the
 round to be satisfied. It stays on a node carried forward, and it passes through a
@@ -1214,13 +1333,22 @@ watch that its own consumer's completion silently ended would stop reporting
 which is exactly what the reference is for. A consumer with no dependents leaves
 nothing to carry the watch, and it ends there.
 
-A failed lifecycle node whose preserved branch is carried forward is continued
-**automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**. The count is
+A failed **or cancelled** lifecycle node whose preserved branch is carried forward
+is continued **automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**.
+The count is
 kept on the plan node's `resume.attempts` and settles the node out of the next
 round once it is spent, exactly as a `drop` would: the failing result stands for
 the planner, and the branch stays recoverable with `just repo-recover`. An explicit
 `retry` edit clears the count, so the bound only ever stops the harness repeating
 itself — never a decision the planner made after reading the result.
+
+A **parked** node is the deliberate exception, and the distinction is worth
+holding onto: `cancelled` is a stop the round took, so continuing it is the
+harness finishing what it started and it spends that budget. `parked` is a stop
+the *planner* took with `cancel`, so no round redispatches it and it spends
+nothing. It carries its checkpoint forward regardless, because that preserved
+branch is exactly what a later [`requeue`](#parking-a-node-and-picking-it-up-again)
+has to pick up rather than cutting a fresh one beside it.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
