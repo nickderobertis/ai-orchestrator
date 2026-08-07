@@ -72,7 +72,6 @@ from .launch import (
     LAUNCHER_KINDS,
     LaunchError,
     LaunchInfo,
-    RunOwner,
     caller_identity,
     generate_launch_id,
     launch_info,
@@ -109,6 +108,7 @@ from .scratch import (
     owned_scratch_directory,
     processes_stamped_for,
 )
+from .stop import describe_other_owner
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
@@ -1613,7 +1613,8 @@ def adopt_orchestrator(
     if not owner.is_(caller):
         mine = caller.label if caller is not None else "this session has no launcher provenance"
         raise DispatchError(
-            f"refusing to adopt {validated}: it was launched by {_describe_owner(owner)}, "
+            f"refusing to adopt {validated}: it was launched by "
+            f"{describe_other_owner(owner)}, "
             f"not by you ({mine}). Confirm with its planner before taking it over."
         )
     if (driving := _live_driver(run_dir)) is not None:
@@ -1703,13 +1704,6 @@ def adopt_orchestrator(
     update_run_owner(validated, run_dir, pid)
     write_relaunch_record(run_dir, {**record, "adoptions": generation})
     return validated
-
-
-def _describe_owner(owner: RunOwner) -> str:
-    """Name a run's owner for an adoption refusal, without printing its session id."""
-    if owner.identity is None:
-        return "no recorded launcher (unknown is not the same as yours)"
-    return f"another planner ({owner.identity.label})"
 
 
 def _relaunch_record(

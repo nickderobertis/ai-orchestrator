@@ -1052,7 +1052,7 @@ def run_graph(
         stop the round's other workers to ask.
         """
         nonlocal stalls_checked_at
-        if proposal_pump is None or stall_after is None or run_id is None:
+        if proposal_pump is None or stall_after is None or run_id is None or round_number is None:
             return
         now = time.monotonic()
         if now - stalls_checked_at < STALL_POLL_SECONDS:

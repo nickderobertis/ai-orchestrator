@@ -290,12 +290,16 @@ def run_tree(owners: tuple[RecordedOwner, ...]) -> set[ProcessId]:
     return set(roots) | set(descendants_of(roots))
 
 
-def _describe(owner: RunOwner) -> str:
+def describe_other_owner(owner: RunOwner) -> str:
     """Name a run's owner for a refusal, without printing its session id.
 
     Only ever called about a run the caller does not own, so there is no "you" case
     to render: the two things a planner can be looking at are another planner's run
     and a run nobody can attribute.
+
+    Shared with `dispatch.adopt_orchestrator`, which refuses on the same ownership
+    rule: a planner must read the same sentence whether the verb it typed was going
+    to end another session's run or take it over.
     """
     if owner.identity is None:
         return "no recorded launcher (unknown is not the same as yours)"
@@ -350,12 +354,14 @@ def main(argv: list[str] | None = None) -> int:
         if not args.force:
             print(
                 f"stop: refusing to stop {run_id}: it was launched by "
-                f"{_describe(owner)}, not by you ({mine}). Confirm with its planner, "
+                f"{describe_other_owner(owner)}, not by you ({mine}). Confirm with its planner, "
                 f"or override with: just stop {run_id} --runs-dir {args.runs_dir} --force",
                 file=sys.stderr,
             )
             return 2
-        print(f"stop: --force: {run_id} was launched by {_describe(owner)}; you are {mine}")
+        print(
+            f"stop: --force: {run_id} was launched by {describe_other_owner(owner)}; you are {mine}"
+        )
         print("stop: this will stop the following recorded processes and everything below them:")
         _report_targets(run_id, recorded_owners(run_dir))
 
