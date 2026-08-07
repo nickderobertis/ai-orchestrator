@@ -5,6 +5,7 @@ import {
 } from "@ai-orchestrator/dag-model";
 import {
   cleanup,
+  configure,
   fireEvent,
   render,
   screen,
@@ -69,6 +70,25 @@ const openTranscript = async (name: RegExp) => {
 const detail = () =>
   screen.getByRole("region", { name: "Timeline item detail" });
 
+/** The same pane, awaited: it arrives on a read behind the node view's own shell. */
+const openedDetail = () =>
+  screen.findByRole("region", { name: "Timeline item detail" });
+
+/**
+ * Whole-app jsdom journeys exceed vitest's 5 s default under the concurrent agent
+ * dispatches this host runs. It covers the suite rather than the slowest few, because
+ * host load decides which case crosses the line; sized only to catch a journey that has
+ * stopped making progress.
+ */
+const JOURNEY_TIMEOUT = { timeout: 60_000 };
+
+/**
+ * Half this suite's waits poll for a chained telemetry read, which exceeds Testing
+ * Library's 1 s default under load while still arriving. Set here rather than in the
+ * shared setup because vitest isolates a test file's environment.
+ */
+configure({ asyncUtilTimeout: 10_000 });
+
 /** Nodes of the live fixture whose status every surface has to agree on. */
 const SERVED_STATUSES: readonly { node: string; status: string }[] = [
   { node: "queued", status: "blocked" },
@@ -77,7 +97,7 @@ const SERVED_STATUSES: readonly { node: string; status: string }[] = [
   { node: "publish", status: "failed" },
 ];
 
-describe("DAG application", () => {
+describe("DAG application", JOURNEY_TIMEOUT, () => {
   // The graph is one reading of a run and no longer the one an empty address lands
   // on, so the journeys that are about it say so — exactly as an operator's own
   // bookmark of the graph does. The landing view has a journey of its own below.
@@ -105,6 +125,10 @@ describe("DAG application", () => {
     expect(
       screen.getByRole("navigation", { name: "Breadcrumb" }),
     ).toHaveTextContent("dashboard");
+
+    // The rail comes from a second read, so waiting on the shell above would not say
+    // the record everything below reads has landed.
+    await screen.findByRole("region", { name: "Node timeline" });
 
     // The upstream visualization identifies each activity and keeps timing details
     // in its hover/focus tooltip rather than printing metadata beside every row.
@@ -292,7 +316,9 @@ describe("DAG application", () => {
     // A bookmarked moment is restored, expanded, from the address alone.
     await screen.findByRole("region", { name: "Timeline for dashboard" });
     expect(
-      await within(detail()).findByText("The transcript is accessible"),
+      await within(await openedDetail()).findByText(
+        "The transcript is accessible",
+      ),
     ).toBeInTheDocument();
 
     const back = screen.getByRole("button", { name: /Graph/ });
@@ -535,7 +561,9 @@ describe("DAG application", () => {
     await screen.findByRole("region", { name: "Timeline for archive" });
     // Thirty recorded turns: the reader is shown a page and told what is left,
     // rather than handed the whole session on selection.
-    expect(await within(detail()).findByText("Archive step 0")).toBeVisible();
+    expect(
+      await within(await openedDetail()).findByText("Archive step 0"),
+    ).toBeVisible();
     expect(within(detail()).getByText("Archive step 24")).toBeInTheDocument();
     expect(within(detail()).queryByText("Archive step 25")).toBeNull();
 
@@ -1309,16 +1337,20 @@ describe("DAG application", () => {
   });
 });
 
-test("serves the timeline of whichever run is selected", async () => {
-  window.history.replaceState(null, "", `/?run=${HISTORY_RUN}&node=archive`);
-  const { client } = telemetryHarness();
-  render(<App client={client} />);
-  // The archive run's own recorded work, not the live run's.
-  expect(
-    within(
-      await screen.findByRole("region", { name: "Node timeline" }),
-    ).getByRole("button", { name: /engineer-archive/ }),
-  ).toBeInTheDocument();
-  expect(runTimeline(HISTORY_RUN).spans).toHaveLength(3);
-  cleanup();
-});
+test(
+  "serves the timeline of whichever run is selected",
+  JOURNEY_TIMEOUT,
+  async () => {
+    window.history.replaceState(null, "", `/?run=${HISTORY_RUN}&node=archive`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    // The archive run's own recorded work, not the live run's.
+    expect(
+      within(
+        await screen.findByRole("region", { name: "Node timeline" }),
+      ).getByRole("button", { name: /engineer-archive/ }),
+    ).toBeInTheDocument();
+    expect(runTimeline(HISTORY_RUN).spans).toHaveLength(3);
+    cleanup();
+  },
+);

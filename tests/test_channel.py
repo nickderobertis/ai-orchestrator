@@ -58,6 +58,7 @@ from orchestrator.channel import (
 )
 from orchestrator.coordination import atomic_json
 from orchestrator.edits import parse_commands
+from orchestrator.supervisory import load_captures, open_capture
 
 
 def _heartbeat(channel: Path) -> dict[str, object]:
@@ -833,6 +834,64 @@ def test_relay_preserves_an_existing_terminal_blocker(
     assert relay_supervisor(channel, "orch", 1, timeout=1) == 0
     assert sent[0]["surface"] == blocker
     assert json.loads(capsys.readouterr().out)["completion"] is True
+
+
+def test_relay_records_the_driver_turn_it_served_after_answering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The capture is written once the reply is in, not before either FIFO.
+
+    Where this write sits is load-bearing. Ahead of `write_message` it delays a
+    surface planners read under seconds-long budgets; between the two FIFOs it
+    delays this relay reaching `read_message`, which is the window a planner
+    replying immediately lands in. So it happens after the answer.
+    """
+    run_dir = tmp_path / "run-recorded"
+    channel = create_channel(run_dir)
+    open_capture(run_dir, session="orchestrator-orch", agent_role="orchestrator")
+    monkeypatch.setattr("orchestrator.channel.write_message", lambda path, value, timeout: None)
+    monkeypatch.setattr(
+        "orchestrator.channel.read_message",
+        lambda path, timeout: {"completion": True, "reason": "done"},
+    )
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"op": "supervisor", "task": "round complete", "messages": []})),
+    )
+
+    assert relay_supervisor(channel, "orch", 1, timeout=1) == 0
+    assert json.loads(capsys.readouterr().out)["completion"] is True
+    captured = load_captures(run_dir)
+    assert [turn["text"] for turn in captured[0].turns] == ["round complete"]
+
+
+def test_relay_records_the_driver_turn_a_planner_never_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A planner who never replies must not cost the turn its only record.
+
+    That guarantee is why the write cannot simply move to the end of the happy
+    path: this relay's whole reason for existing is a supervisor that can be left
+    waiting, and the turn it already served is exactly what a stranded run needs
+    recorded.
+    """
+    run_dir = tmp_path / "run-unanswered"
+    channel = create_channel(run_dir)
+    open_capture(run_dir, session="orchestrator-orch", agent_role="orchestrator")
+    monkeypatch.setattr("orchestrator.channel.write_message", lambda path, value, timeout: None)
+
+    def _never(path: Path, timeout: float) -> dict[str, object]:
+        raise ChannelTimeout("channel read timed out")
+
+    monkeypatch.setattr("orchestrator.channel.read_message", _never)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"op": "supervisor", "task": "stranded turn", "messages": []})),
+    )
+
+    assert relay_supervisor(channel, "orch", 1, timeout=1) == 1
+    captured = load_captures(run_dir)
+    assert [turn["text"] for turn in captured[0].turns] == ["stranded turn"]
 
 
 def test_relay_replaces_stale_nonblocking_pending_surface(

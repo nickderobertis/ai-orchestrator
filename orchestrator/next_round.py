@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -196,12 +197,25 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
         )
 
 
+def _print_row(header: str, run_id: str, driver: Mapping[str, str]) -> None:
+    """Print one run's row, led by the driver line every row form carries.
+
+    Every form this view renders — abandoned, parked, pre-round, and settled-round —
+    answers the same question first, so the answer is written once here rather than
+    once per branch, where three of the four would go unread by any journey.
+    """
+    print(header)
+    if run_id in driver:
+        print(f"    {driver[run_id]}")
+
+
 def main_runs(argv: list[str] | None = None) -> int:
     from .channel import ChannelError, pending_surface_indicator, planner_wait_indicator
     from .dispatches import live_dispatches, run_indicator
     from .goals import concurrent_indicator
     from .launch import UNKNOWN_OWNER, caller_identity, read_run_owner
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
+    from .supervisory import driver_indicator
 
     parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
@@ -287,6 +301,13 @@ def main_runs(argv: list[str] | None = None) -> int:
         for path in run_dirs
         if (indicator := run_indicator(path.name, observed)) is not None
     }
+    # A row that says ACTIVE says only that a pid was recorded, which left a planner
+    # wondering why nothing is settling to infer whether that pid is still there.
+    driver = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := driver_indicator(path)) is not None
+    }
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
@@ -298,16 +319,18 @@ def main_runs(argv: list[str] | None = None) -> int:
         # surface that run last queued outlives it, so reporting what it is waiting for
         # is exactly the misreading that let a dead run look like live work.
         if run_id in abandoned:
-            print(f"! {run_id}  {owner}  {abandoned[run_id]}")
+            _print_row(f"! {run_id}  {owner}  {abandoned[run_id]}", run_id, driver)
             continue
         if run_id in parked:
-            print(f"! {run_id}  {owner}  {parked[run_id]}")
+            _print_row(f"! {run_id}  {owner}  {parked[run_id]}", run_id, driver)
             continue
         try:
             waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
         except (ChannelError, ConfigError, OSError):
             waiting = None
-        print(f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})")
+        _print_row(
+            f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})", run_id, driver
+        )
         if run_id in live:
             print(f"    {live[run_id]}")
         if run_id in unread:
@@ -328,7 +351,9 @@ def main_runs(argv: list[str] | None = None) -> int:
             except (ChannelError, ConfigError, OSError):
                 waiting = None
         owner = f"[{ownership.get(run_id, 'unknown')}]"
-        print(f"{marker}{run_id}  {owner}  round-{number:02d}  ({waiting or summary})")
+        _print_row(
+            f"{marker}{run_id}  {owner}  round-{number:02d}  ({waiting or summary})", run_id, driver
+        )
         if run_id in abandoned:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:

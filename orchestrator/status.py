@@ -37,6 +37,7 @@ from .provider_health import failure_rollups
 from .provider_health import probe as probe_provider_health
 from .provider_health import render as render_provider_health
 from .registry import Registry, RegistryError
+from .supervisory import driver_indicator
 from .telemetry import collect_run
 from .workspace import IdentityKey, RepositoryType, Workflow
 
@@ -638,6 +639,12 @@ def main(argv: list[str] | None = None) -> int:
                 for path in args.runs_dir.iterdir()
                 if path.is_dir() and (run_id is None or path.name == run_id)
             ):
+                # Leads the run's block deliberately: what follows is the stopped
+                # verdict and then the surface it explains, and that pair has to stay
+                # adjacent or it reads as a run waiting on a person who is being waited
+                # on by nothing.
+                if (driver := driver_indicator(run_dir)) is not None:
+                    indicators.append(f"{run_dir.name}: {driver}")
                 # Reported before the channel indicators and independently of them: a
                 # run that lost its round or its orchestrator leaves its last planner
                 # surface in place, so it would otherwise still read as "waiting on me".
