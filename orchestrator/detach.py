@@ -25,6 +25,14 @@ What this costs is job control: a round in its own session is not in its termina
 foreground group, so Ctrl-C reaches only the relaying parent. The child therefore
 announces its own pid, which is the pid to signal to stop a round on purpose.
 
+Leaving the session is only half of outliving a dispatch, and the other half is
+`reattribute_successor`: escaping the *signals* a turn's teardown sends is no use if
+the sweep that runs once the launching step settles terminates the round anyway. It
+does, because the environment the kernel fixed at this process's ``exec`` still names
+the launcher's dispatch, and that stamp is the sweep's whole proof of a leaked tree.
+So a successor takes a status directory of its own and re-``exec``s under it before it
+forks. See "The successor contract" in docs/repo-lifecycle.md.
+
 This is the first of three layers. A killer that walks the process tree still reaches
 us, so `runs.round_abandonment_guard` records an abandonment on every catchable
 signal, and the run views derive liveness from the recorded owner's pid so even
@@ -38,7 +46,14 @@ import signal
 import sys
 import traceback
 import warnings
+from pathlib import Path
 from typing import NoReturn, Protocol
+
+from .scratch import (
+    AGENT_STATUS_DIR_ENV,
+    claim_successor_scratch_directory,
+    record_successor_owner,
+)
 
 CRASHED = 70
 """The status a round exits with when an exception escaped it.
@@ -57,6 +72,23 @@ class Entry(Protocol):
     def __call__(self, argv: list[str] | None = None, /) -> int: ...
 
 
+SUCCESSOR_ENV = "ORCHESTRATOR_DETACHED_SUCCESSOR"
+"""Set on the re-``exec``ed side of `reattribute_successor`, and read only there.
+
+An environment variable rather than a flag, because the thing that has to survive is
+the ``exec`` itself: nothing in this process image outlives it, so the one channel
+from before to after is the environment the new image is handed. It is removed from
+``os.environ`` the moment it is read, so a successor this one starts — a `repo-recover`
+under a round, say — re-attributes to a directory of its own rather than inheriting a
+claim that says its launcher already did.
+"""
+
+#: The successor status directory this process is running under, once it has
+#: re-attributed to one. Held here rather than re-derived from the environment because
+#: only this module can tell a directory it claimed from one it merely inherited, and
+#: the forked round owner has to know which of the two it is recording itself into.
+_claimed: Path | None = None
+
 #: The interpreter's own warning about forking a process that has threads, matched
 #: exactly so that suppressing it can suppress nothing else. Anchored at the start
 #: because `warnings` matches a filter's message with `re.match`, and stopping at the
@@ -64,6 +96,64 @@ class Entry(Protocol):
 _MULTI_THREADED_FORK_WARNING = (
     r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks"
 )
+
+
+def reattribute_successor(label: str) -> None:
+    """Re-``exec`` under a status directory of this process's own, and return there.
+
+    **Only ever called at a real process entry point.** It replaces the process image
+    with the command line the interpreter was given, so calling it from anywhere that
+    is not the top of ``main`` restarts the whole program — and calling it from a test
+    restarts the test runner.
+
+    A round owner or a publication driver launched from inside a dispatch inherits that
+    dispatch's ``ORCHESTRATOR_AGENT_STATUS_DIR``. Once the launching step settles, the
+    scratch sweep reads the stamp, finds the dispatch behind it finished, and reaps
+    what it takes for a leaked tree — which is what killed two `repo-recover` runs that
+    had already passed their gate, thirty minutes apart, on branches that then had to
+    be recovered by hand. Nothing weaker than an ``exec`` fixes it: ``/proc/<pid>/environ``
+    is the memory the kernel wrote at ``exec`` and `os.environ` does not touch it, so a
+    process cannot shed an inherited stamp in place.
+
+    Re-stamping rather than scrubbing, because the sweep's reach is not the problem —
+    the misattribution is. A successor under its own directory is retained while it
+    runs and reaped when it is gone, which is what an unstamped process would never be:
+    the tree a successor leaves behind is exactly the kind this sweep exists for.
+
+    Returns without doing anything when the process carries no stamp at all, which is
+    every launch from an ordinary shell, and when no durable claim could be made — a
+    successor that runs unattributed is a sweep that cannot reach it, which is the safe
+    direction to fail in.
+    """
+    global _claimed
+    if os.environ.pop(SUCCESSOR_ENV, None) is not None:
+        stamped = os.environ.get(AGENT_STATUS_DIR_ENV)
+        _claimed = Path(stamped) if stamped else None
+        return
+    if not os.environ.get(AGENT_STATUS_DIR_ENV):
+        return
+    status_dir = claim_successor_scratch_directory()
+    if status_dir is None:
+        return
+    environment = {
+        **os.environ,
+        AGENT_STATUS_DIR_ENV: os.fspath(status_dir),
+        SUCCESSOR_ENV: label,
+    }
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execve(sys.executable, sys.orig_argv, environment)
+    except OSError as failure:  # pragma: no cover - the exec of this same interpreter
+        # Reported rather than raised: the work this process was started to do is
+        # worth more than the attribution, and an operator who sees this knows the
+        # run is back to being killable by the sweep behind its launcher.
+        print(
+            f"{label}: could not re-exec under its own dispatch attribution ({failure}); "
+            "continuing under the launching dispatch's stamp",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def run_detached(entry: Entry, argv: list[str] | None, label: str) -> int:
@@ -119,8 +209,14 @@ def _own_round(  # pragma: no cover - see run_detached
     signalled death reports.
     """
     os.setsid()
+    # Recorded here rather than by the process that claimed the directory, because that
+    # process is the relaying parent and the launching turn's teardown kills it. An
+    # owner record naming it would go stale the moment the round it protects was left
+    # alone, which is the failure `reattribute_successor` exists to prevent.
+    if _claimed is not None:
+        record_successor_owner(_claimed)
     print(
-        f"{label}: round owner pid {os.getpid()} leads its own session; "
+        f"{label}: pid {os.getpid()} leads its own session; "
         f"ending the launching turn will not stop it. Stop it with `kill {os.getpid()}`.",
         file=sys.stderr,
         flush=True,

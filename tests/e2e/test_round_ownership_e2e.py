@@ -126,7 +126,7 @@ def _await_exit(pid: int) -> None:
     assert not _alive(pid), f"round owner {pid} never exited"
 
 
-ANNOUNCED_OWNER = re.compile(r"round owner pid (\d+) leads its own session")
+ANNOUNCED_OWNER = re.compile(r"pid (\d+) leads its own session")
 
 
 def _await_announced_owner(err: Path) -> int:

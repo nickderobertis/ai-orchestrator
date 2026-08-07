@@ -85,6 +85,7 @@ from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.verify import PRESERVED_GATE_LOG_ATTEMPTS, preserved_gate_log_dir
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
 _T = TypeVar("_T")
@@ -3667,6 +3668,96 @@ done""",
         "refs/heads/main",
     ], gated
     assert _has_file(origin, "main", "covered.txt")
+
+
+def test_merge_path_gate_evidence_outlives_the_worktree_it_ran_in(tmp_path, bare_origin) -> None:
+    """Every verdict this branch's merge path reached is still readable afterwards.
+
+    Both halves of the asymmetry that cost a landing its proof. The gate runs inside a
+    run worktree that is removed the moment the workstream settles, so a green recorded
+    only there is gone by the time anybody looks — which is how a branch came to have a
+    16:55 failure on disk and nothing at all for the 17:48 pass that actually published
+    it. And every attempt used to be appended into one file end to end, so reading the
+    second of four meant counting bytes into it.
+
+    Driven as an operator drives it: a branch rejected by the repository's own pre-push
+    hook, the hook repaired, and the same branch published — against real git, with the
+    real hook, through the same worktree root a real run uses.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-gate-evidence")
+    safety = gitops.clone(origin, tmp_path / "safety-gate-evidence")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+    install_pre_push_hook(safety, "printf 'pre-push: gate run 1 failed\\n' >&2\nexit 1")
+    branch = "feature/gate-evidence-outlives-its-worktree"
+    root = tmp_path / "gate-evidence-worktrees"
+    evidence = preserved_gate_log_dir(root, branch)
+    # The branch has already been pushed to its bound: what one more attempt does to a
+    # full directory is the half of retention a fresh branch could never show.
+    evidence.mkdir(parents=True)
+    for attempt in range(1, PRESERVED_GATE_LOG_ATTEMPTS + 1):
+        (evidence / f"gate-{attempt:04d}.log").write_text(f"attempt {attempt}\n", encoding="utf-8")
+
+    worktrees: list[Path] = []
+
+    def records_its_worktree(persona: str, task: str, *, project_dir: str, **kwargs: object):
+        worktrees.append(Path(project_dir))
+        return make_writing_dispatch(filename="evidence.txt")(
+            persona, task, project_dir=project_dir, **kwargs
+        )
+
+    rejected = run_repo_task(
+        str(canonical),
+        "Publish work the merge-path gate rejects, then republish it.",
+        "engineer",
+        workspace=Workspace(root),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=records_its_worktree,
+        recorded_gate=["true"],
+    )
+    assert rejected.outcome == "gate-failed", rejected.detail
+
+    install_pre_push_hook(safety, "printf 'pre-push: gate run 2 passed\\n' >&2")
+    published = run_repo_task(
+        str(canonical),
+        "Publish the same branch once the repository gate accepts it.",
+        "engineer",
+        workspace=Workspace(root),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=records_its_worktree,
+        recorded_gate=["true"],
+    )
+    assert published.ok and published.outcome == "merged", published.detail
+
+    assert worktrees and not any(path.exists() for path in worktrees), (
+        "the run worktrees survived, so this proves nothing about outliving them"
+    )
+    kept = sorted(path.name for path in evidence.glob("gate-*.log"))
+    verdicts = {
+        name: text
+        for name in kept
+        if "merge-path verification" in (text := (evidence / name).read_text(encoding="utf-8"))
+    }
+    # The green is preserved by the very mechanism that preserved the red, and each is
+    # in a file of its own rather than concatenated into one.
+    passed = [name for name, text in verdicts.items() if "verdict: passed" in text]
+    failed = [name for name, text in verdicts.items() if "verdict: FAILED" in text]
+    assert failed and "gate run 1 failed" in verdicts[failed[0]], sorted(verdicts)
+    assert passed and "gate run 2 passed" in verdicts[passed[-1]], sorted(verdicts)
+    assert set(passed).isdisjoint(failed), "two verdicts shared one file"
+    # Claimed in order, so the sequence an operator reads is the order they were
+    # reached — what the single appended file could only answer with byte arithmetic.
+    assert failed[0] < passed[0]
+
+    # Retention bounds the directory: the attempts that had already filled it to the
+    # cap lose their oldest to make room, and nothing else grows.
+    assert len(kept) == PRESERVED_GATE_LOG_ATTEMPTS, kept
+    assert not (evidence / "gate-0001.log").exists()
+    assert all(name > "gate-0001.log" for name in kept)
 
 
 def test_pre_push_gate_failure_preserves_completed_work_in_execution_checkout(

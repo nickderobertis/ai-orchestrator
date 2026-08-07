@@ -419,6 +419,81 @@ refs, and ambiguous remote branches fail with a remediation instead of falling
 back to `main`. `just sync` discovers the same branch; `just sync <branch>
 <remote>` is the explicit form.
 
+### Where a merge-path verdict is preserved
+
+Every merge-path invocation for one branch is written twice, and the second copy is
+the point:
+
+* into the node's own run artifacts (`round-NN/<node>/gate.log`), which is where the
+  node result and the `verification-finished` event's `log_path` point; and
+* into **`<worktree root>/gate-logs/<branch with `/` flattened to `-`>/`**, one file
+  per invocation, `gate-0001.log` upward in the order they were claimed, reported as
+  the same event's `preserved_log_path`.
+
+The durable copy exists because the run does not. The gate runs inside a worktree that
+is removed as soon as the workstream settles, and a run root is retained only while
+recovery may still need it — so a *passing* gate used to leave nothing readable once
+the work landed, while the *failure* it superseded stayed on disk. A branch whose 16:55
+rejection was recoverable and whose 17:48 pass was not is what this closed. Both
+verdicts, and a publication that failed before any gate ruled, now land in the same
+place by the same mechanism, whichever driver published: a lifecycle node, `just
+repo-recover`, or the squash push a local workflow makes.
+
+One file per invocation rather than one appended log, because reading the second of
+four attempts out of a single 190 KB file meant counting bytes into it. A number
+another writer already claimed is never written over, so two publications of one
+branch — a retry beside the recovery of what it replaced — cannot share a file.
+Retention keeps the newest `PRESERVED_GATE_LOG_ATTEMPTS` (10) and prunes the rest, so
+a branch that re-pushes through a red gate all night cannot grow the directory without
+end. The single `gate.log` a branch recovered before this split still has is neither
+counted nor pruned: it is the whole history of those attempts.
+
+### The successor contract
+
+A process a dispatch starts inherits its `ORCHESTRATOR_AGENT_STATUS_DIR`, and the
+sweep's process reaper acts on exactly that stamp: a live process stamped for a
+dispatch that is over is a leaked tree, and it is terminated. That is correct for what
+a finished dispatch actually leaves behind, and it was catastrophic for the two things
+that are *meant* to outlive their launcher — a round owner (`just run-plan`, `just
+next-round`) and a publication driver (`just repo-recover`, `just integrate`). One
+round owner died sixty-six seconds in; two recoveries died at exit 143 with their gate
+already green.
+
+Those four entry points therefore **re-attribute** before they fork:
+`orchestrator.detach.reattribute_successor` claims a watchdog directory of its own and
+`exec`s the process under it. An `exec` and nothing less, because `/proc/<pid>/environ`
+is the memory the kernel wrote at the last `exec` and `os.environ` does not touch it —
+a process cannot shed an inherited stamp in place, and everything it starts afterwards
+would inherit the launcher's stamp anyway.
+
+Re-stamping rather than scrubbing, because the reaper's reach was never the problem.
+The directory a successor claims makes it *reapable under its own identity*: while the
+successor runs the sweep retains its whole tree, and once it is gone the same tree
+becomes exactly the kind of leaving this reaper exists for. An unstamped process would
+be neither, forever.
+
+What the sweeper reads there is deliberately the weaker of its two ownership proofs.
+`claim_successor_scratch_directory` records an identity in `owner.lock` **without**
+holding the `flock` a dispatcher holds, so:
+
+* `_watchdog_is_reclaimable` — which accepts a recorded live identity — retains the
+  tree, and reclaims it once that identity is gone; while
+* `watchdog_has_a_live_owner` — which takes only a held lock — says no, so a round
+  owner never appears in `just host` or `just status` as a live dispatch with no turn
+  and no role.
+
+The record is written by the *forked* owner rather than by the process that claimed
+the directory, because that process becomes the relaying parent the launching turn's
+teardown kills. Until the fork records itself there is no `owner.lock` at all, and the
+`pid` file the claim wrote is what covers that window: the creating process is alive
+across the whole of it, and a successor killed inside it leaves a directory the sweep
+can still reclaim rather than one nothing may ever touch.
+
+Nothing about the reaper's proof standard moves for this. A process stamped for a
+finished dispatch that did not re-attribute is still reaped, in the same sweep that
+spares the round — which is what
+`tests/e2e/test_successor_survival_e2e.py` asserts in one run.
+
 ### One judged diff, one verdict
 
 A gate tier can end in a judge that is not reproducible — this repository's
@@ -1305,8 +1380,9 @@ provenance: it has commits ahead of origin/<base>, and all of them are complete.
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
 it skips a candidate for incomplete provenance. A recovery whose push a pre-push
 hook gates also preserves that gate run under the recovery workspace's
-`gate-logs/`, named in the reported detail and in `--format json` as `gate_log`,
-so consecutive failures on one branch are comparable instead of reading alike.
+[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named in the reported
+detail and in `--format json` as `gate_log`, so consecutive attempts on one branch
+are comparable instead of reading alike.
 An identity covered by required PR checks instead has no gate at its push — the
 checks decide afterwards — so no verdict is recorded there.
 

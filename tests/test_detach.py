@@ -24,7 +24,18 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.detach import CRASHED, run_detached
+import orchestrator.detach as detach
+from orchestrator.detach import (
+    CRASHED,
+    SUCCESSOR_ENV,
+    reattribute_successor,
+    run_detached,
+)
+from orchestrator.scratch import AGENT_STATUS_DIR_ENV
+
+
+def _never_called(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("re-attribution took a path it had no business taking")
 
 
 def test_detached_round_leads_its_own_session_and_relays_its_exit_code(tmp_path: Path) -> None:
@@ -136,3 +147,62 @@ def test_the_deliberate_fork_is_silent_while_every_other_fork_still_warns() -> N
     finally:
         running.set()
         thread.join()
+
+
+# Re-attribution's own `exec` is proven by `tests/e2e/test_successor_survival_e2e.py`,
+# because a process entry point is the only place it can be called: it replaces the
+# process image, and calling it anywhere else restarts that program — here, pytest.
+# What is left are the three ways it decides *not* to exec, each of which leaves a
+# round running under an attribution somebody has to be able to reason about.
+
+
+def test_a_process_no_dispatch_started_is_left_exactly_as_it_was(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`just run-plan` from a shell has no launcher to be misattributed to."""
+    monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
+    monkeypatch.delenv(SUCCESSOR_ENV, raising=False)
+    monkeypatch.setattr(detach, "claim_successor_scratch_directory", _never_called)
+
+    reattribute_successor("run-plan")
+
+    assert AGENT_STATUS_DIR_ENV not in os.environ
+
+
+def test_the_re_execed_side_claims_its_directory_and_stops_passing_the_sentinel_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A successor under a successor must attribute to itself, not inherit the claim."""
+    claimed = tmp_path / "orchestrator-watchdog-mine" / "agent"
+    monkeypatch.setenv(SUCCESSOR_ENV, "run-plan")
+    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(claimed))
+    monkeypatch.setattr(detach, "claim_successor_scratch_directory", _never_called)
+    monkeypatch.setattr(detach, "_claimed", None)
+
+    reattribute_successor("run-plan")
+
+    assert detach._claimed == claimed
+    # Still stamped, so everything below inherits the attribution; no longer marked as
+    # already-attributed, so a `repo-recover` this round starts takes one of its own.
+    assert os.environ[AGENT_STATUS_DIR_ENV] == str(claimed)
+    assert SUCCESSOR_ENV not in os.environ
+
+
+def test_a_claim_that_could_not_be_made_runs_unattributed_rather_than_misattributed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Losing the sweep's reach beats keeping the launcher's stamp and being reaped.
+
+    Nothing execs here, so the round goes on to run under the stamp it inherited — the
+    one condition this whole mechanism cannot repair, and the reason it is reported
+    rather than raised.
+    """
+    launcher = tmp_path / "orchestrator-watchdog-launcher" / "agent"
+    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(launcher))
+    monkeypatch.delenv(SUCCESSOR_ENV, raising=False)
+    monkeypatch.setattr(detach, "claim_successor_scratch_directory", lambda: None)
+    monkeypatch.setattr(os, "execve", _never_called)
+
+    reattribute_successor("repo-recover")
+
+    assert os.environ[AGENT_STATUS_DIR_ENV] == str(launcher)

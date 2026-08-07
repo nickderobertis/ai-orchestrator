@@ -103,6 +103,7 @@ from .verify import (
     NOOP_GATE,
     VerifyResult,
     comparison_env,
+    preserved_gate_log_dir,
     record_merge_path_failure,
     record_merge_path_verification,
     resolve_gate_template,
@@ -1894,6 +1895,13 @@ def run_repo_task(
             },
         )
         branch = result.branch
+        # Where this branch's merge-path gate runs are kept. Under the workspace root
+        # rather than under the run: the worktree the gate runs in is removed when the
+        # workstream settles and the run root is retained only while recovery may need
+        # it, so a green recorded in either could be gone while the red it superseded
+        # was still readable. Every publication attempt for one branch lands here, in
+        # a file of its own — see `orchestrator.verify.preserve_gate_log`.
+        gate_evidence = preserved_gate_log_dir(workspace.root, branch)
         worktree_base = f"origin/{pr_base}"
         prepared: ResumePrep | None = None
         if resume is not None:
@@ -2270,6 +2278,7 @@ def run_repo_task(
                         command=merge_path_gate,
                         ok=False,
                         output=exc.output,
+                        preserve_dir=gate_evidence,
                     )
                     or result.verify
                 )
@@ -2284,6 +2293,7 @@ def run_repo_task(
                     command=merge_path_gate,
                     ok=True,
                     output=pushed,
+                    preserve_dir=gate_evidence,
                 )
                 or result.verify
             )
@@ -2369,6 +2379,7 @@ def run_repo_task(
                         command=merge_path_gate,
                         ok=False,
                         output=exc.output,
+                        preserve_dir=gate_evidence,
                     )
                     or result.verify
                 )
@@ -2380,6 +2391,7 @@ def run_repo_task(
                     command=merge_path_gate,
                     ok=True,
                     output=pushed,
+                    preserve_dir=gate_evidence,
                 )
                 or result.verify
             )
@@ -2407,6 +2419,7 @@ def run_repo_task(
             repository_type=effective_type,
             journal=log,
             gate_command=tuple(merge_path_gate),
+            gate_log_root=gate_evidence,
             push_env=workstream_env,
             preverified_pr=preverified_pr,
             local_prepare=(synchronize_and_push_local_publication if local_publication else None),
@@ -2544,6 +2557,12 @@ def run_repo_task(
             label=f"publication of {result.branch}",
             outcome=type(exc).__name__,
             output=exc.output if isinstance(exc, GitError) else str(exc),
+            # Recomputed rather than carried: this handler covers failures from before
+            # the branch had a name, and a durable location is only nameable once it
+            # does. Without a branch there is nothing per-branch to preserve under.
+            preserve_dir=(
+                preserved_gate_log_dir(workspace.root, result.branch) if result.branch else None
+            ),
         )
         result.detail = redact(str(exc)) + (
             f" — full merge-path log: {log_path}" if log_path else ""

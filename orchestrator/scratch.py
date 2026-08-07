@@ -275,12 +275,82 @@ def owned_scratch_directory() -> Iterator[Path]:
             os.close(fd)
 
 
-def _legacy_watchdog_is_reclaimable(path: Path) -> bool:
-    """Judge a directory that predates ownership locking by its worker pid alone.
+def claim_successor_scratch_directory() -> Path | None:
+    """Open a watchdog directory for a process that must outlive the dispatch under it.
 
-    Only a dispatch already running when the lock was introduced lands here. It
-    keeps the strongest identity available for that pid, so such a dispatch
-    survives the upgrade instead of losing its scratch mid-run.
+    A round owner and a publication driver are both started from inside a dispatch and
+    are meant to keep working after it settles, but the environment the kernel fixed at
+    their ``exec`` still names the *launcher's* status directory — which is the one
+    thing `orphaned_dispatch_processes` reaps on. Once that dispatch is over, its stamp
+    reads as proof of a leaked tree, and the sweep has terminated two publication runs
+    that had already passed their gate. So a successor takes a directory of its own and
+    re-``exec``s under it; `orchestrator.detach` is the caller, and the exec is why this
+    only creates the tree rather than yielding it — a context manager cannot span the
+    process image being replaced.
+
+    Deliberately *not* `owned_scratch_directory`'s held ``flock``. That lock is what
+    `watchdog_has_a_live_owner` reads to say a **dispatch** is running, and a round
+    owner holding one would appear in `just host` as a live dispatch with no turn and
+    no role. The recorded identity alone is what the sweeper needs, and it is exactly
+    the weaker proof `_watchdog_is_reclaimable` was written to accept.
+
+    The ``pid`` file is the claim until the process that will actually own the tree
+    writes the identity record — see `record_successor_owner`. The two are written by
+    different processes because a successor forks after this: this one becomes the
+    relaying parent that the launching turn's teardown kills, and recording *it* as the
+    owner would hand the sweeper a dead owner for a live round.
+
+    ``None`` when no durable claim can be made, which leaves the caller to run
+    unattributed rather than under a directory the sweeper would call reclaimable.
+    """
+    if _OwnerIdentity.current(os.getpid()) is None:
+        return None
+    try:
+        directory = Path(tempfile.mkdtemp(prefix=WATCHDOG_PREFIX))
+        (directory / AGENT_STATUS_DIR_NAME).mkdir()
+        (directory / "pid").write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        return None
+    return directory / AGENT_STATUS_DIR_NAME
+
+
+def record_successor_owner(status_dir: Path) -> bool:
+    """Record this process as the owner of a successor directory claimed for it.
+
+    Called by the forked process that owns the work, so that the sweeper judges the
+    tree by the identity of what is actually running in it rather than by the relaying
+    parent the launching turn is about to kill. Reports whether the record was written,
+    because a successor that could not make one is running under a directory whose only
+    claim is a ``pid`` that is no longer the right one.
+    """
+    owner = _OwnerIdentity.current(os.getpid())
+    if owner is None:
+        return False
+    directory = status_dir.parent
+    try:
+        # Replaced into place rather than written in place: a sweeper reading a
+        # half-written record parses no identity, and no identity is the one answer
+        # that authorizes reaping the very process this record exists to protect.
+        # Until the rename lands there is no file at all, which the `pid` claim covers.
+        staged = directory / f".{OWNER_LOCK_NAME}.{os.getpid()}"
+        staged.write_text(owner.render(), encoding="utf-8")
+        os.replace(staged, directory / OWNER_LOCK_NAME)
+    except OSError:
+        return False
+    return True
+
+
+def _legacy_watchdog_is_reclaimable(path: Path) -> bool:
+    """Judge a directory with no owner record by the pid that created it.
+
+    Two shapes land here, and one answer serves both. A dispatch already running when
+    ownership locking was introduced keeps the strongest identity available for that
+    pid, so it survives the upgrade instead of losing its scratch mid-run. And a
+    successor directory (`claim_successor_scratch_directory`) is in exactly this state
+    for the instant between being created and the forked owner recording itself — the
+    creating process is alive across that whole window, so the tree is retained, and a
+    successor killed inside it leaves a directory this can still reclaim rather than
+    one nothing may ever touch.
     """
     try:
         pid = int((path / "pid").read_text(encoding="utf-8").strip())

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError
-from .detach import run_detached
+from .detach import reattribute_successor, run_detached
 from .journal import open_journal
 from .plan import PlanError
 from .provider_health import failure_rollups
@@ -352,7 +352,13 @@ def main_runs(argv: list[str] | None = None) -> int:
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    """`just next-round` process entry point: detach from the launching turn first."""
+    """`just next-round` process entry point: outlive the dispatch that launched it.
+
+    The same two halves in the same order as `orchestrator.graph.main_cli`: this claims
+    a round too, and a continuation killed by the sweep behind its launcher leaves the
+    same ledger saying a dead run is still working.
+    """
+    reattribute_successor("next-round")
     return run_detached(main, argv, "next-round")
 
 
