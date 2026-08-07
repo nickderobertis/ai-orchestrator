@@ -1,9 +1,11 @@
 """The supervisory tier, end to end: served spans, local capture, and CLI liveness.
 
-The tier that drives every run was the one tier no view could see. Its sessions run
-on the identity chain that puts codex first, whose history writes were failing, so the
-orchestrator and its check-ins were absent from every history-derived view — while
-being the tier whose deaths orphan runs.
+The tier that drives every run was the one tier no view could see. Not because it went
+unrecorded — oneharness had been writing its sessions all along — but because nothing
+served them, so the orchestrator and its check-ins were absent from every
+history-derived view while being the tier whose deaths orphan runs. This proves the
+serving path, and the narrower fallback for a session whose history write really was
+refused (a failure mode that is not specific to any one harness).
 
 This drives the real executor: a real `just orchestrate` launch, its real detached
 onejudge process, its real per-round check-in dispatch, and the real read API and

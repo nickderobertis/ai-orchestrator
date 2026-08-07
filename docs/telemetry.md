@@ -162,8 +162,13 @@ no time.
 ## Seeing the supervisory tier
 
 The launched orchestrator and its per-round check-in dispatches are agents like any
-other, and they are visible the same way — with one addition and one fallback,
-because this tier is the one whose sessions oneharness has been failing to record.
+other, and they are visible the same way — with one addition and one fallback.
+
+They were invisible for longer than the workers, and the reason is worth keeping:
+oneharness *was* recording them. This host's history store holds 157 `orchestrator`
+and 728 `check-in` run records, correctly role-labelled, out of 12,387 runs. Nothing
+served them. So the run-scope span below is the fix; the capture is a fallback for
+the narrower case where the write itself was refused.
 
 1. **`just status <run-id>` and `just runs`** carry one driver line per unfinished
    launch: whether the recorded pid is still there, which part of its loop the run's
@@ -194,9 +199,20 @@ readable head, so it stays sized by the tier rather than by the run.
 
 The upstream defect it exists for is oneharness refusing a history write with
 `new history run lacks complete v1.0 telemetry` (and the `cannot write vN history
-telemetry` variants). `orchestrator/supervisory.py` owns those patterns;
-`orchestrator/graph.py` classifies a dispatch that died on one as an infrastructure
-failure, and the capture records the same string as the reason a session is missing.
+telemetry` variants), raised in `crates/oneharness-core/src/io/history.rs`.
+`orchestrator/supervisory.py` owns those patterns; `orchestrator/graph.py` classifies
+a dispatch that died on one as an infrastructure failure, and the capture records the
+same string as the reason a session is missing.
+
+That refusal is not codex-specific, though it was assumed to be, and the assumption
+sent a night's debugging at the wrong harness. A refused write leaves nothing behind,
+so the store cannot exhibit one directly; what it does
+show is that every one of codex's 7,642 run records is `ok` with complete native
+telemetry, while claude-code supplies no native per-phase timing at all (`started_at`,
+`finished_at`, `tool_ms`, `time_to_first_token_ms`, `model_ms` are absent from all
+4,745 of its records) and carries every recorded failure. Those counts come from
+reading `type: "run"` lines out of the history store (`just telemetry` reaches the
+same records); re-measure there rather than inferring the harness from chain order.
 
 ## Diagnosing a provider failure
 

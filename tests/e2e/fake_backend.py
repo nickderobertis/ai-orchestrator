@@ -327,10 +327,11 @@ def main() -> int:
                     and not stale.exists()
                     and (channel_dir / "heartbeat-surface.json").is_file()
                 )
-                # The upstream defect this repository captures around: a codex turn
-                # whose harness cannot complete its history write fails the write, so
-                # the session is simply absent from history. Forced once, on the
-                # side of the conversation that runs the supervisory tier.
+                # The upstream defect this repository captures around: a turn whose
+                # harness cannot complete its history write fails the write, so the
+                # session is simply absent from history. Forced once, on the side of
+                # the conversation that runs the supervisory tier. Not tied to a
+                # harness here because it is not tied to one upstream either.
                 history_value = os.environ.get("FAKE_CHECK_IN_HISTORY_WRITE_FAILS")
                 history_fails = Path(history_value) if history_value else None
                 if fail_once is not None and not fail_once.exists():

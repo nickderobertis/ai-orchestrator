@@ -1,14 +1,28 @@
 """The supervisory tier's own record: what drives a run, and what it is doing.
 
-Every history-derived view here is built from what oneharness wrote. That is enough
-for the worker tier, whose sessions are recorded reliably; it was never enough for
-the tier *above* it. A launched orchestrator and its periodic check-in dispatches run
-on the identity chain that puts codex first, and a codex turn whose harness cannot
-write a complete history run fails the write outright — ``new history run lacks
-complete v1.0 telemetry``. `graph.infrastructure_failure_detail` already recognised
-that string as an infrastructure failure; nothing recorded the *session*, so the
-supervisory tier was simply absent from every history-derived view, including on the
-nights its deaths orphaned runs.
+Every history-derived view here is built from what oneharness wrote, and the tier
+*above* the workers was missing from all of them — including on the nights its deaths
+orphaned runs. Measuring the local history store settled why, and it is worth writing
+down because the obvious answer is the wrong one.
+
+The supervisory sessions are **recorded**. Across the 12,387 run records in this
+host's store, oneharness had already written 157 ``orchestrator`` and 728
+``check-in`` runs, correctly role-labelled. So the tier was never absent from
+history; nothing *served* it. That is the gap `timeline` closes, and it is the whole
+reason a run-scope span for these sessions is the fix rather than a workaround.
+
+The refused write is real but secondary, and it is not the harness it was assumed to
+be. oneharness refuses a write with ``new history run lacks complete v1.0
+telemetry`` (`crates/oneharness-core/src/io/history.rs`), which
+`graph.infrastructure_failure_detail` already classified as an infrastructure
+failure. A refused write leaves nothing behind, so the store cannot show one
+directly — but it does show that codex is not the suspect: every one of its 7,642
+run records is ``ok`` and carries complete native telemetry, while claude-code
+supplies no native per-phase timing at all (``started_at``, ``finished_at``,
+``tool_ms``, ``time_to_first_token_ms``, ``model_ms`` are absent from all 4,745 of
+its records) and carries every recorded failure. So the capture below is kept as a
+harness-agnostic fallback for a session whose write was refused, not as a codex
+workaround.
 
 This module is the local half, and it holds two things:
 
