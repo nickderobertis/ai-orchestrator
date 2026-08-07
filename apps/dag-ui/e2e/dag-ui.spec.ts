@@ -2112,7 +2112,6 @@ test("shows mid-turn activity from a live dispatch", async ({ page }) => {
   ).toHaveCount(0);
 });
 
-/** Where the detail panel is read: how far down, and how far short of its end. */
 async function detailScroll(
   page: Page,
 ): Promise<{ top: number; bottom: number }> {
@@ -2124,7 +2123,6 @@ async function detailScroll(
     }));
 }
 
-/** Scroll the detail panel the way a reader does: the wheel, over the panel. */
 async function wheelDetail(page: Page, delta: number): Promise<void> {
   const panel = await itemDetail(page).boundingBox();
   if (panel === null) throw new Error("the detail panel is not on screen");

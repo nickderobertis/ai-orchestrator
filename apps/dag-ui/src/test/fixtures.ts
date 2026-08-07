@@ -421,7 +421,6 @@ export function runTimeline(runId: string = LIVE_RUN) {
   };
 }
 
-/** The live run's worker session, which both its timeline and its detail name. */
 export const WORKER_SESSION = "worker-session";
 
 /**
@@ -458,7 +457,6 @@ export function workerConversation(turns: number) {
   };
 }
 
-/** The live run's timeline once that worker dispatch has recorded `turns` turns. */
 export function workerTurnsTimeline(turns: number) {
   const served = runTimeline(LIVE_RUN);
   const grown = dispatch(

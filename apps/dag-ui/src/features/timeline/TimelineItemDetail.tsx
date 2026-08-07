@@ -67,7 +67,7 @@ export function TimelineItemDetail({
     client,
     runId,
     conversationId,
-    row === undefined ? undefined : recordedSession(row),
+    row === undefined ? undefined : transcriptFingerprint(row),
   );
   const stickToLastLine = useStickyBottom(
     conversationId,
@@ -512,7 +512,7 @@ function Reference({
  *
  * A row that is one recorded turn cannot grow, so its own identity is its record.
  */
-function recordedSession(row: TimelineRow): string {
+function transcriptFingerprint(row: TimelineRow): string {
   if (row.rowKind !== "span") return row.id;
   const last = row.span.events.at(-1);
   return [

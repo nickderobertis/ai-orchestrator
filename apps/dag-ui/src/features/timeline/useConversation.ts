@@ -15,7 +15,6 @@ export interface ConversationState {
   readonly error?: Error;
 }
 
-/** What has been read, and which transcript it is the reading of. */
 interface Fetched {
   readonly key: string;
   readonly conversation?: DagConversation;
