@@ -30,6 +30,7 @@ import yaml
 from mock_oneharness import BARRIER_DEATH_NOTICE
 from nx_workspace import requires_workspace_install
 from rendezvous import Rendezvous
+from waits import timeout as e2e_timeout
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
 from orchestrator.channel import (
@@ -488,9 +489,21 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         time.sleep(0.02)
 
 
+@pytest.mark.load_sensitive
 def test_real_run_plan_round_budget_surfaces_blocking_proposal(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
+    """The round budget, not the box, is what must end this run.
+
+    Every wait below is a hang guard and is load-scaled. The 0.2s budget is the only
+    literal, because its expiry is the behavior under test: it is measured inside the
+    round against its own clock, so it fires whatever the host is doing. Reaching the
+    proposal, though, costs a launched CLI process tree and a real onejudge dispatch
+    before the round can cancel it and write to the FIFO — measured at about 1.5s on
+    an idle box and 6-8s under the load this suite runs itself at, so the five
+    literal seconds this used to allow made the *guard*, not the budget, decide the
+    verdict.
+    """
     runs = tmp_path / "runs"
     run_dir = runs / "round-budget"
     channel = create_channel(run_dir)
@@ -538,7 +551,7 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
         stderr=subprocess.PIPE,
     )
 
-    proposal = read_message(channel / "up.fifo", timeout=5)
+    proposal = read_message(channel / "up.fifo", timeout=e2e_timeout(5))
     assert proposal["surface"] == {
         "kind": "proposal",
         "message": (
@@ -551,9 +564,9 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
     write_message(
         channel / "down.fifo",
         {"completion": False, "message": "stop", "reason": "budget exhausted"},
-        timeout=5,
+        timeout=e2e_timeout(5),
     )
-    stdout, stderr = process.communicate(timeout=5)
+    stdout, stderr = process.communicate(timeout=e2e_timeout(5))
     assert process.returncode == 1, (stdout, stderr)
 
 
