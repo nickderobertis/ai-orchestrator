@@ -96,6 +96,10 @@ export function TimelinePopoverLayer() {
     // to another segment is the `focusin` above.
     const blur = (event: Event) =>
       setFocused((current) =>
+        // Safely a `FocusEvent`: this handler is only ever reached through the
+        // `focusout` registration below, which the DOM dispatches as one — the
+        // parameter is the wider `Event` only because `addEventListener`'s listener
+        // signature is untyped in the name it is registered under.
         settle(current, anchoredAt((event as FocusEvent).relatedTarget)),
       );
     const away = () => setHovered(undefined);

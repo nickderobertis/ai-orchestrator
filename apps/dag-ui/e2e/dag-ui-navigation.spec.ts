@@ -397,6 +397,41 @@ for (const size of VIEWPORTS) {
   });
 }
 
+test("ends the reading when the pointer leaves the document", async ({
+  page,
+}) => {
+  // The other way a pointer stops being over a segment, and the one no other journey
+  // here reaches: they all dismiss by moving the pointer *onto* something that is not
+  // a segment, which is `pointerover` doing the closing. A pointer leaving the window
+  // arrives nowhere, so it fires no `pointerover` at all — the document's own
+  // `pointerleave` is the only thing that hears it, and without it the reading stays
+  // painted over an app the pointer is no longer in.
+  await open(page, DESKTOP, `/?run=${runs().live}&node=foundation`);
+  const segment = timeline(page).getByRole("button", { name: /branch push/ });
+  await segment.hover();
+  const reading = page.getByTestId("timeline-popover");
+  await expect(reading).toContainText("Lane: verification");
+
+  // Out through the top edge, to a point the document does not cover — the pointer
+  // leaving the window, not moving to another part of it.
+  await page.mouse.move(Math.round(DESKTOP.width / 2), -5);
+  await expect(reading).toHaveCount(0);
+
+  // And it takes only the pointed-at reading with it. Someone who tabbed to a segment
+  // and then took the pointer off the window keeps that segment's reading: the two are
+  // tracked apart precisely so the pointer leaving does not answer for the keyboard.
+  await tabTo(page, segment);
+  await expect(reading).toContainText("Lane: verification");
+  await timeline(page)
+    .getByRole("button", { name: /^Publication/ })
+    .hover();
+  await expect(reading).toContainText("Lane: publication");
+
+  await page.mouse.move(Math.round(DESKTOP.width / 2), -5);
+  await expect(segment).toBeFocused();
+  await expect(reading).toContainText("Lane: verification");
+});
+
 test("reads a segment of the graph timeline, and follows it as the view scrolls", async ({
   page,
 }) => {
