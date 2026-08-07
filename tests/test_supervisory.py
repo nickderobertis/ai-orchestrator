@@ -5,15 +5,18 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
+from orchestrator.conversations import _status_state
 from orchestrator.supervisory import (
     CAPTURE_DIR,
     CAPTURE_SCHEMA_VERSION,
     MAX_CAPTURED_TURN_CHARS,
     MAX_CAPTURED_TURNS,
     CaptureError,
+    CaptureStatus,
     capture_path,
     close_capture,
     driver_indicator,
@@ -456,3 +459,25 @@ def test_a_driver_with_nothing_timeable_still_reports_its_phase(tmp_path: Path) 
     )
     assert bare.last_activity_age() is None
     assert "no observed activity" in bare.describe()
+
+
+def test_a_capture_terminal_status_stays_a_word_the_transcript_fold_produces() -> None:
+    """Drift-gate `CaptureStatus` against the vocabulary it borrows its terminal words from.
+
+    A capture-backed span and a history-backed one sit in the same timeline, so a
+    reader must not have to know which source a status came from. `CaptureStatus`
+    borrows its terminal words rather than owning them, and this is the gate that
+    borrowing is required to have: if `conversations._status_state` stops folding a
+    record status onto one of them, the two vocabularies have diverged and a served
+    span has started reading differently depending on where it came from.
+    """
+    produced = {_status_state(status) for status in ("ok", "nonzero", "spawn-error", "timeout")}
+    terminal = set(get_args(CaptureStatus)) - {"running"}
+
+    assert terminal <= produced, (
+        f"capture terminal statuses {sorted(terminal)} are no longer all produced by "
+        f"conversations._status_state {sorted(produced)}; reconcile the two vocabularies"
+    )
+    # `running` is the one word this scheme owns: a capture is written open, and the
+    # fold has no word for a session that is still speaking.
+    assert "running" not in produced

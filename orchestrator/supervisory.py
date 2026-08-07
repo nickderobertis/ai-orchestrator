@@ -1,30 +1,9 @@
 """The supervisory tier's own record: what drives a run, and what it is doing.
 
-Every history-derived view here is built from what oneharness wrote, and the tier
-*above* the workers was missing from all of them — including on the nights its deaths
-orphaned runs. Measuring the local history store settled why, and it is worth writing
-down because the obvious answer is the wrong one.
-
-The supervisory sessions are **recorded**. Across the 12,387 run records in this
-host's store, oneharness had already written 157 ``orchestrator`` and 728
-``check-in`` runs, correctly role-labelled. So the tier was never absent from
-history; nothing *served* it. That is the gap `timeline` closes, and it is the whole
-reason a run-scope span for these sessions is the fix rather than a workaround.
-
-The refused write is real but secondary, and it is not the harness it was assumed to
-be. oneharness refuses a write with ``new history run lacks complete v1.0
-telemetry`` (`crates/oneharness-core/src/io/history.rs`), which
-`graph.infrastructure_failure_detail` already classified as an infrastructure
-failure. A refused write leaves nothing behind, so the store cannot show one
-directly — but it does show that codex is not the suspect: every one of its 7,642
-run records is ``ok`` and carries complete native telemetry, while claude-code
-supplies no native per-phase timing at all (``started_at``, ``finished_at``,
-``tool_ms``, ``time_to_first_token_ms``, ``model_ms`` are absent from all 4,745 of
-its records) and carries every recorded failure. So the capture below is kept as a
-harness-agnostic fallback for a session whose write was refused, not as a codex
-workaround.
-
-This module is the local half, and it holds two things:
+oneharness records these sessions; for most of this repository's life nothing served
+them, which is why the tier that drives every run was missing from every
+history-derived view. Serving them is `timeline`'s job, so this module is only the
+part history cannot supply, and it holds two things:
 
 * **A bounded local capture.** One small JSON record per supervisory session, written
   by the dispatch layer at the seam it already controls: `dispatch.launch_orchestrator`
@@ -86,6 +65,10 @@ _SESSION_NAME = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_SESSION_NAME_CHA
 #: two readers need the same answer: `graph` classifies a dispatch that died this way
 #: as an infrastructure failure, and the capture records the same text as the reason a
 #: session is missing from history.
+#:
+#: Matched for any harness. This was once believed to be codex-specific and is not;
+#: `docs/telemetry.md` carries the measurement that ruled that out, and scoping these
+#: patterns to one harness would silently stop capturing the others.
 HISTORY_WRITE_FAILURE_PATTERNS = (
     re.compile(r"cannot write v[0-9]+(?:\.[0-9]+)* history telemetry", re.IGNORECASE),
     re.compile(
@@ -99,9 +82,13 @@ HISTORY_WRITE_FAILURE_PATTERNS = (
 #: record naming anything else was not written by this scheme and has no claim on a run.
 _AGENT_ROLES: frozenset[str] = frozenset(get_args(AgentRole))
 
-#: Where one supervisory session stands. Deliberately the same three words the
-#: transcript state vocabulary folds onto, so a served span reads identically whether
-#: it came from history or from a capture.
+#: Where one supervisory session stands. Its two *terminal* words are taken from the
+#: vocabulary `conversations._status_state` folds a record status onto, so a served
+#: span reads identically whether it came from history or from a capture. That
+#: borrowing is what makes this a second source, so it has a drift gate:
+#: `tests/test_supervisory.py` fails if a terminal status here stops being one that
+#: fold can produce. ``running`` is deliberately *not* borrowed — a capture is written
+#: open and closed later, and the fold has no word for a session still speaking.
 CaptureStatus = Literal["running", "completed", "failed"]
 _CAPTURE_STATUSES: frozenset[str] = frozenset(get_args(CaptureStatus))
 
