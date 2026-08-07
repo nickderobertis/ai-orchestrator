@@ -1102,3 +1102,54 @@ def test_runs_cli_says_so_when_this_session_launched_nothing(tmp_path, capsys, m
 
     assert main_runs(["--runs-dir", str(tmp_path), "--mine"]) == 0
     assert "No runs launched by this session." in capsys.readouterr().out
+
+
+def _driven(runs_dir, run_id: str, *, pid: int):
+    """A launch whose driver `just runs` can observe, as `just orchestrate` leaves one."""
+    run = _launch(runs_dir, run_id)
+    (run / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": pid, "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    return run
+
+
+def test_runs_cli_carries_the_driver_line_on_every_row_form(tmp_path, capsys) -> None:
+    """The driver line reaches the three row forms the live-run journey never renders.
+
+    `just runs` renders four row shapes, and the end-to-end journey only ever produces
+    the ACTIVE pre-round one. The other three are exactly where a planner looks when
+    nothing is settling — a run that stopped, and a run whose last round is recorded —
+    so a line that answered only on the healthy shape would be missing wherever it is
+    most needed.
+    """
+    gone = os.getpid() + 10_000_000
+    # Abandoned: the launch's own pid is provably gone, which is the whole claim the
+    # dead-driver line makes.
+    _driven(tmp_path, "stopped", pid=gone)
+    # A settled round under a launch that is still there, which is the recorded-row form.
+    recorded = _driven(tmp_path, "recorded", pid=os.getpid())
+    _, round_dir = write_next_plan(recorded, PLAN)
+    write_result(round_dir, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+
+    lines = out.splitlines()
+    stopped_row = next(index for index, line in enumerate(lines) if line.startswith("! stopped"))
+    # Directly beneath its own row, not merely somewhere in the output: this line is
+    # read as belonging to the row above it.
+    assert "DRIVER DEAD" in lines[stopped_row + 1], out
+    assert "nothing is driving this run" in lines[stopped_row + 1], out
+
+    recorded_row = next(
+        index for index, line in enumerate(lines) if "recorded" in line and "round-01" in line
+    )
+    assert f"driver running (pid {os.getpid()})" in lines[recorded_row + 1], out
+
+
+# The parked row form is proven in tests/e2e/test_supervisory_visibility_e2e.py rather
+# than here. `parked` means "alive with nothing running underneath", so it cannot be
+# asserted against this process's own pid: whether that reads as parked depends on
+# whether pytest happens to have a live child at the time, which under xdist it often
+# does. That test spawns a process with no descendants and drives the real `just runs`.

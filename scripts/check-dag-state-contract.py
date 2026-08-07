@@ -1042,7 +1042,7 @@ def main() -> None:
     )
 
     # The served run timeline: the design contract is authoritative for its payload
-    # shapes, and its two closed vocabularies are mirrored in the dag-model schemas a
+    # shapes, and its closed vocabularies are mirrored in the dag-model schemas a
     # client parses with, so all three sides are reconciled here.
     for name in (
         "TimelineReference",
@@ -1052,14 +1052,29 @@ def main() -> None:
         "RunTimeline",
     ):
         reconcile_shape(timeline, name, design, interface_fields(design, name))
-    for python_name, schema_name in (
-        ("TimelineSpanKind", "timelineSpanKindSchema"),
-        ("TimelineReferenceKind", "timelineReferenceKindSchema"),
+    # `reconcile_shape` above lets the server omit an optional documented field, which
+    # is right for a server and wrong for the schema a browser parses *with*: a field
+    # served but absent there is dropped before any client sees it. So the span the
+    # supervisory tier's own additions land on is reconciled symmetrically too.
+    reconcile_documented_schema(dag_model, "timelineSpanSchema", design, "TimelineSpan")
+    # The driver phase is declared by `orchestrator/supervisory.py`, which derives it,
+    # rather than by the timeline that serves it — one source, two readers.
+    supervisory = root / "orchestrator/supervisory.py"
+    for python_module, python_name, schema_name, documented in (
+        (timeline, "TimelineSpanKind", "timelineSpanKindSchema", "TimelineSpanKind"),
+        (
+            timeline,
+            "TimelineReferenceKind",
+            "timelineReferenceKindSchema",
+            "TimelineReferenceKind",
+        ),
+        (supervisory, "SupervisoryPhase", "supervisoryPhaseSchema", "SupervisoryPhase"),
     ):
-        members = literal_values(timeline, python_name)
+        members = literal_values(python_module, python_name)
+        where = f"orchestrator/{python_module.name} {python_name}"
         reconcile(
             f"{python_name} vocabulary",
-            (f"orchestrator/timeline.py {python_name}", members),
+            (where, members),
             (
                 f"packages/dag-model/src/index.ts {schema_name}",
                 zod_enum_members(dag_model, schema_name),
@@ -1067,10 +1082,10 @@ def main() -> None:
         )
         reconcile(
             f"{python_name} vocabulary",
-            (f"orchestrator/timeline.py {python_name}", members),
+            (where, members),
             (
-                f"docs/dag-ui/design.md {python_name}",
-                documented_type_union(design, python_name),
+                f"docs/dag-ui/design.md {documented}",
+                documented_type_union(design, documented),
             ),
         )
 
