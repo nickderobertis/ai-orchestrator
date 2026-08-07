@@ -449,8 +449,17 @@ def test_a_model_given_to_one_side_never_reaches_the_other(
             ("--worker-harness", "claude-code:primary,codex"),
             "spans",
         ),
+        # The judge side's own mixed-family refusal, driven the same way: the two
+        # sides resolve on different branches against different configs, so one of
+        # them proving the rule proves nothing about the other.
+        (
+            "--judge-model",
+            "claude-opus-5",
+            ("--judge-harness", "claude-code:primary,codex"),
+            "spans",
+        ),
     ],
-    ids=["worker-unpaired", "judge-unpaired", "worker-two-families"],
+    ids=["worker-unpaired", "judge-unpaired", "worker-two-families", "judge-two-families"],
 )
 def test_a_model_the_pairing_rule_forbids_refuses_the_dispatch_before_it_starts(
     tmp_path: Path,

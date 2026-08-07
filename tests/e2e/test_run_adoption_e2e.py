@@ -40,7 +40,7 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.adopt import read_relaunch_record
+from orchestrator.adopt import RELAUNCH_SCHEMA_VERSION, relaunch_path
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, JUDGE_MODEL_ENV
 from orchestrator.launch import LAUNCHER_ENVIRONMENT_VARIABLES, read_launch_link
 from orchestrator.stop import recorded_owners, run_tree
@@ -55,6 +55,12 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 JUDGE_IDENTITY = "claude-code:primary"
 JUDGE_MODEL = "claude-opus-5"
 
+#: Where the backend the run's own dispatches spawn appends the routing it was
+#: spawned with. That process is the far end of the inheritance a per-side choice
+#: travels — driver, round, dispatch, onejudge, provider — so it is where "this run's
+#: work actually got the model it was launched on" is a fact rather than a hop.
+ROUTING_RECORD = "FAKE_BACKEND_ROUTING"
+
 #: Everything a harness exports to say which session it is, cleared before each launch
 #: so the session under test is the one this journey named rather than the developer's.
 _LAUNCHER_VARIABLES = (
@@ -66,13 +72,15 @@ _LAUNCHER_VARIABLES = (
 )
 
 
-def _session_env(tmp_path: Path, session_id: str) -> dict[str, str]:
+def _session_env(tmp_path: Path, session_id: str, routing: Path | None = None) -> dict[str, str]:
     environment = {**os.environ}
     for name in _LAUNCHER_VARIABLES:
         environment.pop(name, None)
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
     environment["CLAUDECODE"] = "1"
     environment["CLAUDE_CODE_SESSION_ID"] = session_id
+    if routing is not None:
+        environment[ROUTING_RECORD] = str(routing)
     return environment
 
 
@@ -175,24 +183,28 @@ def _kill_the_whole_run_tree(run_dir: Path) -> None:
 # llmlint: ignore-end[tests_mirror_real_usage]
 
 
-def _driver_environment(run_dir: Path) -> dict[str, str]:
-    """The environment the kernel fixed into this run's live driver when it started.
+def _routing(record: Path, *, after: int = 0) -> list[dict[str, str]]:
+    """The routing every provider this run spawned since line `after` was given.
 
-    Read from the process itself rather than from anything the harness wrote down,
-    because that is what a dispatch of the run will inherit: a value the record
-    replayed but the spawn dropped would still read correctly everywhere else.
+    A per-side choice is carried by environment and inherited the whole way down —
+    driver, round, dispatch, onejudge, the provider it spawns — so the provider is
+    where a replayed value either arrived or did not. Read there rather than at the
+    driver, because that is the end of the journey the run's work actually makes: a
+    value the record replayed and the spawn dropped would still read correctly at
+    every point above it.
     """
-    wait = deadline(60)
+    lines = record.read_text(encoding="utf-8").splitlines()[after:]
+    return [json.loads(line) for line in lines]
+
+
+def _await_routing(record: Path, *, after: int = 0) -> list[dict[str, str]]:
+    """Block until this run has spawned a provider past line `after`, then read it."""
+    wait = deadline(120)
     while True:
-        owners = [owner for owner in recorded_owners(run_dir) if owner.source == "orchestrator"]
-        raw = b""
-        if owners:
-            with suppress(OSError):
-                raw = Path(f"/proc/{owners[-1].pid}/environ").read_bytes()
-        if raw:
-            entries = (item.split("=", 1) for item in raw.decode().split("\0") if "=" in item)
-            return {name: value for name, value in entries}
-        assert time.monotonic() < wait, f"{run_dir.name} has no readable driver environment"
+        spawned = _routing(record, after=after)
+        if spawned:
+            return spawned
+        assert time.monotonic() < wait, f"no dispatch of this run reached {record}"
         time.sleep(0.05)
 
 
@@ -260,8 +272,10 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     tmp_path: Path, onejudge_bin: str, reaped: list[Path]
 ) -> None:
     runs = tmp_path / "runs"
-    planner = _session_env(tmp_path, "session-adoption-owner")
-    stranger = _session_env(tmp_path, "session-another-planner")
+    routing = tmp_path / "routing.jsonl"
+    routing.touch()
+    planner = _session_env(tmp_path, "session-adoption-owner", routing)
+    stranger = _session_env(tmp_path, "session-another-planner", routing)
     held = Rendezvous.at(tmp_path, "adoption")
 
     launched = _launch(
@@ -284,7 +298,8 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     reaped.append(run_dir)
     run_id = run_dir.name
     _await_round_claimed(run_dir, held)
-    assert _driver_environment(run_dir)[JUDGE_MODEL_ENV] == JUDGE_MODEL
+    # The launch routed as it was told to, at the boundary that decides a turn.
+    assert {entry.get(JUDGE_MODEL_ENV) for entry in _await_routing(routing)} == {JUDGE_MODEL}
 
     # A run another planner launched is refused by name, with no `--force` to get
     # past it: unlike a stop, adopting takes over ongoing work rather than ending it.
@@ -303,6 +318,9 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     assert link is not None
     _kill_the_whole_run_tree(run_dir)
     held.let_go()
+    # Everything recorded past here was spawned by whatever drives the run next, so
+    # the dead driver's own turns cannot be mistaken for the replacement's.
+    before_adoption = len(_routing(routing))
 
     # A run launched before adoption existed has no parameters to replay, and is
     # refused rather than started on guessed ones. Moved aside rather than deleted,
@@ -312,7 +330,7 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     # this host predating adoption has no relaunch record, and the refusal they get
     # is what this asserts — through the real `just orchestrate --adopt`, on a real
     # run, with only the record the older build would not have written withheld.
-    record = run_dir / "orchestrator" / "relaunch.json"
+    record = relaunch_path(run_dir)
     record.replace(record.with_suffix(".withheld"))
     unreplayable = _adopt(runs, planner, run_id)
     assert unreplayable.returncode == 2, unreplayable.stdout
@@ -322,15 +340,18 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     adopted = _adopt(runs, planner, run_id)
     assert adopted.returncode == 0, adopted.stderr
     assert json.loads(adopted.stdout)["run_id"] == run_id
-    # The routing came back with the driver. `_adopt` passes no side options at all —
-    # they are launch-only — so both halves here are the record's, and the model is
-    # the half a replay that kept only the identity would have dropped: every round
-    # this fresh driver dispatches would have been supervised at the tier the judge
-    # config pins instead of the one the run was launched on.
-    replacement = _driver_environment(run_dir)
-    assert replacement[JUDGE_HARNESS_ENV] == JUDGE_IDENTITY
-    assert replacement[JUDGE_MODEL_ENV] == JUDGE_MODEL
     _answer_and_await_the_report(run_id, runs)
+
+    # The routing came back with the driver, all the way to the provider its rounds
+    # spawn. `_adopt` passes no side options at all — they are launch-only — so both
+    # halves here are the record's, and the model is the half a replay that kept only
+    # the identity would have dropped: every round this fresh driver dispatched would
+    # have been supervised at the tier the judge config pins instead of the one the
+    # run was launched on.
+    replayed = _routing(routing, after=before_adoption)
+    assert replayed, "the adopted driver dispatched nothing to route"
+    assert {entry.get(JUDGE_HARNESS_ENV) for entry in replayed} == {JUDGE_IDENTITY}
+    assert {entry.get(JUDGE_MODEL_ENV) for entry in replayed} == {JUDGE_MODEL}
 
     # One run id, and no second run minted beside it.
     assert sorted(item.name for item in runs.iterdir()) == [run_id]
@@ -353,7 +374,109 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     assert f"session: orchestrator-{run_id}-adopt1" in effective
     assert (run_dir / "orchestrator" / "report.pre-adopt-1.json").is_file()
     # And the record the next adoption would replay still carries both halves, so the
-    # choice survives a second driver swap rather than only the first.
-    record = read_relaunch_record(run_dir)
-    assert record["judge_harness"] == JUDGE_IDENTITY
-    assert record["judge_model"] == JUDGE_MODEL
+    # choice survives a second driver swap rather than only the first. Read as the
+    # file it is — the persisted contract a second adoption re-reads — rather than
+    # through the reader, which would prove the reader agrees with itself.
+    persisted = json.loads(relaunch_path(run_dir).read_text(encoding="utf-8"))
+    assert persisted["judge_harness"] == JUDGE_IDENTITY
+    assert persisted["judge_model"] == JUDGE_MODEL
+    assert persisted["adoptions"] == 1
+
+
+def _downgrade_to_schema_v1(run_dir: Path) -> dict[str, object]:
+    """Rewrite this run's record as the previous build would have written it.
+
+    A build without the per-side model half wrote schema 1 and no `worker_model` /
+    `judge_model` key at all, so that is what the file becomes: the version number
+    and the absence together, rather than a v2 record with the number changed. What
+    it deliberately does NOT drop is `judge_harness`, which v1 already carried — the
+    point of the journey is which halves come back and which are silent.
+    """
+    path = relaunch_path(run_dir)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["schema_version"] == RELAUNCH_SCHEMA_VERSION, record
+    downgraded = {
+        key: value
+        for key, value in record.items()
+        if key not in {"schema_version", "worker_model", "judge_model"}
+    }
+    downgraded["schema_version"] = 1
+    path.write_text(json.dumps(downgraded), encoding="utf-8")
+    return downgraded
+
+
+def test_a_run_recorded_by_the_previous_build_is_adopted_from_its_v1_record(
+    tmp_path: Path, onejudge_bin: str, reaped: list[Path]
+) -> None:
+    """A run orphaned across an upgrade is rescued, not stranded by its own record.
+
+    Adoption exists for a run whose driver died; a run launched by the build *before*
+    the model half existed is exactly such a run, and refusing its record would leave
+    the upgrade itself as the thing that stranded it. So a v1 record is replayed: the
+    identity it recorded comes back, and its silence about the model is read as the
+    same answer a v2 record naming none gives — that side runs the model its config
+    pins. Both are observed where a dispatch's routing lands rather than in the file
+    that was read, and the record is left normalized to the current version so the
+    NEXT adoption of this run replays a record this build wrote.
+    """
+    runs = tmp_path / "runs"
+    routing = tmp_path / "routing.jsonl"
+    routing.touch()
+    planner = _session_env(tmp_path, "session-v1-record-owner", routing)
+    held = Rendezvous.at(tmp_path, "v1-adoption")
+
+    launched = _launch(
+        runs,
+        planner,
+        onejudge_bin,
+        str(_plan(tmp_path, held)),
+        "--base",
+        str(_base(tmp_path)),
+        "--judge-harness",
+        JUDGE_IDENTITY,
+        "--judge-model",
+        JUDGE_MODEL,
+        "--skill-command",
+        sys.executable,
+        str(FAKE_BACKEND),
+    )
+    assert launched.returncode == 0, launched.stderr
+    run_dir = _await_launched_run(runs)
+    reaped.append(run_dir)
+    run_id = run_dir.name
+    _await_round_claimed(run_dir, held)
+    _await_routing(routing)
+
+    _kill_the_whole_run_tree(run_dir)
+    held.let_go()
+    before_adoption = len(_routing(routing))
+    # llmlint: ignore[tests_mirror_real_usage] No command this build has writes a v1
+    # record — the build that did is the one this journey is about — so the record is
+    # rewritten into the shape that build left behind. Every other party is real: the
+    # run, its ledger, `just orchestrate --adopt`, and the dispatches it then drives.
+    downgraded = _downgrade_to_schema_v1(run_dir)
+    assert downgraded["judge_harness"] == JUDGE_IDENTITY
+
+    adopted = _adopt(runs, planner, run_id)
+    assert adopted.returncode == 0, adopted.stderr
+    assert json.loads(adopted.stdout)["run_id"] == run_id
+    _answer_and_await_the_report(run_id, runs)
+
+    # The run finished on its own ledger, from a record an older build wrote.
+    result = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    assert result["state"] == "complete", result
+    assert sorted(item.name for item in runs.iterdir()) == [run_id]
+
+    # The identity v1 recorded came back; the model it never recorded did not, so the
+    # judge side runs whatever `oneharness.judge.toml` pins for that identity.
+    replayed = _routing(routing, after=before_adoption)
+    assert replayed, "the adopted driver dispatched nothing to route"
+    assert {entry.get(JUDGE_HARNESS_ENV) for entry in replayed} == {JUDGE_IDENTITY}
+    assert {entry.get(JUDGE_MODEL_ENV) for entry in replayed} == {None}
+
+    # And the record is normalized on the way back out, so a second adoption of this
+    # run replays the current schema rather than the one it was rescued from.
+    persisted = json.loads(relaunch_path(run_dir).read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == RELAUNCH_SCHEMA_VERSION
+    assert persisted["judge_harness"] == JUDGE_IDENTITY
+    assert "judge_model" not in persisted

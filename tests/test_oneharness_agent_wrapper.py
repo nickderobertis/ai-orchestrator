@@ -656,6 +656,91 @@ def test_a_model_with_no_identity_stops_the_turn_here(
     assert argv == []
 
 
+#: A chain of two harness families, spelled per side from identities that side's own
+#: config configures — so the selection check passes and the *pairing* check is the
+#: only thing left to refuse it.
+_MIXED_FAMILY_CHAIN = "claude-code:primary,codex"
+
+
+@pytest.mark.parametrize(
+    ("argv_builder", "model_variable", "harness_variable"),
+    [
+        (lambda _: ["run", "--compact", "--prompt", "probe"], WORKER_MODEL_ENV, WORKER_HARNESS_ENV),
+        (_judge_argv, JUDGE_MODEL_ENV, JUDGE_HARNESS_ENV),
+    ],
+)
+def test_a_model_on_a_mixed_provider_chain_stops_the_turn_here(
+    tmp_path: Path,
+    argv_builder: Callable[[Path], list[str]],
+    model_variable: str,
+    harness_variable: str,
+) -> None:
+    """The other half of the pairing rule, at the same boundary.
+
+    A paired-but-mixed chain is the hole a presence check leaves open: the identity
+    is set, so the model is accepted, and `ONEHARNESS_MODEL` beats a config's
+    per-harness `model` for everything the side then runs — so a Claude model name
+    lands on the codex candidate whenever the chain falls through to it. `fallback`
+    does not fall through a *task* failure, so that dispatch dies on a provider
+    rejection rather than degrading. `orchestrator/harnesses.py` refuses the same
+    pair, but a hand-set variable reaches the wrapper without passing through it.
+    """
+    proc, argv = _run_wrapper(
+        tmp_path,
+        argv_builder(tmp_path),
+        env={harness_variable: _MIXED_FAMILY_CHAIN, model_variable: "claude-opus-5"},
+    )
+
+    assert proc.returncode == 2
+    # Both offending variables are named, so the operator sees which pair to narrow.
+    assert model_variable in proc.stderr
+    assert harness_variable in proc.stderr
+    assert _MIXED_FAMILY_CHAIN in proc.stderr
+    assert "spans claude-code, codex" in proc.stderr
+    # Nothing was spawned, and no selection reached oneharness either: the refusal
+    # happens before this branch's own `exec`.
+    assert argv == []
+
+
+#: A chain of two identities of ONE family, which the rule must still honor.
+_ONE_FAMILY_CHAIN = "claude-code:primary,claude-code:alternate"
+
+
+@pytest.mark.parametrize(
+    ("chain_argv_builder", "model_variable", "harness_variable"),
+    [
+        (
+            lambda path, _chain: ["run", "--compact", "--prompt", "probe"],
+            WORKER_MODEL_ENV,
+            WORKER_HARNESS_ENV,
+        ),
+        (_judge_argv, JUDGE_MODEL_ENV, JUDGE_HARNESS_ENV),
+    ],
+)
+def test_a_model_on_a_one_family_chain_of_several_identities_still_runs(
+    tmp_path: Path,
+    chain_argv_builder: Callable[[Path, tuple[str, ...]], list[str]],
+    model_variable: str,
+    harness_variable: str,
+) -> None:
+    """The rule is one *family*, not one identity: a same-family chain is honored.
+
+    A check that refused every chain of more than one identity would take away the
+    fallback within a provider, which is the whole point of naming a chain — and it
+    would refuse the routing this repository's own configs declare.
+    """
+    proc, argv = _run_wrapper(
+        tmp_path,
+        chain_argv_builder(tmp_path, tuple(_ONE_FAMILY_CHAIN.split(","))),
+        env={harness_variable: _ONE_FAMILY_CHAIN, model_variable: "claude-opus-5"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert _named_model(argv) == "claude-opus-5"
+    assert _exported_model(tmp_path) == "claude-opus-5"
+    assert _selection(tmp_path) == _ONE_FAMILY_CHAIN
+
+
 def test_a_selection_the_side_cannot_honor_stops_the_turn_here(tmp_path: Path) -> None:
     """The variables are the boundary a hand-set value arrives at, so check them.
 

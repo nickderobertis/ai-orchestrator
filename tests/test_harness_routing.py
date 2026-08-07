@@ -136,6 +136,39 @@ def test_only_the_judge_supervises_on_the_cheaper_claude_tier() -> None:
             assert variant["model"] == expected, f"{config.name}:{name}"
 
 
+#: The document an operator reads the judge's tier off, and the numerals it may
+#: spell a count with. Both halves of the claim are derived from the config below,
+#: so retuning the supervisor tier — or naming a fourth Claude identity — fails here
+#: until the sentence is updated with it.
+_JUDGE_TIER_DOCUMENT = "docs/onejudge-integration.md"
+_NUMERALS = {2: "two", 3: "three", 4: "four", 5: "five"}
+
+
+@pytest.mark.reads_docs
+def test_documentation_states_the_judge_tier_its_config_pins() -> None:
+    """The per-side model section restates the judge's pinned tier; reconcile it.
+
+    An operator reaching for `--judge-model` reads that sentence to learn what they
+    are overriding, so a stale one sends them to change a tier that already moved —
+    or leaves them believing a fourth identity is on it. The config is the one
+    source; this holds the prose to it rather than to a second copy of the value.
+    """
+    variants = _config(JUDGE_CONFIG)["harness"]["claude-code"]["variant"]
+    pinned = {variant["model"] for variant in variants.values()}
+    assert len(pinned) == 1, f"{JUDGE_CONFIG.name} pins several Claude tiers: {sorted(pinned)}"
+    counted = _NUMERALS.get(len(variants))
+    assert counted is not None, f"{JUDGE_CONFIG.name} names {len(variants)} Claude identities"
+    stated = (
+        f"`{JUDGE_CONFIG.name}` pins `{pinned.pop()}` on all {counted} of its Claude identities"
+    )
+    prose = " ".join((REPO_ROOT / _JUDGE_TIER_DOCUMENT).read_text(encoding="utf-8").split())
+
+    assert stated in prose, (
+        f"{_JUDGE_TIER_DOCUMENT} must state {stated!r}; update it in the same change "
+        f"that retuned {JUDGE_CONFIG.name}, or stop documenting the tier"
+    )
+
+
 def test_every_role_defines_the_alternate_codex_identity_identically() -> None:
     """All four chains reach a second Codex identity; hold them to one definition.
 

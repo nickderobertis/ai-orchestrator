@@ -278,10 +278,34 @@ def _record_history_labels() -> None:
         stream.write(os.environ.get("ONEHARNESS_HISTORY_LABELS", "") + "\n")
 
 
+def _record_routing_environment() -> None:
+    """Append the per-side routing this invocation was spawned with, when asked.
+
+    A dispatch's routing is decided by environment: each side's variable is resolved
+    into oneharness's process-wide one, and everything the side runs inherits it. The
+    provider process is the far end of that inheritance — the place the choice either
+    arrived or did not — so a journey asking "did this run's work actually get the
+    model it was launched on" reads it here rather than at a pid it looked up.
+
+    Selected by name shape rather than by a restated list, so a variable added to
+    either half of the seam is recorded without this file learning about it. Nothing
+    else in this backend depends on it, and journeys that set no path see no change.
+    """
+    destination = os.environ.get("FAKE_BACKEND_ROUTING")
+    if not destination:
+        return
+    routing = {
+        name: value for name, value in os.environ.items() if name.endswith(("_HARNESSES", "_MODEL"))
+    }
+    with open(destination, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(routing, sort_keys=True) + "\n")
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "onejudge-report-proxy":
         return _onejudge_report_proxy(sys.argv[2:])
     _record_history_labels()
+    _record_routing_environment()
     req = json.loads(sys.stdin.read())
     if not isinstance(req, dict):
         sys.stderr.write("fake_backend: request must be a JSON object\n")

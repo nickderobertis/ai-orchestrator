@@ -334,6 +334,10 @@ Picking the identity does not pick the tier. Every role's config pins a `model` 
 harness — `oneharness.judge.toml` pins `claude-sonnet-5` on all three of its Claude
 identities *by design*, the cheaper-supervisor intent — so `--judge-harness
 claude-code:primary` gets the judge onto that subscription and leaves it on sonnet.
+That config is the one source of the tier and the count; the sentence above restates
+them because an operator has to read them here, and
+`tests/test_harness_routing.py::test_documentation_states_the_judge_tier_its_config_pins`
+derives both from `oneharness.judge.toml` and fails when the two disagree.
 `--worker-model` / `--judge-model` are the second half of the same seam:
 
 ```sh
@@ -364,6 +368,17 @@ chain selects and kills the dispatch on a provider rejection. Name the identity 
 the model together.
 ```
 
+Both halves of that rule are enforced **twice**, in the two places a choice can enter.
+`orchestrator/harnesses.py` refuses them before a dispatch starts, which is what an
+operator sees; `scripts/oneharness-agent.sh` refuses them again on the branch it
+resolves each side on, because `ORCHESTRATOR_WORKER_MODEL` and
+`ORCHESTRATOR_JUDGE_MODEL` are ordinary environment variables and a hand-set one
+reaches the wrapper having passed through no dispatch at all. The second check is not
+redundant with the first: it is the only one on that path, and the failure it stops —
+`ONEHARNESS_MODEL` beating a config's per-harness `model` for everything the side then
+runs, so a Claude model name lands on the codex candidate the chain falls through to —
+is a dispatch that dies rather than degrades.
+
 The model **value** is deliberately not checked against an allowlist, and that
 asymmetry with the identity is the point. An identity selects credentials and
 environment routing that only this repository configures, so naming an unconfigured
@@ -376,7 +391,10 @@ than quietly running something else.
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
 0.6.6, a config's per-harness `model` **beats** the variable, while the `--model`
-flag on an invocation's own argv beats the config:
+flag on an invocation's own argv beats the config — a precedence that is a fact about
+one release, so the literal above is derived from `config/oneharness.version` by
+`tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
+and an upgrade fails here until this measurement is redone:
 
 ```
 $ ONEHARNESS_HARNESSES=claude-code:primary ONEHARNESS_MODEL=claude-opus-5 \

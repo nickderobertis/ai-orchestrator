@@ -154,17 +154,41 @@ apply_side_selection() {
 
 # Apply one side's model to this process only. The value itself is deliberately not
 # checked — it is passed through to the harness the operator named in the same
-# breath, where an unknown name fails loudly — but the pairing is: without that
-# side's identity, one model would reach whichever candidate the configured chain
-# selects, which is the provider rejection the pairing rule exists to make
-# unconstructable. orchestrator/harnesses.py refuses the same combination before a
-# dispatch starts; this is the boundary a hand-set variable arrives at.
+# breath, where an unknown name fails loudly — but the pairing is, in both of its
+# halves. Without that side's identity, one model would reach whichever candidate the
+# configured chain selects; with an identity spanning two harness families, it
+# reaches a candidate of the wrong one — say a Claude model name on a codex
+# candidate. Either way `fallback` does not fall through a *task* failure, so the
+# dispatch dies on a provider rejection instead of degrading, which is the outcome
+# the pairing rule exists to make unconstructable. orchestrator/harnesses.py refuses
+# the same combinations before a dispatch starts; this is the boundary a hand-set
+# variable arrives at, having passed through none of that.
 # $1 names the model variable for diagnostics, $2 is its value, $3 names the harness
 # variable its side must also carry.
 apply_side_model() {
     local model_variable=$1 model_value=$2 harness_variable=$3
-    if [ -z "${!harness_variable-}" ]; then
+    local harness_value candidate family seen=' ' families='' family_count=0
+    local -a requested
+    harness_value=${!harness_variable-}
+    if [ -z "$harness_value" ]; then
         echo "oneharness-agent: $model_variable '$model_value' requires $harness_variable, which names the identity the model belongs to; set both, or unset $model_variable to use the model this side's config pins, then retry" >&2
+        return 2
+    fi
+    # Split on commas alone, as the selection above does: an unquoted expansion would
+    # also glob, so a value containing `*` could become whatever the cwd happens to
+    # hold. A composed identity names its family before the colon.
+    IFS=',' read -r -a requested <<<"$harness_value"
+    for candidate in "${requested[@]}"; do
+        family=${candidate%%:*}
+        case "$seen" in
+            *" $family "*) continue ;;
+        esac
+        seen="${seen}${family} "
+        families="${families:+$families, }$family"
+        family_count=$((family_count + 1))
+    done
+    if [ "$family_count" -gt 1 ]; then
+        echo "oneharness-agent: $model_variable '$model_value': $harness_variable '$harness_value' spans $families, and one model cannot name a model of each; narrow $harness_variable to identities of a single harness, then retry" >&2
         return 2
     fi
     side_model=(--model "$model_value")
