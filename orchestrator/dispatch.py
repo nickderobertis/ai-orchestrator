@@ -108,7 +108,6 @@ from .scratch import (
     owned_scratch_directory,
     processes_stamped_for,
 )
-from .stop import describe_other_owner
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
@@ -1614,7 +1613,7 @@ def adopt_orchestrator(
         mine = caller.label if caller is not None else "this session has no launcher provenance"
         raise DispatchError(
             f"refusing to adopt {validated}: it was launched by "
-            f"{describe_other_owner(owner)}, "
+            f"{owner.describe_other()}, "
             f"not by you ({mine}). Confirm with its planner before taking it over."
         )
     if (driving := _live_driver(run_dir)) is not None:
