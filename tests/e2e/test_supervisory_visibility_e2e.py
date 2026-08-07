@@ -520,6 +520,23 @@ def test_a_driver_that_finished_its_loop_stops_reporting_itself(
     assert "driver running" not in listed, listed
     assert "DRIVER DEAD" not in listed, listed
 
+    # The timeline is the other half of that, and it says the opposite thing on
+    # purpose: the CLI goes quiet about a driver whose loop is over, while the served
+    # span still has to carry *why* it is quiet. `finished` is the phase no other
+    # journey reaches, because reaching it means running a graph to its report.
+    binary = _oneharness_bin(tmp_path, tmp_path / "history-store.json")
+    with _serve(create_app(runs, oneharness_bin=str(binary))) as base:
+        spans = (
+            httpx.Client(base_url=base, timeout=30)
+            .get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"})
+            .json()["spans"]
+        )
+    driver = next(
+        span for span in spans if span["kind"] == "dispatch" and span.get("phase") is not None
+    )
+    assert driver["agent_role"] == "orchestrator", driver
+    assert driver["phase"] == "finished", driver
+
 
 def _launched(runs: Path, run_id: str, *, pid: int) -> Path:
     """One run directory in the on-disk shape `just orchestrate` leaves behind."""

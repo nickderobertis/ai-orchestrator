@@ -1365,22 +1365,13 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         atomic_json(pending_path, surfaced["surface"])
         write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
         record_surface(channel_dir)
-        # One orchestrator turn just ended: this relay is invoked once per turn and is
-        # the only in-process view of one, so it is where the driver's bounded local
-        # capture gets its transcript. It is a locked read-modify-write with an fsync,
-        # and *where* that cost sits is the whole of this arrangement.
-        #
-        # Not before `write_message`: that puts it between a turn ending and its
-        # surface becoming visible, on a path planners read under seconds-long
-        # budgets. Not between `write_message` and `read_message` either — that is the
-        # window a planner replying immediately lands in, and widening it made a
-        # `channel-reply` arrive before this relay was listening at all.
-        #
-        # So it happens once the reply has been waited for, in a `finally` so a
-        # planner who never answers still cannot cost the turn its record: that is the
-        # guarantee, and this is the one placement that gets it without paying for it
-        # on either FIFO. The final surface is what is recorded, so a deferred blocker
-        # substituted above is what the capture shows.
+        # This relay runs once per orchestrator turn, so it is where the driver's
+        # bounded local capture gets its transcript. The write is a locked
+        # read-modify-write with an fsync, and it sits after both FIFOs because either
+        # earlier position pays that cost inside a window something waits on: before
+        # `write_message` delays the surface, and between the two delayed this relay
+        # past a `channel-reply` that had already been sent. `finally`, so a planner
+        # who never answers still cannot cost the turn its record.
         try:
             response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
         finally:
