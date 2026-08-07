@@ -354,6 +354,7 @@ def next_round(
             results,
             completed_humans,
             retry_requested=tid in retry,
+            stated_resume=tid in retry and "resume" in retry[tid],
             source_round=prev_result.get("round"),
         ):
             continue
@@ -527,6 +528,16 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
 #: different scales, so a change of heart about one is a change of heart about both.
 MAX_AUTOMATIC_ROUND_RESUMES = MAX_AUTOMATIC_STEP_RESUMES
 
+#: Settled states whose preserved branch the next round continues. ``cancelled``
+#: belongs here for the same reason ``failed`` does and was the harder case to see:
+#: a node the round stopped cooperatively — a spent round budget, a live retry, a
+#: sibling that settled — commits its partial work and leaves an incomplete-step
+#: marker exactly as a failure does, and reading only ``failed`` meant the next
+#: round cut a fresh branch beside work that was already on one. Continuing it
+#: spends the same bounded budget, so a node that keeps being cancelled still
+#: reaches the planner rather than looping.
+_PRESERVING_STATUSES = frozenset({"failed", "cancelled"})
+
 
 def _spent_attempts(nid: str, node: dict[str, Any]) -> int:
     """Automatic continuations this node already carries; reject an unusable count.
@@ -566,6 +577,7 @@ def _apply_lifecycle_resume(
     completed_humans: set[str],
     *,
     retry_requested: bool = False,
+    stated_resume: bool = False,
     source_round: object = None,
 ) -> bool:
     """Attach continuation metadata; return whether the node runs again at all.
@@ -586,21 +598,35 @@ def _apply_lifecycle_resume(
     if not isinstance(item, dict):
         return True
     status = item.get("status")
-    # An explicit branch is an intentional routing decision for a preserved
-    # attempt. It may pin a known branch or opt out by naming a fresh branch. A
-    # waiting workstream is not choosing a branch, so it keeps the pause
-    # metadata that carries its already completed steps.
-    if "branch" in node and status != "waiting":
-        node.pop("resume", None)
-        return True
     resume = item.get("resume")
+    # A ``retry`` that states its own resume is the planner naming the work to
+    # continue after reading the result, and nothing derived from that result may
+    # overrule it. It travels as written, pinned to its own branch.
+    if stated_resume:
+        stated = node.get("resume")
+        if isinstance(stated, dict):
+            node.setdefault("branch", stated.get("branch"))
+        return True
+    # An explicit branch is an intentional routing decision for a preserved
+    # attempt. Naming the preserved branch itself continues it — the dispatch
+    # lands on those commits either way, and dropping the continuation only cost
+    # the record of it and the completed steps it carries. Naming any other
+    # branch is the opt-out that starts the work fresh. A waiting workstream is
+    # not choosing a branch, so it keeps the pause metadata that carries its
+    # already completed steps.
+    pinned = node.get("branch")
+    if pinned is not None and status != "waiting":
+        preserved = resume.get("branch") if isinstance(resume, dict) else None
+        if pinned != preserved:
+            node.pop("resume", None)
+            return True
     waiting_steps = item.get("waiting_steps") or []
     prefix = f"{nid}/"
     completed_steps = sorted(
         ref.removeprefix(prefix) for ref in completed_humans if ref.startswith(prefix)
     )
-    retrying_preserved = retry_requested and status == "failed"
-    continuing_preserved = status == "failed" and resume is not None
+    retrying_preserved = retry_requested and status in _PRESERVING_STATUSES
+    continuing_preserved = status in _PRESERVING_STATUSES and resume is not None
     if not (status == "waiting" or retrying_preserved or continuing_preserved) or (
         resume is None and not waiting_steps
     ):

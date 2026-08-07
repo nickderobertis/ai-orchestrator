@@ -343,6 +343,41 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\ntick\n")
+            # The real incident this reproduces: the worker commits its finished work
+            # and the provider then dies before the turn is reported. The named path
+            # counts the deaths, so a journey says how many dispatches die (`die-times`,
+            # default one) and every later one runs through — which is what lets it
+            # assert that the completing dispatch built on preserved work rather than
+            # re-deriving it.
+            died = re.search(r"die-after-commit=(\S+)", task)
+            if died is not None:
+                latch = Path(died.group(1))
+                deaths = int(latch.read_text(encoding="utf-8")) if latch.exists() else 0
+                times = re.search(r"die-times=(\d+)", task)
+                if deaths < (int(times.group(1)) if times is not None else 1):
+                    latch.write_text(str(deaths + 1), encoding="utf-8")
+                    Path("DIED.txt").write_text(
+                        f"work from dispatch {deaths + 1}, which then died\n", encoding="utf-8"
+                    )
+                    # `die-dirty` is the same death mid-edit: the worker's change is on
+                    # disk and was never committed, which is what the harness has to
+                    # commit for it rather than throw away with the worktree.
+                    if "die-dirty" not in task:
+                        subprocess.run(["git", "add", "DIED.txt"], check=True, capture_output=True)
+                        subprocess.run(
+                            [
+                                "git",
+                                "commit",
+                                "-m",
+                                "feat: work committed before the provider died",
+                            ],
+                            check=True,
+                            capture_output=True,
+                        )
+                    sys.stderr.write(
+                        "fake_backend: provider error (respond): harness failed (quota)\n"
+                    )
+                    return 1
             orchestrator_plan = _orchestrator_command(task)
             infrastructure_failures = {
                 "provider-errors": "fake_backend: provider error",

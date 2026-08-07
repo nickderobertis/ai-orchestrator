@@ -1148,6 +1148,36 @@ def _await_relaunch(
     cancel.wait(seconds)
 
 
+def _preserve_step_work(step: Step, *, worktree: Path, pr_base: str, dispatch_head: str) -> bool:
+    """Commit whatever a stopped dispatch left on the branch; report if it left any.
+
+    The one place a stop turns into preserved branch state, shared by the two ways a
+    dispatch stops short: a report that says it did not complete, and a dispatcher
+    that raised instead of returning one. The second used to skip this entirely, so a
+    provider outage at closeout discarded work that was already committed and green —
+    the branch kept the commits, but nothing marked them preserved, so no later round
+    and no planner pin was allowed to continue them.
+    """
+    if gitops.is_dirty(worktree):
+        gitops.add_all(worktree)
+        gitops.commit(worktree, _incomplete_commit_message(step, pr_base))
+        return True
+    if gitops.head_sha(worktree) == dispatch_head or not gitops.has_commits_ahead(
+        worktree, f"origin/{pr_base}"
+    ):
+        return False
+    # The whole branch, not this dispatch's slice of it. The marker records
+    # one fact about the branch — that it carries preserved incomplete work
+    # — and every reader of it (recovery's refusal, its attestation, the
+    # recorded PR base) asks that question base-relative. Asked from this
+    # dispatch's own head, the answer is always "no marker yet" on a
+    # redispatch, so each round handed one more empty marker to a branch
+    # already carrying one, and recovery then had one more commit to attest.
+    if not incomplete_commits(worktree, f"origin/{pr_base}", "HEAD"):
+        gitops.commit_empty(worktree, _incomplete_commit_message(step, pr_base))
+    return True
+
+
 def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str) -> None:
     """Persist a dispatch's raw report and stable oneharness correlation pointer."""
     directory = journal.artifact_dir
@@ -1223,23 +1253,46 @@ def _run_steps(
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         step_session = f"{scoped_session(branch, worktree)}:{sid}"
-        report = dispatch_fn(
-            cast(str, step.persona),
-            step.task,
-            project_dir=str(worktree),
-            oneharness_mode=oneharness_mode,
-            use_llmlint_wrapper=use_llmlint_wrapper,
-            base_path=base_path,
-            persona_dir=persona_dir,
-            session=step_session,
-            max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-            done_when=step.done_when,
-            extra_instructions=extra_instructions,
-            labels=log.labels,
-            env=dispatch_env,
-            cancel=cancel,
-        )
-        persist_report_artifacts(log, report, session=step_session)
+        try:
+            report = dispatch_fn(
+                cast(str, step.persona),
+                step.task,
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session=step_session,
+                max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                done_when=step.done_when,
+                extra_instructions=extra_instructions,
+                labels=log.labels,
+                env=dispatch_env,
+                cancel=cancel,
+            )
+            persist_report_artifacts(log, report, session=step_session)
+        except Exception as exc:
+            # A dispatcher that raises has no report to route through the
+            # not-completed path below, and the work the worker already committed is
+            # on the branch either way. Preserving it here is what makes a provider
+            # outage at closeout a stop the next attempt continues rather than one
+            # that silently strands a finished, gate-green change; the failure itself
+            # still reaches the scheduler unchanged.
+            preserved = _preserve_step_work(
+                step, worktree=worktree, pr_base=pr_base, dispatch_head=dispatch_head
+            )
+            log.append(
+                "step-settled",
+                detail={
+                    "status": "not-completed",
+                    "step_kind": step.kind,
+                    "turns": 0,
+                    "preserved": preserved,
+                    "outcome": "dispatch-failed",
+                    "outcome_detail": redact(str(exc)),
+                },
+            )
+            raise
         reports[sid] = report
         if not report.completed:
             # llmlint: ignore[changed_behavior_has_e2e] The live orchestrator e2e kills this
@@ -1269,27 +1322,9 @@ def _run_steps(
                 and not (gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head)
             ):
                 deaths_leaving_no_work.add(sid)
-            preserved = False
-            if gitops.is_dirty(worktree):
-                gitops.add_all(worktree)
-                gitops.commit(worktree, _incomplete_commit_message(step, pr_base))
-                preserved = True
-            else:
-                dispatch_committed = gitops.head_sha(worktree) != dispatch_head
-                ahead_of_pr_base = gitops.has_commits_ahead(worktree, f"origin/{pr_base}")
-                # The whole branch, not this dispatch's slice of it. The marker records
-                # one fact about the branch — that it carries preserved incomplete work
-                # — and every reader of it (recovery's refusal, its attestation, the
-                # recorded PR base) asks that question base-relative. Asked from this
-                # dispatch's own head, the answer is always "no marker yet" on a
-                # redispatch, so each round handed one more empty marker to a branch
-                # already carrying one, and recovery then had one more commit to attest.
-                already_marked = bool(incomplete_commits(worktree, f"origin/{pr_base}", "HEAD"))
-                if dispatch_committed and ahead_of_pr_base and not already_marked:
-                    gitops.commit_empty(worktree, _incomplete_commit_message(step, pr_base))
-                    preserved = True
-                elif dispatch_committed and ahead_of_pr_base:
-                    preserved = True
+            preserved = _preserve_step_work(
+                step, worktree=worktree, pr_base=pr_base, dispatch_head=dispatch_head
+            )
             log.append(
                 "step-settled",
                 detail={
@@ -1693,6 +1728,10 @@ def run_repo_task(
         outcome="error",
     )
     worktree: Path | None = None
+    #: Why a preserved branch this dispatch was asked to continue was not adoptable,
+    #: on the path that is allowed to fall back to a fresh branch. Appended to
+    #: whatever outcome the run reaches, so no exit reports a fresh start silently.
+    declined = ""
     try:
         if title is not None:
             _validate_explicit_title(title)
@@ -1882,6 +1921,14 @@ def run_repo_task(
                 abandoned = resume
                 resume = None
                 result.branch = branch = _workstream_branch_name(effective_steps)
+                # Falling back is allowed here, staying quiet about it is not: the
+                # round that starts fresh has to say which branch it declined and
+                # why, in the journal and in its own result, or a reader is left to
+                # infer a re-derivation from a branch name that changed.
+                declined = (
+                    f"declined to resume branch {abandoned.branch!r} at "
+                    f"{abandoned.checkpoint}: {validated}"
+                )
                 result.retry_lineage = RetryLineage(
                     abandoned.branch,
                     abandoned.checkpoint,
@@ -1922,6 +1969,12 @@ def run_repo_task(
                 "pr_base": pr_base,
                 "synthetic_stack_base": result.synthetic_stack_base,
                 "resumed": resume is not None,
+                # Which commit was adopted, and — when nothing was — why this
+                # dispatch is starting from the base instead. `resumed` alone said
+                # only that a fresh branch appeared, leaving a reader to guess
+                # whether the harness continued the work or re-derived it.
+                "resumed_from": resume.checkpoint if resume is not None else "",
+                "resume_declined": declined,
             },
         )
         remote_base = f"origin/{pr_base}"
@@ -2065,7 +2118,16 @@ def run_repo_task(
                     "relaunch(es) did the same, so nothing of the task was attempted "
                     "— probe the launch path with 'just smoke' before redispatching"
                 )
-            if incomplete_commits(worktree, remote_base, "HEAD"):
+            # Commits ahead of the base are the test, not the marker: a step that
+            # never reached its own preservation — a dispatcher that raised, a step
+            # skipped after an earlier one stopped — leaves work on the branch with
+            # no marker on it, and reading the marker alone recorded no continuation
+            # for exactly the case that most needs one. The marker is written here
+            # instead, so what a later round or a planner pin may continue is decided
+            # by whether the branch carries work.
+            if gitops.has_commits_ahead(worktree, remote_base):
+                if not incomplete_commits(worktree, remote_base, "HEAD"):
+                    gitops.commit_empty(worktree, _incomplete_commit_message(lead, pr_base))
                 result.resume = Resume(
                     branch=branch,
                     base_branch=root_base,
@@ -2509,6 +2571,8 @@ def run_repo_task(
         )
         return result
     finally:
+        if declined and declined not in result.detail:
+            result.detail = f"{result.detail}; {declined}" if result.detail else declined
         if worktree is not None:
             _preserve_failed_retry(
                 result,

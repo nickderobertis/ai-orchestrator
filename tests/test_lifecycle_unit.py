@@ -164,6 +164,58 @@ def test_drafted_body_validation(body, expected) -> None:
 
 
 @pytest.mark.reads_docs
+def test_documented_branch_discovered_continuation_fields_track_the_producer(
+    tmp_path, bare_origin
+) -> None:
+    """The prose names the continuation fields; the lifecycle decides what they are.
+
+    `docs/repo-lifecycle.md` tells a planner how to read `branch-discovered` — which
+    field says work was adopted, which names the commit, which carries the reason it
+    was not. That is a restatement of the event, so it needs a gate: the names come
+    from an event this run actually emitted, and each has to be documented. Renaming
+    or dropping one in the producer fails here rather than leaving the prose
+    describing a field nobody writes.
+    """
+    from orchestrator import gitops
+    from orchestrator.dispatch import Report
+    from orchestrator.journal import NodeJournal, open_journal
+    from orchestrator.runs import NodeId, RunId
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "canonical-branch-discovered")
+    install_pre_push_hook(publication)
+
+    def writing_dispatch(persona, task, *, project_dir, **_kw):
+        Path(project_dir, "documented.txt").write_text("documented\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    workspace = Workspace(
+        tmp_path / "ws-branch-discovered",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    journal = open_journal(tmp_path / "run-bd", RunId("run-bd"), 1)
+    result = run_repo_task(
+        str(origin),
+        "Document the continuation fields.",
+        "engineer",
+        workspace=workspace,
+        recorded_gate=["true"],
+        dispatch_fn=writing_dispatch,
+        journal=NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId("run-bd"), round=1),
+    )
+    assert result.outcome == "merged", result.detail
+
+    discovered = next(event for event in journal.events() if event.kind == "branch-discovered")
+    continuation = {"resumed", "resumed_from", "resume_declined"}
+    assert continuation <= set(discovered.detail), discovered.detail
+    docs = (Path(__file__).parents[1] / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
+    for field_name in sorted(continuation):
+        assert f"`{field_name}`" in docs
+
+
+@pytest.mark.reads_docs
 def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> None:
     """Make intentional contract copies fail together when the template changes."""
     root = Path(__file__).parents[1]
