@@ -82,6 +82,7 @@ from .provenance import (
 from .provider_failure import journalled
 from .redaction import redact
 from .registry import Registry, RegistryError, merge_gate_coverage, validate_identity_key
+from .relaunch import relaunch_session, seeded_task, transcript_seed
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RESUME_MODES,
@@ -1297,6 +1298,7 @@ def _run_steps(
     extra_instructions: str | None = None,
     completed: frozenset[str] = frozenset(),
     cancel: threading.Event | None = None,
+    relaunch: int = 0,
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
 
@@ -1304,6 +1306,14 @@ def _run_steps(
     share one working tree, so running two dispatches into it at once would corrupt
     it. A step that does not complete fails the workstream and skips dependents.
     A ``human`` step pauses the workstream and blocks its dependents.
+
+    ``relaunch`` is which relaunch of this workstream this is — the count the
+    workstream loop spends after a dispatch dies leaving no work behind, which on
+    this host is a provider refusing to start the turn. It is *not* the turn-cap
+    resume count: that resume continues the same conversation on purpose, while a
+    relaunch must never continue the dead one. Past zero, each step takes a
+    conversation of its own and is seeded with what its predecessor recorded; see
+    `orchestrator.relaunch`.
     """
     by_id = {s.id: s for s in steps}
     deps = {s.id: s.deps for s in steps}
@@ -1326,9 +1336,33 @@ def _run_steps(
                 detail={"status": "done", "step_kind": step.kind, "outcome": "no-changes"},
             )
             return NodeRun("done", None, None)
-        log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
+        step_base_session = f"{scoped_session(branch, worktree)}:{sid}"
+        step_session = relaunch_session(step_base_session, relaunch)
+        step_task = step.task
+        if relaunch > 0:
+            # The dead conversation is never asked for again — it is read *back* from
+            # history and carried forward as prompt text instead. Asking for it is
+            # what the harness answers with "No conversation found", and answering
+            # that with another relaunch is the loop this exists to end.
+            dead_session = relaunch_session(step_base_session, relaunch - 1)
+            step_task = seeded_task(
+                step.task,
+                dead_session=dead_session,
+                seed=transcript_seed(dead_session),
+            )
+        log.append(
+            "step-started",
+            detail={
+                "step_kind": step.kind,
+                "persona": step.persona,
+                # Recorded because it is the only durable statement of *which*
+                # conversation a step ran as, and the whole point of a relaunch is
+                # that it is a different one.
+                "session": step_session,
+                **({"relaunch": relaunch} if relaunch else {}),
+            },
+        )
         dispatch_head = gitops.head_sha(worktree)
-        step_session = f"{scoped_session(branch, worktree)}:{sid}"
         # The refusal's own account of the stop, when the harness never returned a
         # report for `incomplete_detail` below to read one out of.
         refusal: str | None = None
@@ -1336,7 +1370,7 @@ def _run_steps(
         try:
             report = dispatch_fn(
                 cast(str, step.persona),
-                step.task,
+                step_task,
                 project_dir=str(worktree),
                 oneharness_mode=oneharness_mode,
                 use_llmlint_wrapper=use_llmlint_wrapper,
@@ -2132,6 +2166,7 @@ def run_repo_task(
                 extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
                 completed=frozenset(completed_step_ids),
                 cancel=cancel,
+                relaunch=relaunches,
             )
             for step_result in step_run.results:
                 previous = prior_step_results.get(step_result.id)

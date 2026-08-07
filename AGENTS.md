@@ -150,7 +150,16 @@ dispatch onejudge.
    the progress views report as `PARKED` is alive and not working — no child process,
    no surface, no ledger write — so treat it as stopped and intervene rather than
    waiting on it; that liveness verdict is unrelated to a node the planner *parked*
-   with `cancel`, which is a deliberate idle. `channel-reply` refuses an edit it
+   with `cancel`, which is a deliberate idle. A run whose *driver* is dead but whose
+   ledger is intact is not lost and must not be relaunched under a new id: `just
+   orchestrate --adopt <run-id>` attaches a fresh orchestrator to it, keeping the run
+   id, journal, ledger, and anchors, and refuses another session's run, one something
+   is still driving, and one with no relaunch record — see [Adopting a run whose
+   driver died](docs/orchestration.md#adopting-a-run-whose-driver-died). Mid-round,
+   the round itself surfaces a **non-blocking** update for a dispatch that has
+   recorded nothing past its stall threshold; that is evidence to act on, not a
+   verdict, so decide between `cancel`, `retry`, and letting it run.
+   `channel-reply` refuses an edit it
    cannot apply, with the reason, and every edit it accepts reaches the graph; a
    non-zero reply is a rejection to correct, never a command to resend.
 
