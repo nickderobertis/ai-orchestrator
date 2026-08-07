@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from .config import ConfigError
@@ -28,6 +29,26 @@ def _failure_line(value: object) -> str | None:
     return f"Provider: {side}-side {identity} {cause}{reset}"
 
 
+def _reason_line(item: Mapping[str, object], outcome: object) -> str | None:
+    """The recorded sentence behind a node's outcome, when it says more than the name.
+
+    An outcome is a category and a reason is a diagnosis: ``resume-failed`` says a
+    pause could not be picked up, and only the reason says *which* precondition it
+    was. Leaving that to `just history-show` is what turned a five-second read of
+    this view into archaeology, so the first line of it is rendered here. Only the
+    first — a merge or rebase failure records its whole transcript, which belongs
+    under `Full logs` below rather than in the middle of a summary — and the
+    elision is marked so a truncated reason never reads as a complete one.
+    """
+    recorded = item.get("error") or item.get("detail")
+    if not isinstance(recorded, str) or not (text := recorded.strip()):
+        return None
+    if text == str(outcome):
+        return None
+    first, _, rest = text.partition("\n")
+    return f"Reason: {first}" + (" […]" if rest.strip() else "")
+
+
 def render(run: str, runs_dir: Path) -> str:
     """Render the latest completed round; node failures remain successful viewing."""
     run_id = validate_run_id(run)
@@ -45,6 +66,8 @@ def render(run: str, runs_dir: Path) -> str:
             or ("completed" if item.get("completed") else "-")
         )
         lines.append(f"{node}  {item['status']}  {outcome}")
+        if reason := _reason_line(item, outcome):
+            lines.append(f"  {reason}")
         if failure := _failure_line(item.get("failure_attribution")):
             lines.append(f"  {failure}")
         # A parked node is idle, not lost: the branch its cancelled dispatch preserved

@@ -1204,7 +1204,20 @@ nothing derived from the round's result overrules it. A pinned branch the lifecy
 cannot adopt fails the dispatch as `resume-failed`, naming the pin and the reason;
 substituting a fresh branch for a pin the planner named is the defect that rule
 exists to prevent, because the edit is reported as applied and the work is then
-re-derived somewhere else. A continuation the harness carried forward on its own
+re-derived somewhere else.
+
+**A precondition the harness cannot even check is a resume failure too.** Adopting
+the preserved branch, resolving the checkpoint, reading the provenance over
+`origin/<pr-base>`, and querying a recorded draft are all git or GitHub calls that
+can fail outright rather than answer — a stacked `pr_base` a prerequisite's merge
+deleted from origin is the common one. Each raised straight past the resume
+reporting into the handler that wraps publication, so the node settled as
+`merge-path failure: publication of <branch>` — a phase the run stops well short
+of, since it never cuts a worktree. It now settles `resume-failed` with
+`cannot check whether <precondition> for branch <branch> at recorded checkpoint
+<sha>`, and `just results` renders that reason beside the status. Nothing falls
+back to a fresh branch on this path: an unanswered question is not evidence that
+the preserved work is unusable. A continuation the harness carried forward on its own
 may still fall back to a fresh branch when the preserved work is no longer
 adoptable, and it says so where the round is read: `branch-discovered` carries
 `resume_declined` and the settled node's `detail` carries the same reason, beside
