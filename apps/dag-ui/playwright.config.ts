@@ -118,6 +118,26 @@ export default defineConfig({
   // selects it, and `just dag-ui-screens` is when it runs.
   testIgnore: "**/*.screens.spec.ts",
   globalTeardown: "./e2e/global-teardown.ts",
+  /**
+   * What a wait here is allowed to take, measured for this host rather than inherited.
+   *
+   * This config set neither budget, so it ran on Playwright's 5 s assertion / 30 s test
+   * defaults — values for a dedicated runner, which this is not. Every wait in this tier
+   * crosses three processes and a disk read (browser, the dev server transforming the app
+   * on demand, uvicorn, the journal files it projects), on a host whose charter is to run
+   * live agent dispatches beside its own tests. Its two sibling configs already budget for
+   * that against the same servers and the same surfaces — 900 s in `isolation.config.ts`,
+   * 120 s in `screenshots.config.ts`; only this one was left on the defaults.
+   *
+   * The same eight navigation journeys take 25.4 s at load average 15-19 and 54.2 s at 41,
+   * and the full tier at 55-70 blew the *test* cap inside single `page.goto`, `click`,
+   * `hover` and `keyboard.press` calls — 20 of 55 failing, every one of them a poll
+   * expiring on a read still in flight and not one a wrong value. Neither budget can turn
+   * a failing assertion into a passing one: an element that never arrives still fails,
+   * 15 s later. They only stop a loaded host from being reported as a broken app.
+   */
+  expect: { timeout: 15_000 },
+  timeout: 120_000,
   // One server serves one run directory, and the live-update journeys change what it
   // is serving, so the journeys share that state and must not run against each other.
   workers: 1,
