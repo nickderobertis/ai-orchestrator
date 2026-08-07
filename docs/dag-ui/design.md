@@ -503,6 +503,17 @@ than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
 
+One rollup stands for one *category* of that node's nested work, and a dispatch's
+category is the **pair** `(agent_role, transport_role)` rather than either half. A
+worker and the check-in beside it share a transport; a worker and the lint run it
+made of its own work share a semantic role, because that session carries
+`agentRole: "worker"` by the attribution contract and is identified only by its
+transport. Keying on one half alone summed one category's duration under another's
+name, and left the graph-level view — which reads these rollups as the node's own
+lanes — without a lane the node view draws. The rollup carries the pair it
+summarized, so the client derives that lane from the same two words it derives a
+dispatch's from.
+
 ```ts
 interface RunTimeline {
   api_version: 2;
@@ -514,10 +525,12 @@ interface RunTimeline {
 // One interval of recorded work. ended_at is null for work the recorded stream
 // never closed, which is what an in-flight run looks like rather than an error.
 // parent_id links spans into a tree; a span with no parent is run-level.
-// count, total_duration_ms and intervals appear only on a "rollup" span;
-// agent_role, transport_role and dispatch_id only on a "dispatch" one, where the
-// roles are the DagConversation attribution's own values so a row can be labelled
-// and grouped without fetching the transcript behind it. phase appears only on the
+// count, total_duration_ms and intervals appear only on a "rollup" span, and
+// dispatch_id only on a "dispatch" one. agent_role and transport_role appear on a
+// dispatch — where they are the DagConversation attribution's own values, so a row
+// can be labelled and grouped without fetching the transcript behind it — and on a
+// scope=run rollup of dispatches, which carries the pair every session it summarizes
+// shares. phase appears only on the
 // launched orchestrator's own dispatch span, and says which part of its loop the
 // run's recorded state places the driver in.
 interface TimelineSpan {

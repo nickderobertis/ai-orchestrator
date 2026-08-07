@@ -242,7 +242,10 @@ class TimelineSpan(TypedDict):
     the recorded nesting implies; a span with no parent is run-level.
 
     ``count``, ``total_duration_ms`` and ``intervals`` appear only on a ``rollup``
-    span, and the role pair and ``dispatch_id`` only on a ``dispatch`` one. ``phase``
+    span, and ``dispatch_id`` only on a ``dispatch`` one. The role pair appears on a
+    dispatch and on a ``scope=run`` rollup of dispatches, which carries the pair every
+    session it stands for shares — that is what tells a summarized lint run from the
+    worker whose semantic role it borrows. ``phase``
     appears only on the launched orchestrator's own dispatch span, where it says which
     part of its loop the run's recorded state places the driver in.
     """
@@ -1334,7 +1337,13 @@ def run_timeline(
 
 
 def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
-    """Return run work and bounded summaries of every node's nested activity."""
+    """Return run work and bounded summaries of every node's nested activity.
+
+    One summary per category the node recorded, where a dispatch's category is the
+    pair of roles the server serves on it rather than either half alone. A graph-level
+    view reads these as that node's lanes, so a category it cannot tell apart here is
+    a lane that view cannot draw.
+    """
     scoped = [deepcopy(span) for span in spans if span.get("node_id") is None]
     nodes = [span for span in spans if span["kind"] == "node"]
     for node in nodes:
@@ -1346,11 +1355,18 @@ def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
             for span in spans
             if span.get("node_id") == node.get("node_id") and span is not node
         ]
-        groups: dict[tuple[str, str | None], list[TimelineSpan]] = {}
+        groups: dict[tuple[str, str | None, str | None], list[TimelineSpan]] = {}
         for child in children:
-            role = child.get("agent_role") if child["kind"] == "dispatch" else None
-            groups.setdefault((child["kind"], role), []).append(child)
-        for (kind, role), grouped in groups.items():
+            dispatched = child["kind"] == "dispatch"
+            role = child.get("agent_role") if dispatched else None
+            # Grouped by *both* recorded roles, because the semantic one does not tell
+            # a worker apart from the lint run it made of its own work: that session
+            # carries `agent_role: worker` by contract and is identified only by its
+            # transport. Folding the two together summed lint duration under the
+            # worker's name and left the graph view without the lane the node view has.
+            transport = child.get("transport_role") if dispatched else None
+            groups.setdefault((child["kind"], role, transport), []).append(child)
+        for (kind, role, transport), grouped in groups.items():
             first, last = grouped[0], grouped[-1]
             durations = [
                 (
@@ -1361,8 +1377,12 @@ def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
                 for item in grouped
                 if item["ended_at"] is not None
             ]
+            # Both roles are in the id for the same reason they are in the key: a worker
+            # and the check-in beside it share a transport, a worker and its lint run
+            # share a semantic role, and either pair alone would collide.
+            named = "-".join(part for part in (role, transport) if part) or "activity"
             rollup: TimelineSpan = {
-                "id": f"summary-{node['id']}-{kind}-{role or 'activity'}",
+                "id": f"summary-{node['id']}-{kind}-{named}",
                 "kind": "rollup",
                 "label": role or kind,
                 "parent_id": node["id"],
@@ -1378,5 +1398,7 @@ def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
                 rollup["round"] = round_number
             if role is not None:
                 rollup["agent_role"] = role
+            if transport is not None:
+                rollup["transport_role"] = transport
             scoped.append(rollup)
     return sorted(scoped, key=lambda span: (span["started_at"], span["id"]))

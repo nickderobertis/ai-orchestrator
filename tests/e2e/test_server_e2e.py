@@ -2068,6 +2068,33 @@ def test_scoped_timeline_endpoints_reconstruct_one_ordered_run_history_over_http
         assert all(span["total_duration_ms"] >= 0 for span in summaries)
         assert all(span["events"] == [] for span in summaries)
         assert all("reference" not in span for span in summaries)
+        # One summary per *category*, where a dispatch's category is the pair of roles
+        # it was served with rather than either half. Both these nodes ran a worker and
+        # the lint run that worker made of its own work, and a lint session carries the
+        # worker's semantic role by contract — so a summary keyed on `agent_role` alone
+        # folded the two together and lost a whole category of the node's time under a
+        # name that was not its own. That is the category a graph-level view draws as a
+        # lane, and the one the node view has always drawn.
+        dispatched = {
+            (span.get("node_id"), span["agent_role"], span["transport_role"]): span
+            for span in summaries
+            if "agent_role" in span
+        }
+        assert sorted(dispatched) == [
+            ("api", "worker", "agent"),
+            ("api", "worker", "llmlint"),
+            ("docs", "worker", "agent"),
+            ("docs", "worker", "llmlint"),
+        ]
+        assert all(span["count"] == 1 for span in dispatched.values())
+        # Every summary still has an id of its own, and a category that is not a
+        # dispatch carries neither role rather than borrowing one.
+        assert len({span["id"] for span in summaries}) == len(summaries)
+        assert all(
+            "agent_role" not in span and "transport_role" not in span
+            for span in summaries
+            if span["label"] in {"verification", "publication", "pr-drafting"}
+        )
         spans = [
             *(span for span in run_scope if span.get("node_id") is None),
             *timeline["spans"],
