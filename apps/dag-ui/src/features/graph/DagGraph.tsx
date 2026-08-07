@@ -96,7 +96,10 @@ export function DagGraph({
         nodesConnectable={false}
         elementsSelectable
         fitView
-        minZoom={0.35}
+        // `fitView` never zooms out past `minZoom`, so this floor decides whether the
+        // graph arrives whole or cropped. Kept below what the narrowest viewport in
+        // the matrix needs; the controls zoom in from there.
+        minZoom={0.05}
         onNodeClick={(_, node) => onSelectNode(node.id)}
         aria-label="DAG execution graph"
       >

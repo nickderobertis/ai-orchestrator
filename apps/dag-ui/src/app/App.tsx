@@ -26,6 +26,7 @@ import { groupRuns, nodeViews } from "../features/runs/run-model";
 import { useDagTelemetry } from "../features/runs/useDagTelemetry";
 import { useUrlSelection } from "../features/runs/useUrlSelection";
 import { NodeTimelineView } from "../features/timeline/NodeTimelineView";
+import { TimelinePopoverLayer } from "../features/timeline/TimelinePopover";
 import { Timestamp } from "../lib/Timestamp";
 
 const defaultClient = new TelemetryClient(window.location.origin, {
@@ -89,6 +90,7 @@ export function App({
 
   return (
     <TooltipProvider>
+      <TimelinePopoverLayer />
       <div className="app-shell">
         <RunNavigation
           groups={groups}
