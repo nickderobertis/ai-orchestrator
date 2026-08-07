@@ -204,9 +204,9 @@ export interface NodeTimelineV2 {
  * earliest one would move the axis and the time cursor on collapse, and the same
  * moment would sit at two different places depending on which view was open.
  */
-export function compactTimelineItems(
-  items: readonly TimelineItem<TimelineRow>[],
-): readonly TimelineItem<TimelineRow>[] {
+export function compactTimelineItems<Payload>(
+  items: readonly TimelineItem<Payload>[],
+): readonly TimelineItem<Payload>[] {
   const ordered = [...items].sort((left, right) => left.start - right.start);
   const first = ordered.at(0)?.start ?? 0;
   const last = Math.max(
@@ -216,7 +216,7 @@ export function compactTimelineItems(
   const boundaries = new Set(
     [
       ordered.at(0),
-      ordered.reduce<TimelineItem<TimelineRow> | undefined>(
+      ordered.reduce<TimelineItem<Payload> | undefined>(
         (latest, item) =>
           latest === undefined ||
           (item.end ?? item.start) > (latest.end ?? latest.start)
@@ -232,7 +232,7 @@ export function compactTimelineItems(
   // range as one visual moment so sibling buttons never cover one another at the
   // viewport sizes the application supports.
   const pointCluster = (last - first) * 0.02;
-  const result: TimelineItem<TimelineRow>[] = [];
+  const result: TimelineItem<Payload>[] = [];
   for (const item of ordered) {
     const itemVisualEnd = Math.max(
       item.end ?? item.start,
@@ -263,25 +263,25 @@ export function compactTimelineItems(
   return result;
 }
 
-function compactPriority(item: TimelineItem<TimelineRow>): number {
+function compactPriority(item: TimelineItem<unknown>): number {
   const lane = item.laneId ?? "";
   const order = NODE_LANES.findIndex(({ id }) => id === lane);
   return order < 0 ? NODE_LANES.length : order;
 }
 
 /** Keep one clickable journal icon per visual moment, always retaining a deep link. */
-export function compactTimelineMarkers(
-  markers: readonly TimelineMarker<TimelineRow>[],
-  items: readonly TimelineItem<TimelineRow>[],
+export function compactTimelineMarkers<Payload>(
+  markers: readonly TimelineMarker<Payload>[],
+  items: readonly TimelineItem<Payload>[],
   selectedId?: string,
-): readonly TimelineMarker<TimelineRow>[] {
+): readonly TimelineMarker<Payload>[] {
   const times = [
     ...markers.map(({ at }) => at),
     ...items.flatMap((item) => [item.start, item.end ?? item.start]),
   ];
   const first = Math.min(...times);
   const cluster = (Math.max(...times) - first) * 0.02;
-  const result: TimelineMarker<TimelineRow>[] = [];
+  const result: TimelineMarker<Payload>[] = [];
   for (const marker of [...markers].sort((left, right) => left.at - right.at)) {
     const collision = result.findLast(
       (candidate) => marker.at - candidate.at <= cluster,
@@ -419,6 +419,18 @@ export function nodeTimeline(
   return { span: own, rows, total: count(rows) };
 }
 
+/**
+ * One span on its own as a row, for a reader that reached it outside a node.
+ *
+ * The graph-level view opens run-level sessions — the orchestrator's own, and the
+ * per-round check-ins — and they are read in the same panel a node's sessions are.
+ * Projecting them through the same function is what keeps the two readings identical
+ * rather than merely similar.
+ */
+export function spanAsRow(span: TimelineSpan): TimelineRow {
+  return spanRow(span, new Map());
+}
+
 /** Depth-first lookup of one row by the id the query string carries. */
 export function findRow(
   rows: readonly TimelineRow[],
@@ -483,10 +495,42 @@ function spanRow(
  * worker's own verification, told apart from the worker only by its transport role.
  */
 function dispatchRole(span: TimelineSpan): DispatchRole | undefined {
-  if (span.kind !== "dispatch") return undefined;
+  return span.kind === "dispatch" ? servedRole(span) : undefined;
+}
+
+/**
+ * The dispatch role a span was *served* with, whatever kind of span it is.
+ *
+ * A `scope=run` rollup of dispatches carries the same pair the dispatches it stands
+ * for carry, because that pair is the category it summarizes — so the graph-level
+ * view reads a lane out of one exactly as the node view reads it out of the other.
+ */
+function servedRole(span: TimelineSpan): DispatchRole | undefined {
+  if (span.agent_role === undefined) return undefined;
   return span.transport_role === LLMLINT_TRANSPORT
     ? LLMLINT_TRANSPORT
     : span.agent_role;
+}
+
+/**
+ * The lane one served span is plotted in, from its roles and the kind vocabulary.
+ *
+ * A rollup is named for what it summarized rather than for being a rollup, so its
+ * `label` is read as that kind — which is what keeps a summarized verification in the
+ * verification lane instead of in the aggregate one every rollup would otherwise share.
+ */
+export function spanLane(span: TimelineSpan): LaneId | null {
+  const role = servedRole(span);
+  if (role !== undefined) return LANE_BY_ROLE[role] ?? null;
+  // Widened for the lookup, not narrowed for it: a rollup's label is a plain string,
+  // and a word the table has no entry for is an answer rather than an assertion.
+  const table: Readonly<Record<string, LaneId | null>> = LANE_BY_SPAN_KIND;
+  return table[span.kind === "rollup" ? span.label : span.kind] ?? null;
+}
+
+/** What one lane is called wherever an operator meets it. */
+export function laneLabel(lane: LaneId): string {
+  return LANE_LABELS[lane];
 }
 
 function eventRow(event: TimelineEvent): TimelineRow {

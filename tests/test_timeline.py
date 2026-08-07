@@ -854,3 +854,50 @@ def test_a_run_the_orchestrator_drives_serves_its_driver_and_check_in_at_run_sco
     assert dispatches["capture-orchestrator-demo"]["phase"] == "executing-run-plan"
     assert dispatches["capture-orchestrator-demo"]["ended_at"] is None
     assert dispatches["capture-check-in-demo-1"]["agent_role"] == "check-in"
+
+
+def test_run_scope_keeps_a_waiting_node_and_the_measured_cost_of_an_aggregate(
+    tmp_path: Path,
+) -> None:
+    """Two things the graph-level reading of a run is built on, at `scope=run`.
+
+    A node waiting on a person is journalled without ever being started, and lock
+    contention is journalled per acquisition rather than per graph transition. Both
+    are ordinary, and a summary that dropped the first and re-measured the second
+    told an operator that a graph blocked on a human had done nothing for an hour
+    and that four seconds of contention had cost two minutes.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "demo"
+    tasks = [
+        {"id": "api", "task": "ship"},
+        {"id": "signoff", "kind": "human", "task": "approve the release"},
+    ]
+    prepare_round(run_dir, {"tasks": tasks})
+    journal = open_journal(run_dir, RunId("demo"), 1)
+    for task in tasks:
+        journal.append("node-added", detail={"definition": task})
+    journal.append("round-started", detail={"plan": {"schema_version": 3}})
+    journal.append("node-started", node=NodeId("api"), detail={"node_kind": "direct"})
+    for _ in range(4):
+        journal.append("lock-wait", node=NodeId("api"), detail={"seconds": 1.5})
+    # No `node-started`: the scheduler journals the wait itself and nothing before it.
+    journal.append("human-waiting", node=NodeId("signoff"), detail={"status": "waiting"})
+
+    served = run_timeline(runs, "demo", oneharness_bin=ABSENT, scope="run")
+    by_node: dict[str | None, list[TimelineSpan]] = {}
+    for span in served["spans"]:
+        by_node.setdefault(span.get("node_id"), []).append(span)
+
+    # The waiting node is present with the wait that is the only thing it recorded,
+    # even though nothing ever opened a span to hold it.
+    waiting = by_node["signoff"]
+    assert [span["kind"] for span in waiting] == ["rollup"]
+    assert waiting[0]["label"] == "human-wait"
+    assert "parent_id" not in waiting[0]
+    assert waiting[0]["round"] == 1
+
+    # And the aggregate reports the six seconds it measured, not the window it fell in.
+    aggregate = next(span for span in by_node["api"] if span["label"] == "rollup")
+    assert aggregate["count"] == 1
+    assert aggregate["total_duration_ms"] == 6000

@@ -969,6 +969,12 @@ def _history_store(workspace: Path) -> Path:
         )
         for recorded in _DASHBOARD_SESSIONS
     ]
+    # The run-level sessions are stamped from the same clock as the journal above them,
+    # for a reason the dashboard sessions do not have to care about: the graph-level
+    # view plots the *whole run* on one range, from its earliest record to its latest.
+    # A run-level session pinned to a fixed calendar date stretched that range across
+    # the days between it and the wall clock, and every node in the graph collapsed to
+    # a hairline at one edge of a plot that was almost entirely empty.
     sessions.append(
         _session(
             workspace,
@@ -982,11 +988,16 @@ def _history_store(workspace: Path) -> Path:
             launch_id=CODEX_LAUNCH,
             prompt="Drive the graph",
             text="Coordinating the execution frontier",
-            started="2026-07-26T10:00:00Z",
+            # Opened before the first node was dispatched: the driver is what starts
+            # the run, so it is the launch the whole plot is measured from.
+            started=_stamp(dashboard_start - timedelta(seconds=60)),
         )
     )
     # A second session recorded at no node: the round's check-in is dispatched for the
     # whole run, so the overall view lists several run-level sessions rather than one.
+    # Its gap after the last node session is what gives that view a stretch of the run
+    # nothing was recorded in — which the graph timeline has to draw rather than leave
+    # as blank space a reader cannot tell from a missing record.
     sessions.append(
         _session(
             workspace,
@@ -1000,7 +1011,7 @@ def _history_store(workspace: Path) -> Path:
             launch_id=CODEX_LAUNCH,
             prompt="Report progress",
             text="Round 1 progress reported",
-            started="2026-07-26T10:30:00Z",
+            started=_stamp(dashboard_start + timedelta(seconds=420)),
         )
     )
     # Hundreds of sessions on one node, one of them long enough to be paged itself.

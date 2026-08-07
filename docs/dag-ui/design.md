@@ -503,16 +503,29 @@ than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
 
-One rollup stands for one *category* of that node's nested work, and a dispatch's
-category is the **pair** `(agent_role, transport_role)` rather than either half. A
-worker and the check-in beside it share a transport; a worker and the lint run it
-made of its own work share a semantic role, because that session carries
-`agentRole: "worker"` by the attribution contract and is identified only by its
-transport. Keying on one half alone summed one category's duration under another's
-name, and left the graph-level view — which reads these rollups as the node's own
-lanes — without a lane the node view draws. The rollup carries the pair it
-summarized, so the client derives that lane from the same two words it derives a
-dispatch's from.
+That scope is what a graph-level reading of the run is built on — one row per node,
+each row's rollups read as that node's lanes — so three of its rules exist to keep
+that reading true to the record:
+
+- One rollup stands for one *category* of that node's nested work, and a dispatch's
+  category is the **pair** `(agent_role, transport_role)` rather than either half. A
+  worker and the check-in beside it share a transport; a worker and the lint run it
+  made of its own work share a semantic role, because that session carries
+  `agentRole: "worker"` by the attribution contract and is identified only by its
+  transport. Keying on one half alone summed one category's duration under another's
+  name and left the graph view without a lane the node view draws. The rollup carries
+  the pair it summarized, so a client derives that lane from the same two words it
+  derives a dispatch's from. A rollup of anything else carries neither.
+- Every node the run recorded anything about is summarized, whether or not its own
+  `node` span was opened. A node the scheduler settled without dispatching journals no
+  `node-started` — a node waiting on a person is the everyday case — and keying on the
+  container span dropped that node's whole record, so a graph blocked on a human read
+  as a graph doing nothing. Such a rollup carries its `node_id` and its round with no
+  `parent_id`, because there is no span to be a child of.
+- `total_duration_ms` is the time the summarized spans **cost**, and a span that
+  already carries its own total contributes that rather than its start-to-end window.
+  An aggregate of high-frequency records is exactly the case where the two differ:
+  four seconds of lock contention spread over two minutes is four seconds.
 
 ```ts
 interface RunTimeline {

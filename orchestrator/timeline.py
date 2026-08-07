@@ -1343,18 +1343,25 @@ def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
     pair of roles the server serves on it rather than either half alone. A graph-level
     view reads these as that node's lanes, so a category it cannot tell apart here is
     a lane that view cannot draw.
+
+    Every node the run recorded anything about gets summaries, whether or not its own
+    span was opened. A node the scheduler settled without dispatching journals no
+    ``node-started`` — a node waiting on a person is the everyday case — so keying on
+    the container span dropped that node's whole record here, and the view above read
+    a graph waiting on a human as a graph doing nothing.
     """
     scoped = [deepcopy(span) for span in spans if span.get("node_id") is None]
-    nodes = [span for span in spans if span["kind"] == "node"]
-    for node in nodes:
-        summary = deepcopy(node)
-        summary["events"] = []
-        scoped.append(summary)
-        children = [
-            span
-            for span in spans
-            if span.get("node_id") == node.get("node_id") and span is not node
-        ]
+    recorded: dict[str, list[TimelineSpan]] = {}
+    for span in spans:
+        if (node_id := span.get("node_id")) is not None:
+            recorded.setdefault(node_id, []).append(span)
+    for node_id, node_spans in recorded.items():
+        container = next((span for span in node_spans if span["kind"] == "node"), None)
+        if container is not None:
+            summary = deepcopy(container)
+            summary["events"] = []
+            scoped.append(summary)
+        children = [span for span in node_spans if span is not container]
         groups: dict[tuple[str, str | None, str | None], list[TimelineSpan]] = {}
         for child in children:
             dispatched = child["kind"] == "dispatch"
@@ -1368,33 +1375,25 @@ def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
             groups.setdefault((child["kind"], role, transport), []).append(child)
         for (kind, role, transport), grouped in groups.items():
             first, last = grouped[0], grouped[-1]
-            durations = [
-                (
-                    datetime.fromisoformat(item["ended_at"])
-                    - datetime.fromisoformat(item["started_at"])
-                ).total_seconds()
-                * 1000
-                for item in grouped
-                if item["ended_at"] is not None
-            ]
             # Both roles are in the id for the same reason they are in the key: a worker
             # and the check-in beside it share a transport, a worker and its lint run
             # share a semantic role, and either pair alone would collide.
             named = "-".join(part for part in (role, transport) if part) or "activity"
             rollup: TimelineSpan = {
-                "id": f"summary-{node['id']}-{kind}-{named}",
+                "id": f"summary-{container['id'] if container else node_id}-{kind}-{named}",
                 "kind": "rollup",
                 "label": role or kind,
-                "parent_id": node["id"],
                 "started_at": first["started_at"],
                 "ended_at": last["ended_at"],
                 "count": len(grouped),
-                "total_duration_ms": int(sum(durations)),
+                "total_duration_ms": sum(_summarized_ms(item) for item in grouped),
+                "node_id": node_id,
                 "events": [],
             }
-            if (node_id := node.get("node_id")) is not None:
-                rollup["node_id"] = node_id
-            if (round_number := node.get("round")) is not None:
+            if container is not None:
+                rollup["parent_id"] = container["id"]
+            round_number = (container or first).get("round")
+            if round_number is not None:
                 rollup["round"] = round_number
             if role is not None:
                 rollup["agent_role"] = role
@@ -1402,3 +1401,21 @@ def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
                 rollup["transport_role"] = transport
             scoped.append(rollup)
     return sorted(scoped, key=lambda span: (span["started_at"], span["id"]))
+
+
+def _summarized_ms(span: TimelineSpan) -> int:
+    """How long one summarized span actually took.
+
+    A span that already carries its own total is an aggregate of thousands of
+    high-frequency records, and its start-to-end interval is the window they fell in
+    rather than the time they cost. Re-measuring that window turned four seconds of
+    lock contention into a summary claiming two minutes of it.
+    """
+    if (total := span.get("total_duration_ms")) is not None:
+        return total
+    if span["ended_at"] is None:
+        return 0
+    elapsed = datetime.fromisoformat(span["ended_at"]) - datetime.fromisoformat(
+        span["started_at"]
+    )
+    return int(elapsed.total_seconds() * 1000)
