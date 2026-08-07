@@ -11,11 +11,21 @@ downstream binary, exactly as the agent wrapper's tests do.
 from __future__ import annotations
 
 import json
+import re
 import stat
 import subprocess
+import time
 from pathlib import Path
 
+import pytest
+
 from orchestrator import REPO_ROOT
+from orchestrator.boundary import (
+    BACKOFF_FACTOR,
+    DEFAULT_ATTEMPTS,
+    DEFAULT_BACKOFF_SECONDS,
+    MAX_BACKOFF_SECONDS,
+)
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
 AGENT_WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
@@ -353,3 +363,105 @@ def test_a_streamed_turn_is_never_buffered_by_the_retry(tmp_path: Path) -> None:
 
     assert proc.returncode == 1
     assert _stub_invocations(tmp_path) == 1
+
+
+def test_the_wrapper_restates_the_boundary_policy_the_python_side_owns() -> None:
+    """The drift gate for the four numbers the shell cannot import.
+
+    `orchestrator/boundary.py` is the one source of the retry policy, but this
+    wrapper runs before any interpreter and has to restate it. Restating without a
+    gate is how the two halves of one policy end up disagreeing — the shell riding
+    out an outage for two minutes while the journal says five seconds. This reads
+    both sides and fails when they part.
+    """
+    declared = dict(
+        re.findall(r"^(BOUNDARY_[A-Z_]+)=(\d+)$", WRAPPER.read_text(encoding="utf-8"), re.M)
+    )
+
+    assert declared == {
+        "BOUNDARY_DEFAULT_ATTEMPTS": str(DEFAULT_ATTEMPTS),
+        "BOUNDARY_DEFAULT_BACKOFF_SECONDS": str(int(DEFAULT_BACKOFF_SECONDS)),
+        "BOUNDARY_BACKOFF_FACTOR": str(int(BACKOFF_FACTOR)),
+        "BOUNDARY_MAX_BACKOFF_SECONDS": str(int(MAX_BACKOFF_SECONDS)),
+    }
+
+
+def test_a_retry_that_succeeded_says_nothing_and_a_failure_says_everything(
+    tmp_path: Path,
+) -> None:
+    """A recovery that worked is not news; one that did not is the whole story.
+
+    Two alarming lines on a planner's terminal for an outcome nothing needs to act
+    on is exactly the noise that makes real diagnostics get skimmed. The durable
+    record is the attempts log either way.
+    """
+    log = tmp_path / "boundary-attempts.jsonl"
+    recovered = _retrying_wrapper(
+        tmp_path,
+        body=(
+            'if [ "$count" -eq 1 ]; then echo "quota exhausted" >&2; exit 1; fi\n'
+            "printf '{\"ok\":true}'\n"
+        ),
+        attempts_log=log,
+    )
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert "retried in" not in recovered.stderr, recovered.stderr
+    # The child's own words still reach the operator; only the wrapper's narration
+    # of a recovery that worked is withheld.
+    assert "quota exhausted" in recovered.stderr
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
+
+    exhausted = _retrying_wrapper(
+        tmp_path / "exhausted",
+        body='echo "harness cannot start" >&2\nexit 2\n',
+        attempts="2",
+    )
+
+    assert exhausted.returncode == 2
+    assert "retried in" in exhausted.stderr, exhausted.stderr
+
+
+@pytest.mark.parametrize("configured", ["", ".", "-1", "0", "not-a-number", "1e9"])
+def test_an_unusable_backoff_falls_back_rather_than_disabling_the_recovery(
+    tmp_path: Path, configured: str
+) -> None:
+    """Both settings arrive from the environment, so every shape reaches the sleep.
+
+    A value this wrapper could not use would otherwise reach `sleep` directly: `.`
+    and `not-a-number` fail it, `-1` and `0` remove the wait the backoff exists for,
+    and `1e9` is a run asleep past any planner's patience. The recovery still has to
+    happen, so an unusable value takes the default rather than the turn.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'count=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 ))\n'
+        'printf \'%s\' "$count" > "$STUB_COUNT"\n'
+        'if [ "$count" -eq 1 ]; then exit 1; fi\n'
+        "printf '{\"ok\":true}'\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    started = time.monotonic()
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--prompt", "probe"],
+        text=True,
+        capture_output=True,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "STUB_COUNT": str(tmp_path / "stub-count"),
+            "ORCHESTRATOR_BOUNDARY_ATTEMPTS": "2",
+            "ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS": configured,
+        },
+    )
+    elapsed = time.monotonic() - started
+
+    assert proc.returncode == 0, proc.stderr
+    assert _stub_invocations(tmp_path) == 2
+    # The default wait, not the unusable one: long enough to prove a wait happened,
+    # far short of the ceiling a `1e9` would otherwise have asked for.
+    assert DEFAULT_BACKOFF_SECONDS <= elapsed < MAX_BACKOFF_SECONDS

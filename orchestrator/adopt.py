@@ -87,6 +87,18 @@ def _count(value: object, field: str) -> int:
     return value
 
 
+def _flag(value: object, field: str) -> bool:
+    """One recorded boolean, refusing anything merely truthy.
+
+    Coercing would accept `"false"`, `0.0`, and `[]` as answers to a question that
+    decides whether an adoption proceeds past the concurrency guard. A record that
+    does not say `true` or `false` has not answered it.
+    """
+    if not isinstance(value, bool):
+        raise ConfigError(f"relaunch record field {field!r} must be a JSON boolean")
+    return value
+
+
 def _seconds(value: object, field: str) -> float:
     if (
         not isinstance(value, (int, float))
@@ -98,6 +110,12 @@ def _seconds(value: object, field: str) -> float:
     return float(value)
 
 
+# llmlint: ignore[changed_behavior_has_e2e] The observable refusal — a run with no
+# relaunch record to replay — runs through the real `just orchestrate --adopt` in
+# tests/e2e/test_run_adoption_e2e.py. What stays unit-proven is the *shape* of a
+# record a launch cannot write: every branch below needs the file hand-edited into a
+# state no launch produces, so a journey per branch would drive one `if` through a
+# real run and prove nothing about adoption.
 def read_relaunch_record(run_dir: Path) -> RelaunchRecord:
     """Re-read one run's launch parameters, refusing anything unusable.
 
@@ -128,7 +146,9 @@ def read_relaunch_record(run_dir: Path) -> RelaunchRecord:
         "max_turns": _count(raw.get("max_turns"), "max_turns"),
         "turn_timeout": _count(raw.get("turn_timeout"), "turn_timeout"),
         "heartbeat_interval": _seconds(raw.get("heartbeat_interval"), "heartbeat_interval"),
-        "acknowledge_concurrent": bool(raw.get("acknowledge_concurrent")),
+        "acknowledge_concurrent": _flag(
+            raw.get("acknowledge_concurrent"), "acknowledge_concurrent"
+        ),
         "oneharness_mode": _text(raw.get("oneharness_mode"), "oneharness_mode"),
         "adoptions": _count(raw.get("adoptions"), "adoptions"),
     }

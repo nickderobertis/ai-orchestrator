@@ -680,9 +680,11 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     canonical = gitops.clone(origin, tmp_path / "canonical-relaunched")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
     launches: list[str] = []
+    dispatched_tasks: list[str] = []
 
     def dying_then_working(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
         launches.append(persona)
+        dispatched_tasks.append(task)
         if len(launches) == 1:
             return _launch_death(persona)
         worktree = Path(project_dir)
@@ -707,6 +709,11 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     assert launches == ["engineer", "engineer"]
     # The relaunch waited rather than asking the same refusing provider at once.
     assert waits == [RELAUNCH_BACKOFF_SECONDS]
+    # A death before the first turn records no conversation, so there is nothing to
+    # seed the relaunch with — and the relaunched dispatch is given exactly the task,
+    # unchanged, which is the behaviour that existed before seeding did.
+    assert dispatched_tasks == [dispatched_tasks[0]] * 2
+    assert "Prior session context" not in dispatched_tasks[1]
     assert _has_file(origin, "main", "cost-report.txt")
 
 

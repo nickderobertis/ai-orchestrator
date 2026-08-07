@@ -252,6 +252,16 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     _kill_the_whole_run_tree(run_dir)
     held.let_go()
 
+    # A run launched before adoption existed has no parameters to replay, and is
+    # refused rather than started on guessed ones. Moved aside rather than deleted,
+    # so the adoption below is the same run in the same state.
+    record = run_dir / "orchestrator" / "relaunch.json"
+    record.replace(record.with_suffix(".withheld"))
+    unreplayable = _orchestrate(runs, planner, onejudge_bin, "--adopt", run_id)
+    assert unreplayable.returncode == 2, unreplayable.stdout
+    assert "no relaunch record" in unreplayable.stderr, unreplayable.stderr
+    record.with_suffix(".withheld").replace(record)
+
     adopted = _orchestrate(runs, planner, onejudge_bin, "--adopt", run_id)
     assert adopted.returncode == 0, adopted.stderr
     assert json.loads(adopted.stdout)["run_id"] == run_id

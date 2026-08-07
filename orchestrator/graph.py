@@ -1069,6 +1069,13 @@ def run_graph(
             age = wall - last
             if age < stall_after or stalls_reported.get(nid) == last:
                 continue
+            # llmlint: ignore[changed_behavior_has_e2e] The first quiet stretch is
+            # driven through the real recipe in tests/e2e/test_worker_stall_e2e.py.
+            # A *second* one needs a dispatch that publishes activity, goes quiet,
+            # publishes again, and goes quiet again — activity only the streaming
+            # agent wrapper writes, which the deterministic command provider every
+            # journey here dispatches through never produces. The re-report is one
+            # comparison against the timestamp already asserted on.
             stalls_reported[nid] = last
             heard = (
                 recent.describe(now=wall)
@@ -1640,6 +1647,10 @@ def _run_round(
         # and a retry that saved this run would otherwise be visible only to whoever
         # tails a log. The round that follows it is the first thing recording again.
         for retried in drain_attempts(run_dir):
+            # Same invariance as every other closed payload this journal records: a
+            # `dict[str, str | int | float]` is not a `Mapping[str, DetailValue]` to
+            # a checker even though every value in it is one, and `BoundaryAttempt`
+            # validated all of them on the way out of the log.
             journal.append("boundary-retried", detail=cast(Any, retried.detail()))
         for acknowledgement in acknowledgements:
             journal.append(
@@ -1842,6 +1853,9 @@ def _run_round(
                 # Same policy the pump keeps for its own surfaces: a journal that
                 # cannot take the record must not be what stops the recovery.
                 with suppress(JournalError, OSError):
+                    # `cast` for the reason the fold above uses one: the closed
+                    # attempt payload is every value the journal's own recursive
+                    # union admits, and a checker cannot derive that.
                     journal.append("boundary-retried", detail=cast(Any, retried.detail()))
 
             report = retry_boundary_request(

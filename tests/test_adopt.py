@@ -81,6 +81,8 @@ def test_relaunch_record_is_absent_before_adoption_existed(tmp_path: Path) -> No
         ("worker_harness", 4, "'worker_harness'"),
         ("judge_harness", "", "'judge_harness'"),
         ("skill_provider", ["kind"], "'skill_provider'"),
+        ("acknowledge_concurrent", "false", "'acknowledge_concurrent'"),
+        ("acknowledge_concurrent", 0, "'acknowledge_concurrent'"),
     ],
 )
 def test_relaunch_record_refuses_a_field_it_cannot_replay(

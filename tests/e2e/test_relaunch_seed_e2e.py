@@ -14,6 +14,14 @@ seed in its prompt — is in test_lifecycle_e2e.py.
 # reading it are both real. One test makes a *listed* session's file unreadable, which is
 # the live-store race (a session swept between the list and the read) and the one branch a
 # store cannot be asked to produce on demand.
+# llmlint: ignore-file[tests_mirror_real_usage] The user-facing path — a workstream that
+# dies to a provider and is relaunched with this seed in its prompt — is driven through
+# `run_repo_task` in test_lifecycle_e2e.py, which is what proves the seed reaches an agent
+# at all. What these hold is the *bound*, and the bound is only visible against a store a
+# dispatch cannot be asked to produce: twenty recorded turns of five thousand characters
+# each, a session listed and then swept, a turn that recorded neither half. Driving each
+# through a real lifecycle would need a paid agent to author that transcript first, and
+# would still assert on the same rendering this calls directly.
 
 from __future__ import annotations
 

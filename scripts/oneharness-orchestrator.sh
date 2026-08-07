@@ -74,20 +74,41 @@ done
 # where it is safe: an attempt that produced ANY stdout has already answered
 # onejudge — which parses this process's stdout as exactly one document — so it is
 # never asked again. Only an attempt that produced nothing is, which is precisely
-# the launch-path death this exists for. The defaults are
-# `orchestrator.boundary.DEFAULT_ATTEMPTS` / `DEFAULT_BACKOFF_SECONDS`.
-boundary_attempts=${ORCHESTRATOR_BOUNDARY_ATTEMPTS:-3}
-boundary_backoff=${ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS:-5}
+# the launch-path death this exists for.
+#
+# The four policy numbers below are `orchestrator/boundary.py`'s — DEFAULT_ATTEMPTS,
+# DEFAULT_BACKOFF_SECONDS, BACKOFF_FACTOR, MAX_BACKOFF_SECONDS — restated here
+# because this runs before any interpreter and cannot import them. They are held to
+# that one source by a drift gate rather than by hope:
+# `tests/test_oneharness_orchestrator_wrapper.py` reads both sides and fails when
+# they disagree.
+BOUNDARY_DEFAULT_ATTEMPTS=3
+BOUNDARY_DEFAULT_BACKOFF_SECONDS=5
+BOUNDARY_BACKOFF_FACTOR=2
+BOUNDARY_MAX_BACKOFF_SECONDS=120
+
+# Every configured value is validated before it can reach a `sleep` or a loop bound.
+# Both arrive from the environment, so `.`, `-1`, `1e9`, and an empty string all
+# reach here, and each one silently disables or hangs the recovery it configures.
+# An unusable value falls back to the default rather than failing the turn — this is
+# how hard a *recovery* tries, and refusing to recover over a malformed number would
+# be the worse error.
+positive_number() {
+    case "$1" in
+        '' | *[!0-9.]* | *.*.* | .) return 1 ;;
+    esac
+    awk -v v="$1" 'BEGIN { exit !(v > 0) }'
+}
+boundary_attempts=${ORCHESTRATOR_BOUNDARY_ATTEMPTS:-$BOUNDARY_DEFAULT_ATTEMPTS}
+boundary_backoff=${ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS:-$BOUNDARY_DEFAULT_BACKOFF_SECONDS}
 case "$boundary_attempts" in
-    '' | *[!0-9]*) boundary_attempts=3 ;;
+    '' | *[!0-9]*) boundary_attempts=$BOUNDARY_DEFAULT_ATTEMPTS ;;
 esac
-[ "$boundary_attempts" -ge 1 ] 2>/dev/null || boundary_attempts=3
-case "$boundary_backoff" in
-    '' | *[!0-9.]* | *.*.*) boundary_backoff=5 ;;
-esac
+[ "$boundary_attempts" -ge 1 ] 2>/dev/null || boundary_attempts=$BOUNDARY_DEFAULT_ATTEMPTS
+positive_number "$boundary_backoff" || boundary_backoff=$BOUNDARY_DEFAULT_BACKOFF_SECONDS
 
 if ! captured_stdout=$(mktemp "${TMPDIR:-/tmp}/oneharness-orchestrator.XXXXXX"); then
-    echo "oneharness-orchestrator: cannot create the stdout buffer the boundary retry needs; retrying is disabled for this turn" >&2
+    echo "oneharness-orchestrator: cannot create the stdout buffer the boundary retry needs under ${TMPDIR:-/tmp}; free space there or point TMPDIR at a writable directory to restore post-round retries, then retry. This turn runs unbuffered and is not retried." >&2
     exec oneharness run --config "$orchestrator_config" "$@"
 fi
 trap 'rm -f "$captured_stdout"' EXIT
@@ -97,12 +118,24 @@ trap 'rm -f "$captured_stdout"' EXIT
 # lives on stderr, which passes through untouched above.
 record_boundary_attempt() {
     [ -n "${ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG-}" ] || return 0
-    printf '{"at":%s,"attempt":%s,"attempts":%s,"reason":"the orchestrator turn exited %s producing no output","role":"orchestrator"}\n' \
-        "$(date +%s)" "$1" "$boundary_attempts" "$2" >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG" || true
+    if ! printf '{"at":%s,"attempt":%s,"attempts":%s,"reason":"the orchestrator turn exited %s producing no output","role":"orchestrator"}\n' \
+        "$(date +%s)" "$1" "$boundary_attempts" "$2" >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG"; then
+        # Recorded on the notice below instead, which is printed only if the whole
+        # request ultimately fails. Losing the record must not cost the recovery.
+        boundary_notices="${boundary_notices}oneharness-orchestrator: could not record the retried attempt at $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG; the run journal will not carry it
+"
+    fi
 }
 
+# The retry notices are collected rather than printed as they happen, and released
+# only if the request ultimately fails. A turn that was refused once and then
+# answered is a recovery that worked, and a wrapper that narrated it would put two
+# alarming lines on a planner's terminal for an outcome nothing needs to act on. The
+# attempts log above is the durable record either way.
+boundary_notices=''
 boundary_attempt=1
-boundary_delay=$boundary_backoff
+boundary_delay=$(awk -v d="$boundary_backoff" -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" \
+    'BEGIN { printf "%g", (d > m ? m : d) }')
 while :; do
     set +e
     oneharness run --config "$orchestrator_config" "$@" >"$captured_stdout"
@@ -113,10 +146,21 @@ while :; do
         break
     fi
     record_boundary_attempt "$boundary_attempt" "$boundary_status"
-    echo "oneharness-orchestrator: the orchestrator turn exited $boundary_status producing no output; retrying in ${boundary_delay}s (attempt $((boundary_attempt + 1)) of $boundary_attempts)" >&2
+    boundary_notices="${boundary_notices}oneharness-orchestrator: the orchestrator turn exited $boundary_status producing no output; retried in ${boundary_delay}s (attempt $((boundary_attempt + 1)) of $boundary_attempts)
+"
     sleep "$boundary_delay"
     boundary_attempt=$((boundary_attempt + 1))
-    boundary_delay=$(awk -v d="$boundary_delay" 'BEGIN { v = d * 2; if (v > 120) v = 120; printf "%g", v }')
+    boundary_delay=$(awk -v d="$boundary_delay" -v f="$BOUNDARY_BACKOFF_FACTOR" \
+        -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" 'BEGIN { v = d * f; printf "%g", (v > m ? m : v) }')
 done
-cat "$captured_stdout"
+if [ "$boundary_status" -ne 0 ] && [ -n "$boundary_notices" ]; then
+    printf '%s' "$boundary_notices" >&2
+fi
+# Explicitly, rather than leaving it to strict mode: this is the answer onejudge
+# parses, and a buffer that cannot be replayed has to say so rather than exit with
+# the turn's own status and look like the turn itself failed.
+if ! cat "$captured_stdout"; then
+    echo "oneharness-orchestrator: could not replay the buffered turn from $captured_stdout; the turn ran but its answer is lost — rerun it" >&2
+    exit 2
+fi
 exit "$boundary_status"
