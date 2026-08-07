@@ -410,7 +410,12 @@ function stamp(seconds: number): string {
 export function runTimeline(runId: string = LIVE_RUN) {
   return {
     api_version: 2,
-    observed_at: "2026-07-26T12:00:00Z",
+    timeline_schema_version: 2,
+    // Read shortly after the last record it carries, which is what a poll of a live
+    // run actually returns. The graph-level view plots an unfinished run out to this
+    // instant, so a stamp an hour past the record would say the run had spent an
+    // hour idle that it never lived.
+    observed_at: stamp(240),
     run_id: runId,
     spans: runId === HISTORY_RUN ? historySpans() : liveSpans(),
   };
@@ -749,6 +754,170 @@ function runLevelDispatch(
   };
 }
 
+/**
+ * The same run at `scope=run`: the run's own spans, each node's root, and one bounded
+ * summary per category of the work recorded inside it.
+ *
+ * This is what the graph-level reading of a run is served, and it is deliberately not
+ * the node payload with pieces removed — a summary carries a count and the time its
+ * category *cost*, the roles that identify it, and no events, references or bodies.
+ * `orchestrator.timeline._run_scope` owns the rule; `tests/e2e/test_server_e2e.py`
+ * holds it to the shape written out here.
+ */
+export function runScopeTimeline(runId: string = LIVE_RUN) {
+  const served = runTimeline(runId);
+  return {
+    ...served,
+    spans:
+      runId === HISTORY_RUN
+        ? [
+            ...served.spans.filter(({ kind }) => kind === "round"),
+            { ...historySpans()[0], events: [] },
+            categorySummary("node-1-archive", "archive", "dispatch", 20, 80, {
+              agent_role: "worker",
+              transport_role: "agent",
+            }),
+          ]
+        : [
+            ...served.spans.filter((span) => !("node_id" in span)),
+            ...liveSpans()
+              .filter((span) => span.kind === "node")
+              .map((span) => ({ ...span, events: [] })),
+            categorySummary(
+              "node-1-foundation",
+              "foundation",
+              "verification",
+              30,
+              95,
+            ),
+            categorySummary(
+              "node-1-foundation",
+              "foundation",
+              "publication",
+              100,
+              180,
+            ),
+            categorySummary(
+              "node-1-dashboard",
+              "dashboard",
+              "dispatch",
+              12,
+              60,
+              {
+                agent_role: "worker",
+                transport_role: "agent",
+              },
+            ),
+            categorySummary(
+              "node-1-dashboard",
+              "dashboard",
+              "dispatch",
+              20,
+              50,
+              {
+                agent_role: "worker",
+                transport_role: "llmlint",
+              },
+            ),
+            categorySummary(
+              "node-1-dashboard",
+              "dashboard",
+              "dispatch",
+              62,
+              90,
+              {
+                agent_role: "judge",
+                transport_role: "judge",
+              },
+            ),
+            categorySummary(
+              "node-1-dashboard",
+              "dashboard",
+              "dispatch",
+              92,
+              110,
+              {
+                agent_role: "check-in",
+                transport_role: "agent",
+              },
+            ),
+            categorySummary(
+              "node-1-dashboard",
+              "dashboard",
+              "dispatch",
+              112,
+              130,
+              {
+                agent_role: "pr-author",
+                transport_role: "agent",
+              },
+            ),
+            // The aggregate keeps the 4.2s it measured, not the 140s window it fell in.
+            {
+              ...categorySummary(
+                "node-1-dashboard",
+                "dashboard",
+                "rollup",
+                15,
+                155,
+              ),
+              count: 1240,
+              total_duration_ms: 4200,
+            },
+            categorySummary(
+              "node-1-publish",
+              "publish",
+              "verification",
+              30,
+              50,
+            ),
+            categorySummary("node-1-publish", "publish", "publication", 55, 70),
+            // `approval` never started, so the run journalled no span to parent this
+            // to — and the wait is still the only thing that node has recorded.
+            {
+              ...categorySummary(
+                "node-1-approval",
+                "approval",
+                "human-wait",
+                75,
+                75,
+              ),
+              ended_at: null,
+              parent_id: undefined,
+            },
+          ],
+  };
+}
+
+/** One `scope=run` category summary, as `_run_scope` writes one. */
+function categorySummary(
+  parentId: string,
+  nodeId: string,
+  kind: string,
+  from: number,
+  to: number,
+  roles?: DispatchRoles,
+) {
+  const named =
+    roles === undefined
+      ? "activity"
+      : `${roles.agent_role}-${roles.transport_role}`;
+  return {
+    id: `summary-${parentId}-${kind}-${named}`,
+    kind: "rollup",
+    label: roles?.agent_role ?? kind,
+    parent_id: parentId,
+    node_id: nodeId,
+    round: 1,
+    started_at: stamp(from),
+    ended_at: stamp(to),
+    count: 1,
+    total_duration_ms: (to - from) * 1000,
+    ...(roles ?? {}),
+    events: [],
+  };
+}
+
 export const PR_URL = "https://github.com/example/repo/pull/12";
 
 function dispatch(
@@ -798,6 +967,7 @@ export function busyTimeline(sessions: number) {
   );
   return {
     api_version: 2,
+    timeline_schema_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: LIVE_RUN,
     spans: [

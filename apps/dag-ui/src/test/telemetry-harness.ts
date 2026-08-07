@@ -8,6 +8,7 @@ import {
   longConversation,
   runDetail,
   runList,
+  runScopeTimeline,
   runTimeline,
 } from "./fixtures";
 
@@ -67,6 +68,14 @@ export const isRunDetail = (url: URL): boolean =>
 export const isTimeline = (url: URL): boolean =>
   url.pathname.endsWith("/timeline");
 
+/**
+ * True for the whole-run scope of that path. It is a different payload rather than a
+ * subset of the node one — each node reduced to its root and one bounded summary per
+ * category — so a view that reads it is answered with it.
+ */
+export const isRunScopeTimeline = (url: URL): boolean =>
+  isTimeline(url) && url.searchParams.get(API_V2_QUERY.scope) === "run";
+
 /** True for one transcript's path, whatever run and conversation it names. */
 export const isConversation = (url: URL): boolean =>
   url.pathname.includes("/conversations/");
@@ -89,7 +98,10 @@ export const fixtureRunFor = (url: URL): string =>
 export function defaultResponder(url: URL): Response {
   if (isRunList(url)) return Response.json(runList);
   const runId = fixtureRunFor(url);
-  if (isTimeline(url)) return Response.json(runTimeline(runId));
+  if (isTimeline(url))
+    return Response.json(
+      isRunScopeTimeline(url) ? runScopeTimeline(runId) : runTimeline(runId),
+    );
   if (isConversation(url)) {
     const wanted = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
     if (wanted === LONG_SESSION) return Response.json(longConversation());

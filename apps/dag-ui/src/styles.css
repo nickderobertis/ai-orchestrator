@@ -431,8 +431,6 @@ p {
 
 .breadcrumb,
 .node-view-facts,
-.rail-row,
-.rail-summary,
 .detail-link,
 .session-toggle {
   display: flex;
@@ -657,7 +655,7 @@ p {
   margin-left: 24px;
 }
 
-.node-detail-drawer {
+.detail-drawer {
   position: fixed;
   z-index: 30;
   top: 0;
@@ -685,115 +683,14 @@ p {
   pointer-events: none;
 }
 
-.timeline-rail {
-  overflow: auto;
-  min-height: 0;
-  padding: 12px;
-  border-right: 1px solid var(--border);
-  background: var(--sidebar);
-}
-
-.timeline-more {
-  width: 100%;
-  margin-top: 6px;
-  justify-content: flex-start;
-  font-size: 11px;
-}
-
 .timeline-detail {
   min-width: 0;
   min-height: 0;
 }
 
-.node-detail-drawer .timeline-detail {
+.detail-drawer .timeline-detail {
   height: 100%;
   overflow: hidden;
-}
-
-.rail-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rail-row {
-  gap: 2px;
-  border-radius: 7px;
-}
-
-.rail-row:hover {
-  background: var(--accent);
-}
-
-.rail-chevron {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-}
-
-.rail-open {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 4px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.rail-open[data-selected="true"] {
-  background: var(--accent);
-  box-shadow: inset 2px 0 var(--primary);
-}
-
-.rail-summary {
-  gap: 6px;
-  font-size: 11px;
-}
-
-.rail-kind {
-  color: var(--foreground);
-  font-weight: 600;
-}
-
-/* Reads as a qualifier on the kind beside it, not as a second kind. */
-.rail-role {
-  color: var(--muted-foreground);
-  white-space: nowrap;
-}
-
-.rail-label {
-  overflow: hidden;
-  min-width: 0;
-  flex: 1 1 auto;
-  color: var(--muted-foreground);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail-time,
-.rail-count,
-.rail-duration {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-.rail-status {
-  flex: 0 0 auto;
-  padding: 0 4px;
-  font-size: 9px;
-}
-
-.rail-more {
-  width: 100%;
-  justify-content: flex-start;
-  font-size: 11px;
 }
 
 .detail-when {
@@ -871,7 +768,7 @@ p {
 
 /* The panel's own close control floats over its content, so the record's heading
    keeps a lane clear for it rather than putting its status badge underneath. */
-.node-detail-drawer .detail-title {
+.detail-drawer .detail-title {
   padding-right: 40px;
 }
 
@@ -964,26 +861,6 @@ pre {
   font-weight: 600;
 }
 
-.overall-node-summary {
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-}
-
-.overall-node-summary .timeline-rail {
-  max-height: 280px;
-  margin-top: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.node-timeline-link {
-  border: 0;
-  background: transparent;
-  color: var(--primary);
-  font-size: 11px;
-  cursor: pointer;
-}
-
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1004,6 +881,100 @@ pre {
 
 .metric strong {
   font-size: 15px;
+}
+
+/* `min-width: 0` on both, because a grid item's default `min-width: auto` sizes it to
+   its own min-content — and a row's min-content is its legend plus two mono clock
+   readings, which is wider than a phone. Without it the rows pushed the card past the
+   working area and took their own controls off the side of the screen with them. */
+.graph-rows {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.graph-row {
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* A dozen rows of a graph are read as a stack, so each plot gives back the padding it
+   takes as a card of its own. */
+.graph-row .timeline {
+  padding: 10px 12px;
+}
+
+/* The plot's own two controls sit in a row that does not wrap, and below about 200px
+   of working area they stop fitting beside each other — which put "Reset zoom" off the
+   side of a screen that never scrolls sideways, out of reach of pointer and of view.
+   Selected through the button rather than through the container's utility classes, so
+   it keeps holding when the design system restyles that header. Unscoped on purpose:
+   the node view draws the same control in the same row and loses it the same way. */
+div:has(> [aria-label="Reset timeline zoom"]) {
+  flex-wrap: wrap;
+}
+
+/* The run's own driving sessions are not one of the graph's nodes, and the row that
+   holds them says so before its plot is read rather than by its name alone. */
+.graph-row[data-row-kind="run"] {
+  border-left: 2px solid var(--primary);
+  padding-left: 10px;
+}
+
+.graph-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.graph-row-name {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+button.graph-row-name {
+  color: var(--primary);
+  cursor: pointer;
+}
+
+.graph-row-facts {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/*
+ * A stretch the run recorded nothing in, drawn as a stretch rather than left blank.
+ *
+ * Blank is the one reading that has to be avoided here: a graph is idle for most of
+ * its wall time, and empty space cannot be told from a record that is missing. The
+ * hatching is what says "nothing happened here" rather than "nothing is known", and it
+ * is deliberately flat and unsaturated so it never competes with the work beside it.
+ *
+ * Reached through the tooltip id the upstream plot derives from each item's own id,
+ * because that is the only mark an idle segment carries into the DOM;
+ * `IDLE_ID_PREFIX` in `graph-timeline.ts` is the one source of the prefix below.
+ */
+.graph-timeline button[aria-describedby^="timeline-detail-idle-"] {
+  border-color: var(--border);
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--border) 0 2px,
+    transparent 2px 6px
+  );
 }
 
 .loading-state,
@@ -1088,8 +1059,16 @@ pre {
   /* The drawer stops being two thirds of a working area that no longer has room for
      one: at this width the reading it carries is the whole screen, and the transcript
      it was opened from is one Escape away. */
-  .node-detail-drawer {
+  .detail-drawer {
     width: 100vw;
+  }
+
+  /* One clock over a dozen stacked rows, and at this width its two readings do not fit
+     one line. They stack instead of holding the row wider than the screen — which is
+     what a `justify-between` pair that cannot shrink does. */
+  .graph-row [data-timeline-axis] {
+    flex-wrap: wrap;
+    gap: 2px 10px;
   }
 
   .metric-grid,

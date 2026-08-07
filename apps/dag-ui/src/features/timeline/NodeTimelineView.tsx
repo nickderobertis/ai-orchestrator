@@ -375,7 +375,7 @@ function NodeExecution({
         })}
       </section>
       {selected !== undefined && (
-        <aside aria-label="Item detail panel" className="node-detail-drawer">
+        <aside aria-label="Item detail panel" className="detail-drawer">
           <Button
             aria-label="Close detail"
             className="drawer-close"

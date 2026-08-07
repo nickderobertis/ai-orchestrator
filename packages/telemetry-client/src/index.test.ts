@@ -113,6 +113,7 @@ describe("TelemetryClient fetch boundary", () => {
         if (url.includes("/timeline?")) {
           return Response.json({
             api_version: 2,
+            timeline_schema_version: 2,
             observed_at: "2026-07-26T12:00:00Z",
             run_id: "run-1",
             spans: [
@@ -162,6 +163,7 @@ describe("TelemetryClient fetch boundary", () => {
       fetch: async () =>
         Response.json({
           api_version: 2,
+          timeline_schema_version: 2,
           observed_at: "2026-07-26T12:00:00Z",
           run_id: "run-1",
           spans: [{ id: "x", kind: "guess", label: "x", events: [] }],

@@ -25,13 +25,15 @@ import { useEffect, useState } from "react";
 import { Timestamp } from "../../lib/Timestamp";
 import { formatDuration } from "../../lib/time";
 import type { NodeView } from "../runs/run-model";
-import { PAGE_SIZE } from "./TimelineRail";
 import {
   dispatchRoleLabel,
   LLMLINT_TRANSPORT,
   type TimelineRow,
 } from "./timeline-model";
 import { useConversation } from "./useConversation";
+
+/** How many turns of a long transcript are handed to the reader at once. */
+const PAGE_SIZE = 25;
 
 /**
  * The one timeline item the operator opened, expanded across the working area.
@@ -50,7 +52,12 @@ export function TimelineItemDetail({
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
-  readonly node: NodeView;
+  /**
+   * The node whose record this is. Absent for a run-level session, which the graph
+   * view opens here too: those belong to the run rather than to any node, and the
+   * publication facts a node contributes are not theirs to show.
+   */
+  readonly node?: NodeView;
   readonly row?: TimelineRow;
   readonly conversationRevision?: number;
 }) {
@@ -123,7 +130,7 @@ function Body({
   readonly row: TimelineRow;
   readonly client: TelemetryClient;
   readonly runId: string;
-  readonly node: NodeView;
+  readonly node?: NodeView;
   readonly reference?: TimelineReference;
   readonly transcript: Transcript;
 }) {
@@ -138,7 +145,7 @@ function Body({
         row={row}
       />
     );
-  if (isPublication(row, reference))
+  if (isPublication(row, reference) && node !== undefined)
     return <Publication node={node} reference={reference} />;
   return <Recorded reference={reference} row={row} />;
 }

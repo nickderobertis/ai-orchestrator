@@ -24,6 +24,7 @@ import {
   ROUND_CHECK_IN_SESSION,
   runDetail,
   runList,
+  runScopeTimeline,
   runTimeline,
 } from "../test/fixtures";
 import {
@@ -88,6 +89,13 @@ const JOURNEY_TIMEOUT = { timeout: 60_000 };
  * shared setup because vitest isolates a test file's environment.
  */
 configure({ asyncUtilTimeout: 10_000 });
+
+/**
+ * The two sessions the live fixture recorded at no node, by the span id that opens
+ * each one: the orchestrator driving the graph, and the round's own check-in.
+ */
+const ORCHESTRATOR_SPAN = "dispatch-orchestrator-session";
+const CHECK_IN_SPAN = `dispatch-${ROUND_CHECK_IN_SESSION}`;
 
 /** Nodes of the live fixture whose status every surface has to agree on. */
 const SERVED_STATUSES: readonly { node: string; status: string }[] = [
@@ -512,7 +520,7 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     ).toBeInTheDocument();
   });
 
-  test("reports the overall view's sessions as unread rather than absent", async () => {
+  test("reports the graph timeline as unread rather than as an empty run", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
     let release: (response: Response) => void = () => {};
     const held = telemetryHarness((url) => {
@@ -523,16 +531,16 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
       return defaultResponder(url);
     });
     const view = render(<App client={held.client} />);
-    // "No run-level conversation" would be a claim about a record nothing has read.
+    // "No timeline" would be a claim about a record nothing has read yet.
     expect(
-      await screen.findByText("Loading the run's sessions…"),
+      await screen.findByText("Loading the run's timeline…"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("No run-level conversation is available."),
+      screen.queryByText("This run has recorded no timeline yet."),
     ).toBeNull();
-    release(Response.json(runTimeline(LIVE_RUN)));
+    release(Response.json(runScopeTimeline(LIVE_RUN)));
     expect(
-      await screen.findByText("Coordinating the execution frontier"),
+      await screen.findByRole("region", { name: "Graph timeline" }),
     ).toBeInTheDocument();
     view.unmount();
 
@@ -545,9 +553,8 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
         : defaultResponder(url),
     );
     render(<App client={failing.client} />);
-    expect(
-      await screen.findByText(/The run's sessions could not be read/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Timeline unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/Journal is corrupt/)).toBeInTheDocument();
   });
 
   test("hands a long session to the reader a page at a time", async () => {
@@ -599,7 +606,11 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
   });
 
   test("reports a planner transcript the server cannot serve", async () => {
-    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${LIVE_RUN}&view=overall&event=${ORCHESTRATOR_SPAN}`,
+    );
     const { client } = telemetryHarness((url) =>
       isConversation(url)
         ? Response.json(
@@ -610,8 +621,9 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     );
     render(<App client={client} />);
     expect(
-      await screen.findByText(/This transcript could not be read/),
+      await screen.findByText("Transcript unavailable"),
     ).toBeInTheDocument();
+    expect(screen.getByText("History store is gone")).toBeInTheDocument();
   });
 
   test("reports a node timeline still on its way, then invites a selection", async () => {
@@ -917,7 +929,11 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
   });
 
   test("shows live activity and refetches an open transcript on run-scoped invalidation", async () => {
-    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${LIVE_RUN}&view=overall&event=${ORCHESTRATOR_SPAN}`,
+    );
     const { client, sources, fetch } = telemetryHarness();
     render(<App client={client} />);
     await screen.findByText("Coordinating the execution frontier");
@@ -1032,7 +1048,7 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     render(<App client={client} />);
     // The overall reading of the run is what an operator arrives for; the graph is
     // one tab away, and every deep link into it still opens where it points.
-    expect(await screen.findByText("Run timeline")).toBeInTheDocument();
+    expect(await screen.findByText("Graph timeline")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -1047,7 +1063,7 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
   });
 
-  test("shows the run-level sessions in the overall view", async () => {
+  test("opens the graph line into one row per node beside the run's own", async () => {
     const { client } = telemetryHarness();
     render(<App client={client} />);
     await screen.findByText("dashboard");
@@ -1058,52 +1074,86 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     await waitFor(() =>
       expect(window.location.search).toContain("view=overall"),
     );
-    expect(await screen.findByText("Run timeline")).toBeInTheDocument();
+    // Collapsed, the run is one line: no row of any kind is drawn yet.
+    const line = await screen.findByRole("region", { name: "Graph timeline" });
     expect(
-      await screen.findByText("Coordinating the execution frontier"),
-    ).toBeInTheDocument();
-    // Each run-level row says which kind of dispatch it was, from the role served on
-    // its own span — the orchestrator's own session and the round's check-in read as
-    // themselves rather than as two identically labelled sessions.
-    expect(screen.getByText("Run-level · orchestrator")).toBeInTheDocument();
-    expect(screen.getByText("Run-level · check-in")).toBeInTheDocument();
-    // And the run's launch is named with the same phrase the navigation heads its
-    // group with, rather than with the raw launcher enum.
-    expect(screen.getAllByText(/^Codex session · /)).not.toHaveLength(0);
-  });
+      screen.queryByRole("region", { name: "dashboard timeline" }),
+    ).toBeNull();
 
-  test("states when a node summary has no recorded activity", async () => {
-    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
-    const scoped = runTimeline(LIVE_RUN);
-    const { client } = telemetryHarness((url) =>
-      isTimeline(url)
-        ? Response.json({
-            ...scoped,
-            spans: scoped.spans.filter((span) => !("node_id" in span)),
-          })
-        : defaultResponder(url),
+    await userEvent.click(
+      within(line).getByRole("button", { name: "Expand timeline" }),
     );
-    render(<App client={client} />);
-    const summary = await screen.findByText("dashboard", {
-      selector: ".overall-node-summary .session-name",
+    // One row per plan node, and the run's own driving sessions beside them rather
+    // than mixed into a node that did not dispatch them.
+    const runRow = await screen.findByRole("region", {
+      name: "Run-level timeline",
     });
-    const trigger = summary.closest("button");
-    if (trigger === null) throw new Error("node summary has no trigger");
-    await userEvent.click(trigger);
     expect(
-      await screen.findByText("No activity summary recorded."),
+      within(runRow).getByRole("button", { name: /^Run-level · Orchestrator/ }),
+    ).toBeInTheDocument();
+    expect(
+      within(runRow).getByRole("button", { name: /^Run-level · Check-in/ }),
+    ).toBeInTheDocument();
+    for (const node of ["foundation", "dashboard", "publish", "queued"]) {
+      expect(
+        screen.getByRole("region", { name: `${node} timeline` }),
+      ).toBeInTheDocument();
+    }
+  });
+
+  test("opens a node row again into the lanes its node view draws", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    const line = await screen.findByRole("region", { name: "Graph timeline" });
+    await userEvent.click(
+      within(line).getByRole("button", { name: "Expand timeline" }),
+    );
+    const row = await screen.findByRole("region", {
+      name: "dashboard timeline",
+    });
+    // Collapsed, the row is one line whatever it holds; the legend already names the
+    // categories, including the lint run that shares the worker's semantic role.
+    expect(
+      within(row)
+        .getAllByRole("listitem")
+        .map((l) => l.textContent),
+    ).toEqual([
+      "Worker",
+      "Judge",
+      "Lint",
+      "Check-in",
+      "PR author",
+      "Lock waits",
+      "Idle",
+    ]);
+    expect(within(row).getAllByTestId("timeline-lane")).toHaveLength(1);
+
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Expand timeline" }),
+    );
+    expect(within(row).getAllByTestId("timeline-lane")).toHaveLength(7);
+    // And a node the run never reached is one lane of recorded silence rather than
+    // an empty row that could equally mean its record is missing.
+    const queued = screen.getByRole("region", { name: "queued timeline" });
+    await userEvent.click(
+      within(queued).getByRole("button", { name: "Expand timeline" }),
+    );
+    expect(
+      within(queued)
+        .getAllByTestId("timeline-lane")
+        .map((l) => l.dataset.laneId),
+    ).toEqual(["idle"]);
+    expect(
+      within(queued).getByRole("button", { name: /^Idle · 4m 0s/ }),
     ).toBeInTheDocument();
   });
 
-  test("opens a run-level session other than the one shown on arrival", async () => {
+  test("opens a run-level session in the panel, and nothing before it is asked for", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
     const { client, fetch } = telemetryHarness();
     render(<App client={client} />);
-    // The run recorded two sessions at no node: the planner's, and the round's own
-    // check-in. Only the first is open on arrival.
-    expect(
-      await screen.findByText("Coordinating the execution frontier"),
-    ).toBeInTheDocument();
+    const line = await screen.findByRole("region", { name: "Graph timeline" });
     const transcripts = (): string[] =>
       fetch.mock.calls
         .map(
@@ -1113,28 +1163,75 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
         .map((url: URL) =>
           decodeURIComponent(url.pathname.split("/").at(-1) ?? ""),
         );
-    expect(transcripts()).toEqual(["orchestrator-session"]);
-    expect(screen.queryByText("Round 1 progress reported")).toBeNull();
+    // The run recorded two sessions at no node. Neither is read until one is opened:
+    // the graph view is a plot of the record, not a download of it.
+    expect(transcripts()).toEqual([]);
 
-    // Opening the check-in discloses it and reads its own transcript, then — the
-    // whole point of listing them separately rather than stacking every session.
     await userEvent.click(
-      screen.getByRole("button", { name: /check-in-round-1/ }),
+      within(line).getByRole("button", { name: "Expand timeline" }),
     );
+    const runRow = screen.getByRole("region", { name: "Run-level timeline" });
+    await userEvent.click(
+      within(runRow).getByRole("button", { name: /^Run-level · Check-in/ }),
+    );
+    // It opens in the same panel a node's own session opens in, with the turns
+    // labelled by the role the plot named the segment with.
+    const panel = await openedDetail();
     expect(
-      await screen.findByText("Round 1 progress reported"),
+      await within(panel).findByText("Round 1 progress reported"),
     ).toBeInTheDocument();
-    expect(transcripts()).toEqual([
-      "orchestrator-session",
-      ROUND_CHECK_IN_SESSION,
-    ]);
+    expect(
+      within(panel).getByRole("heading", { name: /^Check-in \(/ }),
+    ).toBeInTheDocument();
+    expect(transcripts()).toEqual([ROUND_CHECK_IN_SESSION]);
+    expect(window.location.search).toContain(`event=${CHECK_IN_SPAN}`);
+
+    // Escape closes it, exactly as it closes the node view's own panel.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Timeline item detail" }),
+      ).toBeNull(),
+    );
   });
 
-  test("says so when a run recorded no run-level conversation", async () => {
+  test("draws a run that recorded no run-level session as a silent row", async () => {
     window.history.replaceState(null, "", `/?run=${HISTORY_RUN}&view=overall`);
     const { client } = telemetryHarness();
     render(<App client={client} />);
-    expect(await screen.findByText("archive")).toBeInTheDocument();
+    const line = await screen.findByRole("region", { name: "Graph timeline" });
+    await userEvent.click(
+      within(line).getByRole("button", { name: "Expand timeline" }),
+    );
+    // Every session of this run belongs to a node, so the run-level row recorded
+    // nothing — which is a row of idle, not a row that has been left out.
+    const runRow = screen.getByRole("region", { name: "Run-level timeline" });
+    expect(
+      within(runRow).getByRole("button", { name: /^Idle · 2m 0s/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "archive timeline" }),
+    ).toBeInTheDocument();
+  });
+
+  test("drills from a node's row into that node's own view", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    const line = await screen.findByRole("region", { name: "Graph timeline" });
+    await userEvent.click(
+      within(line).getByRole("button", { name: "Expand timeline" }),
+    );
+    // Any segment of the row is the way in, silence included: the row is the node.
+    await userEvent.click(
+      within(
+        screen.getByRole("region", { name: "foundation timeline" }),
+      ).getByRole("button", { name: /^foundation · Verification/ }),
+    );
+    expect(
+      await screen.findByRole("region", { name: "Timeline for foundation" }),
+    ).toBeInTheDocument();
+    expect(window.location.search).toContain("node=foundation");
   });
 
   test("refreshes on demand and restores a bookmarked node selection", async () => {

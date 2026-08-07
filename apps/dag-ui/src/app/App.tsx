@@ -185,10 +185,13 @@ export function App({
                   <OverallView
                     client={client}
                     detail={detail}
+                    nodes={nodes}
                     timeline={telemetry.timeline}
                     timelineError={telemetry.timelineError}
                     conversationRevision={telemetry.conversationRevision}
                     onSelectNode={selection.selectNode}
+                    onSelectItem={selection.selectItem}
+                    selectedItemId={selection.itemId}
                   />
                 ) : selectedNode ? (
                   // Opening a node hands it the whole working area: the graph stays

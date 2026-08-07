@@ -134,6 +134,7 @@ test("a package consumer fetches a run timeline over a real HTTP boundary", asyn
       if (url.pathname === "/api/v2/runs/demo/timeline") {
         return Response.json({
           api_version: 2,
+          timeline_schema_version: 2,
           observed_at: "2026-07-26T12:00:00Z",
           run_id: "demo",
           spans: [

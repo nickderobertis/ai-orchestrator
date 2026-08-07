@@ -161,6 +161,33 @@ const timeline = (page: Page): Locator =>
 const itemDetail = (page: Page): Locator =>
   page.getByRole("region", { name: "Timeline item detail" });
 
+/** The overall view's single line: the whole graph collapsed to one clock. */
+const graphLine = (page: Page): Locator =>
+  page.getByRole("region", { name: "Graph timeline" });
+
+/** One row of that graph, once the line has been opened into rows. */
+const graphRow = (page: Page, name: string): Locator =>
+  page.getByRole("region", { name: `${name} timeline` });
+
+/** The whole row, plot and heading: the heading is where its name and totals are. */
+const graphRowCard = (page: Page, name: string): Locator =>
+  page.locator(".graph-row").filter({ has: graphRow(page, name) });
+
+/** Open the line into one row per node beside the run's own driving sessions. */
+async function expandGraphRows(page: Page): Promise<void> {
+  await graphLine(page)
+    .getByRole("button", { name: "Expand timeline" })
+    .click();
+  await expect(
+    page.getByRole("region", { name: "Run-level timeline" }),
+  ).toBeVisible();
+}
+
+/** What one plot's clock currently reads: its two axis ticks, in order. */
+async function axisTicks(plot: Locator): Promise<string> {
+  return plot.getByTestId("timeline-axis").innerText();
+}
+
 test("tracks every node state and kind of a live run", async ({ page }) => {
   await openObservatory(page);
 
@@ -865,11 +892,10 @@ test("keeps a node's task, criteria, dependencies and verification reachable", a
     "true",
   );
   await page.getByRole("tab", { name: "Overall" }).click();
-  const reopened = page
-    .locator(".overall-node-summary")
-    .filter({ hasText: "dashboard" });
-  await reopened.getByRole("button", { name: /dashboard/ }).click();
-  await reopened.getByRole("button", { name: "Open timeline" }).click();
+  await expandGraphRows(page);
+  await graphRowCard(page, "dashboard")
+    .getByRole("button", { name: "dashboard", exact: true })
+    .click();
   await expect(page).toHaveURL(/node=dashboard/);
   await page.getByRole("tab", { name: "Task" }).click();
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
@@ -1114,24 +1140,18 @@ test("restores a bookmarked view and refreshes through the read API", async ({
     /^(\d{1,3}ms|[1-5]?\ds|\d+m [1-5]?\ds|\d+h [1-5]?\dm [1-5]?\ds)$/,
   );
   await expect(metric("Turns")).toContainText(/\d+/);
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expect(graphLine(page)).toBeVisible();
   await expect(page.getByText("Observe the live DAG safely")).toBeVisible();
-  await expect(
-    page.getByText("Coordinating the execution frontier"),
-  ).toBeVisible();
-  // Each run-level row names its own role, and the run's launch is named with the
-  // same phrase the navigation heads its group with rather than a raw enum.
-  await expect(page.getByText("Run-level · orchestrator")).toBeVisible();
   await expect(page.getByText(/^Codex session · /).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expect(graphLine(page)).toBeVisible();
 
   await page.getByRole("tab", { name: "Graph" }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
-  await expect(page.getByText("Run timeline")).toHaveCount(0);
+  await expect(graphLine(page)).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(
@@ -1150,7 +1170,7 @@ test("lands on the run as a whole, with every deep link still opening", async ({
     "aria-selected",
     "true",
   );
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expect(graphLine(page)).toBeVisible();
   await expect(page.locator(".dag-node")).toHaveCount(0);
 
   // Picking a second run is an operator comparing the two, so the reading they are
@@ -1163,9 +1183,7 @@ test("lands on the run as a whole, with every deep link still opening", async ({
     "aria-selected",
     "true",
   );
-  await expect(
-    page.getByText("No run-level conversation is available."),
-  ).toBeVisible();
+  await expect(graphLine(page)).toBeVisible();
   await expect(page.locator(".dag-node")).toHaveCount(0);
 
   // Every address that does name where it is going still opens there.
@@ -1198,29 +1216,8 @@ test("lands on the run as a whole, with every deep link still opening", async ({
     "aria-selected",
     "true",
   );
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expect(graphLine(page)).toBeVisible();
   await expect(page.locator(".dag-node")).toHaveCount(0);
-});
-
-test("expands a node summary and opens its full timeline", async ({ page }) => {
-  await openObservatory(page, `/?run=${runs().live}&view=overall`);
-  const summary = page
-    .locator(".overall-node-summary")
-    .filter({ hasText: "dashboard" });
-  await summary.getByRole("button", { name: /dashboard/ }).click();
-  await expect(
-    summary.getByRole("region", { name: "Node timeline" }),
-  ).toBeVisible();
-  const workerSummary = summary
-    .getByRole("region", { name: "Node timeline" })
-    .getByRole("button", { name: /worker/ });
-  await workerSummary.focus();
-  await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/node=dashboard/);
-  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
 });
 
 test("restores node tabs and moves between them from the keyboard", async ({
@@ -1281,19 +1278,6 @@ test("restores node tabs and moves between them from the keyboard", async ({
   await page.getByRole("tab", { name: "Task" }).click();
   await page.getByRole("button", { name: RegExp(runs().history) }).click();
   await expect(page).not.toHaveURL(/tab=/);
-});
-
-test("names a node whose run summary has no recorded activity", async ({
-  page,
-}) => {
-  await openObservatory(page, `/?run=${runs().live}&view=overall`);
-  const summary = page
-    .locator(".overall-node-summary")
-    .filter({ hasText: "queued" });
-  await summary.getByRole("button", { name: /queued/ }).click();
-  await expect(
-    summary.getByText("No activity summary recorded."),
-  ).toBeVisible();
 });
 
 test("reads every recorded moment as words rather than as its stamp", async ({
@@ -1429,29 +1413,252 @@ test("opens a run-level session other than the one shown on arrival", async ({
   });
 
   // The served run records two sessions at no node: the orchestrator's own, and the
-  // round's check-in beside it. Only the first is open on arrival.
+  // round's check-in beside it. The graph view plots them and reads neither, because
+  // it is a reading of the record rather than a download of it.
   await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expandGraphRows(page);
+  const runLevel = page.getByRole("region", { name: "Run-level timeline" });
+  await expect(runLevel).toBeVisible();
+  await expect.poll(() => transcripts.size).toBe(0);
+
+  // Each opens in the two-thirds panel beside the plot, with the turns labelled by
+  // the role the segment that opened them was named with.
+  await runLevel
+    .getByRole("button", { name: /^Run-level · Orchestrator/ })
+    .click();
+  await expect(itemDetail(page)).toContainText(
+    "Coordinating the execution frontier",
+  );
   await expect(
-    page.getByText("Coordinating the execution frontier"),
+    itemDetail(page)
+      .getByRole("article", { name: /^Turn / })
+      .first(),
   ).toBeVisible();
-  await expect(page.getByText("Round 1 progress reported")).toHaveCount(0);
   await expect.poll(() => transcripts.size).toBe(1);
 
-  // Opening the check-in discloses it and reads its own transcript only then.
-  await page.getByRole("button", { name: /check-in-.*round-1/ }).click();
-  await expect(page.getByText("Round 1 progress reported")).toBeVisible();
+  // The panel takes two thirds of the working area and lies over the plot it was
+  // opened from, so reading the next session means closing this one — which Escape
+  // does here exactly as it does in the node view.
+  await page.keyboard.press("Escape");
+  await expect(itemDetail(page)).toHaveCount(0);
+  await runLevel.getByRole("button", { name: /^Run-level · Check-in/ }).click();
+  await expect(itemDetail(page)).toContainText("Round 1 progress reported");
+  await expect(itemDetail(page)).toContainText("Check-in");
   await expect.poll(() => transcripts.size).toBe(2);
 });
 
-test("says so when a run recorded no run-level conversation", async ({
+test("draws a run that recorded no run-level session as a silent row", async ({
   page,
 }) => {
-  // The settled run's history holds a worker session and no orchestrator one, so
-  // its overall view has no planner transcript to show.
+  // The settled run's history holds a worker session and no orchestrator one, so its
+  // run-level row recorded nothing at all — which is a row of idle rather than a row
+  // that has been left out, and it is drawn beside the node that did work.
   await openObservatory(page, `/?run=${runs().history}&view=overall`);
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expandGraphRows(page);
+  const runLevel = page.getByRole("region", { name: "Run-level timeline" });
+  await expect(runLevel.getByRole("button", { name: /^Idle · / })).toHaveCount(
+    1,
+  );
   await expect(
-    page.getByText("No run-level conversation is available."),
+    page.getByRole("region", { name: "archive timeline" }),
+  ).toBeVisible();
+});
+
+test("reads the whole run as one clock, node by node, from one line", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+
+  // Collapsed, the run is a single line covering everything it has recorded. Its
+  // clock runs from the launch to the moment the record was read, which for a run
+  // still going is now — and no row of any kind is drawn yet.
+  await expect(graphLine(page)).toBeVisible();
+  await expect(page.getByRole("region", { name: /\stimeline$/ })).toHaveCount(
+    1,
+  );
+  await expect(
+    graphLine(page).getByRole("button", { name: /^Idle · / }),
+  ).not.toHaveCount(0);
+
+  // Opened once: one row per plan node, and the run's own driving sessions beside
+  // them rather than folded into a node that never dispatched them.
+  await expandGraphRows(page);
+  for (const node of ["foundation", "dashboard", "publish", "queued"]) {
+    await expect(graphRow(page, node)).toBeVisible();
+  }
+  const dashboard = graphRow(page, "dashboard");
+  // Collapsed, a row is one line whatever it holds.
+  await expect(dashboard.getByTestId("timeline-lane")).toHaveCount(1);
+
+  // Opened again: that node's own category lanes, the same vocabulary its node view
+  // draws — Lint included, which shares the worker's semantic role and is told from
+  // it only by the transport the served summary carries.
+  await dashboard.getByRole("button", { name: "Expand timeline" }).click();
+  await expect(
+    dashboard
+      .getByTestId("timeline-lane")
+      .and(page.locator('[data-lane-id="lint"]')),
+  ).toHaveCount(1);
+  await expect(
+    dashboard
+      .getByTestId("timeline-lane")
+      .and(page.locator('[data-lane-id="worker"]')),
+  ).toHaveCount(1);
+  // And the other rows are untouched: opening one node is not opening the graph.
+  await expect(
+    graphRow(page, "publish").getByTestId("timeline-lane"),
+  ).toHaveCount(1);
+});
+
+test("keeps every graph row on one scale when any of them is zoomed", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expandGraphRows(page);
+  const dashboard = graphRow(page, "dashboard");
+  const runLevel = page.getByRole("region", { name: "Run-level timeline" });
+
+  // Every plot starts on the same clock, which is what makes a column of one row
+  // mean the same instant as the column above it.
+  const before = await axisTicks(graphLine(page));
+  expect(await axisTicks(dashboard)).toBe(before);
+  expect(await axisTicks(runLevel)).toBe(before);
+
+  // Zooming *one* row reframes all of them, because there is one range and every
+  // plot is drawn against it.
+  await dashboard.getByLabel(/^Timeline plot/).hover();
+  await page.mouse.wheel(0, -300);
+  await expect.poll(() => axisTicks(dashboard)).not.toBe(before);
+  const zoomed = await axisTicks(dashboard);
+  expect(await axisTicks(graphLine(page))).toBe(zoomed);
+  expect(await axisTicks(runLevel)).toBe(zoomed);
+
+  // And resetting from any of them puts every one of them back.
+  await runLevel.getByRole("button", { name: "Reset timeline zoom" }).click();
+  await expect.poll(() => axisTicks(graphLine(page))).toBe(before);
+  expect(await axisTicks(dashboard)).toBe(before);
+});
+
+test("draws the stretches the run recorded nothing in", async ({ page }) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expandGraphRows(page);
+  const runLevel = page.getByRole("region", { name: "Run-level timeline" });
+
+  // The run-level row records the driver, then a gap, then the round's check-in.
+  // That gap is drawn as a segment of its own: blank space is the one reading to
+  // avoid here, because it cannot be told from a record that is missing.
+  const idle = runLevel.getByRole("button", { name: /^Idle · / }).first();
+  await expect(idle).toBeVisible();
+  // Distinct to look at, not merely to a screen reader: work is a solid bar and
+  // silence is hatched, so a glance at the row already separates the two.
+  const hatching = await idle.evaluate(
+    (element) => getComputedStyle(element).backgroundImage,
+  );
+  expect(hatching).toContain("repeating-linear-gradient");
+  const working = await runLevel
+    .getByRole("button", { name: /^Run-level · Orchestrator/ })
+    .evaluate((element) => getComputedStyle(element).backgroundImage);
+  expect(working).not.toContain("repeating-linear-gradient");
+
+  // And how long it was silent is on the segment itself rather than left to be
+  // measured off the axis.
+  await idle.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Lane: idle");
+
+  // A node the run never reached is that same reading for its whole life.
+  const queued = graphRow(page, "queued");
+  await expect(queued.getByRole("button", { name: /^Idle · / })).toHaveCount(1);
+  await expect(queued.getByRole("button", { name: /^queued · / })).toHaveCount(
+    0,
+  );
+
+  // A gap too narrow to see is not drawn at all. This run's journal is written in
+  // one pass, so `foundation` verified and published milliseconds apart inside a
+  // window of minutes — a hairline nobody could read or click. Only the two gaps at
+  // the ends survive, and they always do: they are what makes every row span the
+  // same interval, which is what one shared zoom rests on.
+  await expect(
+    graphRow(page, "foundation").getByRole("button", { name: /^Idle · / }),
+  ).toHaveCount(2);
+
+  // How much of its life each row spent working, and how much it did not, is on the
+  // row rather than left to be measured off the plot.
+  await expect(
+    graphRowCard(page, "queued").locator(".graph-row-facts"),
+  ).toHaveText(/^0ms recorded · \d+m \d+s idle$/);
+});
+
+test("frames a different run from scratch when the reader moves to it", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expandGraphRows(page);
+  const dashboard = graphRow(page, "dashboard");
+  await dashboard.getByRole("button", { name: "Expand timeline" }).click();
+  await dashboard.getByLabel(/^Timeline plot/).hover();
+  await page.mouse.wheel(0, -300);
+  await expect(
+    graphLine(page).getByRole("button", { name: "Reset timeline zoom" }),
+  ).toBeEnabled();
+
+  // A different run is a different clock, so none of that framing follows it there:
+  // one run's zoom over another run's record would be a plot of nothing.
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
+  await expect(graphLine(page)).toBeVisible();
+  await expect(page.getByRole("region", { name: /\stimeline$/ })).toHaveCount(
+    1,
+  );
+  await expect(
+    graphLine(page).getByRole("button", { name: "Reset timeline zoom" }),
+  ).toBeDisabled();
+});
+
+test("says a run has recorded no timeline rather than drawing an empty one", async ({
+  page,
+}) => {
+  // The served `dag-ui-eventless` run has its round prepared and has journalled
+  // nothing at all — what every run looks like for its first moments. There is no
+  // clock to plot, and saying so is not the same answer as an empty plot.
+  await openObservatory(page, `/?run=${runs().eventless}&view=overall`);
+  await expect(
+    page.getByText("This run has recorded no timeline yet."),
+  ).toBeVisible();
+  await expect(graphLine(page)).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("drills from a graph row into that node's own view", async ({ page }) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expandGraphRows(page);
+  // The row's own name is one way in, from the level where the rows first appear.
+  await graphRowCard(page, "foundation")
+    .getByRole("button", { name: "foundation", exact: true })
+    .click();
+  await expect(page).toHaveURL(/node=foundation/);
+  await expect(
+    page.getByRole("region", { name: "Timeline for foundation" }),
+  ).toBeVisible();
+
+  // And so is any segment of it, at the level where each category has its own lane.
+  await page.getByRole("tab", { name: "Overall" }).click();
+  await expandGraphRows(page);
+  const foundation = graphRow(page, "foundation");
+  await foundation.getByRole("button", { name: "Expand timeline" }).click();
+  await foundation
+    .getByRole("button", { name: /^foundation · Verification/ })
+    .click();
+  await expect(page).toHaveURL(/node=foundation/);
+
+  // Silence counts as one of its segments: the row *is* the node, working or not.
+  await page.getByRole("tab", { name: "Overall" }).click();
+  await expandGraphRows(page);
+  await graphRow(page, "dashboard")
+    .getByRole("button", { name: /^Idle · / })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/node=dashboard/);
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
   ).toBeVisible();
 });
 
@@ -1479,7 +1686,7 @@ test("recovers the selection when a bookmarked run is not being served", async (
   // The same fallback from the overall reading keeps the operator in it: only the
   // run under the view is rewritten, so a stale bookmark never also moves them.
   await openObservatory(page, "/?run=absent-run");
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expect(graphLine(page)).toBeVisible();
   await expect(page.getByRole("tab", { name: "Overall" })).toHaveAttribute(
     "aria-selected",
     "true",

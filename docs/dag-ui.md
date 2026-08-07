@@ -11,9 +11,8 @@ declares no schema, event name, or API path of its own.
 
 `@oneharness/ui` is the app's design system, not just its transcript renderer.
 The view switcher is its `Tabs`; panels, metric tiles and transcript cards are its
-`Card`; the navigation, timeline rail, item detail and overall view scroll inside
-its `ScrollArea`; the node's task and context are its `Accordion`; a timeline row
-discloses what it contains through its `Collapsible`; the telemetry banner is its
+`Card`; the navigation, item detail and overall view scroll inside
+its `ScrollArea`; the node's task and context are its `Accordion`; the telemetry banner is its
 `Alert`; the loading view is its `Skeleton`; and every secondary action is its
 `Button`, with `Badge`, `Separator`, `Tooltip` and the `cn` helper where they fit.
 `ConversationView` is deliberately not adopted: it requires a reply handler and
@@ -85,13 +84,7 @@ run with no launch record at all — an e2e fixture, a bare `run-plan` — reads
 `Unattributed` rather than as an unknown session. Select a run, then:
 
 - **Overall** is where an address that names no view lands, and it is the run read
-  as a whole: its telemetry and its **run-level sessions**.
-  A session the graph placed at no node is run-level work, so that is where the
-  planner's own conversation and the per-round check-ins are read; each names its
-  own role — orchestrator, check-in — from the role pair its timeline span carries,
-  and the same launch phrase the navigation heads its group with. Each is fetched
-  only while it is open, and a timeline that has not arrived or could not be read
-  is reported as such rather than as a run that recorded none.
+  as a whole: its telemetry tiles over the **graph timeline** (below).
 - use **Graph** to inspect status and progress; green nodes succeeded, red nodes
   failed or were cancelled, and an animated acid highlight marks active work;
 - select a node in the graph or keyboard-accessible node list to open its
@@ -109,6 +102,45 @@ data through the telemetry client instead of treating the event stream as a
 second state model. A dropped stream is reported in the header banner and clears
 itself when the browser reconnects, because the server opens every connection
 with a fresh snapshot.
+
+## The graph timeline
+
+The overall view answers the question above a node: **what has this run spent its
+life on?** It is one plot with three levels, each one click from the next and all
+three in the vocabulary the node view already uses, projected from
+`GET /api/v2/runs/{run_id}/timeline?scope=run`.
+
+- **Collapsed** it is a single line covering the whole run — from its earliest
+  record to its last, or to the moment the served payload was read while the run
+  is still going. "Now" is the payload's own `observed_at` rather than the
+  browser's clock, so the line says how long the run had been going when it was
+  last read instead of drifting between polls.
+- **Opened once** it is one row per plan node, plus a **run-level row** for the
+  sessions recorded at no node — the orchestrator driving the graph and the
+  per-round check-ins. Each row says how long it recorded work and how long it
+  did not.
+- **Opened again**, a row is that node's own category lanes: the same words the
+  node view draws, read out of the `scope=run` summaries. A summary's lane comes
+  from the *pair* of roles it carries, which is what tells a lint run from the
+  worker whose semantic role it borrows.
+
+Every plot is handed one controlled range, so a wheel or a brush anywhere reframes
+all of them and a column means the same instant at every level. There is
+deliberately **no time cursor** here: a cursor locks a plot to a position in a
+stream being read beside it, and a graph is many streams at once.
+
+**Silence is drawn.** A run's wall time is mostly not work — a node waits on a
+dependency, a graph waits on a person, a driver waits on a provider — and blank
+space cannot be told from a record that is missing. A stretch nothing was recorded
+in is a hatched segment carrying how long it lasted, and a node the run never
+reached is that reading for its whole life. Interior gaps too narrow to see are
+dropped; the gaps at the two ends never are, because they are what makes every row
+span the same interval, which is what one shared zoom rests on.
+
+Clicking a node's row — its name, or any segment of it, working or idle — opens
+that node's view. A run-level session has no node to drill into, so it opens in the
+same two-thirds right panel a node's own sessions open in, with `ConversationTimeline`
+and role-labeled turns, and Escape closes it.
 
 ## The node timeline view
 
@@ -217,12 +249,14 @@ being photographed.
 
 | Captured file | What it shows |
 | --- | --- |
-| `01-run-list-overall` | the run list beside the overall view |
-| `02-graph` | the graph |
-| `03-node-collapsed` | the node view as it opens: the compact line over its transcript |
-| `04-node-expanded` | the same view with one row per category |
-| `05-node-item-detail` | a verification opened over that reading |
-| `06-conversation` | a conversation in the right panel |
+| `01-run-list-overall` | the run list beside the overall view, its graph timeline collapsed to one line |
+| `02-graph-rows` | that line opened into one row per node beside the run's own, with one row opened again into its lanes |
+| `03-run-level-session` | a run-level session opened over that reading in the right panel |
+| `04-graph` | the graph |
+| `05-node-collapsed` | the node view as it opens: the compact line over its transcript |
+| `06-node-expanded` | the same view with one row per category |
+| `07-node-item-detail` | a verification opened over that reading |
+| `08-conversation` | a conversation in the right panel |
 
 The tier asserts nothing beyond having reached each surface with its real reads landed:
 it is the operator's eyes, and `e2e/dag-ui-navigation.spec.ts` is what holds the
