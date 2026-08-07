@@ -254,6 +254,20 @@ def _has_file(origin: Path, ref: str, path: str) -> bool:
     )
 
 
+def _preserved_branch_clone(workspace: Path, branch: str) -> Path:
+    """The clone still holding a preserved branch, which is where it survives.
+
+    A dispatch that raised never reached publication, so its branch exists only in
+    the per-run clone the workstream worked in — retained for recovery rather than
+    pushed anywhere. This is the same place `just recoverable` looks for one.
+    """
+    for candidate in sorted(workspace.rglob(".git")):
+        clone = candidate.parent
+        if gitops.branch_exists(clone, branch):
+            return clone
+    raise AssertionError(f"no clone under {workspace} carries branch {branch!r}")
+
+
 def _tip(origin: Path, ref: str) -> str:
     return subprocess.run(
         ["git", "-C", str(origin), "rev-parse", ref], text=True, capture_output=True
@@ -2254,10 +2268,11 @@ def test_a_dispatch_that_dies_mid_edit_keeps_the_work_it_had_not_committed(
     """A provider that dies mid-edit costs the turn, not the uncommitted work.
 
     The worse half of the same fault: the worker's change is on disk and was never
-    committed, so a dispatcher that raised took it down with the worktree. It is
-    committed under the incomplete-step marker here, the same as a report that says
-    it did not complete, and the round says in its own journal that this is what
-    happened rather than leaving a `step-started` with nothing to close it.
+    committed, so a dispatch that ended without a report took it down with the
+    worktree. It is committed under the incomplete-step marker here, the same as a
+    report that says it did not complete, and the round says in its own journal that
+    this is what happened rather than leaving a `step-started` with nothing to close
+    it.
     """
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-died-dirty")
@@ -2312,6 +2327,101 @@ def test_a_dispatch_that_dies_mid_edit_keeps_the_work_it_had_not_committed(
         json.loads(line)
         for line in (runs_dir / run / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
+    # The refused dispatch closes its own step, and says both why it stopped and
+    # that it left something behind — the two facts a reader needs to tell this from
+    # a node that hung. A quota refusal is recordable provider evidence, so it
+    # settles through the shared not-completed path carrying the attribution that
+    # names who refused, rather than as an unattributed raise.
+    died = [
+        event
+        for event in events
+        if event["kind"] == "step-settled" and event["detail"].get("preserved") is True
+    ]
+    assert len(died) == 1, died
+    assert died[0]["detail"]["status"] == "not-completed"
+    attribution = died[0]["detail"]["failure_attribution"]
+    # The cause is the one this path exists for: a worker that was already working
+    # when its provider refused is exactly the worker whose tree can hold authored
+    # work, so dropping it would trade one silent loss for another.
+    assert attribution["cause"] == "quota_mid_conversation", attribution
+    assert "harness failed (quota)" in attribution["raw_tail"], attribution
+
+    # The uncommitted change reached the base through the marker commit that saved
+    # it, and the publication carries the attestation that marker required.
+    assert _has_file(origin, "main", "DIED.txt")
+    published = gitops.log_messages(canonical, "origin/main~1", "origin/main")
+    assert any(RECOVERY_TRAILER in commit.message for commit in published), published
+
+
+def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """The other half of a dying dispatch: a cause that is not provider evidence.
+
+    A refusal the chain can classify becomes a report and settles through the shared
+    not-completed path. A cause it cannot — here an infrastructure failure that only
+    mentions a harness — has no report to settle through, so the dispatcher raises.
+    That arm has to commit what the worker left on its way out; before it did, this
+    was the case that discarded a finished change and let the next round start from
+    an empty branch. The failure itself still reaches the scheduler unchanged.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-died-unclassified")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    latch = tmp_path / "died-unclassified.deaths"
+    plan_path = tmp_path / "died-unclassified.plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        # Every dispatch of the round dies this way, so the round ends
+                        # with work on a branch and no report anywhere describing it.
+                        "task": (
+                            f"complete-now write-change die-after-commit={latch} "
+                            f"die-times={_DISPATCHES_PER_ROUND} die-unclassified"
+                        ),
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "title": "feat: keep the work an unclassified death left behind",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = "died-unclassified"
+
+    assert run_plan_main([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    settled = json.loads((runs_dir / run / "round-01" / "result.json").read_text(encoding="utf-8"))[
+        "results"
+    ]["change"]
+    # Loud, not silent: the node names the cause it died of rather than reporting a
+    # bare stop that a later round would answer by re-deriving the work.
+    assert settled["status"] == "failed"
+    assert "cannot write v0.3 history telemetry" in settled["detail"]
+
+    events = [
+        json.loads(line)
+        for line in (runs_dir / run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
     # The raised dispatch closes its own step, and says both that it failed that way
     # and that it left something behind — the two facts a reader needs to tell this
     # from a node that hung.
@@ -2320,16 +2430,18 @@ def test_a_dispatch_that_dies_mid_edit_keeps_the_work_it_had_not_committed(
         for event in events
         if event["kind"] == "step-settled" and event["detail"].get("outcome") == "dispatch-failed"
     ]
-    assert len(died) == 1, died
-    assert died[0]["detail"]["preserved"] is True
-    assert died[0]["detail"]["status"] == "not-completed"
-    assert "harness failed (quota)" in died[0]["detail"]["outcome_detail"]
+    assert died, [event["detail"] for event in events if event["kind"] == "step-settled"]
+    assert all(event["detail"]["preserved"] is True for event in died), died
+    assert all(event["detail"]["status"] == "not-completed" for event in died), died
+    assert "cannot write v0.3 history telemetry" in died[0]["detail"]["outcome_detail"]
 
-    # The uncommitted change reached the base through the marker commit that saved
-    # it, and the publication carries the attestation that marker required.
-    assert _has_file(origin, "main", "DIED.txt")
-    published = gitops.log_messages(canonical, "origin/main~1", "origin/main")
-    assert any(RECOVERY_TRAILER in commit.message for commit in published), published
+    # And the journal is describing something real: the branch carries the work under
+    # exactly one marker, so what the event says was preserved is what recovery finds.
+    preserved = _preserved_branch_clone(tmp_path / "workspace", settled["branch"])
+    ahead = gitops.log_messages(preserved, "origin/main", settled["branch"])
+    assert ahead, settled["branch"]
+    assert len(incomplete_commits(preserved, "origin/main", settled["branch"])) == 1
+    assert _has_file(preserved, settled["branch"], "DIED.txt")
 
 
 def test_a_retry_resume_that_cannot_be_adopted_is_refused_by_name(

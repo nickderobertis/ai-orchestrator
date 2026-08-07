@@ -414,8 +414,15 @@ def main() -> int:
                             check=True,
                             capture_output=True,
                         )
+                    # `die-unclassified` is the same death by a cause that is *not*
+                    # recordable provider evidence, so the dispatcher raises instead
+                    # of synthesizing a refusal report. It is the arm that has to
+                    # preserve the work on its way out rather than leaving the branch
+                    # to be found by accident.
                     sys.stderr.write(
-                        "fake_backend: provider error (respond): harness failed (quota)\n"
+                        "harness claude-code cannot write v0.3 history telemetry\n"
+                        if "die-unclassified" in task
+                        else "fake_backend: provider error (respond): harness failed (quota)\n"
                     )
                     return 1
             orchestrator_plan = _orchestrator_command(task)
