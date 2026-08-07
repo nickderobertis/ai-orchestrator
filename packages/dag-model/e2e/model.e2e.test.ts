@@ -70,6 +70,46 @@ test("the checked-in v2 run-detail contract parses and v1 is rejected", async ()
   expect(() => parseRunDetail({ ...golden, api_version: 1 })).toThrow();
 });
 
+test("the checked-in v2 run-timeline contract parses, and v1's meaning is refused", async () => {
+  // The same bytes `tests/test_timeline.py` compares the Python projection to, parsed
+  // here with the schema a browser parses with — so neither side can move the payload
+  // without the other failing on it.
+  const golden = await Bun.file(
+    new URL("../../../tests/golden/run-timeline-v2.json", import.meta.url),
+  ).json();
+  const parsed = parseRunTimeline(golden);
+  expect(parsed.timeline_schema_version).toBe(2);
+
+  // The pair a rollup of dispatches carries is what names the category it summarized,
+  // and it survives the round trip: a worker and the lint run that carries the
+  // worker's own semantic role are two categories, told apart by the transport alone.
+  const summaries = parsed.spans.filter((span) => span.kind === "rollup");
+  expect(
+    summaries
+      .filter((span) => span.agent_role !== undefined)
+      .map((span) => [span.agent_role, span.transport_role]),
+  ).toEqual([
+    ["worker", "agent"],
+    ["worker", "llmlint"],
+  ]);
+  // And a rollup of anything else carries neither key at all rather than a null one,
+  // so "not a dispatch" cannot be read as "a dispatch whose role went missing".
+  const others = summaries.filter((span) => span.agent_role === undefined);
+  expect(others.map((span) => span.label)).toEqual([
+    "rollup",
+    "verification",
+    "human-wait",
+  ]);
+  expect(others.every((span) => !("transport_role" in span))).toBe(true);
+
+  // A payload on the other meaning of that pair is refused rather than rendered as
+  // though it agreed with this one.
+  expect(() =>
+    parseRunTimeline({ ...golden, timeline_schema_version: 1 }),
+  ).toThrow();
+  expect(() => parseRunTimeline({ ...golden, api_version: 1 })).toThrow();
+});
+
 test("the goal id the read boundary derives is what makes a legacy run parse", async () => {
   // Python derives this fixture's `plan.goal.id`; the run behind it recorded text
   // alone. Without that id the contract rejects the whole detail.
@@ -469,6 +509,7 @@ test("a package consumer validates populated telemetry and attribution", () => {
 test("a package consumer parses a served run timeline through the export", () => {
   const timeline = parseRunTimeline({
     api_version: 2,
+    timeline_schema_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: "run-1",
     spans: [
@@ -527,6 +568,7 @@ test("a package consumer reads one dispatch's two sessions, its turn timing, and
   };
   const timeline = parseRunTimeline({
     api_version: 2,
+    timeline_schema_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: "run-1",
     spans: [
@@ -556,6 +598,7 @@ test("a package consumer reads one dispatch's two sessions, its turn timing, and
   expect(() =>
     parseRunTimeline({
       api_version: 2,
+      timeline_schema_version: 2,
       observed_at: "2026-07-26T12:00:00Z",
       run_id: "run-1",
       spans: [

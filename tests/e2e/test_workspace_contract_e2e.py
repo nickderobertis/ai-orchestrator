@@ -238,6 +238,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "packages/dag-model/src/index.ts",
         "packages/telemetry-client/src/index.ts",
         "tests/golden/run-detail-v2.json",
+        "tests/golden/run-timeline-v2.json",
         "apps/dag-ui/vite.config.ts",
         "apps/dag-ui/e2e/viewports.ts",
         "apps/dag-ui/e2e/gallery.screens.spec.ts",
@@ -505,6 +506,56 @@ def test_dag_state_contract_checker_reports_dag_ui_viewport_matrix_drift(
     assert result.returncode != 0
     assert "DAG UI viewport matrix" in result.stderr
     assert "1024x760" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_run_timeline_version_drift(
+    tmp_path: Path,
+) -> None:
+    """A timeline payload whose meaning moved in one copy and not the others must fail.
+
+    The number exists so a consumer can tell which meaning of a rollup it is holding.
+    A bump that reaches the serializer and leaves the contract, the schema a client
+    parses with, or the checked-in golden behind is exactly the drift that makes it
+    worthless — so each of those three is reconciled against Python here.
+    """
+    checkout = _dag_state_contract_checkout(tmp_path)
+    timeline = checkout / "orchestrator/timeline.py"
+    bumped = timeline.read_text().replace(
+        "TIMELINE_SCHEMA_VERSION = 2", "TIMELINE_SCHEMA_VERSION = 3"
+    )
+    assert "TIMELINE_SCHEMA_VERSION = 3" in bumped, "timeline.py no longer owns the version"
+    timeline.write_text(bumped)
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "run timeline schema version" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_run_scope_rollup_field_drift(
+    tmp_path: Path,
+) -> None:
+    """A rollup that stops carrying a declared key must fail, not merely parse.
+
+    Every key the pair lives in is optional on `TimelineSpan`, so dropping one from a
+    rollup violates no schema on either side. Only a declaration of what *this* span
+    carries can catch it, which is what this rule is.
+    """
+    checkout = _dag_state_contract_checkout(tmp_path)
+    timeline = checkout / "orchestrator/timeline.py"
+    dropped = timeline.read_text().replace('        "transport_role",\n', "", 1)
+    assert '"transport_role"' not in dropped.split("RUN_SCOPE_ROLLUP_FIELDS")[1].split(")")[0], (
+        "RUN_SCOPE_ROLLUP_FIELDS no longer declares the key this drops"
+    )
+    timeline.write_text(dropped)
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "run-scope rollup fields" in result.stderr
+    assert "transport_role" in result.stderr
 
 
 @pytest.mark.reads_docs

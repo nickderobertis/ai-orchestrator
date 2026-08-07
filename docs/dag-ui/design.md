@@ -527,9 +527,55 @@ that reading true to the record:
   An aggregate of high-frequency records is exactly the case where the two differ:
   four seconds of lock contention spread over two minutes is four seconds.
 
+One rollup carries exactly these keys and no others. They are a subset of
+`TimelineSpan`, restated because that shape says which keys may ever appear on *a*
+span while this says which of them this one does — and the role pair is optional
+everywhere, so a rollup that stopped carrying it, or a rollup of some other kind that
+started, would violate no schema while changing what a summary means.
+`orchestrator/timeline.py` owns the set as `RUN_SCOPE_ROLLUP_FIELDS` and
+`scripts/check-dag-state-contract.py` reconciles the two.
+
+```ts
+interface RunScopeRollup {
+  id: string;
+  kind: "rollup";
+  label: string; // the summarized agent role, else the summarized span kind
+  started_at: string;
+  ended_at: string | null;
+  events: []; // always empty: a summary stands in for items, it does not carry them
+  count: number;
+  total_duration_ms: number;
+  node_id: string;
+  parent_id?: string; // omitted when the run journalled no `node` span to hang it on
+  round?: number;
+  agent_role?: AgentRole; // this pair appears together, on a rollup of dispatches
+  transport_role?: "agent" | "judge" | "llmlint";
+}
+```
+
+Every optional key above is **omitted** when it does not apply, never served as
+`null`: a consumer switching on the role pair has to be able to tell "not a dispatch"
+from "a dispatch whose role went missing". `ended_at` is the one key a span may carry
+as null, because that is what work the record never closed looks like.
+`tests/golden/run-timeline-v2.json` is the checked-in cross-language example —
+`tests/test_timeline.py` compares the Python projection to it and
+`packages/dag-model/e2e/model.e2e.test.ts` parses the same bytes with the schema a
+browser parses with.
+
+The envelope carries a version of its own. `api_version` says which API this is and
+may not move without a new major route; `timeline_schema_version` says which *meaning*
+of the payload under it a consumer is holding, and moves on its own. Version 1 was the
+unversioned shape, in which the role pair appeared only on a `dispatch` span — so a
+client could read "carries roles" as "is a dispatch". Version 2 serves that pair on a
+`scope=run` rollup too, where it names the category the rollup summarizes, and that
+inference no longer holds. `orchestrator/timeline.py` owns the number as
+`TIMELINE_SCHEMA_VERSION`; `scripts/check-dag-state-contract.py` reconciles it here,
+in the `dag-model` schema, and in `tests/golden/run-timeline-v2.json`.
+
 ```ts
 interface RunTimeline {
   api_version: 2;
+  timeline_schema_version: 2;
   observed_at: string;
   run_id: string;
   spans: TimelineSpan[];

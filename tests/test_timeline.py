@@ -26,8 +26,11 @@ from orchestrator.supervisory import (
 from orchestrator.timeline import (
     CONVERSATION_TURN_KIND,
     HISTORY_WRITE_FAILURE_KIND,
+    RUN_SCOPE_ROLLUP_FIELDS,
+    TIMELINE_SCHEMA_VERSION,
     TimelineSpan,
     assemble,
+    run_scope,
     run_timeline,
 )
 
@@ -901,3 +904,94 @@ def test_run_scope_keeps_a_waiting_node_and_the_measured_cost_of_an_aggregate(
     aggregate = next(span for span in by_node["api"] if span["label"] == "rollup")
     assert aggregate["count"] == 1
     assert aggregate["total_duration_ms"] == 6000
+
+
+def _versioned_run_scope() -> list[TimelineSpan]:
+    """The `scope=run` reduction of one recorded run, from fixed inputs.
+
+    Built through the two public halves of this projection — `assemble` then
+    `run_scope` — rather than through `run_timeline`, because a journal on disk is
+    stamped with the wall clock and a golden has to be the same bytes every time.
+    """
+    events = [
+        _event(1, "round-started", offset=0),
+        _event(2, "node-started", node="api", offset=1),
+        _event(3, "lock-wait", node="api", detail={"seconds": 1.5}, offset=2),
+        _event(4, "lock-wait", node="api", detail={"seconds": 1.5}, offset=3),
+        _event(5, "verification-started", node="api", detail={"label": "just gate"}, offset=4),
+        _event(6, "verification-finished", node="api", detail={"ok": True}, offset=9),
+        # Journalled with no `node-started` before it, which is how the scheduler
+        # records a node waiting on a person.
+        _event(7, "human-waiting", node="signoff", offset=10),
+    ]
+    conversations = [
+        _conversation("worker-1", started="2026-07-19T00:00:20Z", node="api", round_number=1),
+        _conversation(
+            "lint-1",
+            started="2026-07-19T00:00:30Z",
+            transport_role="llmlint",
+            agent_role="worker",
+            node="api",
+            round_number=1,
+        ),
+    ]
+    return run_scope(assemble(events, conversations, DetailSnapshot()))
+
+
+def test_v2_run_timeline_golden_matches_the_python_run_scope_projection() -> None:
+    """The checked-in cross-language example of the versioned run-scope payload.
+
+    `packages/dag-model/e2e/model.e2e.test.ts` parses these same bytes with the schema
+    a browser parses with, so the two sides cannot drift into disagreeing about a
+    payload they both claim to serve and read.
+    """
+    golden = json.loads((Path(__file__).parent / "golden" / "run-timeline-v2.json").read_text())
+
+    assert golden["api_version"] == 2
+    # Restated in the document rather than derived from the module, so a bump that
+    # moves the serializer and leaves the checked-in bytes behind fails right here.
+    assert golden["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION
+    assert _versioned_run_scope() == golden["spans"]
+
+
+def test_the_v2_role_pair_round_trips_on_a_dispatch_rollup_and_is_absent_elsewhere() -> None:
+    """What the schema-2 bump added: additive, lossless, and omitted when it means nothing.
+
+    The pair is what tells one summarized category from another — a worker from the
+    lint run that carries the worker's own semantic role. A rollup of anything else
+    has no such category, and it must carry *no* key rather than a null one: a
+    consumer switching on the pair has to be able to tell "not a dispatch" from "a
+    dispatch whose role went missing".
+    """
+    scoped = {span["id"]: span for span in _versioned_run_scope() if span["kind"] == "rollup"}
+
+    dispatched = {
+        (span["agent_role"], span["transport_role"]): span
+        for span in scoped.values()
+        if "agent_role" in span
+    }
+    assert sorted(dispatched) == [("worker", "agent"), ("worker", "llmlint")]
+    # Lossless through the wire, which is the only form a client ever sees.
+    assert (
+        json.loads(json.dumps(dispatched[("worker", "llmlint")]))
+        == dispatched[("worker", "llmlint")]
+    )
+
+    others = [span for span in scoped.values() if "agent_role" not in span]
+    assert {span["label"] for span in others} == {"verification", "rollup", "human-wait"}
+    assert all("transport_role" not in span for span in others)
+    # Omitted, never served as a null. `ended_at` is the one key a span may carry as
+    # null — that is what work the record never closed looks like — so it is the one
+    # exception; anything else null would be a value a client could read and switch on.
+    assert all(
+        value is not None
+        for span in scoped.values()
+        for key, value in span.items()
+        if key != "ended_at"
+    )
+
+    # And every summary carries only the keys the contract declares for one, which is
+    # what the graph-level view reads a node's lanes out of — with a dispatch rollup
+    # under a node exercising every one of them.
+    assert all(set(span) <= RUN_SCOPE_ROLLUP_FIELDS for span in scoped.values())
+    assert set(dispatched[("worker", "llmlint")]) == RUN_SCOPE_ROLLUP_FIELDS

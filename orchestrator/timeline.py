@@ -71,6 +71,43 @@ from .telemetry import native_session_groups
 
 TimelineScope = Literal["run"]
 
+#: The run timeline payload's own schema version, which moves independently of
+#: ``API_VERSION``.
+#:
+#: The two answer different questions. ``api_version`` says which API this is, and it
+#: may not move without a new major route; this says which *meaning* of the payload
+#: under it a consumer is holding. Version 1 was the unversioned shape, where a role
+#: pair appeared only on a ``dispatch`` span and a client could read "carries roles" as
+#: "is a dispatch". Version 2 serves that pair on a ``scope=run`` rollup as well, where
+#: it names the category the rollup summarizes — so that inference no longer holds, and
+#: a consumer needs to be able to tell the two apart rather than guess from the fields.
+TIMELINE_SCHEMA_VERSION = 2
+
+#: Exactly the keys a ``scope=run`` rollup may carry.
+#:
+#: ``TimelineSpan`` says which keys may ever appear on *a* span; this says which of them
+#: this one does. It is declared rather than left implicit because the role pair is
+#: optional everywhere, so a rollup that stopped carrying it — or a rollup of some other
+#: kind that started — would violate no schema while silently changing what a summary
+#: means to the graph-level view that reads a node's lanes out of these.
+RUN_SCOPE_ROLLUP_FIELDS: frozenset[str] = frozenset(
+    {
+        "id",
+        "kind",
+        "label",
+        "started_at",
+        "ended_at",
+        "events",
+        "count",
+        "total_duration_ms",
+        "node_id",
+        "parent_id",
+        "round",
+        "agent_role",
+        "transport_role",
+    }
+)
+
 #: What a timeline item points at instead of inlining it. The three artifact kinds
 #: are exactly the keys a node or step result records under ``artifacts``, so a
 #: consumer resolves one the same way the result view does.
@@ -276,6 +313,7 @@ class RunTimeline(TypedDict):
     """The ``RunTimeline`` served by ``GET /api/v2/runs/{run_id}/timeline``."""
 
     api_version: int
+    timeline_schema_version: int
     observed_at: str
     run_id: str
     spans: list[TimelineSpan]
@@ -1302,7 +1340,7 @@ def run_timeline(
     if node_id is not None:
         spans = [span for span in spans if span.get("node_id") == node_id]
     elif scope == "run":
-        spans = _run_scope(spans)
+        spans = run_scope(spans)
     by_path: dict[str, str] = {}
     for event in events:
         result = event.detail.get("result")
@@ -1326,6 +1364,7 @@ def run_timeline(
                 detail["artifact_id"] = by_path.get(log_path, _artifact_id("gate_log", log_path))
     timeline: RunTimeline = {
         "api_version": API_VERSION,
+        "timeline_schema_version": TIMELINE_SCHEMA_VERSION,
         "observed_at": (now or datetime.now(UTC)).isoformat(),
         "run_id": validated,
         "spans": spans,
@@ -1336,8 +1375,12 @@ def run_timeline(
     return timeline
 
 
-def _run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
+def run_scope(spans: Sequence[TimelineSpan]) -> list[TimelineSpan]:
     """Return run work and bounded summaries of every node's nested activity.
+
+    Public beside `assemble`, and pure like it: the two together are the whole
+    projection this scope serves, so a caller holding recorded spans can reduce them
+    exactly as the served payload does rather than approximate it.
 
     One summary per category the node recorded, where a dispatch's category is the
     pair of roles the server serves on it rather than either half alone. A graph-level

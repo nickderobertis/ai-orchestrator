@@ -59,7 +59,11 @@ from orchestrator.launch import (
 from orchestrator.monitor import DetailSnapshot, save_snapshot, snapshot_path
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
-from orchestrator.timeline import ROLLUP_INTERVAL_LIMIT
+from orchestrator.timeline import (
+    ROLLUP_INTERVAL_LIMIT,
+    RUN_SCOPE_ROLLUP_FIELDS,
+    TIMELINE_SCHEMA_VERSION,
+)
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 LAUNCH_ID = "a" * 32
@@ -2060,9 +2064,25 @@ def test_scoped_timeline_endpoints_reconstruct_one_ordered_run_history_over_http
         timeline = body.json()
         assert timeline["api_version"] == 2
         assert timeline["run_id"] == "demo"
-        run_scope = client.get("/api/v2/runs/demo/timeline?scope=run").json()["spans"]
+        # Both scopes carry the timeline payload's own version beside the API's. It is
+        # what tells a consumer which meaning of a rollup it is holding — `api_version`
+        # answers a different question and stays 2 whatever this payload does.
+        assert timeline["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION
+        scoped = client.get("/api/v2/runs/demo/timeline?scope=run").json()
+        assert scoped["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION
+        run_scope = scoped["spans"]
         assert any(span.get("node_id") == "api" for span in run_scope)
         summaries = [span for span in run_scope if span["kind"] == "rollup"]
+        # A served summary carries exactly the keys the contract declares for one, and
+        # never a key set to null: an absent role is an omitted field, so a consumer
+        # reading the pair cannot mistake "not a dispatch" for "a dispatch with no role".
+        assert all(set(span) <= RUN_SCOPE_ROLLUP_FIELDS for span in summaries)
+        assert all(
+            value is not None
+            for span in summaries
+            for key, value in span.items()
+            if key != "ended_at"
+        )
         assert len({span["label"] for span in summaries}) > 1
         assert all(span["count"] >= 1 for span in summaries)
         assert all(span["total_duration_ms"] >= 0 for span in summaries)

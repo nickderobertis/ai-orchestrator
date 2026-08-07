@@ -410,6 +410,7 @@ function stamp(seconds: number): string {
 export function runTimeline(runId: string = LIVE_RUN) {
   return {
     api_version: 2,
+    timeline_schema_version: 2,
     // Read shortly after the last record it carries, which is what a poll of a live
     // run actually returns. The graph-level view plots an unfinished run out to this
     // instant, so a stamp an hour past the record would say the run had spent an
@@ -966,6 +967,7 @@ export function busyTimeline(sessions: number) {
   );
   return {
     api_version: 2,
+    timeline_schema_version: 2,
     observed_at: "2026-07-26T12:00:00Z",
     run_id: LIVE_RUN,
     spans: [

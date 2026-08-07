@@ -797,8 +797,20 @@ export const artifactContentSchema = openObject({
   content: z.string(),
   truncated: z.boolean(),
 });
+/**
+ * The timeline envelope, which carries a version of its own beside the API's.
+ *
+ * `api_version` says which API this is; `timeline_schema_version` says which *meaning*
+ * of the payload under it this is, and moves on its own. Version 1 was the unversioned
+ * shape, where the role pair appeared only on a `dispatch` span — so a client could
+ * read "carries roles" as "is a dispatch". Version 2 serves that pair on a `scope=run`
+ * rollup too, naming the category it summarizes, and that inference no longer holds.
+ * Pinned as a literal so a payload from a server on the other meaning is refused here
+ * rather than rendered as though it agreed.
+ */
 export const runTimelineSchema = openObject({
   api_version: z.literal(2),
+  timeline_schema_version: z.literal(2),
   observed_at: timestamp,
   run_id: z.string().min(1),
   spans: z.array(timelineSpanSchema),
