@@ -163,6 +163,24 @@ def _hold_until_released(task: str, turn: int) -> bool:
     return True
 
 
+def _write_agent_change(path: Path, text: str) -> None:
+    """Land one agent-authored file whole, the way a real editor lands one.
+
+    A cooperative cancellation tears this process down *mid-turn*, and `write_text`
+    truncates before it writes: a turn killed inside that window left an **empty**
+    file where a complete one had been, and the lifecycle then preserved, gated
+    (`test -f`), and merged the empty one. The window is microseconds wide and
+    opens only when a later turn rewrites content an earlier turn already wrote,
+    which is why it read as a bad host — it needs a drop to land inside it, so it
+    surfaced only under concurrent dispatch load. Writing a sibling and renaming
+    makes the visible path only ever hold one whole write, so an interrupted
+    rewrite leaves the previous content rather than nothing.
+    """
+    scratch = path.with_name(f".{path.name}.partial")
+    scratch.write_text(text, encoding="utf-8")
+    os.replace(scratch, path)
+
+
 def _commit_and_push_ci_iteration(state: str) -> None:
     """Act like the paid agent iterating a branch against authoritative CI."""
     Path("CI_STATE.txt").write_text(state + "\n", encoding="utf-8")
@@ -667,7 +685,7 @@ def main() -> int:
                     os.environ.get("LLMLINT_ONEHARNESS_BIN", "<absent>"), encoding="utf-8"
                 )
             if "write-change" in task:
-                (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+                _write_agent_change(Path.cwd() / "CHANGE.txt", "change from fake agent\n")
             if "run-worker-gate" in task:
                 # A real worker proves its own change with the repository's own gate
                 # before it settles, and iterates on a red one rather than accepting
@@ -700,8 +718,8 @@ def main() -> int:
                 )
             if "write-unique-change" in task:
                 identity = re.sub(r"[^A-Za-z0-9._-]+", "-", Path.cwd().name)
-                (Path.cwd() / f"CHANGE-{identity}.txt").write_text(
-                    "change from fake agent\n", encoding="utf-8"
+                _write_agent_change(
+                    Path.cwd() / f"CHANGE-{identity}.txt", "change from fake agent\n"
                 )
             cwd_match = re.search(r"record-cwd=([^\s]+)", task)
             if cwd_match is not None:
