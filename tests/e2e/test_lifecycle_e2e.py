@@ -4206,13 +4206,18 @@ def test_three_failing_recoveries_of_one_branch_report_three_distinct_causes(
     assert len(set(causes)) == 3, causes
     assert "does not exist in any registered checkout" in causes[0]
     assert stale.outcome == dead_option.outcome == "gate-failed"
-    # Each rejection keeps its own output, so "the same failure again" is checkable
-    # rather than assumed.
-    assert stale.gate_log is not None and stale.gate_log == dead_option.gate_log
-    preserved = Path(stale.gate_log).read_text(encoding="utf-8")
-    assert "pre-push: llmlint stale finding" in preserved
-    assert "pre-push: ruff found a dead CLI option" in preserved
-    assert preserved.count("verdict: FAILED") == 2
+    # Each rejection keeps its own output in a file of its own, under the one durable
+    # directory this branch's attempts accumulate in — so "the same failure again" is
+    # checkable by reading the attempt, rather than by counting bytes into a log that
+    # held every attempt end to end.
+    assert stale.gate_log is not None and dead_option.gate_log is not None
+    assert stale.gate_log != dead_option.gate_log
+    assert Path(stale.gate_log).parent == Path(dead_option.gate_log).parent
+    first = Path(stale.gate_log).read_text(encoding="utf-8")
+    second = Path(dead_option.gate_log).read_text(encoding="utf-8")
+    assert "pre-push: llmlint stale finding" in first
+    assert "pre-push: ruff found a dead CLI option" in second
+    assert first.count("verdict: FAILED") == second.count("verdict: FAILED") == 1
     assert stale.gate_log in stale.detail
 
 
@@ -4308,6 +4313,23 @@ def test_a_publication_that_fails_before_any_gate_preserves_its_error(
     assert "merge-path failure: publication of" in preserved
     assert "verdict: passed" in preserved  # the earlier gate run is still there
     assert str(failure.detail["log_path"]) in result.detail
+    # And it is preserved where the run cannot take it with it. This failure settles
+    # the workstream, so the worktree the record above lives beside is disposed and the
+    # run root is retained only while recovery might want it; the per-branch directory
+    # is the copy an operator still has afterwards.
+    durable = Path(str(failure.detail["preserved_log_path"]))
+    directory = preserved_gate_log_dir(workspace.root, result.branch)
+    assert durable.parent == directory
+    assert "merge-path failure: publication of" in durable.read_text(encoding="utf-8")
+    # One invocation per file rather than the run-scoped log's running append: the
+    # branch push that passed sits beside this failure instead of inside its file.
+    attempts = {
+        path.name: path.read_text(encoding="utf-8") for path in directory.glob("gate-*.log")
+    }
+    assert sorted(attempts) == ["gate-0001.log", "gate-0002.log"], sorted(attempts)
+    assert attempts["gate-0001.log"].count("verdict: passed") == 1
+    assert attempts["gate-0002.log"] == durable.read_text(encoding="utf-8")
+    assert "verdict:" not in attempts["gate-0002.log"]
 
 
 def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_origin) -> None:

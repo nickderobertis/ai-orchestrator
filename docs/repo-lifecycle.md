@@ -443,7 +443,7 @@ One file per invocation rather than one appended log, because reading the second
 four attempts out of a single 190 KB file meant counting bytes into it. A number
 another writer already claimed is never written over, so two publications of one
 branch — a retry beside the recovery of what it replaced — cannot share a file.
-Retention keeps the newest `PRESERVED_GATE_LOG_ATTEMPTS` (10) and prunes the rest, so
+Retention keeps the newest **10** (`PRESERVED_GATE_LOG_ATTEMPTS`) and prunes the rest, so
 a branch that re-pushes through a red gate all night cannot grow the directory without
 end. The single `gate.log` a branch recovered before this split still has is neither
 counted nor pruned: it is the whole history of those attempts.
@@ -459,12 +459,21 @@ next-round`) and a publication driver (`just repo-recover`, `just integrate`). O
 round owner died sixty-six seconds in; two recoveries died at exit 143 with their gate
 already green.
 
-Those four entry points therefore **re-attribute** before they fork:
-`orchestrator.detach.reattribute_successor` claims a watchdog directory of its own and
-`exec`s the process under it. An `exec` and nothing less, because `/proc/<pid>/environ`
-is the memory the kernel wrote at the last `exec` and `os.environ` does not touch it —
-a process cannot shed an inherited stamp in place, and everything it starts afterwards
-would inherit the launcher's stamp anyway.
+Those four entry points therefore go through `orchestrator.detach.run_successor`, which
+adds one step to the fork the round already made: the forked round claims a watchdog
+directory of its own and **re-`exec`s** under it. An `exec` and nothing less, because
+`/proc/<pid>/environ` is the memory the kernel wrote at the last `exec` and `os.environ`
+does not touch it — a process cannot shed an inherited stamp in place, and everything it
+starts afterwards would inherit the launcher's stamp anyway.
+
+It is the **round** that re-`exec`s, not the process that forked it, and the difference
+is not cosmetic. The relaying parent outlives the round by the moment it takes to collect
+its exit status. A parent stamped for the round's directory spends that moment as a live
+process whose recorded owner is already dead — which is the reaper's definition of a
+leaked tree — so a sweep landing in that window kills the parent before it can report
+how the round ended, and a completed round reaches its caller as `143`. The parent
+therefore keeps the launcher's stamp, which describes it correctly: it belongs to the
+launcher and is meant to die with it.
 
 Re-stamping rather than scrubbing, because the reaper's reach was never the problem.
 The directory a successor claims makes it *reapable under its own identity*: while the
@@ -482,12 +491,9 @@ holding the `flock` a dispatcher holds, so:
   owner never appears in `just host` or `just status` as a live dispatch with no turn
   and no role.
 
-The record is written by the *forked* owner rather than by the process that claimed
-the directory, because that process becomes the relaying parent the launching turn's
-teardown kills. Until the fork records itself there is no `owner.lock` at all, and the
-`pid` file the claim wrote is what covers that window: the creating process is alive
-across the whole of it, and a successor killed inside it leaves a directory the sweep
-can still reclaim rather than one nothing may ever touch.
+The claim is written by the process that will own the tree, before its `exec`, and there
+is no window: an `exec` carries a pid and its start token across unchanged, so the
+identity recorded before it still describes the process working there afterwards.
 
 Nothing about the reaper's proof standard moves for this. A process stamped for a
 finished dispatch that did not re-attribute is still reaped, in the same sweep that

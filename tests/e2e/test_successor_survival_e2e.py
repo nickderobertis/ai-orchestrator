@@ -69,9 +69,12 @@ def _live_owner_record(pid: int) -> str:
 class LaunchedRound:
     """One `just run-plan` started the way a dispatched agent turn starts it."""
 
-    def __init__(self, process: subprocess.Popen[bytes], streams: tuple[Path, Path]) -> None:
+    def __init__(
+        self, process: subprocess.Popen[bytes], streams: tuple[Path, Path], run_id: str
+    ) -> None:
         self.process = process
         self.out, self.err = streams
+        self.run_id = run_id
         self.owner = self._await_announced_owner()
 
     def _await_announced_owner(self) -> int:
@@ -130,11 +133,11 @@ def launch(
     scratch_root: Path,
     command_base: Callable[..., Path],
     onejudge_bin: str,
-) -> Iterator[Callable[[Path, str], LaunchedRound]]:
+) -> Iterator[Callable[..., LaunchedRound]]:
     """Start rounds under a launching dispatch's stamp, and reap whatever survives."""
     started: list[LaunchedRound] = []
 
-    def _start(status_dir: Path, run_id: str) -> LaunchedRound:
+    def _start(status_dir: Path, run_id: str, **environment: str) -> LaunchedRound:
         hold = Rendezvous.at(tmp_path, run_id)
         streams = (tmp_path / f"{run_id}.out", tmp_path / f"{run_id}.err")
         arguments = [
@@ -165,16 +168,21 @@ def launch(
                     **os.environ,
                     "TMPDIR": str(scratch_root),
                     AGENT_STATUS_DIR_ENV: os.fspath(status_dir),
+                    **environment,
                 },
             )
         hold.wait(e2e_timeout(120))
-        round_ = LaunchedRound(process, streams)
+        round_ = LaunchedRound(process, streams, run_id)
         started.append(round_)
         return round_
 
     yield _start
+    # Released before anything is signalled: a turn parked at its rendezvous cannot
+    # notice a teardown, so killing first leaves the provider to be reaped rather than
+    # to finish, and the leak guard then reports the tree this fixture was cleaning up.
     for round_ in started:
-        Rendezvous.at(tmp_path, "survives").let_go()
+        Rendezvous.at(tmp_path, round_.run_id).let_go()
+    for round_ in started:
         for pid in (round_.owner, round_.process.pid):
             with contextlib.suppress(PermissionError, ProcessLookupError):
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
@@ -199,12 +207,26 @@ def _successor_directory(root: Path, owner: int) -> Path:
     Found by the record it wrote rather than by name, because the name is a temporary
     one nothing outside the successor knows — and finding it by the owner it recorded
     is the same evidence the sweeper reads.
+
+    The owner record alone does not identify it, though: the round owner is also the
+    *dispatcher* of the node it runs, so the watchdog directory `run_onejudge` takes out
+    records the same pid. What separates them is the worker `pid` a dispatch writes and
+    a successor has no notion of — a structural difference, deliberately not the held
+    lock, which is the thing the journey goes on to assert about.
     """
-    for candidate in sorted(root.glob(WATCHDOG_PATTERN)):
-        record = candidate / OWNER_LOCK_NAME
-        if record.is_file() and record.read_text(encoding="utf-8").split()[:1] == [str(owner)]:
-            return candidate
-    pytest.fail(f"the round owner {owner} recorded no scratch directory of its own under {root}")
+    found = [
+        candidate
+        for candidate in sorted(root.glob(WATCHDOG_PATTERN))
+        if (record := candidate / OWNER_LOCK_NAME).is_file()
+        and record.read_text(encoding="utf-8").split()[:1] == [str(owner)]
+        and not (candidate / "pid").exists()
+    ]
+    if len(found) != 1:
+        pytest.fail(
+            f"expected exactly one scratch directory claimed by the round owner {owner} "
+            f"under {root}, found {[str(path) for path in found]}"
+        )
+    return found[0]
 
 
 def _await_result(path: Path) -> dict[str, object]:
@@ -221,7 +243,7 @@ def _await_result(path: Path) -> dict[str, object]:
 def test_a_launched_round_outlives_the_sweep_that_reaps_its_launchers_leavings(
     tmp_path: Path,
     scratch_root: Path,
-    launch: Callable[[Path, str], LaunchedRound],
+    launch: Callable[..., LaunchedRound],
 ) -> None:
     """The round survives its launcher's whole ending; a real leak still does not."""
     launcher = scratch_root / "orchestrator-watchdog-launcher"
@@ -239,8 +261,6 @@ def test_a_launched_round_outlives_the_sweep_that_reaps_its_launchers_leavings(
         status_dir,
         timeout=e2e_timeout(60),
     )
-    successor = _successor_directory(scratch_root, round_.owner)
-
     round_.teardown_launching_turn()
     assert is_running(round_.owner), "the round died with the turn that launched it"
     # The launching step settles: its dispatcher releases the scratch directory, which
@@ -252,14 +272,17 @@ def test_a_launched_round_outlives_the_sweep_that_reaps_its_launchers_leavings(
     assert is_running(round_.owner), (
         f"the sweep reaped the round owner as its launcher's leaving\n{swept.stdout}"
     )
-    assert successor.is_dir(), "the sweep reclaimed the directory the round is attributed to"
     # The round is not merely alive: it is still driving the dispatch it started, which
     # is what the operator lost when this reaped a tree sixty-six seconds into a round.
     driving = live_dispatches(root=scratch_root)
     assert driving, f"no dispatch of the surviving round is running\n{swept.stdout}"
     assert {dispatch.run_id for dispatch in driving} == {"survives"}
-    # The successor's own directory is deliberately not held with the lock a dispatcher
-    # takes, so a round owner never appears in `just host` as a dispatch with no turn.
+    # It survived because it is attributed to a directory of its own, and that directory
+    # outlived the sweep too. Resolved after the sweep for that reason.
+    successor = _successor_directory(scratch_root, round_.owner)
+    assert successor.is_dir(), "the sweep reclaimed the directory the round is attributed to"
+    # That directory is deliberately not held with the lock a dispatcher takes, so a
+    # round owner never appears in `just host` as a dispatch with no turn and no role.
     assert all(item.status_dir != successor / AGENT_STATUS_DIR_NAME for item in driving)
 
     assert await_reaped(leaked, timeout=e2e_timeout(60)), (
@@ -269,4 +292,47 @@ def test_a_launched_round_outlives_the_sweep_that_reaps_its_launchers_leavings(
 
     Rendezvous.at(tmp_path, "survives").let_go()
     settled = _await_result(tmp_path / "runs" / "survives" / "round-01" / "result.json")
+    assert settled["state"] == "complete"
+
+
+@pytest.mark.load_sensitive
+def test_a_round_that_cannot_claim_its_own_attribution_runs_on_and_says_so(
+    tmp_path: Path,
+    scratch_root: Path,
+    launch: Callable[..., LaunchedRound],
+) -> None:
+    """Losing the attribution must not lose the round, and must not be silent.
+
+    A durable claim needs this host's own procfs identity — the pid and start token the
+    sweeper later judges the tree by — so a procfs the round cannot read is a claim it
+    cannot make. That is the one condition `_reexec_reattributed` degrades on, and the
+    degrade has to fail toward keeping the work: the round runs on under the launching
+    dispatch's stamp, which leaves it reapable by the sweep behind that dispatch.
+
+    Silently would be the wrong way to do it. The operator's only warning that this
+    round is back to being killable is the line it prints, so the line is asserted.
+    """
+    launcher = scratch_root / "orchestrator-watchdog-launcher"
+    status_dir = launcher / AGENT_STATUS_DIR_NAME
+    status_dir.mkdir(parents=True)
+    (launcher / OWNER_LOCK_NAME).write_text(_live_owner_record(os.getpid()), encoding="utf-8")
+    blind = tmp_path / "unreadable-procfs"
+    blind.mkdir()
+
+    round_ = launch(status_dir, "degrades", AI_ORCHESTRATOR_PROC_ROOT=str(blind))
+
+    reported = round_.err.read_text(encoding="utf-8", errors="replace")
+    assert "no scratch directory of its own could be claimed" in reported, reported
+    assert "running under the launching dispatch's attribution" in reported, reported
+    # It really did run on under the launcher's stamp: nothing under this root is a
+    # directory claimed by the round rather than taken out by a dispatch.
+    claimed = [
+        path
+        for path in scratch_root.glob(WATCHDOG_PATTERN)
+        if path != launcher and not (path / "pid").exists()
+    ]
+    assert claimed == [], claimed
+
+    Rendezvous.at(tmp_path, "degrades").let_go()
+    settled = _await_result(tmp_path / "runs" / "degrades" / "round-01" / "result.json")
     assert settled["state"] == "complete"

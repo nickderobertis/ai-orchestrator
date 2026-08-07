@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError
-from .detach import reattribute_successor, run_detached
+from .detach import run_successor
 from .journal import open_journal
 from .plan import PlanError
 from .provider_health import failure_rollups
@@ -358,8 +358,7 @@ def main_cli(argv: list[str] | None = None) -> int:
     a round too, and a continuation killed by the sweep behind its launcher leaves the
     same ledger saying a dead run is still working.
     """
-    reattribute_successor("next-round")
-    return run_detached(main, argv, "next-round")
+    return run_successor(main, argv, "next-round")
 
 
 if __name__ == "__main__":  # pragma: no cover

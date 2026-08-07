@@ -36,7 +36,7 @@ from .channel import (
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_mapping
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
-from .detach import reattribute_successor, run_detached
+from .detach import run_successor
 from .dispatch import (
     DispatchError,
     Report,
@@ -1821,14 +1821,8 @@ def print_continuation(
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    """`just run-plan` process entry point: outlive the dispatch that launched it.
-
-    Both halves, in the one order that works: re-attribution replaces this process
-    image, so it has to happen before the fork that would otherwise leave a round owner
-    the ``exec`` never reaches.
-    """
-    reattribute_successor("run-plan")
-    return run_detached(main, argv, "run-plan")
+    """`just run-plan` process entry point: outlive the dispatch that launched it."""
+    return run_successor(main, argv, "run-plan")
 
 
 if __name__ == "__main__":  # pragma: no cover

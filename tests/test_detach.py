@@ -25,17 +25,8 @@ from pathlib import Path
 import pytest
 
 import orchestrator.detach as detach
-from orchestrator.detach import (
-    CRASHED,
-    SUCCESSOR_ENV,
-    reattribute_successor,
-    run_detached,
-)
+from orchestrator.detach import CRASHED, SUCCESSOR_ENV, run_detached, run_successor
 from orchestrator.scratch import AGENT_STATUS_DIR_ENV
-
-
-def _never_called(*_args: object, **_kwargs: object) -> None:
-    raise AssertionError("re-attribution took a path it had no business taking")
 
 
 def test_detached_round_leads_its_own_session_and_relays_its_exit_code(tmp_path: Path) -> None:
@@ -150,59 +141,74 @@ def test_the_deliberate_fork_is_silent_while_every_other_fork_still_warns() -> N
 
 
 # Re-attribution's own `exec` is proven by `tests/e2e/test_successor_survival_e2e.py`,
-# because a process entry point is the only place it can be called: it replaces the
-# process image, and calling it anywhere else restarts that program — here, pytest.
-# What is left are the three ways it decides *not* to exec, each of which leaves a
-# round running under an attribution somebody has to be able to reason about.
+# because the forked round is the only place it can happen: it replaces that process
+# image, and a fork made from a test that then `exec`ed would restart the test runner.
+# What is left is the decision `run_successor` makes before any of that — which of its
+# three shapes this invocation is — because getting it wrong either loses the round's
+# attribution or re-`exec`s a process that was never launched to own anything.
 
 
-def test_a_process_no_dispatch_started_is_left_exactly_as_it_was(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_launch_no_dispatch_started_asks_for_no_re_attribution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """`just run-plan` from a shell has no launcher to be misattributed to."""
     monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
     monkeypatch.delenv(SUCCESSOR_ENV, raising=False)
-    monkeypatch.setattr(detach, "claim_successor_scratch_directory", _never_called)
+    asked = _recording_run_detached(monkeypatch, tmp_path)
 
-    reattribute_successor("run-plan")
+    assert run_successor(lambda _argv: 4, None, "run-plan") == 4
+    assert asked == [False]
 
-    assert AGENT_STATUS_DIR_ENV not in os.environ
 
-
-def test_the_re_execed_side_claims_its_directory_and_stops_passing_the_sentinel_on(
+def test_a_launch_from_inside_a_dispatch_asks_the_round_to_re_attribute(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A successor under a successor must attribute to itself, not inherit the claim."""
-    claimed = tmp_path / "orchestrator-watchdog-mine" / "agent"
-    monkeypatch.setenv(SUCCESSOR_ENV, "run-plan")
-    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(claimed))
-    monkeypatch.setattr(detach, "claim_successor_scratch_directory", _never_called)
-    monkeypatch.setattr(detach, "_claimed", None)
-
-    reattribute_successor("run-plan")
-
-    assert detach._claimed == claimed
-    # Still stamped, so everything below inherits the attribution; no longer marked as
-    # already-attributed, so a `repo-recover` this round starts takes one of its own.
-    assert os.environ[AGENT_STATUS_DIR_ENV] == str(claimed)
-    assert SUCCESSOR_ENV not in os.environ
-
-
-def test_a_claim_that_could_not_be_made_runs_unattributed_rather_than_misattributed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Losing the sweep's reach beats keeping the launcher's stamp and being reaped.
-
-    Nothing execs here, so the round goes on to run under the stamp it inherited — the
-    one condition this whole mechanism cannot repair, and the reason it is reported
-    rather than raised.
-    """
-    launcher = tmp_path / "orchestrator-watchdog-launcher" / "agent"
-    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(launcher))
+    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(tmp_path / "orchestrator-watchdog-them" / "agent"))
     monkeypatch.delenv(SUCCESSOR_ENV, raising=False)
-    monkeypatch.setattr(detach, "claim_successor_scratch_directory", lambda: None)
-    monkeypatch.setattr(os, "execve", _never_called)
+    asked = _recording_run_detached(monkeypatch, tmp_path)
 
-    reattribute_successor("repo-recover")
+    assert run_successor(lambda _argv: 0, None, "repo-recover") == 0
+    assert asked == [True]
 
-    assert os.environ[AGENT_STATUS_DIR_ENV] == str(launcher)
+
+def test_the_re_execed_round_owns_the_work_without_forking_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """It already leads its own session and is already stamped; forking would be a loop."""
+    mine = tmp_path / "orchestrator-watchdog-mine" / "agent"
+    monkeypatch.setenv(SUCCESSOR_ENV, "run-plan")
+    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(mine))
+    _recording_run_detached(monkeypatch, tmp_path, refuse=True)
+
+    def entry(_argv: list[str] | None) -> int:
+        raise RuntimeError("the round's own failure")
+
+    # Mapped rather than raised, for the same reason the forked side maps it: a crash
+    # reported as the round's own `1` reads as an unfinished round.
+    assert run_successor(entry, None, "run-plan") == CRASHED
+    # Scrubbed, so a `repo-recover` this round starts claims a directory of its own
+    # instead of reading the marker as "somebody already did".
+    assert SUCCESSOR_ENV not in os.environ
+    assert os.environ[AGENT_STATUS_DIR_ENV] == str(mine)
+
+
+def _recording_run_detached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, refuse: bool = False
+) -> list[bool]:
+    """Record what `run_successor` asks the fork for, without making one.
+
+    The fork itself is covered above and by the journeys; what these need is the
+    argument, and a real fork here would run each assertion twice.
+    """
+    asked: list[bool] = []
+
+    def recorded(entry: object, argv: object, label: object, *, reattribute: bool = False) -> int:
+        if refuse:
+            raise AssertionError("the re-execed round forked instead of owning the work")
+        asked.append(reattribute)
+        # `entry` is typed `object` so this stands in for `run_detached` whatever it is
+        # handed; the call is what the real one makes, and only its type is unprovable.
+        return entry(argv)  # type: ignore[operator]
+
+    monkeypatch.setattr(detach, "run_detached", recorded)
+    return asked

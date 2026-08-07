@@ -50,6 +50,7 @@ from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops, provider_h
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 from orchestrator.harnesses import HARNESS_SELECTION_ENV
+from orchestrator.scratch import AGENT_STATUS_DIR_ENV
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
@@ -129,6 +130,27 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in tuple(os.environ):
         if key.startswith(CHANNEL_ENV_PREFIX):
             monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dispatch_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the enclosing dispatch's ownership stamp out of the suite's own processes.
+
+    Every worker verifies itself by running this suite from inside a dispatch, so the
+    suite inherits that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` — and anything it
+    starts inherits it in turn. Two behaviors then depend on where the suite happens to
+    be running rather than on what a test states: a `just run-plan` re-attributes itself
+    to a scratch directory of its own (`orchestrator.detach.run_successor`) only when a
+    stamp is there to leave, and the sweep's reaper claims a process only when one is.
+    Both would answer differently for a developer running the suite from a shell than
+    for the gate that has to pass, which is the one difference a suite may never have.
+
+    A test that is *about* the stamp states it — `tests/e2e/test_successor_survival_e2e.py`
+    launches under one deliberately, and `process_tree.spawn_reparented_leaving` sets the
+    exact one it means. The same rule as the comparison identity below: a test's
+    environment is the test's to state.
+    """
+    monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

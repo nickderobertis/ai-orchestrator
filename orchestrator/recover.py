@@ -16,7 +16,7 @@ from pathlib import Path
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError
 from .coordination import git_lock_identity
-from .detach import reattribute_successor, run_detached
+from .detach import run_successor
 from .dispatch import Report, dispatch, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .lifecycle import (
@@ -607,8 +607,7 @@ def main_cli(argv: list[str] | None = None) -> int:
     gate had already gone green were terminated here, once by the launching turn's
     teardown and once by the sweep that ran when that step settled.
     """
-    reattribute_successor("repo-recover")
-    return run_detached(main, argv, "repo-recover")
+    return run_successor(main, argv, "repo-recover")
 
 
 if __name__ == "__main__":  # pragma: no cover

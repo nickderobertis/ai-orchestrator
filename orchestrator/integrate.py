@@ -31,7 +31,7 @@ from typing import Literal
 
 from . import gitops
 from .coordination import git_lock_identity
-from .detach import reattribute_successor, run_detached
+from .detach import run_successor
 from .lifecycle import _default_title
 from .merge_queue import merge_queue_turn
 from .provenance import attestation_trailers, unattested_incomplete
@@ -355,8 +355,7 @@ def main_cli(argv: list[str] | None = None) -> int:
     integration train runs each candidate's gate and then advances a base branch, so a
     death partway through leaves some candidates published and the rest not.
     """
-    reattribute_successor("integrate")
-    return run_detached(main, argv, "integrate")
+    return run_successor(main, argv, "integrate")
 
 
 if __name__ == "__main__":  # pragma: no cover

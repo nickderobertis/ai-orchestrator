@@ -35,7 +35,6 @@ from orchestrator.scratch import (
     orphaned_dispatch_processes,
     owned_scratch_directory,
     processes_stamped_for,
-    record_successor_owner,
     require_scratch_capacity,
     sweep_scratch,
     watchdog_has_a_live_owner,
@@ -1006,12 +1005,11 @@ def test_a_finished_dispatchs_leaving_is_terminated_where_no_parentage_remains(
 
 
 # What the sweeper is allowed to conclude about a directory a successor claimed for
-# itself. The journey is `tests/e2e/test_successor_survival_e2e.py`; these are the
-# three states that directory passes through, each of which the sweeper meets on its
-# own and only one of which authorizes anything.
+# itself. The journey is `tests/e2e/test_successor_survival_e2e.py`; these are the two
+# states that directory is ever in, only one of which authorizes anything.
 
 
-def test_a_successor_directory_is_retained_before_and_after_its_owner_records_itself(
+def test_a_successor_directory_is_retained_while_the_process_that_claimed_it_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
@@ -1019,34 +1017,25 @@ def test_a_successor_directory_is_retained_before_and_after_its_owner_records_it
     assert status_dir is not None
     directory = status_dir.parent
     assert status_dir.name == "agent" and directory.name.startswith("orchestrator-watchdog-")
-
-    # Before the forked owner records itself there is no owner record at all, and the
-    # claim that covers the gap is the creating process's pid — which is this one.
-    assert not (directory / OWNER_LOCK_NAME).exists()
-    assert sweep_scratch(tmp_path).removed == ()
-    assert sweep_scratch(tmp_path).watchdog_retained == (directory,)
-
-    assert record_successor_owner(status_dir) is True
+    # The claim names the claiming process, because an `exec` carries a pid and its
+    # start token across unchanged: what is recorded here still describes the process
+    # working in the tree afterwards.
     assert (directory / OWNER_LOCK_NAME).read_text(encoding="utf-8").split()[0] == str(os.getpid())
+
+    assert sweep_scratch(tmp_path).removed == ()
     assert sweep_scratch(tmp_path).watchdog_retained == (directory,)
 
 
 def test_a_successor_directory_is_reclaimed_once_the_process_it_named_is_gone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both states it can die in, because a leak that outlives one is never reaped."""
+    """A successor's leavings must become reapable, or the sweep loses a whole family."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    before_recording = claim_successor_scratch_directory()
-    after_recording = claim_successor_scratch_directory()
-    assert before_recording is not None and after_recording is not None
-    record_successor_owner(after_recording)
-    for directory in (before_recording.parent, after_recording.parent):
-        (directory / "pid").write_text("999999999", encoding="utf-8")
-    (after_recording.parent / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    status_dir = claim_successor_scratch_directory()
+    assert status_dir is not None
+    (status_dir.parent / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
 
-    removed = sweep_scratch(tmp_path).removed
-
-    assert set(removed) == {before_recording.parent, after_recording.parent}
+    assert sweep_scratch(tmp_path).removed == (status_dir.parent,)
 
 
 def test_a_successor_is_not_a_dispatch_the_live_views_report(
@@ -1062,7 +1051,6 @@ def test_a_successor_is_not_a_dispatch_the_live_views_report(
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     status_dir = claim_successor_scratch_directory()
     assert status_dir is not None
-    record_successor_owner(status_dir)
 
     assert watchdog_has_a_live_owner(status_dir.parent) is False
     with owned_scratch_directory() as dispatched:

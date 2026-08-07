@@ -830,10 +830,13 @@ Escaping the launching turn's *signals* is only half of it. Everything a dispatc
 starts carries that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` stamp, and once the
 launching step settles the scratch sweep reads that stamp as proof of a leaked tree
 and terminates what carries it — a contract that is right for real leaks and was
-wrong for these. So a **launched round or publication driver re-attributes itself
-before it forks**: `just run-plan`, `just next-round`, `just repo-recover`, and `just
-integrate` each take a scratch directory of their own and `exec` under it, so the
-sweep judges them by their own liveness rather than by their launcher's. See
+wrong for these. So a **launched round or publication driver re-attributes itself as
+part of forking**: in `just run-plan`, `just next-round`, `just repo-recover`, and
+`just integrate`, the forked round takes a scratch directory of its own and `exec`s
+under it, so the sweep judges it by its own liveness rather than by its launcher's.
+The relaying parent deliberately keeps the launcher's stamp — it outlives the round
+by the moment it takes to collect the exit status, and a parent stamped for the
+round's directory would spend exactly that moment looking like a leak. See
 [The successor contract](repo-lifecycle.md#the-successor-contract) for what the
 sweeper is then allowed to conclude, and why an `exec` is the only thing that works.
 The two protections are independent and both are needed: without the fork a round
