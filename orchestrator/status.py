@@ -63,6 +63,10 @@ class LedgerState:
     run_id: runs.RunId
     round: int
     summary: str
+    #: Whether the round that owns this branch is still executing. A checkout
+    #: outlives its round, so naming the round without this reads as live work when
+    #: the round is long over. See `_branch_rounds`.
+    live: bool
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,8 @@ def _settled_nodes(runs_dir: Path, run_id: str) -> dict[tuple[str, str], NodeSta
         # check comes first because membership alone would raise about hashability
         # rather than degrade, which is the one thing this view must not do.
         known = isinstance(recorded, str) and recorded in TERMINAL_NODE_STATES
+        # `cast` because membership in a `Literal`'s value set is checked above and no
+        # narrowing form expresses that; the check, not the cast, is the guarantee.
         status = cast(NodeState, recorded) if known else "done"
         settled[(str(event.round), str(event.node))] = status
     return settled
@@ -213,6 +219,8 @@ class InFlightDispatch:
         )
 
 
+# `Any`: journal detail is open persisted JSON whose keys vary by event kind, so the
+# value is checked here rather than typed at the parameter.
 def _persona(detail: Mapping[str, Any]) -> str | None:
     value = detail.get("persona")
     return value if isinstance(value, str) and value else None
@@ -350,23 +358,106 @@ def _ref_exists(project: Path, ref: str) -> bool:
     return True
 
 
-def _ledger_for_branch(runs_dir: Path, branch: str | None) -> LedgerState | None:
-    if branch is None or not runs_dir.is_dir():
+def _journalled_branches(run_dir: Path) -> dict[int, set[str]]:
+    """Every branch each round of this run is recorded as cutting, from the journal.
+
+    The journal is the only record of a round that is *still executing*: it writes
+    `branch-discovered` as the workstream starts, where `result.json` appears only
+    once the round is over. Reading it is what lets this view attribute a worktree to
+    the round actually working in it, instead of to whichever finished round last
+    mentioned the branch.
+    """
+    found: dict[int, set[str]] = {}
+    try:
+        events = read_events(run_dir / JOURNAL_NAME)
+    except (ConfigError, OSError):
+        return {}
+    for event in events:
+        if event.kind != "branch-discovered":
+            continue
+        branch = event.detail.get("branch")
+        if isinstance(branch, str) and branch:
+            found.setdefault(event.round, set()).add(branch)
+    return found
+
+
+def _recorded_result(round_dir: Path) -> runs.GraphPayload | None:
+    """One round's recorded result, or None when it has none this view can read."""
+    path = round_dir / "result.json"
+    if not path.is_file():
         return None
-    matches: list[LedgerState] = []
-    for run_dir in runs_dir.iterdir():
-        latest = runs.latest_round(run_dir) if run_dir.is_dir() else None
-        if latest is None or not (latest[1] / "result.json").is_file():
-            continue
+    try:
+        return runs.as_result_payload(runs.load_mapping(path))
+    except (ConfigError, OSError):
+        return None
+
+
+def _outranks(candidate: LedgerState, current: LedgerState | None) -> bool:
+    """Whether ``candidate`` is the truer owner of a branch than ``current``.
+
+    A live round wins outright: one working in the checkout now beats any that
+    worked in it before. Among settled rounds the newest wins, which is the answer
+    the view gave before liveness was part of it.
+    """
+    if current is None:
+        return True
+    return (candidate.live, candidate.round, candidate.run_id) > (
+        current.live,
+        current.round,
+        current.run_id,
+    )
+
+
+def _branch_rounds(runs_dir: Path) -> dict[str, LedgerState]:
+    """The round that owns each branch, and whether that round is still executing.
+
+    Both halves come from live records rather than from residue. Ownership is the
+    round's own recorded result *or* its journalled `branch-discovered`, so a round
+    still in flight — which has written no result — can be recognised at all.
+    Liveness is the same rule the channel applies before it accepts a graph edit: a
+    round with a recorded result, or one no live owner holds, is over.
+
+    Built once for the whole view rather than per dispatch: a run's journal is the
+    only record of a round still in flight, and re-reading every one of them for
+    every recorded session would make this view cost their product.
+    """
+    owners: dict[str, LedgerState] = {}
+    if not runs_dir.is_dir():
+        return owners
+    for run_dir in sorted(runs_dir.iterdir()):
+        # A directory name is external filesystem input and becomes reported ledger
+        # state, so it is admitted only as a run id this ledger could have written.
         try:
-            payload = runs._as_result_payload(runs.load_mapping(latest[1] / "result.json"))
-        except (ConfigError, OSError):
+            run_id = runs.validate_run_id(run_dir.name) if run_dir.is_dir() else None
+        except ConfigError:
             continue
-        if any(item.get("branch") == branch for item in payload["results"].values()):
-            matches.append(
-                LedgerState(runs.RunId(run_dir.name), latest[0], runs.status_summary(payload))
-            )
-    return max(matches, default=None, key=lambda item: (item.round, item.run_id))
+        if run_id is None:
+            continue
+        journalled = _journalled_branches(run_dir)
+        for number, round_dir in runs.rounds(run_dir):
+            payload = _recorded_result(round_dir)
+            branches = set(journalled.get(number, set()))
+            if payload is not None:
+                branches.update(
+                    branch
+                    for item in payload["results"].values()
+                    if isinstance(branch := item.get("branch"), str) and branch
+                )
+            if not branches:
+                continue
+            finished = (round_dir / "result.json").is_file()
+            live = not finished and runs.round_appears_in_flight(round_dir)
+            if payload is not None:
+                summary = runs.status_summary(payload)
+            elif finished:
+                summary = "result unreadable"
+            else:
+                summary = "in flight" if live else "no result recorded"
+            state = LedgerState(run_id, number, summary, live)
+            for branch in branches:
+                if _outranks(state, owners.get(branch)):
+                    owners[branch] = state
+    return owners
 
 
 def collect(
@@ -387,6 +478,9 @@ def collect(
     # sessions: a run with twenty dispatches must not re-read its journal twenty
     # times to answer the same question about it.
     settled: dict[str, dict[tuple[str, str], NodeState]] = {}
+    # One pass over the ledger for the whole view, keyed by branch: the round that
+    # owns a branch is a fact about the runs root, not about the session asking.
+    owners = _branch_rounds(runs_dir)
     for session in history.worker_sessions(oneharness_bin=oneharness_bin):
         if run_id is not None and session.labels.get(RUN_LABEL) != run_id:
             continue
@@ -431,7 +525,7 @@ def collect(
                 branch=branch,
                 base=git.base if git else None,
                 commits=git.commits if git else [],
-                ledger=_ledger_for_branch(runs_dir, branch),
+                ledger=owners.get(branch) if branch is not None else None,
             )
         )
     return result
@@ -492,9 +586,10 @@ def _human(
         else:
             lines.append("  Branch: unavailable (worktree/branch is gone)")
         if task.ledger:
+            retained = "" if task.ledger.live else "round ended; worktree retained — "
             lines.append(
                 f"  Round: {task.ledger.run_id} round-{task.ledger.round:02d} — "
-                f"{task.ledger.summary}"
+                f"{retained}{task.ledger.summary}"
             )
             lines.append(
                 f"  Results: just results {task.ledger.run_id}; per-node detail is listed there"
@@ -504,6 +599,8 @@ def _human(
     return "\n".join(lines)
 
 
+# `Any`: this is `--format json` output, an open mapping of already-validated fields
+# on its way to `json.dumps`, not a type this view may narrow.
 def _json_value(task: TaskStatus) -> dict[str, Any]:
     value = asdict(task)
     value["commits"] = [{"sha": commit.sha, "subject": commit.subject} for commit in task.commits]

@@ -139,8 +139,61 @@ verify or authoring work may run longer than four hours.
 `{"status":"running","surface":null}`; a settled run returns
 `{"status":"finished"}`. `channel-reply` accepts a reply file or reads JSON from
 stdin when its file argument is omitted. Both sides may exit and reattach between
-messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
-`down.fifo`, `channel.json`, and the last `planner-verdict.json`.
+messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo` (the
+surface endpoint), the durable reply queue below, `channel.json`, and the last
+`planner-verdict.json`.
+
+### A planner writes a reply once
+
+**Acceptance means delivery for a reply, exactly as it does for an edit.** A reply
+`channel-reply` accepts is appended to `runs/<run-id>/channel/replies.jsonl` and
+claimed from there by whichever reader reaches it next — the reconciler's receiver
+while a round is executing, the supervisor relay at a boundary — each claim
+advancing `replies-cursor.json` under the queue lock, so one reply reaches exactly
+one reader and no reader can lose it. Nothing has to be listening at the moment the
+planner writes.
+
+The command reports which of the two true things happened, on stdout:
+
+```json
+{"reply": 3, "state": "delivered"}
+{"reply": 4, "state": "queued"}
+```
+
+`delivered` means a reader claimed it before the command exited; `queued` means it
+is durable and waiting for the next read. Both are success — the reply survives
+either way, and `queued` is not an instruction to resend. The command does not wait
+out its `--timeout` to say so.
+
+Replies used to ride `down.fifo` alone, so acceptance depended on a live rendezvous
+and `channel-reply` failed with `channel rendezvous timed out` whenever nothing held
+that endpoint open. Whether it *did* was invisible from the planner's side: the
+reconciler's receiver polls for the whole of a round, so the same reply queued
+instantly mid-round and timed out at a round boundary while the orchestrator agent
+was mid-turn. Delivering one ruling took retry loops of up to ten attempts during
+live supervision on 2026-08-05, and one delivery window opened only after a stale
+surface was consumed. No reply class requires a rendezvous now.
+
+**One reply class is refused, immediately and by name.** A settled run has no reader
+left, now or later, so queuing a reply to it would park it where nothing drains it:
+
+```
+channel-reply: this run has settled, so nothing will ever read a reply to it; no
+reply was queued; check the run id and reply shape, then rerun the command
+```
+
+That is an exit-2 refusal on the spot rather than a timeout, and it is the same
+liveness verdict `channel-next` answers `{"status":"finished"}` on. A surface still
+awaiting an answer outranks it — a consumed surface (`planner-pending.json`) or a
+blocker preserved for the next reply-ready relay (`deferred-blocker.json`), which is
+the shape a cancelled round leaves. The run asked for that reply, so it is accepted
+whatever the liveness probe makes of the process that asked.
+
+Edit-envelope semantics are unchanged. Edits still validate against the live graph
+before anything is queued, still travel their own `commands.jsonl`, and
+`channel-reply` still waits for the reconciler's verdict and exits by [the edit
+table](#live-graph-edits) — the reply-state line is printed alongside that, not
+instead of it.
 
 ### Planner-update pacemaker
 
@@ -375,8 +428,9 @@ stays legal at a round boundary.
 Accepted edits are appended to `runs/<run-id>/channel/commands.jsonl` and drained
 from there by the reconciler, which advances `commands-cursor.json`. That durable
 queue is what makes acceptance mean delivery: both `relay_supervisor` and the
-reconciler's own receiver read the down FIFO, so a command riding only the frame
-reached the graph or not depending on which reader won. The reconciler then
+reconciler's own receiver claim the replies a planner sends, so a command riding
+only the reply reached the graph or not depending on which reader won — and the
+relay has no graph to apply one to. The reconciler then
 answers each claimed command in `command-outcomes.jsonl`, and `channel-reply`
 waits for that verdict before it exits:
 
@@ -745,6 +799,28 @@ prints the concrete full-artifact paths for failures. A run containing failed
 nodes is still a successful results lookup; only an invalid invocation exits
 non-zero. `just status` gives the same next step when a worker maps to a ledger
 round.
+
+**A checkout outlives its round, and `just status` says which it is.** The `Round:`
+line names the round that owns a worker's branch and whether that round is still
+executing:
+
+```
+  Round: harness-fixes round-06 — in flight
+  Round: one-way-dispatch-3 round-05 — round ended; worktree retained — 1 failed
+```
+
+Both halves come from live records. Ownership is the round's own recorded result
+*or* its journalled `branch-discovered`, so a round still in flight — which has
+written no result — is recognised at all, and a live match outranks a settled one.
+Liveness is the same rule the channel applies before accepting a graph edit: a
+round with a recorded result, or one no live owner holds, is over. The JSON form
+carries it as `ledger.live`.
+
+Only finished rounds used to be searched, so a branch could only ever be matched to
+a round that was already over — and was then named as if it were the work in
+progress. A worktree is retained past its round (for a resume, or a recovery), so
+during the be48 recovery `just status` attributed a live checkout's activity to a
+`round-05` that had settled hours earlier, and the planner acted on it.
 
 `just status <run-id>` reports a dispatch that has finished no turn yet. oneharness
 writes one history record per *completed* turn and dispatches here routinely spend
@@ -1470,7 +1546,7 @@ before: context rides alongside them and changes none of them.
   the strict typed ids its details point at.
 - `orchestrator/monitor.py` — the four-source aggregation, dedup, and the
   `just monitor` stream/exit contract.
-- `orchestrator/channel.py` — FIFO transport, surface/reply validation, and the
-  live `relay_supervisor` command judge.
+- `orchestrator/channel.py` — the surface FIFO, the durable reply and command
+  queues, surface/reply validation, and the live `relay_supervisor` command judge.
 - `orchestrator/dispatch.py` — one worker subprocess, plus `launch_orchestrator`'s
   detached orchestrator path and split-provider wiring.

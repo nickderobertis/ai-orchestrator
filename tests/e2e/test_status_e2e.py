@@ -20,6 +20,7 @@ from pathlib import Path
 from history_store import write_worker_session as _record
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.graph import main as main_plan
 from orchestrator.journal import open_journal
 from orchestrator.labels import graph_labels
 from orchestrator.next_round import main_runs
@@ -400,6 +401,183 @@ def test_status_reports_every_settled_node_as_the_journal_recorded_it(
         for node, status in labelled.items():
             assert f"  {node}  " in human.stdout
             assert f"({status};" in human.stdout
+    finally:
+        for worktree in worktrees:
+            workspace.remove_worktree(ref, worktree)
+
+
+def _preserved_checkout(workspace_root: Path, branch: str) -> Path:
+    """Check the branch a settled round preserved back out, where it was preserved.
+
+    This is what picking that work up again does — a retry's resume and `just
+    repo-recover` both put the preserved branch back into a worktree of the run
+    clone that still holds it. The checkout then outlives the round that made the
+    branch, which is the whole state this view has to describe honestly.
+    """
+    clone = next(path for path in sorted(workspace_root.rglob(".clone")) if path.is_dir())
+    assert gitops.branch_exists(clone, branch)
+    return gitops.worktree_add_existing(clone, clone.parent / "recovered", branch)
+
+
+def test_status_never_reports_a_settled_round_as_a_worktrees_live_activity(
+    tmp_path: Path, bare_origin, command_base, personas_dir
+) -> None:
+    """A checkout outlives its round, and this view must say which it is.
+
+    The round here is real: `run-plan` drives a lifecycle node that commits and then
+    fails, so its branch is preserved for recovery exactly as a stopped workstream's
+    is, and its round settles with a recorded result. Checking that branch back out
+    is what picking the work up again does, and a checkout is the filesystem's word
+    for "running" — so the settled round must not be named as its activity.
+
+    A round that *is* executing is the other half: it has written no result, so it
+    is recognised from the run's own journal and reported without the retention
+    clause. Both verdicts come from live records — the ledger's own round state —
+    rather than from whichever finished round last mentioned the branch.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-retained")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    workspace_root = tmp_path / "workspace"
+    plan_path = tmp_path / "retained.plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "name": "retained",
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-change: preserve this partial attempt",
+                        "max_turns": 2,
+                        "recorded_gate": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        main_plan(
+            [
+                str(plan_path),
+                "--run",
+                "retained-run",
+                "--runs-dir",
+                str(runs_dir),
+                "--base",
+                str(command_base()),
+                "--persona-dir",
+                str(personas_dir),
+                "--workspace",
+                str(workspace_root),
+                "--format",
+                "json",
+            ]
+        )
+        == 1
+    )
+    settled = json.loads((runs_dir / "retained-run" / "round-01" / "result.json").read_text())
+    branch = settled["results"]["change"]["branch"]
+    worktree = _preserved_checkout(workspace_root, branch)
+    try:
+        # The dispatch's own history session, pointed at the checkout that outlived
+        # the round — the combination that made the settled round read as live work.
+        history_dir = tmp_path / "history"
+        store = history_dir / "retained-project"
+        store.mkdir(parents=True)
+        _record(store / "change-20260805T120000Z-1.jsonl", project=worktree, name="change")
+
+        shown = _run(history_dir, workspace_root, runs_dir)
+        assert shown.returncode == 0, shown.stderr
+        assert "Round: retained-run round-01 — round ended; worktree retained" in shown.stdout
+
+        encoded = _run(history_dir, workspace_root, runs_dir, "--format", "json")
+        assert encoded.returncode == 0, encoded.stderr
+        reported = json.loads(encoded.stdout)[0]
+        assert reported["running"] is True
+        assert reported["branch"] == branch
+        assert reported["ledger"]["run_id"] == "retained-run"
+        assert reported["ledger"]["live"] is False
+
+        # The other verdict, from a round that really is executing: claimed through
+        # the real ledger by this process, so its recorded owner is alive, and known
+        # to own the branch only through the journal a round in flight has written.
+        live_run = runs_dir / "live-run"
+        assert prepare_round(live_run, {"tasks": [{"id": "change", "task": "x"}]}).number == 1
+        open_journal(live_run, RunId("live-run"), 1).append(
+            "branch-discovered", node=NodeId("change"), detail={"repo": "local", "branch": branch}
+        )
+
+        live = _run(history_dir, workspace_root, runs_dir, "--format", "json")
+        assert live.returncode == 0, live.stderr
+        assert json.loads(live.stdout)[0]["ledger"] == {
+            "run_id": "live-run",
+            "round": 1,
+            "summary": "in flight",
+            "live": True,
+        }
+        human = _run(history_dir, workspace_root, runs_dir)
+        assert "Round: live-run round-01 — in flight" in human.stdout
+        assert "worktree retained" not in human.stdout
+    finally:
+        gitops.worktree_remove(worktree.parent / ".clone", worktree)
+
+
+def test_status_still_attributes_a_round_whose_result_it_cannot_read(
+    tmp_path: Path, bare_origin
+) -> None:
+    """A round with no readable result still owns its branch, and says so plainly.
+
+    Both halves are reported through the real `just status`. Dropping the branch
+    instead would put the checkout back to reading as unattached work, which is the
+    same blindness a stale attribution causes from the other direction — so the
+    round is named, marked ended, and described by the one thing left to say.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-damaged")
+    Registry().register(str(canonical), workflow="local")
+    workspace_root = tmp_path / ".ai-orchestrator" / "workspaces"
+    workspace = Workspace(workspace_root, resolver=lambda _: canonical)
+    ref = normalize_repo(str(origin))
+    workspace.ensure_clone(ref)
+    runs_dir = tmp_path / "runs"
+    history_dir = tmp_path / "history"
+    store = history_dir / "damaged-project"
+    store.mkdir(parents=True)
+
+    worktrees: list[Path] = []
+    for index, (run_id, damaged) in enumerate((("torn", True), ("stopped", False))):
+        branch = f"agent/{run_id}"
+        worktrees.append(workspace.worktree(ref, branch, base="origin/main"))
+        _record(
+            store / f"{run_id}-2026080{index}T120000Z-{index}.jsonl",
+            project=worktrees[-1],
+            name=run_id,
+        )
+        open_journal(runs_dir / run_id, RunId(run_id), 1).append(
+            "branch-discovered", node=NodeId("change"), detail={"repo": "local", "branch": branch}
+        )
+        round_dir = runs_dir / run_id / "round-01"
+        round_dir.mkdir(parents=True, exist_ok=True)
+        if damaged:
+            # A round that finished and whose result was torn: the file is there and
+            # this view cannot read it, which is not the same as no result at all.
+            (round_dir / "result.json").write_text("not: [valid", encoding="utf-8")
+
+    try:
+        shown = _run(history_dir, workspace_root, runs_dir)
+        assert shown.returncode == 0, shown.stderr
+        assert "Round: torn round-01 — round ended; worktree retained — result unreadable" in (
+            shown.stdout
+        )
+        assert "Round: stopped round-01 — round ended; worktree retained — no result recorded" in (
+            shown.stdout
+        )
     finally:
         for worktree in worktrees:
             workspace.remove_worktree(ref, worktree)

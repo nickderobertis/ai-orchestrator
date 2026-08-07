@@ -38,7 +38,6 @@ from orchestrator.channel import (
     CHANNEL_RUN_ID_ENV,
     create_channel,
     read_message,
-    write_message,
 )
 from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, run_onejudge
@@ -561,11 +560,17 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
         "blocking": True,
     }
     wedged.let_go()
-    write_message(
-        channel / "down.fifo",
-        {"completion": False, "message": "stop", "reason": "budget exhausted"},
-        timeout=e2e_timeout(5),
+    # Through the planner's own recipe, which needs no rendezvous: the round that
+    # raised this blocker has already cancelled its workers.
+    answered = subprocess.run(
+        ["just", "channel-reply", "round-budget", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        input=json.dumps({"completion": False, "message": "stop", "reason": "budget exhausted"}),
+        text=True,
+        capture_output=True,
+        check=False,
     )
+    assert answered.returncode == 0, answered.stderr
     stdout, stderr = process.communicate(timeout=e2e_timeout(5))
     assert process.returncode == 1, (stdout, stderr)
 
