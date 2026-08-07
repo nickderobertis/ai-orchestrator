@@ -855,9 +855,16 @@ same cores and the same advisory locks, and what fails is the handshake — a
 that arrives a second late — on a subset that rotates per run. That is the one
 constraint this suite has that lives *between* tests rather than inside one, which
 is why no assertion inside any of them can express it and why the answer is the
-distribution rather than a longer timeout. The bound on what it costs is already
-measured above: `--dist loadfile` — every file a group — was 331s against `load`'s
-322s, and this groups the journeys of that shape rather than every file.
+distribution rather than a longer timeout.
+
+What it costs is the group's own serial time, because one worker runs all of it:
+measured at `-n 1` on a quiet box, 40s for the 28 members it had when the guard
+below only knew about multiprocessing queues, and 221s for the 47 it has now. That
+raises this worker's floor above the tier's longest single test (about 143s) without
+reaching the tier's own wall clock (311s for `just test` forced fresh), so the group
+is the binding floor for one worker rather than the critical path. It buys back far
+more than it spends: three publications of one branch were rejected by journeys of
+this shape, each costing a verify cycle of an hour or more.
 
 The transport is not the shape, and reading it as one cost three publications.
 `tests/e2e/test_contention_e2e.py` declares for its whole module and was for a while
