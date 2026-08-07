@@ -82,7 +82,14 @@ def _oneharness_bin(tmp_path: Path, store: Path) -> Path:
     return binary
 
 
-def _launch(plan: Path, runs: Path, base: Path, onejudge_bin: str, **env: str) -> str:
+def _launch(
+    plan: Path,
+    runs: Path,
+    base: Path,
+    onejudge_bin: str,
+    heartbeat: str = "0.5",
+    **env: str,
+) -> str:
     launched = subprocess.run(
         [
             "just",
@@ -96,7 +103,7 @@ def _launch(plan: Path, runs: Path, base: Path, onejudge_bin: str, **env: str) -
             "--onejudge-bin",
             onejudge_bin,
             "--heartbeat-interval",
-            "0.5",
+            heartbeat,
             "--skill-command",
             sys.executable,
             str(FAKE_BACKEND),
@@ -445,7 +452,17 @@ def test_a_driver_that_finished_its_loop_stops_reporting_itself(
         ),
         encoding="utf-8",
     )
-    run_id = _launch(plan, runs, _base(tmp_path), onejudge_bin, XDG_STATE_HOME=str(tmp_path / "st"))
+    # No pacemaker here: this journey is about the boundary surface and the reply that
+    # ends the loop, and a check-in queueing between the two would answer a surface the
+    # planner never read.
+    run_id = _launch(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat="600",
+        XDG_STATE_HOME=str(tmp_path / "st"),
+    )
 
     _drain(run_id, runs)
     subprocess.run(
