@@ -184,7 +184,11 @@ def test_a_worker_that_records_nothing_surfaces_to_the_planner_mid_round(
 
 
 def _run_plan(
-    tmp_path: Path, runs: Path, onejudge_bin: str, *extra: str
+    tmp_path: Path,
+    runs: Path,
+    onejudge_bin: str,
+    *extra: str,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Drive one round through the real recipe, which is where --stall-after lives."""
     plan = tmp_path / "threshold-plan.json"
@@ -214,10 +218,30 @@ def _run_plan(
             *extra,
         ],
         cwd=REPO_ROOT,
+        env={**os.environ, **(environment or {})},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(300),
     )
+
+
+def test_a_stall_threshold_exported_for_a_whole_run_is_refused_when_unusable(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """The environment is how a launch reaches every round of its run.
+
+    A value only the flag validated would leave a run watching nothing while every
+    round of it reported, by silence, that it was watching.
+    """
+    refused = _run_plan(
+        tmp_path,
+        tmp_path / "runs",
+        onejudge_bin,
+        environment={STALL_AFTER_ENV: "whenever"},
+    )
+
+    assert refused.returncode == 2, refused.stdout
+    assert STALL_AFTER_ENV in refused.stderr, refused.stderr
 
 
 def test_the_round_takes_its_stall_threshold_from_the_command_line(

@@ -89,6 +89,11 @@ class RetryPolicy:
         """The wait before attempt ``attempt + 1``, counting attempts from one."""
         return min(self.backoff * BACKOFF_FACTOR ** (attempt - 1), MAX_BACKOFF_SECONDS)
 
+    # llmlint: ignore[changed_behavior_has_e2e] The configured policy runs through
+    # the real recipes in tests/e2e/test_boundary_retry_e2e.py, which sets both
+    # variables. What stays unit-proven is the *fallback*: a value the environment
+    # cannot supply through any command, whose whole observable effect is that the
+    # retry still happens — which the journeys already assert with a usable value.
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> RetryPolicy:
         """The configured policy, falling back to the default for anything unusable.
@@ -130,6 +135,20 @@ class BoundaryAttempt:
     attempts: int
     reason: str
 
+    @classmethod
+    def of(
+        cls, *, at: float, role: str, attempt: int, attempts: int, reason: str
+    ) -> BoundaryAttempt:
+        """One attempt with its reason normalized, whichever side recorded it.
+
+        Both paths end in the same place — a `boundary-retried` detail in the run's
+        durable journal and a line on a planner's terminal — but only one of them
+        goes through the JSONL reader. A provider's exception text reaching the
+        in-process path unredacted and unbounded would be a credential in the
+        journal, so the cleaning lives here, where both callers pass through it.
+        """
+        return cls(at=at, role=role, attempt=attempt, attempts=attempts, reason=_clean(reason))
+
     def detail(self) -> dict[str, str | int | float]:
         return {
             "at": self.at,
@@ -140,10 +159,20 @@ class BoundaryAttempt:
         }
 
 
+def _clean(reason: str) -> str:
+    """One recorded reason, collapsed to a line, redacted, and bounded."""
+    return " ".join(redact(reason).split())[:MAX_REASON_CHARS]
+
+
 def attempts_log(run_dir: Path) -> Path:
     return run_dir / "orchestrator" / ATTEMPTS_LOG_NAME
 
 
+# llmlint: ignore[changed_behavior_has_e2e] The successful record and the fold that
+# reads it back run through two real `just run-plan` rounds and the real wrapper in
+# tests/e2e/test_boundary_retry_e2e.py. The failure here is an unwritable log — a
+# filesystem state a round cannot be asked for, whose whole contract is that
+# *nothing* observable changes, which is what the unit boundary asserts.
 def record_attempt(path: Path, attempt: BoundaryAttempt) -> None:
     """Append one retried attempt to the shared log, best effort.
 
@@ -201,15 +230,16 @@ def _parsed(line: str) -> BoundaryAttempt | None:
         or not isinstance(reason, str)
     ):
         return None
-    return BoundaryAttempt(
-        at=float(at),
-        role=role,
-        attempt=attempt,
-        attempts=attempts,
-        reason=" ".join(redact(reason).split())[:MAX_REASON_CHARS],
+    return BoundaryAttempt.of(
+        at=float(at), role=role, attempt=attempt, attempts=attempts, reason=reason
     )
 
 
+# llmlint: ignore[changed_behavior_has_e2e] The fold itself runs through a real
+# round in tests/e2e/test_boundary_retry_e2e.py. What stays unit-proven is what it
+# does with a log or cursor nothing here wrote — a corrupt line, an unreadable
+# cursor, more lines than one fold examines — each of which needs the file
+# hand-edited into a state no wrapper produces.
 def drain_attempts(run_dir: Path) -> list[BoundaryAttempt]:
     """Every attempt recorded since this run last folded, advancing the cursor.
 
@@ -278,7 +308,7 @@ def retry_boundary_request(
             if attempt >= policy.attempts or not retryable(exc):
                 raise
             report(
-                BoundaryAttempt(
+                BoundaryAttempt.of(
                     at=now(),
                     role=role,
                     attempt=attempt,

@@ -106,6 +106,37 @@ def test_a_retryable_failure_is_asked_again_and_reported() -> None:
     assert waited == [2.0, 4.0]
 
 
+def test_a_providers_own_words_are_redacted_and_bounded_before_the_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The in-process path reaches the same journal as the JSONL one.
+
+    Only one of the two goes through the file reader, so a refusal whose text
+    happened to echo a credential would have gone into the run's durable record
+    unredacted if the cleaning lived only there.
+    """
+    monkeypatch.setenv("ORCHESTRATOR_TEST_TOKEN", "sk-live-in-process-value")
+    reported: list[BoundaryAttempt] = []
+
+    with pytest.raises(RuntimeError):
+        retry_boundary_request(
+            lambda: (_ for _ in ()).throw(
+                RuntimeError("refused\n\tsk-live-in-process-value " + "x" * 400)
+            ),
+            role="check-in",
+            policy=RetryPolicy(attempts=2, backoff=0.0),
+            retryable=lambda _exc: True,
+            report=reported.append,
+            sleep=lambda _seconds: None,
+        )
+
+    (recorded,) = reported
+    assert "sk-live-in-process-value" not in recorded.reason
+    assert "<redacted:ORCHESTRATOR_TEST_TOKEN>" in recorded.reason
+    assert "\n" not in recorded.reason and "\t" not in recorded.reason
+    assert len(recorded.reason) <= MAX_REASON_CHARS
+
+
 def test_a_failure_the_caller_will_not_retry_is_raised_at_once() -> None:
     calls: list[int] = []
 
