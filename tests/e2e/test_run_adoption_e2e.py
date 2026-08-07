@@ -108,25 +108,33 @@ def reaped() -> Iterator[list[Path]]:
 
 
 def _orchestrate(
-    runs: Path, env: dict[str, str], onejudge_bin: str, *arguments: str
+    runs: Path, env: dict[str, str], *arguments: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [
-            "just",
-            "orchestrate",
-            *arguments,
-            "--detach",
-            "--runs-dir",
-            str(runs),
-            "--onejudge-bin",
-            onejudge_bin,
-        ],
+        ["just", "orchestrate", *arguments, "--detach", "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
         env=env,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(300),
     )
+
+
+def _launch(
+    runs: Path, env: dict[str, str], onejudge_bin: str, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """Start a run, naming the harness binary this suite's venv provides."""
+    return _orchestrate(runs, env, *arguments, "--onejudge-bin", onejudge_bin)
+
+
+def _adopt(runs: Path, env: dict[str, str], run_id: str) -> subprocess.CompletedProcess[str]:
+    """Adopt a run, passing nothing the adoption would have to read and drop.
+
+    Deliberately no `--onejudge-bin`: adoption replays the launch parameters the run
+    recorded — this suite's venv binary among them — and refuses a launch-only option
+    beside `--adopt` rather than silently ignoring it.
+    """
+    return _orchestrate(runs, env, "--adopt", run_id)
 
 
 # llmlint: ignore-block[tests_mirror_real_usage] No command produces this state, and
@@ -226,7 +234,7 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     stranger = _session_env(tmp_path, "session-another-planner")
     held = Rendezvous.at(tmp_path, "adoption")
 
-    launched = _orchestrate(
+    launched = _launch(
         runs,
         planner,
         onejudge_bin,
@@ -245,12 +253,12 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
 
     # A run another planner launched is refused by name, with no `--force` to get
     # past it: unlike a stop, adopting takes over ongoing work rather than ending it.
-    theirs = _orchestrate(runs, stranger, onejudge_bin, "--adopt", run_id)
+    theirs = _adopt(runs, stranger, run_id)
     assert theirs.returncode == 2, theirs.stdout
     assert "another planner" in theirs.stderr, theirs.stderr
 
     # And this planner's own run is refused while something is still driving it.
-    live = _orchestrate(runs, planner, onejudge_bin, "--adopt", run_id)
+    live = _adopt(runs, planner, run_id)
     assert live.returncode == 2, live.stdout
     assert "orchestrator process is still running" in live.stderr, live.stderr
 
@@ -271,12 +279,12 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     # run, with only the record the older build would not have written withheld.
     record = run_dir / "orchestrator" / "relaunch.json"
     record.replace(record.with_suffix(".withheld"))
-    unreplayable = _orchestrate(runs, planner, onejudge_bin, "--adopt", run_id)
+    unreplayable = _adopt(runs, planner, run_id)
     assert unreplayable.returncode == 2, unreplayable.stdout
     assert "no relaunch record" in unreplayable.stderr, unreplayable.stderr
     record.with_suffix(".withheld").replace(record)
 
-    adopted = _orchestrate(runs, planner, onejudge_bin, "--adopt", run_id)
+    adopted = _adopt(runs, planner, run_id)
     assert adopted.returncode == 0, adopted.stderr
     assert json.loads(adopted.stdout)["run_id"] == run_id
     _answer_and_await_the_report(run_id, runs)
