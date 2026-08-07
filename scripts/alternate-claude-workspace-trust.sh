@@ -89,7 +89,11 @@ mark_alternate_claude_trust() (
     return 1
   fi
   local -a trust_temporaries=()
-  # shellcheck disable=SC2329  # Invoked from the exit trap below, which shellcheck cannot follow.
+  # Both codes name the same diagnostic: shellcheck renamed it SC2329 after 0.10.x,
+  # which still reports it as SC2317. Naming only the newer one silently lints clean
+  # on the newer release and fails the lint tier on the older, since an unrecognized
+  # code is ignored rather than rejected — so the suppression has to carry both.
+  # shellcheck disable=SC2317,SC2329  # Invoked from the exit trap below, which shellcheck cannot follow.
   cleanup_trust_files() {
     (( ${#trust_temporaries[@]} > 0 )) || return 0
     local -a stale=("${trust_temporaries[@]}")
@@ -107,7 +111,7 @@ mark_alternate_claude_trust() (
     done
     trust_temporaries=("${kept[@]}")
   }
-  # shellcheck disable=SC2329  # Invoked by name as this subshell's EXIT trap handler.
+  # shellcheck disable=SC2317,SC2329  # Invoked by name as this subshell's EXIT trap handler.
   on_trust_exit() {
     local status=$?
     cleanup_trust_files || status=1
