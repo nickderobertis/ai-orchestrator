@@ -129,6 +129,12 @@ def _orchestrate(
     )
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] No command produces this state, and
+# that is the point of it: `just stop` deliberately lets each owner record its own
+# abandonment, while adoption exists for the state *nothing* got to record. So the
+# death is synthesized — from the run's own `status.json` records, read through the
+# same functions `just stop` reads them with, which is the closest an operator can
+# get. Everything either side of it is the real command surface.
 def _kill_the_whole_run_tree(run_dir: Path) -> None:
     """End the driver and everything below it the way a provider death leaves them.
 
@@ -147,6 +153,9 @@ def _kill_the_whole_run_tree(run_dir: Path) -> None:
             return
         time.sleep(0.05)
     raise AssertionError(f"processes outlived the kill: {sorted(tracked)}")
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
 
 
 def _alive(pid: ProcessId) -> bool:

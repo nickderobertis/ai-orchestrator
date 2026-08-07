@@ -1582,8 +1582,6 @@ def adopt_orchestrator(
     *,
     runs_dir: str | Path = "runs",
     heartbeat_interval: float | None = None,
-    launcher: str | None = None,
-    launcher_session_id: str | None = None,
 ) -> str:
     """Attach a fresh orchestrator process to an orphaned run, keeping its ledger.
 
@@ -1601,6 +1599,11 @@ def adopt_orchestrator(
     driver on one ledger is the race this whole harness is arranged to prevent. And a
     run with no relaunch record cannot be replayed at all, so it is refused rather
     than started on guessed parameters.
+
+    There is deliberately no launcher override here, unlike `launch_orchestrator`.
+    Provenance is the *run's*, recorded once when it was launched and unchanged by
+    who drives it; what this needs from the caller is only whether it is that
+    session, which is `caller_identity` — the same question `just stop` asks.
     """
     root = Path(runs_dir).resolve()
     validated = validate_run_id(run_id)

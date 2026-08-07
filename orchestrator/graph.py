@@ -1069,19 +1069,25 @@ def run_graph(
             age = wall - last
             if age < stall_after or stalls_reported.get(nid) == last:
                 continue
-            # llmlint: ignore[changed_behavior_has_e2e] The first quiet stretch is
-            # driven through the real recipe in tests/e2e/test_worker_stall_e2e.py.
-            # A *second* one needs a dispatch that publishes activity, goes quiet,
-            # publishes again, and goes quiet again — activity only the streaming
-            # agent wrapper writes, which the deterministic command provider every
-            # journey here dispatches through never produces. The re-report is one
-            # comparison against the timestamp already asserted on.
+            # llmlint: ignore-block[changed_behavior_has_e2e] The stall surface is
+            # driven through the real recipe in tests/e2e/test_worker_stall_e2e.py,
+            # on the branch a real journey can reach: a dispatch that has published
+            # nothing. Everything keyed on a *published* summary — the re-report
+            # after a second quiet stretch, and the "now <what> (N events, Ns ago)"
+            # phrasing — needs live activity, which only `scripts/oneharness-stream.py`
+            # writes and only for an oneharness agent turn; every journey here
+            # dispatches through the deterministic command provider, which publishes
+            # none. That publication has its own journey in
+            # tests/e2e/test_agent_stream_e2e.py and its reader is proven against
+            # real summaries in tests/test_activity.py; what is left here is one
+            # comparison and one call to `NodeActivity.describe`.
             stalls_reported[nid] = last
             heard = (
                 recent.describe(now=wall)
                 if recent is not None
                 else "nothing recorded since it was dispatched"
             )
+            # llmlint: ignore-end[changed_behavior_has_e2e]
             proposal_pump.propose(
                 nid,
                 f"no activity for {int(age)}s (threshold {stall_after:g}s); "
