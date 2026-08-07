@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,8 +16,16 @@ from orchestrator.journal import Detail, Event, EventKind, NodeId, RunId, StepId
 from orchestrator.monitor import DetailSnapshot, save_snapshot
 from orchestrator.read_model import InvalidRunId, ProjectionFailed, RunNotFound
 from orchestrator.runs import prepare_round
+from orchestrator.supervisory import (
+    DriverState,
+    SupervisoryCapture,
+    close_capture,
+    open_capture,
+    record_turn,
+)
 from orchestrator.timeline import (
     CONVERSATION_TURN_KIND,
+    HISTORY_WRITE_FAILURE_KIND,
     TimelineSpan,
     assemble,
     run_timeline,
@@ -639,3 +649,208 @@ def test_a_history_store_that_errors_degrades_to_no_conversations(tmp_path: Path
     served = run_timeline(runs, "demo", oneharness_bin=str(broken))
 
     assert [span["kind"] for span in served["spans"]] == ["round", "node"]
+
+
+def _capture(
+    run_dir: Path,
+    *,
+    session: str,
+    agent_role: str,
+    round_number: int | None = None,
+    started: float,
+    finished: float | None = None,
+    turns: tuple[str, ...] = (),
+    history_failure: str | None = None,
+) -> None:
+    """One supervisory capture, written exactly as the dispatch layer writes it."""
+    open_capture(
+        run_dir,
+        session=session,
+        agent_role=agent_role,
+        persona=agent_role,
+        round_number=round_number,
+        started_at=started,
+    )
+    for index, text in enumerate(turns):
+        record_turn(run_dir, session, text, at=started + index + 1)
+    if finished is not None:
+        close_capture(
+            run_dir,
+            session,
+            status="failed" if history_failure else "completed",
+            history_failure=history_failure,
+            finished_at=finished,
+        )
+
+
+def test_a_supervisory_session_history_lost_is_served_from_its_local_capture() -> None:
+    """The tier whose harness refused the write is still a span, with the refusal on it."""
+    events = [_event(1, "round-started", offset=0), _event(2, "node-started", node="api", offset=0)]
+    captures = [
+        SupervisoryCapture(
+            session="orchestrator-demo",
+            agent_role="orchestrator",
+            started_at="2026-07-19T00:00:10+00:00",
+            status="running",
+            turns=({"at": "2026-07-19T00:00:40+00:00", "text": "driving round 1"},),
+        ),
+        SupervisoryCapture(
+            session="check-in-demo-1",
+            agent_role="check-in",
+            started_at="2026-07-19T00:01:00+00:00",
+            finished_at="2026-07-19T00:01:30+00:00",
+            status="failed",
+            round=1,
+            history_failure="new history run lacks complete v1.0 telemetry",
+        ),
+    ]
+
+    spans = assemble(events, [], DetailSnapshot(), captures)
+    dispatches = {span["id"]: span for span in _by_kind(spans, "dispatch")}
+    driver = dispatches["capture-orchestrator-demo"]
+    check_in = dispatches["capture-check-in-demo-1"]
+
+    assert driver["agent_role"] == "orchestrator"
+    assert driver["transport_role"] == "agent"
+    # Still speaking: a capture nothing closed is open-ended, exactly like a live
+    # transcript, rather than being given an invented end.
+    assert driver["ended_at"] is None
+    assert "reference" not in driver, "a capture has no transcript to point at"
+    assert _kinds(driver) == [CONVERSATION_TURN_KIND]
+    assert driver["events"][0]["status"] == "captured"
+    assert driver["detail"] == {"output_tail": "2026-07-19T00:00:40+00:00 driving round 1"}
+
+    # A round-scoped capture attaches to its round, as a recorded check-in would.
+    assert check_in["parent_id"] == _one(spans, "round")["id"]
+    assert check_in["ended_at"] == "2026-07-19T00:01:30+00:00"
+    failure = next(event for event in check_in["events"] if event["kind"] != CONVERSATION_TURN_KIND)
+    assert failure["kind"] == HISTORY_WRITE_FAILURE_KIND
+    assert failure["status"] == "new history run lacks complete v1.0 telemetry"
+
+
+def test_a_capture_stands_down_when_history_did_record_that_session() -> None:
+    """Serving both would draw one session twice; the recorded transcript wins."""
+    events = [_event(1, "round-started", offset=0)]
+    conversations = [
+        _conversation("orchestrator-1", started="2026-07-19T00:00:30Z", agent_role="orchestrator"),
+        _conversation(
+            "check-in-1",
+            started="2026-07-19T00:01:00Z",
+            agent_role="check-in",
+            round_number=1,
+        ),
+    ]
+    captures = [
+        SupervisoryCapture(
+            session="orchestrator-demo",
+            agent_role="orchestrator",
+            started_at="2026-07-19T00:00:10+00:00",
+            status="running",
+        ),
+        SupervisoryCapture(
+            session="check-in-demo-1",
+            agent_role="check-in",
+            started_at="2026-07-19T00:01:00+00:00",
+            status="completed",
+            round=1,
+        ),
+        # A second round's check-in that history never recorded still needs its span.
+        SupervisoryCapture(
+            session="check-in-demo-2",
+            agent_role="check-in",
+            started_at="2026-07-19T00:02:00+00:00",
+            status="completed",
+            round=2,
+        ),
+    ]
+
+    spans = assemble(events, conversations, DetailSnapshot(), captures)
+    served = sorted(span["id"] for span in _by_kind(spans, "dispatch"))
+
+    assert served == ["capture-check-in-demo-2", "dispatch-check-in-1", "dispatch-orchestrator-1"]
+    driver = next(span for span in spans if span["id"] == "dispatch-orchestrator-1")
+    assert driver["reference"] == {"kind": "conversation", "value": "orchestrator-1"}
+
+
+def test_an_undatable_capture_is_dropped_rather_than_placed_by_invention() -> None:
+    spans = assemble(
+        [_event(1, "round-started", offset=0)],
+        [],
+        DetailSnapshot(),
+        [
+            SupervisoryCapture(
+                session="orchestrator-demo",
+                agent_role="orchestrator",
+                started_at="whenever",
+                status="running",
+            )
+        ],
+    )
+    assert _by_kind(spans, "dispatch") == []
+
+
+def test_the_phase_lands_on_the_newest_driver_span_and_nothing_else() -> None:
+    """A resumed run has more than one driver session; the phase describes now."""
+    driver = DriverState(
+        session="orchestrator-demo",
+        pid=4242,
+        alive=True,
+        phase="executing-run-plan",
+        round=1,
+        last_activity_at=None,
+    )
+    conversations = [
+        _conversation(
+            "orchestrator-old", started="2026-07-19T00:00:10Z", agent_role="orchestrator"
+        ),
+        _conversation(
+            "orchestrator-new", started="2026-07-19T00:05:00Z", agent_role="orchestrator"
+        ),
+        _conversation("check-in-1", started="2026-07-19T00:06:00Z", agent_role="check-in"),
+    ]
+
+    spans = assemble(
+        [_event(1, "round-started", offset=0)], conversations, DetailSnapshot(), (), driver
+    )
+    by_id = {span["id"]: span for span in spans}
+
+    assert by_id["dispatch-orchestrator-new"]["phase"] == "executing-run-plan"
+    assert "phase" not in by_id["dispatch-orchestrator-old"]
+    assert "phase" not in by_id["dispatch-check-in-1"]
+
+
+def test_a_run_the_orchestrator_drives_serves_its_driver_and_check_in_at_run_scope(
+    tmp_path: Path,
+) -> None:
+    """Both supervisory spans survive `scope=run`, which is where the run row reads them."""
+    runs = tmp_path / "runs"
+    run_dir = _run(runs, "demo")
+    _capture(
+        run_dir,
+        session="orchestrator-demo",
+        agent_role="orchestrator",
+        started=BASE + 1,
+        turns=("driving round 1",),
+    )
+    _capture(
+        run_dir,
+        session="check-in-demo-1",
+        agent_role="check-in",
+        round_number=1,
+        started=BASE + 2,
+        finished=BASE + 3,
+        history_failure="new history run lacks complete v1.0 telemetry",
+    )
+    (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (run_dir / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": os.getpid(), "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+
+    served = run_timeline(runs, "demo", oneharness_bin=ABSENT, scope="run")
+    dispatches = {span["id"]: span for span in served["spans"] if span["kind"] == "dispatch"}
+
+    assert sorted(dispatches) == ["capture-check-in-demo-1", "capture-orchestrator-demo"]
+    assert dispatches["capture-orchestrator-demo"]["phase"] == "executing-run-plan"
+    assert dispatches["capture-orchestrator-demo"]["ended_at"] is None
+    assert dispatches["capture-check-in-demo-1"]["agent_role"] == "check-in"

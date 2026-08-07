@@ -159,6 +159,61 @@ no time.
    gate rejected it", "a sibling run moved the base", and "the host failed" are
    three different readings rather than one silent settle.
 
+## Seeing the supervisory tier
+
+The launched orchestrator and its per-round check-in dispatches are agents like any
+other, and they are visible the same way — with one addition and one fallback.
+
+They were invisible for longer than the workers, and the reason is worth keeping:
+oneharness *was* recording them. This host's history store holds 157 `orchestrator`
+and 728 `check-in` run records, correctly role-labelled, out of 12,387 runs. Nothing
+served them. So the run-scope span below is the fix; the capture is a fallback for
+the narrower case where the write itself was refused.
+
+1. **`just status <run-id>` and `just runs`** carry one driver line per unfinished
+   launch: whether the recorded pid is still there, which part of its loop the run's
+   own state places it in (`starting`, `driving-round`, `executing-run-plan`,
+   `reviewing-results`, `surfacing`), and how long since anything of it was last observed doing something. A
+   driver this host has *proved* is gone reads `DRIVER DEAD (pid N is gone) — …;
+   nothing is driving this run`. That is deliberately distinct from `PARKED`, which
+   is a launch that still holds its pid while nothing progresses, and from a node
+   the planner idled with `cancel`.
+2. **The run timeline** (`GET /api/v2/runs/{run_id}/timeline?scope=run`) serves one
+   dispatch span per supervisory session, role-labelled through `agent_role`, open
+   (`ended_at: null`) while the session is still speaking. The driver's span also
+   carries `phase`, the same vocabulary the CLI prints.
+3. **When the harness refused the history write**, the span comes from the run's own
+   bounded local capture under `runs/<run-id>/supervisory/` instead of from a
+   transcript: same role, timing and liveness, the captured turns as
+   `conversation-turn` events with status `captured`, the bounded text under
+   `detail.output_tail`, and the refusal itself as a `history-write-failed` event
+   carrying the reason. A capture-backed span has no `conversation` reference,
+   because there is no transcript to open. A capture stands down as soon as history
+   *did* record that session, so a session is never drawn twice.
+
+The capture is written by the dispatch layer at the seams it already owns:
+`just orchestrate` opens the driver's, the channel relay appends one bounded turn
+per orchestrator turn, and the check-in dispatcher opens and closes its own. It is a
+summary and never a replacement — bounded to the newest few turns, each cut to a
+readable head, so it stays sized by the tier rather than by the run.
+
+The upstream defect it exists for is oneharness refusing a history write with
+`new history run lacks complete v1.0 telemetry` (and the `cannot write vN history
+telemetry` variants), raised in `crates/oneharness-core/src/io/history.rs`.
+`orchestrator/supervisory.py` owns those patterns; `orchestrator/graph.py` classifies
+a dispatch that died on one as an infrastructure failure, and the capture records the
+same string as the reason a session is missing.
+
+That refusal is not codex-specific, though it was assumed to be, and the assumption
+sent a night's debugging at the wrong harness. A refused write leaves nothing behind,
+so the store cannot exhibit one directly; what it does
+show is that every one of codex's 7,642 run records is `ok` with complete native
+telemetry, while claude-code supplies no native per-phase timing at all (`started_at`,
+`finished_at`, `tool_ms`, `time_to_first_token_ms`, `model_ms` are absent from all
+4,745 of its records) and carries every recorded failure. Those counts come from
+reading `type: "run"` lines out of the history store (`just telemetry` reaches the
+same records); re-measure there rather than inferring the harness from chain order.
+
 ## Diagnosing a provider failure
 
 A node that dies to the provider says which side of the conversation refused,

@@ -517,7 +517,9 @@ interface RunTimeline {
 // count, total_duration_ms and intervals appear only on a "rollup" span;
 // agent_role, transport_role and dispatch_id only on a "dispatch" one, where the
 // roles are the DagConversation attribution's own values so a row can be labelled
-// and grouped without fetching the transcript behind it.
+// and grouped without fetching the transcript behind it. phase appears only on the
+// launched orchestrator's own dispatch span, and says which part of its loop the
+// run's recorded state places the driver in.
 interface TimelineSpan {
   id: string;
   kind: TimelineSpanKind;
@@ -538,6 +540,7 @@ interface TimelineSpan {
   dispatch_id?: string;
   reference?: TimelineReference;
   detail?: { ok?: boolean; output_tail?: string; artifact_id?: string };
+  phase?: SupervisoryPhase;
 }
 
 // One discrete wait a rollup absorbed. A rollup stands in for thousands of
@@ -587,7 +590,35 @@ type TimelineReferenceKind =
   | "worker_report"
   | "oneharness_session"
   | "pr";
+
+// Which part of its loop the launched orchestrator is in, derived by the server from
+// what the run itself recorded — never asserted by the agent, which cannot report
+// that it has stopped talking. "surfacing" wins over a running round, because a
+// blocking surface is what the driver is waiting on whatever else it started;
+// "finished" wins over everything, because a written report ends the loop.
+type SupervisoryPhase =
+  | "starting"
+  | "driving-round"
+  | "executing-run-plan"
+  | "reviewing-results"
+  | "surfacing"
+  | "finished";
 ```
+
+The supervisory tier — the launched orchestrator and its per-round check-in
+dispatches — is served from the same span vocabulary as every other dispatch, with
+one addition and one fallback:
+
+- The driver's span carries `phase`, and stays open (`ended_at: null`) for as long as
+  its loop is running.
+- A supervisory session whose harness refused to write history is served from the
+  run's own bounded local capture (`runs/<run-id>/supervisory/`) instead: same role,
+  timing and liveness, its captured turns as `conversation-turn` events with status
+  `captured`, its bounded text under `detail.output_tail`, and the refusal itself as
+  a `history-write-failed` event whose `status` is the recorded reason. A capture is
+  suppressed whenever history *did* record that session, matched on the pair that
+  identifies a supervisory session: semantic role and round. A capture-backed span
+  carries no `conversation` reference, because there is no transcript to open.
 
 `orchestrator/timeline.py` owns the fold, from the run journal, the run's
 conversations, and the persisted `DetailSnapshot`. Its rules:

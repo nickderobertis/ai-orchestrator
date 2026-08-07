@@ -90,6 +90,7 @@ from .scratch import (
     owned_scratch_directory,
     processes_stamped_for,
 )
+from .supervisory import open_capture
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
@@ -1591,6 +1592,17 @@ def launch_orchestrator(
         },
     )
     update_run_owner(run_dir.name, run_dir, proc.pid)
+    # The driver's own bounded local capture, opened here because this is the last
+    # point anything in this process sees the session: the orchestrator is detached and
+    # its harness may never write a history record for it. `channel.relay_supervisor`
+    # appends a turn to this file once per orchestrator turn, so the tier stays visible
+    # whether or not oneharness recorded it.
+    open_capture(
+        run_dir,
+        session=config["session"],
+        agent_role="orchestrator",
+        persona="orchestrator",
+    )
     raw_plan_name = plan_mapping.get("name")
     plan_name = slugify(
         raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
