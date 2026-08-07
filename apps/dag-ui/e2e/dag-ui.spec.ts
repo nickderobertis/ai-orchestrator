@@ -72,21 +72,39 @@ function sessionGroup(page: Page, runId: string): Locator {
     .filter({ has: page.getByRole("button", { name: RegExp(runId) }) });
 }
 
-/** Whether repeated Tab presses ever land on `target`, i.e. it is in the tab order. */
+/**
+ * Whether repeated Tab presses ever land on `target`, i.e. it is in the tab order.
+ *
+ * The element is resolved once and answers for itself, because `Locator.evaluate`
+ * re-queries and waits for a match: a target that leaves the document mid-walk would
+ * otherwise park the loop until the test budget expired, reporting that expiry rather
+ * than the disappearance behind it.
+ */
 async function tabTo(
   page: Page,
   target: Locator,
   presses = 40,
 ): Promise<boolean> {
-  for (let index = 0; index < presses; index += 1) {
-    await page.keyboard.press("Tab");
-    if (
-      await target.evaluate((element) => element === document.activeElement)
-    ) {
-      return true;
+  const element = await target.elementHandle();
+  if (element === null)
+    throw new Error("nothing to tab to: the target is not in the document");
+  try {
+    for (let index = 0; index < presses; index += 1) {
+      await page.keyboard.press("Tab");
+      const walked = await element.evaluate((node) => ({
+        focused: node === document.activeElement,
+        attached: node.isConnected,
+      }));
+      if (walked.focused) return true;
+      if (!walked.attached)
+        throw new Error(
+          `the target left the document after ${index + 1} Tab presses, before focus reached it`,
+        );
     }
+    return false;
+  } finally {
+    await element.dispose();
   }
-  return false;
 }
 
 async function backgroundColor(locator: Locator): Promise<string> {
@@ -667,13 +685,23 @@ test("scrolls the transcript to the journal record a marker names", async ({
 test("opens a node from the keyboard-accessible node list and walks back", async ({
   page,
 }) => {
+  // Eighty-odd Tab presses, each a browser round trip: latency-bound rather than slow.
+  test.slow();
   await openObservatory(page);
+  // The run navigation precedes the workspace in the tab order, so the walk means
+  // nothing until it has arrived: setting off first reached the node list only because
+  // the fifty run links were still missing from it.
+  await expect(
+    page.getByRole("navigation", { name: "DAG runs" }).locator(".run-link"),
+  ).toHaveCount(50);
   // The canvas is a pointer surface, so the list beside it is the keyboard path to
   // every node; it has to reach the same node view a click does.
   const node = page
     .getByRole("list", { name: "DAG nodes" })
     .getByRole("button", { name: "dashboard: running" });
-  expect(await tabTo(page, node)).toBe(true);
+  // Enough to cross that navigation and the workspace behind it: the node answers at
+  // the 82nd tab stop.
+  expect(await tabTo(page, node, 120)).toBe(true);
   await page.keyboard.press("Enter");
   await expect(
     page.getByRole("region", { name: "Timeline for dashboard" }),
@@ -1016,16 +1044,35 @@ test("loads another run-list page when navigation reaches the end", async ({
   await expect(navigation.locator(".run-link")).toHaveCount(52);
 });
 
+/**
+ * A window tall enough to hold the whole first page of runs: those fifty rows measure
+ * 4350px, so this leaves room for ten more before the list would scroll again.
+ */
+const RUN_LIST_FITS_HEIGHT = 5200;
+
 test("loads another run-list page from the keyboard", async ({ page }) => {
-  // Seventy Tab presses, each a browser round trip and an evaluate: the journey is
-  // latency-bound rather than slow, so it needs the budget rather than the speed.
+  // Fifty-odd Tab presses, each a browser round trip: the journey is latency-bound
+  // rather than slow, so it needs the budget rather than the speed.
   test.slow();
+  // The keyboard path and the scroll path are otherwise the same path: walking the run
+  // list scrolls it, the navigation pages itself from that scroll, and `hasMore` going
+  // false unmounts the control being tabbed towards. A list that fits cannot scroll.
+  await page.setViewportSize({ width: 1280, height: RUN_LIST_FITS_HEIGHT });
   await page.goto("/?view=graph");
   const navigation = page.getByRole("navigation", { name: "DAG runs" });
   const loadMore = page.getByRole("button", { name: "Load more runs" });
   await expect(navigation.locator(".run-link")).toHaveCount(50);
+  // Asserted rather than assumed: a first page that outgrew the window would scroll.
+  expect(
+    await navigation
+      .locator("[data-radix-scroll-area-viewport]")
+      .evaluate((element) => element.scrollHeight - element.clientHeight),
+  ).toBe(0);
 
   expect(await tabTo(page, loadMore, 70)).toBe(true);
+  // Still on the first page once the walk has arrived, so the only thing that can
+  // account for the next one is the keypress below.
+  await expect(navigation.locator(".run-link")).toHaveCount(50);
   await page.keyboard.press("Enter");
   await expect(navigation.locator(".run-link")).toHaveCount(52);
 });
