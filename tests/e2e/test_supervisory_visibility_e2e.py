@@ -203,14 +203,15 @@ def _reply(run_id: str, runs: Path, value: dict[str, object]) -> None:
         seconds=120,
         what="the relay waiting on a planner reply",
     )
-    subprocess.run(
+    answered = subprocess.run(
         ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
         input=json.dumps(value),
         text=True,
         capture_output=True,
-        check=True,
+        check=False,
     )
+    assert answered.returncode == 0, answered.stderr
 
 
 def _drain(run_id: str, runs: Path) -> dict[str, object]:
