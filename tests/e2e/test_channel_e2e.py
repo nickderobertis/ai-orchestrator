@@ -994,6 +994,128 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     assert "valid run ids" in stale_monitor.stderr
 
 
+def _reply_state(run_id: str, runs: Path, value: dict[str, object]) -> dict[str, object]:
+    """Send one reply through the real recipe and return what it reported."""
+    sent = subprocess.run(
+        ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        input=json.dumps(value),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return dict(json.loads(sent.stdout))
+
+
+# llmlint: ignore[tests_mirror_real_usage] The acceptance contract is durability and
+# exactly-once delivery of an accepted reply. `channel-reply` reports `queued` or
+# `delivered` and the journey asserts that through it, but no command surface reports
+# how many records the queue holds or how far a reader has consumed it — which is the
+# only way "delivered once" is distinguishable from "delivered twice". Both the read
+# and the assertion live here so the journey itself states the invariant and never
+# handles the private files.
+def _assert_queue_holds(runs: Path, run_id: str, *, records: list[int], consumed: int) -> None:
+    """Assert the durable queue holds exactly ``records`` and a reader claimed ``consumed``."""
+    queue = runs / run_id / "channel" / "replies.jsonl"
+    queued = [
+        json.loads(line) for line in queue.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    assert [record["seq"] for record in queued] == records
+    cursor = runs / run_id / "channel" / "replies-cursor.json"
+    claimed = 0
+    if cursor.is_file():
+        claimed = int(json.loads(cursor.read_text(encoding="utf-8"))["consumed"])
+    assert claimed == consumed
+
+
+def test_a_reply_written_with_nobody_listening_is_queued_then_delivered_once(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """The planner writes once, whatever the orchestrator happens to be doing.
+
+    `pre-round-pause` parks the orchestrator agent inside its very first turn — the
+    round it drives has not started, so no reconciler is polling, and its supervisor
+    relay has not been asked anything yet, so nothing holds the channel open either.
+
+    The reply is accepted in that window, reported honestly as `queued`, survives
+    with nothing listening, and is claimed exactly once when the run next reads. The
+    verdict that answers a waiting relay reports `delivered` from the same command,
+    and a reply to the settled run is refused by name instead of waited out.
+    """
+    runs = tmp_path / "no-rendezvous-runs"
+    release = tmp_path / "release-the-round"
+    plan = tmp_path / "no-rendezvous.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "no-rendezvous",
+                "tasks": [
+                    {
+                        "id": "worker",
+                        "persona": "engineer",
+                        "task": f"pre-round-pause {release} complete-now no-assessment",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin)
+
+    # Nothing has surfaced, because the agent is still inside its first turn.
+    assert _next_cli(run_id, runs, timeout="0.001") == {"status": "running", "surface": None}
+    started = time.monotonic()
+    queued = _reply_state(
+        run_id,
+        runs,
+        {"completion": False, "message": "hold the frontier", "reason": "hold the frontier"},
+    )
+    # Promptly, and with no reader anywhere.
+    assert time.monotonic() - started < e2e_timeout(10)
+    assert queued == {"reply": 1, "state": "queued"}
+    _assert_queue_holds(runs, run_id, records=[1], consumed=0)
+
+    release.touch()
+    verdict = runs / run_id / "channel" / "planner-verdict.json"
+    wait = deadline(30)
+    while not verdict.is_file():
+        assert time.monotonic() < wait, "the queued reply was never claimed"
+        time.sleep(0.02)
+    assert json.loads(verdict.read_text(encoding="utf-8")) == {
+        "completion": False,
+        "message": "hold the frontier",
+        "reason": "hold the frontier",
+    }
+    # Exactly once: one durable record, and a cursor that moved past it.
+    _assert_queue_holds(runs, run_id, records=[1], consumed=1)
+
+    # The companion state. A relay is waiting on this one, so the same command says
+    # `delivered` — and it is the reply that actually closes the run out.
+    assert _wait_surface(run_id, runs)["surface"]["kind"] in {"milestone", "closeout"}
+    assert _reply_state(run_id, runs, {"completion": True, "reason": "verified"}) == {
+        "reply": 2,
+        "state": "delivered",
+    }
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+    # The one class that cannot be queued: a settled run has no reader left, so this
+    # is an immediate refusal by name rather than a timeout, and nothing is written.
+    started = time.monotonic()
+    refused = subprocess.run(
+        ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        input=json.dumps({"completion": True, "reason": "too late"}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert refused.returncode == 2
+    assert time.monotonic() - started < e2e_timeout(10)
+    assert "this run has settled, so nothing will ever read a reply to it" in refused.stderr
+    _assert_queue_holds(runs, run_id, records=[1, 2], consumed=2)
+
+
 def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin: str) -> None:
     runs = tmp_path / "large-summary-runs"
     run_id = _launch_cli(

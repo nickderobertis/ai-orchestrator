@@ -70,6 +70,15 @@ COMMAND_CURSOR_FILE = "commands-cursor.json"
 #: what makes acceptance mean *applied*: the submitter waits here for the answer
 #: rather than exiting on "queued" and learning the outcome later, or never.
 COMMAND_OUTCOME_FILE = "command-outcomes.jsonl"
+#: Accepted planner replies, and how far a reader has consumed them. A reply riding
+#: `down.fifo` alone reached the agent only if something held that endpoint open at
+#: the moment it was written, so a reply accepted here is durable instead.
+REPLY_QUEUE_FILE = "replies.jsonl"
+REPLY_CURSOR_FILE = "replies-cursor.json"
+#: How long `channel-reply` watches an accepted reply before reporting it `queued`.
+#: This only decides how long the command lingers to say `delivered` instead; the
+#: queue has already settled whether the reply survives.
+REPLY_DELIVERY_OBSERVATION_SECONDS = 2.0
 
 PlannerSurfaceKind = Literal[
     "supervisor",
@@ -744,6 +753,172 @@ def await_command_outcomes(
     )
 
 
+@dataclass(frozen=True)
+class QueuedReply:
+    """One durably accepted planner reply awaiting whichever reader claims it."""
+
+    seq: int
+    #: `Any` because this is the onejudge JSON reply frame, exactly as `_reply`
+    #: validates and `read_message` carries it: an open wire mapping whose keys vary
+    #: by verdict shape, not a closed type this module may narrow. `submit_reply` and
+    #: `await_reply` pass the same frame in and out for the same reason.
+    reply: dict[str, Any]
+
+
+def _reply_queue_lock(channel_dir: Path) -> str:
+    return f"channel-replies:{channel_dir.resolve()}"
+
+
+def _queued_reply(line: str) -> QueuedReply | None:
+    """Parse one queued reply, returning None for anything unreadable.
+
+    The queue is a file on disk anything with the run directory can rewrite, so the
+    payload is revalidated through `_reply` — the same contract that admitted it —
+    rather than trusted because this process wrote it. `_reply` is idempotent on its
+    own output, so a well-formed record round-trips unchanged.
+    """
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    seq, payload = record.get("seq"), record.get("reply")
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return QueuedReply(seq, _reply(payload))
+    except ChannelError:
+        return None
+
+
+def _reply_lines(channel_dir: Path) -> list[str]:
+    path = channel_dir / REPLY_QUEUE_FILE
+    if not path.is_file():
+        return []
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    return [line for line in raw.splitlines() if line.strip()]
+
+
+def _read_reply_queue(channel_dir: Path) -> list[QueuedReply]:
+    """Every readable reply, in the strictly increasing order this writer appends.
+
+    A per-record check is not enough here: the cursor is a single high-water mark, so
+    a duplicated or out-of-order sequence would let one advance consume two records,
+    and the second reply would be lost with no reader ever seeing it. Records that
+    break the invariant are dropped exactly as unparseable ones are — the queue-wide
+    shape is as much a boundary as each record's.
+    """
+    served: list[QueuedReply] = []
+    for line in _reply_lines(channel_dir):
+        queued = _queued_reply(line)
+        if queued is None or (served and queued.seq <= served[-1].seq):
+            continue
+        served.append(queued)
+    return served
+
+
+def _next_reply_seq(channel_dir: Path) -> int:
+    """The next sequence to allocate, counting records this reader cannot parse.
+
+    Bounded by the *line* count as well as the highest readable sequence, because
+    this writer allocates 1..N one record per line: a damaged record still occupies
+    the sequence it was written with, and allocating over it would let one cursor
+    advance answer two different replies. The caller must hold the queue lock.
+    """
+    lines = _reply_lines(channel_dir)
+    highest = max((record.seq for line in lines if (record := _queued_reply(line))), default=0)
+    return max(highest, len(lines)) + 1
+
+
+def submit_reply(channel_dir: Path, response: Mapping[str, Any]) -> int:
+    """Durably accept one planner reply and return its queue sequence."""
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    with advisory_lock(_reply_queue_lock(channel_dir)):
+        seq = _next_reply_seq(channel_dir)
+        with (channel_dir / REPLY_QUEUE_FILE).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"seq": seq, "reply": dict(response)}, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    return seq
+
+
+def _consumed_replies(channel_dir: Path) -> int:
+    """How far a reader has claimed, from the durable cursor."""
+    path = channel_dir / REPLY_CURSOR_FILE
+    if not path.is_file():
+        return 0
+    value = load_mapping(path).get("consumed")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ChannelError("reply cursor is invalid")
+    return value
+
+
+def claim_reply(channel_dir: Path) -> QueuedReply | None:
+    """Claim the oldest unconsumed reply, advancing the durable cursor.
+
+    The cursor advance and the read happen under one lock, which is what makes a
+    reply reach exactly one reader: the reconciler's receiver and the supervisor
+    relay both claim from here, and neither can hand back what it took.
+    """
+    with advisory_lock(_reply_queue_lock(channel_dir)):
+        consumed = _consumed_replies(channel_dir)
+        pending = [item for item in _read_reply_queue(channel_dir) if item.seq > consumed]
+        if not pending:
+            return None
+        claimed = min(pending, key=lambda item: item.seq)
+        atomic_json(channel_dir / REPLY_CURSOR_FILE, {"consumed": claimed.seq})
+        return claimed
+
+
+def pending_replies(channel_dir: Path) -> tuple[QueuedReply, ...]:
+    """Every accepted reply no reader has claimed, oldest first."""
+    with advisory_lock(_reply_queue_lock(channel_dir)):
+        consumed = _consumed_replies(channel_dir)
+        return tuple(
+            sorted(
+                (item for item in _read_reply_queue(channel_dir) if item.seq > consumed),
+                key=lambda item: item.seq,
+            )
+        )
+
+
+def await_reply(channel_dir: Path, *, timeout: float) -> dict[str, Any]:
+    """Claim the next durably queued planner reply, bounded by ``timeout``."""
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ChannelError("timeout must be finite and non-negative")
+    deadline = time.monotonic() + timeout
+    while True:
+        claimed = claim_reply(channel_dir)
+        if claimed is not None:
+            return claimed.reply
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ChannelTimeout("no planner reply arrived before the deadline")
+        time.sleep(min(0.02, remaining))
+
+
+def await_reply_delivery(channel_dir: Path, seq: int, *, timeout: float) -> bool:
+    """Whether a reader claimed reply ``seq`` within ``timeout``.
+
+    A `False` here is `queued`, never a failure: the reply is already durable, so
+    the only thing still open is whether a reader has reached it yet.
+    """
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ChannelError("timeout must be finite and non-negative")
+    deadline = time.monotonic() + timeout
+    while True:
+        with advisory_lock(_reply_queue_lock(channel_dir)):
+            if _consumed_replies(channel_dir) >= seq:
+                return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.02, remaining))
+
+
 def live_round(run_dir: Path) -> int:
     """The round currently accepting graph edits, else raise a stated rejection."""
     latest = latest_round(run_dir)
@@ -1301,19 +1476,22 @@ class ProposalPump:
             self._awaiting_reply.clear()
 
     def _receive(self) -> None:
-        """Continuously receive planner edits, independent of proposal timing."""
+        """Continuously claim durable planner replies, independent of proposal timing."""
         while not self._stop.is_set():
             try:
-                response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
-                apply_heartbeat_reply(self._channel_dir, response)
-                # Commands travel the durable queue, not this frame: whichever reader
-                # wins the endpoint, the reconciler still claims every accepted edit.
-                self._replies.put(response)
+                claimed = claim_reply(self._channel_dir)
+                if claimed is None:
+                    self._stop.wait(0.05)
+                    continue
+                apply_heartbeat_reply(self._channel_dir, claimed.reply)
+                # Commands travel their own durable queue, not this record: whichever
+                # reader claims the reply, the reconciler still drains every accepted
+                # edit. The reply itself is now durable for the same reason — a
+                # planner writing to an endpoint nobody held is what this replaced.
+                self._replies.put(claimed.reply)
                 if self._awaiting_reply.is_set():
                     self._reply_received.set()
-            except ChannelTimeout:
-                continue
-            except (ChannelError, OSError):
+            except (ChannelError, ConfigError, OSError):
                 return
 
 
@@ -1367,13 +1545,14 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         record_surface(channel_dir)
         # This relay runs once per orchestrator turn, so it is where the driver's
         # bounded local capture gets its transcript. The write is a locked
-        # read-modify-write with an fsync, and it sits after both FIFOs because either
-        # earlier position pays that cost inside a window something waits on: before
+        # read-modify-write with an fsync, and it sits after both the surface and the
+        # reply because either earlier position pays that cost inside a window
+        # something waits on: before
         # `write_message` delays the surface, and between the two delayed this relay
         # past a `channel-reply` that had already been sent. `finally`, so a planner
         # who never answers still cannot cost the turn its record.
         try:
-            response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
+            response = await_reply(channel_dir, timeout=timeout)
         finally:
             record_turn(
                 channel_dir.parent,
@@ -1453,6 +1632,30 @@ def _finished(run_dir: Path) -> bool:
     return False
 
 
+def _awaits_an_answer(channel_dir: Path) -> bool:
+    """Whether a surface is still holding this run open for a planner reply.
+
+    Both files outlive their delivery waiting for one: `planner-pending.json` is the
+    consumed surface, and `deferred-blocker.json` the blocker preserved for the next
+    reply-ready relay — the shape a cancelled round leaves, where nothing writes the
+    first. A run that asked is owed an answer whatever a liveness probe makes of the
+    process that asked, so this outranks the settled-run refusal.
+
+    The *contents* decide, not the file's existence: this overrides a refusal, and
+    only a surface the relay could actually forward names a question anyone is still
+    waiting on. A file that does not validate as one is left to the liveness probe,
+    which then refuses with a reason rather than queuing into a dead end.
+    """
+    for name in ("planner-pending.json", "deferred-blocker.json"):
+        path = channel_dir / name
+        if not path.is_file():
+            continue
+        with suppress(ChannelError, ConfigError, OSError):
+            _validated_persisted_surface(load_mapping(path))
+            return True
+    return False
+
+
 def next_surface(run_dir: Path, *, timeout: float) -> dict[str, Any]:
     """Consume this run's next planner surface, or report why there is none.
 
@@ -1521,8 +1724,9 @@ def main_next(argv: list[str] | None = None) -> int:
     return 0
 
 
-# llmlint: ignore[changed_behavior_has_e2e] the real reply FIFO journey is e2e while malformed
-# JSON, reply contracts, and absent-rendezvous errors are exhaustively exercised in unit tests.
+# llmlint: ignore[changed_behavior_has_e2e] the real durable-reply journey is e2e — queued
+# while the agent is mid-turn, delivered at its next read, and refused by name on a settled
+# run — while malformed JSON and reply contracts are exhaustively exercised in unit tests.
 def main_reply(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Reply to the live orchestrator supervisor")
     parser.add_argument("run_id")
@@ -1531,6 +1735,7 @@ def main_reply(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
     accepted: tuple[int, ...] = ()
+    queued: int | None = None
     try:
         raw = (
             sys.stdin.read() if args.reply == "-" else Path(args.reply).read_text(encoding="utf-8")
@@ -1542,6 +1747,14 @@ def main_reply(argv: list[str] | None = None) -> int:
         _validated_interval(args.timeout, field="timeout")
         resolved = resolve_supervision_run(args.runs_dir, args.run_id)
         run_dir = args.runs_dir / resolved
+        # The one reply class that cannot be durably accepted, refused immediately and
+        # by name rather than waited out: a settled run has no reader left, now or
+        # later, so queuing the reply would only park it where nothing drains it. Every
+        # other reply is queued, whatever is or is not listening at the time.
+        if not _awaits_an_answer(run_dir / "channel") and _finished(run_dir):
+            raise ChannelError(
+                "this run has settled, so nothing will ever read a reply to it; no reply was queued"
+            )
         response = _reply(value)
         commands = parse_commands(response)
         # `complete` is a closeout verdict rather than a graph mutation, so it rides
@@ -1557,7 +1770,7 @@ def main_reply(argv: list[str] | None = None) -> int:
             if round_number is not None:
                 validate_commands(run_dir, round_number, commands)
                 accepted = submit_commands(run_dir / "channel", commands, round_number=round_number)
-        write_message(run_dir / "channel" / "down.fifo", response, timeout=args.timeout)
+        queued = submit_reply(run_dir / "channel", response)
     except (
         ChannelError,
         ChannelTimeout,
@@ -1566,9 +1779,9 @@ def main_reply(argv: list[str] | None = None) -> int:
         json.JSONDecodeError,
         OSError,
     ) as exc:
-        # Accepted edits are already durable, so a transport failure after acceptance
-        # must not read as "nothing happened": resubmitting them would apply them twice.
-        queued = (
+        # Accepted edits are already durable, so a failure after acceptance must not
+        # read as "nothing happened": resubmitting them would apply them twice.
+        durable = (
             ""
             if not accepted
             else f"; edit(s) {', '.join(f'#{seq}' for seq in accepted)} were accepted and "
@@ -1576,10 +1789,19 @@ def main_reply(argv: list[str] | None = None) -> int:
         )
         print(
             f"channel-reply: {exc}; check the run id and reply shape, then rerun the command"
-            f"{queued}",
+            f"{durable}",
             file=sys.stderr,
         )
         return 2
+    # Acceptance already means the reply survives, so this only decides which of two
+    # true things to report: a reader claimed it, or it is waiting for the next one.
+    assert queued is not None  # `submit_reply` returns a sequence or raises above
+    delivered = await_reply_delivery(
+        run_dir / "channel",
+        queued,
+        timeout=min(args.timeout, REPLY_DELIVERY_OBSERVATION_SECONDS),
+    )
+    print(json.dumps({"reply": queued, "state": "delivered" if delivered else "queued"}))
     if not accepted:
         return 0
     # Apply-or-reject, synchronously. An edit that passed submission can still lose a

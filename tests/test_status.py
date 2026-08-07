@@ -14,10 +14,10 @@ from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId, StepId
 from orchestrator.status import (
     GitState,
+    _branch_rounds,
     _git_state,
     _human,
     _labelled_locator,
-    _ledger_for_branch,
     _positional,
     _settled_nodes,
     in_flight_dispatches,
@@ -119,7 +119,8 @@ def test_git_state_rejects_non_repository(tmp_path: Path) -> None:
     assert _git_state(tmp_path / "gone") is None
 
 
-def test_ledger_ignores_pending_malformed_and_unmatched_rounds(tmp_path: Path) -> None:
+def test_branch_index_ignores_pending_malformed_and_unmatched_rounds(tmp_path: Path) -> None:
+    """A round this view cannot attribute owns no branch, and never invents one."""
     (tmp_path / "file").write_text("not a run", encoding="utf-8")
     (tmp_path / "pending" / "round-01").mkdir(parents=True)
     malformed = tmp_path / "malformed" / "round-01"
@@ -130,8 +131,46 @@ def test_ledger_ignores_pending_malformed_and_unmatched_rounds(tmp_path: Path) -
     (unmatched / "result.json").write_text(
         '{"ok":true,"started_order":[],"results":{}}', encoding="utf-8"
     )
-    assert _ledger_for_branch(tmp_path, "feature") is None
-    assert _ledger_for_branch(tmp_path, None) is None
+    assert _branch_rounds(tmp_path) == {}
+    assert _branch_rounds(tmp_path / "no-such-runs-dir") == {}
+
+
+def test_a_journalled_branch_survives_a_result_this_view_cannot_read(tmp_path: Path) -> None:
+    """The round is over and its result is damaged; the branch is still attributed.
+
+    Dropping it would put the checkout back to reading as unattached work, which is
+    the same blindness the stale attribution caused from the other direction. The
+    round is reported as ended, with the one honest thing left to say about it.
+    """
+    run_dir = tmp_path / "damaged"
+    open_journal(run_dir, RunId("damaged"), 1).append(
+        "branch-discovered", node=NodeId("change"), detail={"branch": "feature"}
+    )
+    round_dir = run_dir / "round-01"
+    round_dir.mkdir(parents=True, exist_ok=True)
+    (round_dir / "result.json").write_text("not: [valid", encoding="utf-8")
+
+    owner = _branch_rounds(tmp_path)["feature"]
+    assert (owner.run_id, owner.round, owner.summary, owner.live) == (
+        "damaged",
+        1,
+        "result unreadable",
+        False,
+    )
+
+
+def test_a_round_nothing_is_driving_owns_its_branch_without_reading_as_live(
+    tmp_path: Path,
+) -> None:
+    """No result and no live owner is a stopped round, not a running one."""
+    run_dir = tmp_path / "stopped"
+    open_journal(run_dir, RunId("stopped"), 1).append(
+        "branch-discovered", node=NodeId("change"), detail={"branch": "feature"}
+    )
+    (run_dir / "round-01").mkdir(parents=True, exist_ok=True)
+
+    owner = _branch_rounds(tmp_path)["feature"]
+    assert (owner.round, owner.summary, owner.live) == (1, "no result recorded", False)
 
 
 def test_status_cli_rejects_limit_and_reports_missing_history_tool(monkeypatch, capsys) -> None:

@@ -26,8 +26,11 @@ from orchestrator.channel import (
     _validated_heartbeat_surface,
     apply_heartbeat_reply,
     await_command_outcomes,
+    await_reply,
+    await_reply_delivery,
     claim_commands,
     claim_heartbeat,
+    claim_reply,
     command_outcomes,
     create_channel,
     due_indicator,
@@ -44,6 +47,7 @@ from orchestrator.channel import (
     mark_heartbeat_due,
     next_surface,
     pending_commands,
+    pending_replies,
     pending_surface_indicator,
     pending_surfaces,
     read_message,
@@ -52,6 +56,7 @@ from orchestrator.channel import (
     relay_supervisor,
     release_heartbeat_claim,
     submit_commands,
+    submit_reply,
     unanswered_commands,
     validate_commands,
     write_message,
@@ -236,19 +241,16 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         "proposal_id": "worker:found adjacent work",
     }
     reply = {"completion": False, "message": "defer", "reason": "next round"}
-    sender = threading.Thread(
-        target=write_message,
-        args=(channel / "down.fifo", reply),
-        kwargs={"timeout": 1},
-    )
-    sender.start()
+    # Submitted the way `channel-reply` submits one: durably, with nobody holding an
+    # endpoint open. The pump's receiver claims it on its own poll.
+    assert submit_reply(channel, reply) == 1
     deadline = time.monotonic() + 1
     verdict = channel / "planner-verdict.json"
     while time.monotonic() < deadline and not verdict.is_file():
         pump.persist_replies()
         time.sleep(0.01)
-    sender.join()
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
+    assert pending_replies(channel) == ()
     state = heartbeat_state(channel)
     assert state is not None
     state.update({"last_surface_at": 0, "interval_s": 1})
@@ -340,24 +342,29 @@ def test_new_proposal_pump_continues_persisted_heartbeat_countdown(tmp_path: Pat
         ),
     ],
 )
-def test_convenience_recipe_builds_reply_over_real_fifo(
+def test_convenience_recipe_queues_its_reply_with_no_reader_present(
     tmp_path: Path,
     entrypoint: Callable[[list[str] | None], int],
     arguments: list[str],
     expected: dict[str, object],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Every convenience shape is accepted with nothing listening, and says so.
+
+    No reader is started deliberately: this is the state a planner replies into
+    while the orchestrator agent is mid-turn, and it used to be the one that failed.
+    """
     runs = tmp_path / "runs"
     channel = create_channel(runs / "orch")
-    received: list[dict[str, object]] = []
 
-    def receive() -> None:
-        received.append(read_message(channel / "down.fifo", timeout=1))
-
-    reader = threading.Thread(target=receive)
-    reader.start()
     assert entrypoint(["orch", *arguments, "--runs-dir", str(runs)]) == 0
-    reader.join()
-    assert received == [expected]
+
+    assert json.loads(capsys.readouterr().out) == {"reply": 1, "state": "queued"}
+    assert [item.reply for item in pending_replies(channel)] == [expected]
+    claimed = claim_reply(channel)
+    assert claimed is not None and claimed.reply == expected
+    # Exactly once: the cursor moved with the claim, so a second reader gets nothing.
+    assert claim_reply(channel) is None
 
 
 def test_channel_run_resolution_accepts_unique_active_plan_name_and_lists_ambiguity(
@@ -391,7 +398,15 @@ def test_channel_run_resolution_accepts_unique_active_plan_name_and_lists_ambigu
     assert "launch-1, launch-2" in error
 
 
-def test_unanswered_proposal_releases_down_fifo_before_boundary(tmp_path: Path) -> None:
+def test_a_reply_sent_after_the_pump_closes_waits_for_the_boundary_relay(
+    tmp_path: Path,
+) -> None:
+    """The window the incident happened in: no reader between round and relay.
+
+    The pump has closed and the relay has not opened, which is exactly where a reply
+    used to time out. It is accepted, survives with nobody holding anything open, and
+    the next reader — the relay, here standing in for it — gets it.
+    """
     channel = create_channel(tmp_path / "run")
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
@@ -400,18 +415,14 @@ def test_unanswered_proposal_releases_down_fifo_before_boundary(tmp_path: Path) 
     assert not pump._thread.is_alive()
 
     boundary_reply = {"completion": True, "reason": "closeout verified"}
-    sender = threading.Thread(
-        target=write_message,
-        args=(channel / "down.fifo", boundary_reply),
-        kwargs={"timeout": 1},
-    )
-    sender.start()
-    assert read_message(channel / "down.fifo", timeout=1) == boundary_reply
-    sender.join()
+    assert submit_reply(channel, boundary_reply) == 1
+    assert await_reply(channel, timeout=1) == boundary_reply
+    with pytest.raises(ChannelTimeout, match="no planner reply arrived"):
+        await_reply(channel, timeout=0.05)
 
 
-@pytest.mark.parametrize("failure", ["write", "read", "write_timeout", "read_timeout"])
-def test_proposal_pump_stops_on_broken_fifo(
+@pytest.mark.parametrize("failure", ["write", "write_timeout", "claim_error", "claim_os_error"])
+def test_proposal_pump_stops_on_a_broken_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     channel = create_channel(tmp_path / "run")
@@ -432,19 +443,20 @@ def test_proposal_pump_stops_on_broken_fifo(
             )
         case "write_timeout":
             monkeypatch.setattr("orchestrator.channel.write_message", fail_after_timeout)
-        case "read" | "read_timeout":
+        case "claim_error" | "claim_os_error":
             monkeypatch.setattr("orchestrator.channel.write_message", lambda *args, **kwargs: None)
+            broken: Exception = (
+                ChannelError("broken")
+                if failure == "claim_error"
+                else OSError("reply queue is unreadable")
+            )
             monkeypatch.setattr(
-                "orchestrator.channel.read_message",
-                (
-                    fail_after_timeout
-                    if failure == "read_timeout"
-                    else lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken"))
-                ),
+                "orchestrator.channel.claim_reply",
+                lambda *args, **kwargs: (_ for _ in ()).throw(broken),
             )
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
-    target = pump._receiver if failure.startswith("read") else pump._thread
+    target = pump._receiver if failure.startswith("claim") else pump._thread
     target.join(timeout=1)
     assert not target.is_alive()
     pump.close()
@@ -783,10 +795,7 @@ def test_relay_shapes_supervisor_and_persists_verdict(
     monkeypatch.setattr(
         "orchestrator.channel.write_message", lambda path, value, timeout: sent.append(value)
     )
-    monkeypatch.setattr(
-        "orchestrator.channel.read_message",
-        lambda path, timeout: {"completion": False, "message": "retry X", "reason": "gap"},
-    )
+    submit_reply(channel, {"completion": False, "message": "retry X", "reason": "gap"})
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO(json.dumps({"op": "supervisor", "task": "work", "messages": []})),
@@ -822,10 +831,7 @@ def test_relay_preserves_an_existing_terminal_blocker(
         "orchestrator.channel.write_message",
         lambda path, value, timeout: sent.append(dict(value)),
     )
-    monkeypatch.setattr(
-        "orchestrator.channel.read_message",
-        lambda path, timeout: {"completion": True, "reason": "acknowledged"},
-    )
+    submit_reply(channel, {"completion": True, "reason": "acknowledged"})
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO(json.dumps({"op": "supervisor", "task": "round complete", "messages": []})),
@@ -839,21 +845,18 @@ def test_relay_preserves_an_existing_terminal_blocker(
 def test_relay_records_the_driver_turn_it_served_after_answering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The capture is written once the reply is in, not before either FIFO.
+    """The capture is written once the reply is in, not before the surface.
 
     Where this write sits is load-bearing. Ahead of `write_message` it delays a
-    surface planners read under seconds-long budgets; between the two FIFOs it
-    delays this relay reaching `read_message`, which is the window a planner
-    replying immediately lands in. So it happens after the answer.
+    surface planners read under seconds-long budgets; between the surface and the
+    reply it delays this relay reaching the reply queue, which is the window a
+    planner replying immediately lands in. So it happens after the answer.
     """
     run_dir = tmp_path / "run-recorded"
     channel = create_channel(run_dir)
     open_capture(run_dir, session="orchestrator-orch", agent_role="orchestrator")
     monkeypatch.setattr("orchestrator.channel.write_message", lambda path, value, timeout: None)
-    monkeypatch.setattr(
-        "orchestrator.channel.read_message",
-        lambda path, timeout: {"completion": True, "reason": "done"},
-    )
+    submit_reply(channel, {"completion": True, "reason": "done"})
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO(json.dumps({"op": "supervisor", "task": "round complete", "messages": []})),
@@ -879,17 +882,13 @@ def test_relay_records_the_driver_turn_a_planner_never_answered(
     channel = create_channel(run_dir)
     open_capture(run_dir, session="orchestrator-orch", agent_role="orchestrator")
     monkeypatch.setattr("orchestrator.channel.write_message", lambda path, value, timeout: None)
-
-    def _never(path: Path, timeout: float) -> dict[str, object]:
-        raise ChannelTimeout("channel read timed out")
-
-    monkeypatch.setattr("orchestrator.channel.read_message", _never)
+    # Nothing is submitted, so the relay waits out its bound with no answer.
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO(json.dumps({"op": "supervisor", "task": "stranded turn", "messages": []})),
     )
 
-    assert relay_supervisor(channel, "orch", 1, timeout=1) == 1
+    assert relay_supervisor(channel, "orch", 1, timeout=0.05) == 1
     captured = load_captures(run_dir)
     assert [turn["text"] for turn in captured[0].turns] == ["stranded turn"]
 
@@ -907,10 +906,7 @@ def test_relay_replaces_stale_nonblocking_pending_surface(
         "orchestrator.channel.write_message",
         lambda path, value, timeout: sent.append(dict(value)),
     )
-    monkeypatch.setattr(
-        "orchestrator.channel.read_message",
-        lambda path, timeout: {"completion": True, "reason": "done"},
-    )
+    submit_reply(channel, {"completion": True, "reason": "done"})
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO(json.dumps({"op": "supervisor", "task": "fresh milestone", "messages": []})),
@@ -965,15 +961,13 @@ def test_bridge_mains_render_bounded_states_and_validate_reply(
     assert main_next(["orch", "--runs-dir", str(tmp_path / "runs"), "--timeout", "0"]) == 0
     assert json.loads(capsys.readouterr().out) == {"status": "running", "surface": None}
 
-    received: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "orchestrator.channel.write_message",
-        lambda path, value, timeout: received.append(dict(value)),
-    )
     reply = tmp_path / "reply.json"
     reply.write_text('{"completion":true,"reason":"verified"}', encoding="utf-8")
     assert main_reply(["orch", str(reply), "--runs-dir", str(tmp_path / "runs")]) == 0
-    assert received == [{"completion": True, "reason": "verified"}]
+    assert json.loads(capsys.readouterr().out) == {"reply": 1, "state": "queued"}
+    assert [item.reply for item in pending_replies(run_dir / "channel")] == [
+        {"completion": True, "reason": "verified"}
+    ]
 
 
 def test_finished_uses_report_and_owner_liveness(tmp_path: Path) -> None:
@@ -1417,19 +1411,26 @@ def test_main_reply_refuses_an_edit_with_no_live_round(
     assert not (run_dir / "channel" / "commands.jsonl").exists()
 
 
-def test_main_reply_reports_accepted_edits_when_the_transport_fails(
+def test_main_reply_reports_accepted_edits_when_queuing_the_reply_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Edits are durable before the reply is, so a later failure must say so.
+
+    Nothing about the reply can fail for want of a reader any more, but the write
+    itself still can — a full or unwritable run directory — and the accepted edits
+    are already applied-or-answered by then. Reporting that as "nothing happened"
+    is what would get them resubmitted, and applied twice.
+    """
     runs = tmp_path / "runs"
     run_dir = runs / "orch"
     create_channel(run_dir)
     _round(run_dir)
     monkeypatch.setattr("orchestrator.channel.validate_commands", lambda *args: None)
 
-    def refuse(path: Path, value: object, *, timeout: float) -> None:
-        raise ChannelTimeout("no reader")
+    def refuse(channel_dir: Path, response: object) -> int:
+        raise OSError("no space left on device")
 
-    monkeypatch.setattr("orchestrator.channel.write_message", refuse)
+    monkeypatch.setattr("orchestrator.channel.submit_reply", refuse)
     reply = tmp_path / "edit.json"
     reply.write_text(
         json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
@@ -1438,6 +1439,103 @@ def test_main_reply_reports_accepted_edits_when_the_transport_fails(
     assert main_reply(["orch", str(reply), "--runs-dir", str(runs)]) == 2
     assert "edit(s) #1 were accepted" in capsys.readouterr().err
     assert [item.seq for item in pending_commands(run_dir / "channel")] == [1]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "not json at all",
+        json.dumps(["not", "a", "mapping"]),
+        json.dumps({"seq": 0, "reply": {"completion": True, "reason": "seq below one"}}),
+        json.dumps({"seq": True, "reply": {"completion": True, "reason": "bool is not a seq"}}),
+        json.dumps({"seq": 1, "reply": "not a mapping"}),
+        json.dumps({"seq": 1, "reply": {"completion": "not a boolean"}}),
+    ],
+)
+def test_an_unreadable_queued_reply_is_skipped_rather_than_served(
+    tmp_path: Path, record: str
+) -> None:
+    """The queue is a file on disk, so a damaged record must not become a verdict.
+
+    Each of these would otherwise be handed to the orchestrator as the planner's
+    answer. They are skipped instead, and the well-formed reply behind them is still
+    claimed — a reader that stopped at the first bad line would strand it.
+    """
+    channel = create_channel(tmp_path / "damaged-run")
+    good = {"completion": False, "message": "keep going", "reason": "keep going"}
+    (channel / "replies.jsonl").write_text(
+        f"{record}\n" + json.dumps({"seq": 2, "reply": good}) + "\n", encoding="utf-8"
+    )
+
+    assert [item.seq for item in pending_replies(channel)] == [2]
+    assert await_reply(channel, timeout=0.1) == good
+    assert claim_reply(channel) is None
+
+
+def test_a_damaged_record_still_holds_the_sequence_it_was_written_with(tmp_path: Path) -> None:
+    """Allocating over a record this reader cannot parse would break exactly-once.
+
+    The unreadable record is skipped when replies are *served*, but it still occupies
+    a sequence: reusing it would give two replies one number, and the single cursor
+    advance that answers one would answer the other too.
+    """
+    channel = create_channel(tmp_path / "reused-run")
+    assert submit_reply(channel, {"completion": True, "reason": "first"}) == 1
+    with (channel / "replies.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"seq": 2, "reply": {"completion": "torn"}}\n')
+
+    assert submit_reply(channel, {"completion": True, "reason": "third"}) == 3
+    assert [item.seq for item in pending_replies(channel)] == [1, 3]
+
+
+def test_a_repeated_or_reordered_sequence_never_rides_one_cursor_advance(
+    tmp_path: Path,
+) -> None:
+    """The cursor is one high-water mark, so the queue's own ordering is a boundary.
+
+    A duplicate or backwards sequence would be consumed by the advance that answered
+    the record before it — one claim, two replies, and the second lost with no reader
+    ever seeing it. Both are dropped, and the next well-ordered reply still serves.
+    """
+    channel = create_channel(tmp_path / "disordered-run")
+    good = {"completion": False, "message": "keep going", "reason": "keep going"}
+    (channel / "replies.jsonl").write_text(
+        "\n".join(
+            json.dumps({"seq": seq, "reply": {**good, "reason": reason}})
+            for seq, reason in ((2, "first"), (2, "duplicate"), (1, "backwards"), (3, "next"))
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert [item.seq for item in pending_replies(channel)] == [2, 3]
+    claimed = claim_reply(channel)
+    assert claimed is not None and claimed.reply["reason"] == "first"
+    survivor = claim_reply(channel)
+    assert survivor is not None and survivor.reply["reason"] == "next"
+    assert claim_reply(channel) is None
+
+
+def test_reply_queue_reads_refuse_an_invalid_cursor_and_an_unbounded_wait(
+    tmp_path: Path,
+) -> None:
+    """Both bounds this queue stands on are checked rather than assumed.
+
+    A cursor that is not a count would silently re-serve or silently swallow every
+    queued reply, and a non-finite deadline never compares true — the wait it bounds
+    would never end.
+    """
+    channel = create_channel(tmp_path / "invalid-run")
+    submit_reply(channel, {"completion": True, "reason": "verified"})
+    for unbounded in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(ChannelError, match="finite and non-negative"):
+            await_reply(channel, timeout=unbounded)
+        with pytest.raises(ChannelError, match="finite and non-negative"):
+            await_reply_delivery(channel, 1, timeout=unbounded)
+
+    atomic_json(channel / "replies-cursor.json", {"consumed": "all of them"})
+    with pytest.raises(ChannelError, match="reply cursor is invalid"):
+        claim_reply(channel)
 
 
 def test_pump_rejects_a_command_left_over_from_another_round(tmp_path: Path) -> None:
@@ -1498,16 +1596,11 @@ def test_validate_commands_accepts_an_attest_and_refuses_a_repeat(tmp_path: Path
         validate_commands(runs / "orch", 1, twice)
 
 
-def test_main_reply_queues_a_validated_edit_before_sending_the_frame(
+def test_main_reply_queues_a_validated_edit_beside_the_reply_that_carried_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runs = _live_graph_run(tmp_path)
     channel = runs / "orch" / "channel"
-    sent: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "orchestrator.channel.write_message",
-        lambda path, value, timeout: sent.append(dict(value)),
-    )
     reply = tmp_path / "edit.json"
     reply.write_text(
         json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
@@ -1516,8 +1609,11 @@ def test_main_reply_queues_a_validated_edit_before_sending_the_frame(
     # No reconciler is draining, so the edit is durably accepted but unanswered: that
     # is neither success nor a rejection, and the caller is told not to resubmit.
     assert main_reply(["orch", str(reply), "--runs-dir", str(runs), "--timeout", "0.2"]) == 1
-    assert "were accepted but not reconciled" in capsys.readouterr().err
-    assert sent[0]["commands"] == [{"op": "attest", "ref": "approve"}]
+    shown = capsys.readouterr()
+    assert "were accepted but not reconciled" in shown.err
+    assert json.loads(shown.out) == {"reply": 1, "state": "queued"}
+    carried = pending_replies(channel)
+    assert [item.reply["commands"] for item in carried] == [[{"op": "attest", "ref": "approve"}]]
     queued = pending_commands(channel)
     assert [(item.seq, item.round, item.command.payload) for item in queued] == [
         (1, 1, {"op": "attest", "ref": "approve"})
@@ -1558,24 +1654,17 @@ def test_main_reply_refuses_an_inapplicable_edit_without_queueing_it(
     assert pending_commands(runs / "orch" / "channel") == ()
 
 
-def test_main_reply_keeps_a_bare_completion_legal_at_a_round_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_reply_keeps_a_bare_completion_legal_at_a_round_boundary(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    create_channel(runs / "orch")
-    sent: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "orchestrator.channel.write_message",
-        lambda path, value, timeout: sent.append(dict(value)),
-    )
+    channel = create_channel(runs / "orch")
     reply = tmp_path / "complete.json"
     reply.write_text(
         json.dumps({"version": 1, "commands": [{"op": "complete", "reason": "verified"}]}),
         encoding="utf-8",
     )
     assert main_reply(["orch", str(reply), "--runs-dir", str(runs)]) == 0
-    assert sent[0]["completion"] is True
-    assert not (runs / "orch" / "channel" / "commands.jsonl").exists()
+    assert [item.reply["completion"] for item in pending_replies(channel)] == [True]
+    assert not (channel / "commands.jsonl").exists()
 
 
 def test_a_command_that_loses_the_applicability_race_is_rejected_to_its_submitter(
