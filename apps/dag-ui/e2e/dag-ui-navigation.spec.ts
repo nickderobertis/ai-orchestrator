@@ -115,7 +115,7 @@ test("scrolls the working area without moving the run list", async ({
   // state the two regions have to scroll independently in.
   await open(page, DESKTOP, `/?run=${runs().live}&view=overall`);
   await page.setViewportSize({ width: 1024, height: 700 });
-  await expect(page.getByText("Run timeline")).toBeVisible();
+  await expect(page.getByText("Graph timeline")).toBeVisible();
   const workspace = page
     .locator(".overall-view [data-radix-scroll-area-viewport]")
     .first();

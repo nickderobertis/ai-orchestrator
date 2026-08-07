@@ -1057,6 +1057,25 @@ def main() -> None:
     # served but absent there is dropped before any client sees it. So the span the
     # supervisory tier's own additions land on is reconciled symmetrically too.
     reconcile_documented_schema(dag_model, "timelineSpanSchema", design, "TimelineSpan")
+    # And the envelope around it, for the same reason: the version it carries is the
+    # only thing telling a consumer which meaning of that span it is holding, and a
+    # schema that does not parse the field cannot report a mismatch it never saw.
+    reconcile_documented_schema(dag_model, "runTimelineSchema", design, "RunTimeline")
+    # What a `scope=run` rollup carries. `TimelineSpan` above says which keys may ever
+    # appear on *a* span; this says which of them this one does, which is the part a
+    # graph-level consumer reads a node's lanes out of. Reconciled as fields rather
+    # than left to the optionality of the parent shape: `agent_role` and
+    # `transport_role` are optional on every span, so a rollup that stopped carrying
+    # them — or a rollup kind that started — would pass every other check here while
+    # silently changing what a summary means.
+    reconcile(
+        "run-scope rollup fields",
+        (
+            "orchestrator/timeline.py RUN_SCOPE_ROLLUP_FIELDS",
+            frozenset_members(timeline, "RUN_SCOPE_ROLLUP_FIELDS"),
+        ),
+        ("docs/dag-ui/design.md RunScopeRollup", list(interface_fields(design, "RunScopeRollup"))),
+    )
     # The driver phase is declared by `orchestrator/supervisory.py`, which derives it,
     # rather than by the timeline that serves it — one source, two readers.
     supervisory = root / "orchestrator/supervisory.py"
@@ -1209,6 +1228,42 @@ def main() -> None:
         ),
         remedy="regenerate the golden alongside the bump, then reconcile them in one change",
     )
+
+    # The run timeline's own schema version, which moves independently of `api_version`
+    # and of the telemetry index. `api_version` answers "which API is this"; a
+    # consumer that has to know whether a rollup's role pair means what it now means
+    # cannot read that off a number that stays 2 whatever the payload does. Four copies
+    # again: Python owns it, the contract restates it, the schema a client parses with
+    # pins it as a literal, and the checked-in golden carries a serialized one.
+    for label, path, pattern, remedy in (
+        (
+            "docs/dag-ui/design.md",
+            design,
+            r"timeline_schema_version:? (\d+)",
+            None,
+        ),
+        (
+            "packages/dag-model/src/index.ts",
+            dag_model,
+            r"timeline_schema_version: z\.literal\((\d+)\)",
+            None,
+        ),
+        (
+            "tests/golden/run-timeline-v2.json",
+            root / "tests/golden/run-timeline-v2.json",
+            r'"timeline_schema_version": (\d+)',
+            "regenerate the golden alongside the bump, then reconcile them in one change",
+        ),
+    ):
+        reconcile_number(
+            "run timeline schema version",
+            (
+                "orchestrator/timeline.py TIMELINE_SCHEMA_VERSION",
+                module_number(timeline, "TIMELINE_SCHEMA_VERSION"),
+            ),
+            (label, documented_number(path, "run timeline schema version", pattern)),
+            **({} if remedy is None else {"remedy": remedy}),
+        )
 
     # Network defaults the contract states in prose and the server states in code.
     server = root / "orchestrator/server.py"

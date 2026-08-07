@@ -759,8 +759,11 @@ export const timelineIntervalSchema = openObject({
  * never closed — an in-flight run, not an error — and `parent_id` links spans into
  * the tree the recorded nesting implies. `count`, `total_duration_ms` and
  * `intervals` appear only on a `rollup` span, which stands in for thousands of
- * high-frequency records, and the role pair and `dispatch_id` — the key that groups
- * the several oneharness sessions of one onejudge dispatch — only on a `dispatch` one.
+ * high-frequency records, and `dispatch_id` — the key that groups the several
+ * oneharness sessions of one onejudge dispatch — only on a `dispatch` one. The role
+ * pair appears on a dispatch and on a `scope=run` rollup of dispatches, which carries
+ * the pair every session it summarizes shares: that pair, not either half of it, is
+ * the category such a rollup stands for.
  */
 export const timelineSpanSchema = openObject({
   id: z.string().min(1),
@@ -794,8 +797,20 @@ export const artifactContentSchema = openObject({
   content: z.string(),
   truncated: z.boolean(),
 });
+/**
+ * The timeline envelope, which carries a version of its own beside the API's.
+ *
+ * `api_version` says which API this is; `timeline_schema_version` says which *meaning*
+ * of the payload under it this is, and moves on its own. Version 1 was the unversioned
+ * shape, where the role pair appeared only on a `dispatch` span — so a client could
+ * read "carries roles" as "is a dispatch". Version 2 serves that pair on a `scope=run`
+ * rollup too, naming the category it summarizes, and that inference no longer holds.
+ * Pinned as a literal so a payload from a server on the other meaning is refused here
+ * rather than rendered as though it agreed.
+ */
 export const runTimelineSchema = openObject({
   api_version: z.literal(2),
+  timeline_schema_version: z.literal(2),
   observed_at: timestamp,
   run_id: z.string().min(1),
   spans: z.array(timelineSpanSchema),

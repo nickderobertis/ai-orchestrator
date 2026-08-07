@@ -503,9 +503,79 @@ than issuing one request per node. The
 server assembles it — clients never fold the journal, history, or the monitor
 snapshot themselves.
 
+That scope is what a graph-level reading of the run is built on — one row per node,
+each row's rollups read as that node's lanes — so three of its rules exist to keep
+that reading true to the record:
+
+- One rollup stands for one *category* of that node's nested work, and a dispatch's
+  category is the **pair** `(agent_role, transport_role)` rather than either half. A
+  worker and the check-in beside it share a transport; a worker and the lint run it
+  made of its own work share a semantic role, because that session carries
+  `agentRole: "worker"` by the attribution contract and is identified only by its
+  transport. Keying on one half alone summed one category's duration under another's
+  name and left the graph view without a lane the node view draws. The rollup carries
+  the pair it summarized, so a client derives that lane from the same two words it
+  derives a dispatch's from. A rollup of anything else carries neither.
+- Every node the run recorded anything about is summarized, whether or not its own
+  `node` span was opened. A node the scheduler settled without dispatching journals no
+  `node-started` — a node waiting on a person is the everyday case — and keying on the
+  container span dropped that node's whole record, so a graph blocked on a human read
+  as a graph doing nothing. Such a rollup carries its `node_id` and its round with no
+  `parent_id`, because there is no span to be a child of.
+- `total_duration_ms` is the time the summarized spans **cost**, and a span that
+  already carries its own total contributes that rather than its start-to-end window.
+  An aggregate of high-frequency records is exactly the case where the two differ:
+  four seconds of lock contention spread over two minutes is four seconds.
+
+One rollup carries exactly these keys and no others. They are a subset of
+`TimelineSpan`, restated because that shape says which keys may ever appear on *a*
+span while this says which of them this one does — and the role pair is optional
+everywhere, so a rollup that stopped carrying it, or a rollup of some other kind that
+started, would violate no schema while changing what a summary means.
+`orchestrator/timeline.py` owns the set as `RUN_SCOPE_ROLLUP_FIELDS` and
+`scripts/check-dag-state-contract.py` reconciles the two.
+
+```ts
+interface RunScopeRollup {
+  id: string;
+  kind: "rollup";
+  label: string; // the summarized agent role, else the summarized span kind
+  started_at: string;
+  ended_at: string | null;
+  events: []; // always empty: a summary stands in for items, it does not carry them
+  count: number;
+  total_duration_ms: number;
+  node_id: string;
+  parent_id?: string; // omitted when the run journalled no `node` span to hang it on
+  round?: number;
+  agent_role?: AgentRole; // this pair appears together, on a rollup of dispatches
+  transport_role?: "agent" | "judge" | "llmlint";
+}
+```
+
+Every optional key above is **omitted** when it does not apply, never served as
+`null`: a consumer switching on the role pair has to be able to tell "not a dispatch"
+from "a dispatch whose role went missing". `ended_at` is the one key a span may carry
+as null, because that is what work the record never closed looks like.
+`tests/golden/run-timeline-v2.json` is the checked-in cross-language example —
+`tests/test_timeline.py` compares the Python projection to it and
+`packages/dag-model/e2e/model.e2e.test.ts` parses the same bytes with the schema a
+browser parses with.
+
+The envelope carries a version of its own. `api_version` says which API this is and
+may not move without a new major route; `timeline_schema_version` says which *meaning*
+of the payload under it a consumer is holding, and moves on its own. Version 1 was the
+unversioned shape, in which the role pair appeared only on a `dispatch` span — so a
+client could read "carries roles" as "is a dispatch". Version 2 serves that pair on a
+`scope=run` rollup too, where it names the category the rollup summarizes, and that
+inference no longer holds. `orchestrator/timeline.py` owns the number as
+`TIMELINE_SCHEMA_VERSION`; `scripts/check-dag-state-contract.py` reconciles it here,
+in the `dag-model` schema, and in `tests/golden/run-timeline-v2.json`.
+
 ```ts
 interface RunTimeline {
   api_version: 2;
+  timeline_schema_version: 2;
   observed_at: string;
   run_id: string;
   spans: TimelineSpan[];
@@ -514,10 +584,12 @@ interface RunTimeline {
 // One interval of recorded work. ended_at is null for work the recorded stream
 // never closed, which is what an in-flight run looks like rather than an error.
 // parent_id links spans into a tree; a span with no parent is run-level.
-// count, total_duration_ms and intervals appear only on a "rollup" span;
-// agent_role, transport_role and dispatch_id only on a "dispatch" one, where the
-// roles are the DagConversation attribution's own values so a row can be labelled
-// and grouped without fetching the transcript behind it. phase appears only on the
+// count, total_duration_ms and intervals appear only on a "rollup" span, and
+// dispatch_id only on a "dispatch" one. agent_role and transport_role appear on a
+// dispatch — where they are the DagConversation attribution's own values, so a row
+// can be labelled and grouped without fetching the transcript behind it — and on a
+// scope=run rollup of dispatches, which carries the pair every session it summarizes
+// shares. phase appears only on the
 // launched orchestrator's own dispatch span, and says which part of its loop the
 // run's recorded state places the driver in.
 interface TimelineSpan {
