@@ -64,6 +64,10 @@ fi
 # orchestrator side today; this is what keeps that true rather than assumed.
 for arg in "$@"; do
     if [ "$arg" = "--stream" ]; then
+        # llmlint: ignore[tool_output_is_signal] A pass-through, like the --config
+        # branch above: this process is replaced, so there is no wrapper left to add
+        # a line, and interposing one would corrupt the very stream the caller asked
+        # for. oneharness's own diagnostics are the signal on this path.
         exec oneharness run --config "$orchestrator_config" "$@"
     fi
 done
@@ -113,6 +117,9 @@ positive_number "$boundary_backoff" || boundary_backoff=$BOUNDARY_DEFAULT_BACKOF
 
 if ! captured_stdout=$(mktemp "${TMPDIR:-/tmp}/oneharness-orchestrator.XXXXXX"); then
     echo "oneharness-orchestrator: cannot create the stdout buffer the boundary retry needs under ${TMPDIR:-/tmp}; free space there or point TMPDIR at a writable directory to restore post-round retries, then retry. This turn runs unbuffered and is not retried." >&2
+    # llmlint: ignore[tool_output_is_signal] The wrapper has already said what went
+    # wrong here and what fixes it, on the line above; the turn itself then runs
+    # unwrapped, and what it reports is oneharness's own to report.
     exec oneharness run --config "$orchestrator_config" "$@"
 fi
 # `rm -f` succeeds for an already-absent path, so the only failures left are a
@@ -182,6 +189,12 @@ fi
 # Explicitly, rather than leaving it to strict mode: this is the answer onejudge
 # parses, and a buffer that cannot be replayed has to say so rather than exit with
 # the turn's own status and look like the turn itself failed.
+if [ "$boundary_status" -ne 0 ] && [ -s "$captured_stdout" ]; then
+    # The turn answered and still failed, so it was never a candidate for a retry.
+    # Its own words are on stderr above; this says which decision was taken about
+    # them, because "buffered, not retried" is the part only the wrapper knows.
+    echo "oneharness-orchestrator: the orchestrator turn exited $boundary_status after producing output, so it was answered rather than retried; read the turn's own error above, then rerun it once the cause is cleared" >&2
+fi
 if ! cat "$captured_stdout"; then
     echo "oneharness-orchestrator: could not replay the buffered turn from $captured_stdout; the turn ran but its answer is lost — rerun it" >&2
     exit 2
