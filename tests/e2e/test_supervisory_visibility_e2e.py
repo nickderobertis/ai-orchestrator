@@ -38,6 +38,7 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator.runs import write_next_plan, write_result
 from orchestrator.server import create_app
 from orchestrator.supervisory import CAPTURE_DIR
 
@@ -167,10 +168,10 @@ def _status(run_id: str, runs: Path, history: Path) -> str:
     return viewed.stdout
 
 
-def _runs(runs: Path, history: Path) -> str:
+def _runs(runs: Path, history: Path, *extra: str) -> str:
     history.mkdir(exist_ok=True)
     listed = subprocess.run(
-        ["just", "runs", "--runs-dir", str(runs)],
+        ["just", "runs", "--runs-dir", str(runs), *extra],
         cwd=REPO_ROOT,
         env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(history)},
         text=True,
@@ -415,16 +416,10 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         assert resolved.json()["conversation"]["id"] == conversation_id
         assert resolved.json()["attribution"]["agentRole"] == "orchestrator"
 
-        # A capture torn by a partial write costs only itself: the run still serves the
-        # spans its other sources carry, which is the whole point of an optional source.
-        check_in_capture.write_text("{", encoding="utf-8")
-        after = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()
-        roles = {
-            span.get("agent_role")
-            for span in after["spans"]
-            if span["kind"] == "dispatch" and "agent_role" in span
-        }
-        assert roles == {"orchestrator"}, after
+    # A capture torn by a partial write costs only itself, and that is proven in
+    # `tests/test_supervisory.py` rather than here: reaching it means writing a
+    # half-file, which no interface an operator drives can produce, so injecting it
+    # through this journey would be staging a state rather than travelling to one.
 
     # And marks it explicitly once it is gone: the state four stranded runs were in.
     with suppress(ProcessLookupError, PermissionError):
@@ -524,3 +519,60 @@ def test_a_driver_that_finished_its_loop_stops_reporting_itself(
     listed = _runs(runs, tmp_path / "history")
     assert "driver running" not in listed, listed
     assert "DRIVER DEAD" not in listed, listed
+
+
+def _launched(runs: Path, run_id: str, *, pid: int) -> Path:
+    """One run directory in the on-disk shape `just orchestrate` leaves behind."""
+    run = runs / run_id
+    (run / "channel").mkdir(parents=True)
+    (run / "launch.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    (run / "orchestrator").mkdir()
+    (run / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": pid, "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    return run
+
+
+def test_just_runs_carries_the_driver_line_on_its_parked_and_settled_rows(tmp_path: Path) -> None:
+    """The two row forms a single live journey cannot reach, through the real CLI.
+
+    `just runs` renders four row shapes and one launch only ever occupies one of them
+    at a time, so the live journey above covers the ACTIVE and dead-driver forms. These
+    two are the rest: a launch alive with nothing progressing, and a run whose latest
+    round is recorded. Both are read by a planner asking why nothing is settling, so
+    both are driven here through the real `just runs` command rather than in process.
+    """
+    runs = tmp_path / "runs"
+    history = tmp_path / "history"
+    # A real process that is alive and has no descendant of its own. Both halves
+    # matter: the driver line's claim is about a pid that resolves, and `parked` is
+    # precisely "alive, with nothing running under it". This test's own pid would
+    # satisfy the first and fail the second, because `just runs` below is its child.
+    idle = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    try:
+        _launched(runs, "idle", pid=idle.pid)
+        settled = _launched(runs, "settled", pid=idle.pid)
+        write_next_plan(settled, {"name": "Useful run", "concurrency": 1, "tasks": [{"id": "a"}]})
+        write_result(
+            settled / "round-01",
+            {"ok": True, "started_order": ["a"], "results": {"a": {"status": "done"}}},
+        )
+
+        # A threshold both launches have necessarily passed — neither has a child
+        # process or a ledger write — so the parked form renders without waiting on
+        # wall clock.
+        lines = _runs(runs, history, "--parked-after", "0.001").splitlines()
+    finally:
+        idle.terminate()
+        idle.wait(timeout=30)
+
+    parked = next(index for index, line in enumerate(lines) if line.startswith("! idle"))
+    assert "PARKED" in lines[parked], lines
+    # Directly beneath its own row: this line is read as belonging to the row above it.
+    assert f"driver running (pid {idle.pid})" in lines[parked + 1], lines
+
+    recorded = next(
+        index for index, line in enumerate(lines) if "settled" in line and "round-01" in line
+    )
+    assert f"driver running (pid {idle.pid})" in lines[recorded + 1], lines

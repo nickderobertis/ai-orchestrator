@@ -1148,21 +1148,8 @@ def test_runs_cli_carries_the_driver_line_on_every_row_form(tmp_path, capsys) ->
     assert f"driver running (pid {os.getpid()})" in lines[recorded_row + 1], out
 
 
-def test_runs_cli_carries_the_driver_line_on_a_parked_row(tmp_path, capsys) -> None:
-    """The parked row form keeps the driver line too.
-
-    Its own indicator says the launch is alive with nothing progressing; the driver
-    line beneath it says which phase of its loop that pid is stuck in, which is the
-    difference between "wait longer" and "intervene".
-    """
-    _driven(tmp_path, "idle", pid=os.getpid())
-
-    # A threshold this run has necessarily passed, so the parked branch renders without
-    # waiting on wall-clock: this launch has no child process and no ledger write.
-    assert main_runs(["--runs-dir", str(tmp_path), "--parked-after", "0.001"]) == 0
-    lines = capsys.readouterr().out.splitlines()
-
-    row = next(index for index, line in enumerate(lines) if line.startswith("! idle"))
-    assert "PARKED" in lines[row], lines
-    assert lines[row + 1 :], f"the parked row carries no line beneath it: {lines}"
-    assert f"driver running (pid {os.getpid()})" in lines[row + 1], lines
+# The parked row form is proven in tests/e2e/test_supervisory_visibility_e2e.py rather
+# than here. `parked` means "alive with nothing running underneath", so it cannot be
+# asserted against this process's own pid: whether that reads as parked depends on
+# whether pytest happens to have a live child at the time, which under xdist it often
+# does. That test spawns a process with no descendants and drives the real `just runs`.
