@@ -358,6 +358,11 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         assert "lacks complete v1.0 telemetry" in live_view, live_view
         assert f"{run_id}/{CAPTURE_DIR}/" in live_view, live_view
         live_rows = _runs(runs, tmp_path / "history")
+        # The row it hangs off, named exactly: round 1 has not settled, so this run has
+        # no ledger row yet and `just runs` renders it from the pre-round branch. That
+        # branch is the one a planner reads while wondering why nothing is settling,
+        # and asserting the bare row would pass just as well if the line moved off it.
+        assert f"* {run_id}  [mine]  ACTIVE  (orchestrator running)" in live_rows, live_rows
         assert f"    driver running (pid {owner})" in live_rows, live_rows
 
         # The node was held so far, so the driver's first turn had not ended. Let it
