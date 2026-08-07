@@ -89,7 +89,9 @@ mark_alternate_claude_trust() (
     return 1
   fi
   local -a trust_temporaries=()
-  # shellcheck disable=SC2329  # Invoked from the exit trap below, which shellcheck cannot follow.
+  # Both codes are the same false positive under two shellcheck versions: 0.11+ calls a
+  # trap-only function uninvoked (SC2329), 0.10 calls its body unreachable (SC2317).
+  # shellcheck disable=SC2329,SC2317  # Invoked from the exit trap below, which shellcheck cannot follow.
   cleanup_trust_files() {
     (( ${#trust_temporaries[@]} > 0 )) || return 0
     local -a stale=("${trust_temporaries[@]}")
@@ -107,7 +109,7 @@ mark_alternate_claude_trust() (
     done
     trust_temporaries=("${kept[@]}")
   }
-  # shellcheck disable=SC2329  # Invoked by name as this subshell's EXIT trap handler.
+  # shellcheck disable=SC2329,SC2317  # Invoked by name as this subshell's EXIT trap handler.
   on_trust_exit() {
     local status=$?
     cleanup_trust_files || status=1
