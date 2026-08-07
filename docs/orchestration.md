@@ -1220,13 +1220,21 @@ which is exactly what the reference is for. A consumer with no dependents leaves
 nothing to carry the watch, and it ends there.
 
 A failed **or cancelled** lifecycle node whose preserved branch is carried forward
-is continued
-**automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**. The count is
+is continued **automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**.
+The count is
 kept on the plan node's `resume.attempts` and settles the node out of the next
 round once it is spent, exactly as a `drop` would: the failing result stands for
 the planner, and the branch stays recoverable with `just repo-recover`. An explicit
 `retry` edit clears the count, so the bound only ever stops the harness repeating
 itself — never a decision the planner made after reading the result.
+
+A **parked** node is the deliberate exception, and the distinction is worth
+holding onto: `cancelled` is a stop the round took, so continuing it is the
+harness finishing what it started and it spends that budget. `parked` is a stop
+the *planner* took with `cancel`, so no round redispatches it and it spends
+nothing. It carries its checkpoint forward regardless, because that preserved
+branch is exactly what a later [`requeue`](#parking-a-node-and-picking-it-up-again)
+has to pick up rather than cutting a fresh one beside it.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
