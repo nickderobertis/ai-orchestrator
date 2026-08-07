@@ -94,6 +94,26 @@ a worktree under its own run root and gets its own. A name that repeated across
 runs would ask the harness to resume a conversation it filed under a directory
 that no longer exists, which fails before the first turn.
 
+**A relaunch is the one continuation that must not continue.** Every relaunch above
+follows a dispatch that died leaving nothing behind — on this host, a provider
+refusing the turn — and the conversation it died in is bound to the identity that
+refused. Reusing its name asks that identity for a session it may no longer hold,
+and `No conversation found with session ID ...` is another death, which earns
+another relaunch, which asks again; whole lineages have been spent on that loop
+without one turn of work. So relaunch *N* dispatches as `<session>#relaunchN`
+(`orchestrator/relaunch.py`), which is also what frees the fallback chain to run
+the turn on whichever identity still can — a fresh conversation carries no binding
+across harnesses.
+
+Continuity comes from context rather than from the session. The dead conversation's
+own recorded turns are read back out of oneharness history, bounded and redacted,
+and given to the relaunched dispatch as prompt text ahead of the task, stating
+plainly that the prior session is gone and cannot be resumed. A history read that
+finds nothing — including the death that happened before the first turn ever
+recorded — degrades to the task alone, because the seed improves a relaunch and is
+never a precondition for one. The turn-cap resume is deliberately *not* a relaunch
+and keeps its conversation: it is continuing work the harness still holds.
+
 `just run-plan <plan.json>` runs one, over a plan holding a single lifecycle node
 (`examples/single-node-lifecycle.plan.json`); it is the only executor, so there is
 no second path a single workstream can take. The node's `repo` is a GitHub
@@ -1285,7 +1305,20 @@ nothing derived from the round's result overrules it. A pinned branch the lifecy
 cannot adopt fails the dispatch as `resume-failed`, naming the pin and the reason;
 substituting a fresh branch for a pin the planner named is the defect that rule
 exists to prevent, because the edit is reported as applied and the work is then
-re-derived somewhere else. A continuation the harness carried forward on its own
+re-derived somewhere else.
+
+**A precondition the harness cannot even check is a resume failure too.** Adopting
+the preserved branch, resolving the checkpoint, reading the provenance over
+`origin/<pr-base>`, and querying a recorded draft are all git or GitHub calls that
+can fail outright rather than answer — a stacked `pr_base` a prerequisite's merge
+deleted from origin is the common one. Each raised straight past the resume
+reporting into the handler that wraps publication, so the node settled as
+`merge-path failure: publication of <branch>` — a phase the run stops well short
+of, since it never cuts a worktree. It now settles `resume-failed` with
+`cannot check whether <precondition> for branch <branch> at recorded checkpoint
+<sha>`, and `just results` renders that reason beside the status. Nothing falls
+back to a fresh branch on this path: an unanswered question is not evidence that
+the preserved work is unusable. A continuation the harness carried forward on its own
 may still fall back to a fresh branch when the preserved work is no longer
 adoptable, and it says so where the round is read: `branch-discovered` carries
 `resume_declined` and the settled node's `detail` carries the same reason, beside

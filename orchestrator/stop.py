@@ -41,7 +41,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import ConfigError
-from .launch import RunOwner, caller_identity, read_run_owner
+from .launch import caller_identity, read_run_owner
 from .runs import (
     abandoned_launch_indicator,
     abandoned_round_indicator,
@@ -290,18 +290,6 @@ def run_tree(owners: tuple[RecordedOwner, ...]) -> set[ProcessId]:
     return set(roots) | set(descendants_of(roots))
 
 
-def _describe(owner: RunOwner) -> str:
-    """Name a run's owner for a refusal, without printing its session id.
-
-    Only ever called about a run the caller does not own, so there is no "you" case
-    to render: the two things a planner can be looking at are another planner's run
-    and a run nobody can attribute.
-    """
-    if owner.identity is None:
-        return "no recorded launcher (unknown is not the same as yours)"
-    return f"another planner ({owner.identity.label})"
-
-
 def _report_targets(run_id: str, owners: tuple[RecordedOwner, ...]) -> None:
     for owner in owners:
         where = "" if owner.local else f" on {owner.host} — not reachable from this host"
@@ -350,12 +338,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.force:
             print(
                 f"stop: refusing to stop {run_id}: it was launched by "
-                f"{_describe(owner)}, not by you ({mine}). Confirm with its planner, "
+                f"{owner.describe_other()}, not by you ({mine}). Confirm with its planner, "
                 f"or override with: just stop {run_id} --runs-dir {args.runs_dir} --force",
                 file=sys.stderr,
             )
             return 2
-        print(f"stop: --force: {run_id} was launched by {_describe(owner)}; you are {mine}")
+        print(f"stop: --force: {run_id} was launched by {owner.describe_other()}; you are {mine}")
         print("stop: this will stop the following recorded processes and everything below them:")
         _report_targets(run_id, recorded_owners(run_dir))
 

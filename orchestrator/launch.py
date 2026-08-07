@@ -565,6 +565,20 @@ class RunOwner:
             return "unknown"
         return "mine" if self.is_(caller) else self.identity.label
 
+    def describe_other(self) -> str:
+        """Name this owner for a refusal, without printing its session id.
+
+        Only ever called about a run the caller does not own, so there is no "you"
+        case to render: the two things a planner can be looking at are another
+        planner's run and a run nobody can attribute. It lives here, on the owner
+        itself, because two verbs refuse on this same rule — `just stop` and `just
+        orchestrate --adopt` — and a planner must read the same sentence whether the
+        verb it typed was going to end another session's run or take it over.
+        """
+        if self.identity is None:
+            return "no recorded launcher (unknown is not the same as yours)"
+        return f"another planner ({self.identity.label})"
+
 
 UNKNOWN_OWNER = RunOwner("unknown", None)
 

@@ -32,6 +32,7 @@ import pytest
 from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
+from history_store import write_worker_session
 from rendezvous import Rendezvous
 from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
@@ -85,7 +86,9 @@ from orchestrator.provenance import (
 from orchestrator.provider_health import failure_rollups
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
+from orchestrator.relaunch import RELAUNCH_MARK
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
+from orchestrator.results import main as results_main
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.verify import PRESERVED_GATE_LOG_ATTEMPTS, preserved_gate_log_dir
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
@@ -695,9 +698,11 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     canonical = gitops.clone(origin, tmp_path / "canonical-relaunched")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
     launches: list[str] = []
+    dispatched_tasks: list[str] = []
 
     def dying_then_working(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
         launches.append(persona)
+        dispatched_tasks.append(task)
         if len(launches) == 1:
             return _launch_death(persona)
         worktree = Path(project_dir)
@@ -722,6 +727,11 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     assert launches == ["engineer", "engineer"]
     # The relaunch waited rather than asking the same refusing provider at once.
     assert waits == [RELAUNCH_BACKOFF_SECONDS]
+    # A death before the first turn records no conversation, so there is nothing to
+    # seed the relaunch with — and the relaunched dispatch is given exactly the task,
+    # unchanged, which is the behaviour that existed before seeding did.
+    assert dispatched_tasks == [dispatched_tasks[0]] * 2
+    assert "Prior session context" not in dispatched_tasks[1]
     assert _has_file(origin, "main", "cost-report.txt")
 
 
@@ -779,6 +789,81 @@ def test_an_empty_death_after_committed_work_relaunches_onto_the_preserved_branc
     # and the work that finished afterwards reach the base together.
     assert _has_file(origin, "main", "partial.txt")
     assert _has_file(origin, "main", "finished.txt")
+
+
+def test_a_relaunch_starts_a_fresh_seeded_session_and_never_resumes_the_dead_one(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    """The relaunch after a provider death takes a conversation of its own.
+
+    Reusing the name asks the identity that just refused for a session it may no
+    longer hold, and `No conversation found with session ID ...` is another death,
+    which earns another relaunch — the loop that spent whole lineages without a turn
+    of work. So the second dispatch is a *new* conversation, and the dead one is read
+    back out of oneharness history and carried forward as prompt text instead.
+
+    The history store here is the real one: the dying dispatch records a session in
+    oneharness' own line format, and the seed is read back through the real
+    `oneharness history` CLI, exactly as production reads it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-seeded-relaunch")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    history_dir = tmp_path / "history"
+    store = history_dir / "seeded-relaunch-project"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    dispatched: list[tuple[str, str]] = []
+
+    def dying_then_working(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        dispatched.append((session, task))
+        worktree = Path(project_dir)
+        if len(dispatched) == 1:
+            # What the dead conversation leaves behind: a real recorded session,
+            # under the very name this dispatch ran as.
+            write_worker_session(
+                store / "dying-dispatch-20260806T120000Z-1.jsonl",
+                project=worktree,
+                name=session,
+                prompt="Measure the lifecycle cost and write cost-report.txt.",
+            )
+            return _launch_death(persona)
+        (worktree / "cost-report.txt").write_text("measured\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: report lifecycle cost")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "seeded-relaunch-worktrees"),
+        branch="feature/seeded-relaunch",
+        dispatch_fn=dying_then_working,
+        recorded_gate=["true"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert len(dispatched) == 2, dispatched
+    (dead_session, _), (fresh_session, relaunched_task) = dispatched
+    # A new conversation, not the dead one — and the dead name is never asked for again.
+    assert fresh_session != dead_session
+    assert fresh_session == f"{dead_session}{RELAUNCH_MARK}1"
+    assert [session for session, _ in dispatched].count(dead_session) == 1
+    # And the work continues from what the dead conversation recorded, carried as
+    # prompt text rather than as a session to resume.
+    assert "Prior session context (bounded)" in relaunched_task
+    assert "Measure the lifecycle cost and write cost-report.txt." in relaunched_task
+    assert "Implemented the unified view." in relaunched_task
+    assert "NOT being resumed" in relaunched_task
+    # The original task is still the task; the seed is context in front of it.
+    assert relaunched_task.endswith(
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n"
+    )
+    assert _has_file(origin, "main", "cost-report.txt")
 
 
 @pytest.mark.parametrize(
@@ -2553,6 +2638,75 @@ def test_a_retry_resume_that_cannot_be_adopted_is_refused_by_name(
     assert gone["outcome"] == "resume-failed"
     assert f"branch {lost.branch!r} no longer exists locally or on origin" in gone["detail"]
     assert gone["branch"] == lost.branch
+
+
+def test_a_resume_precondition_that_cannot_be_checked_settles_as_a_resume_failure(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A precondition the harness cannot evaluate is still a resume failure.
+
+    A precondition that *fails* has always said so. One whose own check raised —
+    here the stacked `pr_base` a prerequisite's merge deleted from origin, so the
+    provenance question cannot be asked at all — used to escape into the handler
+    that wraps publication, and the node settled as
+    ``merge-path failure: publication of <branch>``: a phase this run never reaches,
+    since it stops before the worktree is even cut. That misdirection sent a live
+    diagnosis into merge mechanics while the cause sat in the resume pin. The node
+    must name the precondition instead, and `just results` must show it.
+    """
+    lost = _round_one_lost_its_dispatch(
+        tmp_path, bare_origin, command_base, personas_dir, run="uncheckable-resume"
+    )
+    capsys.readouterr()
+
+    # The shape a merged stack leaves behind: the pin still names the prerequisite
+    # branch it was cut over, and origin no longer has it.
+    gone = "feature/prerequisite-already-merged"
+    pin = tmp_path / "pin-vanished-base.json"
+    pin.write_text(
+        json.dumps(
+            {
+                "retry": {
+                    "change": {
+                        "resume": {
+                            "branch": lost.branch,
+                            "base_branch": "main",
+                            "pr_base": gone,
+                            "checkpoint": lost.checkpoint,
+                            "completed_steps": [],
+                            "mode": "retry",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        next_round_main([lost.run, str(pin), "--runs-dir", str(lost.runs_dir), *lost.common]) == 1
+    )
+    capsys.readouterr()
+
+    refused = lost.recorded(2, "result.json")["results"]["change"]
+    assert refused["outcome"] == "resume-failed"
+    assert refused["detail"].startswith("resume-failed: cannot check whether "), refused["detail"]
+    # The precondition by name, and the ref that made it unanswerable.
+    assert "unattested incomplete provenance" in refused["detail"], refused["detail"]
+    assert f"origin/{gone}" in refused["detail"], refused["detail"]
+    assert lost.branch in refused["detail"] and lost.checkpoint in refused["detail"]
+    # And never the phase it did not reach.
+    assert "merge-path failure" not in refused["detail"], refused["detail"]
+    assert "publication of" not in refused["detail"], refused["detail"]
+    # Nothing was published or preserved anew: the pinned branch is untouched.
+    assert refused["branch"] == lost.branch and refused["pr"] is None
+
+    # The planner-facing view carries both halves — the status and the reason — so
+    # the diagnosis is the first thing read rather than the end of an archaeology.
+    assert results_main([lost.run, "--runs-dir", str(lost.runs_dir)]) == 0
+    rendered = capsys.readouterr().out
+    assert "change  failed  resume-failed" in rendered, rendered
+    assert "Reason: resume-failed: cannot check whether " in rendered, rendered
+    assert f"origin/{gone}" in rendered, rendered
 
 
 def test_a_cooperatively_cancelled_node_continues_its_branch_in_a_later_round(

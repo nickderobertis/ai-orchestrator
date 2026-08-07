@@ -27,7 +27,8 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -81,6 +82,7 @@ from .provenance import (
 from .provider_failure import journalled
 from .redaction import redact
 from .registry import Registry, RegistryError, merge_gate_coverage, validate_identity_key
+from .relaunch import relaunch_session, seeded_task, transcript_seed
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RESUME_MODES,
@@ -965,8 +967,62 @@ class ResumePrep:
     published: bool
 
 
+#: The one resume failure a *harness-carried* retry may answer by starting fresh: the
+#: preserved work is provably no longer unattested-incomplete, so there is nothing
+#: left to continue. Named once because the message and the fallback that keys on it
+#: must not drift apart — and because a precondition that could not be *checked*
+#: proves nothing about the work and must never match it.
+_INVALID_PROVENANCE = "does not carry valid unattested incomplete provenance"
+
+
+class _ResumeUncheckable(Exception):
+    """A resume precondition whose own check could not be evaluated."""
+
+    def __init__(self, precondition: str, cause: Exception) -> None:
+        super().__init__(precondition)
+        self.precondition = precondition
+        self.cause = cause
+
+
+@contextmanager
+def _checking(precondition: str) -> Iterator[None]:
+    """Attribute a git or GitHub failure to the resume precondition it interrupted.
+
+    A precondition that *fails* already returns its own sentence below. One that
+    cannot be evaluated at all — the base ref a prerequisite's merge deleted from
+    origin is the common one — used to raise straight past every one of them into
+    the publication handler at the end of `_run_repo_task`, which settled it as
+    ``merge-path failure: publication of <branch>``. That names a phase the run
+    never reached, since it stops before the worktree is cut, and it sent a real
+    diagnosis toward merge mechanics while the cause sat in the resume pin. Both
+    endings are resume failures, so both say ``resume-failed`` and name the
+    precondition.
+    """
+    try:
+        yield
+    except (GitError, GitHubError) as exc:
+        raise _ResumeUncheckable(precondition, exc) from exc
+
+
+def _uncheckable_resume(resume: Resume, unchecked: _ResumeUncheckable) -> str:
+    return (
+        f"resume-failed: cannot check whether {unchecked.precondition} for branch "
+        f"{resume.branch!r} at recorded checkpoint {resume.checkpoint}: "
+        f"{redact(str(unchecked.cause))}"
+    )
+
+
 def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) -> ResumePrep | str:
     """Validate that a recorded pause still describes reachable branch history."""
+    try:
+        return _resume_preconditions(clone, resume, github)
+    except _ResumeUncheckable as unchecked:
+        return _uncheckable_resume(resume, unchecked)
+
+
+def _resume_preconditions(
+    clone: Path, resume: Resume, github: GitHubBackend | None
+) -> ResumePrep | str:
     published = _ref_exists(clone, f"origin/{resume.branch}")
     local = gitops.branch_exists(clone, resume.branch)
     if not published and not local:
@@ -980,26 +1036,38 @@ def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) 
             f"repository; branch {resume.branch!r} was rewritten"
         )
     tip = f"origin/{resume.branch}" if published else resume.branch
-    if not gitops.is_ancestor(clone, resume.checkpoint, tip):
+    with _checking("the recorded checkpoint is still in the branch history"):
+        rewritten = not gitops.is_ancestor(clone, resume.checkpoint, tip)
+    if rewritten:
         return (
             f"resume-failed: branch {resume.branch!r} was rewritten; recorded checkpoint "
             f"{resume.checkpoint} is no longer in the history of {tip}"
         )
-    if resume.mode == "retry" and not unattested_incomplete(clone, f"origin/{resume.pr_base}", tip):
-        return (
-            f"resume-failed: branch {resume.branch!r} does not carry valid unattested "
-            "incomplete provenance; retry will use a fresh branch"
-        )
-    if published and local and not gitops.is_ancestor(clone, resume.branch, tip):
-        return (
-            f"resume-failed: local branch {resume.branch!r} has unpublished or divergent "
-            f"commits and cannot be fast-forwarded safely to {tip}"
-        )
+    if resume.mode == "retry":
+        with _checking(
+            f"the branch still carries unattested incomplete provenance over "
+            f"origin/{resume.pr_base}"
+        ):
+            attested = not unattested_incomplete(clone, f"origin/{resume.pr_base}", tip)
+        if attested:
+            return (
+                f"resume-failed: branch {resume.branch!r} {_INVALID_PROVENANCE}; "
+                "retry will use a fresh branch"
+            )
+    if published and local:
+        with _checking("the local branch can be fast-forwarded to its published tip"):
+            diverged = not gitops.is_ancestor(clone, resume.branch, tip)
+        if diverged:
+            return (
+                f"resume-failed: local branch {resume.branch!r} has unpublished or divergent "
+                f"commits and cannot be fast-forwarded safely to {tip}"
+            )
     if resume.pr is not None:
         pr = _pr_from_url(resume.pr, head=resume.branch, base=resume.pr_base)
         if pr is None:
             return f"resume-failed: recorded draft {resume.pr!r} is not a GitHub pull-request URL"
-        status = (github or CliGitHubBackend()).status(pr)
+        with _checking(f"the recorded draft {resume.pr} is still an open draft"):
+            status = (github or CliGitHubBackend()).status(pr)
         if status.merged:
             return (
                 f"resume-failed: draft PR {resume.pr} merged before the human-gated "
@@ -1231,6 +1299,7 @@ def _run_steps(
     extra_instructions: str | None = None,
     completed: frozenset[str] = frozenset(),
     cancel: threading.Event | None = None,
+    relaunch: int = 0,
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
 
@@ -1238,6 +1307,14 @@ def _run_steps(
     share one working tree, so running two dispatches into it at once would corrupt
     it. A step that does not complete fails the workstream and skips dependents.
     A ``human`` step pauses the workstream and blocks its dependents.
+
+    ``relaunch`` is which relaunch of this workstream this is — the count the
+    workstream loop spends after a dispatch dies leaving no work behind, which on
+    this host is a provider refusing to start the turn. It is *not* the turn-cap
+    resume count: that resume continues the same conversation on purpose, while a
+    relaunch must never continue the dead one. Past zero, each step takes a
+    conversation of its own and is seeded with what its predecessor recorded; see
+    `orchestrator.relaunch`.
     """
     by_id = {s.id: s for s in steps}
     deps = {s.id: s.deps for s in steps}
@@ -1260,9 +1337,33 @@ def _run_steps(
                 detail={"status": "done", "step_kind": step.kind, "outcome": "no-changes"},
             )
             return NodeRun("done", None, None)
-        log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
+        step_base_session = f"{scoped_session(branch, worktree)}:{sid}"
+        step_session = relaunch_session(step_base_session, relaunch)
+        step_task = step.task
+        if relaunch > 0:
+            # The dead conversation is never asked for again — it is read *back* from
+            # history and carried forward as prompt text instead. Asking for it is
+            # what the harness answers with "No conversation found", and answering
+            # that with another relaunch is the loop this exists to end.
+            dead_session = relaunch_session(step_base_session, relaunch - 1)
+            step_task = seeded_task(
+                step.task,
+                dead_session=dead_session,
+                seed=transcript_seed(dead_session),
+            )
+        log.append(
+            "step-started",
+            detail={
+                "step_kind": step.kind,
+                "persona": step.persona,
+                # Recorded because it is the only durable statement of *which*
+                # conversation a step ran as, and the whole point of a relaunch is
+                # that it is a different one.
+                "session": step_session,
+                **({"relaunch": relaunch} if relaunch else {}),
+            },
+        )
         dispatch_head = gitops.head_sha(worktree)
-        step_session = f"{scoped_session(branch, worktree)}:{sid}"
         # The refusal's own account of the stop, when the harness never returned a
         # report for `incomplete_detail` below to read one out of.
         refusal: str | None = None
@@ -1270,7 +1371,7 @@ def _run_steps(
         try:
             report = dispatch_fn(
                 cast(str, step.persona),
-                step.task,
+                step_task,
                 project_dir=str(worktree),
                 oneharness_mode=oneharness_mode,
                 use_llmlint_wrapper=use_llmlint_wrapper,
@@ -1944,7 +2045,7 @@ def run_repo_task(
             workspace.adopt_preserved_branch(ref, resume.branch)
             validated = _validate_resume(clone, resume, github)
             if isinstance(validated, str):
-                invalid_provenance = "valid unattested incomplete provenance" in validated
+                invalid_provenance = _INVALID_PROVENANCE in validated
                 if resume.mode != "retry" or not invalid_provenance:
                     result.outcome = "resume-failed"
                     result.detail = validated
@@ -2073,6 +2174,7 @@ def run_repo_task(
                 extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
                 completed=frozenset(completed_step_ids),
                 cancel=cancel,
+                relaunch=relaunches,
             )
             for step_result in step_run.results:
                 previous = prior_step_results.get(step_result.id)
