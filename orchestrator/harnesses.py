@@ -29,7 +29,10 @@ both per branch — it names the model on that branch's own ``oneharness run`` a
 exports the variable for everything the side subsequently runs. That precedence is a
 fact about one release rather than about oneharness, so ``config/oneharness.version``
 owns the literal above and ``tests/test_onejudge_version.py`` fails every restatement
-of it — here, in the wrapper, and in the reference document — on an upgrade.
+of it — here, in the wrapper, and in the reference document — on an upgrade. The tier
+and identity count this paragraph opens with are owned the same way by
+``oneharness.judge.toml``, with ``tests/test_harness_routing.py`` holding every copy
+of them to it.
 
 A model override is accepted only **paired with that side's harness override**, and
 only when the harness override names one harness family. A model name belongs to a
