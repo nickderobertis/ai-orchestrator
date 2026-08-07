@@ -118,6 +118,18 @@ export default defineConfig({
   // selects it, and `just dag-ui-screens` is when it runs.
   testIgnore: "**/*.screens.spec.ts",
   globalTeardown: "./e2e/global-teardown.ts",
+  /**
+   * Budgeted for this host rather than inherited. Every wait here crosses the browser,
+   * the dev server, uvicorn and a disk read, and this host runs live agent dispatches
+   * beside its own tests, which roughly doubles a journey. Playwright's 5 s / 30 s
+   * defaults assume a dedicated runner; the sibling configs driving the same servers
+   * already budget for that (`isolation.config.ts`, `screenshots.config.ts`).
+   *
+   * Neither value can make a failing assertion pass — an element that never arrives
+   * still fails, 15 s later.
+   */
+  expect: { timeout: 15_000 },
+  timeout: 120_000,
   // One server serves one run directory, and the live-update journeys change what it
   // is serving, so the journeys share that state and must not run against each other.
   workers: 1,

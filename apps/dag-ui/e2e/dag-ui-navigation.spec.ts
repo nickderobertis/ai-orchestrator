@@ -57,10 +57,18 @@ async function expectThePageItselfDoesNotScroll(page: Page): Promise<void> {
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
+/**
+ * Open the app at `size` and wait until it is holding runs, not merely mounted.
+ *
+ * The `DAG Observatory` heading is a sibling of the run list rather than anything
+ * rendered from it, so it paints on mount and says nothing about the run-list read.
+ * Readiness is a loaded run link. This also settles the apparent width dependence: the
+ * loop's first viewport races the dev server's initial transform, whichever one it is.
+ */
 async function open(page: Page, size: Viewport, path: string): Promise<void> {
   await page.setViewportSize({ width: size.width, height: size.height });
   await page.goto(path);
-  await expect(page.getByText("DAG Observatory")).toBeVisible();
+  await expect(navigation(page).locator(".run-link").first()).toBeVisible();
 }
 
 for (const size of [DESKTOP, PHONE]) {
