@@ -556,7 +556,15 @@ kernel fixed at `exec`, and `ORCHESTRATOR_AGENT_STATUS_DIR` names the dispatch's
 watchdog scratch directory. A stamp for a dispatch that is over — its directory gone,
 or its ownership lock free — is proof; a live dispatch's worker, an unstamped
 process, one stamped for another root, and the sweeping process's own ancestry are
-left running. Every
+left running. The processes that are *meant* to outlive their launcher carry no
+exemption and need none: `run-plan`, `next-round`, `repo-recover`, and `integrate`
+each fork a round that claims a watchdog directory of its own and `exec`s under it, so
+the sweep judges a round owner or a publication driver by its own liveness rather
+than by the dispatch that started it — and still reaps that tree once it is gone. It
+is the *forked round* that re-`exec`s, never the parent relaying its exit status, and
+it is an `exec` because an inherited stamp cannot be shed in place. See [The successor
+contract](docs/repo-lifecycle.md#the-successor-contract); never work around a kill
+here with `nohup`/`setsid` by hand. Every
 sweep names the families it examined and the families it could not, so `reclaimed
 0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).

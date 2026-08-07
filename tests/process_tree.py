@@ -10,10 +10,14 @@ attribute the worker but whether there is a window at all.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from leak_reaper import POLL_SECONDS
+
+from orchestrator.scratch import AGENT_STATUS_DIR_ENV
 
 #: Long enough for the guard to take several samples of the tree before it orphans.
 LINGER = POLL_SECONDS * 4
@@ -156,6 +160,26 @@ def write_reparented_leaving(directory: Path) -> Path:
     script = directory / "reparented_leaving.py"
     script.write_text(_REPARENTED_SOURCE, encoding="utf-8")
     return script
+
+
+def spawn_reparented_leaving(
+    script: Path, marker: Path, status_dir: Path | None, *, timeout: float = 30.0
+) -> int:
+    """Start a real init-adopted process stamped for ``status_dir``; return its pid.
+
+    The stamp is set the only way it reaches a process in production: in the
+    environment it is `exec`ed with, which is what the kernel then fixes for good.
+    Any stamp this process already carries is dropped first, so a suite that is itself
+    running under a dispatch cannot hand the leaving an inherited one.
+    """
+    environment = {key: value for key, value in os.environ.items() if key != AGENT_STATUS_DIR_ENV}
+    if status_dir is not None:
+        environment[AGENT_STATUS_DIR_ENV] = os.fspath(status_dir)
+    intermediate = subprocess.Popen([sys.executable, str(script), str(marker)], env=environment)
+    assert intermediate.wait(timeout=timeout) == 0
+    pid = await_recorded_pid(marker, timeout=timeout)
+    assert await_orphaned(pid, timeout=timeout), f"pid {pid} was never reparented to init"
+    return pid
 
 
 def await_recorded_pids(path: Path, *, timeout: float = 30.0) -> tuple[int, ...]:

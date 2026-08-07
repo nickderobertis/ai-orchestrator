@@ -19,10 +19,9 @@ from pathlib import Path
 import pytest
 from conftest import install_pre_push_hook
 from process_tree import (
-    await_orphaned,
     await_reaped,
-    await_recorded_pid,
     is_running,
+    spawn_reparented_leaving,
     write_reparented_leaving,
 )
 from rendezvous import Rendezvous
@@ -32,7 +31,6 @@ from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.runs import RECORDED_RESULT_SCHEMA_VERSION
 from orchestrator.scratch import (
-    AGENT_STATUS_DIR_ENV,
     MIN_FREE_BYTES_ENV,
     ORPHAN_FAMILY,
     ORPHAN_PROOF_SKIP_REASON,
@@ -109,22 +107,6 @@ while not release.exists():
 handle.close()
 assert named
 """
-
-
-def _spawn_reparented_leaving(script: Path, marker: Path, status_dir: Path | None) -> int:
-    """Start a real init-adopted process stamped for ``status_dir``; return its pid.
-
-    The stamp is set the only way it reaches a process in production: in the
-    environment it is `exec`ed with, which is what the kernel then fixes for good.
-    """
-    environment = {key: value for key, value in os.environ.items() if key != AGENT_STATUS_DIR_ENV}
-    if status_dir is not None:
-        environment[AGENT_STATUS_DIR_ENV] = os.fspath(status_dir)
-    intermediate = subprocess.Popen([sys.executable, str(script), str(marker)], env=environment)
-    assert intermediate.wait(timeout=e2e_timeout(60)) == 0
-    pid = await_recorded_pid(marker, timeout=e2e_timeout(30))
-    assert await_orphaned(pid, timeout=e2e_timeout(30)), f"pid {pid} was never reparented to init"
-    return pid
 
 
 def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
@@ -354,7 +336,9 @@ def test_sweep_recipe_reaps_a_finished_dispatchs_reparented_leavings(tmp_path: P
 
     script = write_reparented_leaving(tmp_path)
     leavings = {
-        name: _spawn_reparented_leaving(script, tmp_path / f"m-{name}", status_dir)
+        name: spawn_reparented_leaving(
+            script, tmp_path / f"m-{name}", status_dir, timeout=e2e_timeout(60)
+        )
         for name, status_dir in (
             ("finished", finished / "agent"),
             ("vanished", vanished / "agent"),
@@ -710,8 +694,11 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     finished = scratch / "orchestrator-watchdog-finished"
     (finished / "agent").mkdir(parents=True)
     (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
-    leaving = _spawn_reparented_leaving(
-        write_reparented_leaving(tmp_path), tmp_path / "m-blind", finished / "agent"
+    leaving = spawn_reparented_leaving(
+        write_reparented_leaving(tmp_path),
+        tmp_path / "m-blind",
+        finished / "agent",
+        timeout=e2e_timeout(60),
     )
     blind = tmp_path / "not-procfs"
     blind.mkdir()

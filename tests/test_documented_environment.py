@@ -33,6 +33,7 @@ from orchestrator.harnesses import (
 from orchestrator.provenance import INCOMPLETE_TRAILER, RECOVERY_TRAILER
 from orchestrator.provider_health import PROBE_ENV
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
+from orchestrator.verify import PRESERVED_GATE_LOG_ATTEMPTS
 from orchestrator.workspace import RETAINED_INCOMPLETE_RUNS
 
 #: Each variable the code names as a constant, and the document that tells an
@@ -138,6 +139,17 @@ def test_documentation_states_the_default_its_constant_declares(
     assert stated in prose, (
         f"{document} does not state {stated}; update it in the same change that "
         "moved the constant, or stop documenting the default"
+    )
+
+
+@pytest.mark.reads_docs
+def test_documentation_states_the_preserved_gate_log_retention() -> None:
+    """An operator reads this to know how many attempts are still on disk to read."""
+    prose = (REPO_ROOT / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
+
+    assert re.search(rf"newest \*\*{PRESERVED_GATE_LOG_ATTEMPTS}\*\*", prose), (
+        "docs/repo-lifecycle.md must derive its preserved-gate-log bound from "
+        "PRESERVED_GATE_LOG_ATTEMPTS"
     )
 
 

@@ -24,7 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.detach import CRASHED, run_detached
+import orchestrator.detach as detach
+from orchestrator.detach import CRASHED, SUCCESSOR_ENV, run_detached, run_successor
+from orchestrator.scratch import AGENT_STATUS_DIR_ENV
 
 
 def test_detached_round_leads_its_own_session_and_relays_its_exit_code(tmp_path: Path) -> None:
@@ -136,3 +138,77 @@ def test_the_deliberate_fork_is_silent_while_every_other_fork_still_warns() -> N
     finally:
         running.set()
         thread.join()
+
+
+# Re-attribution's own `exec` is proven by `tests/e2e/test_successor_survival_e2e.py`,
+# because the forked round is the only place it can happen: it replaces that process
+# image, and a fork made from a test that then `exec`ed would restart the test runner.
+# What is left is the decision `run_successor` makes before any of that — which of its
+# three shapes this invocation is — because getting it wrong either loses the round's
+# attribution or re-`exec`s a process that was never launched to own anything.
+
+
+def test_a_launch_no_dispatch_started_asks_for_no_re_attribution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`just run-plan` from a shell has no launcher to be misattributed to."""
+    monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
+    monkeypatch.delenv(SUCCESSOR_ENV, raising=False)
+    asked = _recording_run_detached(monkeypatch, tmp_path)
+
+    assert run_successor(lambda _argv: 4, None, "run-plan") == 4
+    assert asked == [False]
+
+
+def test_a_launch_from_inside_a_dispatch_asks_the_round_to_re_attribute(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(tmp_path / "orchestrator-watchdog-them" / "agent"))
+    monkeypatch.delenv(SUCCESSOR_ENV, raising=False)
+    asked = _recording_run_detached(monkeypatch, tmp_path)
+
+    assert run_successor(lambda _argv: 0, None, "repo-recover") == 0
+    assert asked == [True]
+
+
+def test_the_re_execed_round_owns_the_work_without_forking_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """It already leads its own session and is already stamped; forking would be a loop."""
+    mine = tmp_path / "orchestrator-watchdog-mine" / "agent"
+    monkeypatch.setenv(SUCCESSOR_ENV, "run-plan")
+    monkeypatch.setenv(AGENT_STATUS_DIR_ENV, str(mine))
+    _recording_run_detached(monkeypatch, tmp_path, refuse=True)
+
+    def entry(_argv: list[str] | None) -> int:
+        raise RuntimeError("the round's own failure")
+
+    # Mapped rather than raised, for the same reason the forked side maps it: a crash
+    # reported as the round's own `1` reads as an unfinished round.
+    assert run_successor(entry, None, "run-plan") == CRASHED
+    # Scrubbed, so a `repo-recover` this round starts claims a directory of its own
+    # instead of reading the marker as "somebody already did".
+    assert SUCCESSOR_ENV not in os.environ
+    assert os.environ[AGENT_STATUS_DIR_ENV] == str(mine)
+
+
+def _recording_run_detached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, refuse: bool = False
+) -> list[bool]:
+    """Record what `run_successor` asks the fork for, without making one.
+
+    The fork itself is covered above and by the journeys; what these need is the
+    argument, and a real fork here would run each assertion twice.
+    """
+    asked: list[bool] = []
+
+    def recorded(entry: object, argv: object, label: object, *, reattribute: bool = False) -> int:
+        if refuse:
+            raise AssertionError("the re-execed round forked instead of owning the work")
+        asked.append(reattribute)
+        # `entry` is typed `object` so this stands in for `run_detached` whatever it is
+        # handed; the call is what the real one makes, and only its type is unprovable.
+        return entry(argv)  # type: ignore[operator]
+
+    monkeypatch.setattr(detach, "run_detached", recorded)
+    return asked
