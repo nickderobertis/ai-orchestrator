@@ -126,7 +126,7 @@ def _await_exit(pid: int) -> None:
     assert not _alive(pid), f"round owner {pid} never exited"
 
 
-ANNOUNCED_OWNER = re.compile(r"round owner pid (\d+) leads its own session")
+ANNOUNCED_OWNER = re.compile(r"pid (\d+) leads its own session")
 
 
 def _await_announced_owner(err: Path) -> int:
@@ -433,9 +433,9 @@ def test_a_crashing_round_ends_in_the_fork_rather_than_climbing_back_out_of_it(
     assert str(occupied) in crashed.stderr, crashed.stderr
     assert crashed.stderr.count("Traceback (most recent call last):") == 1, crashed.stderr
     # The proof that the launching program did not run a second time: the traceback
-    # stops inside the round. A frame naming the entry point above the fork would be
+    # stops at the round's own catcher. A frame naming the entry point above it would be
     # the child reporting itself from the middle of the launcher's own program.
-    assert "in _own_round" in crashed.stderr, crashed.stderr
+    assert "in _completed_status" in crashed.stderr, crashed.stderr
     assert "in main_cli" not in crashed.stderr, crashed.stderr
     # And one round announced one owner; a second pass would have announced another.
     assert len(ANNOUNCED_OWNER.findall(crashed.stderr)) == 1, crashed.stderr

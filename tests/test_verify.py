@@ -16,6 +16,8 @@ from orchestrator.runs import NodeId, RunId
 from orchestrator.verify import (
     detect_gate,
     detect_gate_candidates,
+    preserve_gate_log,
+    preserved_gate_log_dir,
     record_merge_path_failure,
     record_merge_path_verification,
     run_gate,
@@ -293,3 +295,81 @@ def test_a_publication_that_never_reached_a_gate_still_records_its_error(
     (event,) = [e for e in journal.events() if e.kind == "publication-failed"]
     assert "could not read from remote repository" in str(event.detail["output_tail"])
     assert "could not read from remote repository" in Path(log_path).read_text(encoding="utf-8")
+
+
+# One durable location per branch, written by whichever driver publishes it. The
+# journeys are in `tests/e2e/test_lifecycle_e2e.py`; these are the boundaries a real
+# publication cannot be made to sit on — a full directory, a concurrent claim, and the
+# single appended file every branch on this host still has from before the split.
+
+
+def test_each_invocation_claims_a_file_of_its_own_and_retention_bounds_the_rest(
+    tmp_path: Path,
+) -> None:
+    directory = preserved_gate_log_dir(tmp_path, "ai-orchestrator/engineer/deadbeef")
+    assert directory == tmp_path / "gate-logs" / "ai-orchestrator-engineer-deadbeef"
+
+    written = [preserve_gate_log(directory, f"attempt {n}", retain=3) for n in range(1, 6)]
+
+    assert [Path(path).name for path in written] == [f"gate-{n:04d}.log" for n in range(1, 6)]
+    assert sorted(path.name for path in directory.glob("gate-*.log")) == [
+        "gate-0003.log",
+        "gate-0004.log",
+        "gate-0005.log",
+    ]
+    assert Path(written[-1]).read_text(encoding="utf-8") == "attempt 5\n"
+
+
+def test_the_appended_log_written_before_the_split_is_neither_counted_nor_pruned(
+    tmp_path: Path,
+) -> None:
+    """Every branch recovered on this host has one, and it is the whole history."""
+    directory = preserved_gate_log_dir(tmp_path, "feature/legacy")
+    directory.mkdir(parents=True)
+    legacy = directory / "gate.log"
+    legacy.write_text("four appended attempts\n", encoding="utf-8")
+
+    for attempt in range(4):
+        preserve_gate_log(directory, f"attempt {attempt}", retain=1)
+
+    assert legacy.read_text(encoding="utf-8") == "four appended attempts\n"
+    assert sorted(path.name for path in directory.glob("gate-*.log")) == ["gate-0004.log"]
+
+
+def test_a_number_another_writer_already_claimed_is_never_written_over(
+    tmp_path: Path,
+) -> None:
+    """Two publications of one branch can run at once — a retry beside a recovery."""
+    directory = preserved_gate_log_dir(tmp_path, "feature/concurrent")
+    directory.mkdir(parents=True)
+    (directory / "gate-0001.log").write_text("the other writer's run\n", encoding="utf-8")
+    # The name this call would otherwise take next, created between its scan and its
+    # claim, which is the only window `O_EXCL` exists to close.
+    (directory / "gate-0002.log").write_text("claimed mid-scan\n", encoding="utf-8")
+
+    written = preserve_gate_log(directory, "mine", retain=10)
+
+    assert Path(written).name == "gate-0003.log"
+    assert (directory / "gate-0001.log").read_text(encoding="utf-8") == "the other writer's run\n"
+    assert (directory / "gate-0002.log").read_text(encoding="utf-8") == "claimed mid-scan\n"
+
+
+def test_a_preserved_copy_is_named_beside_the_run_scoped_one(tmp_path: Path) -> None:
+    """The report keeps pointing into the run; the durable copy is what outlives it."""
+    journal, scope = _scope(tmp_path, "durable-evidence")
+    durable = preserved_gate_log_dir(tmp_path, "feature/durable")
+
+    result = record_merge_path_verification(
+        scope,
+        label="branch push",
+        command=["just", "gate"],
+        ok=True,
+        output="gate passed\n",
+        preserve_dir=durable,
+    )
+
+    assert result is not None and result.preserved_log_path is not None
+    (event,) = [e for e in journal.events() if e.kind == "verification-finished"]
+    assert event.detail["preserved_log_path"] == result.preserved_log_path
+    assert event.detail["log_path"] != result.preserved_log_path
+    assert "verdict: passed" in Path(result.preserved_log_path).read_text(encoding="utf-8")

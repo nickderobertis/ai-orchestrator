@@ -859,6 +859,25 @@ decides only whether this command waits, and Ctrl-C ends the attachment, not the
 run. Inside the run, `run-plan` still forks: the orchestrator agent surfaces an
 update and ends its turn, and the round must survive that.
 
+Escaping the launching turn's *signals* is only half of it. Everything a dispatch
+starts carries that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` stamp, and once the
+launching step settles the scratch sweep reads that stamp as proof of a leaked tree
+and terminates what carries it — a contract that is right for real leaks and was
+wrong for these. So a **launched round or publication driver re-attributes itself as
+part of forking**: in `just run-plan`, `just next-round`, `just repo-recover`, and
+`just integrate`, the forked round takes a scratch directory of its own and `exec`s
+under it, so the sweep judges it by its own liveness rather than by its launcher's.
+The relaying parent deliberately keeps the launcher's stamp — it outlives the round
+by the moment it takes to collect the exit status, and a parent stamped for the
+round's directory would spend exactly that moment looking like a leak. See
+[The successor contract](repo-lifecycle.md#the-successor-contract) for what the
+sweeper is then allowed to conclude, and why an `exec` is the only thing that works.
+The two protections are independent and both are needed: without the fork a round
+dies at teardown, without the re-attribution it dies at the next sweep. Nothing else
+needs it — a `just` recipe an agent runs to completion inside its turn is not a
+successor, and neither is `just orchestrate`, which is launched as a program of its
+own rather than from inside a dispatch.
+
 The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
 rejected input, 128+N signalled. An exception escaping the round is the exception: it
 ends the round there, prints its traceback, and exits **70**, so a crash is never read

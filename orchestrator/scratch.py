@@ -275,6 +275,48 @@ def owned_scratch_directory() -> Iterator[Path]:
             os.close(fd)
 
 
+def claim_successor_scratch_directory() -> Path | None:
+    """Open a watchdog directory for a process that must outlive the dispatch under it.
+
+    A round owner and a publication driver are both started from inside a dispatch and
+    are meant to keep working after it settles, but the environment the kernel fixed at
+    their ``exec`` still names the *launcher's* status directory — which is the one
+    thing `orphaned_dispatch_processes` reaps on. Once that dispatch is over, its stamp
+    reads as proof of a leaked tree, and the sweep has terminated two publication runs
+    that had already passed their gate. So a successor takes a directory of its own and
+    re-``exec``s under it; `orchestrator.detach` is the caller, and the exec is why this
+    only creates the tree rather than yielding it — a context manager cannot span the
+    process image being replaced.
+
+    Deliberately *not* `owned_scratch_directory`'s held ``flock``. That lock is what
+    `watchdog_has_a_live_owner` reads to say a **dispatch** is running, and a round
+    owner holding one would appear in `just host` as a live dispatch with no turn and
+    no role. The recorded identity alone is what the sweeper needs, and it is exactly
+    the weaker proof `_watchdog_is_reclaimable` was written to accept.
+
+    The caller is the process that will *own* the tree, which is why the owner record is
+    written here rather than handed to somebody else to write: an ``exec`` carries a
+    pid and its start token across unchanged, so the identity recorded before the exec
+    is still the identity of the process running after it. There is no window in which
+    this directory names an owner that is not the one working in it.
+
+    ``None`` when no durable claim can be made, which leaves the caller to run
+    unattributed rather than under a directory the sweeper would call reclaimable.
+    """
+    owner = _OwnerIdentity.current(os.getpid())
+    if owner is None:
+        return None
+    try:
+        directory = Path(tempfile.mkdtemp(prefix=WATCHDOG_PREFIX))
+        # Written before the status directory the stamp names, so the tree is never
+        # judgeable — by this sweep or any concurrent one — without its owner beside it.
+        (directory / OWNER_LOCK_NAME).write_text(owner.render(), encoding="utf-8")
+        (directory / AGENT_STATUS_DIR_NAME).mkdir()
+    except OSError:
+        return None
+    return directory / AGENT_STATUS_DIR_NAME
+
+
 def _legacy_watchdog_is_reclaimable(path: Path) -> bool:
     """Judge a directory that predates ownership locking by its worker pid alone.
 

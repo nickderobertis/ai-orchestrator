@@ -50,6 +50,8 @@ NOOP_GATE = "<no-op>"
 __all__ = [
     "GateAttestation",
     "NOOP_GATE",
+    "PRESERVED_GATE_LOG_ATTEMPTS",
+    "PRESERVED_GATE_LOG_DIRNAME",
     "VERIFICATION_TAIL_BYTES",
     "VerifyResult",
     "append_gate_log",
@@ -58,6 +60,8 @@ __all__ = [
     "detect_gate_candidates",
     "format_merge_path_failure",
     "format_merge_path_record",
+    "preserve_gate_log",
+    "preserved_gate_log_dir",
     "record_merge_path_failure",
     "record_merge_path_verification",
     "resolve_gate_template",
@@ -68,6 +72,27 @@ __all__ = [
 #: event. The whole run stays in the log the result points at; this is the slice a
 #: planner reads without opening it.
 VERIFICATION_TAIL_BYTES = 2000
+
+#: The per-branch directory, under the lifecycle worktree root, that outlives every
+#: tree a publication is built in. A run worktree is removed when its workstream
+#: settles and a run root is retained only while recovery may still need it, so a
+#: gate whose evidence lived in either left nothing behind to read — which is how a
+#: publication that had already passed its gate came to have no surviving proof of
+#: the green while the same branch's earlier red was still on disk.
+PRESERVED_GATE_LOG_DIRNAME = "gate-logs"
+#: One file per merge-path invocation, numbered in the order they were claimed. The
+#: single appended file this replaced held every attempt end to end with nothing
+#: between them, so reading the second of four meant counting bytes.
+PRESERVED_GATE_LOG_PREFIX = "gate-"
+PRESERVED_GATE_LOG_SUFFIX = ".log"
+_PRESERVED_GATE_LOG_DIGITS = 4
+#: How many invocations one branch keeps. Every one of these holds a whole gate run —
+#: the largest on this host is ~190 KB — so the bound is what stops a branch that
+#: re-pushes through a red gate all night from growing this directory without end.
+#: Ten is well past the four attempts the worst landing here has needed, and it is
+#: deliberately a count rather than an age: what an operator reaches for is the last
+#: few attempts, whenever they happened.
+PRESERVED_GATE_LOG_ATTEMPTS = 10
 
 
 def comparison_env(base: str, *, remote: str = "origin") -> dict[str, str]:
@@ -134,6 +159,10 @@ class VerifyResult:
     reused: bool = False
     attestation: GateAttestation | None = None
     log_path: str | None = None
+    #: Where this same run was kept outside every tree the publication is disposed
+    #: with — see `preserve_gate_log`. ``None`` where the caller named no durable
+    #: location, which is every gate run that is not a merge path's.
+    preserved_log_path: str | None = None
     #: The gate was stopped rather than answering. Not a verdict about the change:
     #: a caller that treats it as one reports a cancelled workstream as having
     #: failed its gate, and preserves nothing.
@@ -170,6 +199,73 @@ def append_gate_log(directory: Path, record: str) -> str:
     return str(path)
 
 
+def preserved_gate_log_dir(root: str | Path, branch: str) -> Path:
+    """Where ``branch`` keeps its merge-path gate runs, under a lifecycle worktree root.
+
+    One directory per branch, named from the branch with its separators flattened, so
+    a stacked ``ai-orchestrator/engineer/...`` head does not turn one branch into a
+    tree of directories nothing prunes.
+    """
+    return Path(root) / PRESERVED_GATE_LOG_DIRNAME / branch.replace("/", "-")
+
+
+def _preserved_attempts(directory: Path) -> list[tuple[int, Path]]:
+    """Every numbered attempt already in ``directory``, oldest claim first.
+
+    Only this module's own shape is recognised. A directory that predates the split
+    still holds the single appended ``gate.log``, and that file is neither counted
+    toward retention nor pruned by it: it is the whole history of the attempts made
+    before this existed, and deleting it to make room would destroy exactly the
+    evidence this preserves.
+    """
+    found: list[tuple[int, Path]] = []
+    for path in directory.glob(f"{PRESERVED_GATE_LOG_PREFIX}*{PRESERVED_GATE_LOG_SUFFIX}"):
+        digits = path.name[len(PRESERVED_GATE_LOG_PREFIX) : -len(PRESERVED_GATE_LOG_SUFFIX)]
+        if digits.isdigit() and path.is_file() and not path.is_symlink():
+            found.append((int(digits), path))
+    return sorted(found)
+
+
+def _claim_preserved_attempt(directory: Path) -> Path:
+    """Create the next attempt's own file, refusing to reuse another writer's number.
+
+    ``O_EXCL`` rather than a check-then-write: two publications of the same branch can
+    run at once — a retry beside the recovery of what it replaced — and a number both
+    of them read as free is one that would have silently overwritten a gate run.
+    """
+    number = max((claimed for claimed, _ in _preserved_attempts(directory)), default=0)
+    while True:
+        number += 1
+        path = directory / (
+            f"{PRESERVED_GATE_LOG_PREFIX}{number:0{_PRESERVED_GATE_LOG_DIGITS}d}"
+            f"{PRESERVED_GATE_LOG_SUFFIX}"
+        )
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            continue
+        return path
+
+
+def preserve_gate_log(
+    directory: Path, record: str, *, retain: int = PRESERVED_GATE_LOG_ATTEMPTS
+) -> str:
+    """Keep one merge-path invocation's evidence where the run cannot take it; prune.
+
+    Written outside every tree a publication is disposed with, so a passing gate is
+    preserved by the same mechanism as a failing one — the asymmetry this replaced
+    left the only proof of a green in a worktree that was removed with the workstream,
+    while the red it superseded stayed readable.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    path = _claim_preserved_attempt(directory)
+    path.write_text(record if record.endswith("\n") else record + "\n", encoding="utf-8")
+    for _, stale in _preserved_attempts(directory)[: -max(retain, 1)]:
+        with suppress(OSError):
+            stale.unlink()
+    return str(path.resolve())
+
+
 def record_merge_path_verification(
     journal: NodeSink,
     *,
@@ -177,6 +273,7 @@ def record_merge_path_verification(
     command: list[str],
     ok: bool,
     output: str,
+    preserve_dir: Path | None = None,
 ) -> VerifyResult | None:
     """Preserve what the merge path's gate actually did, and where to read it.
 
@@ -189,12 +286,17 @@ def record_merge_path_verification(
     gate runs here — the identity is covered by required PR checks, which decide
     later and are recorded by ``pr-checks-observed``. Returns ``None`` there
     rather than calling a bare accepted push a passed verification.
+
+    ``preserve_dir`` is the branch's durable location. The run's own artifact
+    directory is still where the report points, because that is where the rest of the
+    node's evidence is; this is the copy that is still there once the run is not.
     """
     if not command:
         return None
     record = format_merge_path_record(label=label, command=command, ok=ok, output=output)
     directory = journal.artifact_dir
     log_path = append_gate_log(directory, record) if directory is not None else None
+    preserved = preserve_gate_log(preserve_dir, record) if preserve_dir is not None else None
     journal.append(
         "verification-finished",
         detail={
@@ -203,9 +305,16 @@ def record_merge_path_verification(
             "command": list(command),
             "output_tail": record[-VERIFICATION_TAIL_BYTES:],
             **({"log_path": log_path} if log_path else {}),
+            **({"preserved_log_path": preserved} if preserved else {}),
         },
     )
-    return VerifyResult(ok=ok, command=list(command), output=record, log_path=log_path)
+    return VerifyResult(
+        ok=ok,
+        command=list(command),
+        output=record,
+        log_path=log_path,
+        preserved_log_path=preserved,
+    )
 
 
 def format_merge_path_failure(*, label: str, outcome: str, output: str) -> str:
@@ -218,7 +327,12 @@ def format_merge_path_failure(*, label: str, outcome: str, output: str) -> str:
 
 
 def record_merge_path_failure(
-    journal: NodeSink, *, label: str, outcome: str, output: str
+    journal: NodeSink,
+    *,
+    label: str,
+    outcome: str,
+    output: str,
+    preserve_dir: Path | None = None,
 ) -> str | None:
     """Preserve a publication that failed before any gate ruled; return its log path.
 
@@ -230,6 +344,7 @@ def record_merge_path_failure(
     record = format_merge_path_failure(label=label, outcome=outcome, output=output)
     directory = journal.artifact_dir
     log_path = append_gate_log(directory, record) if directory is not None else None
+    preserved = preserve_gate_log(preserve_dir, record) if preserve_dir is not None else None
     journal.append(
         "publication-failed",
         detail={
@@ -237,6 +352,7 @@ def record_merge_path_failure(
             "outcome": outcome,
             "output_tail": record[-VERIFICATION_TAIL_BYTES:],
             **({"log_path": log_path} if log_path else {}),
+            **({"preserved_log_path": preserved} if preserved else {}),
         },
     )
     return log_path

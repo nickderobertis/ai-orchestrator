@@ -16,6 +16,7 @@ from pathlib import Path
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError
 from .coordination import git_lock_identity
+from .detach import run_successor
 from .dispatch import Report, dispatch, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .lifecycle import (
@@ -46,9 +47,10 @@ from .redaction import redact
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
 from .verify import (
     NOOP_GATE,
-    append_gate_log,
     comparison_env,
     format_merge_path_record,
+    preserve_gate_log,
+    preserved_gate_log_dir,
     resolve_gate_template,
 )
 from .workspace import (
@@ -293,8 +295,8 @@ def recover_repo(
             nonlocal preserved_gate_log
             if not merge_path_gate:
                 return ""
-            preserved_gate_log = append_gate_log(
-                recovery_root / "gate-logs" / branch.replace("/", "-"),
+            preserved_gate_log = preserve_gate_log(
+                preserved_gate_log_dir(recovery_root, branch),
                 format_merge_path_record(
                     label=f"recovery push {branch}",
                     command=merge_path_gate,
@@ -594,5 +596,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result.ok else 1
 
 
+def main_cli(argv: list[str] | None = None) -> int:
+    """`just repo-recover` process entry point: outlive the dispatch that launched it.
+
+    Recovery is a publication driver: it pushes a preserved branch through the
+    repository's own gate, and everything between that push starting and the merge
+    landing is uninterruptible in the sense that matters — stopping halfway leaves a
+    branch pushed and unmerged for a human to work out. It gets the same two protections
+    a round owner gets, for the same reason and in the same order. Two recoveries whose
+    gate had already gone green were terminated here, once by the launching turn's
+    teardown and once by the sweep that ran when that step settled.
+    """
+    return run_successor(main, argv, "repo-recover")
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(main_cli())

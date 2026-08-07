@@ -138,6 +138,12 @@ class MergeContext:
     #: The repository's complete gate, recorded alongside the publication push it
     #: verifies. Empty where required PR checks stand in for a pre-push hook.
     gate_command: tuple[str, ...] = ()
+    #: This branch's durable merge-path evidence directory, outside every tree the
+    #: publication is disposed with. The squash push is the *decisive* gate run — a
+    #: branch push that passed says nothing about the tree finally published — so it
+    #: is the one whose evidence most has to outlive the run. ``None`` where the
+    #: caller keeps its own (`orchestrator.recover` preserves inside `local_prepare`).
+    gate_log_root: Path | None = None
     preverified_pr: PullRequest | None = None
     local_prepare: Callable[[], MergeOutcome | None] | None = None
     #: The workstream environment every publishing push carries. The merge path is
@@ -530,6 +536,7 @@ def _record_verification(
         command=list(ctx.gate_command),
         ok=ok,
         output=output,
+        preserve_dir=ctx.gate_log_root,
     )
 
 
@@ -537,7 +544,13 @@ def _record_failure(ctx: MergeContext, *, label: str, outcome: str, output: str)
     """Preserve a publication that ended before any gate ruled on it."""
     if ctx.journal is None:
         return None
-    return record_merge_path_failure(ctx.journal, label=label, outcome=outcome, output=output)
+    return record_merge_path_failure(
+        ctx.journal,
+        label=label,
+        outcome=outcome,
+        output=output,
+        preserve_dir=ctx.gate_log_root,
+    )
 
 
 def _evidence(verification: VerifyResult | None) -> str:

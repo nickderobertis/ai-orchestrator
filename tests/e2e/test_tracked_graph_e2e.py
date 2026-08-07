@@ -3076,7 +3076,7 @@ def test_legacy_repo_plan_mapping_runs_through_the_canonical_executor(
     # The one executor owns its rounds through the detaching entry point and relays
     # their exit status; what detaching buys is proven by
     # tests/e2e/test_round_ownership_e2e.py.
-    assert re.search(r"run-plan: round owner pid \d+ leads its own session", canonical_run.stderr)
+    assert re.search(r"run-plan: pid \d+ leads its own session", canonical_run.stderr)
     assert (
         subprocess.run(
             ["git", "-C", str(origin), "cat-file", "-e", "main:CHANGE.txt"],

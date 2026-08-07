@@ -44,7 +44,7 @@ from .channel import (
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_mapping
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
-from .detach import run_detached
+from .detach import run_successor
 from .dispatch import (
     DispatchError,
     Report,
@@ -2036,8 +2036,8 @@ def print_continuation(
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    """`just run-plan` process entry point: detach from the launching turn first."""
-    return run_detached(main, argv, "run-plan")
+    """`just run-plan` process entry point: outlive the dispatch that launched it."""
+    return run_successor(main, argv, "run-plan")
 
 
 if __name__ == "__main__":  # pragma: no cover
