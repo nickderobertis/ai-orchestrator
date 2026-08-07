@@ -883,8 +883,13 @@ pre {
   font-size: 15px;
 }
 
+/* `min-width: 0` on both, because a grid item's default `min-width: auto` sizes it to
+   its own min-content — and a row's min-content is its legend plus two mono clock
+   readings, which is wider than a phone. Without it the rows pushed the card past the
+   working area and took their own controls off the side of the screen with them. */
 .graph-rows {
   display: grid;
+  min-width: 0;
   gap: 10px;
   margin: 12px 0 0;
   padding: 0;
@@ -892,8 +897,25 @@ pre {
 }
 
 .graph-row {
+  min-width: 0;
   padding-top: 10px;
   border-top: 1px solid var(--border);
+}
+
+/* A dozen rows of a graph are read as a stack, so each plot gives back the padding it
+   takes as a card of its own. */
+.graph-row .timeline {
+  padding: 10px 12px;
+}
+
+/* The plot's own two controls sit in a row that does not wrap, and below about 200px
+   of working area they stop fitting beside each other — which put "Reset zoom" off the
+   side of a screen that never scrolls sideways, out of reach of pointer and of view.
+   Selected through the button rather than through the container's utility classes, so
+   it keeps holding when the design system restyles that header. Unscoped on purpose:
+   the node view draws the same control in the same row and loses it the same way. */
+div:has(> [aria-label="Reset timeline zoom"]) {
+  flex-wrap: wrap;
 }
 
 /* The run's own driving sessions are not one of the graph's nodes, and the row that
@@ -1039,6 +1061,14 @@ button.graph-row-name {
      it was opened from is one Escape away. */
   .detail-drawer {
     width: 100vw;
+  }
+
+  /* One clock over a dozen stacked rows, and at this width its two readings do not fit
+     one line. They stack instead of holding the row wider than the screen — which is
+     what a `justify-between` pair that cannot shrink does. */
+  .graph-row [data-timeline-axis] {
+    flex-wrap: wrap;
+    gap: 2px 10px;
   }
 
   .metric-grid,

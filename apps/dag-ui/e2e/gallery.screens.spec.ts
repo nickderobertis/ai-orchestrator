@@ -64,7 +64,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "01b-graph-rows",
+    name: "02-graph-rows",
     title: "Overall view: one row per node, plus the run's own",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&view=overall`);
@@ -84,7 +84,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "01c-run-level-session",
+    name: "03-run-level-session",
     title: "Overall view with a run-level session open over it",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&view=overall`);
@@ -105,7 +105,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "02-graph",
+    name: "04-graph",
     title: "Graph view",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&view=graph`);
@@ -118,7 +118,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "03-node-collapsed",
+    name: "05-node-collapsed",
     title: "Node view: the collapsed line over its transcript",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=dashboard`);
@@ -139,7 +139,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "04-node-expanded",
+    name: "06-node-expanded",
     title: "Node view: one row per category",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=dashboard`);
@@ -150,7 +150,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "05-node-item-detail",
+    name: "07-node-item-detail",
     title: "Node view with a verification open over the reading",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=foundation`);
@@ -164,7 +164,7 @@ const SURFACES: readonly Surface[] = [
     },
   },
   {
-    name: "06-conversation",
+    name: "08-conversation",
     title: "A conversation in the right panel",
     open: async (page) => {
       await page.goto(`/?run=${runs().live}&node=dashboard`);

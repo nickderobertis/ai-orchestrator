@@ -518,15 +518,15 @@ def test_dag_state_contract_checker_reports_dag_ui_surface_drift(
     """
     checkout = _dag_state_contract_checkout(tmp_path)
     surfaces = checkout / "apps/dag-ui/e2e/gallery.screens.spec.ts"
-    renamed = surfaces.read_text().replace('"06-conversation"', '"06-transcript"')
-    assert '"06-transcript"' in renamed, "SURFACES no longer declares the capture this renames"
+    renamed = surfaces.read_text().replace('"08-conversation"', '"08-transcript"')
+    assert '"08-transcript"' in renamed, "SURFACES no longer declares the capture this renames"
     surfaces.write_text(renamed)
 
     result = _dag_state_contract_run(checkout)
 
     assert result.returncode != 0
     assert "DAG UI screenshot surfaces" in result.stderr
-    assert "06-transcript" in result.stderr
+    assert "08-transcript" in result.stderr
 
 
 @pytest.mark.reads_docs

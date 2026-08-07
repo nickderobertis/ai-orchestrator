@@ -1415,7 +1415,5 @@ def _summarized_ms(span: TimelineSpan) -> int:
         return total
     if span["ended_at"] is None:
         return 0
-    elapsed = datetime.fromisoformat(span["ended_at"]) - datetime.fromisoformat(
-        span["started_at"]
-    )
+    elapsed = datetime.fromisoformat(span["ended_at"]) - datetime.fromisoformat(span["started_at"])
     return int(elapsed.total_seconds() * 1000)
