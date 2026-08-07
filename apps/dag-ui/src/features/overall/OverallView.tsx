@@ -41,7 +41,6 @@ export function OverallView({
   nodes,
   timeline,
   timelineError,
-  conversationRevision,
   onSelectNode,
   selectedItemId,
   onSelectItem,
@@ -51,7 +50,6 @@ export function OverallView({
   readonly nodes: readonly NodeView[];
   readonly timeline?: RunTimeline;
   readonly timelineError?: Error;
-  readonly conversationRevision?: number;
   readonly onSelectNode: (nodeId: string) => void;
   readonly selectedItemId?: string;
   readonly onSelectItem: (itemId?: string) => void;
@@ -170,7 +168,6 @@ export function OverallView({
           </Button>
           <TimelineItemDetail
             client={client}
-            conversationRevision={conversationRevision}
             row={spanAsRow(opened)}
             runId={runId}
           />

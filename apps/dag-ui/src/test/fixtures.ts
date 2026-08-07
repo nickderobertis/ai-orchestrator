@@ -421,6 +421,60 @@ export function runTimeline(runId: string = LIVE_RUN) {
   };
 }
 
+/** The live run's worker session, which both its timeline and its detail name. */
+export const WORKER_SESSION = "worker-session";
+
+/**
+ * The live run's worker transcript once it has recorded `turns` turns.
+ *
+ * A dispatched session is written a turn at a time, so this and `workerTurnsTimeline`
+ * are one fixture in two payloads: the timeline gains a `conversation-turn` event as
+ * the transcript gains the turn itself, exactly as `orchestrator/timeline.py` folds
+ * them. A test that grew one without the other would be describing a server that
+ * cannot exist.
+ */
+export function workerConversation(turns: number) {
+  const recorded = conversation(
+    WORKER_SESSION,
+    "worker",
+    "agent",
+    "dashboard",
+    CODEX_LAUNCH,
+    "codex",
+    "Implementing the dashboard now",
+  );
+  return {
+    ...recorded,
+    conversation: {
+      ...recorded.conversation,
+      turns: Array.from({ length: turns }, (_, index) => ({
+        ...recorded.conversation.turns[0],
+        id: `${WORKER_SESSION}-${index}`,
+        ...(index === 0
+          ? {}
+          : { assistant: `Dashboard turn ${index} arrived` }),
+      })),
+    },
+  };
+}
+
+/** The live run's timeline once that worker dispatch has recorded `turns` turns. */
+export function workerTurnsTimeline(turns: number) {
+  const served = runTimeline(LIVE_RUN);
+  const grown = dispatch(
+    WORKER_SESSION,
+    "engineer-dashboard",
+    "dashboard",
+    12,
+    60,
+    Array.from({ length: turns }, (_, index) => `${WORKER_SESSION}-${index}`),
+  );
+  return {
+    ...served,
+    spans: served.spans.map((span) => (span.id === grown.id ? grown : span)),
+  };
+}
+
 /** The settled run's one recorded session, long enough to be read a page at a time. */
 export const LONG_SESSION = "archive-session";
 

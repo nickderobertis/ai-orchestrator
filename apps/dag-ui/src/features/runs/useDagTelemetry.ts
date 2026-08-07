@@ -27,10 +27,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 /**
  * What has been read for the one run being looked at.
  *
- * Transcripts are deliberately absent: they dominate the detail payload and are
- * re-read on every invalidation, so the detail is fetched without them and the
- * ordered record comes from the timeline instead. A single conversation is fetched
- * by whichever view opens it.
+ * Transcripts are deliberately absent: they dominate the detail payload, so the
+ * detail is fetched without them and the ordered record comes from the timeline
+ * instead. A single conversation is fetched by whichever view opens it, and re-read
+ * only when the timeline says that session recorded something — see
+ * `useConversation`, which owns that rule.
  */
 interface RunRecord {
   readonly runId: string;
@@ -51,7 +52,6 @@ export interface DagTelemetryState {
   readonly loading: boolean;
   readonly lastUpdated?: string;
   readonly activity: readonly LiveActivity[];
-  readonly conversationRevision: number;
   readonly error?: Error;
   readonly refresh: () => Promise<void>;
   readonly loadMore: () => Promise<void>;
@@ -68,7 +68,6 @@ export function useDagTelemetry(
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string>();
   const [activity, setActivity] = useState<readonly LiveActivity[]>([]);
-  const [conversationRevision, setConversationRevision] = useState(0);
   const [error, setError] = useState<Error>();
   //: Bumped whenever the selected run's reads must be taken again.
   const [revision, setRevision] = useState(0);
@@ -234,10 +233,8 @@ export function useDagTelemetry(
           event.event === "conversation.changed" ||
           event.event === "activity.changed" ||
           event.event === "run.changed"
-        ) {
+        )
           setRevision((current) => current + 1);
-          setConversationRevision((current) => current + 1);
-        }
       },
       onError: (caught) => setError(asError(caught)),
     });
@@ -257,7 +254,6 @@ export function useDagTelemetry(
       loading,
       lastUpdated,
       activity,
-      conversationRevision,
       error,
       refresh,
       loadMore,
@@ -270,7 +266,6 @@ export function useDagTelemetry(
       loading,
       lastUpdated,
       activity,
-      conversationRevision,
       error,
       refresh,
       loadMore,
