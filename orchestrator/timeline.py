@@ -60,6 +60,13 @@ from .read_model import (
     make_servable,
 )
 from .runs import NodeId, RunId, validate_run_id
+from .supervisory import (
+    DriverState,
+    SupervisoryCapture,
+    SupervisoryPhase,
+    driver_state,
+    load_captures,
+)
 from .telemetry import native_session_groups
 
 TimelineScope = Literal["run"]
@@ -157,6 +164,25 @@ _TERMINAL_CONVERSATION_STATES = frozenset({"completed", "failed", "stopped"})
 #: The transport role of a nested lint run, which nests under the dispatch it ran in.
 _LLMLINT_ROLE = "llmlint"
 
+#: The semantic role of the process driving a tracked run. Its span is the one that
+#: carries `phase`, because the phase describes that loop and nothing else.
+_DRIVER_ROLE = "orchestrator"
+
+#: The transport role a locally captured supervisory session is served under: a capture
+#: stands in for the *agent* side of one onejudge dispatch, which is the side whose
+#: harness write failed. The supervisor beside it is its own session and its own record.
+_CAPTURE_TRANSPORT_ROLE = "agent"
+
+#: The event kind naming a harness that refused to write a session's history. Recorded
+#: as an event inside the served span, so the reason a transcript is missing travels
+#: with the span standing in for it rather than being inferred from the absence.
+HISTORY_WRITE_FAILURE_KIND = "history-write-failed"
+
+#: The turn status a captured turn is served with. Deliberately not one of the
+#: transcript states: this turn is known from the run's own bounded capture, not from a
+#: recorded transcript, and a reader must be able to tell the two apart.
+_CAPTURED_TURN_STATUS = "captured"
+
 #: The step id `orchestrator.lifecycle.run_repo_task` synthesizes for a workstream
 #: that was given one `(persona, task)` rather than a step DAG. It is a name for the
 #: node itself, so serving a span for it manufactured a container that held most of a
@@ -216,7 +242,9 @@ class TimelineSpan(TypedDict):
     the recorded nesting implies; a span with no parent is run-level.
 
     ``count``, ``total_duration_ms`` and ``intervals`` appear only on a ``rollup``
-    span, and the role pair and ``dispatch_id`` only on a ``dispatch`` one.
+    span, and the role pair and ``dispatch_id`` only on a ``dispatch`` one. ``phase``
+    appears only on the launched orchestrator's own dispatch span, where it says which
+    part of its loop the run's recorded state places the driver in.
     """
 
     id: str
@@ -238,6 +266,7 @@ class TimelineSpan(TypedDict):
     dispatch_id: NotRequired[str]
     reference: NotRequired[TimelineReference]
     detail: NotRequired[VerificationDetail]
+    phase: NotRequired[SupervisoryPhase]
 
 
 class RunTimeline(TypedDict):
@@ -936,6 +965,18 @@ class _DispatchIndex:
         pool = containing or [span for span in candidates if span["started_at"] <= at]
         return max(pool, key=lambda span: span["started_at"]) if pool else None
 
+    def round_parent(self, round_number: int | None, at: str) -> str | None:
+        """The round span containing ``at``, for an item located by round alone.
+
+        A supervisory capture carries the graph locators its dispatch was labelled
+        with and nothing finer: a check-in names a round, and the driver's own session
+        names neither. Both are legitimately run-level when no round contains them.
+        """
+        if round_number is None:
+            return None
+        found = self._select("round", at, round_number=round_number)
+        return found["id"] if found is not None else None
+
     def graph_parent(self, conversation: DagConversation, at: str) -> str | None:
         """The step, node, or round span a conversation's own labels place it in."""
         attribution = conversation["attribution"]
@@ -1038,6 +1079,102 @@ def _fold_conversations(assembly: _Assembly, conversations: Sequence[DagConversa
             index.add(assembly.get(span_id))
 
 
+def _fold_captures(
+    assembly: _Assembly,
+    captures: Sequence[SupervisoryCapture],
+    conversations: Sequence[DagConversation],
+) -> None:
+    """Serve each supervisory session history did not record, from its local capture.
+
+    The capture is a *fallback*, never a duplicate: a session oneharness recorded is
+    already a dispatch span with its own transcript, and serving the capture beside it
+    would draw one session twice. A capture is matched to that recorded session by the
+    pair its labels and its own record agree on — semantic role and round — because
+    that is what identifies a supervisory session: one driver per run, one check-in per
+    round. Not by session id, which history keeps as oneharness's own opaque
+    ``session_id`` rather than the name a dispatch chose.
+
+    That the pair is as precise as an id is a property of the two sites that open a
+    capture, each naming its session after exactly this pair: ``orchestrator-<run>`` in
+    `dispatch.launch_orchestrator` and ``check-in-<run>-<round>` in `graph._run_round`.
+    So re-entering either scope — a relaunched run, a retried check-in — re-opens the
+    capture already there rather than adding a second one this match could suppress
+    without ever serving. Held by `tests/test_supervisory.py`, which fails if a capture
+    site starts naming a session per attempt instead.
+
+    What survives that match is a session whose harness refused the history write. It
+    is served with the same role, timing, and open-ended liveness a recorded one would
+    have, its bounded captured turns as events, and — when the capture recorded one —
+    the refusal itself as a `history-write-failed` event, so the reason its transcript
+    is missing travels with the span standing in for it.
+    """
+    served = {
+        (item["attribution"]["agentRole"], item["attribution"].get("round"))
+        for item in conversations
+    }
+    index = _DispatchIndex(assembly.spans())
+    for capture in captures:
+        if (capture.agent_role, capture.round) in served:
+            continue
+        started_at = _normalize(capture.started_at)
+        if started_at is None:
+            continue
+        span_id = assembly.open(
+            ("supervisory", capture.session),
+            f"capture-{capture.session}",
+            kind="dispatch",
+            label=summarize(capture.session),
+            started_at=started_at,
+            ended_at=_normalize(capture.finished_at),
+            parent_id=index.round_parent(capture.round, started_at),
+            round_number=capture.round,
+            status=capture.status,
+            agent_role=capture.agent_role,
+            transport_role=_CAPTURE_TRANSPORT_ROLE,
+        )
+        span = assembly.get(span_id)
+        if tail := capture.transcript_tail:
+            span["detail"] = {"output_tail": tail}
+        for position, turn in enumerate(capture.turns):
+            assembly.add_event(
+                span_id,
+                {
+                    "id": f"{span_id}-turn-{position}",
+                    "kind": CONVERSATION_TURN_KIND,
+                    "at": _normalize(turn["at"]) or started_at,
+                    "status": _CAPTURED_TURN_STATUS,
+                },
+            )
+        if capture.history_failure is not None:
+            assembly.add_event(
+                span_id,
+                {
+                    "id": f"{span_id}-history-write-failed",
+                    "kind": HISTORY_WRITE_FAILURE_KIND,
+                    "at": _normalize(capture.finished_at) or started_at,
+                    "status": capture.history_failure,
+                },
+            )
+
+
+def _apply_driver_phase(spans: Sequence[TimelineSpan], driver: DriverState | None) -> None:
+    """Give the driver's own span the phase the run's recorded state places it in.
+
+    The newest one only: a resumed run has more than one driver session, and the phase
+    describes what is happening *now*, so labelling an earlier one with it would date a
+    finished session by the state of the run that outlived it.
+    """
+    if driver is None:
+        return
+    candidates = [
+        span
+        for span in spans
+        if span["kind"] == "dispatch" and span.get("agent_role") == _DRIVER_ROLE
+    ]
+    if candidates:
+        max(candidates, key=lambda span: (span["started_at"], span["id"]))["phase"] = driver.phase
+
+
 def _observed_pr_states(snapshot: DetailSnapshot) -> dict[str, str]:
     """Observed PR state keyed by url, from the persisted monitor snapshot."""
     observed: dict[str, str] = {}
@@ -1074,17 +1211,25 @@ def assemble(
     events: Sequence[Event],
     conversations: Sequence[DagConversation],
     snapshot: DetailSnapshot,
+    captures: Sequence[SupervisoryCapture] = (),
+    driver: DriverState | None = None,
 ) -> list[TimelineSpan]:
-    """Fold the three recorded sources into one ordered span tree.
+    """Fold the recorded sources into one ordered span tree.
 
     Pure: it reads nothing and writes nothing. Every input is already validated by
     the reader that produced it, so this is the join, not another trust boundary.
+
+    ``captures`` and ``driver`` are the supervisory tier's own record, and both default
+    to absent so a caller that only holds the three history-derived sources gets
+    exactly the tree it always did.
     """
     assembly = _Assembly()
     _fold_journal(assembly, events)
     _fold_conversations(assembly, conversations)
+    _fold_captures(assembly, captures, conversations)
     spans = assembly.spans()
     _apply_observations(spans, snapshot)
+    _apply_driver_phase(spans, driver)
     return spans
 
 
@@ -1143,8 +1288,13 @@ def run_timeline(
                 known_node_ids.add(definition_id)
     if node_id is not None and node_id not in known_node_ids:
         raise InvalidRunId("node_id does not name a node in this run")
+    captures = load_captures(run_dir)
     spans = assemble(
-        events, _conversations(validated, oneharness_bin, events), load_snapshot(run_dir)
+        events,
+        _conversations(validated, oneharness_bin, events),
+        load_snapshot(run_dir),
+        captures,
+        driver_state(run_dir, captures),
     )
     if node_id is not None:
         spans = [span for span in spans if span.get("node_id") == node_id]

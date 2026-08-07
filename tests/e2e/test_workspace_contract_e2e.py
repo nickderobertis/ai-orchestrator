@@ -230,6 +230,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/launch.py",
         "orchestrator/lifecycle.py",
         "orchestrator/read_model.py",
+        "orchestrator/supervisory.py",
         "orchestrator/telemetry.py",
         "orchestrator/timeline.py",
         "orchestrator/server.py",

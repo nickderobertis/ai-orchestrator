@@ -135,6 +135,13 @@ from .runs import (
     write_result,
 )
 from .scratch import capacity_failure_detail, sweep_scratch
+from .supervisory import (
+    HISTORY_WRITE_FAILURE_PATTERNS,
+    close_capture,
+    history_write_failure,
+    open_capture,
+    record_turn,
+)
 from .workspace import Workspace
 
 NodeKind = Literal["agent", "human"]
@@ -164,11 +171,10 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
     re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
-    re.compile(r"cannot write v[0-9]+(?:\.[0-9]+)* history telemetry", re.IGNORECASE),
-    re.compile(
-        r"new history (?:record|run) lacks complete v[0-9]+(?:\.[0-9]+)* telemetry",
-        re.IGNORECASE,
-    ),
+    # A harness that cannot complete its history write is the same no-dispatch failure
+    # it always was; the patterns now live in `supervisory`, because the capture that
+    # records the resulting missing session has to recognise exactly this string.
+    *HISTORY_WRITE_FAILURE_PATTERNS,
 )
 
 
@@ -1825,35 +1831,72 @@ def _run_round(
             )
             attempted = 0
 
+            def surfaced(report: Report) -> bool:
+                """Whether this attempt actually put the update in front of the planner."""
+                written = _surface_written_at()
+                return report.completed and written is not None and written != before
+
             def launch() -> Report:
                 nonlocal attempted
                 attempted += 1
-                return dispatch(
-                    "check-in",
-                    task,
-                    base_path=args.base_config,
-                    persona_dir=args.persona_dir,
-                    cwd=args.cwd or REPO_ROOT,
-                    onejudge_bin=args.onejudge_bin,
-                    provider=args.provider,
-                    oneharness_mode=args.oneharness_mode,
-                    worker_harness=args.worker_harness,
-                    judge_harness=args.judge_harness,
-                    labels={
-                        "run_id": validated_run_id,
-                        "round": str(round_number),
-                        "agent_role": "check-in",
-                        "persona": "check-in",
-                    },
-                    # Each attempt is its own conversation, for the reason a lifecycle
-                    # relaunch is: the identity that just refused may no longer hold
-                    # the one before it, and asking for it is another refusal.
-                    session=relaunch_session(
-                        f"check-in-{validated_run_id}-{round_number}", attempted - 1
-                    ),
-                    max_turns=1,
-                    timeout=dispatch_timeout,
+                # Each attempt is its own conversation, for the reason a lifecycle
+                # relaunch is: the identity that just refused may no longer hold
+                # the one before it, and asking for it is another refusal.
+                session = relaunch_session(
+                    f"check-in-{validated_run_id}-{round_number}", attempted - 1
                 )
+                # Opened before the dispatch, closed after it whichever way it ends: a
+                # check-in whose harness could not write history is the very session
+                # this capture exists for, and it cannot record itself once it is gone.
+                # One capture per *attempt* rather than per round, because a retry is a
+                # whole dispatch under a conversation of its own — and an attempt that
+                # died to the provider is exactly the turn a planner has to read
+                # afterwards, which a capture describing only the latest one would drop.
+                open_capture(
+                    run_dir,
+                    session=session,
+                    agent_role="check-in",
+                    persona="check-in",
+                    round_number=round_number,
+                )
+                try:
+                    report = dispatch(
+                        "check-in",
+                        task,
+                        base_path=args.base_config,
+                        persona_dir=args.persona_dir,
+                        cwd=args.cwd or REPO_ROOT,
+                        onejudge_bin=args.onejudge_bin,
+                        provider=args.provider,
+                        oneharness_mode=args.oneharness_mode,
+                        worker_harness=args.worker_harness,
+                        judge_harness=args.judge_harness,
+                        labels={
+                            "run_id": validated_run_id,
+                            "round": str(round_number),
+                            "agent_role": "check-in",
+                            "persona": "check-in",
+                        },
+                        session=session,
+                        max_turns=1,
+                        timeout=dispatch_timeout,
+                    )
+                except Exception as exc:
+                    close_capture(
+                        run_dir,
+                        session,
+                        status="failed",
+                        history_failure=history_write_failure(str(exc)),
+                    )
+                    raise
+                record_turn(run_dir, session, report.summary())
+                close_capture(
+                    run_dir,
+                    session,
+                    status="completed" if surfaced(report) else "failed",
+                    history_failure=history_write_failure(report.stderr),
+                )
+                return report
 
             def journal_retry(retried: BoundaryAttempt) -> None:
                 # Same policy the pump keeps for its own surfaces: a journal that
@@ -1877,8 +1920,7 @@ def _run_round(
                 ),
                 report=journal_retry,
             )
-            written = _surface_written_at()
-            if not report.completed or written is None or written == before:
+            if not surfaced(report):
                 raise RuntimeError("check-in agent did not surface a completed status update")
 
         proposal_pump = ProposalPump(

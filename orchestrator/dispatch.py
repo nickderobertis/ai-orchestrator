@@ -109,6 +109,7 @@ from .scratch import (
     owned_scratch_directory,
     processes_stamped_for,
 )
+from .supervisory import open_capture
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
@@ -1923,6 +1924,20 @@ def _start_orchestrator_process(
             "host": socket.gethostname(),
             "started": datetime.now(UTC).isoformat(),
         },
+    )
+    # The driver's own bounded local capture, opened here because this is the last
+    # point anything in this process sees the session: the orchestrator is detached
+    # and its harness may never write a history record for it. `channel.relay_supervisor`
+    # appends a turn to this file once per orchestrator turn, so the tier stays visible
+    # whether or not oneharness recorded it. Opened in the shared spawn helper rather
+    # than in `launch_orchestrator` alone, so an *adopted* driver — a different
+    # conversation, and the one whose predecessor already died unobserved — is
+    # captured on the same terms.
+    open_capture(
+        run_dir,
+        session=config["session"],
+        agent_role="orchestrator",
+        persona="orchestrator",
     )
     return proc.pid
 
