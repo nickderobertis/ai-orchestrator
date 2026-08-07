@@ -302,7 +302,7 @@ def apply_edit(
             if replacement_id in by_id:
                 raise EditError("retry replacement id must be new")
             _validate_retry_pin(replacement_id, node)
-            replacement = dict(node)
+            replacement = _pin_retry_branch(dict(node))
             replacement.setdefault("deps", list(by_id[node_id].get("deps", [])))
             direct_dependents = [task for task in tasks if node_id in task.get("deps", [])]
             reset: set[str] = {task["id"] for task in direct_dependents}
@@ -449,6 +449,27 @@ def _validate_retry_pin(replacement_id: str, node: Mapping[str, Any]) -> None:
             f"retry replacement {replacement_id!r} pins branch {branch!r} but resumes "
             f"branch {resumed!r}; a retry may name only one branch"
         )
+
+
+def _pin_retry_branch(node: dict[str, Any]) -> dict[str, Any]:
+    """Make a planner-named resume the branch pin it already is.
+
+    A retry that states ``resume`` is the planner answering "continue *this* work",
+    and the lifecycle reads a branch pin as the promise it must not silently break:
+    a preserved branch it cannot adopt fails the dispatch by name instead of being
+    swapped for a fresh one. Recording the pin the resume already implies is what
+    puts a planner-authored continuation on that side of the line, while a
+    continuation the harness carried forward on its own keeps the fallback.
+
+    `_validate_retry_pin` has already refused a node whose two answers disagree, so
+    an existing ``branch`` is either the same branch or a deliberate fresh start.
+    """
+    resume = node.get("resume")
+    if node.get("branch") is None and isinstance(resume, Mapping):
+        branch = resume.get("branch")
+        if isinstance(branch, str) and branch:
+            node["branch"] = branch
+    return node
 
 
 def _definition(node: Mapping[str, Any]) -> dict[str, Any]:
