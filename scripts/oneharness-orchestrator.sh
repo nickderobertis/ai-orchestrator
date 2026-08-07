@@ -136,14 +136,34 @@ record_boundary_attempt() {
     # The launch creates this directory, but the exported path is the contract and
     # this is what makes it one: a caller that named a log somewhere else gets the
     # record rather than a silent nothing the next round cannot fold.
-    mkdir -p "$(dirname -- "$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG")" 2>/dev/null || true
-    if ! printf '{"at":%s,"attempt":%s,"attempts":%s,"reason":"the orchestrator turn exited %s producing no output","role":"orchestrator"}\n' \
-        "$(date +%s)" "$1" "$boundary_attempts" "$2" >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG"; then
-        # Recorded on the notice below instead, which is printed only if the whole
-        # request ultimately fails. Losing the record must not cost the recovery.
-        boundary_notices="${boundary_notices}oneharness-orchestrator: could not append the retried attempt to $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG ($(: >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG" 2>&1 || true)); the next round cannot fold it into the run journal — check that its directory exists and is writable
-"
+    log_dir=$(dirname -- "$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG")
+    mkdir_error=$(mkdir -p "$log_dir" 2>&1) || {
+        # Printed at once, unlike the retry notices: this is not narration of a
+        # recovery that worked, it is the durable record of one going missing, and a
+        # planner reading `events.jsonl` afterwards would otherwise see no retry at
+        # all. It never changes the turn's own fate.
+        echo "oneharness-orchestrator: could not create $log_dir for the boundary-attempts log ($mkdir_error); the next round cannot fold this retry into the run journal — create that directory or unset ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG" >&2
+        return 0
+    }
+    append_error=$(printf '{"at":%s,"attempt":%s,"attempts":%s,"reason":"the orchestrator turn exited %s producing no output","role":"orchestrator"}\n' \
+        "$(date +%s)" "$1" "$boundary_attempts" "$2" 2>&1 >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG") || {
+        echo "oneharness-orchestrator: could not append the retried attempt to $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG ($append_error); the next round cannot fold it into the run journal — check that the file is writable" >&2
+    }
+}
+
+# The backoff arithmetic, with its failure handled rather than left to strict mode.
+# `awk` failing here is a broken toolchain, not a policy decision, and a recovery
+# that died silently on it would look exactly like the provider outage it is riding
+# out. The previous delay stands in, so the wait still happens.
+bounded_delay() {
+    local computed
+    if computed=$(awk -v d="$1" -v f="$2" -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" \
+        'BEGIN { v = d * f; printf "%g", (v > m ? m : v) }') && [ -n "$computed" ]; then
+        printf '%s' "$computed"
+        return 0
     fi
+    echo "oneharness-orchestrator: could not compute the retry backoff with awk; falling back to ${1}s. Check that awk is on PATH — 'just bootstrap' restores the toolchain." >&2
+    printf '%s' "$1"
 }
 
 # The retry notices are collected rather than printed as they happen, and released
@@ -153,8 +173,7 @@ record_boundary_attempt() {
 # attempts log above is the durable record either way.
 boundary_notices=''
 boundary_attempt=1
-boundary_delay=$(awk -v d="$boundary_backoff" -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" \
-    'BEGIN { printf "%g", (d > m ? m : d) }')
+boundary_delay=$(bounded_delay "$boundary_backoff" 1)
 while :; do
     # Checked before the turn, and separately from it: a buffer that cannot be
     # written makes every attempt look like a provider that answered nothing, which
@@ -174,10 +193,11 @@ while :; do
     record_boundary_attempt "$boundary_attempt" "$boundary_status"
     boundary_notices="${boundary_notices}oneharness-orchestrator: the orchestrator turn exited $boundary_status producing no output; retried in ${boundary_delay}s (attempt $((boundary_attempt + 1)) of $boundary_attempts). If every attempt below also failed, probe the launch path with 'just smoke' and read the provider-health block in 'just status' before relaunching this run.
 "
-    sleep "$boundary_delay"
+    # A `sleep` that will not run is not a reason to stop recovering — the next
+    # attempt is the point, and the wait only spaces it. Say so and keep going.
+    sleep "$boundary_delay" || echo "oneharness-orchestrator: could not wait ${boundary_delay}s between attempts; retrying immediately, which asks the same provider sooner than intended. Check that sleep is on PATH — 'just bootstrap' restores the toolchain." >&2
     boundary_attempt=$((boundary_attempt + 1))
-    boundary_delay=$(awk -v d="$boundary_delay" -v f="$BOUNDARY_BACKOFF_FACTOR" \
-        -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" 'BEGIN { v = d * f; printf "%g", (v > m ? m : v) }')
+    boundary_delay=$(bounded_delay "$boundary_delay" "$BOUNDARY_BACKOFF_FACTOR")
 done
 if [ "$boundary_status" -ne 0 ] && [ ! -s "$captured_stdout" ]; then
     # Said whether or not anything was retried: a single-attempt policy reaches here
