@@ -26,6 +26,7 @@ seed in its prompt — is in test_lifecycle_e2e.py.
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,34 @@ def test_another_conversations_turns_are_never_carried_into_this_one(
     )
 
     assert transcript_seed(SESSION) is None
+
+
+def test_a_history_command_that_cannot_list_sessions_still_lets_the_relaunch_go(
+    store: Path, tmp_path: Path
+) -> None:
+    """The store this host cannot read at all: unseeded, never held up.
+
+    Driven through a real `oneharness` that fails rather than by patching the listing
+    out, because the failure is a subprocess one — a CLI that is broken, absent, or
+    pointed at a store it cannot open, which is what an operator actually hits. The
+    conversation is written and provably findable first, so the `None` here can only
+    mean the listing failed and not that there was nothing to carry.
+    """
+    write_worker_session(
+        store / "dead-20260806T120000Z-1.jsonl",
+        project=tmp_path,
+        name=SESSION,
+        prompt="Measure the lifecycle cost.",
+    )
+    assert transcript_seed(SESSION) is not None, "the seed must be findable before it is denied"
+
+    broken = tmp_path / "broken-oneharness"
+    broken.write_text(
+        "#!/usr/bin/env bash\necho 'history store unavailable' >&2\nexit 1\n", encoding="utf-8"
+    )
+    broken.chmod(broken.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    assert transcript_seed(SESSION, oneharness_bin=str(broken)) is None
 
 
 def test_a_session_file_that_disappeared_falls_through_to_the_next(

@@ -2080,7 +2080,6 @@ def test_main_plan_human_format(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    # human format (default), recording into a runs root of its own
     rc = lc.main_plan([plan_file, "--runs-dir", str(tmp_path / "runs")])
     assert rc == 1  # not ok
     assert "repo-plan" in capsys.readouterr().out

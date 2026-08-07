@@ -1569,7 +1569,7 @@ def launch_orchestrator(
 #: are "may be live" answers rather than proofs of death — the same asymmetry `stop`
 #: keeps — so an owner this host cannot probe keeps its run, and only a driver this
 #: host can see is gone is replaced.
-def _live_driver(run_dir: Path) -> str | None:
+def _live_driver_reason(run_dir: Path) -> str | None:
     """Why this run still has something driving it, or ``None`` when nothing does."""
     if launch_claims_a_live_owner(run_dir):
         return "its launched orchestrator process is still running"
@@ -1628,7 +1628,7 @@ def adopt_orchestrator(
             f"{owner.describe_other()}, "
             f"not by you ({mine}). Confirm with its planner before taking it over."
         )
-    if (driving := _live_driver(run_dir)) is not None:
+    if (driving := _live_driver_reason(run_dir)) is not None:
         raise DispatchError(
             f"refusing to adopt {validated}: {driving}. Adoption replaces a dead driver; "
             f"end this one first with: just stop {validated} --runs-dir {root}"

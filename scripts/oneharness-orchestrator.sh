@@ -64,10 +64,7 @@ fi
 # orchestrator side today; this is what keeps that true rather than assumed.
 for arg in "$@"; do
     if [ "$arg" = "--stream" ]; then
-        # llmlint: ignore[tool_output_is_signal] A pass-through, like the --config
-        # branch above: this process is replaced, so there is no wrapper left to add
-        # a line, and interposing one would corrupt the very stream the caller asked
-        # for. oneharness's own diagnostics are the signal on this path.
+        # llmlint: ignore[tool_output_is_signal] A pass-through, like the --config branch above: this process is replaced by oneharness, so there is no wrapper left to add a line to its success output or its failure, and interposing one would corrupt the very stream the caller asked for. oneharness's own diagnostics are the signal on this path.
         exec oneharness run --config "$orchestrator_config" "$@"
     fi
 done
@@ -117,9 +114,7 @@ positive_number "$boundary_backoff" || boundary_backoff=$BOUNDARY_DEFAULT_BACKOF
 
 if ! captured_stdout=$(mktemp "${TMPDIR:-/tmp}/oneharness-orchestrator.XXXXXX"); then
     echo "oneharness-orchestrator: cannot create the stdout buffer the boundary retry needs under ${TMPDIR:-/tmp}; free space there or point TMPDIR at a writable directory to restore post-round retries, then retry. This turn runs unbuffered and is not retried." >&2
-    # llmlint: ignore[tool_output_is_signal] The wrapper has already said what went
-    # wrong here and what fixes it, on the line above; the turn itself then runs
-    # unwrapped, and what it reports is oneharness's own to report.
+    # llmlint: ignore[tool_output_is_signal] The wrapper has already said what went wrong here and what fixes it, on the line above; this process is then replaced by oneharness, so what its success or failure reports is oneharness's own to report.
     exec oneharness run --config "$orchestrator_config" "$@"
 fi
 # `rm -f` succeeds for an already-absent path, so the only failures left are a
