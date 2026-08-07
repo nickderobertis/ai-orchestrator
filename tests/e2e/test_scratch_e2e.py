@@ -795,6 +795,7 @@ assert candidate
     assert "retained 1 directories referenced by live processes" in result.stdout
 
 
+@pytest.mark.load_sensitive
 @pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])
 def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     tmp_path: Path, command_base: Callable[..., Path], onejudge_bin: str, identifiable: bool

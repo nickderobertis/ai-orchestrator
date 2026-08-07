@@ -47,7 +47,13 @@ from .dispatch import (
 )
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
-from .harnesses import JUDGE_SIDE, WORKER_SIDE, harness_option_help, harness_override_env
+from .harnesses import (
+    JUDGE_SIDE,
+    WORKER_SIDE,
+    harness_option_help,
+    model_option_help,
+    side_override_env,
+)
 from .ids import GraphId
 from .journal import NodeSink, NullNodeJournal
 from .merge import (
@@ -1794,6 +1800,8 @@ def run_repo_task(
     oneharness_mode: str | None = "bypass",
     worker_harness: str | None = None,
     judge_harness: str | None = None,
+    worker_model: str | None = None,
+    judge_model: str | None = None,
     dispatch_fn: DispatchFn = dispatch,
     base_path: str | Path = BASE_CONFIG,
     persona_dir: str | Path = PERSONA_DIR,
@@ -1837,12 +1845,19 @@ def run_repo_task(
     outcome.
 
     ``worker_harness`` / ``judge_harness`` select each conversation side's provider
-    for every step of this workstream (see `orchestrator.harnesses`). They are
-    validated before the worktree is cut, so a value naming an identity this
-    repository has not configured costs nothing but the message that says so.
+    for every step of this workstream, and ``worker_model`` / ``judge_model`` the
+    model it runs on (see `orchestrator.harnesses`). They are validated before the
+    worktree is cut, so a value naming an identity this repository has not
+    configured — or a model paired with no identity — costs nothing but the message
+    that says so.
     """
     log: NodeSink = journal if journal is not None else NullNodeJournal()
-    harness_env = harness_override_env(worker=worker_harness, judge=judge_harness)
+    side_env = side_override_env(
+        worker=worker_harness,
+        judge=judge_harness,
+        worker_model=worker_model,
+        judge_model=judge_model,
+    )
     require_scratch_capacity()
     effective_steps = steps or (
         [Step("main", persona, task, max_turns=max_turns, done_when=done_when)]
@@ -1997,7 +2012,7 @@ def run_repo_task(
         # gate and the publication rebuild judge the same base. Each side's harness
         # selection rides along here too, so every step of the workstream — and any
         # relaunch of one — supervises and works on the providers it was given.
-        workstream_env = {**cache_env, **comparison_env(pr_base), **harness_env}
+        workstream_env = {**cache_env, **comparison_env(pr_base), **side_env}
         gate_template = selection.gate
         if recorded_gate is not None:
             resolved_recorded_gate = recorded_gate
@@ -3362,6 +3377,8 @@ def make_repo_runner(
     oneharness_mode: str | None,
     worker_harness: str | None = None,
     judge_harness: str | None = None,
+    worker_model: str | None = None,
+    judge_model: str | None = None,
     verify_via_ci: bool = False,
     poll_interval: float,
     timeout: float,
@@ -3396,6 +3413,8 @@ def make_repo_runner(
             oneharness_mode=oneharness_mode,
             worker_harness=worker_harness,
             judge_harness=judge_harness,
+            worker_model=worker_model,
+            judge_model=judge_model,
             base_path=base_path,
             persona_dir=persona_dir,
             max_turns=node.max_turns,
@@ -3447,6 +3466,18 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         JUDGE_SIDE.option, default=None, metavar="ID", help=harness_option_help(JUDGE_SIDE)
+    )
+    parser.add_argument(
+        WORKER_SIDE.model_option,
+        default=None,
+        metavar="MODEL",
+        help=model_option_help(WORKER_SIDE),
+    )
+    parser.add_argument(
+        JUDGE_SIDE.model_option,
+        default=None,
+        metavar="MODEL",
+        help=model_option_help(JUDGE_SIDE),
     )
     parser.add_argument(
         "--verify-via-ci",
@@ -3657,6 +3688,8 @@ def main_plan(argv: list[str] | None = None) -> int:
         oneharness_mode=args.oneharness_mode,
         worker_harness=args.worker_harness,
         judge_harness=args.judge_harness,
+        worker_model=args.worker_model,
+        judge_model=args.judge_model,
         verify_via_ci=args.verify_via_ci,
         poll_interval=args.poll_interval,
         timeout=args.timeout,

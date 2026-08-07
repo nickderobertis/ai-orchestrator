@@ -136,6 +136,59 @@ def test_only_the_judge_supervises_on_the_cheaper_claude_tier() -> None:
             assert variant["model"] == expected, f"{config.name}:{name}"
 
 
+#: Every place the judge's pinned tier is restated in prose, and the sentence each
+#: must spell. Pairs rather than a mapping, because one file states the fact twice.
+#: Four copies, for the reason the precedence claim has three: the reference section
+#: is what an operator reaching for `--judge-model` reads, the module docstring is
+#: what a reader changing that code sees, and AGENTS.md is what a planner is handed.
+#: Gating only one leaves the rest drifting silently past a retuned tier or a fourth
+#: identity. Each template names whichever halves its own sentence states — two of
+#: them call the tier by intent rather than by name — and every half comes from the
+#: config, so none of this prose had to be reworded to be held to it.
+JUDGE_TIER_CLAIMS = (
+    ("docs/onejudge-integration.md", "`{config}` pins `{model}` on all {counted} of its Claude"),
+    ("docs/onejudge-integration.md", "all {counted} of its Claude variants are `{model}`"),
+    (
+        "orchestrator/harnesses.py",
+        "the judge's {counted} Claude identities are pinned to the cheaper supervisor tier",
+    ),
+    (
+        "AGENTS.md",
+        "the judge's {counted} Claude identities are pinned to the cheaper supervisor model",
+    ),
+)
+#: The numerals a count may be spelled with. A config that grows past these fails
+#: loudly below rather than silently matching nothing.
+_NUMERALS = {2: "two", 3: "three", 4: "four", 5: "five"}
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(("relative_path", "template"), JUDGE_TIER_CLAIMS)
+def test_documentation_states_the_judge_tier_its_config_pins(
+    relative_path: str, template: str
+) -> None:
+    """Prose restating the judge's pinned tier is reconciled against the config.
+
+    An operator reaching for `--judge-model` reads this to learn what they are
+    overriding, so a stale sentence sends them to change a tier that already moved —
+    or leaves them believing a fourth identity is on it. `oneharness.judge.toml` is
+    the one source; this holds every copy to it rather than to each other.
+    """
+    variants = _config(JUDGE_CONFIG)["harness"]["claude-code"]["variant"]
+    pinned = {variant["model"] for variant in variants.values()}
+    assert len(pinned) == 1, f"{JUDGE_CONFIG.name} pins several Claude tiers: {sorted(pinned)}"
+    counted = _NUMERALS.get(len(variants))
+    assert counted is not None, f"{JUDGE_CONFIG.name} names {len(variants)} Claude identities"
+    stated = template.format(config=JUDGE_CONFIG.name, model=pinned.pop(), counted=counted)
+    # Whitespace-normalized: every one of these sentences wraps across lines.
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+
+    assert stated in written, (
+        f"{relative_path} must state {stated!r}; update it in the same change that "
+        f"retuned {JUDGE_CONFIG.name}, or stop restating the tier there"
+    )
+
+
 def test_every_role_defines_the_alternate_codex_identity_identically() -> None:
     """All four chains reach a second Codex identity; hold them to one definition.
 

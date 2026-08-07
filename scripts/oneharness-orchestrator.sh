@@ -135,6 +135,7 @@ record_boundary_attempt() {
     # `log_dir` empty and hand `mkdir -p ""` a failure about the wrong thing, which
     # is a worse account of the missing record than saying the path could not be
     # derived at all.
+    # shellcheck disable=SC2015  # Both failures take this branch deliberately: an unset log_dir is as unusable as a dirname that exited non-zero.
     log_dir=$(dirname -- "$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG") && [ -n "$log_dir" ] || {
         echo "oneharness-orchestrator: could not derive the directory of $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG, so this retry cannot be recorded and the next round cannot fold it into the run journal — point ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG at an ordinary path, or unset it" >&2
         return 0
@@ -152,6 +153,7 @@ record_boundary_attempt() {
     # field, and what lands in the log is `{"at":,...}` — malformed JSON the next
     # round drops, leaving a retry that reads as never having happened. The one
     # failure this whole record exists to make visible.
+    # shellcheck disable=SC2015  # Same deliberate shape as the dirname above: an empty stamp is as unusable as a date that exited non-zero.
     stamped=$(date +%s) && [ -n "$stamped" ] || {
         echo "oneharness-orchestrator: could not read the clock with date, so the retried attempt cannot be recorded to $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG and the next round cannot fold it into the run journal — check that date is on PATH ('just bootstrap' restores the toolchain)" >&2
         return 0

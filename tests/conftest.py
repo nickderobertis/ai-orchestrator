@@ -49,7 +49,7 @@ from scheduling import pytest_collection_modifyitems  # noqa: F401
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops, provider_health
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
-from orchestrator.harnesses import HARNESS_SELECTION_ENV
+from orchestrator.harnesses import DISPATCH_SELECTION_ENV
 from orchestrator.scratch import AGENT_STATUS_DIR_ENV
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -171,24 +171,25 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_harness_selection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep an enclosing dispatch's harness choice — by any of its names — out of this suite.
+def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep an enclosing dispatch's per-side choice — by any of its names — out of this suite.
 
-    A dispatch launched with `--worker-harness` / `--judge-harness` exports the
-    selection to everything it runs, including the worker's own gate — which is
-    this suite. The journeys that assert what a side selects would then be reading
-    the outer run's choice instead of their own, exactly as with the comparison
-    identity above: a test's environment is the test's to state.
+    A dispatch launched with `--worker-harness` / `--judge-harness` — or with
+    `--worker-model` / `--judge-model` — exports that choice to everything it runs,
+    including the worker's own gate, which is this suite. The journeys that assert
+    what a side selects would then be reading the outer run's choice instead of
+    their own, exactly as with the comparison identity above: a test's environment
+    is the test's to state.
 
-    The per-side pair alone did not cover that: `scripts/oneharness-agent.sh`
+    The per-side variables alone do not cover that: `scripts/oneharness-agent.sh`
     resolves each side's value into oneharness's own process-wide
-    `ONEHARNESS_HARNESSES` and exports *that*, so the variable this suite actually
-    inherited from an enclosing per-side dispatch was the one nothing dropped — and
-    the journeys below failed on unmodified `main` whenever the outer run used an
-    override. `HARNESS_SELECTION_ENV` names all three in one place so the seam
-    cannot fall behind the wrapper again.
+    `ONEHARNESS_HARNESSES` / `ONEHARNESS_MODEL` and exports *those*, so the variable
+    this suite actually inherited from an enclosing per-side dispatch was the one
+    nothing dropped — and the journeys below failed on unmodified `main` whenever
+    the outer run used an override. `DISPATCH_SELECTION_ENV` names every one of them
+    in one place so the seam cannot fall behind the wrapper again.
     """
-    for key in HARNESS_SELECTION_ENV:
+    for key in DISPATCH_SELECTION_ENV:
         monkeypatch.delenv(key, raising=False)
 
 

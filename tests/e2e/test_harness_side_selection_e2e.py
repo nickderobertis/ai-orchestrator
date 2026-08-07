@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,8 +38,12 @@ from waits import timeout as e2e_timeout
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.harnesses import (
     JUDGE_HARNESS_ENV,
+    JUDGE_SIDE,
     PROCESS_WIDE_HARNESS_ENV,
+    PROCESS_WIDE_MODEL_ENV,
     WORKER_HARNESS_ENV,
+    WORKER_SIDE,
+    HarnessSide,
 )
 from orchestrator.labels import parse_labels
 
@@ -52,6 +57,41 @@ WORKER_MARKER = "You are one worker in a larger orchestrated effort"
 #: against them rather than merely chosen to differ by inspection.
 WORKER_CHOICE = "codex"
 JUDGE_CHOICE = "claude-code:primary"
+#: The identity both sides are put on for the model journeys, so what those prove is
+#: the model alone rather than the model riding along with a different provider.
+SHARED_MODEL_IDENTITY = "claude-code:primary"
+#: The identity both default chains reach in this fixture, where neither alternate
+#: Claude config directory exists — asserted by the default-path journey below.
+DEFAULT_IDENTITY = "codex"
+
+
+def _configured_model(side: HarnessSide, identity: str) -> str:
+    """The model a role's config pins for one identity: the default that side runs on.
+
+    Read from the config rather than restated, so a journey asserting "this side was
+    left alone" — or "this value is one the config would not have produced" — keeps
+    meaning that after somebody retunes a tier.
+    """
+    harness, _, variant = identity.partition(":")
+    with side.config.open("rb") as handle:
+        entry = tomllib.load(handle)["harness"][harness]
+    if variant:
+        entry = entry["variant"][variant]
+    model = entry["model"]
+    assert isinstance(model, str)
+    return model
+
+
+#: Each side is given the model the OTHER side's config pins for the shared identity:
+#: the worker config pins the author tier there and the judge config the cheaper
+#: supervisor tier, by design. Swapping them is what makes the journeys below
+#: discriminating — a side that ignored its own value, or let its config win (which
+#: is all `ONEHARNESS_MODEL` alone would allow), records the value it was supposed to
+#: displace. Derived from the configs so the swap cannot quietly become a no-op.
+WORKER_MODEL_CHOICE = _configured_model(JUDGE_SIDE, SHARED_MODEL_IDENTITY)
+JUDGE_MODEL_CHOICE = _configured_model(WORKER_SIDE, SHARED_MODEL_IDENTITY)
+
+
 #: The process-wide value the two journeys below state for themselves: a third
 #: identity, which is what makes "the side ignored its own selection" observable.
 #: It is only a sentinel while it is a value nobody else could have supplied, so
@@ -72,6 +112,7 @@ with open(os.environ["SELECTION_RECORD"], "a") as record:
         "bin": {name!r},
         "claude_config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
         "harnesses": os.environ.get("ONEHARNESS_HARNESSES"),
+        "model": os.environ.get({process_wide_model_env!r}),
         "worker_override": os.environ.get({worker_env!r}),
         "judge_override": os.environ.get({judge_env!r}),
         # What oneharness would stamp on the session this turn becomes, read where
@@ -123,6 +164,7 @@ def _fake_providers(bin_dir: Path) -> None:
             name=name,
             worker_env=WORKER_HARNESS_ENV,
             judge_env=JUDGE_HARNESS_ENV,
+            process_wide_model_env=PROCESS_WIDE_MODEL_ENV,
             judge_marker=JUDGE_MARKER,
             worker_marker=WORKER_MARKER,
         )
@@ -159,6 +201,9 @@ def _provider_environment(tmp_path: Path, oneharness_bin: str) -> tuple[Path, di
     # journey that states none genuinely runs with none. Dropped here, before the
     # per-journey `env` is layered on, so a stated value is the only one there is.
     environment.pop(PROCESS_WIDE_HARNESS_ENV, None)
+    # The model half of the same provenance rule: a journey that states no model
+    # must genuinely run with none, whatever the enclosing dispatch chose.
+    environment.pop(PROCESS_WIDE_MODEL_ENV, None)
     return record, environment
 
 
@@ -196,6 +241,21 @@ class Dispatched:
     def side(self, marker: str) -> list[dict[str, Any]]:
         """Every recorded turn whose prompt carries this side's marker."""
         return [turn for turn in self.turns if marker in " ".join(turn["argv"])]
+
+    def models(self, marker: str) -> set[str | None]:
+        """The `--model` each of this side's turns was actually spawned with.
+
+        Read from the provider's own argv rather than from the environment,
+        because that is what decides the turn: every role's config pins a `model`
+        per harness, and a config value beats `ONEHARNESS_MODEL`.
+        """
+        return {_spawned_model(turn) for turn in self.side(marker)}
+
+
+def _spawned_model(turn: Mapping[str, Any]) -> str | None:
+    """The model named on one spawned provider's own command line, if any."""
+    argv = list(turn["argv"])
+    return argv[argv.index("--model") + 1] if "--model" in argv else None
 
 
 def _recorded_turns(record: Path, process: subprocess.CompletedProcess[str]) -> Dispatched:
@@ -297,6 +357,130 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
     # A masked CLAUDE_CONFIG_DIR is what distinguishes the primary account from the
     # alternate2 one the ambient value named; both run the same binary.
     assert {turn["claude_config_dir"] for turn in judge_turns} == {None}
+
+
+def test_each_side_runs_the_model_it_was_given_on_one_shared_identity(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The pairing this half of the seam exists for: one tier author, another reviewer.
+
+    Both sides are put on the same identity so the only thing under test is the
+    model, and each is given the model the other side's config pins — the swap that
+    makes a leak, or a config quietly winning, read as the wrong value rather than
+    as a coincidence. The assertion is on the provider's own `--model`, because that
+    is what decides the turn: a config's per-harness `model` beats `ONEHARNESS_MODEL`,
+    so the exported variable alone would have left both sides on their config's tier.
+    """
+    assert _configured_model(WORKER_SIDE, SHARED_MODEL_IDENTITY) != WORKER_MODEL_CHOICE
+    assert _configured_model(JUDGE_SIDE, SHARED_MODEL_IDENTITY) != JUDGE_MODEL_CHOICE
+    dispatched = _dispatch(
+        tmp_path,
+        onejudge_bin,
+        oneharness_bin,
+        extra_args=(
+            "--worker-harness",
+            SHARED_MODEL_IDENTITY,
+            "--worker-model",
+            WORKER_MODEL_CHOICE,
+            "--judge-harness",
+            SHARED_MODEL_IDENTITY,
+            "--judge-model",
+            JUDGE_MODEL_CHOICE,
+        ),
+    )
+
+    assert dispatched.process.returncode == 0, dispatched.process.stderr
+    assert dispatched.side(WORKER_MARKER), dispatched.turns
+    assert dispatched.side(JUDGE_MARKER), dispatched.turns
+    assert dispatched.models(WORKER_MARKER) == {WORKER_MODEL_CHOICE}
+    assert dispatched.models(JUDGE_MARKER) == {JUDGE_MODEL_CHOICE}
+    # And the variable each side exports for everything it subsequently runs — its
+    # own gate, and the llmlint tier inside it — carries that side's choice alone.
+    assert {turn["model"] for turn in dispatched.side(WORKER_MARKER)} == {WORKER_MODEL_CHOICE}
+    assert {turn["model"] for turn in dispatched.side(JUDGE_MARKER)} == {JUDGE_MODEL_CHOICE}
+
+
+@pytest.mark.parametrize(
+    ("side_args", "marker", "other_marker"),
+    [
+        (
+            ("--judge-harness", SHARED_MODEL_IDENTITY, "--judge-model", JUDGE_MODEL_CHOICE),
+            JUDGE_MARKER,
+            WORKER_MARKER,
+        ),
+        (
+            ("--worker-harness", SHARED_MODEL_IDENTITY, "--worker-model", WORKER_MODEL_CHOICE),
+            WORKER_MARKER,
+            JUDGE_MARKER,
+        ),
+    ],
+    ids=["judge-only", "worker-only"],
+)
+def test_a_model_given_to_one_side_never_reaches_the_other(
+    tmp_path: Path,
+    onejudge_bin: str,
+    oneharness_bin: str,
+    side_args: tuple[str, ...],
+    marker: str,
+    other_marker: str,
+) -> None:
+    """One side named, the other left alone: the untouched side runs its config's model."""
+    dispatched = _dispatch(tmp_path, onejudge_bin, oneharness_bin, extra_args=side_args)
+
+    assert dispatched.process.returncode == 0, dispatched.process.stderr
+    assert dispatched.side(marker), dispatched.turns
+    assert dispatched.side(other_marker), dispatched.turns
+    assert dispatched.models(marker) == {side_args[-1]}
+    # The other side runs the model ITS config pins for the identity it landed on,
+    # and carries no variable to inherit one from — which is what "left alone" is.
+    other_side = WORKER_SIDE if other_marker == WORKER_MARKER else JUDGE_SIDE
+    assert dispatched.models(other_marker) == {_configured_model(other_side, DEFAULT_IDENTITY)}
+    assert {turn["model"] for turn in dispatched.side(other_marker)} == {None}
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "extra", "reason"),
+    [
+        ("--worker-model", "claude-opus-5", (), "--worker-harness"),
+        ("--judge-model", "claude-opus-5", (), "--judge-harness"),
+        (
+            "--worker-model",
+            "claude-opus-5",
+            ("--worker-harness", "claude-code:primary,codex"),
+            "spans",
+        ),
+        # The judge side's own mixed-family refusal, driven the same way: the two
+        # sides resolve on different branches against different configs, so one of
+        # them proving the rule proves nothing about the other.
+        (
+            "--judge-model",
+            "claude-opus-5",
+            ("--judge-harness", "claude-code:primary,codex"),
+            "spans",
+        ),
+    ],
+    ids=["worker-unpaired", "judge-unpaired", "worker-two-families", "judge-two-families"],
+)
+def test_a_model_the_pairing_rule_forbids_refuses_the_dispatch_before_it_starts(
+    tmp_path: Path,
+    onejudge_bin: str,
+    oneharness_bin: str,
+    option: str,
+    value: str,
+    extra: tuple[str, ...],
+    reason: str,
+) -> None:
+    """A dispatch that would die on a provider rejection must not start at all."""
+    dispatched = _dispatch(
+        tmp_path, onejudge_bin, oneharness_bin, extra_args=(*extra, option, value)
+    )
+
+    assert dispatched.process.returncode == 2, dispatched.process.stdout
+    stderr = dispatched.process.stderr
+    assert option in stderr
+    assert reason in stderr
+    # Nothing was spawned: the refusal happens before any provider is selected.
+    assert dispatched.turns == []
 
 
 def test_a_dispatch_never_stamps_the_worker_role_on_its_own_supervisor(
@@ -403,6 +587,12 @@ def test_with_no_selection_at_all_both_sides_resolve_their_configured_chains(
     assert {turn["harnesses"] for turn in judge_turns} == {None}
     assert {turn["worker_override"] for turn in dispatched.turns} == {None}
     assert {turn["judge_override"] for turn in dispatched.turns} == {None}
+    # And the model no-op: with neither option set no branch names a model of its
+    # own and no variable carries one, so each side runs exactly the model its config
+    # pins for the identity it landed on. That is what "unchanged" means here.
+    assert dispatched.models(WORKER_MARKER) == {_configured_model(WORKER_SIDE, DEFAULT_IDENTITY)}
+    assert dispatched.models(JUDGE_MARKER) == {_configured_model(JUDGE_SIDE, DEFAULT_IDENTITY)}
+    assert {turn["model"] for turn in dispatched.turns} == {None}
 
 
 @pytest.mark.parametrize(
@@ -572,6 +762,76 @@ def test_a_one_node_plan_runs_a_whole_workstream_on_the_providers_it_was_given(
     assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
     assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}
     assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
+
+
+def test_a_one_node_plan_runs_a_whole_workstream_on_the_models_it_was_given(
+    tmp_path: Path, bare_origin, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The model half reaches the lifecycle runner too, not only the direct one.
+
+    `just run-plan` builds a separate runner for lifecycle workstreams, so a model
+    that reached only the direct one would leave a whole branch supervised at a tier
+    nobody chose — the same split the harness half has its own journey for. This
+    drives the real recorded executor over a real git checkout: the node clones,
+    works in its worktree, passes its gate and merges, every turn of it through the
+    real wrapper and the real oneharness.
+    """
+    origin = bare_origin()
+    checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
+    record, environment = _provider_environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "workstream.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "workstream",
+                        "repo": str(checkout),
+                        "persona": "engineer",
+                        "task": "record which model ran this workstream",
+                        "max_turns": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.run(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "worktrees"),
+            "--worker-harness",
+            SHARED_MODEL_IDENTITY,
+            "--worker-model",
+            WORKER_MODEL_CHOICE,
+            "--judge-harness",
+            SHARED_MODEL_IDENTITY,
+            "--judge-model",
+            JUDGE_MODEL_CHOICE,
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+    dispatched = _recorded_turns(record, process)
+
+    assert process.returncode == 0, process.stderr
+    # The merge is what proves the models did not just parse but carried a real
+    # workstream — several dispatches on one branch — all the way through.
+    assert json.loads(process.stdout)["results"]["workstream"]["outcome"] == "merged"
+    assert dispatched.side(WORKER_MARKER), dispatched.turns
+    assert dispatched.side(JUDGE_MARKER), dispatched.turns
+    assert dispatched.models(WORKER_MARKER) == {WORKER_MODEL_CHOICE}
+    assert dispatched.models(JUDGE_MARKER) == {JUDGE_MODEL_CHOICE}
 
 
 def test_the_orchestrator_role_is_outside_this_seam(tmp_path: Path, oneharness_bin: str) -> None:

@@ -328,6 +328,114 @@ identity. The other two roles are out of scope — `oneharness.orchestrator.toml
 `oneharness.llmlint.toml` keep resolving through their own wrappers, untouched by
 either variable.
 
+#### Choosing a model per side
+
+Picking the identity does not pick the tier. Every role's config pins a `model` per
+harness — `oneharness.judge.toml` pins `claude-sonnet-5` on all three of its Claude
+identities *by design*, the cheaper-supervisor intent — so `--judge-harness
+claude-code:primary` gets the judge onto that subscription and leaves it on sonnet.
+That config is the one source of the tier and the count; the sentence above restates
+them because an operator has to read them here, and
+`tests/test_harness_routing.py::test_documentation_states_the_judge_tier_its_config_pins`
+derives both from `oneharness.judge.toml` and fails when the two disagree.
+`--worker-model` / `--judge-model` are the second half of the same seam:
+
+```sh
+just orchestrate plan.json \
+  --worker-harness claude-code:primary --worker-model claude-opus-5 \
+  --judge-harness claude-code:primary --judge-model claude-opus-5
+```
+
+Each sets its own variable — `ORCHESTRATOR_WORKER_MODEL` or
+`ORCHESTRATOR_JUDGE_MODEL` — and `scripts/oneharness-agent.sh` resolves them on the
+same two branches the harness pair is resolved on, so a side carrying an explicit
+model never inherits the other side's.
+
+**A model override is accepted only paired with that side's harness override, naming
+identities of a single harness family.** That is a hard rule, not advice: one model
+applies to whichever candidate the chain selects, and oneharness's `fallback` mode
+falls through only a candidate that cannot run at all — never a task failure — so an
+unpaired model reaches a codex candidate carrying a Claude model name and kills the
+dispatch on a provider rejection instead of degrading. Requiring both in one breath
+makes that unconstructable:
+
+```
+$ just run-plan plan.json --worker-model claude-opus-5
+run-plan: --worker-model 'claude-opus-5': requires --worker-harness. A model name
+belongs to one provider, and oneharness's fallback chain does not fall through a
+task failure — so an unpaired model reaches whichever candidate oneharness.toml's
+chain selects and kills the dispatch on a provider rejection. Name the identity and
+the model together.
+```
+
+Both halves of that rule are enforced **twice**, in the two places a choice can enter.
+`orchestrator/harnesses.py` refuses them before a dispatch starts, which is what an
+operator sees; `scripts/oneharness-agent.sh` refuses them again on the branch it
+resolves each side on, because `ORCHESTRATOR_WORKER_MODEL` and
+`ORCHESTRATOR_JUDGE_MODEL` are ordinary environment variables and a hand-set one
+reaches the wrapper having passed through no dispatch at all. The second check is not
+redundant with the first: it is the only one on that path, and the failure it stops —
+`ONEHARNESS_MODEL` beating a config's per-harness `model` for everything the side then
+runs, so a Claude model name lands on the codex candidate the chain falls through to —
+is a dispatch that dies rather than degrades.
+
+The model **value** is deliberately not checked against an allowlist, and that
+asymmetry with the identity is the point. An identity selects credentials and
+environment routing that only this repository configures, so naming an unconfigured
+one must refuse. A model name is passed straight through to the harness the operator
+named in the same breath, where an unknown one fails loudly at the provider rather
+than quietly running something else.
+
+##### Why the wrapper does two things, not one
+
+`ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
+as one is the trap this section exists for. Measured against the adopted oneharness
+0.6.6, a config's per-harness `model` **beats** the variable, while the `--model`
+flag on an invocation's own argv beats the config — a precedence that is a fact about
+one release, so the literal above is derived from `config/oneharness.version` by
+`tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
+and an upgrade fails here until this measurement is redone:
+
+```
+$ ONEHARNESS_HARNESSES=claude-code:primary ONEHARNESS_MODEL=claude-opus-5 \
+    oneharness run --config oneharness.judge.toml --print-command --prompt hi
+  claude-code:primary ran claude-sonnet-5      # the config won
+$ ONEHARNESS_HARNESSES=claude-code:primary \
+    oneharness run --config oneharness.judge.toml --model claude-opus-5 \
+    --print-command --prompt hi
+  claude-code:primary ran claude-opus-5        # the flag won
+```
+
+So the wrapper applies each side's model **twice**: it names it on that branch's own
+`oneharness run`, which is what actually decides the turn, and it exports
+`ONEHARNESS_MODEL`, which is what carries the choice onward. Because that export
+lands in the side's own process, **everything that side subsequently runs inherits
+it** — a worker's own `just gate`, and any `llmlint` invocation inside that gate.
+
+That inheritance is bounded by the same precedence, and the llmlint tier is where it
+shows. `llmlint` invokes oneharness with **no `--model` at all** — verified here with
+a spy binary in `LLMLINT_ONEHARNESS_BIN` recording its own argv, rather than inferred
+from llmlint's config schema:
+
+```
+$ LLMLINT_ONEHARNESS_BIN=/tmp/spy.sh llmlint --diff --diff-base HEAD
+  spy argv: run --system-file <tmp> --prompt 'Evaluate each rule ...' --schema <tmp>
+            --cwd <repo> --timeout 600 --mode read-only --require-available --compact
+  ONEHARNESS_MODEL=claude-opus-5     # inherited, and the argv names no model
+```
+
+`oneharness.llmlint.toml` pins a `model` on every identity it names, so that
+inherited variable loses to the config and the tier keeps its own pinned model. What
+*does* move the llmlint tier is the harness half: `ONEHARNESS_HARNESSES` is
+process-wide and beats config, so a worker-side **harness** override already pins
+which identity that tier judges on — and its config then supplies that identity's
+model. Reach for `--worker-harness` when the goal is which subscription the llmlint
+tier spends.
+
+With neither model flag set nothing changes here either: no branch names a model of
+its own, no variable carries one, and each side runs exactly the model its config
+pins for the identity it landed on.
+
 #### What a spawned provider inherits, and what that is not
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
@@ -343,8 +451,11 @@ $ oneharness run --config <chain.toml> --prompt hi                    # chain fr
 
 That is why a dispatch leaks its selection: the wrapper exports the variable, so the
 provider *and everything that provider then runs* — a worker's own `just gate`, and
-therefore this suite — inherit it. `HARNESS_SELECTION_ENV` and the fixtures over it
-exist for exactly that inheritance.
+therefore this suite — inherit it. `DISPATCH_SELECTION_ENV` and the fixtures over it
+exist for exactly that inheritance: it names every variable a per-side choice can
+arrive under — both harness variables, both model variables, and the two
+process-wide ones they are resolved into — in one place, so a reader that drops the
+list is genuinely isolated rather than isolated from half of it.
 
 The two are told apart by **provenance, not by value**. Every selection is dropped at
 each process boundary the suite owns (`tests/conftest.py` for its own environment,

@@ -16,8 +16,11 @@ from waits import timeout as e2e_timeout
 from orchestrator import REPO_ROOT
 from orchestrator.harnesses import (
     JUDGE_HARNESS_ENV,
+    JUDGE_MODEL_ENV,
     PROCESS_WIDE_HARNESS_ENV,
+    PROCESS_WIDE_MODEL_ENV,
     WORKER_HARNESS_ENV,
+    WORKER_MODEL_ENV,
 )
 
 #: The journeys the leak actually broke, run nested under an exported selection. The
@@ -53,14 +56,16 @@ def test_real_pytest_path_ignores_parent_orchestrator_channel() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_real_pytest_path_ignores_an_enclosing_dispatchs_harness_selection() -> None:
-    """A worker's own gate must not read the harness choice its dispatch was given.
+def test_real_pytest_path_ignores_an_enclosing_dispatchs_side_selection() -> None:
+    """A worker's own gate must not read the per-side choice its dispatch was given.
 
-    This is the environment a `--worker-harness` dispatch really runs its gate in:
-    the wrapper resolves the per-side value into oneharness's process-wide variable
-    and exports that, so all three arrive together. With only the per-side pair
-    scrubbed, the third one reached the suite and the selection journeys failed on an
-    unmodified `main` — a false failure on the very evidence the change is judged by.
+    This is the environment a `--worker-harness` / `--worker-model` dispatch really
+    runs its gate in: the wrapper resolves each per-side value into oneharness's
+    matching process-wide variable and exports that, so both halves arrive under
+    three names apiece. With only the per-side pair scrubbed, the one they resolve
+    *into* reached the suite and the selection journeys failed on an unmodified
+    `main` — a false failure on the very evidence the change is judged by. The model
+    half is seeded here too, so the probe below is asked the question it now answers.
 
     So the nested session runs the journeys that inherit their environment, beside a
     probe that reads it directly. Each journey asserts which provider was actually
@@ -71,6 +76,9 @@ def test_real_pytest_path_ignores_an_enclosing_dispatchs_harness_selection() -> 
         WORKER_HARNESS_ENV: "codex",
         JUDGE_HARNESS_ENV: "codex",
         PROCESS_WIDE_HARNESS_ENV: "claude-code:alternate2",
+        WORKER_MODEL_ENV: "gpt-5.6-sol",
+        JUDGE_MODEL_ENV: "gpt-5.6-sol",
+        PROCESS_WIDE_MODEL_ENV: "claude-opus-5",
     }
 
     completed = subprocess.run(
@@ -78,7 +86,7 @@ def test_real_pytest_path_ignores_an_enclosing_dispatchs_harness_selection() -> 
             sys.executable,
             "-m",
             "pytest",
-            "tests/e2e/harness_selection_environment_probe.py",
+            "tests/e2e/dispatch_selection_environment_probe.py",
             *INHERITANCE_SENSITIVE_JOURNEYS,
             "-q",
         ],
