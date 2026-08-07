@@ -17,7 +17,7 @@ import stat
 import subprocess
 import time
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -25,7 +25,12 @@ from process_tree import consumed_cpu_seconds
 
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
-from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
+from orchestrator.harnesses import (
+    JUDGE_HARNESS_ENV,
+    JUDGE_MODEL_ENV,
+    WORKER_HARNESS_ENV,
+    WORKER_MODEL_ENV,
+)
 from orchestrator.labels import LABEL_ENV, format_labels, parse_labels
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
@@ -54,6 +59,8 @@ def _run_wrapper(
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" > "$ONEHARNESS_ENV2_FILE"\n'
         'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n'
+        # The model half of the same selection, read where oneharness reads it.
+        'printf \'%s\\n\' "${ONEHARNESS_MODEL-}" > "$ONEHARNESS_MODEL_FILE"\n'
         'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n'
         # The labels oneharness would stamp on the session this turn becomes, read
         # where oneharness reads them: the environment of the process it is spawned
@@ -72,6 +79,7 @@ def _run_wrapper(
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
             "ONEHARNESS_ENV2_FILE": str(tmp_path / "oneharness-env2"),
             "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
+            "ONEHARNESS_MODEL_FILE": str(tmp_path / "oneharness-model"),
             "ONEHARNESS_CODEX_ENV_FILE": str(tmp_path / "oneharness-codex-env"),
             **({"HOME": str(tmp_path / "home")} if include_home else {}),
             **(
@@ -98,6 +106,22 @@ def _run_wrapper(
 
 def _selection(tmp_path: Path) -> str:
     return (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+
+
+def _exported_model(tmp_path: Path) -> str:
+    """The ONEHARNESS_MODEL the spawned oneharness inherited, and everything under it."""
+    return (tmp_path / "oneharness-model").read_text(encoding="utf-8").strip()
+
+
+def _named_model(argv: list[str]) -> str:
+    """The model this branch named on its own `oneharness run`, `""` when it named none.
+
+    Read separately from the exported variable because they answer different
+    questions: a config's per-harness `model` beats the variable, so this argv is
+    what actually decides the model of *this* turn, while the variable is what the
+    turn's own children inherit.
+    """
+    return argv[argv.index("--model") + 1] if "--model" in argv else ""
 
 
 def _raw_labels(tmp_path: Path) -> str:
@@ -532,6 +556,189 @@ def test_a_side_without_its_own_selection_resolves_exactly_as_before(tmp_path: P
     judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env={WORKER_HARNESS_ENV: "codex"})
     assert judge.returncode == 0, judge.stderr
     assert _selection(tmp_path) == ""
+
+
+def test_each_side_runs_the_model_it_was_given_and_only_on_its_own_branch(
+    tmp_path: Path,
+) -> None:
+    """The model half of the seam: one side's choice must not reach the other.
+
+    Both mechanisms are asserted because they do different work. The `--model` on
+    this branch's own argv is what actually decides the turn — a config's
+    per-harness `model` beats `ONEHARNESS_MODEL`, so the variable alone would leave
+    the side on whatever its config pins — and the exported variable is what carries
+    the choice to everything the side then runs.
+    """
+    both = {
+        WORKER_HARNESS_ENV: "claude-code:primary",
+        WORKER_MODEL_ENV: "claude-opus-5",
+        JUDGE_HARNESS_ENV: "codex",
+        JUDGE_MODEL_ENV: "gpt-5.6-sol",
+    }
+
+    agent, agent_argv = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"], env=both)
+    assert agent.returncode == 0, agent.stderr
+    assert _named_model(agent_argv) == "claude-opus-5"
+    assert _exported_model(tmp_path) == "claude-opus-5"
+
+    judge, judge_argv = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=both)
+    assert judge.returncode == 0, judge.stderr
+    assert _named_model(judge_argv) == "gpt-5.6-sol"
+    assert _exported_model(tmp_path) == "gpt-5.6-sol"
+
+
+def test_a_judge_model_never_reaches_the_agent_branch(tmp_path: Path) -> None:
+    """A side given no model of its own must not pick up the other side's."""
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={JUDGE_HARNESS_ENV: "codex", JUDGE_MODEL_ENV: "gpt-5.6-sol"},
+    )
+
+    assert agent.returncode == 0, agent.stderr
+    assert _named_model(argv) == ""
+    assert _exported_model(tmp_path) == ""
+
+
+def test_a_worker_model_never_reaches_the_judge_branch(tmp_path: Path) -> None:
+    judge, argv = _run_wrapper(
+        tmp_path,
+        _judge_argv(tmp_path),
+        env={WORKER_HARNESS_ENV: "claude-code:primary", WORKER_MODEL_ENV: "claude-opus-5"},
+    )
+
+    assert judge.returncode == 0, argv
+    assert _named_model(argv) == ""
+    assert _exported_model(tmp_path) == ""
+
+
+def test_neither_branch_names_a_model_when_neither_side_was_given_one(tmp_path: Path) -> None:
+    """The no-op default: the invocation and the environment stay as they were."""
+    agent, agent_argv = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"])
+    assert agent.returncode == 0, agent.stderr
+    assert "--model" not in agent_argv
+    assert _exported_model(tmp_path) == ""
+
+    judge, judge_argv = _run_wrapper(tmp_path, _judge_argv(tmp_path))
+    assert judge.returncode == 0, judge.stderr
+    assert "--model" not in judge_argv
+    assert _exported_model(tmp_path) == ""
+
+
+@pytest.mark.parametrize(
+    ("argv_builder", "model_variable", "harness_variable"),
+    [
+        (lambda _: ["run", "--compact", "--prompt", "probe"], WORKER_MODEL_ENV, WORKER_HARNESS_ENV),
+        (_judge_argv, JUDGE_MODEL_ENV, JUDGE_HARNESS_ENV),
+    ],
+)
+def test_a_model_with_no_identity_stops_the_turn_here(
+    tmp_path: Path,
+    argv_builder: Callable[[Path], list[str]],
+    model_variable: str,
+    harness_variable: str,
+) -> None:
+    """The pairing rule at the boundary a hand-set variable arrives at.
+
+    The dispatch layer refuses the same combination before anything starts, but
+    nothing stops a caller exporting the model alone — and one model reaching
+    whichever candidate the configured chain selects is the provider rejection the
+    rule exists to make unconstructable.
+    """
+    proc, argv = _run_wrapper(
+        tmp_path, argv_builder(tmp_path), env={model_variable: "claude-opus-5"}
+    )
+
+    assert proc.returncode == 2
+    assert model_variable in proc.stderr
+    assert harness_variable in proc.stderr
+    # Nothing was spawned: the refusal happens before oneharness is invoked at all.
+    assert argv == []
+
+
+#: A chain of two harness families, spelled per side from identities that side's own
+#: config configures — so the selection check passes and the *pairing* check is the
+#: only thing left to refuse it.
+_MIXED_FAMILY_CHAIN = "claude-code:primary,codex"
+
+
+@pytest.mark.parametrize(
+    ("argv_builder", "model_variable", "harness_variable"),
+    [
+        (lambda _: ["run", "--compact", "--prompt", "probe"], WORKER_MODEL_ENV, WORKER_HARNESS_ENV),
+        (_judge_argv, JUDGE_MODEL_ENV, JUDGE_HARNESS_ENV),
+    ],
+)
+def test_a_model_on_a_mixed_provider_chain_stops_the_turn_here(
+    tmp_path: Path,
+    argv_builder: Callable[[Path], list[str]],
+    model_variable: str,
+    harness_variable: str,
+) -> None:
+    """The other half of the pairing rule, at the same boundary.
+
+    A paired-but-mixed chain is the hole a presence check leaves open: the identity
+    is set, so the model is accepted, and `ONEHARNESS_MODEL` beats a config's
+    per-harness `model` for everything the side then runs — so a Claude model name
+    lands on the codex candidate whenever the chain falls through to it. `fallback`
+    does not fall through a *task* failure, so that dispatch dies on a provider
+    rejection rather than degrading. `orchestrator/harnesses.py` refuses the same
+    pair, but a hand-set variable reaches the wrapper without passing through it.
+    """
+    proc, argv = _run_wrapper(
+        tmp_path,
+        argv_builder(tmp_path),
+        env={harness_variable: _MIXED_FAMILY_CHAIN, model_variable: "claude-opus-5"},
+    )
+
+    assert proc.returncode == 2
+    # Both offending variables are named, so the operator sees which pair to narrow.
+    assert model_variable in proc.stderr
+    assert harness_variable in proc.stderr
+    assert _MIXED_FAMILY_CHAIN in proc.stderr
+    assert "spans claude-code, codex" in proc.stderr
+    # Nothing was spawned, and no selection reached oneharness either: the refusal
+    # happens before this branch's own `exec`.
+    assert argv == []
+
+
+#: A chain of two identities of ONE family, which the rule must still honor.
+_ONE_FAMILY_CHAIN = "claude-code:primary,claude-code:alternate"
+
+
+@pytest.mark.parametrize(
+    ("chain_argv_builder", "model_variable", "harness_variable"),
+    [
+        (
+            lambda path, _chain: ["run", "--compact", "--prompt", "probe"],
+            WORKER_MODEL_ENV,
+            WORKER_HARNESS_ENV,
+        ),
+        (_judge_argv, JUDGE_MODEL_ENV, JUDGE_HARNESS_ENV),
+    ],
+)
+def test_a_model_on_a_one_family_chain_of_several_identities_still_runs(
+    tmp_path: Path,
+    chain_argv_builder: Callable[[Path, tuple[str, ...]], list[str]],
+    model_variable: str,
+    harness_variable: str,
+) -> None:
+    """The rule is one *family*, not one identity: a same-family chain is honored.
+
+    A check that refused every chain of more than one identity would take away the
+    fallback within a provider, which is the whole point of naming a chain — and it
+    would refuse the routing this repository's own configs declare.
+    """
+    proc, argv = _run_wrapper(
+        tmp_path,
+        chain_argv_builder(tmp_path, tuple(_ONE_FAMILY_CHAIN.split(","))),
+        env={harness_variable: _ONE_FAMILY_CHAIN, model_variable: "claude-opus-5"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert _named_model(argv) == "claude-opus-5"
+    assert _exported_model(tmp_path) == "claude-opus-5"
+    assert _selection(tmp_path) == _ONE_FAMILY_CHAIN
 
 
 def test_a_selection_the_side_cannot_honor_stops_the_turn_here(tmp_path: Path) -> None:

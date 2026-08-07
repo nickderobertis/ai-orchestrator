@@ -157,6 +157,7 @@ def _launch_cli(
     return str(json.loads(launched.stdout)["run_id"])
 
 
+@pytest.mark.load_sensitive
 def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -397,6 +398,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     assert "planner update due" not in corrupt_status.stdout
 
 
+@pytest.mark.load_sensitive
 def test_a_check_in_that_leaves_a_predecessors_update_in_place_is_not_a_success(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -479,6 +481,7 @@ def test_a_check_in_that_leaves_a_predecessors_update_in_place_is_not_a_success(
     _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
+@pytest.mark.load_sensitive
 def test_completed_check_in_without_surface_is_logged_and_retried(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1122,6 +1125,7 @@ def test_bridge_timeout_reattach_finished_and_monitorable(
     assert isinstance(status["pid"], int) and status["host"]
 
 
+@pytest.mark.load_sensitive
 def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1261,6 +1265,7 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     assert json.loads(heartbeat_path.read_text(encoding="utf-8"))["enabled"] is False
 
 
+@pytest.mark.load_sensitive
 def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1286,6 +1291,7 @@ def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
     assert report["stopped_early"] is False
 
 
+@pytest.mark.load_sensitive
 def test_continuation_round_proposal_uses_reconciled_round_number(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1598,6 +1604,35 @@ def _queued_age(listed: str) -> int:
     return int(matched.group(2))
 
 
+#: The pacemaker interval the unread-update journey launches with, in seconds.
+#:
+#: It has to outlast the journey's own view calls. That test reads the journal after
+#: two planner-facing views, and `just status` alone spends about five seconds
+#: probing every configured identity's provider health — so at the half-second this
+#: journey used to launch with, the pacemaker fired again *during* those views and
+#: the exact `len(sent) == 1` below became a race with them. It failed roughly three
+#: runs in five under the parallel suite's load. Long enough that no second check-in
+#: can land inside that window makes the count exact by timing rather than by
+#: loosening it; the journey then waits for the second one explicitly, because at
+#: this interval it is no longer guaranteed to have arrived on its own.
+_UNREAD_CHECK_IN_INTERVAL_S = 25
+
+
+def _queued_check_ins(journal: Path) -> int:
+    """How many check-ins this run has recorded as *sent* to the planner.
+
+    llmlint: ignore[tests_mirror_real_usage] Same journal contract the assertions
+    below rest on: sent and delivered are separate records and no CLI renders them
+    apart, so the journal is where a send that nobody read is observable at all.
+    """
+    return sum(
+        1
+        for line in journal.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["kind"] == "planner-surface-queued"
+    )
+
+
+@pytest.mark.load_sensitive
 def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1635,7 +1670,13 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.5)
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=_UNREAD_CHECK_IN_INTERVAL_S,
+    )
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
@@ -1713,6 +1754,18 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     else:  # pragma: no cover - only reached when the reported staleness stops growing
         raise AssertionError("the queued surface's reported staleness never grew")
 
+    # The pacemaker firing again behind an update nobody read is what the closing
+    # count asserts, so wait for that second check-in rather than racing it. At the
+    # half-second interval this journey used to launch with it had always already
+    # landed; at an interval long enough to make the earlier count exact it has not,
+    # and the reply below is about to quiet the pacemaker for good.
+    second_check_in = deadline(120)
+    while _queued_check_ins(runs / run_id / "events.jsonl") < 2:
+        assert time.monotonic() < second_check_in, (
+            "the pacemaker never fired again behind the unread update"
+        )
+        time.sleep(0.2)
+
     # Quiet the pacemaker before consuming, so what the views report afterwards is
     # this update's absence rather than a race with the next one.
     _reply_cli(
@@ -1753,6 +1806,7 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
+@pytest.mark.load_sensitive
 def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
     tmp_path: Path, onejudge_bin: str
 ) -> None:

@@ -1022,7 +1022,8 @@ just orchestrate --adopt <run-id> --detach   # the same, unattended
 
 Adoption keeps everything the run owns and replaces only the driver. It re-reads
 the launch parameters the run recorded (`orchestrator/relaunch.json` — the plan,
-the runs root, the base config, the harness routing, the round budget), registers
+the runs root, the base config, each side's harness *and* model, the round budget),
+registers
 the new process as the owner, reopens the channel, and drives the next round from
 the journal-folded plan of record with `--recover`, so the round its predecessor
 left claimed is reclaimed rather than replaced. The run id, the journal, and the

@@ -377,6 +377,21 @@ oneharness's own `ONEHARNESS_HARNESSES` cannot express this: it is process-wide
 and beats config, so it moves both sides at once. See [Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
+Choosing the identity does not choose the **tier**: every one of those files pins a
+`model` per harness, and the judge's three Claude identities are pinned to the
+cheaper supervisor model deliberately. `--worker-model` / `--judge-model`, on the
+same two commands, are the model half of that same per-side seam. A model is
+accepted only paired with that side's `--worker-harness` / `--judge-harness`, naming
+identities of one harness family — one model applies to whichever candidate the
+chain selects, and `fallback` does not fall through a task failure, so an unpaired
+model dies on a provider rejection rather than degrading. The model *value* is
+passed through unchecked, unlike the identity: it goes to the harness just named,
+where an unknown name fails loudly. Note what the seam does **not** buy — a config's
+per-harness `model` beats `ONEHARNESS_MODEL`, so the model a side exports is inert
+against `oneharness.llmlint.toml`'s own pins; a worker-side *harness* override is
+what pins which identity that tier judges on. See [Choosing a model per
+side](docs/onejudge-integration.md#choosing-a-model-per-side).
+
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
 directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
 `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` → `$HOME/.claude-alt2`), and all three

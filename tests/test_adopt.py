@@ -56,11 +56,34 @@ def test_relaunch_record_round_trips_every_optional_field(tmp_path: Path) -> Non
         "round_budget": 90.0,
         "worker_harness": "codex",
         "judge_harness": "claude-code:alternate",
+        "worker_model": "gpt-5.1-codex-max",
+        "judge_model": "claude-opus-5",
         "skill_provider": {"kind": "command", "command": ["fake-provider"]},
     }
     write_relaunch_record(run_dir, record)
 
     assert read_relaunch_record(run_dir) == record
+
+
+def test_a_version_one_record_is_still_replayed(tmp_path: Path) -> None:
+    """The bump that added each side's model does not strand the runs before it.
+
+    Version 1 could not name a model, and its silence about one is the same answer a
+    version 2 record that names none gives — so refusing it would put a run launched
+    by the previous build into exactly the orphaned state adoption exists to end.
+    """
+    run_dir = tmp_path / "run"
+    raw: dict[str, Any] = {**_valid(tmp_path), "schema_version": 1, "judge_harness": "codex"}
+    relaunch_path(run_dir).parent.mkdir(parents=True)
+    relaunch_path(run_dir).write_text(json.dumps(raw), encoding="utf-8")
+
+    replayed = read_relaunch_record(run_dir)
+
+    assert replayed["judge_harness"] == "codex"
+    assert "judge_model" not in replayed
+    # Normalized on the way back out, so the adoption that rewrites it leaves the run
+    # on the version this build actually writes.
+    assert replayed["schema_version"] == RELAUNCH_SCHEMA_VERSION
 
 
 def test_relaunch_record_is_absent_before_adoption_existed(tmp_path: Path) -> None:
@@ -85,6 +108,8 @@ def test_relaunch_record_is_absent_before_adoption_existed(tmp_path: Path) -> No
         ("round_budget", -3, "'round_budget'"),
         ("worker_harness", 4, "'worker_harness'"),
         ("judge_harness", "", "'judge_harness'"),
+        ("worker_model", 4, "'worker_model'"),
+        ("judge_model", "", "'judge_model'"),
         ("skill_provider", ["kind"], "'skill_provider'"),
         ("acknowledge_concurrent", "false", "'acknowledge_concurrent'"),
         ("acknowledge_concurrent", 0, "'acknowledge_concurrent'"),
@@ -213,14 +238,25 @@ def test_adoption_refuses_a_run_whose_round_is_still_in_flight(
         adopt_orchestrator(run_dir.name, runs_dir=run_dir.parent)
 
 
+@pytest.mark.parametrize(
+    "option, value",
+    [
+        ("--base", "/tmp/other.yaml"),
+        # Both halves of a side's routing are replayed from the record, so both are
+        # launch-only: a planner retrying an adoption on a different tier has to
+        # relaunch, and must not be told silently that they already did.
+        ("--judge-harness", "codex"),
+        ("--judge-model", "claude-opus-5"),
+    ],
+)
 def test_the_cli_refuses_a_launch_only_option_beside_adopt(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], option: str, value: str
 ) -> None:
     """Accepting one silently is how a planner learns nothing changed the hard way."""
     with pytest.raises(SystemExit):
-        main_orchestrate(["--adopt", "demo", "--base", "/tmp/other.yaml"])
+        main_orchestrate(["--adopt", "demo", option, value])
 
-    assert "--base" in capsys.readouterr().err
+    assert option in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

@@ -11,8 +11,9 @@ Nothing here decides *whether* a run may be adopted — the ownership and livene
 is `dispatch`'s, beside the launch it mirrors. This module owns the one thing an
 adopting process genuinely cannot reconstruct: the parameters the dead driver was
 launched with. They are written once at launch and re-read at adoption, so the second
-driver runs the same plan, against the same runs root, with the same harness routing,
-rather than whatever the adopting command line happened to say.
+driver runs the same plan, against the same runs root, with the same per-side routing —
+which harness each conversation side runs on, and which model it runs there — rather
+than whatever the adopting command line happened to say.
 
 The record is a file in a run directory, which makes it a trust boundary like any
 other: every field is revalidated on the way back in, and a record that fails is a
@@ -35,7 +36,17 @@ from .runs import load_mapping
 #: own status and effective config rather than in the planner-facing `launch.json`:
 #: this is harness-internal plumbing, and `launch.json` is the record a planner reads.
 RELAUNCH_RECORD_NAME = "relaunch.json"
-RELAUNCH_SCHEMA_VERSION = 1
+#: Version 2 added each side's ``model`` beside the harness identity it must be paired
+#: with. Every version this build can replay in full is listed below and normalized to
+#: the current one on the way back out.
+RELAUNCH_SCHEMA_VERSION = 2
+#: Version 1 is still adoptable: the fields v2 added are optional, and a v1 record's
+#: silence about them is the same answer a v2 record that names no model gives. Reading
+#: it is what keeps a run launched by the previous build out of the one state adoption
+#: exists to rescue it from. The refusal is kept in the other direction — a v1 build
+#: handed a v2 record stops rather than driving a run onto a model it cannot see, which
+#: is why this is a bump rather than two more optional fields at version 1.
+SUPPORTED_RELAUNCH_SCHEMA_VERSIONS = frozenset({1, RELAUNCH_SCHEMA_VERSION})
 
 
 class RelaunchRecord(TypedDict):
@@ -61,6 +72,11 @@ class RelaunchRecord(TypedDict):
     round_budget: NotRequired[float]
     worker_harness: NotRequired[str]
     judge_harness: NotRequired[str]
+    #: The model half of each side's routing, recorded because a driver that replayed
+    #: only the identity would put every judge turn back on the tier that side's config
+    #: pins — silently, which is the substitution `--judge-model` exists to prevent.
+    worker_model: NotRequired[str]
+    judge_model: NotRequired[str]
     #: The orchestrator's own provider block, replayed verbatim. `Any` because this
     #: is onejudge's schema rather than one this repository owns — a `command` list,
     #: an `oneharness` bin, and whatever a future provider kind carries — and the
@@ -165,10 +181,13 @@ def read_relaunch_record(run_dir: Path) -> RelaunchRecord:
             "and cannot be adopted"
         )
     raw = load_mapping(path)
-    if raw.get("schema_version") != RELAUNCH_SCHEMA_VERSION:
+    if raw.get("schema_version") not in SUPPORTED_RELAUNCH_SCHEMA_VERSIONS:
+        replayable = ", ".join(
+            str(version) for version in sorted(SUPPORTED_RELAUNCH_SCHEMA_VERSIONS)
+        )
         raise ConfigError(
             f"relaunch record at {path} is schema version {raw.get('schema_version')!r}, "
-            f"not {RELAUNCH_SCHEMA_VERSION}"
+            f"not one this build replays ({replayable})"
         )
     record: RelaunchRecord = {
         "schema_version": RELAUNCH_SCHEMA_VERSION,
@@ -191,6 +210,14 @@ def read_relaunch_record(run_dir: Path) -> RelaunchRecord:
         record["worker_harness"] = _text(worker, "worker_harness")
     if (judge := raw.get("judge_harness")) is not None:
         record["judge_harness"] = _text(judge, "judge_harness")
+    # Only the shape is settled here; the *pairing* rule — a model is refused unless
+    # its side's identity names one harness family — is `harnesses.side_override_env`'s,
+    # which the adoption runs over these values exactly as the launch ran it over the
+    # command line. A second copy of that judgement here would be one that drifts.
+    if (worker_model := raw.get("worker_model")) is not None:
+        record["worker_model"] = _text(worker_model, "worker_model")
+    if (judge_model := raw.get("judge_model")) is not None:
+        record["judge_model"] = _text(judge_model, "judge_model")
     skill = raw.get("skill_provider")
     if skill is not None:
         # Only the shape this record is responsible for is settled here; what makes a

@@ -744,6 +744,7 @@ def _same_branch_lifecycle_process(
     state_root: str,
     base_config: str,
     persona_dir: str,
+    commit_time: str,
     hold: Rendezvous,
     results: multiprocessing.Queue[dict[str, object]],
 ) -> None:
@@ -755,6 +756,9 @@ def _same_branch_lifecycle_process(
     the boundary under test.
     """
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+    # Both runs commit at the one instant their caller chose — see `_one_commit_instant`.
+    os.environ["GIT_AUTHOR_DATE"] = commit_time
+    os.environ["GIT_COMMITTER_DATE"] = commit_time
     result = run_repo_task(
         origin,
         # The first line is what names the change when no commit does, so the
@@ -769,6 +773,28 @@ def _same_branch_lifecycle_process(
         repo_type="single-owner",
     )
     results.put({"ok": result.ok, "outcome": result.outcome, "detail": result.detail})
+
+
+def _one_commit_instant() -> str:
+    """The single author/committer timestamp both dispatches of the journey below use.
+
+    A commit's SHA embeds its author and committer timestamps at one-second
+    resolution, and these two runs do *deliberately identical* work: one fake agent
+    change, one path, one content, in worktrees that share a branch name and
+    therefore a directory name, off one base commit, under one pinned git identity.
+    So their agent commits are the same commit — and the second run's branch push is
+    a fast-forward of the first's — only while both `git commit` calls land in the
+    same wall-clock second. On a quiet host they do. Under the parallel suite's load
+    they straddle a second boundary, the two histories diverge under one branch
+    name, and git correctly rejects the loser's push as non-fast-forward (the push
+    to a shared destination is deliberately never forced — see `gitops.push`).
+
+    Handing both runs one instant makes that identity a property of the journey
+    rather than of how busy the box happened to be. It is taken from the clock
+    rather than frozen so no commit here is ever dated before the base it descends
+    from.
+    """
+    return f"{int(time.time())} +0000"
 
 
 def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
@@ -786,6 +812,7 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
     # One release for both dispatches: the journey needs them held at one instant.
     release = barrier / "shared.release"
     holds = [Rendezvous(barrier / f"ready-{index}", release) for index in range(2)]
+    commit_time = _one_commit_instant()
     results: multiprocessing.Queue[dict[str, object]] = MP.Queue()
     processes = [
         MP.Process(
@@ -798,6 +825,7 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
                 os.environ["AI_ORCHESTRATOR_HOME"],
                 str(command_base()),
                 str(personas_dir),
+                commit_time,
                 holds[index],
                 results,
             ),

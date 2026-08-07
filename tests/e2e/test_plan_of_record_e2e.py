@@ -18,6 +18,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
 from rendezvous import Rendezvous
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -64,6 +65,7 @@ def _round(run_dir: Path, number: int, name: str) -> dict:
     return json.loads((run_dir / f"round-{number:02d}" / name).read_text(encoding="utf-8"))
 
 
+@pytest.mark.load_sensitive
 def test_rerunning_the_launch_file_folds_the_plan_of_record_into_each_new_round(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
