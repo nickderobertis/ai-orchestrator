@@ -49,6 +49,10 @@ BACKOFF_FACTOR = 2.0
 #: A ceiling on the doubling, so a large configured backoff cannot leave a run
 #: silently asleep for longer than a planner would wait before intervening.
 MAX_BACKOFF_SECONDS = 120.0
+#: And a ceiling on the count, for the same reason: "bounded retry" has to stay a
+#: bound. A configured 10_000 is not a more patient policy, it is a run that never
+#: reports the outage it is riding out.
+MAX_ATTEMPTS = 10
 
 ATTEMPTS_ENV = "ORCHESTRATOR_BOUNDARY_ATTEMPTS"
 BACKOFF_ENV = "ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS"
@@ -60,9 +64,16 @@ CURSOR_NAME = "boundary-attempts-cursor.json"
 
 #: Bound on one recorded reason before it reaches a journal and a terminal.
 MAX_REASON_CHARS = 200
-#: Bound on how much of the file is read at all. Each line is one short record and
-#: the whole point is that they are rare; a file past this is not this record.
-MAX_LOG_BYTES = 256 * 1024
+#: Bound on one recorded line. Each is a short JSON object this wrapper wrote, so
+#: anything past this is not one, and skipping it costs a record rather than the
+#: fold. Applied per line rather than to the file, because a byte cap on the file
+#: would make every record past it permanently unreachable — the cursor counts
+#: lines, so a prefix that never grows is a fold that never advances.
+MAX_LOG_LINE_BYTES = 8 * 1024
+#: Bound on how many lines one fold examines. Retries are rare, so a round that
+#: finds more than this has a log something else is writing; the cursor still
+#: advances past them, so the next round continues rather than restarting here.
+MAX_LOG_LINES_PER_FOLD = 1_000
 
 T = TypeVar("T")
 
@@ -98,7 +109,7 @@ def _positive_int(raw: object, fallback: int) -> int:
         value = int(str(raw))
     except (TypeError, ValueError):
         return fallback
-    return value if value >= 1 else fallback
+    return min(value, MAX_ATTEMPTS) if value >= 1 else fallback
 
 
 def _positive_float(raw: object, fallback: float) -> float:
@@ -204,10 +215,9 @@ def drain_attempts(run_dir: Path) -> list[BoundaryAttempt]:
     path = attempts_log(run_dir)
     cursor_path = path.with_name(CURSOR_NAME)
     try:
-        raw = path.read_bytes()[:MAX_LOG_BYTES]
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
-    lines = raw.decode("utf-8", errors="replace").splitlines()
     consumed = 0
     try:
         recorded = json.loads(cursor_path.read_text(encoding="utf-8"))
@@ -218,11 +228,20 @@ def drain_attempts(run_dir: Path) -> list[BoundaryAttempt]:
             consumed = max(0, min(count, len(lines)))
     except (OSError, ValueError):
         consumed = 0
-    found = [attempt for line in lines[consumed:] if (attempt := _parsed(line)) is not None]
+    examined = lines[consumed : consumed + MAX_LOG_LINES_PER_FOLD]
+    found = [
+        attempt
+        for line in examined
+        if len(line.encode("utf-8")) <= MAX_LOG_LINE_BYTES
+        and (attempt := _parsed(line)) is not None
+    ]
+    # Advanced past everything examined, including a line this reader skipped: the
+    # cursor is what the *next* fold continues from, so leaving it behind would make
+    # one unreadable line stall every retry recorded after it.
     # The fold already happened; a cursor that could not be written means the next
     # round repeats these records rather than losing them.
     with suppress(OSError):
-        cursor_path.write_text(json.dumps({"lines": len(lines)}), encoding="utf-8")
+        cursor_path.write_text(json.dumps({"lines": consumed + len(examined)}), encoding="utf-8")
     return found
 
 

@@ -86,6 +86,7 @@ BOUNDARY_DEFAULT_ATTEMPTS=3
 BOUNDARY_DEFAULT_BACKOFF_SECONDS=5
 BOUNDARY_BACKOFF_FACTOR=2
 BOUNDARY_MAX_BACKOFF_SECONDS=120
+BOUNDARY_MAX_ATTEMPTS=10
 
 # Every configured value is validated before it can reach a `sleep` or a loop bound.
 # Both arrive from the environment, so `.`, `-1`, `1e9`, and an empty string all
@@ -105,6 +106,9 @@ case "$boundary_attempts" in
     '' | *[!0-9]*) boundary_attempts=$BOUNDARY_DEFAULT_ATTEMPTS ;;
 esac
 [ "$boundary_attempts" -ge 1 ] 2>/dev/null || boundary_attempts=$BOUNDARY_DEFAULT_ATTEMPTS
+# "Bounded" has to stay a bound: a configured 10_000 is not a more patient policy,
+# it is a run that never reports the outage it is riding out.
+[ "$boundary_attempts" -le "$BOUNDARY_MAX_ATTEMPTS" ] || boundary_attempts=$BOUNDARY_MAX_ATTEMPTS
 positive_number "$boundary_backoff" || boundary_backoff=$BOUNDARY_DEFAULT_BACKOFF_SECONDS
 
 if ! captured_stdout=$(mktemp "${TMPDIR:-/tmp}/oneharness-orchestrator.XXXXXX"); then
@@ -168,8 +172,12 @@ while :; do
     boundary_delay=$(awk -v d="$boundary_delay" -v f="$BOUNDARY_BACKOFF_FACTOR" \
         -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" 'BEGIN { v = d * f; printf "%g", (v > m ? m : v) }')
 done
-if [ "$boundary_status" -ne 0 ] && [ -n "$boundary_notices" ]; then
+if [ "$boundary_status" -ne 0 ] && [ ! -s "$captured_stdout" ]; then
+    # Said whether or not anything was retried: a single-attempt policy reaches here
+    # with no notices collected, and an empty failed turn that says nothing is the
+    # silence this whole path exists to end.
     printf '%s' "$boundary_notices" >&2
+    echo "oneharness-orchestrator: the orchestrator turn exited $boundary_status producing no output after $boundary_attempt attempt(s) of $boundary_attempts; probe the launch path with 'just smoke' and read the provider-health block in 'just status', then adopt the run with 'just orchestrate --adopt <run-id>' once it is usable" >&2
 fi
 # Explicitly, rather than leaving it to strict mode: this is the answer onejudge
 # parses, and a buffer that cannot be replayed has to say so rather than exit with

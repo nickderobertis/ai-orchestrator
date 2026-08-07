@@ -18,7 +18,10 @@ from orchestrator.boundary import (
     BACKOFF_FACTOR,
     DEFAULT_ATTEMPTS,
     DEFAULT_BACKOFF_SECONDS,
+    MAX_ATTEMPTS,
     MAX_BACKOFF_SECONDS,
+    MAX_LOG_LINE_BYTES,
+    MAX_LOG_LINES_PER_FOLD,
     MAX_REASON_CHARS,
     BoundaryAttempt,
     RetryPolicy,
@@ -57,6 +60,15 @@ def test_an_unusable_setting_never_stops_a_recovery(environment: dict[str, str])
     policy = RetryPolicy.from_environment(environment)
     assert policy.attempts >= 1
     assert policy.backoff > 0
+
+
+def test_a_configured_count_past_the_ceiling_is_still_bounded() -> None:
+    """ "Bounded retry" has to stay a bound however the environment is set."""
+    policy = RetryPolicy.from_environment(
+        {"ORCHESTRATOR_BOUNDARY_ATTEMPTS": str(MAX_ATTEMPTS * 100)}
+    )
+
+    assert policy.attempts == MAX_ATTEMPTS
 
 
 def test_backoff_doubles_and_is_capped() -> None:
@@ -159,6 +171,36 @@ def test_the_fold_advances_its_cursor_so_a_second_round_does_not_double_count(
     with attempts_log(run_dir).open("a", encoding="utf-8") as stream:
         stream.write(_record(role="check-in") + "\n")
     assert [item.role for item in drain_attempts(run_dir)] == ["check-in"]
+
+
+def test_a_log_that_outgrew_one_fold_is_continued_by_the_next(tmp_path: Path) -> None:
+    """A bound on one fold must never become a record nothing can ever reach.
+
+    A byte cap on the file did exactly that: the cursor counts lines, so a prefix
+    that stopped growing was a fold that stopped advancing, and every retry recorded
+    past the cap was invisible for good. Bounding the *lines examined per fold*
+    keeps each round cheap while leaving the log drainable.
+    """
+    run_dir = tmp_path / "run"
+    _write(run_dir, *[_record(attempt=1) for _ in range(MAX_LOG_LINES_PER_FOLD + 5)])
+
+    first = drain_attempts(run_dir)
+    assert len(first) == MAX_LOG_LINES_PER_FOLD
+    assert len(drain_attempts(run_dir)) == 5
+    assert drain_attempts(run_dir) == []
+
+
+def test_a_line_too_long_to_be_a_record_is_skipped_without_stalling_the_fold(
+    tmp_path: Path,
+) -> None:
+    """Skipping it must advance the cursor, or one bad line freezes every later one."""
+    run_dir = tmp_path / "run"
+    _write(run_dir, _record(reason="x" * (MAX_LOG_LINE_BYTES + 1)), _record(attempt=2))
+
+    folded = drain_attempts(run_dir)
+
+    assert [item.attempt for item in folded] == [2]
+    assert drain_attempts(run_dir) == []
 
 
 def test_the_fold_reads_nothing_when_no_boundary_request_was_ever_retried(

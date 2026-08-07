@@ -26,6 +26,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+from .cli_contract import ONEHARNESS_MODES
 from .config import ConfigError
 from .coordination import atomic_json
 from .runs import load_mapping
@@ -60,6 +61,10 @@ class RelaunchRecord(TypedDict):
     round_budget: NotRequired[float]
     worker_harness: NotRequired[str]
     judge_harness: NotRequired[str]
+    #: The orchestrator's own provider block, replayed verbatim. `Any` because this
+    #: is onejudge's schema rather than one this repository owns — a `command` list,
+    #: an `oneharness` bin, and whatever a future provider kind carries — and the
+    #: launch path validates the shape it actually needs before spawning anything.
     skill_provider: NotRequired[dict[str, Any]]
 
 
@@ -109,6 +114,21 @@ def _flag(value: object, field: str) -> bool:
     """
     if not isinstance(value, bool):
         raise ConfigError(f"relaunch record field {field!r} must be a JSON boolean")
+    return value
+
+
+def _mode(value: object) -> str:
+    """One recorded approval mode, checked against the modes this harness has.
+
+    A mode nothing configures does not degrade — oneharness refuses it — so an
+    adoption started on one is a driver that dies on its first turn, which is the
+    state adoption exists to get a run out of.
+    """
+    if not isinstance(value, str) or value not in ONEHARNESS_MODES:
+        raise ConfigError(
+            "relaunch record field 'oneharness_mode' must be one of "
+            + ", ".join(sorted(ONEHARNESS_MODES))
+        )
     return value
 
 
@@ -162,7 +182,7 @@ def read_relaunch_record(run_dir: Path) -> RelaunchRecord:
         "acknowledge_concurrent": _flag(
             raw.get("acknowledge_concurrent"), "acknowledge_concurrent"
         ),
-        "oneharness_mode": _text(raw.get("oneharness_mode"), "oneharness_mode"),
+        "oneharness_mode": _mode(raw.get("oneharness_mode")),
         "adoptions": _count(raw.get("adoptions"), "adoptions"),
     }
     if (budget := raw.get("round_budget")) is not None:
