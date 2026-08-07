@@ -118,6 +118,17 @@ second state model. A dropped stream is reported in the header banner and clears
 itself when the browser reconnects, because the server opens every connection
 with a fresh snapshot.
 
+**An open conversation is readable while the run it belongs to is working.** A
+transcript is re-read only when the served timeline says *that* session recorded
+something — the span it opened carries the session's state, its end, and one event
+per turn — so a run whose other nodes are busy costs the open transcript nothing,
+and a session that has stopped recording is never read again. The re-read a live
+session does earn happens underneath the reader: the turns already on the page stay
+exactly where they are, new ones are appended to them, and the loading skeleton is
+only ever the first read of a transcript, never a refresh of one. The panel follows
+that growth only while the reader is at the end of it — scroll up and it holds the
+position you chose while the session keeps being written below.
+
 ## The graph timeline
 
 The overall view answers the question above a node: **what has this run spent its

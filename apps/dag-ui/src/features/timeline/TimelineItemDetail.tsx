@@ -31,6 +31,7 @@ import {
   type TimelineRow,
 } from "./timeline-model";
 import { useConversation } from "./useConversation";
+import { useStickyBottom } from "./useStickyBottom";
 
 /** How many turns of a long transcript are handed to the reader at once. */
 const PAGE_SIZE = 25;
@@ -48,7 +49,6 @@ export function TimelineItemDetail({
   runId,
   node,
   row,
-  conversationRevision,
 }: {
   readonly client: TelemetryClient;
   readonly runId: string;
@@ -59,20 +59,25 @@ export function TimelineItemDetail({
    */
   readonly node?: NodeView;
   readonly row?: TimelineRow;
-  readonly conversationRevision?: number;
 }) {
   const reference = row === undefined ? undefined : referenceOf(row);
+  const conversationId =
+    reference?.kind === "conversation" ? reference.value : undefined;
   const transcript = useConversation(
     client,
     runId,
-    reference?.kind === "conversation" ? reference.value : undefined,
-    conversationRevision,
+    conversationId,
+    row === undefined ? undefined : transcriptFingerprint(row),
+  );
+  const stickToLastLine = useStickyBottom(
+    conversationId,
+    availableTurnCount(row, transcript),
   );
 
   return (
     <section aria-label="Timeline item detail" className="timeline-detail">
       <ScrollArea className="h-full">
-        <div className="p-[22px] max-sm:p-3">
+        <div className="p-[22px] max-sm:p-3" ref={stickToLastLine}>
           {row === undefined ? (
             <div className="detail-placeholder">
               <ListTree size={30} />
@@ -175,8 +180,11 @@ function Session({
         Loading transcript…
       </div>
     );
+  // Only when there is nothing to read: a revalidation that failed leaves the
+  // transcript already on screen there, which is the whole point of re-reading it
+  // underneath the reader rather than in place of them.
   // llmlint: ignore[changed_behavior_has_e2e] a conforming server cannot produce this state — it names a transcript in a timeline it just served, so a transcript it then refuses only comes from a peer that raced or broke between the two reads. App.test.tsx proves it against the real telemetry client at its browser boundary.
-  if (transcript.error !== undefined || transcript.conversation === undefined)
+  if (transcript.conversation === undefined)
     return (
       <Alert variant="destructive">
         <TriangleAlert />
@@ -491,6 +499,45 @@ function Reference({
       <code>{reference.value}</code>
     </p>
   );
+}
+
+/**
+ * What the served timeline says the session behind this row has recorded.
+ *
+ * `orchestrator/timeline.py` folds one dispatch span per conversation carrying that
+ * transcript's state, its end, and one event per recorded turn — so this string moves
+ * exactly when the transcript does. It is what decides whether an open transcript is
+ * re-read at all: a session that has stopped recording keeps one value forever, and no
+ * amount of activity elsewhere in the run costs a read of it.
+ *
+ * A row that is one recorded turn cannot grow, so its own identity is its record.
+ */
+function transcriptFingerprint(row: TimelineRow): string {
+  if (row.rowKind !== "span") return row.id;
+  const last = row.span.events.at(-1);
+  return [
+    row.span.id,
+    row.span.status ?? "",
+    row.span.ended_at ?? "",
+    row.span.events.length,
+    last?.id ?? "",
+    last?.at ?? "",
+    last?.status ?? "",
+  ].join("|");
+}
+
+/**
+ * How many turns this panel has to show: one, for a row that is a single recorded
+ * turn, and the whole transcript otherwise. Paging decides how many of them reach the
+ * page; it is this that an appended turn lengthens.
+ */
+function availableTurnCount(
+  row: TimelineRow | undefined,
+  transcript: Transcript,
+): number {
+  if (transcript.conversation === undefined) return 0;
+  if (row?.rowKind === "event") return 1;
+  return transcript.conversation.conversation.turns.length;
 }
 
 function referenceOf(row: TimelineRow): TimelineReference | undefined {
