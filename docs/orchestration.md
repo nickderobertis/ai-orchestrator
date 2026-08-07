@@ -1209,6 +1209,17 @@ human gates (and other non-publication nodes), so attestation cannot silently cu
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
 
+**An edits file this input cannot fully apply is refused, never partly applied.**
+The vocabulary is exactly `retry`, `split`, `add`, `drop`, and `complete_human`;
+any other top-level key exits non-zero naming it, and no round directory or ledger
+entry is written. The [version-1 live-edit envelope](#live-graph-edits) is the near
+miss that motivated this: `{"version": 1, "commands": [...]}` shares no key with
+that vocabulary, so `next-round` read the whole thing as *no edits*, derived the
+unedited round, and exited 0 — the planner learned the edit had not applied a full
+round of quota later, when the round dispatched the stale node definition. That
+envelope is `channel-reply`'s schema and stays there; `next-round`'s job is to
+refuse it by name and say which command applies it.
+
 A **cross-DAG reference is not a satisfied dependency id** and is never removed by
 that rule: `run:<id>#<node>` names no node of this graph, so it was never in the
 round to be satisfied. It stays on a node carried forward, and it passes through a
