@@ -35,6 +35,12 @@ if TYPE_CHECKING:
     from .runs import NodeId, RunId, StepId
 
 LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
+#: The label key `orchestrator.smoke` stamps its one dispatch with, so it can find
+#: its own history record — and the only thing that names that dispatch's role,
+#: which has no persona. It lives here because two modules read it from opposite
+#: ends: `smoke` writes it and `dispatches` recognises a stamped process by it, and
+#: a rename on one side alone would leave every smoke turn reporting an unknown role.
+SMOKE_LABEL = "smoke"
 
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 MAX_VALUE_CODEPOINTS = 256

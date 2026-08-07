@@ -22,7 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,7 @@ from nx_inputs import (
 # rather than to a fixture module.
 from scheduling import pytest_collection_modifyitems  # noqa: F401
 
-from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops
+from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops, provider_health
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 from orchestrator.harnesses import HARNESS_SELECTION_ENV
@@ -168,6 +168,26 @@ def _isolate_harness_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for key in HARNESS_SELECTION_ENV:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_usage_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite's planner views off the real providers' usage endpoints.
+
+    `just status`, `just runs`, and the read API all render provider capacity, so
+    every journey that drives one would otherwise spend a probe against this host's
+    configured identities — real network, real accounts, and a subprocess tree the
+    leak guard would have to chase. The variable is exported rather than patched
+    because most of those journeys run the recipe as its own process.
+
+    A test that means to exercise the probe turns it back on and states its own
+    boundary; the cache is dropped either way so one test's answer is never
+    replayed into the next.
+    """
+    monkeypatch.setenv(provider_health.PROBE_ENV, "0")
+    provider_health.forget_probes()
+    yield
+    provider_health.forget_probes()
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:

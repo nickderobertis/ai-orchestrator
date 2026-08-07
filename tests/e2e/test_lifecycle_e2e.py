@@ -42,7 +42,12 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.config import ConfigError
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
-from orchestrator.dispatch import DispatchError, Report, scoped_session
+from orchestrator.dispatch import (
+    DispatchError,
+    Report,
+    classify_provider_failure,
+    scoped_session,
+)
 from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
@@ -75,6 +80,7 @@ from orchestrator.provenance import (
     format_preserved_step_metadata,
     incomplete_commits,
 )
+from orchestrator.provider_health import failure_rollups
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
@@ -1578,7 +1584,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 5
+    assert first_result["schema_version"] == 6
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -1657,7 +1663,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 5 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == 6 and "round" not in unrecorded
 
 
 def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever(
@@ -8417,3 +8423,117 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     assert not result.ok
     assert result.results["a"].status == "failed"
     assert result.results["b"].status == "skipped"
+
+
+def test_a_workstream_step_refused_by_the_provider_records_which_identity_refused(
+    tmp_path, bare_origin
+) -> None:
+    """The lifecycle half of failure attribution, end to end on a real workstream.
+
+    A direct agent node and a lifecycle step reach the provider by different paths,
+    and only the direct one was covered. The night this work exists for lost
+    lifecycle workstreams too, so a refused step has to settle as the refusal it
+    was — naming the side and the identity in its journal, in the recorded result,
+    and in the rolled-up line a planner reads — rather than propagating as a bare
+    dispatch error that names neither.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-refused-step")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    refusal = (
+        "provider error (supervisor): harness failed (quota) — judge-side codex "
+        "quota exhausted mid-conversation; resets Aug 8"
+    )
+
+    def refused_by_the_provider(persona: str, task: str, **_: object) -> Report:
+        raise DispatchError(refusal, failure_attribution=classify_provider_failure(refusal))
+
+    journal = open_journal(tmp_path / "refused-run", RunId("refused"), 1)
+    result = run_repo_task(
+        str(canonical),
+        "## What\nMeasure lifecycle cost.\n\n## Why\nA refused run must say who refused.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "refused-worktrees"),
+        branch="feature/refused-by-provider",
+        dispatch_fn=refused_by_the_provider,
+        recorded_gate=["true"],
+        journal=NodeJournal(journal, NodeId("work"), RunId("refused"), 1),
+    )
+
+    # Settled as a refusal rather than propagating: the workstream is not completed,
+    # and the step it stopped on is recorded rather than lost to a raised error.
+    assert result.outcome == "not-completed", result.detail
+    attribution = result_payload(result)["failure_attribution"]
+    assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
+        "judge",
+        "codex",
+        "quota_mid_conversation",
+    )
+    assert attribution["reset_time"] == "Aug 8"
+
+    # The same fact reaches the journal, which is what the planner views fold.
+    settled = [
+        json.loads(line)
+        for line in (tmp_path / "refused-run" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if json.loads(line)["kind"] == "step-settled"
+    ]
+    assert settled, "the refused step recorded no step-settled event"
+    assert settled[-1]["detail"]["failure_attribution"] == attribution
+
+    # And it reads as the one rolled-up line `just status` / `just runs` print.
+    assert failure_rollups(tmp_path / "refused-run") == [
+        "1 node failed on judge-side codex quota mid conversation, resets Aug 8"
+    ]
+
+
+def test_a_refused_step_preserves_the_work_its_worker_had_already_written(
+    tmp_path, bare_origin
+) -> None:
+    """A refusal is a stop, and a stop preserves the branch like every other one.
+
+    `quota_mid_conversation` is by definition a worker that was already working, so
+    the worktree it is holding can carry real authored work. Settling that refusal
+    as a recorded failure must go through the same preservation every other
+    incomplete step takes; recording the attribution and dropping the work would
+    trade one silent loss for another.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-refused-preserve")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    refusal = (
+        "provider error (respond): harness failed (quota) — claude-code:alternate "
+        "quota exhausted mid-conversation"
+    )
+
+    def refused_after_writing(persona: str, task: str, **kwargs: object) -> Report:
+        (Path(cast(str, kwargs["project_dir"])) / "tiering.md").write_text(
+            "the work the refusal interrupted\n", encoding="utf-8"
+        )
+        raise DispatchError(refusal, failure_attribution=classify_provider_failure(refusal))
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nTier the workspace.\n\n## Why\nA refusal must not cost the work.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "refused-preserve-worktrees"),
+        branch="feature/refused-mid-work",
+        dispatch_fn=refused_after_writing,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "not-completed", result.detail
+    # Resumable, because there is work on the branch worth resuming onto.
+    assert result.resume is not None and result.resume.mode == "retry"
+    # The branch really carries it, under the marker recovery recognises.
+    assert _subject(canonical, result.branch) == "chore: Tier the workspace. (incomplete step)"
+    assert incomplete_commits(canonical, "main", result.branch)
+    assert _has_file(canonical, result.branch, "tiering.md")
+    # And the refusal is still attributed, not traded away for the preservation.
+    attribution = result_payload(result)["failure_attribution"]
+    assert (attribution["side"], attribution["identity"], attribution["cause"]) == (
+        "agent",
+        "claude-code:alternate",
+        "quota_mid_conversation",
+    )

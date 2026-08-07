@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import REPO_ROOT
 from .history import HistoryError, HistorySession, SessionId, all_sessions
-from .labels import format_labels
+from .labels import SMOKE_LABEL, format_labels
 from .scratch import AGENT_STATUS_DIR_ENV
 from .telemetry import (
     NO_LAUNCH_RECORD_FAILURE,
@@ -85,7 +85,7 @@ def _run_wrapper(
     env = {
         **os.environ,
         "ONEHARNESS_HISTORY_DIR": str(history_dir),
-        "ONEHARNESS_HISTORY_LABELS": format_labels({"role": "agent", "smoke": smoke_id}),
+        "ONEHARNESS_HISTORY_LABELS": format_labels({"role": "agent", SMOKE_LABEL: smoke_id}),
         AGENT_STATUS_DIR_ENV: str(status_dir),
     }
     process = subprocess.Popen(

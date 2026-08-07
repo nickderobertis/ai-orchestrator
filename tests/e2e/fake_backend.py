@@ -56,6 +56,41 @@ REPORTED_BLOCKER_PREFIX = "terminal blocker reported:"  # orchestrator.dispatch
 CAPACITY_ERROR_MARKER = "scratch-capacity-preflight:"  # orchestrator.scratch
 DEFAULT_MIN_FREE_BYTES = 5 * 1024**3  # orchestrator.scratch
 
+#: The provider diagnostics this backend can be asked to refuse with, keyed by the
+#: sentinel a task carries: which onejudge operations refuse, and what the harness
+#: writes when it does. Each text is the shape a real harness produced during the
+#: outage that motivated failure attribution — an exhausted identity naming its
+#: reset, a fall-through at launch, a resume against a session the harness had
+#: dropped, a watchdog-killed rate-limit loop, and an exit whose only detail is
+#: claude-code's own structured stdout error payload.
+PROVIDER_REFUSALS = {
+    "agent-attributed-provider-failure": (
+        {"respond"},
+        "agent-side claude-code:alternate2 quota at launch; fell through; resets Aug 8; "
+        + "provider-output " * 300,
+    ),
+    "judge-attributed-provider-failure": (
+        {"supervisor", "judge"},
+        "judge-side codex:primary quota exhausted mid-conversation; resets Aug 8; "
+        + "provider-output " * 300,
+    ),
+    "stale-session-provider-failure": (
+        {"respond"},
+        "claude-code:alternate harness failed: No conversation found with session ID "
+        "0f6c1d2e-dead-4bee-9abc-1234567890ab",
+    ),
+    "rate-limit-provider-failure": (
+        {"respond"},
+        "claude-code:primary harness hit a rate limit; watchdog killed the retry loop "
+        "after 12 minutes",
+    ),
+    "unclassified-provider-failure": (
+        {"respond"},
+        'codex:alternate harness exited 1 {"subtype":"error_during_execution",'
+        '"errors":["stream closed before result","no result message"]}',
+    ),
+}
+
 
 class SupervisorRequest(TypedDict):
     """Validated fields consumed from onejudge's protocol-v4 supervisor request."""
@@ -266,6 +301,11 @@ def main() -> int:
     capped_resume_segment = "resume-after-cap" in task and resume_segments <= 1
     fail = "should-fail" in task or capped_resume_segment or (drafting and "drafting-fails" in task)
 
+    for sentinel, (operations, diagnostic) in PROVIDER_REFUSALS.items():
+        if sentinel in task and op in operations:
+            sys.stderr.write(diagnostic + "\n")
+            return 1
+
     match op:
         case "respond":
             # A deterministic real-provider boundary: whatever this turn is about to
@@ -414,6 +454,12 @@ def main() -> int:
                                 # expected outcome, not an orchestrator failure.
                                 '"name": "eligibility"',
                                 '"name": "rejection"',
+                                # A parked node holds its round `waiting`, and one of
+                                # these journeys also carries a node that fails by
+                                # design; both are the subject, not an orchestrator
+                                # failure.
+                                '"name": "park-and-resume"',
+                                '"name": "pending-park"',
                                 "lifecycle-worker-death-retry",
                                 "provider-errors",
                                 "infrastructure-",
@@ -444,7 +490,11 @@ def main() -> int:
                     )
                 elif orchestrator_turn == 1 and any(
                     name in plan_text
-                    for name in ('"name": "planner-context"', '"name": "carried-edits"')
+                    for name in (
+                        '"name": "planner-context"',
+                        '"name": "carried-edits"',
+                        '"name": "park-and-resume"',
+                    )
                 ):
                     # The transition an orchestrator drives after the planner's
                     # continuing verdict: no attestation, no edits file, just the

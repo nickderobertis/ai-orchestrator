@@ -21,12 +21,23 @@ from .channel import (
     planner_wait_indicator,
 )
 from .config import ConfigError
+from .dispatches import (
+    UNDRIVEN_AFTER_SECONDS,
+    LiveDispatch,
+    live_dispatches,
+    load_indicator,
+    undriven_locators,
+)
 from .goals import concurrent_indicator
 from .journal import JOURNAL_NAME, EventKind, read_events
-from .liveness import PARKED_AFTER_SECONDS, parked_indicator
+from .liveness import PARKED_AFTER_SECONDS, observe_launch, parked_indicator
 from .monitor import RUN_LABEL
 from .projection import TERMINAL_NODE_STATES, NodeState
+from .provider_health import failure_rollups
+from .provider_health import probe as probe_provider_health
+from .provider_health import render as render_provider_health
 from .registry import Registry, RegistryError
+from .telemetry import collect_run
 from .workspace import IdentityKey, RepositoryType, Workflow
 
 # A history record describes one completed harness invocation, not the whole
@@ -166,21 +177,77 @@ class InFlightDispatch:
     persona: str | None
     started_at: float
     activity: NodeActivity | None = None
+    #: The dispatch the ownership registry proves is driving this node, when one is.
+    #: `activity` says what a streamed turn published about itself; this says which
+    #: side of the conversation is running it, on which harness identity, and for how
+    #: long — none of which a publication can report about a turn that has stopped
+    #: publishing, which is exactly the wedged turn a planner needs to see.
+    dispatch: LiveDispatch | None = None
+    #: The ledger records this node as started and nothing is driving it. Set only
+    #: where that is provable; see `orchestrator.dispatches.undriven_locators`.
+    undriven: bool = False
 
     def describe(self, *, now: float) -> str:
         where = f"{self.node}[{self.step}]" if self.step else self.node
         elapsed = max(0, int(now - self.started_at))
         persona = f" {self.persona}" if self.persona else ""
         doing = f"; {self.activity.describe(now=now)}" if self.activity else ""
+        if self.undriven:
+            # Deliberately not "parked": this same vocabulary already has a `parked`
+            # node state, and it means the opposite — a node the planner idled with
+            # `cancel`, whose work is preserved and which `requeue` resumes. This is a
+            # node nobody idled, whose dispatch is simply gone.
+            live = (
+                "; UNDRIVEN (the ledger records this node running, and no live dispatch "
+                "carries its ownership stamp) — inspect with: just host"
+            )
+        elif self.dispatch is not None:
+            live = f"; {self.dispatch.turn.describe(now=now)}"
+        else:
+            live = ""
         return (
             f"round-{self.round:02d} {where}{persona} — "
-            f"in flight for {elapsed // 60}m{elapsed % 60:02d}s, no completed turn yet{doing}"
+            f"in flight for {elapsed // 60}m{elapsed % 60:02d}s, no completed turn yet"
+            f"{live}{doing}"
         )
 
 
 def _persona(detail: Mapping[str, Any]) -> str | None:
     value = detail.get("persona")
     return value if isinstance(value, str) and value else None
+
+
+def reconcile_live(
+    dispatches: Sequence[InFlightDispatch],
+    live: Sequence[LiveDispatch] | None,
+    *,
+    launch_is_working: bool,
+    undriven_after: float = UNDRIVEN_AFTER_SECONDS,
+    now: float | None = None,
+) -> list[InFlightDispatch]:
+    """Join what the ledger says is running to what the ownership registry can prove.
+
+    The ledger stays the record and this only ever adds to it: a node the registry
+    can say nothing about is reported exactly as it was before any of this existed.
+    """
+    by_locator = {
+        locator: dispatch for dispatch in live or () if (locator := dispatch.locator) is not None
+    }
+    undriven = undriven_locators(
+        live,
+        {(str(item.round), item.node): item.started_at for item in dispatches},
+        launch_is_working=launch_is_working,
+        undriven_after=undriven_after,
+        now=now,
+    )
+    return [
+        replace(
+            item,
+            dispatch=by_locator.get((str(item.round), item.node)),
+            undriven=(str(item.round), item.node) in undriven,
+        )
+        for item in dispatches
+    ]
 
 
 def in_flight_dispatches(
@@ -464,6 +531,28 @@ def _positional(value: str | None) -> tuple[int | None, str | None]:
         return None, value
 
 
+def _unrecorded_judges(run_dir: Path) -> list[str]:
+    """Nodes whose worker was recorded but whose simulated user never was.
+
+    A recorded agent session proves the dispatch reached oneharness, so the judge
+    side should be there beside it. When it is not, the supervisor did not stop
+    supervising — its harness failed to write history — and saying so beats letting
+    it disappear from every history-derived view.
+    """
+    try:
+        collected = collect_run(run_dir)
+    except (ConfigError, history.HistoryError, OSError):
+        return []
+    if collected is None:
+        return []
+    return [
+        node.node
+        for node in collected.nodes
+        if node.failure is not None
+        and bool((node.failure.attribution or {}).get("judge_unrecorded"))
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show running and recent dispatched tasks.")
     parser.add_argument(
@@ -484,12 +573,22 @@ def main(argv: list[str] | None = None) -> int:
         help="report a launch with no child process, planner surface, or ledger write for "
         f"this long as parked (default: {PARKED_AFTER_SECONDS:g})",
     )
+    parser.add_argument(
+        "--undriven-after",
+        type=float,
+        default=UNDRIVEN_AFTER_SECONDS,
+        metavar="SECONDS",
+        help="flag a node the ledger records as started, and no live dispatch is "
+        f"driving, once it has been started this long (default: {UNDRIVEN_AFTER_SECONDS:g})",
+    )
     args = parser.parse_args(argv)
     limit, requested_run = _positional(args.target)
     if limit is not None and limit <= 0:
         parser.error("N must be a positive integer")
     if not math.isfinite(args.parked_after) or args.parked_after <= 0:
         parser.error("--parked-after must be a positive, finite number of seconds")
+    if not math.isfinite(args.undriven_after) or args.undriven_after < 0:
+        parser.error("--undriven-after must be a non-negative, finite number of seconds")
     run_id: runs.RunId | None = None
     if requested_run is not None:
         try:
@@ -510,15 +609,29 @@ def main(argv: list[str] | None = None) -> int:
     # Only for a named run: the unscoped view would have to read every recorded
     # run's whole journal to answer the same question, and those journals reach tens
     # of thousands of events. `just status <run-id>` is the invocation that asked.
+    # One registry read for the whole view: the header attributes this host's load
+    # from it, and the in-flight lines below reconcile against the same observation,
+    # so the two halves of one printed picture can never disagree about what is live.
+    live = live_dispatches()
     running_dispatches = (
-        in_flight_dispatches(args.runs_dir, run_id, activity=live_activity(run_id))
+        reconcile_live(
+            in_flight_dispatches(args.runs_dir, run_id, activity=live_activity(run_id)),
+            live,
+            launch_is_working=observe_launch(
+                args.runs_dir / run_id, parked_after=args.parked_after
+            ).live_descendant,
+            undriven_after=args.undriven_after,
+        )
         if run_id is not None
         else []
     )
     if args.format == "json":
         print(json.dumps([_json_value(task) for task in selected]))
     else:
-        indicators: list[str] = []
+        # The header, before every run indicator: a planner who opens this view
+        # because the host feels slow reads what the load is and which run and node
+        # is producing it in the same glance, instead of reconstructing it afterwards.
+        indicators: list[str] = [line for line in (load_indicator(live),) if line is not None]
         if args.runs_dir.is_dir():
             for run_dir in sorted(
                 path
@@ -563,7 +676,27 @@ def main(argv: list[str] | None = None) -> int:
                     indicators.append(f"{run_dir.name}: {waiting}")
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
+                indicators.extend(f"{run_dir.name}: {line}" for line in failure_rollups(run_dir))
+                # Scoped to a named run for the same reason as the dispatch scan above:
+                # answering it means collecting one run's whole telemetry, history
+                # sessions included, which the unscoped view must not pay per run.
+                if run_id is not None:
+                    indicators.extend(
+                        f"{run_dir.name}: {node} judge_unrecorded — judge history is missing"
+                        for node in _unrecorded_judges(run_dir)
+                    )
+        health = (
+            render_provider_health(probe_provider_health(cwd=Path.cwd()))
+            if selected or indicators or running_dispatches
+            else ""
+        )
         print(
-            "\n".join([*indicators, _human(selected, run_id=run_id, in_flight=running_dispatches)])
+            "\n".join(
+                [
+                    *([health] if health else []),
+                    *indicators,
+                    _human(selected, run_id=run_id, in_flight=running_dispatches),
+                ]
+            )
         )
     return 0

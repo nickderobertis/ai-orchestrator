@@ -1240,7 +1240,8 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     await screen.findByText("dashboard");
 
     // A peer that ships a schema the app does not accept must be reported, not
-    // silently rendered from whatever survived.
+    // silently rendered from whatever survived. Kept one ahead of the accepted
+    // version, so this stays a rejection every time that version is bumped.
     sources[0]?.emit(
       "snapshot",
       { ...runList, telemetry_schema_version: 11 },

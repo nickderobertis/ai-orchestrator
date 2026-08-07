@@ -42,6 +42,7 @@ from .journal import (
     read_events,
 )
 from .monitor import DetailSnapshot, load_snapshot, run_state
+from .provider_failure import ProviderFailure
 from .runs import (
     RETRY_DISPOSITIONS,
     GraphResultItem,
@@ -224,11 +225,14 @@ class TimingPresenceRecord(TypedDict):
 class Failure:
     classification: FailureClass
     detail: str = ""
+    attribution: ProviderFailure | None = None
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"class": self.classification}
         if self.detail:
             result["detail"] = self.detail
+        if self.attribution:
+            result.update(self.attribution)
         return result
 
 
@@ -441,7 +445,11 @@ def _failure(item: GraphResultItem) -> Failure | None:
         kind = "agent"
     else:
         kind = "unknown"
-    return Failure(kind, detail)
+    attribution = item.get("failure_attribution")
+    # Read back from a recorded result, so it arrives as arbitrary JSON: narrowed
+    # here rather than trusted, and the served shape is the model above.
+    recorded = cast("ProviderFailure", dict(attribution)) if isinstance(attribution, dict) else None
+    return Failure(kind, detail, recorded)
 
 
 def _gate_seconds(events: list[Event]) -> float:
@@ -1801,6 +1809,28 @@ def collect_run(
     nodes = [
         _node_record(node, item, events, summaries, active_at=node_active_at)
         for node, item in items.items()
+    ]
+    # A recorded worker session proves this dispatch reached oneharness and should
+    # have a simulated-user side. Keep an absent judge explicit; do not infer this
+    # when the entire optional history store is unavailable.
+    roles_by_node: dict[str, set[SessionRole]] = {}
+    for summary in summaries:
+        if node := summary.labels.get("node"):
+            roles_by_node.setdefault(node, set()).add(summary.role)
+    nodes = [
+        replace(
+            node,
+            failure=Failure(
+                node.failure.classification,
+                node.failure.detail,
+                {**(node.failure.attribution or {}), "judge_unrecorded": True},
+            ),
+        )
+        if node.failure is not None
+        and "agent" in roles_by_node.get(node.node, set())
+        and "judge" not in roles_by_node.get(node.node, set())
+        else node
+        for node in nodes
     ]
     native_parts = [part for part in native_by_node.values() if part is not None]
     timing = _run_timing(

@@ -396,3 +396,154 @@ def test_context_is_refused_where_no_dispatch_can_ever_read_it() -> None:
             states={"approve": "waiting"},
             attestations=(),
         )
+
+
+def test_cancel_parks_a_running_node_and_requeue_returns_it_amended() -> None:
+    """The round trip a planner needs: idle one node, then pick it up later."""
+    parked, events = apply_edit(
+        _graph(),
+        EditCommand("cancel", {"op": "cancel", "id": "root"}),
+        states={"root": "running"},
+        attestations=(),
+    )
+    assert events == [{"kind": "node-parked", "node": "root", "detail": {}}]
+    root = next(node for node in parked.tasks if node.id == "root")
+    assert root.parked
+    assert root.definition["parked"] is True
+
+    resumed, events = apply_edit(
+        parked,
+        EditCommand(
+            "requeue",
+            {"op": "requeue", "id": "root", "amend": {"max_turns": 32, "branch": "preserved"}},
+        ),
+        # The frontier still records the park; the node definition is what decides
+        # whether a requeue is legal, which is what makes it work a round later too.
+        states={"root": "parked"},
+        attestations=(),
+    )
+    assert events == [
+        {
+            "kind": "node-requeued",
+            "node": "root",
+            "detail": {"amend": {"max_turns": 32, "branch": "preserved"}},
+        }
+    ]
+    root = next(node for node in resumed.tasks if node.id == "root")
+    assert not root.parked
+    assert "parked" not in root.definition
+    assert root.direct is not None
+    assert root.direct.max_turns == 32
+
+
+def test_a_bare_requeue_records_no_amendment_and_a_real_one_survives_verbatim() -> None:
+    """`amend` is optional on the wire, so it is optional in the compiled record.
+
+    A bare requeue that recorded `"amend": {}` would be saying the planner amended
+    the node with nothing, and every reader of the journal — including one written
+    against the operation before this — would have to know that the empty mapping
+    means what its absence means. Both spellings of "no amendment" therefore compile
+    to the same record. The nonempty form has to round-trip untouched in the same
+    breath, nesting included: that mapping is what the node's next dispatch is built
+    from, so a reader that flattened or dropped part of it would resume different
+    work than the planner asked for.
+    """
+    parked, _ = apply_edit(
+        _graph(),
+        EditCommand("cancel", {"op": "cancel", "id": "root"}),
+        states={"root": "running"},
+        attestations=(),
+    )
+
+    for envelope in ({"op": "requeue", "id": "root"}, {"op": "requeue", "id": "root", "amend": {}}):
+        resumed, events = apply_edit(
+            parked, EditCommand("requeue", envelope), states={"root": "parked"}, attestations=()
+        )
+        assert events == [{"kind": "node-requeued", "node": "root", "detail": {}}], envelope
+        root = next(node for node in resumed.tasks if node.id == "root")
+        assert not root.parked
+        # Nothing but the park was touched: a bare requeue amends no field.
+        assert root.definition == {"id": "root", "persona": "engineer", "task": "Root"}
+
+    pin = {
+        "branch": "feature/sweep",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "a1b2c3d",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    _, amended = apply_edit(
+        parked,
+        EditCommand("requeue", {"op": "requeue", "id": "root", "amend": {"resume": pin}}),
+        states={"root": "parked"},
+        attestations=(),
+    )
+
+    assert amended == [
+        {"kind": "node-requeued", "node": "root", "detail": {"amend": {"resume": pin}}}
+    ]
+
+
+def test_cancel_is_refused_for_a_settled_unknown_or_already_parked_node() -> None:
+    graph = _graph()
+    with pytest.raises(EditError, match="cancel requires an existing node id"):
+        apply_edit(
+            graph,
+            EditCommand("cancel", {"op": "cancel", "id": "ghost"}),
+            states={},
+            attestations=(),
+        )
+    for settled in ("done", "failed", "waiting", "cancelled"):
+        with pytest.raises(EditError, match="pending or running"):
+            apply_edit(
+                graph,
+                EditCommand("cancel", {"op": "cancel", "id": "root"}),
+                states={"root": settled},
+                attestations=(),
+            )
+    parked, _ = apply_edit(
+        graph, EditCommand("cancel", {"op": "cancel", "id": "root"}), states={}, attestations=()
+    )
+    with pytest.raises(EditError, match="already parked"):
+        apply_edit(
+            parked,
+            EditCommand("cancel", {"op": "cancel", "id": "root"}),
+            states={},
+            attestations=(),
+        )
+
+
+def test_requeue_is_refused_for_an_unparked_node_and_a_rewiring_amendment() -> None:
+    graph = _graph()
+    with pytest.raises(EditError, match="requeue requires an existing node id"):
+        apply_edit(
+            graph,
+            EditCommand("requeue", {"op": "requeue", "id": "ghost"}),
+            states={},
+            attestations=(),
+        )
+    with pytest.raises(EditError, match="requeue requires a parked node"):
+        apply_edit(
+            graph,
+            EditCommand("requeue", {"op": "requeue", "id": "root"}),
+            states={"root": "running"},
+            attestations=(),
+        )
+    parked, _ = apply_edit(
+        graph, EditCommand("cancel", {"op": "cancel", "id": "root"}), states={}, attestations=()
+    )
+    with pytest.raises(EditError, match="amendments must be a mapping"):
+        apply_edit(
+            parked,
+            EditCommand("requeue", {"op": "requeue", "id": "root", "amend": "more turns"}),
+            states={},
+            attestations=(),
+        )
+    with pytest.raises(EditError, match="cannot amend 'deps'"):
+        apply_edit(
+            parked,
+            EditCommand("requeue", {"op": "requeue", "id": "root", "amend": {"deps": ["approve"]}}),
+            states={},
+            attestations=(),
+        )

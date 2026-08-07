@@ -149,9 +149,18 @@ dispatch onejudge.
    report. Require verified publication closeout before issuing `complete`. A run
    the progress views report as `PARKED` is alive and not working — no child process,
    no surface, no ledger write — so treat it as stopped and intervene rather than
-   waiting on it. `channel-reply` refuses an edit it cannot apply, with the reason,
-   and every edit it accepts reaches the graph; a non-zero reply is a rejection to
-   correct, never a command to resend.
+   waiting on it; that liveness verdict is unrelated to a node the planner *parked*
+   with `cancel`, which is a deliberate idle. `channel-reply` refuses an edit it
+   cannot apply, with the reason, and every edit it accepts reaches the graph; a
+   non-zero reply is a rejection to correct, never a command to resend.
+
+   **One execution path per deliverable.** When a path fails, diagnose and fix that
+   path or escalate to the operator with evidence; never launch a duplicate parallel
+   path for the same deliverable — a planner-driven integrate or recovery beside a
+   live node delivering it counts as a duplicate — without explicit operator
+   approval. `cancel` is the tool for idling a redundant or misdirected node and
+   `requeue` for resuming it; see [Parking a node, and picking it up
+   again](docs/orchestration.md#parking-a-node-and-picking-it-up-again).
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
@@ -434,6 +443,26 @@ run ledger and the views built on it.
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the
 [ownership rule](#your-loop-as-planner) above.
+
+Those views also stop guessing at what is *running*. A node the ledger records as
+started now reports which side of the conversation is serving it, on which harness
+identity, and for how long — with an anomalous duration for that role flagged, and a
+node nothing is driving flagged `UNDRIVEN` (deliberately not `parked`, which is the
+node state a planner's own `cancel` produces). All of it is proven
+from the dispatch ownership registry, never from `ps` output matched by pattern: the
+`ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into every process a dispatch
+starts, plus the owner lock a live dispatcher holds. `just status` carries the host's
+load averages with that same attribution, and **`just host`** is the whole-host
+view — per live dispatch, its owning session, run/node, role, turn age, and load
+contribution. Miscounting live dispatches from `ps`, and missing a judge turn wedged
+for nearly two hours, are what these replace.
+**`just recoverable`** is the other half of that: every preserved-but-unpublished
+branch across the registered identities, where it lives, why its workstream stopped,
+whether it carries an incomplete-step marker, and the exact command that lands it —
+`just repo-recover` for incomplete provenance, `just integrate` for a complete
+branch, with the fetch included when the publication checkout does not have the
+branch. Reach for it instead of diffing clones by hand. Every one of these views is
+read-only and safe beside live work.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command (or compatibility `next-round` attestation). Keep operational
 syntax and result contracts in
@@ -454,6 +483,16 @@ journeys that drive real Nx provision through the same script rather than skippi
 when a worktree is fresh — a bare `pytest` in one means what the gate means.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
+A node that died to the provider is diagnosed from `just status` alone: it and
+`just runs` print a provider-health block for all five configured identities —
+each one's binding window, utilization, and reset, with a failed probe listed as
+`unknown` rather than dropped — above one rolled-up line per repeated cause naming
+the refusing **side** and **identity**. Read the side first: the agent and judge
+chains prefer different identities, so a fix aimed at the wrong one changes
+nothing, and a whole night was once lost to a judge-chain quota that read as a
+bare `harness failed (quota)`. `just results` and the read API carry the same
+attribution per node with the harness's own bounded output. See [Diagnosing a
+provider failure](docs/telemetry.md#diagnosing-a-provider-failure).
 `just telemetry-server` serves the read-only DAG API over a runs root and
 `just dag-ui` serves the browser view against it; both are read-only and mutate
 no run. `just dag-ui-screens` photographs every major surface of that view at every

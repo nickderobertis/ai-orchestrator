@@ -305,6 +305,71 @@ def test_run_plan_reads_a_json_plan_file_with_json_semantics(
     assert json.loads(accepted.stdout)["results"]["banner"]["status"] == "done"
 
 
+def test_a_launch_plan_carrying_a_parked_node_says_what_it_is_waiting_for(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """What a continuation launch does with a park, and what it tells the planner.
+
+    A round transition folds the executed graph, so the plan a later round is
+    launched from carries `parked` on the node a live `cancel` idled. Launched from
+    that file, the node must not be dispatched again — and the summary has to say
+    the round is waiting on a *planner requeue*, not on a person: this state settles
+    when an edit arrives on the channel, and "awaiting human action" would send a
+    planner looking for an attestation nothing is going to make.
+    """
+    runs = tmp_path / "runs"
+    dispatched = tmp_path / "dispatched.jsonl"
+    plan = tmp_path / "carried-park.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "idled",
+                        "persona": "engineer",
+                        "task": f"complete-now record-task={dispatched}",
+                        "parked": True,
+                    },
+                    {"id": "ships", "persona": "engineer", "task": "complete-now"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "carried-park",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "human",
+    )
+
+    # Not complete, because the graph has not finished; not failed either, which is
+    # the whole point of parking rather than dropping.
+    assert settled.returncode == 1, settled.stderr
+    assert "plan: awaiting planner requeue of parked node(s) (1 done, 1 parked)" in settled.stdout
+    assert "  idled: parked" in settled.stdout
+    # Never dispatched: the fake backend records the task prose of every dispatch it
+    # is given, so an empty file is the launch declining to relaunch a parked node.
+    assert not dispatched.exists()
+    payload = json.loads(
+        (runs / "carried-park" / "round-01" / "result.json").read_text(encoding="utf-8")
+    )
+    assert payload["state"] == "waiting"
+    assert payload["results"]["idled"]["status"] == "parked"
+    assert payload["results"]["ships"]["status"] == "done"
+
+
 def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
@@ -622,7 +687,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
-    assert first["schema_version"] == 5 and first["round"] == 1
+    assert first["schema_version"] == 6 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
@@ -2564,7 +2629,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
-    assert direct_payload["schema_version"] == 5 and "round" not in direct_payload
+    assert direct_payload["schema_version"] == 6 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 

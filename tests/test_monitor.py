@@ -592,6 +592,37 @@ def test_non_boolean_persisted_pending_state_is_ignored(tmp_path: Path) -> None:
     assert state.detail == "round in progress"
 
 
+def test_the_state_line_counts_a_park_among_the_statuses_still_to_act_on(
+    tmp_path: Path,
+) -> None:
+    """A park is tallied with the held statuses, ahead of the ones that are over.
+
+    The state line renders over one declared order, and a status missing from it is
+    still counted — but at the end, beside the failures. That reads a park as
+    something that went wrong, when it is a node the planner idled whose work is
+    preserved and whose release is its own `requeue`. The order is the claim here,
+    so the round holds a done, a parked, and a failed node at once.
+    """
+    run_dir = tmp_path / RUN
+    _settle(
+        run_dir,
+        {
+            "hold": {"status": "done"},
+            "sweep": {"status": "parked", "branch": "feature/sweep"},
+            "probe": {"status": "failed"},
+        },
+        ok=False,
+        state="waiting",
+    )
+
+    state = run_state(run_dir, RUN)
+
+    assert state.state == "waiting"
+    assert state.detail == "1 done, 1 parked, 1 failed"
+    # And a round holding a park is not a run anything may stop watching.
+    assert not state.finished
+
+
 def test_only_a_complete_and_ok_result_counts_as_finished(tmp_path: Path) -> None:
     """`ok` and the state are recorded separately, and both must agree."""
     run_dir = tmp_path / RUN

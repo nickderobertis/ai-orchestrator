@@ -27,6 +27,7 @@ from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .cli_contract import ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .dispatch import Report, dispatch, incomplete_detail
+from .outcomes import HELD_STATUSES, LOST_STATUSES
 
 
 class PlanError(Exception):
@@ -37,7 +38,7 @@ class PlanError(Exception):
 #: for backward-compatible plans; ``human`` names action the harness must never
 #: infer or execute.
 NODE_KINDS = ("agent", "human")
-PLAN_SCHEMA_VERSION = 6
+PLAN_SCHEMA_VERSION = 7
 
 #: Heading the planner's carried context is rendered under inside a dispatched task.
 NODE_CONTEXT_HEADING = "## Planner context"
@@ -151,19 +152,6 @@ class NodeRun:
     recorded: Mapping[str, Any] | None = None
 
 
-#: Dependency statuses that mean a dependent can never run, so the scheduler settles
-#: it ``skipped``.
-#:
-#: Public because the read model re-derives the same two gates for a round that has
-#: not finished — the scheduler journals nothing when it derives them, so a served
-#: graph that did not re-derive them would show every gated node as `pending` while
-#: the run itself has them held. Two copies of this rule would let those two answers
-#: drift; `orchestrator.projection.node_statuses` reads these.
-UNMET_DEP_STATUSES = ("failed", "skipped")
-#: Dependency statuses that mean a dependent is held rather than lost: ``blocked``.
-GATED_DEP_STATUSES = ("waiting", "blocked")
-
-
 def schedule_dag(
     node_ids: list[str],
     deps: dict[str, list[str]],
@@ -225,13 +213,18 @@ def reconcile_dag(
                 settled = [status[d] for d in deps[nid]]
                 if any(s in ("pending", "running") for s in settled):
                     continue
-                if any(s in UNMET_DEP_STATUSES for s in settled):
+                if any(s in LOST_STATUSES for s in settled):
                     status[nid] = "skipped"
                     results[nid] = NodeRun("skipped", "a dependency did not complete")
                     changed = True
-                elif any(s in GATED_DEP_STATUSES for s in settled):
+                elif any(s in HELD_STATUSES for s in settled):
                     status[nid] = "blocked"
-                    results[nid] = NodeRun("blocked", "a dependency is awaiting human action")
+                    held = (
+                        "a dependency is parked"
+                        if any(s == "parked" for s in settled)
+                        else "a dependency is awaiting human action"
+                    )
+                    results[nid] = NodeRun("blocked", held)
                     changed = True
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:

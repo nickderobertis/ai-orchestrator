@@ -57,6 +57,7 @@ interface RunList {
   observed_at: string;
   runs: RunSummary[];
   next_cursor?: string;
+  provider_health?: ProviderHealth;
 }
 
 interface RunSummary {
@@ -106,6 +107,13 @@ interface RunDetail {
   node_details: Record<string, NodeDetail>; // verification + publication rendering facts
   logs?: Record<string, string>; // bounded, path-free tails of the run's own logs
   launch?: RunLaunch; // same run-level launch join as RunSummary
+  provider_health?: ProviderHealth; // read-only capacity snapshot; unavailable probes stay unknown
+}
+
+interface ProviderHealth {
+  schema_version?: string | number;
+  observed_at?: string;
+  identities: Array<Record<string, unknown>>;
 }
 
 interface NodeDetail {
@@ -242,7 +250,7 @@ interface Round {
   plan: ProjectedPlan;
   node_states: Record<
     string,
-    "running" | "done" | "failed" | "waiting" | "cancelled"
+    "running" | "done" | "failed" | "waiting" | "parked" | "cancelled"
   >;
   node_status: Record<string, NodeStatus>;
   node_gated_by: Record<string, string[]>;
@@ -269,6 +277,7 @@ type NodeStatus =
   | "done"
   | "not-completed"
   | "failed"
+  | "parked"
   | "cancelled"
   | "unknown";
 ```
@@ -412,11 +421,16 @@ authoritative stream will not fold degrades to the recorded telemetry statuses.
 
 #### Typed failure and blocker facts
 
+The run-list and run-detail envelopes may additionally carry `provider_health`, a
+read-only oneharness usage snapshot with one entry for every configured identity.
+Unavailable and failed probes remain present with `availability.state = unknown`.
+
 A failed or held node's reason is served typed, not left to be parsed out of prose:
 
-- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string}` —
-  the same classification `RunTelemetry.failure` carries for the run, applied to that
-  node's own recorded item, and omitted for a node that did not fail.
+- `NodeTelemetry.failure` (optional) is `{class: FailureClass, detail?: string}`
+  widened by every `ProviderFailure` field below — the same classification
+  `RunTelemetry.failure` carries for the run, applied to that node's own recorded
+  item, and omitted for a node that did not fail.
 - `GraphResultItem` carries `error`, `detail`, `exit_code`, `blocked_by`,
   `waiting_steps`, and `human_actions` for the node it describes. They are optional
   because a node that neither failed nor waited records none of them.
@@ -431,6 +445,51 @@ type FailureClass =
   | "provider"
   | "configuration"
   | "unknown";
+```
+
+A provider refusal is served as these fields, all optional because only a failure
+that reached a provider carries any of them, and because the evidence a harness
+gives varies — a refusal that stated no reset time is recorded with that silence
+visible rather than invented. `orchestrator/provider_failure.py` owns the shape and
+`scripts/check-dag-state-contract.py` reconciles all three copies.
+
+```ts
+interface ProviderFailure {
+  side?: ConversationSide;
+  harness?: string;
+  variant?: string;
+  identity?: string; // always one the role chains configure, or "unknown"
+  cause?: ProviderFailureCause;
+  raw_tail?: string; // bounded tail of what the harness printed
+  reset_time?: string;
+  missing_session_id?: string;
+  wait_seconds?: number;
+  failure_kind?: string;
+  structured_error?: Record<string, unknown>;
+  judge_unrecorded?: boolean; // agent side recorded, judge side absent
+}
+```
+
+A provider refusal carries two further closed vocabularies. `side` names which of
+onejudge's two conversation sides — or the lint tier beside them — was refused;
+`cause` says why, and is closed so a client can switch on it exhaustively.
+`quota_at_launch` fell through to the next identity in the chain and cost only
+time, while `quota_mid_conversation` could not, because the conversation was
+already bound to the identity that refused it. `harness_exit` is the unclassified
+remainder and carries `structured_error` where the harness reported one.
+
+```ts
+type ConversationSide =
+  | "agent"
+  | "judge"
+  | "llmlint";
+
+type ProviderFailureCause =
+  | "quota_at_launch"
+  | "quota_mid_conversation"
+  | "stale_session_resume"
+  | "rate_limit"
+  | "harness_exit";
 ```
 
 ### Run timeline

@@ -75,6 +75,8 @@ RunToken = NewType("RunToken", str)
 #: an earlier layout created alongside it are never mistaken for run roots — and
 #: are never reaped, since nothing here claims to own them.
 RUNS_DIR_NAME = "runs"
+#: Names the tree under the home directory; resolved by `default_worktree_root`.
+WORKTREE_ROOT_PARTS = (".ai-orchestrator", "worktrees")
 CLONE_DIR_NAME = ".clone"
 OWNER_RECORD_NAME = "owner.json"
 #: Keep a small, useful crash history without allowing abandoned clones to grow
@@ -83,6 +85,19 @@ RETAINED_INCOMPLETE_RUNS = 3
 ALTERNATE_CLAUDE_TRUST_SCRIPT = (
     Path(__file__).resolve().parent.parent / "scripts" / "alternate-claude-workspace-trust.sh"
 )
+
+
+def default_worktree_root() -> Path:
+    """Where every lifecycle run root lives when no caller names one.
+
+    This module owns the layout underneath it, so it owns the default too:
+    `lifecycle`, `recover`, and the read-only `recoverable` view all have to agree on
+    the tree they are walking, and three literals spelling one path is how they stop
+    agreeing. It is a call rather than a constant because the home directory is read
+    from the environment: frozen at import, a process that resolves `HOME` afterwards
+    walks the tree its interpreter started under instead of the one it was pointed at.
+    """
+    return Path.home().joinpath(*WORKTREE_ROOT_PARTS)
 
 
 class WorkspaceError(RuntimeError):

@@ -30,6 +30,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
+from orchestrator.runs import RECORDED_RESULT_SCHEMA_VERSION
 from orchestrator.scratch import (
     AGENT_STATUS_DIR_ENV,
     MIN_FREE_BYTES_ENV,
@@ -936,7 +937,7 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     # The report is parsed out of the swept-past directory, so its survival is the
     # dispatch's own evidence that nothing removed the tree underneath it.
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     # A settled node with a verdict and usage is a report that was read whole out of
     # the swept-past directory; a truncated one cannot produce either.
     node = payload["results"]["solo"]
