@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from contextlib import suppress
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
