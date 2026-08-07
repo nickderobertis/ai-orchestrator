@@ -36,7 +36,14 @@ from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_identity
-from .dispatch import Report, dispatch, incomplete_detail, scoped_session
+from .dispatch import (
+    DispatchError,
+    Report,
+    dispatch,
+    incomplete_detail,
+    recordable_provider_failure,
+    scoped_session,
+)
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .harnesses import (
@@ -77,6 +84,7 @@ from .provenance import (
     is_provenance_commit,
     unattested_incomplete,
 )
+from .provider_failure import journalled
 from .redaction import redact
 from .registry import Registry, RegistryError, merge_gate_coverage, validate_identity_key
 from .runs import (
@@ -1230,23 +1238,54 @@ def _run_steps(
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         step_session = f"{scoped_session(branch, worktree)}:{sid}"
-        report = dispatch_fn(
-            cast(str, step.persona),
-            step.task,
-            project_dir=str(worktree),
-            oneharness_mode=oneharness_mode,
-            use_llmlint_wrapper=use_llmlint_wrapper,
-            base_path=base_path,
-            persona_dir=persona_dir,
-            session=step_session,
-            max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-            done_when=step.done_when,
-            extra_instructions=extra_instructions,
-            labels=log.labels,
-            env=dispatch_env,
-            cancel=cancel,
-        )
-        persist_report_artifacts(log, report, session=step_session)
+        # The refusal's own account of the stop, when the harness never returned a
+        # report for `incomplete_detail` below to read one out of.
+        refusal: str | None = None
+        try:
+            report = dispatch_fn(
+                cast(str, step.persona),
+                step.task,
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session=step_session,
+                max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                done_when=step.done_when,
+                extra_instructions=extra_instructions,
+                labels=log.labels,
+                env=dispatch_env,
+                cancel=cancel,
+            )
+        except DispatchError as exc:
+            if not recordable_provider_failure(exc.failure_attribution):
+                raise
+            # A refusal is a stop, and it settles through the shared not-completed
+            # path below rather than returning here: `quota_mid_conversation` is by
+            # definition a worker that was already working, so the worktree it was
+            # holding can carry authored work, and recording who refused while
+            # dropping that work would trade one silent loss for another.
+            refusal = str(exc)
+            report = Report(
+                # Narrowed for the same reason the dispatch call above narrows it:
+                # `persona` is optional only on a `human` step, and `_run_steps`
+                # never dispatches one, so a step that reached here has a persona.
+                persona=cast(str, step.persona),
+                exit_code=2,
+                completed=False,
+                stopped_early=True,
+                assistant_turns=0,
+                verdicts=[],
+                usage={},
+                raw=None,
+                stderr=refusal,
+                failure_attribution=exc.failure_attribution,
+            )
+        else:
+            # Only a dispatch that returned has artifacts; a refused one raised
+            # before onejudge wrote any.
+            persist_report_artifacts(log, report, session=step_session)
         reports[sid] = report
         if not report.completed:
             # llmlint: ignore[changed_behavior_has_e2e] The live orchestrator e2e kills this
@@ -1257,7 +1296,7 @@ def _run_steps(
             # A death carries the dispatcher's account of it (exit status, stderr);
             # a stop that is not a death says how far it got and why, because
             # "hit the turn cap" on turn 1 is a lie a reader cannot see through.
-            failure: str = (
+            failure: str = refusal or (
                 (report.stderr.strip() or report.outcome)
                 if report.outcome
                 else incomplete_detail(report)
@@ -1306,6 +1345,7 @@ def _run_steps(
                     "preserved": preserved,
                     **({"outcome": report.outcome} if report.outcome else {}),
                     **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
+                    **journalled(report.failure_attribution),
                 },
             )
             if preserved:
@@ -3316,6 +3356,20 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "ok": result.ok,
         "pr": result.pr.url if result.pr else None,
         "detail": result.detail,
+        **(
+            {"failure_attribution": failed_attribution}
+            if (
+                failed_attribution := next(
+                    (
+                        step.report.failure_attribution
+                        for step in result.steps
+                        if step.report and step.report.failure_attribution
+                    ),
+                    None,
+                )
+            )
+            else {}
+        ),
         **({"artifacts": artifacts} if artifacts else {}),
         **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
         "follow_ups": _result_follow_ups(result),

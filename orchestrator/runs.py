@@ -27,11 +27,12 @@ from .config import load_mapping as load_mapping
 from .coordination import advisory_lock, atomic_json
 from .merge import MergePolicy
 from .outcomes import FAILED_ROUND_STATUSES, HELD_STATUSES, STATUS_DISPLAY_ORDER
+from .provider_failure import ProviderFailure
 from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
-RECORDED_RESULT_SCHEMA_VERSION = 5
+RECORDED_RESULT_SCHEMA_VERSION = 6
 ResumeMode = Literal["pause", "retry"]
 RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
@@ -449,6 +450,7 @@ class GraphResultItem(TypedDict, total=False):
     detail: str
     follow_ups: str | None
     steps: list[StepResultPayload]
+    failure_attribution: ProviderFailure
     waiting_steps: list[str]
     resume: ResumePayload | None
     error: str | None

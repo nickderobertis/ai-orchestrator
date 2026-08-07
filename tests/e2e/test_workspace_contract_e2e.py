@@ -224,6 +224,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/projection.py",
         "orchestrator/activity.py",
         "orchestrator/conversations.py",
+        "orchestrator/provider_failure.py",
         "orchestrator/history.py",
         "orchestrator/labels.py",
         "orchestrator/launch.py",

@@ -42,6 +42,7 @@ from orchestrator.channel import (
 from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, run_onejudge
 from orchestrator.graph import main as run_plan_main
+from orchestrator.runs import RECORDED_RESULT_SCHEMA_VERSION
 from orchestrator.watchdog import ProcessId, process_activity
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -299,10 +300,41 @@ def test_real_dispatch_delivers_exact_task_to_agent_history(
         assert matching[0]["labels"]["persona"] == persona
 
 
+@pytest.mark.parametrize(
+    ("refusal", "expected"),
+    [
+        pytest.param(None, None, id="generic-death-is-not-a-refusal"),
+        pytest.param(
+            "provider error (respond): harness claude-code:alternate2 refused: "
+            "weekly usage limit reached, resets Aug 8 09:00 UTC",
+            {
+                "side": "agent",
+                "harness": "claude-code",
+                "variant": "alternate2",
+                "identity": "claude-code:alternate2",
+                "cause": "quota_mid_conversation",
+                "reset_time": "Aug 8 09:00 UTC",
+            },
+            id="refusal-is-attributed",
+        ),
+    ],
+)
 def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
-    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+    tmp_path: Path,
+    onejudge_bin: str,
+    oneharness_bin: str,
+    refusal: str | None,
+    expected: dict[str, str] | None,
 ) -> None:
-    """Kill the real provider worker while onejudge is awaiting it."""
+    """Kill the real provider worker while onejudge is awaiting it.
+
+    A worker the watchdog buries is the one refusal that reaches the graph as a
+    *returned* `Report` rather than a raised `DispatchError`, so this is the only
+    boundary where the returned-report attribution can be proven at all. Both
+    shapes run here because the generic notice already says "provider": it is an
+    infrastructure death that happens to use the word, and recording it as a
+    refusal would refill the bucket this attribution exists to empty.
+    """
     target = tmp_path / "target"
     target.mkdir()
     judge = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
@@ -321,6 +353,7 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
     # process-tree cleanup, and run-plan boundary.
     (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
     barrier = tmp_path / "agent-descendant.pid"
+    runs_dir = tmp_path / "runs"
     existing_status_files = set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))
     plan = tmp_path / "plan.json"
     plan.write_text(
@@ -343,6 +376,7 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         "REAL_ONEHARNESS_BIN": oneharness_bin,
         "MOCK_AGENT_BARRIER": str(barrier),
         "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "2",
+        **({"MOCK_AGENT_REFUSAL": refusal} if refusal else {}),
     }
 
     started = time.monotonic()
@@ -350,7 +384,12 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         [
             str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
             str(plan),
-            "--no-record",
+            # Recorded, not `--no-record`: the journal is the other half of what a
+            # planner reads, and it is written on the same branch as the payload below.
+            "--run",
+            "killed-agent",
+            "--runs-dir",
+            str(runs_dir),
             "--base",
             str(base_path),
             "--project-dir",
@@ -391,6 +430,7 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         time.sleep(0.02)
     assert agent_pid is not None, "agent worker did not reach the provider barrier"
     orphan_pid = int(barrier.read_text(encoding="utf-8"))
+    killed_at = time.monotonic()
     os.kill(agent_pid, signal.SIGTERM)
     stdout, stderr = process.communicate(timeout=5)
 
@@ -403,12 +443,38 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
     # directory, the dispatcher, and the graph to reach this JSON. And a killed
     # harness has to read differently from a worker that stopped on its own, or the
     # planner cannot tell retry from escalate.
-    error = result["results"]["worker"]["error"]
+    item = result["results"]["worker"]
+    error = item["error"]
     assert error.startswith("worker-died"), error
     assert "agent exit status 143" in error, error
     assert "agent harness killed by signal 15" in error, error
     assert BARRIER_DEATH_NOTICE in error, error
-    assert time.monotonic() - started < 5
+    # The recorded result is where a planner reads why the node died, so the
+    # attribution has to survive the same wrapper/status-dir/dispatcher/graph path
+    # the prose above does — or be absent entirely when there was no refusal.
+    attribution = item.get("failure_attribution")
+    if expected is None:
+        assert attribution is None, attribution
+    else:
+        assert attribution is not None, item
+        assert {key: attribution.get(key) for key in expected} == expected
+        assert refusal is not None
+        assert refusal[-60:] in attribution["raw_tail"], attribution["raw_tail"]
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "killed-agent" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    node_failed = next(event for event in events if event["kind"] == "node-failed")
+    assert node_failed["detail"]["outcome"] == "worker-died"
+    assert node_failed["detail"].get("failure_attribution") == attribution
+    # Promptness is the watchdog's own reaction, so it is measured from the kill.
+    # Anchoring it at `started` folded in launching a Python process tree and waiting
+    # for it to reach the provider barrier — setup the rendezvous loop above already
+    # allows ten seconds for, which made a five-second total a bound the box could
+    # fail on its own while the watchdog did its job in milliseconds.
+    assert time.monotonic() - killed_at < 5, time.monotonic() - killed_at
     deadline = time.monotonic() + 2
     while Path(f"/proc/{orphan_pid}").exists() and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -665,7 +731,7 @@ def test_one_node_plan_cli_json_output(command_base, onejudge_bin, tmp_path, cap
     )
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     assert payload["results"]["solo"]["completed"] is True
 
 
@@ -1095,7 +1161,7 @@ def test_one_node_plan_applies_ordered_models_to_real_oneharness(
     argv = argv_path.read_text(encoding="utf-8").splitlines()
     assert argv[argv.index("--model") + 1] == "claude-opus-4-8"
     payload = json.loads(proc.stdout)
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     assert payload["results"]["solo"]["completed"] is True
     assert "telemetry" not in payload["results"]["solo"]
     config_env = env.copy()

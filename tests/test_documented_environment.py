@@ -31,6 +31,7 @@ from orchestrator.harnesses import (
     WORKER_MODEL_ENV,
 )
 from orchestrator.provenance import INCOMPLETE_TRAILER, RECOVERY_TRAILER
+from orchestrator.provider_health import PROBE_ENV
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
 from orchestrator.workspace import RETAINED_INCOMPLETE_RUNS
 
@@ -47,6 +48,7 @@ DOCUMENTED_TUNABLES = (
     (JUDGE_HARNESS_ENV, "docs/onejudge-integration.md"),
     (WORKER_MODEL_ENV, "docs/onejudge-integration.md"),
     (JUDGE_MODEL_ENV, "docs/onejudge-integration.md"),
+    (PROBE_ENV, "docs/telemetry.md"),
 )
 
 

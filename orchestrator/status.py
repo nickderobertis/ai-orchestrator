@@ -33,7 +33,11 @@ from .journal import JOURNAL_NAME, EventKind, read_events
 from .liveness import PARKED_AFTER_SECONDS, observe_launch, parked_indicator
 from .monitor import RUN_LABEL
 from .projection import TERMINAL_NODE_STATES, NodeState
+from .provider_health import failure_rollups
+from .provider_health import probe as probe_provider_health
+from .provider_health import render as render_provider_health
 from .registry import Registry, RegistryError
+from .telemetry import collect_run
 from .workspace import IdentityKey, RepositoryType, Workflow
 
 # A history record describes one completed harness invocation, not the whole
@@ -527,6 +531,28 @@ def _positional(value: str | None) -> tuple[int | None, str | None]:
         return None, value
 
 
+def _unrecorded_judges(run_dir: Path) -> list[str]:
+    """Nodes whose worker was recorded but whose simulated user never was.
+
+    A recorded agent session proves the dispatch reached oneharness, so the judge
+    side should be there beside it. When it is not, the supervisor did not stop
+    supervising — its harness failed to write history — and saying so beats letting
+    it disappear from every history-derived view.
+    """
+    try:
+        collected = collect_run(run_dir)
+    except (ConfigError, history.HistoryError, OSError):
+        return []
+    if collected is None:
+        return []
+    return [
+        node.node
+        for node in collected.nodes
+        if node.failure is not None
+        and bool((node.failure.attribution or {}).get("judge_unrecorded"))
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show running and recent dispatched tasks.")
     parser.add_argument(
@@ -650,7 +676,27 @@ def main(argv: list[str] | None = None) -> int:
                     indicators.append(f"{run_dir.name}: {waiting}")
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
+                indicators.extend(f"{run_dir.name}: {line}" for line in failure_rollups(run_dir))
+                # Scoped to a named run for the same reason as the dispatch scan above:
+                # answering it means collecting one run's whole telemetry, history
+                # sessions included, which the unscoped view must not pay per run.
+                if run_id is not None:
+                    indicators.extend(
+                        f"{run_dir.name}: {node} judge_unrecorded — judge history is missing"
+                        for node in _unrecorded_judges(run_dir)
+                    )
+        health = (
+            render_provider_health(probe_provider_health(cwd=Path.cwd()))
+            if selected or indicators or running_dispatches
+            else ""
+        )
         print(
-            "\n".join([*indicators, _human(selected, run_id=run_id, in_flight=running_dispatches)])
+            "\n".join(
+                [
+                    *([health] if health else []),
+                    *indicators,
+                    _human(selected, run_id=run_id, in_flight=running_dispatches),
+                ]
+            )
         )
     return 0

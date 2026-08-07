@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from orchestrator import REPO_ROOT
+from orchestrator.provider_health import IDENTITIES
 
 WORKER_CONFIG = REPO_ROOT / "oneharness.toml"
 JUDGE_CONFIG = REPO_ROOT / "oneharness.judge.toml"
@@ -267,3 +268,25 @@ def test_host_setup_names_exactly_the_identities_the_roles_select() -> None:
         "docs/host-setup.md must name every identity the role configs select, and no "
         "other; write a harness id there only as the login list's own entry"
     )
+
+
+def test_provider_health_probes_exactly_the_identities_the_roles_select() -> None:
+    """DRIFT-GATE the probed roster against the chains that define it.
+
+    `provider_health.IDENTITIES` is what `just status` and `just runs` probe, and
+    the whole promise of that block is that a chain is never silently short one
+    member — a failed probe is rendered `unknown` rather than dropped. An identity
+    added to or renamed in the role chains would defeat that by never being asked
+    about at all, which is indistinguishable from a healthy one in every view. So
+    take the roster from the configs rather than trusting the tuple to have kept up.
+    """
+    selected: set[str] = set()
+    for config in ROLE_CONFIGS:
+        selected |= set(_config(config)["harnesses"])
+
+    assert selected, "no role config names a harness chain; the gate would prove nothing"
+    assert set(IDENTITIES) == selected, (
+        "orchestrator/provider_health.py IDENTITIES must probe every identity the role "
+        "configs select, and no other; an unprobed identity reads as healthy in every view"
+    )
+    assert len(IDENTITIES) == len(set(IDENTITIES)), "IDENTITIES must not repeat an identity"

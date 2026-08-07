@@ -17,8 +17,10 @@ import argparse
 import asyncio
 import contextlib
 import hashlib
+import json
 import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -79,6 +81,12 @@ from .launch import (
 from .liveness import PARKED_AFTER_SECONDS
 from .monitor import attach
 from .personas import persona_path
+from .provider_failure import (
+    ConversationSide,
+    ProviderFailure,
+    ProviderFailureCause,
+    resolve_identity,
+)
 from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify, validate_run_id
 from .scratch import (
@@ -179,6 +187,10 @@ REPORTED_NOTE_CHARS = 300
 class DispatchError(Exception):
     """onejudge could not be run, or rejected the config (a loud failure)."""
 
+    def __init__(self, message: str, *, failure_attribution: ProviderFailure | None = None):
+        super().__init__(message)
+        self.failure_attribution = failure_attribution
+
 
 class LaunchRecord(TypedDict):
     """Stable planner handoff persisted for one orchestrator launch.
@@ -276,6 +288,7 @@ class Report:
     #: running — and at or below it exited on its own, which is what a harness that
     #: refused to start does. ``None`` when the wrapper recorded nothing usable.
     agent_exit_status: int | None = None
+    failure_attribution: ProviderFailure | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -291,6 +304,127 @@ class Report:
         if self.assessment:
             line += f"\n  follow-ups: {self.assessment}"
         return line
+
+
+_FAILURE_TAIL = 2_000
+_RESET_RE = re.compile(r"(?:resets?|reset(?:s)? at)[: ]+([^,;\n]+)", re.I)
+_SESSION_RE = re.compile(r"No conversation found with session ID[: ]+([\w.-]+)", re.I)
+_WAIT_RE = re.compile(
+    r"(?:wait|retry(?:ing)? in|after)\s+(\d+(?:\.\d+)?)\s*(seconds?|s|minutes?|m)\b", re.I
+)
+
+
+def classify_provider_failure(
+    raw: str, *, side: ConversationSide | None = None
+) -> ProviderFailure | None:
+    """Normalize provider diagnostics without discarding their bounded evidence.
+
+    Redacted before anything is derived from it, not after: every field below is
+    persisted to the journal and the recorded result and served over the read API,
+    which is exactly the durable surface `REPORTED_NOTE_CHARS` states harness-authored
+    stderr must be bounded *and* redacted for. Doing it once here covers the tail, the
+    structured payload, and every matched fragment alike.
+    """
+    redacted = redact(raw)
+    text = " ".join(redacted.split())
+    lower = text.lower()
+    if not any(
+        word in lower
+        for word in ("provider", "harness", "quota", "rate limit", "conversation found")
+    ):
+        return None
+    harness, variant, identity = resolve_identity(text)
+    operation = re.search(r"provider error \((respond|user|supervisor|judge)\)", text, re.I)
+    inferred_side: ConversationSide = side or (
+        "judge"
+        if re.search(r"\bjudge(?:-side)?\b", text, re.I)
+        or operation is not None
+        and operation.group(1).lower() != "respond"
+        else "agent"
+    )
+    reset = _RESET_RE.search(text)
+    session = _SESSION_RE.search(text)
+    waiting = _WAIT_RE.search(text)
+    cause: ProviderFailureCause
+    if session:
+        cause = "stale_session_resume"
+    elif "rate limit" in lower or "rate_limit" in lower:
+        cause = "rate_limit"
+    elif "quota" in lower or "usage limit" in lower or "weekly limit" in lower:
+        cause = (
+            "quota_at_launch"
+            if any(token in lower for token in ("launch", "fell through", "fallback"))
+            else "quota_mid_conversation"
+        )
+    else:
+        cause = "harness_exit"
+    result: ProviderFailure = {
+        "side": inferred_side,
+        "harness": harness,
+        "variant": variant,
+        "identity": identity,
+        "cause": cause,
+        "raw_tail": text[-_FAILURE_TAIL:],
+    }
+    if reset:
+        result["reset_time"] = reset.group(1).strip()
+    if session:
+        result["missing_session_id"] = session.group(1)
+    if waiting:
+        duration = float(waiting.group(1))
+        result["wait_seconds"] = duration * (60 if waiting.group(2).lower().startswith("m") else 1)
+    if cause == "rate_limit":
+        result["failure_kind"] = "rate_limit"
+    for candidate in re.findall(r"\{[^{}]{1,4000}\}", redacted, re.S):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and ("errors" in payload or "subtype" in payload):
+            bounded: dict[str, Any] = {}
+            if isinstance(payload.get("subtype"), str):
+                bounded["subtype"] = payload["subtype"][:200]
+            if isinstance(payload.get("errors"), list):
+                bounded["errors"] = [str(item)[:500] for item in payload["errors"][:10]]
+            result["structured_error"] = bounded
+            break
+    return result
+
+
+def recordable_provider_failure(attribution: ProviderFailure | None) -> bool:
+    """Whether a dispatch failure is provider evidence rather than generic harness prose.
+
+    A positively classified cause is enough on its own. The identity is what the
+    operator acts on, but a harness that named a quota, a rate limit, or a session
+    it had dropped has already said something no generic worker-died conveys — and
+    withholding that because it wrote only "claude", which could be any of three
+    configured identities, would put it back in the bucket this work exists to empty.
+
+    An unclassified exit is held to the harness's own structured payload, and an
+    identity name in the prose is deliberately *not* accepted in its place. Naming a
+    harness is not refusing: "harness codex cannot write v1.0 history telemetry" is
+    an infrastructure failure that happens to say both words, and taking it for a
+    refusal both misattributes it and swallows the terminal blocker it should have
+    raised. Only a payload the harness emitted about its own exit is evidence of one.
+    """
+    if not attribution:
+        return False
+    if attribution.get("cause") != "harness_exit":
+        return True
+    return "structured_error" in attribution
+
+
+def recorded_provider_failure(attribution: ProviderFailure | None) -> ProviderFailure | None:
+    """The attribution a `Report` may carry, which is only recordable evidence.
+
+    The raised path decides this at the `except` and re-raises what does not qualify,
+    so a watchdog-observed death is the one refusal that reaches a consumer as a
+    *returned* `Report`. Filtering it here rather than at each of the four sites that
+    read `report.failure_attribution` keeps one rule: a report that carries an
+    attribution at all is asserting provider evidence, and the journal, the recorded
+    result, `just status`, and the read API can serve it without re-deciding.
+    """
+    return attribution if recordable_provider_failure(attribution) else None
 
 
 @dataclass(frozen=True)
@@ -546,6 +680,7 @@ def _build_report(
     if provenance is not None:
         raw["provenance"] = provenance
     reported_blocker = _reported_blocker(result)
+    failure_attribution = classify_provider_failure(result.stderr)
     return Report(
         persona=persona,
         exit_code=result.exit_code,
@@ -569,6 +704,7 @@ def _build_report(
         ),
         outcome_detail=reported_blocker,
         max_turns=max_turns,
+        failure_attribution=failure_attribution,
     )
 
 
@@ -1042,6 +1178,9 @@ def run_onejudge(
                         outcome_detail=signal.detail,
                         max_turns=turn_cap,
                         agent_exit_status=agent_exit_status(agent_status_dir),
+                        failure_attribution=recorded_provider_failure(
+                            classify_provider_failure(worker_detail, side="agent")
+                        ),
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
@@ -1067,13 +1206,21 @@ def run_onejudge(
         # the harness process dying → "provider error ... Broken pipe"). Don't
         # assume "bad config" — surface onejudge's own stderr, which says which.
         detail = exc.stderr.strip() or "<no stderr>"
-        raise DispatchError(
+        failure_attribution = classify_provider_failure(detail)
+        displayed_detail = (
+            str(failure_attribution["raw_tail"])
+            if failure_attribution and failure_attribution.get("raw_tail")
+            else detail
+        )
+        message = (
             f"onejudge failed (exit {exc.returncode} — bad config or provider/runtime error): "
-            f"{detail}"
-        ) from exc
+            f"{displayed_detail}"
+        )
+        raise DispatchError(message, failure_attribution=failure_attribution) from exc
     except ContractError as exc:
+        message = f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         raise DispatchError(
-            f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
+            message, failure_attribution=classify_provider_failure(str(exc))
         ) from exc
     if isinstance(result, Report):
         result.raw = dict(result.raw or {})

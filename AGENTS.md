@@ -497,6 +497,16 @@ journeys that drive real Nx provision through the same script rather than skippi
 when a worktree is fresh — a bare `pytest` in one means what the gate means.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
+A node that died to the provider is diagnosed from `just status` alone: it and
+`just runs` print a provider-health block for all five configured identities —
+each one's binding window, utilization, and reset, with a failed probe listed as
+`unknown` rather than dropped — above one rolled-up line per repeated cause naming
+the refusing **side** and **identity**. Read the side first: the agent and judge
+chains prefer different identities, so a fix aimed at the wrong one changes
+nothing, and a whole night was once lost to a judge-chain quota that read as a
+bare `harness failed (quota)`. `just results` and the read API carry the same
+attribution per node with the harness's own bounded output. See [Diagnosing a
+provider failure](docs/telemetry.md#diagnosing-a-provider-failure).
 `just telemetry-server` serves the read-only DAG API over a runs root and
 `just dag-ui` serves the browser view against it; both are read-only and mutate
 no run. `just dag-ui-screens` photographs every major surface of that view at every

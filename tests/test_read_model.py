@@ -484,8 +484,72 @@ def test_v2_run_detail_golden_matches_the_python_round_serializer(tmp_path: Path
 
     assert detail["api_version"] == golden["api_version"] == 2
     assert detail["telemetry_schema_version"] == golden["telemetry_schema_version"]
+    # The golden restates the served number rather than deriving it, so a bump that
+    # updates the serializer and leaves the checked-in document behind fails here.
+    assert golden["telemetry_schema_version"] == TELEMETRY_SCHEMA_VERSION
     assert detail["rounds"] == golden["rounds"]
     assert json.loads(json.dumps(detail))["rounds"] == golden["rounds"]
+
+
+def test_the_v10_optional_fields_round_trip_and_stay_absent_when_nothing_recorded(
+    tmp_path: Path,
+) -> None:
+    """What the schema-10 bump added: additive, lossless, and absent when unused.
+
+    `failure_attribution` is why the version moved — a node that met no provider
+    carries none of it, so a consumer pinned to the old shape sees exactly what it
+    saw before. `provider_health` rides the envelope and is always present, because
+    an identity whose probe could not answer must be listed as unknown rather than
+    dropped; what must hold for it is that it survives serialization intact.
+    """
+    runs = tmp_path / "runs"
+    attribution = {
+        "side": "judge",
+        "harness": "codex",
+        "variant": "primary",
+        "identity": "codex",
+        "cause": "quota_mid_conversation",
+        "raw_tail": "harness failed (quota); resets Aug 8",
+        "reset_time": "Aug 8",
+    }
+    run_dir = runs / "refused"
+    prepare_round(run_dir, {"schema_version": 4, "tasks": [{"id": "api", "task": "ship"}]})
+    journal = open_journal(run_dir, RunId("refused"), 1)
+    journal.append(
+        "node-added", detail={"definition": {"id": "api", "persona": "engineer", "task": "ship"}}
+    )
+    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed",
+        node=NodeId("api"),
+        detail={
+            "detail": "provider error",
+            "failure_attribution": attribution,
+            "result": {
+                "kind": "agent",
+                "status": "failed",
+                "task": "ship",
+                "error": "provider error",
+                "failure_attribution": attribution,
+            },
+        },
+    )
+
+    served = run_detail(runs, "refused", oneharness_bin=ABSENT)
+
+    failure = next(node for node in served["run"]["nodes"] if node["node"] == "api")["failure"]
+    assert {key: failure[key] for key in attribution} == attribution
+    # Lossless through the wire, which is the only form a client ever sees.
+    assert json.loads(json.dumps(served)) == served
+    assert served["provider_health"]["identities"], "every configured identity stays listed"
+
+    # And a failure that never reached a provider carries none of those keys, so the
+    # v9-shaped record an old consumer parses is byte-for-byte what it always was.
+    _gated_run(runs, "gated")
+    ordinary = run_detail(runs, "gated", oneharness_bin=ABSENT)
+    failed = next(node for node in ordinary["run"]["nodes"] if node["node"] == "publish")
+    assert set(failed["failure"]) == {"class", "detail"}
+    assert "failure_attribution" not in json.dumps(ordinary)
 
 
 def _goal_run(runs_dir: Path, run_id: str, goal: dict[str, str]) -> Path:
