@@ -2038,6 +2038,23 @@ def test_one_node_plan_writes_output_file(monkeypatch, tmp_path) -> None:
     assert rc == 0 and '"outcome"' in out.read_text(encoding="utf-8")
 
 
+def _own_ledger(tmp_path) -> list[str]:
+    """Give a `main_plan` call its own run ledger instead of the relative default.
+
+    `--runs-dir` defaults to a relative ``runs``, which every test here resolves
+    against the one working directory pytest shares — so several tests claimed
+    rounds in a single ledger inside the checkout. Nothing serialized them: the
+    ledger lock lives under ``AI_ORCHESTRATOR_HOME``, and conftest's autouse
+    `_isolate_orchestrator_home` gives each test its own, so two tests holding
+    "the same" lock hold different files. Under the suite's four workers they
+    raced the window between creating a round directory and writing its
+    ``plan.json``, and the loser failed reading a plan that did not exist yet.
+    The claim itself is right, and so is exiting 2 when it cannot be made; what a
+    caller owes it is a ledger of its own, which is what the e2e journeys pass.
+    """
+    return ["--runs-dir", str(tmp_path / "runs")]
+
+
 def test_main_plan_bad_plan_exit_2(tmp_path, capsys) -> None:
     rc = lc.main_plan([str(tmp_path / "missing.json")])
     assert rc == 2 and "repo-plan:" in capsys.readouterr().err
@@ -2057,7 +2074,7 @@ def test_main_plan_happy(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    rc = lc.main_plan([plan_file, "--format", "json"])
+    rc = lc.main_plan([plan_file, "--format", "json", *_own_ledger(tmp_path)])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True and payload["results"]["a"]["outcome"] == "merged"
@@ -2077,7 +2094,7 @@ def test_main_plan_human_format(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    rc = lc.main_plan([plan_file])  # human format (default)
+    rc = lc.main_plan([plan_file, *_own_ledger(tmp_path)])  # human format (default)
     assert rc == 1  # not ok
     assert "repo-plan" in capsys.readouterr().out
 
