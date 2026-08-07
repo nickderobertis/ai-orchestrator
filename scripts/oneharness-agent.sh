@@ -17,6 +17,18 @@
 # branch's `exec`, so a side carrying an explicit value never inherits the other
 # side's — nor an ambient process-wide one. See orchestrator/harnesses.py, which
 # validates both against the configs before a dispatch ever starts.
+#
+# ORCHESTRATOR_WORKER_MODEL and ORCHESTRATOR_JUDGE_MODEL are the same seam for the
+# MODEL, applied on the same two branches. Each reaches its branch two ways, and it
+# takes both. ONEHARNESS_MODEL is exported, so everything that side then runs
+# inherits the choice — but it lands in oneharness's `environment` CONFIG layer,
+# which a config's per-harness `model` outranks, and every identity in this
+# repository's configs pins one. `--model` on this invocation's own argv is the
+# layer that beats them, so the flag is what actually moves the turn. Measured
+# against oneharness 0.6.6; see docs/onejudge-integration.md, "Choosing a model per
+# side". There is no allowlist to check either value against here: the dispatch
+# layer accepts a model only paired with that side's harness override, so by the
+# time one arrives the identity it belongs to has already been named.
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -139,6 +151,22 @@ apply_side_selection() {
     export ONEHARNESS_HARNESSES="$value"
 }
 
+# Apply one side's model to this branch alone: export it for everything this side
+# then runs, and put it on this invocation's own argv, which is the layer that
+# actually beats a config's per-harness `model` (see the header). An empty value is
+# treated as none rather than applied — an empty model would replace the config's
+# with nothing. A caller that already chose a model keeps it: `--model` repeated is
+# oneharness's fan-out-over-models, not an override, so appending a second one would
+# silently turn one turn into several. $1 is the value; the flag lands in
+# `side_model`, which every `oneharness run` below passes.
+side_model=()
+apply_side_model() {
+    local value=$1
+    [ -n "$value" ] || return 0
+    export ONEHARNESS_MODEL="$value"
+    [ "$caller_model" = true ] || side_model=(--model "$value")
+}
+
 # Whether one `key=value` pair satisfies oneharness's history-label contract: a key
 # of 1-64 ASCII letters/digits/dot/underscore/hyphen starting alphanumeric, and a
 # non-empty value of at most 256 characters carrying no control character. The comma
@@ -197,6 +225,7 @@ shift
 caller_config=false
 caller_config_path=
 caller_stream=false
+caller_model=false
 expect_config_value=false
 # llmlint: ignore[boundary_inputs_validated] this repository's dispatch layer is the only caller and passes exactly one --config; oneharness honors the last value, which this wrapper validates.
 for arg in "$@"; do
@@ -226,6 +255,10 @@ for arg in "$@"; do
             # neither a second `--stream` (oneharness refuses the repeat) nor the
             # filter that would rewrite the stream into a buffered report.
             caller_stream=true
+            ;;
+        --model | --model=*)
+            # A caller that chose a model keeps it; see `apply_side_model`.
+            caller_model=true
             ;;
         --config=*)
             if [[ $caller_config == true ]]; then
@@ -258,6 +291,10 @@ if [[ $caller_config == true ]]; then
         apply_side_selection ORCHESTRATOR_JUDGE_HARNESSES \
             "$ORCHESTRATOR_JUDGE_HARNESSES" "$caller_config_path" || exit "$?"
     fi
+    # The judge's own model, over this config's per-harness one and over an ambient
+    # ONEHARNESS_MODEL — and reaching only this branch, so a worker-side model never
+    # supervises with it.
+    apply_side_model "${ORCHESTRATOR_JUDGE_MODEL-}"
     # The `agent_role` a dispatch stamps names the WORKER it dispatched, and this is
     # the other side of that conversation. oneharness merges history labels
     # CLI > env > project file, so that inherited value outranked
@@ -272,7 +309,7 @@ if [[ $caller_config == true ]]; then
     # The judge's explicit primary variant does not consume it and masks
     # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project
     # config before applying the caller's --config.
-    exec oneharness run "$@"
+    exec oneharness run "${side_model[@]}" "$@"
 fi
 
 if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
@@ -328,13 +365,19 @@ elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
         fi
     fi
 fi
+# The agent's own model, applied independently of the branch above: a side's model
+# and its selection are separate choices. It reaches only the worker's `exec` — and,
+# through the export, everything that worker then runs, including its own gate. What
+# a nested oneharness there does with it still depends on that role's config: the
+# llmlint tier pins a per-harness model, which outranks the inherited variable.
+apply_side_model "${ORCHESTRATOR_WORKER_MODEL-}"
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
     # No status directory means no dispatch is watching, so a streamed turn would
     # have nowhere to publish and nobody to read it. `--events` carries the identical
     # transcript in the end-of-turn report, with one fewer moving part and without
     # replacing this `exec` with a filtered pipeline.
-    exec oneharness run --config "$agent_config" "${agent_events[@]}" "$@"
+    exec oneharness run --config "$agent_config" "${side_model[@]}" "${agent_events[@]}" "$@"
 fi
 
 status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
@@ -376,7 +419,7 @@ agent_activity=$status_dir/agent.activity
 # so a `--prompt-file -` cannot eat the task this turn is about to be given.
 # See docs/onejudge-integration.md, "Streaming the agent side".
 stream_supported() {
-    oneharness run --config "$agent_config" --stream --print-command "$@" \
+    oneharness run --config "$agent_config" "${side_model[@]}" --stream --print-command "$@" \
         >/dev/null 2>&1 </dev/null
 }
 
@@ -436,7 +479,7 @@ else
 fi
 capture_pid=$!
 # llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.
-oneharness run --config "$agent_config" "${agent_stream[@]}" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
+oneharness run --config "$agent_config" "${side_model[@]}" "${agent_stream[@]}" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&

@@ -54,7 +54,7 @@ from .goals import (
     parse_goal,
     register_run,
 )
-from .harnesses import harness_override_env
+from .harnesses import side_override_env
 from .journal import (
     JOURNAL_NAME,
     TERMINAL_NODE_RESULT_FIELD,
@@ -1428,9 +1428,15 @@ def main(argv: list[str] | None = None) -> int:
         plan_mapping = load_mapping(args.plan)
         graph = parse_graph(plan_mapping)
         validate_graph_repo_aliases(graph)
-        # Refuse an unconfigured harness before the round is claimed: every node of
-        # it would otherwise fail one at a time on the same correctable value.
-        harness_override_env(worker=args.worker_harness, judge=args.judge_harness)
+        # Refuse an unconfigured harness, or a model without one, before the round is
+        # claimed: every node of it would otherwise fail one at a time on the same
+        # correctable value.
+        side_override_env(
+            worker=args.worker_harness,
+            judge=args.judge_harness,
+            worker_model=args.worker_model,
+            judge_model=args.judge_model,
+        )
         if args.concurrency is not None and args.concurrency < 1:
             raise PlanError("'--concurrency' must be a positive integer")
         if not math.isfinite(args.round_budget) or args.round_budget <= 0:
@@ -1695,6 +1701,8 @@ def _run_round(
                 oneharness_mode=args.oneharness_mode,
                 worker_harness=args.worker_harness,
                 judge_harness=args.judge_harness,
+                worker_model=args.worker_model,
+                judge_model=args.judge_model,
                 labels={
                     "run_id": validated_run_id,
                     "round": str(round_number),
@@ -1735,6 +1743,8 @@ def _run_round(
                 oneharness_mode=args.oneharness_mode,
                 worker_harness=args.worker_harness,
                 judge_harness=args.judge_harness,
+                worker_model=args.worker_model,
+                judge_model=args.judge_model,
                 timeout=dispatch_timeout,
             ),
             lifecycle_runner=make_repo_runner(
@@ -1746,6 +1756,8 @@ def _run_round(
                 oneharness_mode=args.oneharness_mode,
                 worker_harness=args.worker_harness,
                 judge_harness=args.judge_harness,
+                worker_model=args.worker_model,
+                judge_model=args.judge_model,
                 verify_via_ci=args.verify_via_ci,
                 poll_interval=args.poll_interval,
                 timeout=args.timeout,

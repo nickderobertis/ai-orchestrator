@@ -39,9 +39,10 @@ config, `oneharness.orchestrator.toml`, forced by
 
 Edit those files (or use oneharness's `ONEHARNESS_*` env overrides) to change
 the harness or model on a side for every run on this host. One dispatch changes
-it for itself with `--worker-harness` / `--judge-harness`, the only way to give
-the two sides *different* providers; that pair is specified under Harnesses and
-the live path below. `config/onejudge.base.yaml` carries only the loop's own
+it for itself with `--worker-harness` / `--judge-harness` and `--worker-model` /
+`--judge-model`, the only way to give the two sides *different* providers or
+*different* models; those two pairs are specified under Harnesses and the live
+path below. `config/onejudge.base.yaml` carries only the loop's own
 concerns (persona defaults, session), never harness/model selection.
 
 ## Provider wiring
@@ -358,6 +359,107 @@ where the worker should record its whole substituted chain and the judge none �
 selection leaked in, not that oneharness narrowed one. That misreading has landed here
 once already, and adapting the assertions is what removed the gate that would have
 caught it.
+
+### Choosing a model per side
+
+Identity is half the choice. `oneharness.judge.toml` pins `claude-sonnet-5` on all
+three of its Claude variants by design, so `--judge-harness claude-code:primary`
+puts the supervisor on that subscription and leaves it on the cheaper tier — which
+is the right default, and the wrong one for a run whose whole point is a stronger
+reviewer. Name the model in the same breath:
+
+```sh
+just run-plan plan.json --worker-harness claude-code:primary --worker-model claude-opus-5 \
+                        --judge-harness  claude-code:primary --judge-model  claude-opus-5
+just orchestrate plan.json --judge-harness claude-code:primary --judge-model claude-opus-5
+```
+
+Each flag sets its own variable — `ORCHESTRATOR_WORKER_MODEL` or
+`ORCHESTRATOR_JUDGE_MODEL` — and `scripts/oneharness-agent.sh` applies it on the
+same two branches it applies the harness pair on, so neither side inherits the
+other's. With neither flag set nothing changes: each side runs the model its own
+config pins for the identity it lands on.
+
+#### Two layers, because one of them does not bite
+
+The harness half has one lever. The model half has two, and it takes both.
+oneharness's `ONEHARNESS_MODEL` is process-wide the way `ONEHARNESS_HARNESSES` is —
+which is why it cannot simply be exported around a dispatch: it would also reach
+`oneharness.orchestrator.toml`'s codex-first chain and take the orchestrator
+process down with a model that chain cannot run. But it does **not** have the same
+precedence. It lands in oneharness's `environment` *config* layer, and a config's
+per-harness `model` outranks it — while `--model` on the invocation's own argv
+beats them both. Measured against oneharness 0.6.6, through this repository's own
+llmlint wrapper:
+
+```
+$ ONEHARNESS_MODEL=claude-opus-5 ./scripts/llmlint-oneharness.sh run --prompt hi --print-command
+  global model : claude-opus-5
+  codex                  -> gpt-5.6-sol      # [harness.codex] model wins
+$ ./scripts/llmlint-oneharness.sh run --prompt hi --model claude-opus-5 --print-command
+  codex                  -> claude-opus-5    # the argv flag wins
+```
+
+Every identity in all four of this repository's configs pins a per-harness `model`,
+so the variable alone would move nothing here. The wrapper therefore does both: it
+**exports** `ONEHARNESS_MODEL`, which is how the choice reaches everything that side
+subsequently runs, and it passes **`--model`** on that side's own `oneharness run`,
+which is what moves the turn. A caller that already chose a model keeps it — a
+repeated `--model` is oneharness's fan-out-over-models, not an override, so a second
+one would silently turn one turn into several.
+
+#### What that means for a worker's own gate, and for llmlint
+
+Because the variable is exported, a worker's own `just gate` — and the `llmlint`
+tier inside it — inherit `ONEHARNESS_MODEL`. What they do with it follows from the
+precedence above, and the two halves of the seam differ:
+
+- The **harness** override does reach the llmlint tier. `ONEHARNESS_HARNESSES` beats
+  config, so `--worker-harness claude-code:primary` runs that tier's judge on that
+  identity, at whatever model `oneharness.llmlint.toml` pins for it (`claude-opus-5`).
+- The **model** override does not. `llmlint` invokes oneharness with no `--model` at
+  all — verified with a spy binary in `LLMLINT_ONEHARNESS_BIN` recording its own
+  argv, which is `run --system-file … --prompt … --schema … --cwd … --timeout 600
+  --mode read-only --require-available --compact` — so the inherited variable is the
+  only model input that tier has, and every identity in `oneharness.llmlint.toml`
+  pins a per-harness model that outranks it.
+
+So a per-side model is a statement about the conversation, not about the tools that
+side then runs. It would take effect on a nested oneharness invocation whose config
+pinned no per-harness model, which is exactly why `ONEHARNESS_MODEL` is named in
+`DISPATCH_SELECTION_ENV` alongside the two per-side variables and dropped with them.
+Pinning the llmlint tier's *model* would need `scripts/llmlint-oneharness.sh` to
+translate the inherited value into `--model` **and** `scripts/llmlint-fingerprint.sh`
+to take it into the Nx cache key; without the second half, two judge models would
+share one cached verdict.
+
+#### A model is refused unless its identity is named beside it
+
+`orchestrator/harnesses.py` accepts a model only when that same side's harness
+override is set and names identities of a single harness family, and refuses before
+anything is dispatched:
+
+```
+$ just run-plan plan.json --judge-model claude-opus-5
+run-plan: --judge-model 'claude-opus-5': name that side's harness too, with
+--judge-harness. A model is applied to every candidate that side runs, so an
+unpaired one would be pushed onto whichever identity oneharness.judge.toml's chain
+falls through to — a model name from the wrong provider, which that provider
+rejects rather than degrades from.
+```
+
+`--model` applies to every candidate in a chain, so an unpaired override would hand
+a Claude model name to the `codex` candidate that side's configured chain falls
+through to. Requiring the identity and the model together makes that combination
+unconstructable, which is why the pairing is enforced rather than advised.
+
+The model **value** is deliberately not checked against an allowlist, and that
+asymmetry with the harness option is intentional. A harness identity selects
+credentials and environment routing that only this repository configures, so naming
+an unconfigured one has to refuse — there is nothing behind the name. A model name
+is passed straight through to the harness the operator just named beside it, where
+an unknown one fails loudly at the provider rather than quietly running something
+else.
 
 To address an identity explicitly in a diagnostic run, use the composed id:
 

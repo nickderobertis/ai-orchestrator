@@ -129,12 +129,14 @@ sync branch="" remote="origin":
 # `examples/single-node-direct.plan.json` and
 # `examples/single-node-lifecycle.plan.json`. `--worker-harness` /
 # `--judge-harness` pick the provider each dispatch of the graph uses for its
-# worker and its judge; see docs/onejudge-integration.md#choosing-a-harness-per-side.
+# worker and its judge, and `--worker-model` / `--judge-model` the model each of
+# those sides runs on; see docs/onejudge-integration.md#choosing-a-harness-per-side
+# and #choosing-a-model-per-side.
 #
 # The summary is a `[doc]` attribute rather than the comment because `just --list`
 # renders only the LAST comment line — which on these recipes is a wrapped fragment,
 # or an llmlint directive that has to stay next to the recipe it silences.
-[doc('Run the canonical tracked graph of direct agents, lifecycle agents, and humans: `just run-plan <plan.json>`; --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes.')]
+[doc('Run the canonical tracked graph of direct agents, lifecycle agents, and humans: `just run-plan <plan.json>`; --worker-harness / --judge-harness and --worker-model / --judge-model pick the provider and model for each side of every dispatch it makes.')]
 run-plan *args:
     @uv run orchestrator-run-plan "$@"
 
@@ -144,9 +146,10 @@ run-plan *args:
 # is driving the run (exit 3). `--detach` returns at the launch record instead,
 # for a long unattended run. Either way the run leads its own session, so Ctrl-C
 # detaches rather than stopping it. `--worker-harness` / `--judge-harness` pick the
-# provider each dispatch of the run uses for its worker and its judge.
+# provider each dispatch of the run uses for its worker and its judge, and
+# `--worker-model` / `--judge-model` the model each of those sides runs on.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
-[doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes.')]
+[doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); --worker-harness / --judge-harness and --worker-model / --judge-model pick the provider and model for each side of every dispatch it makes.')]
 orchestrate *args:
     @uv run orchestrator-orchestrate "$@"
 

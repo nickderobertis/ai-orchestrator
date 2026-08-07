@@ -25,7 +25,12 @@ from process_tree import consumed_cpu_seconds
 
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
-from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
+from orchestrator.harnesses import (
+    JUDGE_HARNESS_ENV,
+    JUDGE_MODEL_ENV,
+    WORKER_HARNESS_ENV,
+    WORKER_MODEL_ENV,
+)
 from orchestrator.labels import LABEL_ENV, format_labels, parse_labels
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
@@ -54,6 +59,7 @@ def _run_wrapper(
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" > "$ONEHARNESS_ENV2_FILE"\n'
         'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n'
+        'printf \'%s\\n\' "${ONEHARNESS_MODEL-}" > "$ONEHARNESS_MODEL_FILE"\n'
         'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n'
         # The labels oneharness would stamp on the session this turn becomes, read
         # where oneharness reads them: the environment of the process it is spawned
@@ -72,6 +78,7 @@ def _run_wrapper(
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
             "ONEHARNESS_ENV2_FILE": str(tmp_path / "oneharness-env2"),
             "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
+            "ONEHARNESS_MODEL_FILE": str(tmp_path / "oneharness-model"),
             "ONEHARNESS_CODEX_ENV_FILE": str(tmp_path / "oneharness-codex-env"),
             **({"HOME": str(tmp_path / "home")} if include_home else {}),
             **(
@@ -98,6 +105,16 @@ def _run_wrapper(
 
 def _selection(tmp_path: Path) -> str:
     return (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+
+
+def _model(tmp_path: Path) -> str:
+    """The exact ONEHARNESS_MODEL the spawned oneharness was given."""
+    return (tmp_path / "oneharness-model").read_text(encoding="utf-8").strip()
+
+
+def _model_flag(argv: list[str]) -> str | None:
+    """The model on the spawned oneharness's own argv, which beats its config."""
+    return argv[argv.index("--model") + 1] if "--model" in argv else None
 
 
 def _raw_labels(tmp_path: Path) -> str:
@@ -496,6 +513,151 @@ def test_neither_side_leaks_its_selection_into_the_other(tmp_path: Path) -> None
     judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=both)
     assert judge.returncode == 0, judge.stderr
     assert _selection(tmp_path) == "claude-code:primary"
+
+
+def test_each_side_runs_the_model_it_was_given(tmp_path: Path) -> None:
+    """The model half of the same seam, applied on the same two branches.
+
+    Both ways it is applied are asserted, because it takes both: the exported
+    variable is what everything the side then runs inherits, and the `--model` flag
+    is the only layer that beats the per-harness `model` every identity in this
+    repository's configs pins.
+    """
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={WORKER_HARNESS_ENV: "codex", WORKER_MODEL_ENV: "gpt-5.6-sol"},
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert _model(tmp_path) == "gpt-5.6-sol"
+    assert _model_flag(argv) == "gpt-5.6-sol"
+
+    judge, judge_argv = _run_wrapper(
+        tmp_path,
+        _judge_argv(tmp_path),
+        env={JUDGE_HARNESS_ENV: "claude-code:primary", JUDGE_MODEL_ENV: "claude-opus-5"},
+    )
+    assert judge.returncode == 0, judge.stderr
+    assert _model(tmp_path) == "claude-opus-5"
+    assert _model_flag(judge_argv) == "claude-opus-5"
+
+
+def test_a_caller_that_chose_a_model_keeps_exactly_one(tmp_path: Path) -> None:
+    """A repeated `--model` is oneharness's fan-out, not an override.
+
+    Appending a second one would silently turn one turn into several, so a caller
+    that already chose keeps its own — the same rule `--events` and `--config` follow.
+    """
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--model", "gpt-5.6-terra", "--prompt", "probe"],
+        env={WORKER_HARNESS_ENV: "codex", WORKER_MODEL_ENV: "gpt-5.6-sol"},
+    )
+
+    assert agent.returncode == 0, agent.stderr
+    assert argv.count("--model") == 1
+    assert _model_flag(argv) == "gpt-5.6-terra"
+    # The variable still carries this side's choice to everything it then runs.
+    assert _model(tmp_path) == "gpt-5.6-sol"
+
+
+def test_neither_side_leaks_its_model_into_the_other(tmp_path: Path) -> None:
+    """The pairing this half exists for: two sides, two tiers, one dispatch.
+
+    Both directions, because `ONEHARNESS_MODEL` is process-wide: a judge-side value
+    reaching the agent branch would silently re-model the work, and a worker-side
+    value reaching the judge branch would take the supervisor off the tier
+    `oneharness.judge.toml` puts it on.
+    """
+    both = {
+        WORKER_HARNESS_ENV: "codex",
+        WORKER_MODEL_ENV: "gpt-5.6-sol",
+        JUDGE_HARNESS_ENV: "claude-code:primary",
+        JUDGE_MODEL_ENV: "claude-opus-5",
+    }
+
+    agent, argv = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"], env=both)
+    assert agent.returncode == 0, agent.stderr
+    assert (_model(tmp_path), _model_flag(argv)) == ("gpt-5.6-sol", "gpt-5.6-sol")
+
+    judge, judge_argv = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=both)
+    assert judge.returncode == 0, judge.stderr
+    assert (_model(tmp_path), _model_flag(judge_argv)) == ("claude-opus-5", "claude-opus-5")
+
+
+def test_a_side_given_no_model_never_inherits_the_other_sides(tmp_path: Path) -> None:
+    """One side alone must leave the other resolving its config's own model."""
+    judge_only = {JUDGE_HARNESS_ENV: "claude-code:primary", JUDGE_MODEL_ENV: "claude-opus-5"}
+    agent, argv = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"], env=judge_only)
+    assert agent.returncode == 0, agent.stderr
+    assert (_model(tmp_path), _model_flag(argv)) == ("", None)
+
+    worker_only = {WORKER_HARNESS_ENV: "codex", WORKER_MODEL_ENV: "gpt-5.6-sol"}
+    judge, judge_argv = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=worker_only)
+    assert judge.returncode == 0, judge.stderr
+    assert (_model(tmp_path), _model_flag(judge_argv)) == ("", None)
+
+
+def test_no_model_override_leaves_the_dispatched_environment_exactly_as_it_was(
+    tmp_path: Path,
+) -> None:
+    """The no-op: a selection without a model must change nothing about the model."""
+    agent, argv = _run_wrapper(
+        tmp_path, ["run", "--compact", "--prompt", "probe"], env={WORKER_HARNESS_ENV: "codex"}
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert _model(tmp_path) == ""
+    assert "--model" not in argv
+
+
+def test_an_ambient_model_still_reaches_a_side_that_was_given_none(tmp_path: Path) -> None:
+    """Nothing about oneharness's own model override changes for an unchosen side."""
+    ambient = {"ONEHARNESS_MODEL": "claude-sonnet-5"}
+
+    agent, _ = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"], env=ambient)
+    assert agent.returncode == 0, agent.stderr
+    assert _model(tmp_path) == "claude-sonnet-5"
+
+    judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env=ambient)
+    assert judge.returncode == 0, judge.stderr
+    assert _model(tmp_path) == "claude-sonnet-5"
+
+
+def test_a_side_with_its_own_model_ignores_a_process_wide_one(tmp_path: Path) -> None:
+    """An explicit per-side model beats the variable it is resolved into."""
+    ambient = {"ONEHARNESS_MODEL": "claude-sonnet-5"}
+
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={**ambient, WORKER_HARNESS_ENV: "codex", WORKER_MODEL_ENV: "gpt-5.6-sol"},
+    )
+    assert agent.returncode == 0, agent.stderr
+    assert (_model(tmp_path), _model_flag(argv)) == ("gpt-5.6-sol", "gpt-5.6-sol")
+
+    judge, judge_argv = _run_wrapper(
+        tmp_path,
+        _judge_argv(tmp_path),
+        env={
+            **ambient,
+            JUDGE_HARNESS_ENV: "claude-code:primary",
+            JUDGE_MODEL_ENV: "claude-opus-5",
+        },
+    )
+    assert judge.returncode == 0, judge.stderr
+    assert (_model(tmp_path), _model_flag(judge_argv)) == ("claude-opus-5", "claude-opus-5")
+
+
+def test_an_empty_per_side_model_is_treated_as_none(tmp_path: Path) -> None:
+    """Exporting an empty value would blank the config's model rather than keep it."""
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={"ONEHARNESS_MODEL": "claude-sonnet-5", WORKER_MODEL_ENV: ""},
+    )
+
+    assert agent.returncode == 0, agent.stderr
+    assert (_model(tmp_path), _model_flag(argv)) == ("claude-sonnet-5", None)
 
 
 def test_a_side_with_its_own_selection_ignores_a_process_wide_one(tmp_path: Path) -> None:

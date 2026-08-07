@@ -368,6 +368,22 @@ oneharness's own `ONEHARNESS_HARNESSES` cannot express this: it is process-wide
 and beats config, so it moves both sides at once. See [Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
+`--worker-model` / `--judge-model` are the same seam for the **model**, on the same
+two commands, and they are how a consequential run is supervised at a stronger tier
+than `oneharness.judge.toml`'s deliberate `claude-sonnet-5`. A model is accepted
+only **paired with** that side's harness override, naming identities of a single
+harness family: a model applies to every candidate that side runs, so an unpaired
+one would be handed to whichever identity the configured chain fell through to. The
+model *value* is deliberately not checked against an allowlist, unlike the harness
+identity — an unconfigured identity has nothing behind the name, while an unknown
+model fails loudly at the harness the operator just named beside it. The two levers
+also differ in reach: `ONEHARNESS_MODEL` is exported into that side's process, so a
+worker's own gate inherits it, but it loses to a config's per-harness `model` and
+every identity in all four configs pins one — so the **harness** override reaches
+the llmlint tier inside that gate and the **model** override does not. See
+[Choosing a model per
+side](docs/onejudge-integration.md#choosing-a-model-per-side).
+
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
 directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
 `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` → `$HOME/.claude-alt2`), and all three
