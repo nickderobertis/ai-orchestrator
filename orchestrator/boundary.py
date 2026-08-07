@@ -211,7 +211,10 @@ def drain_attempts(run_dir: Path) -> list[BoundaryAttempt]:
     consumed = 0
     try:
         recorded = json.loads(cursor_path.read_text(encoding="utf-8"))
-        if isinstance(recorded, dict) and isinstance(count := recorded.get("lines"), int):
+        count = recorded.get("lines") if isinstance(recorded, dict) else None
+        # `bool` is an `int`, so `True` would otherwise stand in for "one line
+        # already folded" — a cursor value nothing here ever writes.
+        if isinstance(count, int) and not isinstance(count, bool):
             consumed = max(0, min(count, len(lines)))
     except (OSError, ValueError):
         consumed = 0

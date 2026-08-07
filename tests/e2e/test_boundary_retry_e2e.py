@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -32,7 +33,7 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.boundary import ATTEMPTS_ENV, BACKOFF_ENV
+from orchestrator.boundary import ATTEMPTS_ENV, ATTEMPTS_LOG_ENV, BACKOFF_ENV, attempts_log
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
@@ -162,3 +163,100 @@ def test_a_refused_check_in_launch_is_retried_and_the_journal_counts_the_attempt
     finally:
         held.let_go()
         _stop(run_dir)
+
+
+def _run_plan(plan: Path, run_id: str, runs: Path, base: Path, onejudge_bin: str) -> str:
+    """Drive one recorded round through the real recipe, as the orchestrator does."""
+    result = subprocess.run(
+        [
+            "just",
+            "run-plan",
+            str(plan),
+            "--run",
+            run_id,
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base),
+            "--onejudge-bin",
+            onejudge_bin,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+    # A plan whose only node is a human action settles `waiting`, which run-plan
+    # reports with a non-zero status; the round is recorded either way.
+    assert result.returncode in {0, 1}, result.stderr
+    return result.stdout
+
+
+def test_a_post_round_wrapper_retry_reaches_the_next_rounds_journal(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """The two halves of the wrapper's retry, joined by the run they belong to.
+
+    The orchestrator's own post-round request happens between rounds, with no
+    journal open anywhere — so the wrapper records it and the *next* round folds it
+    in. Both are real here: the real `scripts/oneharness-orchestrator.sh` retries a
+    stub harness that refuses once, and two real `just run-plan` rounds bracket it.
+    A run that only ever tailed the log would report a recovery nobody could see in
+    the ledger, which is the gap this closes.
+    """
+    runs = tmp_path / "runs"
+    run_id = "boundary-fold"
+    plan = tmp_path / "fold-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "boundary-fold",
+                "tasks": [{"id": "release", "kind": "human", "task": "publish the release"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    base = _base(tmp_path)
+    _run_plan(plan, run_id, runs, base, onejudge_bin)
+    run_dir = runs / run_id
+    assert (run_dir / "round-01" / "result.json").is_file()
+
+    # Between the rounds: the real wrapper, asked to make the request the round
+    # boundary depends on, refused once and answering on its retry.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'count=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 ))\n'
+        'printf \'%s\' "$count" > "$STUB_COUNT"\n'
+        'if [ "$count" -eq 1 ]; then echo "quota exhausted" >&2; exit 1; fi\n'
+        "printf '{\"ok\":true}'\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    retried = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"), "run", "--prompt", "x"],
+        text=True,
+        capture_output=True,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "STUB_COUNT": str(tmp_path / "stub-count"),
+            ATTEMPTS_ENV: "3",
+            BACKOFF_ENV: "0.05",
+            ATTEMPTS_LOG_ENV: str(attempts_log(run_dir)),
+        },
+        timeout=e2e_timeout(120),
+    )
+    assert retried.returncode == 0, retried.stderr
+
+    _run_plan(plan, run_id, runs, base, onejudge_bin)
+
+    assert (run_dir / "round-02").is_dir()
+    folded = _journalled_retries(run_dir)
+    assert [(item["role"], item["attempt"], item["attempts"]) for item in folded] == [
+        ("orchestrator", 1, 3)
+    ], folded
+    assert "producing no output" in str(folded[0]["reason"])

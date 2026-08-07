@@ -82,8 +82,21 @@ def _text(value: object, field: str) -> str:
 
 
 def _count(value: object, field: str) -> int:
+    """One recorded non-negative count, for a value zero is a real answer to."""
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ConfigError(f"relaunch record field {field!r} must be a non-negative integer")
+    return value
+
+
+def _limit(value: object, field: str) -> int:
+    """One recorded execution limit, which zero is never a usable value of.
+
+    A zero turn cap or a zero timeout does not start a driver that does less work —
+    it starts one that cannot run a turn at all, which is a run adopted into a state
+    it can never leave.
+    """
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ConfigError(f"relaunch record field {field!r} must be a positive integer")
     return value
 
 
@@ -143,8 +156,8 @@ def read_relaunch_record(run_dir: Path) -> RelaunchRecord:
         "base_path": _text(raw.get("base_path"), "base_path"),
         "onejudge_bin": _text(raw.get("onejudge_bin"), "onejudge_bin"),
         "cwd": _text(raw.get("cwd"), "cwd"),
-        "max_turns": _count(raw.get("max_turns"), "max_turns"),
-        "turn_timeout": _count(raw.get("turn_timeout"), "turn_timeout"),
+        "max_turns": _limit(raw.get("max_turns"), "max_turns"),
+        "turn_timeout": _limit(raw.get("turn_timeout"), "turn_timeout"),
         "heartbeat_interval": _seconds(raw.get("heartbeat_interval"), "heartbeat_interval"),
         "acknowledge_concurrent": _flag(
             raw.get("acknowledge_concurrent"), "acknowledge_concurrent"

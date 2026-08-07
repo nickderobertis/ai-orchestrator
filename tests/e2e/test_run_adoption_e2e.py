@@ -255,6 +255,11 @@ def test_an_orphaned_run_is_adopted_and_completed_on_its_original_ledger(
     # A run launched before adoption existed has no parameters to replay, and is
     # refused rather than started on guessed ones. Moved aside rather than deleted,
     # so the adoption below is the same run in the same state.
+    # llmlint: ignore[tests_mirror_real_usage] There is no command that produces this
+    # state, and that is what it is: a run this build did not launch. Every run on
+    # this host predating adoption has no relaunch record, and the refusal they get
+    # is what this asserts — through the real `just orchestrate --adopt`, on a real
+    # run, with only the record the older build would not have written withheld.
     record = run_dir / "orchestrator" / "relaunch.json"
     record.replace(record.with_suffix(".withheld"))
     unreplayable = _orchestrate(runs, planner, onejudge_bin, "--adopt", run_id)

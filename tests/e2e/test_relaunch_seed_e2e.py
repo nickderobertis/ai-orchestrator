@@ -100,6 +100,9 @@ def test_a_session_file_that_disappeared_falls_through_to_the_next(
     def refuse_the_newer(session: object) -> list[dict[str, object]]:
         if "newer" in str(getattr(session, "path", "")):
             raise HistoryError("cannot read history session")
+        # `object` above so this stands in for the module attribute whatever the
+        # caller passes; the real reader wants a `HistorySession`, and every value
+        # reaching here is one that `all_sessions` just produced.
         return session_records(session)  # type: ignore[arg-type]
 
     monkeypatch.setattr("orchestrator.relaunch.session_records", refuse_the_newer)

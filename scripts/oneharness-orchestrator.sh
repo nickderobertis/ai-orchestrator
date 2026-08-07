@@ -111,18 +111,26 @@ if ! captured_stdout=$(mktemp "${TMPDIR:-/tmp}/oneharness-orchestrator.XXXXXX");
     echo "oneharness-orchestrator: cannot create the stdout buffer the boundary retry needs under ${TMPDIR:-/tmp}; free space there or point TMPDIR at a writable directory to restore post-round retries, then retry. This turn runs unbuffered and is not retried." >&2
     exec oneharness run --config "$orchestrator_config" "$@"
 fi
-trap 'rm -f "$captured_stdout"' EXIT
+# `rm -f` succeeds for an already-absent path, so the only failures left are a
+# directory this process can no longer write. Say so rather than leaving a buffer
+# behind silently; it never changes the turn's own fate.
+# shellcheck disable=SC2064  # the path is fixed here on purpose, not at trap time
+trap 'rm -f "$captured_stdout" || echo "oneharness-orchestrator: could not remove the stdout buffer $captured_stdout; delete it by hand and check the permissions on ${TMPDIR:-/tmp}" >&2' EXIT
 
 # One fixed line per retried attempt, so nothing a provider printed can be smuggled
 # into the record the next round folds into `events.jsonl`. The classified reason
 # lives on stderr, which passes through untouched above.
 record_boundary_attempt() {
     [ -n "${ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG-}" ] || return 0
+    # The launch creates this directory, but the exported path is the contract and
+    # this is what makes it one: a caller that named a log somewhere else gets the
+    # record rather than a silent nothing the next round cannot fold.
+    mkdir -p "$(dirname -- "$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG")" 2>/dev/null || true
     if ! printf '{"at":%s,"attempt":%s,"attempts":%s,"reason":"the orchestrator turn exited %s producing no output","role":"orchestrator"}\n' \
         "$(date +%s)" "$1" "$boundary_attempts" "$2" >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG"; then
         # Recorded on the notice below instead, which is printed only if the whole
         # request ultimately fails. Losing the record must not cost the recovery.
-        boundary_notices="${boundary_notices}oneharness-orchestrator: could not record the retried attempt at $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG; the run journal will not carry it
+        boundary_notices="${boundary_notices}oneharness-orchestrator: could not append the retried attempt to $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG ($(: >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG" 2>&1 || true)); the next round cannot fold it into the run journal — check that its directory exists and is writable
 "
     fi
 }
@@ -137,6 +145,13 @@ boundary_attempt=1
 boundary_delay=$(awk -v d="$boundary_backoff" -v m="$BOUNDARY_MAX_BACKOFF_SECONDS" \
     'BEGIN { printf "%g", (d > m ? m : d) }')
 while :; do
+    # Checked before the turn, and separately from it: a buffer that cannot be
+    # written makes every attempt look like a provider that answered nothing, which
+    # would spend the whole retry budget on a full disk and report a quota outage.
+    if ! : >"$captured_stdout"; then
+        echo "oneharness-orchestrator: cannot write the stdout buffer $captured_stdout; free space on ${TMPDIR:-/tmp} or point TMPDIR at a writable directory, then rerun this turn" >&2
+        exit 2
+    fi
     set +e
     oneharness run --config "$orchestrator_config" "$@" >"$captured_stdout"
     boundary_status=$?
@@ -146,7 +161,7 @@ while :; do
         break
     fi
     record_boundary_attempt "$boundary_attempt" "$boundary_status"
-    boundary_notices="${boundary_notices}oneharness-orchestrator: the orchestrator turn exited $boundary_status producing no output; retried in ${boundary_delay}s (attempt $((boundary_attempt + 1)) of $boundary_attempts)
+    boundary_notices="${boundary_notices}oneharness-orchestrator: the orchestrator turn exited $boundary_status producing no output; retried in ${boundary_delay}s (attempt $((boundary_attempt + 1)) of $boundary_attempts). If every attempt below also failed, probe the launch path with 'just smoke' and read the provider-health block in 'just status' before relaunching this run.
 "
     sleep "$boundary_delay"
     boundary_attempt=$((boundary_attempt + 1))

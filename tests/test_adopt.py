@@ -255,11 +255,17 @@ def test_adoption_starts_a_fresh_conversation_and_preserves_the_dead_drivers_evi
     _as_session(monkeypatch, SESSION)
     _driver_is_gone(monkeypatch)
 
+    # `Any` because this holds whatever the spawn was asked to do — an argv list
+    # here, and whatever a later assertion needs next — and narrowing it would name
+    # one capture's shape in a helper shared by the ones after it.
     captured: dict[str, Any] = {}
 
     class Process:
         pid = 9876
 
+    # `**kwargs: Any` stands in for `subprocess.Popen`'s own keyword surface, which
+    # this double must accept in full and asserts nothing about; typing it would be
+    # restating stdlib's signature in a test.
     def fake_popen(command: list[str], **kwargs: Any) -> Process:
         captured["command"] = list(command)
         return Process()
