@@ -1,5 +1,8 @@
 import { parseRunDetail, parseRunTimeline } from "@ai-orchestrator/dag-model";
 import { describe, expect, test } from "vitest";
+// The stylesheet as text, through the bundler that ships it — so the gate below reads
+// the same file the application is built from rather than a path guessed from a cwd.
+import stylesheet from "../../styles.css?raw";
 import {
   HISTORY_RUN,
   LIVE_RUN,
@@ -147,7 +150,19 @@ describe("the whole graph on one clock", () => {
     expect(graph.line.items.length).toBeLessThan(
       graph.rows.flatMap((row) => row.items).length,
     );
-    expect(graph.line.items.every(({ payload }) => payload.kind !== undefined));
+    // Whichever it kept, every segment still says which of the two it is, so a click
+    // on the line acts on the same thing a click on the row it came from would.
+    expect(
+      [...new Set(graph.line.items.map(({ payload }) => payload.kind))].sort(),
+    ).toEqual(["idle", "work"]);
+  });
+
+  test("styles the silence through the id the model names it with", () => {
+    // The plot derives each segment's tooltip id from the item id, and that is the
+    // only mark an idle segment carries into the DOM — so the stylesheet reaches it
+    // through this prefix, and nothing else in either file says so. This is the gate
+    // that stops the two from drifting apart in silence.
+    expect(stylesheet).toContain(`timeline-detail-${IDLE_ID_PREFIX}`);
   });
 
   test("carries what a click on a segment should open", () => {

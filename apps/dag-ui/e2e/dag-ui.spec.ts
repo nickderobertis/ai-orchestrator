@@ -1571,6 +1571,60 @@ test("draws the stretches the run recorded nothing in", async ({ page }) => {
   await expect(queued.getByRole("button", { name: /^queued · / })).toHaveCount(
     0,
   );
+
+  // A gap too narrow to see is not drawn at all. This run's journal is written in
+  // one pass, so `foundation` verified and published milliseconds apart inside a
+  // window of minutes — a hairline nobody could read or click. Only the two gaps at
+  // the ends survive, and they always do: they are what makes every row span the
+  // same interval, which is what one shared zoom rests on.
+  await expect(
+    graphRow(page, "foundation").getByRole("button", { name: /^Idle · / }),
+  ).toHaveCount(2);
+
+  // How much of its life each row spent working, and how much it did not, is on the
+  // row rather than left to be measured off the plot.
+  await expect(
+    graphRowCard(page, "queued").locator(".graph-row-facts"),
+  ).toHaveText(/^0ms recorded · \d+m \d+s idle$/);
+});
+
+test("frames a different run from scratch when the reader moves to it", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expandGraphRows(page);
+  const dashboard = graphRow(page, "dashboard");
+  await dashboard.getByRole("button", { name: "Expand timeline" }).click();
+  await dashboard.getByLabel(/^Timeline plot/).hover();
+  await page.mouse.wheel(0, -300);
+  await expect(
+    graphLine(page).getByRole("button", { name: "Reset timeline zoom" }),
+  ).toBeEnabled();
+
+  // A different run is a different clock, so none of that framing follows it there:
+  // one run's zoom over another run's record would be a plot of nothing.
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
+  await expect(graphLine(page)).toBeVisible();
+  await expect(page.getByRole("region", { name: /\stimeline$/ })).toHaveCount(
+    1,
+  );
+  await expect(
+    graphLine(page).getByRole("button", { name: "Reset timeline zoom" }),
+  ).toBeDisabled();
+});
+
+test("says a run has recorded no timeline rather than drawing an empty one", async ({
+  page,
+}) => {
+  // The served `dag-ui-eventless` run has its round prepared and has journalled
+  // nothing at all — what every run looks like for its first moments. There is no
+  // clock to plot, and saying so is not the same answer as an empty plot.
+  await openObservatory(page, `/?run=${runs().eventless}&view=overall`);
+  await expect(
+    page.getByText("This run has recorded no timeline yet."),
+  ).toBeVisible();
+  await expect(graphLine(page)).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("drills from a graph row into that node's own view", async ({ page }) => {

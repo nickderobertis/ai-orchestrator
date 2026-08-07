@@ -150,7 +150,6 @@ export function OverallView({
                   graph={graph}
                   onOpenNode={onSelectNode}
                   onOpenSession={onSelectItem}
-                  runId={runId}
                   selectedItemId={selectedItemId}
                 />
               )}
@@ -192,27 +191,24 @@ function GraphExecution({
   graph,
   onOpenNode,
   onOpenSession,
-  runId,
   selectedItemId,
 }: {
   readonly graph: ReturnType<typeof graphTimeline>;
   readonly onOpenNode: (nodeId: string) => void;
   readonly onOpenSession: (itemId?: string) => void;
-  readonly runId: string;
   readonly selectedItemId?: string;
 }) {
+  // A different run is a different clock, and none of this framing follows it there:
+  // selecting one leaves its timeline unread until the new one lands, so the branch
+  // above renders instead and this whole region unmounts with its state. Resetting it
+  // by hand as well would be a second answer nothing could tell from the first — it
+  // was here, and no test could distinguish having it from not.
+  //
+  // A *live* run's extent grows on every poll and deliberately does not reset: a
+  // reader who zoomed in asked to stay there.
   const [zoom, setZoom] = useState<readonly [number, number]>();
   const [rowsOpen, setRowsOpen] = useState(false);
   const [openRows, setOpenRows] = useState<ReadonlySet<string>>(new Set());
-  // A different run is a different clock, so nothing about how the last one was framed
-  // survives the move. A live run's extent grows on every poll and deliberately does
-  // not: a reader who zoomed in asked to stay there.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `runId` is not read by this effect — it is the thing whose change asks for the framing to be dropped. Removing it would leave one run's zoom and open rows over the next run's clock.
-  useEffect(() => {
-    setZoom(undefined);
-    setRowsOpen(false);
-    setOpenRows(new Set());
-  }, [runId]);
   const range = zoom ?? graph.range;
   const open = (segment: GraphSegment) => {
     if (segment.nodeId !== undefined) onOpenNode(segment.nodeId);
