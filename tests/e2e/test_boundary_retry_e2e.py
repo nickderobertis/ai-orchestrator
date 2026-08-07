@@ -297,6 +297,14 @@ def test_a_post_round_wrapper_retry_reaches_the_next_rounds_journal(
 
     # Between the rounds: the real wrapper, asked to make the request the round
     # boundary depends on, refused once and answering on its retry.
+    # llmlint: ignore-block[tests_mirror_real_usage] `just orchestrate` cannot reach this
+    # seam. The orchestrator's post-round request is made *between* rounds, by the wrapper
+    # onejudge runs as its harness, at the one moment no journal is open anywhere — and it
+    # is only retried when a provider refuses it outright, which no command can ask for on
+    # demand. So the wrapper here is the production script at its production path, invoked
+    # the way onejudge invokes it, and the stub is the harness beneath it: the same paid
+    # boundary this suite doubles everywhere. What is bracketed either side is real `just
+    # run-plan`, which is the half that proves the record reaches the ledger.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "oneharness"
@@ -324,6 +332,7 @@ def test_a_post_round_wrapper_retry_reaches_the_next_rounds_journal(
         timeout=e2e_timeout(120),
     )
     assert retried.returncode == 0, retried.stderr
+    # llmlint: ignore-end[tests_mirror_real_usage]
 
     _run_plan(plan, run_id, runs, base, onejudge_bin)
 
