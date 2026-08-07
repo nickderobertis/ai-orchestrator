@@ -641,11 +641,11 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 # The tier above the nodes: whether the process driving this run still
                 # holds its pid, which part of its loop the run's own state places it
-                # in, and how long since it last made a model request. Reported for
-                # every unfinished launch, including one the lines below also call
-                # stopped — the phase and the request age are what say *when* it
-                # stopped. It leads the run's block deliberately: what follows is the
-                # stopped verdict and then the surface that verdict explains, and that
+                # in, and how long since anything of it was last observed doing
+                # something. Reported for every unfinished launch, including one the
+                # lines below also call stopped — the phase and that age are what say
+                # *when* it stopped. It leads the run's block deliberately: what follows
+                # is the stopped verdict and then the surface it explains, and that
                 # pair has to stay adjacent or it reads as a run waiting on a person
                 # who is being waited on by nothing.
                 if (driver := driver_indicator(run_dir)) is not None:

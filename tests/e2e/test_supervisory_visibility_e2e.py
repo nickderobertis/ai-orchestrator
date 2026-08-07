@@ -270,6 +270,9 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
+        # `Any` because these are decoded JSON payloads whose shape is owned by the
+        # `dag-model` timeline schemas rather than by this test; restating a span here
+        # would be a second contract to drift, which is what that gate exists to stop.
         def _by_role() -> dict[str, Any]:
             spans = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()[
                 "spans"
@@ -285,13 +288,11 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         driver_span = by_role["orchestrator"]
         # Still driving: an open-ended span is what a live supervisory session is.
         assert driver_span["ended_at"] is None
-        assert driver_span["phase"] in {
-            "starting",
-            "driving-round",
-            "executing-run-plan",
-            "reviewing-results",
-            "surfacing",
-        }
+        # Exactly the phase the run's own state places it in: `run-plan` owns the
+        # round, and the node it dispatched is held at its rendezvous. (`starting` is
+        # the sub-second window before `run-plan` writes round-01, which no journey can
+        # observe without racing the launch; `tests/test_supervisory.py` walks it.)
+        assert driver_span["phase"] == "executing-run-plan", driver_span
         check_in_span = by_role["check-in"]
         assert check_in_span["round"] == 1
         failure = next(
@@ -329,7 +330,11 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
             seconds=60,
             what="a captured orchestrator turn",
         )
-        assert _by_role()["orchestrator"]["detail"]["output_tail"]
+        driver_span = _by_role()["orchestrator"]
+        assert driver_span["detail"]["output_tail"]
+        # And the phase moved with the run: that surface is unanswered, so what the
+        # driver is doing now is waiting on the planner rather than driving a round.
+        assert driver_span["phase"] == "surfacing", driver_span
 
     # And with the driver's session in history, the recorded transcript wins. The store
     # is the one this run's `oneharness history list` reads, written before the server

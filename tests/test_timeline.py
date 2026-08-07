@@ -797,7 +797,6 @@ def test_the_phase_lands_on_the_newest_driver_span_and_nothing_else() -> None:
         alive=True,
         phase="executing-run-plan",
         round=1,
-        started_at=None,
         last_activity_at=None,
     )
     conversations = [

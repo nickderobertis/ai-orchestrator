@@ -430,7 +430,6 @@ def test_a_driver_with_nothing_timeable_still_reports_its_phase(tmp_path: Path) 
         alive=state.alive,
         phase=state.phase,
         round=state.round,
-        started_at=None,
         last_activity_at=None,
     )
     assert bare.last_activity_age() is None

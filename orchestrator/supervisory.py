@@ -469,7 +469,6 @@ class DriverState:
     alive: bool
     phase: SupervisoryPhase
     round: int | None
-    started_at: float | None
     #: When this host last observed the driver doing anything, as the newest of the
     #: evidence in `_last_activity_at`, or ``None`` when nothing timeable was recorded.
     #: Deliberately *activity* and not "model request": only a captured turn proves a
@@ -659,7 +658,6 @@ def driver_state(
         alive=alive,
         phase=phase,
         round=number,
-        started_at=_mtime(run_dir / _ORCHESTRATOR_DIR / "status.json"),
         last_activity_at=_last_activity_at(run_dir, found),
         history_failure=(history_write_failure(_stderr_tail(run_dir)) or _captured_failure(found)),
     )
