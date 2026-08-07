@@ -152,6 +152,30 @@ def test_a_capture_this_scheme_did_not_write_is_skipped_not_served(tmp_path: Pat
         ),
         encoding="utf-8",
     )
+    (directory / "foreign-role.json").write_text(
+        json.dumps(
+            {
+                "schema_version": CAPTURE_SCHEMA_VERSION,
+                "session": "foreign",
+                "agent_role": "not-a-dispatched-role",
+                "started_at": "2026-08-06T10:00:00+00:00",
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (directory / "undatable.json").write_text(
+        json.dumps(
+            {
+                "schema_version": CAPTURE_SCHEMA_VERSION,
+                "session": "undatable",
+                "agent_role": "check-in",
+                "started_at": "whenever",
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
     (directory / "no-role.json").write_text(
         json.dumps(
             {
@@ -253,7 +277,7 @@ def test_the_driver_phase_follows_what_the_run_itself_recorded(tmp_path: Path) -
     assert driver_indicator(run_dir) is None
 
 
-def test_a_dead_driver_is_marked_explicitly_with_its_phase_and_request_age(
+def test_a_dead_driver_is_marked_explicitly_with_its_phase_and_activity_age(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run-6"
@@ -276,6 +300,32 @@ def test_a_dead_driver_is_marked_explicitly_with_its_phase_and_request_age(
     assert "phase driving-round (round 3)" in line
     assert "last observed activity 2m05 ago" in line
     assert "nothing is driving this run" in line
+
+
+def test_the_newest_refusal_wins_across_captures_written_under_different_offsets(
+    tmp_path: Path,
+) -> None:
+    """Ordered by instant: as text, `+00:00` and `-05:00` sort the opposite way."""
+    run_dir = tmp_path / "run-10"
+    _launch(run_dir)
+    # Two instants an hour apart, written under offsets that reverse them as text:
+    # 13:00+02:00 is 11:00Z and sorts *after* 12:00+00:00, which is 12:00Z.
+    for session, started, reason in (
+        ("check-in-run-10-1", "2026-08-06T13:00:00+02:00", "lacks complete v0.3 telemetry"),
+        ("check-in-run-10-2", "2026-08-06T12:00:00+00:00", "lacks complete v1.0 telemetry"),
+    ):
+        open_capture(run_dir, session=session, agent_role="check-in")
+        close_capture(
+            run_dir, session, status="failed", history_failure=f"new history run {reason}"
+        )
+        path = capture_path(run_dir, session)
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["started_at"] = started
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    line = driver_indicator(run_dir)
+    assert line is not None
+    assert "lacks complete v1.0 telemetry" in line
 
 
 def test_a_harness_that_refused_the_history_write_is_named_in_the_driver_line(

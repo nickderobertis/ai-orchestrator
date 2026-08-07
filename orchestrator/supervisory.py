@@ -43,6 +43,7 @@ from typing import Any, Literal, NotRequired, TypedDict, cast, get_args
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
+from .labels import AgentRole
 from .redaction import redact
 from .runs import latest_round, load_mapping, process_may_be_live
 
@@ -78,6 +79,11 @@ HISTORY_WRITE_FAILURE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+
+#: The semantic roles a capture may name. `labels.AgentRole` is the one source: a
+#: capture is written by the dispatch layer for a role that layer already stamps, so a
+#: record naming anything else was not written by this scheme and has no claim on a run.
+_AGENT_ROLES: frozenset[str] = frozenset(get_args(AgentRole))
 
 #: Where one supervisory session stands. Deliberately the same three words the
 #: transcript state vocabulary folds onto, so a served span reads identically whether
@@ -351,10 +357,12 @@ def _capture_status(value: str) -> CaptureStatus:
 def _record(raw: Mapping[str, Any]) -> CaptureRecord | None:
     """One raw capture mapping as the mutable record, or ``None`` when unusable.
 
-    The session name is revalidated here rather than trusted for having been written
-    by `open_capture`: this is a file on disk that a hand edit can have replaced, and
-    the name it carries becomes a served span's identifier. A record naming a session
-    this scheme would refuse to write is treated as absent.
+    Every identifying field is revalidated here rather than trusted for having been
+    written by `open_capture`: this is a file on disk that a hand edit can have
+    replaced, and what it carries becomes a served span's id, its role label, and its
+    place in time. A name this scheme would refuse to write, a role outside the one
+    `labels.AgentRole` declares, or a start nothing can parse each make the whole
+    record absent rather than reaching a payload as any of the three.
     """
     role = _text(raw.get("agent_role"))
     started = _text(raw.get("started_at"))
@@ -362,8 +370,14 @@ def _record(raw: Mapping[str, Any]) -> CaptureRecord | None:
         session = validate_session(raw.get("session"))
     except CaptureError:
         return None
-    if raw.get("schema_version") != CAPTURE_SCHEMA_VERSION or not (role and started):
+    if (
+        raw.get("schema_version") != CAPTURE_SCHEMA_VERSION
+        or role not in _AGENT_ROLES
+        or started is None
+        or _parse(started) is None
+    ):
         return None
+    assert role is not None
     record: CaptureRecord = {
         "schema_version": CAPTURE_SCHEMA_VERSION,
         "session": session,
@@ -533,15 +547,17 @@ def _captured_failure(captures: Sequence[SupervisoryCapture]) -> str | None:
     in history, and the planner reading that line is the one who needs to know that the
     capture is all there is. The driver's own harness log is preferred when it carries
     one, since that is the only place a detached driver's own refusal appears at all.
+
+    Ordered by parsed instant, not by the recorded text: `_record` guarantees every
+    start parses, and two captures written under different offsets order the opposite
+    way as strings — which would answer with a refusal that is not the newest.
     """
-    return next(
-        (
-            capture.history_failure
-            for capture in sorted(captures, key=lambda item: item.started_at, reverse=True)
-            if capture.history_failure
-        ),
-        None,
-    )
+    recorded = [
+        (parsed, capture.history_failure)
+        for capture in captures
+        if capture.history_failure and (parsed := _parse(capture.started_at)) is not None
+    ]
+    return max(recorded, key=lambda item: item[0])[1] if recorded else None
 
 
 def _round_phase(run_dir: Path) -> tuple[SupervisoryPhase, int | None]:
