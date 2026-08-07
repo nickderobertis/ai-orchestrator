@@ -21,6 +21,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -1855,10 +1856,17 @@ def _start_orchestrator_process(
         if recover
         else ""
     )
+    # Shell-quoted, because this prose is a command the orchestrator agent is told to
+    # execute: a runs root or plan path carrying a space or a shell metacharacter
+    # would otherwise re-split into different arguments, or a different command.
+    quoted_plan = shlex.quote(str(plan))
+    quoted_runs_root = shlex.quote(str(runs_root))
+    quoted_worker_base = shlex.quote(str(worker_base_path))
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
-        f"`just run-plan {plan} --run {run_dir.name} --runs-dir {runs_root} "
-        f"--base {worker_base_path} "
+        f"`just run-plan {quoted_plan} --run {shlex.quote(run_dir.name)} "
+        f"--runs-dir {quoted_runs_root} "
+        f"--base {quoted_worker_base} "
         f"--provider {worker_provider_kind}"
         f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}"
         f"{' --recover' if recover else ''}"
@@ -1933,6 +1941,13 @@ _LAUNCH_ONLY_OPTIONS: tuple[tuple[str, str], ...] = (
     (WORKER_SIDE.option, "worker_harness"),
     (JUDGE_SIDE.option, "judge_harness"),
     ("--skill-command", "skill_command"),
+    # Provenance is the *run's*, recorded once at launch and unchanged by who drives
+    # it — `adopt_orchestrator` deliberately takes no override and asks only whether
+    # the caller is that session. So these describe a launch as much as `--base`
+    # does, and a planner who typed one to re-attribute an adopted run would have
+    # been told nothing.
+    ("--launcher", "launcher"),
+    ("--launcher-session", "launcher_session"),
 )
 
 

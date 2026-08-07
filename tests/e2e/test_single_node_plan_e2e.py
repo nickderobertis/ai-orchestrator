@@ -145,6 +145,10 @@ def _launch(tmp_path: Path, plan: Path, runs: Path, onejudge_bin: str) -> str:
 BOUNDARY_KINDS = ("milestone", "closeout")
 
 
+#: `Any`-valued for the same reason `_example` and `_settled` are: a surface is the
+#: channel's own JSON, whose shape is the contract under test rather than one this
+#: journey may restate. Modelling it here would assert against this file's idea of a
+#: surface instead of the one `just channel-next` actually printed.
 def _next_surface(run_id: str, runs: Path) -> dict[str, Any]:
     surfaced = subprocess.run(
         [
@@ -166,6 +170,8 @@ def _next_surface(run_id: str, runs: Path) -> dict[str, Any]:
 
 def _await_boundary(run_id: str, runs: Path) -> dict[str, Any]:
     """Read surfaces until the round's own boundary, which is what a verdict answers.
+
+    Returns the surface verbatim, `Any`-valued for the reason `_next_surface` gives.
 
     A node that settles with an assessment has it surfaced as a *non-blocking*
     proposal, and the round does not wait on one — so whether it or the boundary

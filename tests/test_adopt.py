@@ -223,6 +223,25 @@ def test_the_cli_refuses_a_launch_only_option_beside_adopt(
     assert "--base" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "option, value",
+    [("--launcher", "codex"), ("--launcher-session", "3f9a1c2e")],
+)
+def test_the_cli_refuses_a_launcher_override_beside_adopt(
+    capsys: pytest.CaptureFixture[str], option: str, value: str
+) -> None:
+    """Provenance is the run's, so re-attributing an adopted run is not on offer.
+
+    `adopt_orchestrator` deliberately takes no launcher override — it asks only
+    whether the caller is the session that launched the run. A planner who typed one
+    of these expecting the adopted run to change hands would have been told nothing.
+    """
+    with pytest.raises(SystemExit):
+        main_orchestrate(["--adopt", "demo", option, value])
+
+    assert option in capsys.readouterr().err
+
+
 def test_the_cli_refuses_a_plan_beside_adopt(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         main_orchestrate(["--adopt", "demo", "plan.json"])
