@@ -19,7 +19,7 @@ import pytest
 from onejudge_sdk import RunResult
 from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
-from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, watchdog
 from orchestrator import dispatch as dispatch_module
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
@@ -1563,14 +1563,36 @@ def test_watchdog_lets_a_signalled_worker_shut_itself_down(tmp_path) -> None:
     assert not is_running(process.pid)
 
 
-def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path) -> None:
+#: The grace period this teardown must not pay, set far enough from the cost it *must*
+#: pay that no measurement can confuse the two. What it must pay is three walks of the
+#: whole host's process table, two procfs reads per process — a cost that belongs to
+#: the host rather than to the teardown: 9ms here at rest, and 180ms measured while
+#: this host carried the concurrent-dispatch load it routinely runs under, which is
+#: what used to fail this test against a fixed 150ms budget with nothing about the
+#: teardown having changed. One grace at this multiple is twenty-five times that
+#: worst measurement, so the bound below separates grace from walks by construction
+#: instead of by a margin the next busier host closes again.
+_UNMISTAKABLE_GRACE = 100 * TERMINATION_GRACE
+
+
+def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     """Tearing down a dispatch that already exited costs nothing but the `/proc` walks.
 
     Every completed dispatch runs this cleanup, and every one of them used to sleep out
     the full `SIGTERM`-to-`SIGKILL` grace once per call — four times over, at a point
     where the tree it is being graceful toward has already gone. Across a suite that
     dispatches hundreds of times that was the single largest cost in the lifecycle e2e.
+
+    The grace is raised rather than the budget, because the two costs are not separable
+    by a wall-clock bound at the real one: a walk of a loaded host's process table is
+    the same order as `TERMINATION_GRACE` itself. Raised, every one of the four sleeps
+    the unconditional form pays is on its own longer than the whole teardown, so this
+    still fails for exactly the defect it was written for and no longer fails for the
+    host being busy.
     """
+    monkeypatch.setattr(watchdog, "TERMINATION_GRACE", _UNMISTAKABLE_GRACE)
     process = subprocess.Popen([sys.executable, "-c", ""], start_new_session=True)
     assert process.wait(timeout=5) == 0
     finished = ProcessId(process.pid)
@@ -1581,9 +1603,10 @@ def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path)
     terminate_tree(finished)
     elapsed = time.monotonic() - start
 
-    # Those three calls sleep four grace periods between them when the grace is
-    # unconditional; the bound is under that and above the `/proc` walks that remain.
-    assert elapsed < 3 * TERMINATION_GRACE, elapsed
+    # Five times the dearest teardown measured under load, and a fifth of a single one
+    # of the four grace periods the unconditional form sleeps: too much room to fail on
+    # the walks, too little to pass on even one grace.
+    assert elapsed < _UNMISTAKABLE_GRACE / 5, elapsed
 
 
 def test_watchdog_terminates_live_process_tree() -> None:

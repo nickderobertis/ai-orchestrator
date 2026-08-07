@@ -170,12 +170,24 @@ ordinary bound; `tests/test_documented_environment.py` fails if the line above a
 that constant drift apart. A non-numeric, zero, negative, or infinite value is
 refused at the boundary rather than silently reverting to unbounded.
 
-When a bound fires, the whole git process *tree* is terminated before its output is
+When a bound fires, the whole git process *group* is terminated before its output is
 collected. That is not a courtesy: a hook's children inherit git's pipes and outlive
 the shell that started them, so reading those pipes after killing git alone blocks
 on exactly the processes the bound stopped waiting for. It is also what stops a
 fired bound from manufacturing the reparented leavings the scratch sweep then has to
 recognise days later.
+
+The group, and not a walk from git's pid, because a walk names the set of processes
+that existed when it ran and a git being torn down goes on starting more. Its
+transport is one git restarts whenever the connection it was using dies — and the
+first signal of the teardown is what kills that connection, so the replacement is
+born after the walk that was supposed to have found everything. Measured under this
+host's ordinary concurrent-dispatch load: the bound fired, the sampled transport
+died, a second one appeared with `init` for a parent, and the drain then sat out its
+whole 30s ceiling on pipes nothing would ever close — turning a 3s bound into a 33s
+one and leaving a live process behind. `_git` therefore starts git in a session of
+its own, the same shape `verify` runs a gate in, so every process git starts is born
+into one group the kernel keeps valid across all of that reparenting.
 
 ## Repository identity, checkout roles, and isolation
 

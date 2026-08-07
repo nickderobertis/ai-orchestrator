@@ -1944,6 +1944,25 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   // one of the view's other badges would fail rather than pass quietly.
   const stateBadge = page.locator('.node-view-facts > [data-slot="badge"]');
 
+  /**
+   * Open one node's view, from a graph that is certainly there to be clicked.
+   *
+   * The graph and a node's view are alternatives — opening a node unmounts the canvas
+   * — so the `Escape` that ends one reading and the click that begins the next are two
+   * navigations, and issuing the second before the first has landed aims a click at a
+   * canvas that is being replaced. What that produces is a reading of whichever node
+   * was open before: a mismatch on the *word*, which is how this was seen failing once
+   * under host load and never since. Waiting for the view to be gone is what
+   * serialises the two; nothing about what is asserted afterwards changes, and the
+   * word is still read before its colour so a selector that drifted onto another badge
+   * fails rather than passes quietly.
+   */
+  const openNode = async (card: Locator, state: string): Promise<void> => {
+    await expect(page.locator(".node-view")).toHaveCount(0);
+    await card.click();
+    await expect(stateBadge).toHaveText(state);
+  };
+
   // Reading a state costs an operator nothing only while the outcomes look different:
   // settled work green, work that was lost red, work still moving blue. The design
   // system's own status vocabulary stops at four states and includes none of these
@@ -1956,8 +1975,7 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     { state: "failed", token: "--destructive" },
     { state: "running", token: "--info" },
   ]) {
-    await page.locator(`.dag-node.state-${state}`).first().click();
-    await expect(stateBadge).toHaveText(state);
+    await openNode(page.locator(`.dag-node.state-${state}`).first(), state);
     await expect(stateBadge).toHaveCSS("color", await tokenColor(page, token));
     await page.keyboard.press("Escape");
   }
@@ -1968,8 +1986,7 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   // action is the graph's own normal shape, and the card is where that is said.
   const held = await tokenColor(page, "--warning");
   for (const state of ["blocked", "skipped"]) {
-    await page.locator(`.dag-node.state-${state}`).click();
-    await expect(stateBadge).toHaveText(state);
+    await openNode(page.locator(`.dag-node.state-${state}`), state);
     await expect(stateBadge).toHaveCSS("color", held);
     await page.keyboard.press("Escape");
   }
@@ -1979,8 +1996,7 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   // mapping that simply paints everything.
   const neutral = await tokenColor(page, "--foreground");
   for (const state of ["waiting", "pending"]) {
-    await page.locator(`.dag-node.state-${state}`).click();
-    await expect(stateBadge).toHaveText(state);
+    await openNode(page.locator(`.dag-node.state-${state}`), state);
     await expect(stateBadge).toHaveCSS("color", neutral);
     await page.keyboard.press("Escape");
   }
