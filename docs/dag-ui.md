@@ -86,9 +86,24 @@ run with no launch record at all — an e2e fixture, a bare `run-plan` — reads
 - **Overall** is where an address that names no view lands, and it is the run read
   as a whole: its telemetry tiles over the **graph timeline** (below).
 - use **Graph** to inspect status and progress; green nodes succeeded, red nodes
-  failed or were cancelled, and an animated acid highlight marks active work;
+  failed or were cancelled, and an animated acid highlight marks active work. The
+  canvas arrives **fitted whole** — every card of the graph inside it — at every
+  width in the viewport matrix, and its own controls zoom in from there. That is a
+  floor on `fitView`'s zoom rather than a fixed scale: at the previous floor a
+  working area narrower than the graph divided by it could not hold the graph, and a
+  phone's column showed about a third of one with the rest off both sides of a canvas
+  that says nothing about having more beside it.
 - select a node in the graph or keyboard-accessible node list to open its
   **timeline view** (below).
+
+**One reading, at three scopes.** The same plot, the same lane words and the same
+clock are used for the whole run, for one node, and for one conversation, and each
+is one click into the last: the [graph timeline](#the-graph-timeline) on the overall
+view opens a node's [timeline view](#the-node-timeline-view), whose transcript opens
+a session in the right panel, where the package's `ConversationTimeline` plots that
+session's own turns above them. Nothing about the vocabulary changes on the way down
+— a segment labelled Judge at the graph scope is the Judge lane of its node and the
+Judge turns of its conversation.
 
 Every stamp is read in the browser's own zone — as a clock time for work recorded
 today and with the date it happened on for anything older — with the whole instant,
@@ -141,6 +156,56 @@ Clicking a node's row — its name, or any segment of it, working or idle — op
 that node's view. A run-level session has no node to drill into, so it opens in the
 same two-thirds right panel a node's own sessions open in, with `ConversationTimeline`
 and role-labeled turns, and Escape closes it.
+
+A dozen rows stacked in one reading is what decides this surface's width behaviour.
+Each row is a card of its own so the stack has an edge to be read against, its head
+wraps its name away from the recorded-versus-idle reading rather than holding the row
+wider than the screen, and at the phone the axis's two clock readings stack for the
+same reason. The rows themselves state `min-width: 0`: a row's min-content is its
+legend plus two monospace clock readings, which is wider than a phone, and without
+that the rows sized the card and took their own controls off the side. A row is
+narrow at that width and its segments are slivers — one shared zoom is the answer to
+that, and it is why a wheel or a brush on any row reframes every one of them.
+
+## Reading a segment
+
+Hovering or focusing any segment, in any plot on any view, states what it is: its
+label, its lane, its status, when it started and ended, how long it took, and for a
+failure the excerpt of what went wrong. `@oneharness/ui` composes that text — this app
+never restates it — but it paints it as a fixed 320px popover *inside* the plot, at a
+fixed offset below the lane row, with no collision handling. A plot only has to be
+shorter than the popover for the bottom of the reading to be cut off, which every
+collapsed line and every graph row is, at every width in the matrix.
+
+Widening a box does not fix that, because the clipping is not one box: the plot clips,
+the node view's pinned region clips, and the overall view's scroll area clips. Nor does
+un-clipping the plot, which trades the cut bottom for a popover that leaves the screen
+sideways — measured at 241px past a 390px viewport.
+
+So the presentation moves out of that stack entirely.
+`src/features/timeline/TimelinePopover.tsx` is one layer mounted once at the app root,
+which watches for a segment being pointed at or focused, **reads the text off the very
+element the segment's `aria-describedby` names**, and renders it into a fixed-position
+portal on the document — placed against the segment, flipped above it when there is no
+room below, and clamped to the screen on both axes. The package's own copy stays where
+it is and stays what `aria-describedby` resolves to, so assistive technology reads the
+description exactly as before; it is only retired from the painted surface, and the
+portal copy is `aria-hidden` because it is a second rendering of a description the
+reader already has. It follows the segment as its region scrolls and as the window
+resizes, and it goes when the segment does — including when the view it was in is
+replaced under a reading nobody dismissed.
+
+**Pointed at and focused are tracked apart**, which the package does not do: its plot
+clears on mouse-leave whether or not the segment still holds focus, so a reader who had
+tabbed to a segment lost its reading the moment a stationary pointer stopped being over
+it — which a region scrolling underneath does by itself. Here the pointer wins while it
+is over a segment, because that is the one being asked about, and the focused reading
+comes back when the pointer leaves rather than nothing coming back.
+
+One layer at the root covers all three scopes, because all three are the same
+component: the graph timeline's rows, a node's plot, and the `ConversationTimeline` in
+the opened panel — that last one nested deepest inside the clipping, in a panel inside
+a scroll area.
 
 ## The node timeline view
 
@@ -274,6 +339,30 @@ width, and Escape leaves the node view. Each journey ends by asserting the *docu
 does not scroll, because a document taller than the window is the signature of a region
 that has put its content out of reach.
 
+The same file holds what a region does with content **wider** than itself, which is
+the other half of the same failure and the one a vertical scroll cannot rescue. Each
+of these is a measurement of a real element against the box that is supposed to hold
+it, rather than a screenshot somebody has to notice something in:
+
+- every card of the graph is inside the canvas, at the widest entry and the narrowest;
+- every item of a node's transcript is inside that region, and the region has nothing
+  to scroll sideways to, driven at the node whose labels are unbreakable branch names;
+- a turn's tool call is wholly in the viewport at phone width **and opens**, because
+  the control that opens it is the row that was going off the edge;
+- a lone recorded term takes the whole fact row, since the list paints its cells by
+  showing its own border colour between them and an empty cell is a filled panel;
+- a hovered segment's reading is whole — on screen on every side, with nothing hidden
+  inside its own box, and carrying exactly the text of the description the segment
+  names. That one is driven at **all five** widths rather than the two extremes,
+  because the clipping it replaced was never a narrow-screen problem: it cut the same
+  reading on a full desktop screen. Around it: the same reading reached by Tab from the
+  top of the document rather than by pointer, in each of the three plots, following its
+  segment through a scroll and a resize, flipped above a segment with no room below it,
+  and gone when the pointer leaves, when focus leaves, and when the view it was in is
+  replaced;
+- the graph is whole on **both** axes, and stays inside the canvas at the new zoom
+  floor the controls can now reach.
+
 ## Verification
 
 ```sh
@@ -318,8 +407,18 @@ the transcript no room at ten expanded lanes, and the document that scrolled out
 under `scrollIntoView`. It went on to find the axis sliced through the middle of its own
 digits by the fold, the six tab names spilling past *both* edges of a scroller that
 could only ever reach one of them, and — once they wrapped — a second row of them
-drawn below the strip that was supposed to hold it. Each is now a journey, because
-a gallery only catches what someone looks at.
+drawn below the strip that was supposed to hold it. The pass after that found the
+graph cropped rather than fitted wherever the working area was narrower than the graph
+divided by `fitView`'s zoom floor, a transcript whose grid column had been sized to an
+unbreakable branch name and so ran past the side of a region that scrolls vertically,
+the tool row of a turn — which is the control that opens it — held at its own
+min-content and pushed off the edge of a panel that clips sideways, and a fact list
+painting half a panel of its own border colour beside a record that states one term.
+Each is now a journey, because a gallery only catches what someone looks at.
+
+The one it caught that no box in this app could hold is the reading a hovered segment
+carries — see [Reading a segment](#reading-a-segment) below, which is where that moved
+to and why.
 
 Every ordinary run exercises that choice; only two overlapping runs exercise what
 it is for, so `isolation.config.ts` is one more Playwright run that starts no server
