@@ -214,6 +214,75 @@ def test_graph_mapping_falls_back_for_programmatic_nodes() -> None:
     }
 
 
+def test_a_retry_that_names_a_resume_pins_the_branch_it_already_named() -> None:
+    """A planner-named continuation reaches the dispatch as the pin it is.
+
+    The lifecycle treats a branch pin as a promise it may not silently break: a
+    preserved branch it cannot adopt fails by name instead of being swapped for a
+    fresh one. A retry that states `resume` is the planner making exactly that
+    promise, so the edit records it rather than leaving the replacement on the side
+    of the line where a fresh branch may be substituted for it.
+    """
+    graph, events = apply_edit(
+        _graph(),
+        EditCommand(
+            "retry",
+            {
+                "op": "retry",
+                "id": "root",
+                "node": {
+                    "id": "replacement",
+                    "repo": "acme/widget",
+                    "persona": "engineer",
+                    "task": "Continue the preserved work",
+                    "resume": {
+                        "branch": "preserved",
+                        "base_branch": "main",
+                        "pr_base": "main",
+                        "checkpoint": "abc1234",
+                        "mode": "retry",
+                    },
+                },
+            },
+        ),
+        states={"root": "failed"},
+        attestations=(),
+    )
+    replacement = next(node for node in graph.tasks if node.id == "replacement")
+    assert replacement.lifecycle is not None
+    assert replacement.lifecycle.branch == "preserved"
+    assert replacement.lifecycle.resume is not None
+    assert replacement.lifecycle.resume.checkpoint == "abc1234"
+    added = next(event for event in events if event["kind"] == "node-added")
+    assert added["detail"]["definition"]["branch"] == "preserved"
+
+    # A retry that names only a branch is unchanged: it is either the preserved
+    # branch or the deliberate fresh start, and neither invents resume metadata.
+    fresh, _ = apply_edit(
+        _graph(),
+        EditCommand(
+            "retry",
+            {
+                "op": "retry",
+                "id": "root",
+                "node": {
+                    "id": "replacement",
+                    "repo": "acme/widget",
+                    "persona": "engineer",
+                    "task": "Start over",
+                    "branch": "somewhere-else",
+                },
+            },
+        ),
+        states={"root": "failed"},
+        attestations=(),
+    )
+    started_over = next(node for node in fresh.tasks if node.id == "replacement")
+    assert started_over.lifecycle is not None
+    assert started_over.lifecycle.branch == "somewhere-else"
+    assert started_over.lifecycle.resume is None
+
+
 def test_retry_replacement_shape_and_lineage_are_validated() -> None:
     graph = _graph()
     with pytest.raises(EditError, match="existing graph node"):
