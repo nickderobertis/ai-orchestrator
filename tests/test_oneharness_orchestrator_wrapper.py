@@ -318,6 +318,46 @@ def test_a_post_round_request_that_produced_nothing_is_asked_again(tmp_path: Pat
     )
 
 
+def test_a_retry_the_clock_cannot_stamp_is_reported_rather_than_written_malformed(
+    tmp_path: Path,
+) -> None:
+    """An unrecordable retry loses the record, never the recovery — and says so.
+
+    The record is JSON the next round folds into `events.jsonl`. A `date` that
+    failed substitutes as nothing, which leaves `printf` succeeding on `{"at":,...}`
+    and the append guard never firing, so the retry reaches the log as a line no
+    reader can parse and reads afterwards as never having happened. A broken clock
+    is a broken toolchain rather than a policy decision, so the turn still gets its
+    second attempt.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    # Shadows the real one: `_retrying_wrapper` puts this directory first on PATH.
+    broken = bin_dir / "date"
+    broken.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    broken.chmod(broken.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    log = tmp_path / "boundary-attempts.jsonl"
+
+    proc = _retrying_wrapper(
+        tmp_path,
+        body=(
+            'if [ "$count" -eq 1 ]; then echo "quota exhausted" >&2; exit 1; fi\n'
+            "printf '{\"ok\":true}'\n"
+        ),
+        attempts_log=log,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == '{"ok":true}'
+    assert _stub_invocations(tmp_path) == 2
+    # Nothing a reader would choke on reached the log.
+    written = log.read_text(encoding="utf-8") if log.is_file() else ""
+    assert written == "", written
+    # And the loss is named, with the remedy, rather than passing for a clean run.
+    assert "could not read the clock with date" in proc.stderr, proc.stderr
+    assert "date is on PATH" in proc.stderr, proc.stderr
+
+
 def test_an_attempt_that_answered_is_never_asked_twice(tmp_path: Path) -> None:
     """A failing turn that produced output has already answered onejudge.
 

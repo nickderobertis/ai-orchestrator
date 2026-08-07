@@ -145,8 +145,17 @@ record_boundary_attempt() {
         echo "oneharness-orchestrator: could not create $log_dir for the boundary-attempts log ($mkdir_error); the next round cannot fold this retry into the run journal — create that directory or unset ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG" >&2
         return 0
     }
+    # Read and checked before the record is built, never substituted into it: a
+    # `date` that failed expands to nothing, `printf` still succeeds on the empty
+    # field, and what lands in the log is `{"at":,...}` — malformed JSON the next
+    # round drops, leaving a retry that reads as never having happened. The one
+    # failure this whole record exists to make visible.
+    stamped=$(date +%s) && [ -n "$stamped" ] || {
+        echo "oneharness-orchestrator: could not read the clock with date, so the retried attempt cannot be recorded to $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG and the next round cannot fold it into the run journal — check that date is on PATH ('just bootstrap' restores the toolchain)" >&2
+        return 0
+    }
     append_error=$(printf '{"at":%s,"attempt":%s,"attempts":%s,"reason":"the orchestrator turn exited %s producing no output","role":"orchestrator"}\n' \
-        "$(date +%s)" "$1" "$boundary_attempts" "$2" 2>&1 >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG") || {
+        "$stamped" "$1" "$boundary_attempts" "$2" 2>&1 >>"$ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG") || {
         echo "oneharness-orchestrator: could not append the retried attempt to $ORCHESTRATOR_BOUNDARY_ATTEMPTS_LOG ($append_error); the next round cannot fold it into the run journal — check that the file is writable" >&2
     }
 }
