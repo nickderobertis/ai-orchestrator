@@ -26,6 +26,8 @@ from orchestrator.boundary import (
     DEFAULT_BACKOFF_SECONDS,
     MAX_ATTEMPTS,
     MAX_BACKOFF_SECONDS,
+    _positive_float,
+    _positive_int,
 )
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
@@ -426,6 +428,86 @@ def test_the_wrapper_restates_the_boundary_policy_the_python_side_owns() -> None
         "BOUNDARY_MAX_BACKOFF_SECONDS": str(int(MAX_BACKOFF_SECONDS)),
         "BOUNDARY_MAX_ATTEMPTS": str(MAX_ATTEMPTS),
     }
+
+
+#: Every shape the environment actually delivers to both halves of the retry policy:
+#: usable decimals, a configured zero, a negative, and the four Python's own `float`
+#: accepts but the wrapper's grammar does not — scientific notation, an explicit
+#: sign, an underscore separator, and surrounding whitespace.
+_BACKOFF_INPUTS = (
+    "5",
+    "1.5",
+    ".5",
+    "5.",
+    "0",
+    "0.0",
+    "-1",
+    "1e9",
+    "1E9",
+    "+5",
+    "1_0",
+    " 5 ",
+    "",
+    ".",
+    "1.2.3",
+    "soon",
+    "nan",
+    "inf",
+)
+
+
+def _wrapper_accepts_backoff(value: str) -> bool:
+    """Whether the wrapper's own `positive_number` takes ``value``.
+
+    The real function, read out of the real script rather than restated here: a copy
+    of the grammar in this file would be a second source of the very contract the
+    gate exists to keep single.
+    """
+    source = WRAPPER.read_text(encoding="utf-8")
+    function = re.search(r"^positive_number\(\) \{.*?^\}$", source, re.M | re.S)
+    assert function is not None, "the wrapper no longer defines positive_number"
+    probe = subprocess.run(
+        ["bash", "-c", f'{function.group(0)}\npositive_number "$1"', "_", value],
+        capture_output=True,
+        text=True,
+    )
+    return probe.returncode == 0
+
+
+@pytest.mark.parametrize("value", _BACKOFF_INPUTS)
+def test_both_halves_of_the_retry_policy_read_one_value_the_same_way(value: str) -> None:
+    """The drift gate for the *parsing*, not just the five restated numbers.
+
+    Both halves read `ORCHESTRATOR_BOUNDARY_BACKOFF_SECONDS` from the same
+    environment, so a value one accepts and the other rejects is one declared policy
+    behaving as two. `1e9` was exactly that: the wrapper fell back to a 5s first
+    delay while Python took it and went straight to the 120s ceiling.
+    """
+    sentinel = -1.0
+    python_accepts = _positive_float(value, sentinel) != sentinel
+
+    assert python_accepts == _wrapper_accepts_backoff(value), value
+
+
+def test_an_attempts_value_only_python_could_parse_falls_back_on_both_sides(
+    tmp_path: Path,
+) -> None:
+    """The same agreement for the count, proven through the real wrapper.
+
+    `1_0` is ten to Python's `int` and nothing to the wrapper's digits-only case, so
+    an underscore-separated count once meant ten attempts on one side and the
+    default on the other.
+    """
+    assert _positive_int("1_0", DEFAULT_ATTEMPTS) == DEFAULT_ATTEMPTS
+
+    exhausted = _retrying_wrapper(
+        tmp_path,
+        body='echo "quota exhausted" >&2\nexit 1\n',
+        attempts="1_0",
+    )
+
+    assert exhausted.returncode == 1
+    assert _stub_invocations(tmp_path) == DEFAULT_ATTEMPTS
 
 
 def test_a_retry_that_succeeded_says_nothing_and_a_failure_says_everything(

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -109,20 +110,33 @@ class RetryPolicy:
         )
 
 
+#: The grammar both sides of this policy accept, which is the wrapper's: plain
+#: decimal digits, with at most one dot for the backoff. Python's own `int` and
+#: `float` are broader — they take `1e9`, `+5`, `1_0`, and surrounding whitespace,
+#: none of which `positive_number` in `scripts/oneharness-orchestrator.sh` accepts —
+#: so parsing with them let one declared policy mean two different things depending
+#: on which side read the environment. `1e9` was the plain case: the shell fell back
+#: to the default first delay and Python took the ceiling. Held here rather than by
+#: hope; `tests/test_oneharness_orchestrator_wrapper.py` runs the shell's own
+#: function beside these over one table of raw values and fails when they disagree.
+_SHELL_DIGITS = re.compile(r"[0-9]+")
+_SHELL_DECIMAL = re.compile(r"(?=.*[0-9])[0-9]*\.?[0-9]*")
+
+
 def _positive_int(raw: object, fallback: int) -> int:
-    try:
-        value = int(str(raw))
-    except (TypeError, ValueError):
+    if raw is None or not _SHELL_DIGITS.fullmatch(str(raw)):
         return fallback
+    value = int(str(raw))
     return min(value, MAX_ATTEMPTS) if value >= 1 else fallback
 
 
 def _positive_float(raw: object, fallback: float) -> float:
-    try:
-        value = float(str(raw))
-    except (TypeError, ValueError):
+    if raw is None or not _SHELL_DECIMAL.fullmatch(str(raw)):
         return fallback
-    return value if math.isfinite(value) and value > 0 else fallback
+    # The grammar admits only digits and one dot, so this is always a finite,
+    # non-negative number; what is left to reject is a configured zero.
+    value = float(str(raw))
+    return value if value > 0 else fallback
 
 
 @dataclass(frozen=True)
