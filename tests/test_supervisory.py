@@ -130,6 +130,35 @@ def test_retrying_a_round_reuses_its_capture_and_keeps_the_refusal_it_recorded(
     assert capture.history_failure is not None
 
 
+def test_resuming_a_run_leaves_it_with_one_driver_capture(tmp_path: Path) -> None:
+    """A resumed run has one driver session, so none of them can be hidden by another.
+
+    `timeline._fold_captures` matches a capture to the sessions history recorded by
+    semantic role and round rather than by session id, and that is only safe while a
+    run cannot hold two sessions of one role. Resuming is the way to try: `just
+    orchestrate --run-id` relaunches an existing run, and `dispatch.launch_orchestrator`
+    names the driver's session after the run alone — `orchestrator-<run>` — so the
+    relaunch re-opens the capture already there instead of adding a second one beside it.
+    """
+    run_dir = tmp_path / "run-resumed"
+    session = f"orchestrator-{run_dir.name}"
+    open_capture(run_dir, session=session, agent_role="orchestrator", started_at=1_000.0)
+    record_turn(run_dir, session, "drove round 1", at=1_001.0)
+    close_capture(run_dir, session, status="completed", finished_at=1_002.0)
+
+    # The relaunch, with the id the run's own name produces both times.
+    open_capture(run_dir, session=session, agent_role="orchestrator", started_at=5_000.0)
+
+    resumed = load_captures(run_dir)
+    assert [capture.session for capture in resumed] == [session]
+    # One capture per role and round is what the timeline's match assumes; a second
+    # driver here would be a session it could suppress without ever serving.
+    assert {(capture.agent_role, capture.round) for capture in resumed} == {("orchestrator", None)}
+    assert resumed[0].started_at.startswith("1970-01-01T00:16:40")
+    assert resumed[0].status == "running"
+    assert [turn["text"] for turn in resumed[0].turns] == ["drove round 1"]
+
+
 def test_capture_writes_are_silent_when_there_is_nothing_to_write(tmp_path: Path) -> None:
     """A capture is an addition to a dispatch; a missing one must not fail the dispatch."""
     run_dir = tmp_path / "run-2"

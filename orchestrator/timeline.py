@@ -1091,7 +1091,16 @@ def _fold_captures(
     would draw one session twice. A capture is matched to that recorded session by the
     pair its labels and its own record agree on — semantic role and round — because
     that is what identifies a supervisory session: one driver per run, one check-in per
-    round.
+    round. Not by session id, which history keeps as oneharness's own opaque
+    ``session_id`` rather than the name a dispatch chose.
+
+    That the pair is as precise as an id is a property of the two sites that open a
+    capture, each naming its session after exactly this pair: ``orchestrator-<run>`` in
+    `dispatch.launch_orchestrator` and ``check-in-<run>-<round>` in `graph._run_round`.
+    So re-entering either scope — a relaunched run, a retried check-in — re-opens the
+    capture already there rather than adding a second one this match could suppress
+    without ever serving. Held by `tests/test_supervisory.py`, which fails if a capture
+    site starts naming a session per attempt instead.
 
     What survives that match is a session whose harness refused the history write. It
     is served with the same role, timing, and open-ended liveness a recorded one would
