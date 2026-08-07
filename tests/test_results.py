@@ -122,3 +122,64 @@ def test_render_names_the_branch_a_parked_node_preserved(tmp_path: Path) -> None
     assert "work  parked  not-completed" in output
     assert "Preserved branch: feature/preserved" in output
     assert "Preserved branch: none (parked before it started)" in output
+
+
+def test_render_carries_the_reason_and_marks_a_transcript_it_elides(tmp_path: Path) -> None:
+    """An outcome names a category; only the reason says which one it was.
+
+    Both halves belong on the same read, so the recorded sentence is rendered beside
+    the status. A merge or rebase failure records its whole transcript there, which
+    is what `Full logs` is for — so this shows the first line and *says* it stopped,
+    because a silently truncated reason reads as a complete one.
+    """
+    runs = tmp_path / "runs"
+    round_dir = runs / "reasoned" / "round-01"
+    round_dir.mkdir(parents=True)
+    (round_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "ok": False,
+                "state": "failed",
+                "started_order": ["stale-pin", "conflicted", "blocked"],
+                "results": {
+                    "stale-pin": {
+                        "kind": "agent",
+                        "status": "failed",
+                        "task": "Continue",
+                        "outcome": "resume-failed",
+                        "error": (
+                            "resume-failed: cannot check whether the branch still carries "
+                            "unattested incomplete provenance over origin/feature/prereq"
+                        ),
+                    },
+                    "conflicted": {
+                        "kind": "agent",
+                        "status": "failed",
+                        "task": "Publish",
+                        "outcome": "sync-conflict",
+                        "detail": "git rebase failed (exit 1): Rebasing (1/34)\nRebasing (2/34)\n",
+                    },
+                    "blocked": {
+                        "kind": "agent",
+                        "status": "blocked",
+                        "task": "Wait",
+                        "error": "dependency failed",
+                    },
+                },
+            }
+        )
+    )
+
+    output = render("reasoned", runs)
+
+    assert "stale-pin  failed  resume-failed" in output
+    assert (
+        "  Reason: resume-failed: cannot check whether the branch still carries "
+        "unattested incomplete provenance over origin/feature/prereq" in output
+    )
+    assert "  Reason: git rebase failed (exit 1): Rebasing (1/34) […]" in output
+    # The reason a node has *instead of* an outcome is already its outcome column;
+    # repeating it as a Reason line would be noise, not diagnosis.
+    assert "blocked  blocked  dependency failed" in output
+    assert "Reason: dependency failed" not in output
