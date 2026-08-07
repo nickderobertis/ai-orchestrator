@@ -1,8 +1,9 @@
 """The boundary-retry policy, and the record the next round folds into the journal.
 
 The journeys are elsewhere: the wrapper's real retry runs as a subprocess in
-tests/test_oneharness_orchestrator_wrapper.py, and the check-in's runs through the
-real channel in tests/e2e/test_channel_e2e.py. What lives here is the trust
+tests/test_oneharness_orchestrator_wrapper.py, and both the check-in's retry and
+the fold of a wrapper retry into the next round's journal run through the real
+recipes in tests/e2e/test_boundary_retry_e2e.py. What lives here is the trust
 boundary neither can produce on demand — an attempts log a subprocess wrote into
 every shape this reader must refuse — and the policy's own arithmetic.
 """

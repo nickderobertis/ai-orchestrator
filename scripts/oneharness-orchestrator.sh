@@ -80,10 +80,10 @@ done
 # never asked again. Only an attempt that produced nothing is, which is precisely
 # the launch-path death this exists for.
 #
-# The four policy numbers below are `orchestrator/boundary.py`'s — DEFAULT_ATTEMPTS,
-# DEFAULT_BACKOFF_SECONDS, BACKOFF_FACTOR, MAX_BACKOFF_SECONDS — restated here
-# because this runs before any interpreter and cannot import them. They are held to
-# that one source by a drift gate rather than by hope:
+# The five policy numbers below are `orchestrator/boundary.py`'s — DEFAULT_ATTEMPTS,
+# DEFAULT_BACKOFF_SECONDS, BACKOFF_FACTOR, MAX_BACKOFF_SECONDS, MAX_ATTEMPTS —
+# restated here because this runs before any interpreter and cannot import them.
+# They are held to that one source by a drift gate rather than by hope:
 # `tests/test_oneharness_orchestrator_wrapper.py` reads both sides and fails when
 # they disagree.
 BOUNDARY_DEFAULT_ATTEMPTS=3

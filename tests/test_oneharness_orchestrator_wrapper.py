@@ -367,7 +367,7 @@ def test_a_streamed_turn_is_never_buffered_by_the_retry(tmp_path: Path) -> None:
 
 
 def test_the_wrapper_restates_the_boundary_policy_the_python_side_owns() -> None:
-    """The drift gate for the four numbers the shell cannot import.
+    """The drift gate for the five numbers the shell cannot import.
 
     `orchestrator/boundary.py` is the one source of the retry policy, but this
     wrapper runs before any interpreter and has to restate it. Restating without a

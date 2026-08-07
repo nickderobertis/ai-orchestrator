@@ -27,6 +27,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
+import pytest
 import yaml
 from rendezvous import Rendezvous
 from waits import deadline
@@ -180,3 +181,65 @@ def test_a_worker_that_records_nothing_surfaces_to_the_planner_mid_round(
         assert result["results"]["quiet-worker"]["status"] == "done", result
     finally:
         _stop(run_dir)
+
+
+def _run_plan(
+    tmp_path: Path, runs: Path, onejudge_bin: str, *extra: str
+) -> subprocess.CompletedProcess[str]:
+    """Drive one round through the real recipe, which is where --stall-after lives."""
+    plan = tmp_path / "threshold-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "stall-threshold",
+                "tasks": [{"id": "worker", "persona": "engineer", "task": "complete-now"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        [
+            "just",
+            "run-plan",
+            str(plan),
+            "--run",
+            f"stall-threshold-{len(extra)}-{'-'.join(extra).replace('-', '')[:12] or 'default'}",
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(_base(tmp_path)),
+            "--onejudge-bin",
+            onejudge_bin,
+            *extra,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+
+
+def test_the_round_takes_its_stall_threshold_from_the_command_line(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """`--stall-after` is what sets this per round, so the recipe has to take it."""
+    accepted = _run_plan(tmp_path, tmp_path / "runs", onejudge_bin, "--stall-after", "30")
+
+    assert accepted.returncode == 0, accepted.stderr
+
+
+@pytest.mark.parametrize("threshold", ["0", "-5", "nan", "inf"])
+def test_a_stall_threshold_the_round_cannot_watch_with_is_refused(
+    tmp_path: Path, onejudge_bin: str, threshold: str
+) -> None:
+    """A round that accepted one would watch nothing and say it was watching.
+
+    Zero and a negative threshold report every dispatch stalled the instant it
+    starts; `nan` makes the comparison silently false forever, and `inf` never
+    fires. All four are a watcher that is not one.
+    """
+    refused = _run_plan(tmp_path, tmp_path / "runs", onejudge_bin, "--stall-after", threshold)
+
+    assert refused.returncode == 2, refused.stdout
+    assert "--stall-after" in refused.stderr, refused.stderr
