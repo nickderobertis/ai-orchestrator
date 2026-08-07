@@ -1909,6 +1909,36 @@ def _start_orchestrator_process(
     return proc.pid
 
 
+#: The options that describe a *launch*, paired with the attribute argparse stores
+#: them under. An adoption replays what the run recorded, so every one of these
+#: would be read and dropped — and a planner who typed `--base` to change what the
+#: adopted driver runs against would have been told nothing.
+_LAUNCH_ONLY_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("--base", "base"),
+    ("--onejudge-bin", "onejudge_bin"),
+    ("--run-id", "run_id"),
+    ("--acknowledge-concurrent", "acknowledge_concurrent"),
+    (ROUND_BUDGET_OPTION, "round_budget"),
+    ("--oneharness-mode", "oneharness_mode"),
+    (WORKER_SIDE.option, "worker_harness"),
+    (JUDGE_SIDE.option, "judge_harness"),
+    ("--skill-command", "skill_command"),
+)
+
+
+def _launch_only_options(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[str]:
+    """Which launch-only options this command line set, compared to their defaults.
+
+    Compared against the parser's own defaults rather than a second list of them, so
+    an option whose default changes cannot start reading as explicitly passed.
+    """
+    return [
+        option
+        for option, attribute in _LAUNCH_ONLY_OPTIONS
+        if getattr(args, attribute) != parser.get_default(attribute)
+    ]
+
+
 def main_orchestrate(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Launch a live-supervised orchestrator and watch it until it settles"
@@ -2003,6 +2033,13 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         parser.error("--adopt drives the run's recorded plan; do not also pass a plan file")
     if not args.adopt and args.plan is None:
         parser.error("a plan file is required unless --adopt names an existing run")
+    if args.adopt and (ignored := _launch_only_options(args, parser)):
+        parser.error(
+            "--adopt replays the parameters the run recorded at launch, so "
+            + ", ".join(ignored)
+            + " would be accepted and ignored; drop them, or change what the run "
+            "replays with a fresh launch"
+        )
     # Detected from the ambient session so the ordinary launch is attributable without
     # the planner remembering two flags: an unattributable run is one no planner can
     # tell from another planner's. Explicit values still win; see `select_launch`.

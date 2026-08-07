@@ -183,6 +183,9 @@ def _parsed(line: str) -> BoundaryAttempt | None:
         not isinstance(at, (int, float))
         or isinstance(at, bool)
         or not math.isfinite(at)
+        # An epoch stamp, so zero and below are not early — they are a clock this
+        # reader cannot place the retry on, rendered into the journal as an age.
+        or at <= 0
         or not isinstance(role, str)
         or not role.isprintable()
         or not 0 < len(role) <= 40
@@ -192,6 +195,9 @@ def _parsed(line: str) -> BoundaryAttempt | None:
         or not isinstance(attempts, int)
         or isinstance(attempts, bool)
         or attempts < attempt
+        # The budget the writer was working to, so a record claiming one past the
+        # ceiling this policy enforces did not come from this policy.
+        or attempts > MAX_ATTEMPTS
         or not isinstance(reason, str)
     ):
         return None

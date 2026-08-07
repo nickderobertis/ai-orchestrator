@@ -23,7 +23,12 @@ from orchestrator.adopt import (
     write_relaunch_record,
 )
 from orchestrator.config import ConfigError
-from orchestrator.dispatch import DispatchError, adopt_orchestrator, launch_orchestrator
+from orchestrator.dispatch import (
+    DispatchError,
+    adopt_orchestrator,
+    launch_orchestrator,
+    main_orchestrate,
+)
 
 SESSION = "session-adopting"
 
@@ -206,6 +211,23 @@ def test_adoption_refuses_a_run_whose_round_is_still_in_flight(
 
     with pytest.raises(DispatchError, match="round-01 is still in flight"):
         adopt_orchestrator(run_dir.name, runs_dir=run_dir.parent)
+
+
+def test_the_cli_refuses_a_launch_only_option_beside_adopt(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Accepting one silently is how a planner learns nothing changed the hard way."""
+    with pytest.raises(SystemExit):
+        main_orchestrate(["--adopt", "demo", "--base", "/tmp/other.yaml"])
+
+    assert "--base" in capsys.readouterr().err
+
+
+def test_the_cli_refuses_a_plan_beside_adopt(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main_orchestrate(["--adopt", "demo", "plan.json"])
+
+    assert "do not also pass a plan file" in capsys.readouterr().err
 
 
 def test_adoption_refuses_a_run_that_does_not_exist(

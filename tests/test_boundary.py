@@ -222,6 +222,9 @@ def test_the_fold_reads_nothing_when_no_boundary_request_was_ever_retried(
         _record(attempt=0),
         _record(attempt=True),
         _record(attempts=1, attempt=2),
+        _record(at=0),
+        _record(at=-1.0),
+        _record(attempt=1, attempts=MAX_ATTEMPTS + 1),
         _record(reason=None),
     ],
 )
@@ -275,10 +278,16 @@ def test_recording_an_attempt_round_trips_through_the_fold(tmp_path: Path) -> No
 
 
 def test_a_log_that_cannot_be_written_is_not_what_stops_a_recovery(tmp_path: Path) -> None:
+    """The record is lost and the recovery is not: the caller keeps retrying."""
     blocked = tmp_path / "file"
     blocked.write_text("not a directory\n", encoding="utf-8")
+    unwritable = blocked / "run"
 
     record_attempt(
-        blocked / "orchestrator" / "boundary-attempts.jsonl",
+        attempts_log(unwritable),
         BoundaryAttempt(at=1.0, role="orchestrator", attempt=1, attempts=3, reason="quota"),
     )
+
+    # Nothing landed, and nothing raised — the next round simply has nothing to fold.
+    assert not attempts_log(unwritable).exists()
+    assert drain_attempts(unwritable) == []
