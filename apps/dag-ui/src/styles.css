@@ -575,6 +575,15 @@ p {
   background: var(--background);
 }
 
+/* An implicit grid column is sized to the widest min-content among its items, and a
+   recorded label is one unbreakable token — a branch name — often enough that this is
+   the normal case. Zeroing the floor keeps the reading inside a region whose scroll is
+   vertical. The dispatch group is a grid of the same items one level in. */
+.node-transcript,
+.transcript-dispatch {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .node-transcript {
   display: grid;
   min-height: 0;
@@ -627,6 +636,15 @@ p {
   font-size: 11px;
 }
 
+/* The other half of the column above: a column that cannot grow makes the token
+   overflow the item instead unless the token is allowed to break. Branch names, run
+   ids and session names are all written this way. */
+.transcript-item strong,
+.transcript-item .transcript-facts,
+.transcript-dispatch > h3 {
+  overflow-wrap: anywhere;
+}
+
 /* One onejudge dispatch, read as one unit: its own name above, and the agent and
    supervising sessions inside it indented so the nesting is visible rather than
    merely stated. */
@@ -653,6 +671,41 @@ p {
 }
 .transcript-dispatch .transcript-item + .transcript-item {
   margin-left: 24px;
+}
+
+/* `TimelinePopover`'s portal — this app's own surface, in the design system's popover
+   tokens, which is the one source it and the package both read colour from. Its
+   position is written by that layer. Above the detail panel, because a segment can be
+   beside one. */
+.timeline-popover {
+  position: fixed;
+  z-index: 60;
+  /* Wide enough for the two timestamps a reading carries to sit two to a line, and
+     never wider than the screen it has to fit inside. */
+  width: 20rem;
+  max-width: calc(100vw - 16px);
+  /* Never in the way of the segment it describes, or of anything under it. */
+  pointer-events: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
+}
+
+/* The package's own copy, retired from the painted surface but left in the accessibility
+   tree — see `TimelinePopover`. Selected on the role because the package sets it exactly
+   while it would be painting that element, so this reaches the painted copy and nothing
+   else, and no derived identifier is restated here to drift. */
+[aria-label^="Timeline plot"] [role="tooltip"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 .detail-drawer {
@@ -686,6 +739,14 @@ p {
 .timeline-detail {
   min-width: 0;
   min-height: 0;
+}
+
+/* A turn's tool call is opened by its own row, which is `flex-1` and so carries the
+   default `min-width: auto` — held at its min-content, the control went off the edge
+   of a panel that clips sideways. Zeroing the floor lets the argument preview give up
+   its width first, which is what its own `truncate` is for. */
+.timeline-detail [data-slot="accordion-trigger"] {
+  min-width: 0;
 }
 
 .detail-drawer .timeline-detail {
@@ -810,6 +871,14 @@ pre {
   min-width: 0;
   padding: 12px;
   background: var(--card);
+}
+
+/* A trailing odd term takes the whole row. The list is painted by showing its own
+   border colour through the 1px gaps between cells, so an empty cell is not blank —
+   it is a filled panel with nothing written on it. Most lists here are odd: a lone
+   Outcome, Dependencies, Publication or verification Result. */
+.facts > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .facts dt {
