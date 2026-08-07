@@ -70,38 +70,22 @@ const openTranscript = async (name: RegExp) => {
 const detail = () =>
   screen.getByRole("region", { name: "Timeline item detail" });
 
-/**
- * The same pane, for a journey that has not already waited for it. An item the
- * address names is opened out of the node's timeline, so the pane is a read behind
- * the node view's own shell; `detail()` is for after something has waited on it.
- */
+/** The same pane, awaited: it arrives on a read behind the node view's own shell. */
 const openedDetail = () =>
   screen.findByRole("region", { name: "Timeline item detail" });
 
 /**
- * A wall-clock budget for work that is CPU-bound, on a host that runs agent dispatches
- * beside its own tests. Each case here renders the whole app into jsdom and drives it,
- * and under load every step dilates together rather than any one stalling — so vitest's
- * 5 s default expires mid-journey on a run that is still making progress.
- *
- * It covers the suite rather than the slowest few, because which case crosses 5 s is
- * set by how loaded the host is that minute and not by the case: a threshold drawn from
- * one measurement just moves the flake to the tier below it. Sized for the only job
- * left to it, catching a journey that has stopped making progress at all.
+ * Whole-app jsdom journeys exceed vitest's 5 s default under the concurrent agent
+ * dispatches this host runs. It covers the suite rather than the slowest few, because
+ * host load decides which case crosses the line; sized only to catch a journey that has
+ * stopped making progress.
  */
 const JOURNEY_TIMEOUT = { timeout: 60_000 };
 
 /**
- * How long one `findBy` here may wait, raised from Testing Library's 1 s default —
- * the tighter of the two bounds, and so the one that expires first.
- *
- * About half this suite's waits have to poll for a chained telemetry read rather than
- * resolving on their first check, and under load those exceed a second while still
- * arriving. The default reports that as "unable to find an element" over a page of
- * dumped DOM, which reads as a product defect rather than as a slow machine. This
- * stays an order of magnitude inside the budget above, so an element that genuinely
- * never arrives is still named as one. It is set here rather than in the shared setup
- * because vitest isolates a test file's environment, so it reaches nothing else.
+ * Half this suite's waits poll for a chained telemetry read, which exceeds Testing
+ * Library's 1 s default under load while still arriving. Set here rather than in the
+ * shared setup because vitest isolates a test file's environment.
  */
 configure({ asyncUtilTimeout: 10_000 });
 
@@ -142,10 +126,8 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
       screen.getByRole("navigation", { name: "Breadcrumb" }),
     ).toHaveTextContent("dashboard");
 
-    // The shell above arrives with the node; the rail is drawn from the node's own
-    // timeline, which is a second read still on its way. Everything from here reads
-    // that record, so it is the rail that is waited for rather than the view around
-    // it — asking the shell whether the record has landed is asking the wrong thing.
+    // The rail comes from a second read, so waiting on the shell above would not say
+    // the record everything below reads has landed.
     await screen.findByRole("region", { name: "Node timeline" });
 
     // The upstream visualization identifies each activity and keeps timing details

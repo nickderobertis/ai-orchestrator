@@ -60,19 +60,10 @@ async function expectThePageItselfDoesNotScroll(page: Page): Promise<void> {
 /**
  * Open the app at `size` and wait until it is holding runs, not merely mounted.
  *
- * `DAG Observatory` is a static heading in the navigation's own header — a sibling of
- * the run list rather than anything rendered from it — so it paints the moment the
- * component mounts and says nothing about whether the run-list read has come back.
- * Waiting on it asked the wrong question: the journey below then read `toHaveCount(50)`
- * off a list whose read was still in flight, and at a squeezed budget that is exactly
- * where it failed, with `Received: 0`.
- *
- * It is also why that journey looked width-dependent. The loop puts 1920x1080 first, so
- * that entry is the file's first test and the only one running while the dev server is
- * still transforming the app's module graph — measured at 33.0 s against its 390x844
- * twin's 18.0 s on the same run. The wide entry failed and the narrow one passed because
- * of where they sit in the loop, not how wide they are; the two differ only in the
- * ellipsis check, which is the part that passed.
+ * The `DAG Observatory` heading is a sibling of the run list rather than anything
+ * rendered from it, so it paints on mount and says nothing about the run-list read.
+ * Readiness is a loaded run link. This also settles the apparent width dependence: the
+ * loop's first viewport races the dev server's initial transform, whichever one it is.
  */
 async function open(page: Page, size: Viewport, path: string): Promise<void> {
   await page.setViewportSize({ width: size.width, height: size.height });
