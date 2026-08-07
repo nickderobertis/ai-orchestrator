@@ -30,7 +30,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, NoReturn, Protocol, cast
+from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
@@ -1266,29 +1266,6 @@ def _run_steps(
         # report for `incomplete_detail` below to read one out of.
         refusal: str | None = None
 
-        def preserve_and_reraise(exc: BaseException) -> NoReturn:
-            # A dispatcher that raises has no report to route through the
-            # not-completed path below, and the work the worker already committed is
-            # on the branch either way. Preserving it here is what makes a provider
-            # outage at closeout a stop the next attempt continues rather than one
-            # that silently strands a finished, gate-green change; the failure itself
-            # still reaches the scheduler unchanged.
-            preserved = _preserve_step_work(
-                step, worktree=worktree, pr_base=pr_base, dispatch_head=dispatch_head
-            )
-            log.append(
-                "step-settled",
-                detail={
-                    "status": "not-completed",
-                    "step_kind": step.kind,
-                    "turns": 0,
-                    "preserved": preserved,
-                    "outcome": "dispatch-failed",
-                    "outcome_detail": redact(str(exc)),
-                },
-            )
-            raise exc
-
         try:
             report = dispatch_fn(
                 cast(str, step.persona),
@@ -1308,7 +1285,26 @@ def _run_steps(
             )
         except DispatchError as exc:
             if not recordable_provider_failure(exc.failure_attribution):
-                preserve_and_reraise(exc)
+                # A refusal the chain cannot classify has no report to route through the
+                # not-completed path below, and the work the worker already committed is on
+                # the branch either way. Journalling the stop here is what keeps a provider
+                # outage at closeout from reading as a step that simply never closed; the
+                # failure itself still reaches the scheduler unchanged.
+                preserved = _preserve_step_work(
+                    step, worktree=worktree, pr_base=pr_base, dispatch_head=dispatch_head
+                )
+                log.append(
+                    "step-settled",
+                    detail={
+                        "status": "not-completed",
+                        "step_kind": step.kind,
+                        "turns": 0,
+                        "preserved": preserved,
+                        "outcome": "dispatch-failed",
+                        "outcome_detail": redact(str(exc)),
+                    },
+                )
+                raise
             # A refusal is a stop, and it settles through the shared not-completed
             # path below rather than returning here: `quota_mid_conversation` is by
             # definition a worker that was already working, so the worktree it was
@@ -1330,8 +1326,6 @@ def _run_steps(
                 stderr=refusal,
                 failure_attribution=exc.failure_attribution,
             )
-        except Exception as exc:
-            preserve_and_reraise(exc)
         else:
             # Only a dispatch that returned has artifacts; a refused one raised
             # before onejudge wrote any.
@@ -2615,6 +2609,11 @@ def run_repo_task(
         )
         return result
     finally:
+        # Attached here rather than at each exit because a declined continuation has to say
+        # so however the run ends, and the exits are many. All three a decline reaches are
+        # driven end to end by
+        # test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback:
+        # merged, not-completed, and parked at a human step.
         if declined and declined not in result.detail:
             result.detail = f"{result.detail}; {declined}" if result.detail else declined
         if worktree is not None:

@@ -2353,8 +2353,20 @@ def test_a_dispatch_that_dies_mid_edit_keeps_the_work_it_had_not_committed(
     assert any(RECOVERY_TRAILER in commit.message for commit in published), published
 
 
+@pytest.mark.parametrize(
+    ("label", "leaves", "markers"),
+    [
+        # The worker got its work committed before the harness died under it. Its marker
+        # is empty and asked base-relative, so a redispatch adds no second one.
+        ("committed", "", 1),
+        # The worse half, where the change is only on disk. This marker *carries* the
+        # files, so every dying dispatch has to write its own — the count is the point
+        # of the distinction, not an accident of it.
+        ("dirty", " die-dirty", _DISPATCHES_PER_ROUND),
+    ],
+)
 def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
-    tmp_path, bare_origin, command_base, personas_dir, capsys
+    tmp_path, bare_origin, command_base, personas_dir, capsys, label, leaves, markers
 ) -> None:
     """The other half of a dying dispatch: a cause that is not provider evidence.
 
@@ -2366,11 +2378,11 @@ def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
     an empty branch. The failure itself still reaches the scheduler unchanged.
     """
     origin = bare_origin()
-    canonical = gitops.clone(origin, tmp_path / "canonical-died-unclassified")
+    canonical = gitops.clone(origin, tmp_path / f"canonical-died-unclassified-{label}")
     Registry().register(str(canonical), workflow="local")
     runs_dir = tmp_path / "runs"
-    latch = tmp_path / "died-unclassified.deaths"
-    plan_path = tmp_path / "died-unclassified.plan.json"
+    latch = tmp_path / f"died-unclassified-{label}.deaths"
+    plan_path = tmp_path / f"died-unclassified-{label}.plan.json"
     plan_path.write_text(
         json.dumps(
             {
@@ -2383,7 +2395,7 @@ def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
                         # with work on a branch and no report anywhere describing it.
                         "task": (
                             f"complete-now write-change die-after-commit={latch} "
-                            f"die-times={_DISPATCHES_PER_ROUND} die-unclassified"
+                            f"die-times={_DISPATCHES_PER_ROUND} die-unclassified{leaves}"
                         ),
                         "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
@@ -2406,7 +2418,7 @@ def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
         "--format",
         "json",
     ]
-    run = "died-unclassified"
+    run = f"died-unclassified-{label}"
 
     assert run_plan_main([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
     capsys.readouterr()
@@ -2440,7 +2452,7 @@ def test_a_dispatch_that_dies_of_an_unclassified_cause_still_preserves_its_work(
     preserved = _preserved_branch_clone(tmp_path / "workspace", settled["branch"])
     ahead = gitops.log_messages(preserved, "origin/main", settled["branch"])
     assert ahead, settled["branch"]
-    assert len(incomplete_commits(preserved, "origin/main", settled["branch"])) == 1
+    assert len(incomplete_commits(preserved, "origin/main", settled["branch"])) == markers
     assert _has_file(preserved, settled["branch"], "DIED.txt")
 
 
@@ -6284,6 +6296,25 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     assert "did not complete" in stopped.detail
     assert f"declined to resume branch {first.branch!r}" in stopped.detail
     assert first.resume.checkpoint in stopped.detail
+
+    # The third way a declined start ends: it reaches a human step and parks there.
+    # A workstream that is *waiting* is the one a planner reads most carefully — it is
+    # being asked to act on it — so the decline has to be in front of them at exactly
+    # that moment, not only on the runs that already finished.
+    paused = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[
+            Step("prepare", "engineer", "Start fresh and prepare a checkpoint."),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        recorded_gate=["true"],
+        resume=first.resume,
+        dispatch_fn=make_writing_dispatch(filename="awaiting.txt"),
+    )
+    assert paused.outcome == "waiting-human"
+    assert f"declined to resume branch {first.branch!r}" in paused.detail
+    assert first.resume.checkpoint in paused.detail
 
 
 def test_a_pinned_retry_resolves_to_the_pinned_branch_or_is_refused(tmp_path, bare_origin) -> None:
