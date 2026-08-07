@@ -194,16 +194,9 @@ def _drain_after_timeout(proc: subprocess.Popen[str]) -> None:
     terminate at all, and it is also what stops a fired bound from leaving the
     orphaned gate run behind that this harness then has to recognise days later.
 
-    The *group*, not a walk from the root, because a walk names a set and a torn-down
-    git goes on starting processes. Its transport is one git restarts when the
-    connection it was using dies — which is exactly what the first signal of the
-    teardown does to it — so the replacement is born after the walk that was supposed
-    to have found everything, inherits the pipes, and outlives every signal aimed at
-    the set. Measured here under concurrent-dispatch load: the bound fired, the
-    sampled transport died, a second one appeared with `init` for a parent, and the
-    drain below then sat out its whole ceiling on pipes nothing would ever close.
-    A process group is the handle the kernel keeps valid across that, and every
-    process git starts is born into it.
+    The *group*, not a walk from the root, because git can start a replacement after
+    any walk that named the set: [Every git command is
+    bounded](../docs/repo-lifecycle.md#every-git-command-is-bounded).
     """
     terminate_process_group(ProcessId(proc.pid))
     try:
@@ -239,12 +232,9 @@ def _git(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, **env} if env is not None else None,
-        # A session of its own, so the bound above has one handle that covers every
-        # process git starts however late — see `_drain_after_timeout`. The same shape
-        # `verify` runs a gate in, and for the same reason: a `push` runs this
-        # repository's whole gate in its pre-push hook, so this is that tree too.
-        # Nothing here is interactive — a git that wanted a terminal would hang out
-        # its bound rather than ask — so the controlling terminal is not a loss.
+        # A session of its own, so the bound has one handle covering every process git
+        # starts however late — see `_drain_after_timeout`. Nothing here is
+        # interactive, so the controlling terminal it gives up is not a loss.
         start_new_session=True,
     ) as process:
         try:

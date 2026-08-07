@@ -1945,17 +1945,8 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   const stateBadge = page.locator('.node-view-facts > [data-slot="badge"]');
 
   /**
-   * Open one node's view, from a graph that is certainly there to be clicked.
-   *
-   * The graph and a node's view are alternatives — opening a node unmounts the canvas
-   * — so the `Escape` that ends one reading and the click that begins the next are two
-   * navigations, and issuing the second before the first has landed aims a click at a
-   * canvas that is being replaced. What that produces is a reading of whichever node
-   * was open before: a mismatch on the *word*, which is how this was seen failing once
-   * under host load and never since. Waiting for the view to be gone is what
-   * serialises the two; nothing about what is asserted afterwards changes, and the
-   * word is still read before its colour so a selector that drifted onto another badge
-   * fails rather than passes quietly.
+   * Open one node's view, once the previous reading's `Escape` has landed: opening a
+   * node unmounts the canvas, so a click before that aims at one being replaced.
    */
   const openNode = async (card: Locator, state: string): Promise<void> => {
     await expect(page.locator(".node-view")).toHaveCount(0);

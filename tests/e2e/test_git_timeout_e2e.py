@@ -50,14 +50,9 @@ Path(sys.argv[1]).write_text(str(os.getpid()), encoding="utf-8")
 time.sleep(3600)
 """
 
-#: The same stand-in, for a gate that starts a replacement worker as it is stopped.
-#: Not a contrivance: it is the shape of git's own transport, which git restarts when
-#: the connection it was using dies — and the first signal of a teardown is what kills
-#: that connection. The replacement is therefore born *after* anything that sampled
-#: the tree, which is how a fired bound was observed leaving a live process behind.
-#: The handler runs before the exit it is handling, so the replacement is always
-#: started; `sleep` rather than another interpreter keeps that start to a few
-#: milliseconds, well inside the grace the teardown holds its `SIGKILL` back for.
+#: The same stand-in, restarting its worker as it is stopped — git's own transport,
+#: which it restarts when the connection dies. `sleep` rather than an interpreter
+#: keeps that start inside the grace the teardown holds its `SIGKILL` back for.
 _RESPAWNING = """
 import os
 import signal
@@ -124,13 +119,9 @@ def _drive(operation: str, target: Path, branch: str, **environment: str) -> dic
 def _await_gone(pid: int, what: str) -> None:
     """Block until a process is no longer running, whatever became of its parent.
 
-    `is_running` rather than ``kill(pid, 0)``, which counts a zombie: an orphan the
-    teardown has already killed reparents up a chain of processes that are themselves
-    exiting, and each link of that chain has to be scheduled before the next collects
-    the status. That queue is a function of the host's load and not of the bound this
-    asserts on, while a process the bound failed to stop is neither exited nor waiting
-    to be collected. The state is reported when the wait does expire, because a leak
-    and a slow collection are the same wall-clock symptom and not the same defect.
+    `is_running` rather than ``kill(pid, 0)``, which counts a zombie — a killed orphan
+    waiting to be collected is a function of the host's load, not of this bound. The
+    state is reported on expiry because the two look alike from the wall clock alone.
     """
     guard = deadline(30)
     while is_running(pid):
@@ -190,14 +181,9 @@ def test_a_gate_that_restarts_its_worker_while_it_is_stopped_is_still_stopped_wh
 ) -> None:
     """The bound stops what git starts *during* the teardown, not only what it found.
 
-    Terminating by parentage means naming a set of processes, and the thing being
-    terminated goes on starting more: git restarts its transport when the connection
-    dies, and the first signal of a teardown is what kills that connection. A process
-    born after the walk is in no set, so it inherits git's pipes, is orphaned when its
-    parent dies, and outlives the bound that was supposed to have ended it — the drain
-    then sits out its whole ceiling on pipes nothing will ever close. This reproduces
-    that shape deterministically instead of waiting for the host to be loaded enough
-    to hit it: what a process group buys over a walk is exactly this case.
+    A process born after a walk of git's tree is in no set that walk named, so it
+    keeps git's pipes and outlives the bound. Driven deterministically here rather
+    than waiting for a host loaded enough to produce it.
     """
     origin = bare_origin()
     checkout = tmp_path / "checkout"
