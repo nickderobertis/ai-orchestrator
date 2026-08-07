@@ -20,6 +20,7 @@ def _run(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.mark.load_sensitive
 def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, command_base) -> None:
     state = tmp_path / "state"
     env = {**os.environ, "AI_ORCHESTRATOR_HOME": str(state)}
@@ -154,6 +155,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     assert goals.stdout.strip() == "No active DAG goals."
 
 
+@pytest.mark.load_sensitive
 def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
@@ -550,6 +552,7 @@ def _barrier_plan(path: Path, target: Path, hold: Rendezvous) -> Path:
     return path
 
 
+@pytest.mark.load_sensitive
 def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
     tmp_path: Path, command_base
 ) -> None:

@@ -1834,6 +1834,7 @@ def test_real_cli_recovers_successful_report_and_no_change_results(
     assert result["results"]["no-change"]["outcome"] == "no-changes"
 
 
+@pytest.mark.load_sensitive
 def test_real_cli_recovers_settled_lifecycle_stack_anchor(
     tmp_path: Path, bare_origin, command_base, onejudge_bin: str
 ) -> None:
@@ -1953,6 +1954,7 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
     assert result["results"]["parent"]["publication_workflow"] == "local"
 
 
+@pytest.mark.load_sensitive
 def test_real_cli_recovers_failed_lifecycle_result(
     tmp_path: Path, bare_origin, command_base, onejudge_bin: str
 ) -> None:
@@ -2242,6 +2244,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert "results:" in malformed_results.stderr
 
 
+@pytest.mark.load_sensitive
 def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     tmp_path: Path, bare_origin, command_base, onejudge_bin: str
 ) -> None:

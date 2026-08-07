@@ -157,6 +157,7 @@ def _launch_cli(
     return str(json.loads(launched.stdout)["run_id"])
 
 
+@pytest.mark.load_sensitive
 def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -397,6 +398,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     assert "planner update due" not in corrupt_status.stdout
 
 
+@pytest.mark.load_sensitive
 def test_a_check_in_that_leaves_a_predecessors_update_in_place_is_not_a_success(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -479,6 +481,7 @@ def test_a_check_in_that_leaves_a_predecessors_update_in_place_is_not_a_success(
     _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
+@pytest.mark.load_sensitive
 def test_completed_check_in_without_surface_is_logged_and_retried(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1122,6 +1125,7 @@ def test_bridge_timeout_reattach_finished_and_monitorable(
     assert isinstance(status["pid"], int) and status["host"]
 
 
+@pytest.mark.load_sensitive
 def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1261,6 +1265,7 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     assert json.loads(heartbeat_path.read_text(encoding="utf-8"))["enabled"] is False
 
 
+@pytest.mark.load_sensitive
 def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1286,6 +1291,7 @@ def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
     assert report["stopped_early"] is False
 
 
+@pytest.mark.load_sensitive
 def test_continuation_round_proposal_uses_reconciled_round_number(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1626,6 +1632,7 @@ def _queued_check_ins(journal: Path) -> int:
     )
 
 
+@pytest.mark.load_sensitive
 def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -1799,6 +1806,7 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
+@pytest.mark.load_sensitive
 def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
     tmp_path: Path, onejudge_bin: str
 ) -> None:

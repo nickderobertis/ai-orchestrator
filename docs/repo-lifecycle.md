@@ -846,17 +846,29 @@ serial invocation rather than rewritten to survive a worker.
 
 `loadgroup` is `load` plus one thing: a test carrying `@pytest.mark.xdist_group`
 runs on the worker its group runs on, and everything else still distributes by
-load. `tests/e2e/test_contention_e2e.py` is one such group, declared once for the
-module through this repository's own `load_sensitive` marker, which
-`tests/conftest.py` translates. Its journeys each start several real lifecycle
-processes and wait for a readiness handshake between them, so two of them in flight
-at once contend for the same cores and the same advisory locks — and what fails is
-the handshake, a `_queue.Empty` on a readiness wait, on a subset that rotates per
-run. That is the one constraint this suite has that lives *between* tests rather
-than inside one, which is why no assertion inside any of them can express it and
-why the answer is the distribution rather than a longer timeout. The bound on what
-it costs is already measured above: `--dist loadfile` — every file a group — was
-331s against `load`'s 322s, and this groups one module rather than all of them.
+load. One group holds this repository's `load_sensitive` family, which
+`tests/scheduling.py` translates into that mark. A member starts a real process it
+does not then wait for and holds a second one against it, so what its assertions
+measure is the interval between them: two members in flight at once contend for the
+same cores and the same advisory locks, and what fails is the handshake — a
+`_queue.Empty` on a readiness wait, a `ChannelTimeout` on a FIFO, a rendezvous file
+that arrives a second late — on a subset that rotates per run. That is the one
+constraint this suite has that lives *between* tests rather than inside one, which
+is why no assertion inside any of them can express it and why the answer is the
+distribution rather than a longer timeout. The bound on what it costs is already
+measured above: `--dist loadfile` — every file a group — was 331s against `load`'s
+322s, and this groups the journeys of that shape rather than every file.
+
+The transport is not the shape, and reading it as one cost three publications.
+`tests/e2e/test_contention_e2e.py` declares for its whole module and was for a while
+the entire family, because the guard that finds new members looked for a
+multiprocessing queue. Journeys that hold the same two processes apart over a FIFO
+(`test_real_run_plan_round_budget_surfaces_blocking_proposal`) and over the
+filesystem (`test_a_queued_update_nobody_read_is_reported_until_it_is_consumed`) sat
+outside it and went on failing the merge-path gate under ordinary host load.
+`tests/test_nx_cache_scope.py` now reads the shape per test function — an unawaited
+launch plus a held counterpart — so a new journey of it joins the family or fails
+that gate by name.
 
 Neither marker is a place to put "this was flaky once". `single_threaded` names a
 subject that is the process; `load_sensitive` names a handshake between processes

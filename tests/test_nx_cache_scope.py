@@ -280,11 +280,59 @@ def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
     assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
 
 
-#: The signature of a journey that cannot be co-scheduled with another of its kind:
-#: it starts several real processes and waits for a readiness handshake between them
-#: over a multiprocessing queue. `_queue.Empty` on that wait, on a subset that
-#: rotates per run, is what two of them in flight at once produce.
-_READINESS_HANDSHAKE = ("import multiprocessing", ".Queue(")
+#: How a journey starts a real process it does not then wait for. Each of these
+#: leaves that process running alongside the assertions: a `multiprocessing` spawn,
+#: a `Popen` the test keeps a handle on, or a launcher that detaches an orchestrator
+#: and returns its run id.
+_UNAWAITED_LAUNCH = (".Popen(", "MP.Process(", "multiprocessing.Process(", "_launch_cli(")
+#: How it then holds a *second* real process against the first, so that the interval
+#: between the two is what its assertions measure. A `Rendezvous` parks a real
+#: dispatched agent turn inside the faked model until the test lets go; a
+#: `multiprocessing` queue carries the same handshake between spawned lifecycles.
+#: The queue was once the whole signature — it is kept as one arm of it so widening
+#: the shape takes nothing out of the family.
+_HELD_COUNTERPART = ("Rendezvous", ".Queue(")
+
+
+def _readiness_journeys() -> tuple[dict[str, list[str]], list[str]]:
+    """Every e2e test of the co-scheduling-sensitive shape, undeclared ones first.
+
+    Read per test function rather than per module. The shape is common enough that
+    whole-module granularity would either drag unrelated tests into the family or let
+    a new journey ride into it on a sibling's declaration — and the second is part of
+    the hole this exists to close. A module-level ``pytestmark`` still declares for
+    every test in its file, because that is what it means.
+    """
+    found: dict[str, list[str]] = {}
+    joined: list[str] = []
+    for module in sorted((REPO_ROOT / "tests" / "e2e").glob("test_*.py")):
+        source = module.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        module_declares = any(
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "pytestmark"
+                for target in node.targets
+            )
+            and LOAD_SENSITIVE_MARKER in ast.unparse(node.value)
+            for node in tree.body
+        )
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+                continue
+            body = ast.get_source_segment(source, node) or ""
+            if not any(launch in body for launch in _UNAWAITED_LAUNCH):
+                continue
+            if not any(held in body for held in _HELD_COUNTERPART):
+                continue
+            declared = module_declares or any(
+                LOAD_SENSITIVE_MARKER in ast.unparse(decorator) for decorator in node.decorator_list
+            )
+            if declared:
+                joined.append(f"{module.name}::{node.name}")
+            else:
+                found.setdefault(module.name, []).append(node.name)
+    return found, joined
 
 
 def test_every_multiprocess_readiness_journey_declares_its_scheduling_constraint() -> None:
@@ -292,31 +340,35 @@ def test_every_multiprocess_readiness_journey_declares_its_scheduling_constraint
 
     The constraint is between these tests rather than inside any one of them, so
     nothing inside a new one fails when it is missing — it just makes a rotating
-    subset of the module flaky, which reads as a bad host rather than as a missing
+    subset of the suite flaky, which reads as a bad host rather than as a missing
     declaration. Naming the shape is what keeps the family from going stale silently,
     exactly as the tier keys above are kept from narrowing silently.
+
+    The shape is *co-scheduling sensitivity*, not one transport. It was first written
+    as "waits on a multiprocessing queue", and journeys that race real subprocesses
+    over a FIFO and over the filesystem instead went on blocking publication from
+    outside the family it was meant to define. What those have in common is not the
+    queue: it is a real process left running while the test asserts, with a second
+    one held against it, so the interval between them is what the assertions measure
+    and another journey of the same kind in flight is what moves it.
     """
     # Spelled once, by the plugin that acts on it. A scan hunting its own literal
     # would keep passing through a rename that left the plugin grouping nothing.
-    declaration = f"pytest.mark.{LOAD_SENSITIVE_MARKER}"
     manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert LOAD_SENSITIVE_MARKER in re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE), (
         f"pytest must register {LOAD_SENSITIVE_MARKER!r} in [tool.pytest.ini_options] markers"
     )
 
-    undeclared = []
-    declared = []
-    for module in sorted((REPO_ROOT / "tests" / "e2e").glob("test_*.py")):
-        source = module.read_text(encoding="utf-8")
-        if not all(fragment in source for fragment in _READINESS_HANDSHAKE):
-            continue
-        (declared if declaration in source else undeclared).append(module.name)
-
+    undeclared, declared = _readiness_journeys()
     assert not undeclared, (
-        f"these journeys wait on a multiprocessing readiness handshake without declaring "
-        f"@{declaration}, so xdist may run two of them at once: {undeclared}"
+        f"these journeys hold a real process against another one they launched without "
+        f"declaring @pytest.mark.{LOAD_SENSITIVE_MARKER}, so xdist may run two of them at "
+        f"once: {undeclared}"
     )
-    assert declared, "the load-sensitive family is empty; this gate would pass vacuously"
+    assert declared, (
+        "the shape signature above matches no journey at all; it has drifted away from "
+        "the suite and this gate would pass vacuously"
+    )
 
 
 def _collected(selector: str) -> set[str]:

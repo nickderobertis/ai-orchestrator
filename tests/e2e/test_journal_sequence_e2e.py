@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 import yaml
 from rendezvous import Rendezvous
 from waits import deadline
@@ -222,6 +223,7 @@ def _release(tmp_path: Path, run_id: str, runs: Path) -> dict:
     )
 
 
+@pytest.mark.load_sensitive
 def test_a_record_this_build_cannot_read_still_holds_its_sequence(
     tmp_path: Path, command_base
 ) -> None:
