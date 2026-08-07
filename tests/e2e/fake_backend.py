@@ -327,11 +327,26 @@ def main() -> int:
                     and not stale.exists()
                     and (channel_dir / "heartbeat-surface.json").is_file()
                 )
+                # The upstream defect this repository captures around: a turn whose
+                # harness cannot complete its history write fails the write, so the
+                # session is simply absent from history. Forced once, on the side of
+                # the conversation that runs the supervisory tier. Not tied to a
+                # harness here because it is not tied to one upstream either.
+                history_value = os.environ.get("FAKE_CHECK_IN_HISTORY_WRITE_FAILS")
+                history_fails = Path(history_value) if history_value else None
                 if fail_once is not None and not fail_once.exists():
                     fail_once.write_text("failed\n", encoding="utf-8")
                     with attempts.open("a", encoding="utf-8") as stream:
                         stream.write("failed\n")
                     sys.stderr.write("fake_backend: forced first check-in failure\n")
+                    return 1
+                if history_fails is not None and not history_fails.exists():
+                    history_fails.write_text("history-write-failed\n", encoding="utf-8")
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("history-write-failed\n")
+                    sys.stderr.write(
+                        "could not write history: new history run lacks complete v1.0 telemetry\n"
+                    )
                     return 1
                 else:
                     with attempts.open("a", encoding="utf-8") as stream:
@@ -383,6 +398,48 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\ntick\n")
+            # The real incident this reproduces: the worker commits its finished work
+            # and the provider then dies before the turn is reported. The named path
+            # counts the deaths, so a journey says how many dispatches die (`die-times`,
+            # default one) and every later one runs through — which is what lets it
+            # assert that the completing dispatch built on preserved work rather than
+            # re-deriving it.
+            died = re.search(r"die-after-commit=(\S+)", task)
+            if died is not None:
+                latch = Path(died.group(1))
+                deaths = int(latch.read_text(encoding="utf-8")) if latch.exists() else 0
+                times = re.search(r"die-times=(\d+)", task)
+                if deaths < (int(times.group(1)) if times is not None else 1):
+                    latch.write_text(str(deaths + 1), encoding="utf-8")
+                    Path("DIED.txt").write_text(
+                        f"work from dispatch {deaths + 1}, which then died\n", encoding="utf-8"
+                    )
+                    # `die-dirty` is the same death mid-edit: the worker's change is on
+                    # disk and was never committed, which is what the harness has to
+                    # commit for it rather than throw away with the worktree.
+                    if "die-dirty" not in task:
+                        subprocess.run(["git", "add", "DIED.txt"], check=True, capture_output=True)
+                        subprocess.run(
+                            [
+                                "git",
+                                "commit",
+                                "-m",
+                                "feat: work committed before the provider died",
+                            ],
+                            check=True,
+                            capture_output=True,
+                        )
+                    # `die-unclassified` is the same death by a cause that is *not*
+                    # recordable provider evidence, so the dispatcher raises instead
+                    # of synthesizing a refusal report. It is the arm that has to
+                    # preserve the work on its way out rather than leaving the branch
+                    # to be found by accident.
+                    sys.stderr.write(
+                        "harness claude-code cannot write v0.3 history telemetry\n"
+                        if "die-unclassified" in task
+                        else "fake_backend: provider error (respond): harness failed (quota)\n"
+                    )
+                    return 1
             orchestrator_plan = _orchestrator_command(task)
             infrastructure_failures = {
                 "provider-errors": "fake_backend: provider error",

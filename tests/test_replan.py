@@ -714,6 +714,110 @@ def test_explicit_branch_overrides_inferred_preserved_resume() -> None:
     assert "resume" not in carried["tasks"][0]
 
 
+def test_a_branch_pin_naming_the_preserved_branch_keeps_continuing_it() -> None:
+    """Only a *different* branch is the opt-out that starts the work fresh.
+
+    A pin naming the preserved branch lands the dispatch on those commits either
+    way, so discarding the continuation only lost the record that it was one, along
+    with the completed steps the checkpoint carries.
+    """
+    resume = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "Continue",
+        "branch": "feature/preserved",
+    }
+
+    carried = next_round(_plan(work), _preserved_failure(resume))
+
+    assert carried["tasks"][0]["branch"] == "feature/preserved"
+    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3, "attempts": 1}
+
+
+def test_a_cancelled_node_carries_the_branch_it_preserved() -> None:
+    """A cooperative stop is a checkpoint, not a discarded attempt."""
+    resume = {
+        "branch": "feature/cancelled",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    result = {
+        "round": 2,
+        "results": {"work": {"status": "cancelled", "outcome": "not-completed", "resume": resume}},
+    }
+
+    carried = next_round(_plan(work), result)
+
+    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 2, "attempts": 1}
+
+    # And it spends one shared budget rather than an unbounded one of its own: a
+    # node the round keeps stopping settles out for the planner exactly as a node
+    # that keeps failing does.
+    def _cancelled(round_number: int) -> dict[str, object]:
+        return {
+            "round": round_number,
+            "results": {
+                "work": {"status": "cancelled", "outcome": "not-completed", "resume": resume}
+            },
+        }
+
+    plan = carried
+    for attempt in range(2, MAX_AUTOMATIC_ROUND_RESUMES + 1):
+        plan = next_round(plan, _cancelled(attempt + 1))
+        assert plan["tasks"][0]["resume"]["attempts"] == attempt
+    assert next_round(plan, _cancelled(MAX_AUTOMATIC_ROUND_RESUMES + 2))["tasks"] == []
+
+
+def test_a_retry_that_states_its_own_resume_overrules_the_recorded_one() -> None:
+    """The planner names the work to continue; nothing derived may replace it."""
+    pinned = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    recorded = {**pinned, "checkpoint": "9999999", "branch": "feature/somewhere-else"}
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+
+    carried = next_round(
+        _plan(work),
+        _preserved_failure(recorded),
+        {"retry": {"work": {"resume": pinned}}},
+    )
+
+    assert carried["tasks"][0]["resume"] == pinned
+    # Recorded as the branch pin it already is, which is what makes the lifecycle
+    # refuse a branch it cannot adopt instead of substituting a fresh one.
+    assert carried["tasks"][0]["branch"] == "feature/preserved"
+
+
+def test_a_stated_resume_that_is_not_a_mapping_is_refused_by_the_plan_parser() -> None:
+    """A malformed pin travels as written and fails loudly, never silently ignored."""
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+
+    with pytest.raises(PlanError, match="'resume' must be a mapping"):
+        next_round(
+            _plan(work),
+            _preserved_failure(_PRESERVED_RESUME),
+            {"retry": {"work": {"resume": "feature/preserved"}}},
+        )
+
+
 def test_lifecycle_resume_ignores_unaddressable_result_entries() -> None:
     missing_id: dict = {}
     missing_result = {"id": "work"}

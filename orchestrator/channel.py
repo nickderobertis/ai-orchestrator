@@ -41,6 +41,7 @@ from .runs import (
     round_appears_in_flight,
     validate_run_id,
 )
+from .supervisory import record_turn
 
 
 class ChannelError(Exception):
@@ -1364,7 +1365,21 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         atomic_json(pending_path, surfaced["surface"])
         write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
         record_surface(channel_dir)
-        response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
+        # This relay runs once per orchestrator turn, so it is where the driver's
+        # bounded local capture gets its transcript. The write is a locked
+        # read-modify-write with an fsync, and it sits after both FIFOs because either
+        # earlier position pays that cost inside a window something waits on: before
+        # `write_message` delays the surface, and between the two delayed this relay
+        # past a `channel-reply` that had already been sent. `finally`, so a planner
+        # who never answers still cannot cost the turn its record.
+        try:
+            response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
+        finally:
+            record_turn(
+                channel_dir.parent,
+                f"orchestrator-{run_id}",
+                str(surfaced["surface"].get("message", "")),
+            )
         apply_heartbeat_reply(channel_dir, response)
         with suppress(FileNotFoundError):
             (channel_dir / "planner-pending.json").unlink()

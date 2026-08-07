@@ -712,6 +712,19 @@ export const timelineSpanKindSchema = z.enum([
   "rollup",
 ]);
 /**
+ * Which part of its loop the launched orchestrator is in. Derived by the server from
+ * what the run itself recorded — never asserted by the agent, which cannot report that
+ * it has stopped talking.
+ */
+export const supervisoryPhaseSchema = z.enum([
+  "starting",
+  "driving-round",
+  "executing-run-plan",
+  "reviewing-results",
+  "surfacing",
+  "finished",
+]);
+/**
  * Where one timeline item's heavy content lives. The payload never inlines a
  * transcript, a gate log, or a report body, so a consumer fetches only what it opens.
  */
@@ -773,6 +786,7 @@ export const timelineSpanSchema = openObject({
     output_tail: z.string().optional(),
     artifact_id: z.string().optional(),
   }).optional(),
+  phase: supervisoryPhaseSchema.optional(),
 });
 export const artifactContentSchema = openObject({
   id: z.string().min(1),
@@ -861,6 +875,7 @@ export type NodeDetail = z.infer<typeof nodeDetailSchema>;
 export type ArtifactContent = z.infer<typeof artifactContentSchema>;
 export type TimelineReferenceKind = z.infer<typeof timelineReferenceKindSchema>;
 export type TimelineSpanKind = z.infer<typeof timelineSpanKindSchema>;
+export type SupervisoryPhase = z.infer<typeof supervisoryPhaseSchema>;
 export type TimelineReference = z.infer<typeof timelineReferenceSchema>;
 export type TimelineEvent = z.infer<typeof timelineEventSchema>;
 export type TimelineInterval = z.infer<typeof timelineIntervalSchema>;
