@@ -4,6 +4,7 @@ import {
   parseRunTimeline,
 } from "@ai-orchestrator/dag-model";
 import {
+  act,
   cleanup,
   configure,
   fireEvent,
@@ -26,6 +27,9 @@ import {
   runList,
   runScopeTimeline,
   runTimeline,
+  WORKER_SESSION,
+  workerConversation,
+  workerTurnsTimeline,
 } from "../test/fixtures";
 import {
   defaultResponder,
@@ -928,7 +932,7 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     );
   });
 
-  test("shows live activity and refetches an open transcript on run-scoped invalidation", async () => {
+  test("shows live activity while leaving a settled transcript unread", async () => {
     window.history.replaceState(
       null,
       "",
@@ -936,11 +940,14 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     );
     const { client, sources, fetch } = telemetryHarness();
     render(<App client={client} />);
-    await screen.findByText("Coordinating the execution frontier");
+    const turn = await screen.findByText("Coordinating the execution frontier");
     await waitFor(() => expect(sources).toHaveLength(2));
-    const before = fetch.mock.calls.filter((call: unknown[]) =>
-      isConversation(new URL(String(call[0]), window.location.origin)),
-    ).length;
+    const reads = (matches: (url: URL) => boolean): number =>
+      fetch.mock.calls.filter((call: unknown[]) =>
+        matches(new URL(String(call[0]), window.location.origin)),
+      ).length;
+    const conversations = reads(isConversation);
+    const timelines = reads(isTimeline);
 
     sources[1]?.emit(
       "activity.changed",
@@ -962,13 +969,143 @@ describe("DAG application", JOURNEY_TIMEOUT, () => {
     );
 
     expect(await screen.findByText("dashboard: Read server.py")).toBeVisible();
-    await waitFor(() =>
-      expect(
-        fetch.mock.calls.filter((call: unknown[]) =>
-          isConversation(new URL(String(call[0]), window.location.origin)),
-        ).length,
-      ).toBeGreaterThan(before),
+    // The run really was re-read, which is what makes the transcript's stillness a
+    // decision rather than an update that never arrived.
+    await waitFor(() => expect(reads(isTimeline)).toBeGreaterThan(timelines));
+    // Work elsewhere in the run cannot change a session that has stopped recording,
+    // so the operator reading it is neither re-served it nor shown a skeleton: the
+    // very element they were reading is still the one on the page.
+    expect(reads(isConversation)).toBe(conversations);
+    expect(screen.getByText("Coordinating the execution frontier")).toBe(turn);
+    expect(screen.queryByText("Loading transcript…")).toBeNull();
+  });
+
+  test("appends a live transcript's next turn under the reader", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    let turns = 1;
+    let release: ((response: Response) => void) | undefined;
+    const { client, sources } = telemetryHarness((url) => {
+      if (isTimeline(url)) return Response.json(workerTurnsTimeline(turns));
+      if (isConversation(url) && url.pathname.endsWith(WORKER_SESSION))
+        // The re-read is held open, so what the panel shows *while* it is in flight
+        // is asserted rather than raced past.
+        return turns === 1
+          ? Response.json(workerConversation(turns))
+          : new Promise<Response>((resolve) => {
+              release = resolve;
+            });
+      return defaultResponder(url);
+    });
+    render(<App client={client} />);
+    await openTranscript(/engineer-dashboard/);
+    const first = await within(await openedDetail()).findByText(
+      "Implementing the dashboard now",
     );
+
+    turns = 2;
+    sources.at(-1)?.emit("conversation.changed", { run_id: LIVE_RUN }, "9");
+    await waitFor(() => expect(release).toBeDefined());
+
+    // Mid-refetch: the turn already being read is untouched and nothing loading has
+    // taken the panel's place.
+    expect(within(detail()).getByText("Implementing the dashboard now")).toBe(
+      first,
+    );
+    expect(screen.queryByText("Loading transcript…")).toBeNull();
+
+    release?.(Response.json(workerConversation(2)));
+    expect(
+      await within(detail()).findByText("Dashboard turn 1 arrived"),
+    ).toBeVisible();
+    // Appended, not re-rendered from scratch: the first turn is the same element it
+    // was before the second one landed.
+    expect(within(detail()).getByText("Implementing the dashboard now")).toBe(
+      first,
+    );
+  });
+
+  test("keeps a transcript readable when a refresh of it fails", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    let turns = 1;
+    let refuses = false;
+    const { client, sources, fetch } = telemetryHarness((url) => {
+      if (isTimeline(url)) return Response.json(workerTurnsTimeline(turns));
+      if (isConversation(url) && url.pathname.endsWith(WORKER_SESSION))
+        return refuses
+          ? Response.json(
+              {
+                error: { code: "unreadable", message: "History store is gone" },
+              },
+              { status: 503 },
+            )
+          : Response.json(workerConversation(turns));
+      return defaultResponder(url);
+    });
+    render(<App client={client} />);
+    await openTranscript(/engineer-dashboard/);
+    const first = await within(await openedDetail()).findByText(
+      "Implementing the dashboard now",
+    );
+    const reads = (): number =>
+      fetch.mock.calls.filter((call: unknown[]) =>
+        isConversation(new URL(String(call[0]), window.location.origin)),
+      ).length;
+    const before = reads();
+
+    refuses = true;
+    turns = 2;
+    sources.at(-1)?.emit("conversation.changed", { run_id: LIVE_RUN }, "9");
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    // Refusing a read that is already in hand is nothing but microtask work, so one
+    // macrotask boundary is past everything it was going to do to the page. Waiting
+    // on the page itself cannot say this: what is being proven is that nothing there
+    // moved at all.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The read it could not complete takes nothing away: what was readable stays
+    // readable rather than being replaced by a report of the failed refresh.
+    expect(within(detail()).getByText("Implementing the dashboard now")).toBe(
+      first,
+    );
+    expect(screen.queryByText("Transcript unavailable")).toBeNull();
+
+    // And the next read that does land is applied to that same page, so a refusal
+    // costs the reader nothing more than the turn it did not deliver.
+    refuses = false;
+    turns = 3;
+    sources.at(-1)?.emit("conversation.changed", { run_id: LIVE_RUN }, "10");
+    expect(
+      await within(detail()).findByText("Dashboard turn 2 arrived"),
+    ).toBeVisible();
+    expect(within(detail()).getByText("Implementing the dashboard now")).toBe(
+      first,
+    );
+  });
+
+  test("shows the loading state only for a transcript it has not read", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    let release: (response: Response) => void = () => {};
+    const { client } = telemetryHarness((url) =>
+      isConversation(url) && url.pathname.endsWith(WORKER_SESSION)
+        ? new Promise<Response>((resolve) => {
+            release = resolve;
+          })
+        : defaultResponder(url),
+    );
+    render(<App client={client} />);
+    await openTranscript(/engineer-dashboard/);
+
+    expect(
+      await within(await openedDetail()).findByText("Loading transcript…"),
+    ).toBeVisible();
+
+    release(Response.json(workerConversation(1)));
+    expect(
+      await within(detail()).findByText("Implementing the dashboard now"),
+    ).toBeVisible();
+    expect(screen.queryByText("Loading transcript…")).toBeNull();
   });
 
   test("loads the next run-list page when the sidebar reaches its end", async () => {

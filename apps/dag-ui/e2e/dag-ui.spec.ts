@@ -2119,6 +2119,78 @@ test("shows mid-turn activity from a live dispatch", async ({ page }) => {
   ).toHaveCount(0);
 });
 
+async function detailScroll(
+  page: Page,
+): Promise<{ top: number; bottom: number }> {
+  return itemDetail(page)
+    .locator('[data-slot="scroll-area-viewport"]')
+    .evaluate((element) => ({
+      top: element.scrollTop,
+      bottom: element.scrollHeight - element.scrollTop - element.clientHeight,
+    }));
+}
+
+async function wheelDetail(page: Page, delta: number): Promise<void> {
+  const panel = await itemDetail(page).boundingBox();
+  if (panel === null) throw new Error("the detail panel is not on screen");
+  await page.mouse.move(panel.x + panel.width / 2, panel.y + panel.height / 2);
+  await page.mouse.wheel(0, delta);
+}
+
+/** A wheel this far in either direction reaches the end of any transcript here. */
+const WHEEL_TO_THE_END = 100_000;
+
+test("follows a growing transcript only while the reader is at its end", async ({
+  page,
+}) => {
+  test.slow();
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await page
+    .getByRole("region", { name: "Node transcript" })
+    .getByRole("button", { name: /^Open Worker \(engineer-dashboard\)/ })
+    .click();
+  await expect(itemDetail(page)).toContainText(
+    "Implementing the dashboard now",
+  );
+
+  // Long enough that the panel really scrolls, and short enough that the reader is
+  // still handed every turn rather than a page of them.
+  changeServedRuns(["--grow-worker-session", "20"]);
+  await expect(itemDetail(page)).toContainText("Dashboard turn 19 arrived");
+  await wheelDetail(page, WHEEL_TO_THE_END);
+  await expect
+    .poll(async () => (await detailScroll(page)).bottom)
+    .toBeLessThan(40);
+  // The panel really does overflow, so being at its end is a position a reader chose
+  // rather than the only one there is.
+  expect((await detailScroll(page)).top).toBeGreaterThan(0);
+
+  // Read at the end, the panel follows what the run writes next.
+  changeServedRuns(["--grow-worker-session", "21"]);
+  await expect(itemDetail(page)).toContainText("Dashboard turn 20 arrived");
+  await expect
+    .poll(async () => (await detailScroll(page)).bottom)
+    .toBeLessThan(40);
+
+  // Read anywhere else, it does not: the reader keeps the position they chose while
+  // the transcript keeps growing underneath them.
+  await wheelDetail(page, -WHEEL_TO_THE_END);
+  await expect.poll(async () => (await detailScroll(page)).top).toBe(0);
+  changeServedRuns(["--grow-worker-session", "22"]);
+  await expect(itemDetail(page)).toContainText("Dashboard turn 21 arrived");
+  expect((await detailScroll(page)).top).toBe(0);
+  // And the turn it was opened on was never taken away and put back.
+  await expect(itemDetail(page)).toContainText(
+    "Implementing the dashboard now",
+  );
+
+  // Opening this long a session lands at its beginning: following a transcript that
+  // is still being written is not the same as skipping to the last thing it said.
+  await page.reload();
+  await expect(itemDetail(page)).toContainText("Dashboard turn 21 arrived");
+  expect((await detailScroll(page)).top).toBe(0);
+});
+
 test("drops a run the server stops serving", async ({ page }) => {
   await openObservatory(page);
   await expect(

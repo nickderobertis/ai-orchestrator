@@ -61,7 +61,6 @@ export function NodeTimelineView({
   selectedItemId,
   onSelectItem,
   onBack,
-  conversationRevision,
   selectedTab,
   onSelectTab,
 }: {
@@ -73,7 +72,6 @@ export function NodeTimelineView({
   readonly selectedItemId?: string;
   readonly onSelectItem: (id?: string) => void;
   readonly onBack: () => void;
-  readonly conversationRevision?: number;
   readonly selectedTab: NodeTab;
   readonly onSelectTab: (tab: NodeTab) => void;
 }) {
@@ -239,7 +237,6 @@ export function NodeTimelineView({
           ) : (
             <NodeExecution
               client={client}
-              conversationRevision={conversationRevision}
               node={node}
               onSelectItem={onSelectItem}
               runId={runId}
@@ -255,7 +252,6 @@ export function NodeTimelineView({
 
 function NodeExecution({
   client,
-  conversationRevision,
   node,
   onSelectItem,
   runId,
@@ -263,7 +259,6 @@ function NodeExecution({
   timeline,
 }: {
   readonly client: TelemetryClient;
-  readonly conversationRevision?: number;
   readonly node: NodeView;
   readonly onSelectItem: (id?: string) => void;
   readonly runId: string;
@@ -387,7 +382,6 @@ function NodeExecution({
           </Button>
           <TimelineItemDetail
             client={client}
-            conversationRevision={conversationRevision}
             node={node}
             row={selected}
             runId={runId}
