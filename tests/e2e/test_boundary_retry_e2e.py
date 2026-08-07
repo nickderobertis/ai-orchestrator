@@ -48,17 +48,19 @@ def _base(tmp_path: Path) -> Path:
 
 def _plan(tmp_path: Path, held: Rendezvous) -> Path:
     """A one-worker plan whose worker is held so the pacemaker fires mid-round."""
-    path = tmp_path / "boundary-retry-plan.json"
+    path = tmp_path / f"{held.ready.stem}-plan.json"
     path.write_text(
         json.dumps(
             {
                 "schema_version": 3,
-                "name": "boundary-retry",
+                "name": held.ready.stem,
                 "tasks": [
                     {
                         "id": "worker",
                         "persona": "engineer",
-                        "task": f"complete-now boundary-retry no-assessment{held.sentinels(0)}",
+                        "task": (
+                            f"complete-now {held.ready.stem} no-assessment{held.sentinels(0)}"
+                        ),
                     }
                 ],
             }
@@ -160,6 +162,77 @@ def test_a_refused_check_in_launch_is_retried_and_the_journal_counts_the_attempt
             .splitlines()
         )
         assert dispatches[:2] == ["provider-refused", "success"], dispatches
+    finally:
+        held.let_go()
+        _stop(run_dir)
+
+
+def test_an_outage_that_does_not_clear_spends_the_budget_and_defers_to_the_pacemaker(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """A bounded retry has to end, and what it ends in is the behaviour that existed.
+
+    Every attempt is refused here, so the budget is spent — and the check-in falls
+    back to exactly what a failed one always did: the failure recorded in
+    `check-in.log`, the pacemaker's lease handed back, and the next interval free to
+    try again. The retries are visible in the journal either way, which is how a
+    planner tells one refusal from an outage nothing is riding out.
+    """
+    runs = tmp_path / "runs"
+    held = Rendezvous.at(tmp_path, "boundary-exhausted")
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            "--detach",
+            str(_plan(tmp_path, held)),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(_base(tmp_path)),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--heartbeat-interval",
+            "0.5",
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "FAKE_CHECK_IN_PROVIDER_REFUSE_ALWAYS": "1",
+            ATTEMPTS_ENV: "2",
+            BACKOFF_ENV: "0.05",
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+    assert launched.returncode == 0, launched.stderr
+    run_id = str(json.loads(launched.stdout)["run_id"])
+    run_dir = runs / run_id
+    try:
+        held.wait(240)
+        wait = deadline(90)
+        while time.monotonic() < wait:
+            if _journalled_retries(run_dir) and (run_dir / "channel" / "check-in.log").is_file():
+                break
+            time.sleep(0.05)
+        retries = _journalled_retries(run_dir)
+        # The budget, and only the budget: two attempts means one recorded retry.
+        assert [item["attempt"] for item in retries[:1]] == [1], retries
+        assert {item["attempts"] for item in retries} == {2}, retries
+        # And then the ordinary deferral, unchanged: the attempt is recorded failed
+        # and the lease is back, so the next interval may try again.
+        failures = [
+            json.loads(line)
+            for line in (run_dir / "channel" / "check-in.log")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert failures and failures[0]["succeeded"] is False, failures
+        assert not (run_dir / "channel" / "heartbeat-surface.json").is_file()
     finally:
         held.let_go()
         _stop(run_dir)

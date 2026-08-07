@@ -322,6 +322,15 @@ def main() -> int:
                 # above, which the pacemaker still defers to its next interval.
                 refuse_once_value = os.environ.get("FAKE_CHECK_IN_PROVIDER_REFUSE_ONCE")
                 refuse_once = Path(refuse_once_value) if refuse_once_value else None
+                # The outage that does not clear: every attempt is refused, which is
+                # what a spent retry budget looks like from the other side.
+                if os.environ.get("FAKE_CHECK_IN_PROVIDER_REFUSE_ALWAYS"):
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("provider-refused\n")
+                    sys.stderr.write(
+                        PROVIDER_REFUSALS["agent-attributed-provider-failure"][1] + "\n"
+                    )
+                    return 1
                 if refuse_once is not None and not refuse_once.exists():
                     refuse_once.write_text("refused\n", encoding="utf-8")
                     with attempts.open("a", encoding="utf-8") as stream:

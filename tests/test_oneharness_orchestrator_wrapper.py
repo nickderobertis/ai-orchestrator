@@ -24,6 +24,7 @@ from orchestrator.boundary import (
     BACKOFF_FACTOR,
     DEFAULT_ATTEMPTS,
     DEFAULT_BACKOFF_SECONDS,
+    MAX_ATTEMPTS,
     MAX_BACKOFF_SECONDS,
 )
 
@@ -383,6 +384,7 @@ def test_the_wrapper_restates_the_boundary_policy_the_python_side_owns() -> None
         "BOUNDARY_DEFAULT_BACKOFF_SECONDS": str(int(DEFAULT_BACKOFF_SECONDS)),
         "BOUNDARY_BACKOFF_FACTOR": str(int(BACKOFF_FACTOR)),
         "BOUNDARY_MAX_BACKOFF_SECONDS": str(int(MAX_BACKOFF_SECONDS)),
+        "BOUNDARY_MAX_ATTEMPTS": str(MAX_ATTEMPTS),
     }
 
 
