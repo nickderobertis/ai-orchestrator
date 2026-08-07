@@ -87,9 +87,18 @@ def _launch(
     runs: Path,
     base: Path,
     onejudge_bin: str,
-    heartbeat: str = "0.5",
+    heartbeat: str = "5",
     **env: str,
 ) -> str:
+    """Launch a real detached orchestrator over the plan, and return its run id.
+
+    The pacemaker interval is deliberately not the sub-second one the heartbeat's own
+    journeys use. This journey needs *a* check-in, not a stream of them, and the
+    pacemaker re-fires every interval for as long as its update sits unread — so a
+    0.5s interval spawned a real onejudge dispatch every half second for the whole
+    time the node was held, which is load this suite pays on every run for no extra
+    proof.
+    """
     launched = subprocess.run(
         [
             "just",
@@ -178,6 +187,17 @@ def _wait_for(predicate: object, *, seconds: float, what: str) -> None:
             return
         time.sleep(0.05)
     raise AssertionError(f"never observed: {what}")
+
+
+def _reply(run_id: str, runs: Path, value: dict[str, object]) -> None:
+    subprocess.run(
+        ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        input=json.dumps(value),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
 
 
 def _drain(run_id: str, runs: Path) -> dict[str, object]:
@@ -328,20 +348,24 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         assert f"    driver running (pid {owner})" in live_rows, live_rows
 
         # The node was held so far, so the driver's first turn had not ended. Let it
-        # finish one: the relay records a bounded turn as each orchestrator turn ends,
-        # which is what gives a capture-backed span its transcript.
+        # finish one, then drive the exchange a real planner drives: read the surface,
+        # and answer it.
         hold.let_go()
         _drain(run_id, runs)
+        # Read but unanswered, so what the driver is doing now is waiting on the
+        # planner rather than driving a round. Asserted before the reply, because the
+        # reply is what ends it.
+        assert _by_role()["orchestrator"]["phase"] == "surfacing", _by_role()
+
+        _reply(run_id, runs, {"completion": False, "reason": "keep going", "message": "continue"})
+        # Answering releases the relay, and the relay records the turn it just served.
+        # That is the whole of a capture-backed span's transcript.
         _wait_for(
             lambda: bool(json.loads(driver_capture.read_text(encoding="utf-8"))["turns"]),
-            seconds=60,
+            seconds=120,
             what="a captured orchestrator turn",
         )
-        driver_span = _by_role()["orchestrator"]
-        assert driver_span["detail"]["output_tail"]
-        # And the phase moved with the run: that surface is unanswered, so what the
-        # driver is doing now is waiting on the planner rather than driving a round.
-        assert driver_span["phase"] == "surfacing", driver_span
+        assert _by_role()["orchestrator"]["detail"]["output_tail"]
 
     # And with the driver's session in history, the recorded transcript wins. The store
     # is the one this run's `oneharness history list` reads, written before the server
