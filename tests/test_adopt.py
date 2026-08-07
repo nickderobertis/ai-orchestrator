@@ -230,6 +230,23 @@ def test_the_cli_refuses_a_plan_beside_adopt(capsys: pytest.CaptureFixture[str])
     assert "do not also pass a plan file" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("interval", [0.0, -1.0, float("nan"), float("inf")])
+def test_adoption_refuses_a_heartbeat_interval_before_it_registers_anything(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, interval: float
+) -> None:
+    """A half-done adoption leaves this process registered as an owner it is not."""
+    run_dir = _launch(monkeypatch, tmp_path, SESSION)
+    _as_session(monkeypatch, SESSION)
+    _driver_is_gone(monkeypatch)
+
+    with pytest.raises(DispatchError, match="heartbeat interval"):
+        adopt_orchestrator(run_dir.name, runs_dir=run_dir.parent, heartbeat_interval=interval)
+    # Nothing moved: the dead driver's evidence is where it was, and the record still
+    # reads as a run that has never been adopted.
+    assert not (run_dir / "orchestrator" / "report.pre-adopt-1.json").exists()
+    assert read_relaunch_record(run_dir)["adoptions"] == 0
+
+
 def test_adoption_refuses_a_run_that_does_not_exist(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

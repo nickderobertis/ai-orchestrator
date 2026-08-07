@@ -1605,6 +1605,13 @@ def adopt_orchestrator(
     who drives it; what this needs from the caller is only whether it is that
     session, which is `caller_identity` — the same question `just stop` asks.
     """
+    # Checked before anything is registered or moved aside, not left to the channel
+    # to refuse: an adoption that failed halfway leaves a reservation naming this
+    # process as the owner of a run it never started driving.
+    if heartbeat_interval is not None and (
+        not math.isfinite(heartbeat_interval) or heartbeat_interval <= 0
+    ):
+        raise DispatchError("heartbeat interval must be a positive finite number of seconds")
     root = Path(runs_dir).resolve()
     validated = validate_run_id(run_id)
     run_dir = root / validated
