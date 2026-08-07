@@ -420,3 +420,52 @@ def _recorded_driver(tmp_path: Path, run_id: str) -> dict[str, object]:
             "persona": "orchestrator",
         },
     }
+
+
+@pytest.mark.load_sensitive
+@pytest.mark.xdist_group("load_sensitive")
+def test_a_driver_that_finished_its_loop_stops_reporting_itself(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """The other end of the same line: a run that ended says so on its own row.
+
+    A finished driver is deliberately silent. Its run already says how it ended, and a
+    line per settled run is exactly what would bury the one run whose driver is dying —
+    which is the line this whole surface exists for.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "settled-loop.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "settled-loop",
+                "tasks": [{"id": "worker", "persona": "engineer", "task": "complete-now finished"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch(plan, runs, _base(tmp_path), onejudge_bin, XDG_STATE_HOME=str(tmp_path / "st"))
+
+    _drain(run_id, runs)
+    subprocess.run(
+        ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        input=json.dumps({"completion": True, "reason": "verified"}),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    report = runs / run_id / "orchestrator" / "report.json"
+    _wait_for(
+        lambda: report.is_file() and report.stat().st_size > 0,
+        seconds=120,
+        what="the driver's own report",
+    )
+
+    reported = _status(run_id, runs, tmp_path / "history")
+    assert "driver running" not in reported, reported
+    assert "DRIVER DEAD" not in reported, reported
+    listed = _runs(runs, tmp_path / "history")
+    assert "driver running" not in listed, listed
+    assert "DRIVER DEAD" not in listed, listed
