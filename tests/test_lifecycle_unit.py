@@ -2005,7 +2005,10 @@ def test_main_plan_happy(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    rc = lc.main_plan([plan_file, "--format", "json"])
+    # Its own runs root, never the default `runs/`: that is the checkout's live run
+    # ledger, and every plan `_write` produces is named `repo-plan.json`, so the two
+    # recording tests here would resolve one run id and race each other's claim.
+    rc = lc.main_plan([plan_file, "--format", "json", "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True and payload["results"]["a"]["outcome"] == "merged"
@@ -2025,7 +2028,8 @@ def test_main_plan_human_format(monkeypatch, tmp_path, capsys) -> None:
             started_order=["a"],
         ),
     )
-    rc = lc.main_plan([plan_file])  # human format (default)
+    # human format (default), recording into a runs root of its own
+    rc = lc.main_plan([plan_file, "--runs-dir", str(tmp_path / "runs")])
     assert rc == 1  # not ok
     assert "repo-plan" in capsys.readouterr().out
 
