@@ -291,8 +291,8 @@ def main_runs(argv: list[str] | None = None) -> int:
     # And one layer above those dispatches: the process driving the run at all. A row
     # that says ACTIVE says a pid was recorded; this says whether that pid is still
     # there, which part of its loop the run's state places it in, and how long since
-    # its last model request — the three things a planner wondering why nothing is
-    # settling was previously left to infer.
+    # anything of it was last observed doing — the three things a planner wondering
+    # why nothing is settling was previously left to infer.
     driver = {
         path.name: indicator
         for path in run_dirs

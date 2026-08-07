@@ -24,8 +24,8 @@ This module is the local half, and it holds two things:
   stands down.
 * **The driver's observable state.** Whether the launched orchestrator's pid is alive,
   which phase of its loop the run's own recorded state places it in, and how long ago
-  it last made a model request. Derived, never asserted by the agent: an agent that
-  has stopped talking cannot report that it stopped.
+  anything of it was last observed doing something. Derived, never asserted by the
+  agent: an agent that has stopped talking cannot report that it stopped.
 
 Nothing here is authoritative. The journal and the ledger still decide; this only
 makes the tier that drives them visible.
@@ -176,7 +176,8 @@ def bounded_note(raw: str) -> str:
     return " ".join(redact(raw[:MAX_CAPTURED_TURN_CHARS]).split())
 
 
-def validate_session(session: str) -> str:
+def validate_session(session: object) -> str:
+    """Return ``session`` when this scheme can carry it, else raise `CaptureError`."""
     if not isinstance(session, str) or _SESSION_NAME.match(session) is None:
         raise CaptureError(
             f"supervisory session name {session!r} must be 1-{MAX_SESSION_NAME_CHARS} ASCII "
@@ -348,11 +349,20 @@ def _capture_status(value: str) -> CaptureStatus:
 
 
 def _record(raw: Mapping[str, Any]) -> CaptureRecord | None:
-    """One raw capture mapping as the mutable record, or ``None`` when unusable."""
-    session = _text(raw.get("session"))
+    """One raw capture mapping as the mutable record, or ``None`` when unusable.
+
+    The session name is revalidated here rather than trusted for having been written
+    by `open_capture`: this is a file on disk that a hand edit can have replaced, and
+    the name it carries becomes a served span's identifier. A record naming a session
+    this scheme would refuse to write is treated as absent.
+    """
     role = _text(raw.get("agent_role"))
     started = _text(raw.get("started_at"))
-    if raw.get("schema_version") != CAPTURE_SCHEMA_VERSION or not (session and role and started):
+    try:
+        session = validate_session(raw.get("session"))
+    except CaptureError:
+        return None
+    if raw.get("schema_version") != CAPTURE_SCHEMA_VERSION or not (role and started):
         return None
     record: CaptureRecord = {
         "schema_version": CAPTURE_SCHEMA_VERSION,
@@ -368,7 +378,9 @@ def _record(raw: Mapping[str, Any]) -> CaptureRecord | None:
     if (harness := _text(raw.get("harness"))) is not None:
         record["harness"] = harness
     if (failure := _text(raw.get("history_failure"))) is not None:
-        record["history_failure"] = failure
+        # Rebounded on read, not only on write: the file can have been replaced since,
+        # and an unbounded reason would reach a served span as a whole harness log.
+        record["history_failure"] = bounded_note(failure)
     number = raw.get("round")
     if isinstance(number, int) and not isinstance(number, bool) and number >= 1:
         record["round"] = number
@@ -434,15 +446,17 @@ class DriverState:
     phase: SupervisoryPhase
     round: int | None
     started_at: float | None
-    #: When the driver last made a model request, as the newest of the evidence in
-    #: `_last_request_at`, or ``None`` when nothing timeable was recorded.
-    last_request_at: float | None
+    #: When this host last observed the driver doing anything, as the newest of the
+    #: evidence in `_last_activity_at`, or ``None`` when nothing timeable was recorded.
+    #: Deliberately *activity* and not "model request": only a captured turn proves a
+    #: turn, and the other evidence is a file the driver's own processes write.
+    last_activity_at: float | None
     history_failure: str | None = None
 
-    def last_request_age(self, *, now: float | None = None) -> float | None:
-        if self.last_request_at is None:
+    def last_activity_age(self, *, now: float | None = None) -> float | None:
+        if self.last_activity_at is None:
             return None
-        return max(0.0, (time.time() if now is None else now) - self.last_request_at)
+        return max(0.0, (time.time() if now is None else now) - self.last_activity_at)
 
     @property
     def dead(self) -> bool:
@@ -450,14 +464,14 @@ class DriverState:
         return not self.alive and self.phase != "finished"
 
     def describe(self, *, now: float | None = None) -> str:
-        """One planner-facing line: liveness first, then phase, then request age."""
+        """One planner-facing line: liveness first, then phase, then how long silent."""
         where = f"{self.phase}" + (f" (round {self.round})" if self.round is not None else "")
         pid = f"pid {self.pid}" if self.pid is not None else "no recorded pid"
-        age = self.last_request_age(now=now)
+        age = self.last_activity_age(now=now)
         elapsed = (
-            "last model request not recorded"
+            "no observed activity"
             if age is None
-            else f"last model request {int(age) // 60}m{int(age) % 60:02d} ago"
+            else f"last observed activity {int(age) // 60}m{int(age) % 60:02d} ago"
         )
         if self.dead:
             return (
@@ -511,6 +525,25 @@ def _stderr_tail(run_dir: Path, limit: int = 8_192) -> str:
         return ""
 
 
+def _captured_failure(captures: Sequence[SupervisoryCapture]) -> str | None:
+    """The newest harness history-write refusal any of this run's captures recorded.
+
+    Reported on the driver's line because it is a fact about the *tier*, not about one
+    session: a refused write means some supervisory transcript this run produced is not
+    in history, and the planner reading that line is the one who needs to know that the
+    capture is all there is. The driver's own harness log is preferred when it carries
+    one, since that is the only place a detached driver's own refusal appears at all.
+    """
+    return next(
+        (
+            capture.history_failure
+            for capture in sorted(captures, key=lambda item: item.started_at, reverse=True)
+            if capture.history_failure
+        ),
+        None,
+    )
+
+
 def _round_phase(run_dir: Path) -> tuple[SupervisoryPhase, int | None]:
     """The phase the latest recorded round places the driver in, and that round."""
     latest = latest_round(run_dir)
@@ -531,15 +564,17 @@ def _round_phase(run_dir: Path) -> tuple[SupervisoryPhase, int | None]:
     return "driving-round", number
 
 
-def _last_request_at(run_dir: Path, captures: Sequence[SupervisoryCapture]) -> float | None:
-    """When the driver last made a model request, from every stamp that can time one.
+def _last_activity_at(run_dir: Path, captures: Sequence[SupervisoryCapture]) -> float | None:
+    """When this host last observed the driver doing something, newest evidence wins.
 
-    Three kinds of evidence, newest wins. A captured turn is the exact answer where
-    one was recorded — `channel.relay_supervisor` writes it as the turn ends. The
-    harness's own stderr is the next best: it is appended to while a turn runs, which
-    is the only in-flight signal a session with no completed turn produces at all. The
-    supervisor verdict the relay persists per turn is the third, and the launch stamp
-    is the floor so a driver that has done nothing yet is still placed in time.
+    Deliberately *activity* rather than "model request", because only one of the four
+    inputs proves a turn: a captured turn is written by `channel.relay_supervisor` as
+    an orchestrator turn ends. The other three are files the driver's own processes
+    write — its harness stderr, appended while a turn runs and the only in-flight
+    signal a session with no completed turn produces at all; the supervisor verdict the
+    relay persists per turn; and the launch stamp, which is the floor so a driver that
+    has done nothing yet is still placed in time. Reporting the newest of them answers
+    "how long has this been silent", which is the question a planner is asking.
     """
     stamps = [
         stamp
@@ -599,8 +634,8 @@ def driver_state(
         phase=phase,
         round=number,
         started_at=_mtime(run_dir / _ORCHESTRATOR_DIR / "status.json"),
-        last_request_at=_last_request_at(run_dir, found),
-        history_failure=history_write_failure(_stderr_tail(run_dir)),
+        last_activity_at=_last_activity_at(run_dir, found),
+        history_failure=(history_write_failure(_stderr_tail(run_dir)) or _captured_failure(found)),
     )
 
 
@@ -616,8 +651,9 @@ def driver_indicator(run_dir: Path, *, now: float | None = None) -> str | None:
     line = state.describe(now=now)
     if state.history_failure is not None:
         line += (
-            f"; harness history write failed ({state.history_failure}) — its transcript is "
-            f"the bounded local capture under {run_dir.name}/{CAPTURE_DIR}/"
+            f"; harness history write failed ({state.history_failure}) — the supervisory "
+            f"transcripts it lost are the bounded local captures under "
+            f"{run_dir.name}/{CAPTURE_DIR}/"
         )
     return line
 

@@ -24,6 +24,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -148,6 +149,20 @@ def _status(run_id: str, runs: Path, history: Path) -> str:
     return viewed.stdout
 
 
+def _runs(runs: Path, history: Path) -> str:
+    history.mkdir(exist_ok=True)
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(history)},
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=180,
+    )
+    return listed.stdout
+
+
 def _wait_for(predicate: object, *, seconds: float, what: str) -> None:
     assert callable(predicate)
     waited = deadline(seconds)
@@ -251,7 +266,7 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=30)
 
-        def _by_role() -> dict[str, dict[str, object]]:
+        def _by_role() -> dict[str, Any]:
             spans = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()[
                 "spans"
             ]
@@ -276,22 +291,29 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
         check_in_span = by_role["check-in"]
         assert check_in_span["round"] == 1
         failure = next(
-            event
-            for event in check_in_span["events"]  # type: ignore[attr-defined]
-            if event["kind"] == "history-write-failed"
+            event for event in check_in_span["events"] if event["kind"] == "history-write-failed"
         )
         assert "lacks complete v1.0 telemetry" in failure["status"]
         # No transcript exists for either, so neither invents a reference to one.
         assert all("reference" not in span for span in by_role.values())
 
-        # `just status` names the live driver: pid liveness, phase, last-request age.
+        # `just status` and `just runs` both name the live driver: pid liveness, phase,
+        # and how long it has been silent — while it is still driving, which is the
+        # window a planner is in when they wonder why nothing is settling.
         owner = json.loads((run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8"))[
             "pid"
         ]
         live_view = _status(run_id, runs, tmp_path / "history")
         assert f"{run_id}: driver running (pid {owner})" in live_view, live_view
-        assert "phase " in live_view and "last model request " in live_view, live_view
-        assert "harness history write failed" not in live_view, live_view
+        assert "phase " in live_view and "last observed activity " in live_view, live_view
+        # This run's check-in had a session the harness refused to record, so the
+        # driver's line says so and points at the bounded captures standing in for the
+        # transcripts that were never written.
+        assert "harness history write failed" in live_view, live_view
+        assert "lacks complete v1.0 telemetry" in live_view, live_view
+        assert f"{run_id}/{CAPTURE_DIR}/" in live_view, live_view
+        live_rows = _runs(runs, tmp_path / "history")
+        assert f"    driver running (pid {owner})" in live_rows, live_rows
 
         # The node was held so far, so the driver's first turn had not ended. Let it
         # finish one: the relay records a bounded turn as each orchestrator turn ends,
@@ -303,12 +325,18 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
             seconds=60,
             what="a captured orchestrator turn",
         )
-        assert _by_role()["orchestrator"]["detail"]["output_tail"]  # type: ignore[index]
+        assert _by_role()["orchestrator"]["detail"]["output_tail"]
 
-        # And with history present, the recorded transcript wins and resolves.
-        store.write_text(
-            json.dumps({"sessions": [_recorded_driver(tmp_path, run_id)]}), encoding="utf-8"
-        )
+    # And with the driver's session in history, the recorded transcript wins. The store
+    # is the one this run's `oneharness history list` reads, written before the server
+    # that reads it starts — the same way every history journey here seeds one.
+    recorded_store = tmp_path / "recorded-store.json"
+    recorded_store.write_text(
+        json.dumps({"sessions": [_recorded_driver(tmp_path, run_id)]}), encoding="utf-8"
+    )
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(recorded_store))
+    with _serve(create_app(runs, oneharness_bin=str(binary))) as base:
+        client = httpx.Client(base_url=base, timeout=30)
         served = client.get(f"/api/v2/runs/{run_id}/timeline", params={"scope": "run"}).json()[
             "spans"
         ]
@@ -333,15 +361,7 @@ def test_a_driven_run_serves_its_supervisory_tier_and_names_a_dead_driver(
     dead_view = _status(run_id, runs, tmp_path / "history")
     assert f"{run_id}: DRIVER DEAD (pid {owner} is gone)" in dead_view, dead_view
     assert "nothing is driving this run" in dead_view, dead_view
-    listed = subprocess.run(
-        ["just", "runs", "--runs-dir", str(runs)],
-        cwd=REPO_ROOT,
-        env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(tmp_path / "history")},
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=180,
-    ).stdout
+    listed = _runs(runs, tmp_path / "history")
     assert "DRIVER DEAD" in listed, listed
 
 

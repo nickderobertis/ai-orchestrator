@@ -168,7 +168,7 @@ because this tier is the one whose sessions oneharness has been failing to recor
 1. **`just status <run-id>` and `just runs`** carry one driver line per unfinished
    launch: whether the recorded pid is still there, which part of its loop the run's
    own state places it in (`starting`, `driving-round`, `executing-run-plan`,
-   `reviewing-results`, `surfacing`), and how long since its last model request. A
+   `reviewing-results`, `surfacing`), and how long since anything of it was last observed doing something. A
    driver this host has *proved* is gone reads `DRIVER DEAD (pid N is gone) — …;
    nothing is driving this run`. That is deliberately distinct from `PARKED`, which
    is a launch that still holds its pid while nothing progresses, and from a node

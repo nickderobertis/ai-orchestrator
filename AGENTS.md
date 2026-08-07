@@ -458,7 +458,7 @@ contribution. Miscounting live dispatches from `ps`, and missing a judge turn we
 for nearly two hours, are what these replace.
 They also report the tier *above* those dispatches: one driver line per unfinished
 launch naming whether the orchestrator's recorded pid is still there, which part of
-its loop the run's own state places it in, and how long since its last model request.
+its loop the run's own state places it in, and how long since anything of it was last observed doing something.
 A driver this host has proved is gone reads `DRIVER DEAD … nothing is driving this
 run` — distinct from `PARKED`, which is a launch that still holds its pid. The same
 tier is served as run-scope timeline spans, from a bounded local capture when the

@@ -269,18 +269,19 @@ def test_a_dead_driver_is_marked_explicitly_with_its_phase_and_request_age(
     assert state.dead is True
     assert state.phase == "driving-round"
     assert state.round == 3
-    assert state.last_request_at is not None
-    line = state.describe(now=(state.last_request_at or 0.0) + 125)
+    assert state.last_activity_at is not None
+    line = state.describe(now=(state.last_activity_at or 0.0) + 125)
     assert "DRIVER DEAD" in line
     assert "pid 4194303 is gone" in line
     assert "phase driving-round (round 3)" in line
-    assert "last model request 2m05 ago" in line
+    assert "last observed activity 2m05 ago" in line
     assert "nothing is driving this run" in line
 
 
 def test_a_harness_that_refused_the_history_write_is_named_in_the_driver_line(
     tmp_path: Path,
 ) -> None:
+    """A refused write is a fact about the tier, so the tier's own line reports it."""
     run_dir = tmp_path / "run-7"
     _launch(run_dir)
     (run_dir / "orchestrator" / "stderr.log").write_text(
@@ -293,6 +294,30 @@ def test_a_harness_that_refused_the_history_write_is_named_in_the_driver_line(
     assert "harness history write failed" in line
     assert "lacks complete v1.0 telemetry" in line
     assert f"{run_dir.name}/{CAPTURE_DIR}/" in line
+
+
+def test_a_refusal_only_a_check_in_capture_recorded_still_reaches_the_driver_line(
+    tmp_path: Path,
+) -> None:
+    """A detached driver's own log is one source; the run's captures are the other.
+
+    onejudge keeps its provider's stderr, so a dispatch whose harness refused the write
+    records that refusal in its capture and nowhere the driver's log can see.
+    """
+    run_dir = tmp_path / "run-9"
+    _launch(run_dir)
+    open_capture(run_dir, session="check-in-run-9-1", agent_role="check-in", round_number=1)
+    close_capture(
+        run_dir,
+        "check-in-run-9-1",
+        status="failed",
+        history_failure="could not write history: new history run lacks complete v1.0 telemetry",
+    )
+
+    line = driver_indicator(run_dir)
+    assert line is not None
+    assert "harness history write failed" in line
+    assert "lacks complete v1.0 telemetry" in line
 
 
 def test_records_damaged_after_they_were_written_degrade_rather_than_raise(
@@ -348,7 +373,7 @@ def test_a_driver_with_nothing_timeable_still_reports_its_phase(tmp_path: Path) 
         phase=state.phase,
         round=state.round,
         started_at=None,
-        last_request_at=None,
+        last_activity_at=None,
     )
-    assert bare.last_request_age() is None
-    assert "last model request not recorded" in bare.describe()
+    assert bare.last_activity_age() is None
+    assert "no observed activity" in bare.describe()
