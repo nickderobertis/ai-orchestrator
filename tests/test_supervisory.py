@@ -22,6 +22,7 @@ from orchestrator.supervisory import (
     load_captures,
     open_capture,
     record_turn,
+    validate_agent_role,
 )
 
 
@@ -200,6 +201,27 @@ def test_a_session_name_the_filesystem_cannot_carry_is_refused(tmp_path: Path) -
     # dispatch, and the dispatch is the thing worth keeping.
     assert record_turn(run_dir, "a" * 251, "a turn") is False
     assert close_capture(run_dir, "a" * 251, status="failed") is False
+
+
+def test_a_role_no_served_span_could_be_attributed_to_is_refused_on_the_way_in(
+    tmp_path: Path,
+) -> None:
+    """Rejected where it is written, not only where it is read.
+
+    A reader that skips an unknown role turns a bad write into a capture that is
+    simply missing from the timeline — the invisibility this whole scheme exists to
+    end — so the caller learns at the boundary instead.
+    """
+    run_dir = tmp_path / "run-role"
+    for role in ("", "planner", "Orchestrator"):
+        with pytest.raises(CaptureError):
+            open_capture(run_dir, session="orchestrator-run-role", agent_role=role)
+    assert load_captures(run_dir) == []
+    # And a value no annotation constrains, because the record is JSON a later
+    # release could hand this the wrong shape of.
+    for value in (7, None, ["orchestrator"]):
+        with pytest.raises(CaptureError):
+            validate_agent_role(value)
 
 
 @pytest.mark.parametrize(

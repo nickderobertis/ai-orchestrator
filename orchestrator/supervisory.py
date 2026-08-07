@@ -192,6 +192,22 @@ def validate_session(session: object) -> str:
     return session
 
 
+def validate_agent_role(agent_role: object) -> str:
+    """Return ``agent_role`` when it is one this scheme serves, else raise `CaptureError`.
+
+    The role is what a served span is attributed to and what the fallback matches a
+    recorded conversation by, so it is a contract rather than a free label. Checked on
+    the way in as well as on the way out: a reader that rejects an unknown role turns
+    a bad write into a capture silently missing from the timeline, which is exactly
+    the invisibility the capture exists to end.
+    """
+    if not isinstance(agent_role, str) or agent_role not in _AGENT_ROLES:
+        raise CaptureError(
+            f"supervisory agent role {agent_role!r} must be one of {sorted(_AGENT_ROLES)}"
+        )
+    return agent_role
+
+
 def capture_path(run_dir: Path, session: str) -> Path:
     return run_dir / CAPTURE_DIR / f"{validate_session(session)}.json"
 
@@ -228,7 +244,7 @@ def open_capture(
     record: CaptureRecord = {
         "schema_version": CAPTURE_SCHEMA_VERSION,
         "session": session,
-        "agent_role": agent_role,
+        "agent_role": validate_agent_role(agent_role),
         "started_at": previous["started_at"] if previous else _now_stamp(started_at),
         "status": "running",
         "finished_at": None,
