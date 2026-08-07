@@ -1450,7 +1450,7 @@ def launch_orchestrator(
     # Same reason: a run told to use a harness nobody configured, or a model paired
     # with no identity, must refuse to start rather than dispatch its first round
     # onto a different provider or into a rejection.
-    harness_env = side_override_env(
+    side_env = side_override_env(
         worker=worker_harness,
         judge=judge_harness,
         worker_model=worker_model,
@@ -1581,7 +1581,7 @@ def launch_orchestrator(
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
     process_env["ONEHARNESS_MODE"] = oneharness_mode
-    process_env.update(harness_env)
+    process_env.update(side_env)
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     try:

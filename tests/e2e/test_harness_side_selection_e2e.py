@@ -60,16 +60,36 @@ JUDGE_CHOICE = "claude-code:primary"
 #: The identity both sides are put on for the model journeys, so what those prove is
 #: the model alone rather than the model riding along with a different provider.
 SHARED_MODEL_IDENTITY = "claude-code:primary"
-#: Each side's model is the one the OTHER side's config pins for that identity:
-#: `oneharness.toml` pins claude-opus-5 and `oneharness.judge.toml` claude-sonnet-5,
-#: by design. So a side that ignored its own value — or let its config win, which is
-#: what `ONEHARNESS_MODEL` alone would allow — records the value under test as the
-#: value it was supposed to displace, and the swap makes that visible either way.
-WORKER_MODEL_CHOICE = "claude-sonnet-5"
-JUDGE_MODEL_CHOICE = "claude-opus-5"
 #: The identity both default chains reach in this fixture, where neither alternate
 #: Claude config directory exists — asserted by the default-path journey below.
 DEFAULT_IDENTITY = "codex"
+
+
+def _configured_model(side: HarnessSide, identity: str) -> str:
+    """The model a role's config pins for one identity: the default that side runs on.
+
+    Read from the config rather than restated, so a journey asserting "this side was
+    left alone" — or "this value is one the config would not have produced" — keeps
+    meaning that after somebody retunes a tier.
+    """
+    harness, _, variant = identity.partition(":")
+    with side.config.open("rb") as handle:
+        entry = tomllib.load(handle)["harness"][harness]
+    if variant:
+        entry = entry["variant"][variant]
+    model = entry["model"]
+    assert isinstance(model, str)
+    return model
+
+
+#: Each side is given the model the OTHER side's config pins for the shared identity:
+#: the worker config pins the author tier there and the judge config the cheaper
+#: supervisor tier, by design. Swapping them is what makes the journeys below
+#: discriminating — a side that ignored its own value, or let its config win (which
+#: is all `ONEHARNESS_MODEL` alone would allow), records the value it was supposed to
+#: displace. Derived from the configs so the swap cannot quietly become a no-op.
+WORKER_MODEL_CHOICE = _configured_model(JUDGE_SIDE, SHARED_MODEL_IDENTITY)
+JUDGE_MODEL_CHOICE = _configured_model(WORKER_SIDE, SHARED_MODEL_IDENTITY)
 
 
 #: The process-wide value the two journeys below state for themselves: a third
@@ -232,18 +252,6 @@ class Dispatched:
         return {_spawned_model(turn) for turn in self.side(marker)}
 
 
-def _configured_model(side: HarnessSide, harness: str) -> str:
-    """The model a role's config pins for one harness: the default a side runs on.
-
-    Read from the config rather than restated, so a journey asserting "this side was
-    left alone" keeps meaning that after somebody retunes a tier.
-    """
-    with side.config.open("rb") as handle:
-        model = tomllib.load(handle)["harness"][harness]["model"]
-    assert isinstance(model, str)
-    return model
-
-
 def _spawned_model(turn: Mapping[str, Any]) -> str | None:
     """The model named on one spawned provider's own command line, if any."""
     argv = list(turn["argv"])
@@ -363,7 +371,8 @@ def test_each_side_runs_the_model_it_was_given_on_one_shared_identity(
     is what decides the turn: a config's per-harness `model` beats `ONEHARNESS_MODEL`,
     so the exported variable alone would have left both sides on their config's tier.
     """
-    assert WORKER_MODEL_CHOICE != JUDGE_MODEL_CHOICE
+    assert _configured_model(WORKER_SIDE, SHARED_MODEL_IDENTITY) != WORKER_MODEL_CHOICE
+    assert _configured_model(JUDGE_SIDE, SHARED_MODEL_IDENTITY) != JUDGE_MODEL_CHOICE
     dispatched = _dispatch(
         tmp_path,
         onejudge_bin,
@@ -744,6 +753,76 @@ def test_a_one_node_plan_runs_a_whole_workstream_on_the_providers_it_was_given(
     assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
     assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}
     assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
+
+
+def test_a_one_node_plan_runs_a_whole_workstream_on_the_models_it_was_given(
+    tmp_path: Path, bare_origin, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The model half reaches the lifecycle runner too, not only the direct one.
+
+    `just run-plan` builds a separate runner for lifecycle workstreams, so a model
+    that reached only the direct one would leave a whole branch supervised at a tier
+    nobody chose — the same split the harness half has its own journey for. This
+    drives the real recorded executor over a real git checkout: the node clones,
+    works in its worktree, passes its gate and merges, every turn of it through the
+    real wrapper and the real oneharness.
+    """
+    origin = bare_origin()
+    checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
+    record, environment = _provider_environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "workstream.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "workstream",
+                        "repo": str(checkout),
+                        "persona": "engineer",
+                        "task": "record which model ran this workstream",
+                        "max_turns": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.run(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "worktrees"),
+            "--worker-harness",
+            SHARED_MODEL_IDENTITY,
+            "--worker-model",
+            WORKER_MODEL_CHOICE,
+            "--judge-harness",
+            SHARED_MODEL_IDENTITY,
+            "--judge-model",
+            JUDGE_MODEL_CHOICE,
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+    dispatched = _recorded_turns(record, process)
+
+    assert process.returncode == 0, process.stderr
+    # The merge is what proves the models did not just parse but carried a real
+    # workstream — several dispatches on one branch — all the way through.
+    assert json.loads(process.stdout)["results"]["workstream"]["outcome"] == "merged"
+    assert dispatched.side(WORKER_MARKER), dispatched.turns
+    assert dispatched.side(JUDGE_MARKER), dispatched.turns
+    assert dispatched.models(WORKER_MARKER) == {WORKER_MODEL_CHOICE}
+    assert dispatched.models(JUDGE_MARKER) == {JUDGE_MODEL_CHOICE}
 
 
 def test_the_orchestrator_role_is_outside_this_seam(tmp_path: Path, oneharness_bin: str) -> None:
