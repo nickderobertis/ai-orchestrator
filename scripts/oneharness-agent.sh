@@ -24,7 +24,9 @@
 # branch's own `oneharness run` is the only one that beats the `model` a config pins
 # for the selected harness (oneharness 0.6.6 lets that config value beat
 # ONEHARNESS_MODEL), and the exported ONEHARNESS_MODEL is what carries the side's
-# choice to everything it subsequently runs.
+# choice to everything it subsequently runs. That precedence is a fact about one
+# release, so config/oneharness.version owns the literal above and
+# tests/test_onejudge_version.py fails here on an upgrade until it is re-measured.
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)

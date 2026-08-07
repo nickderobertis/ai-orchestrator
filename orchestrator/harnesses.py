@@ -26,7 +26,10 @@ process-wide lever, ``ONEHARNESS_MODEL``, is *not* the one it looks like: measur
 against oneharness 0.6.6, a config's per-harness ``model`` beats it, while the
 ``--model`` flag on an invocation's own argv beats the config. So the wrapper does
 both per branch — it names the model on that branch's own ``oneharness run`` and
-exports the variable for everything the side subsequently runs.
+exports the variable for everything the side subsequently runs. That precedence is a
+fact about one release rather than about oneharness, so ``config/oneharness.version``
+owns the literal above and ``tests/test_onejudge_version.py`` fails every restatement
+of it — here, in the wrapper, and in the reference document — on an upgrade.
 
 A model override is accepted only **paired with that side's harness override**, and
 only when the harness override names one harness family. A model name belongs to a
