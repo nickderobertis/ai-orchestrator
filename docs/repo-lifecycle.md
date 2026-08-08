@@ -894,6 +894,37 @@ subject that is the process; `load_sensitive` names a handshake between processe
 the test itself starts. A test that is merely slow, or that races something it does
 not own, is a test to fix.
 
+##### The three ways a wall-clock assertion is fixed
+
+Neither marker helps a test whose own budget is the problem, and those failed five
+gate runs on one branch whose diff touched none of them. Three shapes of fix, none
+of which is a looser bound:
+
+**Magnify the signal.** `test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace
+_period` proves a teardown skips the `SIGTERM`-to-`SIGKILL` grace when nothing is
+left to be graceful toward. Against the real 50ms grace, "skipped it" and "the host
+was busy" are the same 150ms, and the `/proc` walks the teardown must pay measured
+15-19ms idle and 180ms under load. So the test raises the grace a hundredfold for
+itself: what it now separates is a budget twenty-five times the dearest walk from
+one grace period five times larger again. The contract is untouched — restoring the
+unconditional sleep fails it at 20s against 1s.
+
+**Bound by what the failure costs.** The journey that proves a fired bound stops a
+gate restarting its worker had a budget the e2e load scale of four expanded to 83
+seconds — past the 33 a single escapee actually costs, so it could not have caught
+one. It is now half the drain ceiling: under what the failure costs, and two orders
+of magnitude above the 61-85ms this path overshoots its bound by under load.
+
+**Wait for the thing, not for a duration.** `_await_gone` polled `kill(pid, 0)`,
+which counts a *zombie* — so it waited on init's reaping rather than on the bound,
+and expired by 8-10ms after its full guard. It asks `is_running` now.
+
+The fourth shape is a test racing something it does not own, and the answer there is
+to retry the action rather than widen the wait on its result. The DAG UI's palette
+journey opens eight node views in sequence, and closing one mounts a fresh canvas: a
+click delivered into that remount selects nothing at all. Under a 20x CPU throttle
+its pre-fix form lost one at its ninth open; the retrying form ran 40 opens clean.
+
 #### Two invocations, two tasks, one floor
 
 Those two invocations were chained inside one Nx target by `&&`, which bought

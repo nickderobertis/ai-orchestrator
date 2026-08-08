@@ -18,6 +18,7 @@ import pytest
 from orchestrator import REPO_ROOT
 from orchestrator.coordination import LOCK_TIMEOUT_ENV
 from orchestrator.gitops import (
+    _DRAIN_SECONDS,
     DEFAULT_HOOK_TIMEOUT_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     GIT_HOOK_TIMEOUT_ENV,
@@ -139,6 +140,20 @@ def test_documentation_states_the_default_its_constant_declares(
     assert stated in prose, (
         f"{document} does not state {stated}; update it in the same change that "
         "moved the constant, or stop documenting the default"
+    )
+
+
+@pytest.mark.reads_docs
+def test_documentation_states_the_drain_ceiling_its_constant_declares() -> None:
+    """The prose names this ceiling as what a single escapee costs a fired bound.
+
+    That number is the whole reason the paragraph is there, so a stale one would
+    describe a cost the code no longer pays.
+    """
+    prose = (REPO_ROOT / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
+
+    assert f"whole {_DRAIN_SECONDS:g}s ceiling" in prose, (
+        "docs/repo-lifecycle.md must derive its drain ceiling from gitops._DRAIN_SECONDS"
     )
 
 

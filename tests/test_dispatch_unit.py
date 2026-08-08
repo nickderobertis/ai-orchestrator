@@ -1563,10 +1563,10 @@ def test_watchdog_lets_a_signalled_worker_shut_itself_down(tmp_path) -> None:
     assert not is_running(process.pid)
 
 
-#: The grace raised until it cannot be confused with the cost the teardown *must* pay:
-#: three walks of the host's whole process table, measured at 9ms idle and 180ms under
-#: the concurrent-dispatch load that used to fail this against a fixed 150ms budget.
-#: One grace at this multiple is twenty-five times that worst measurement.
+#: The grace raised until it cannot be confused with the cost the teardown *must* pay
+#: — three walks of the host's whole process table, measured at 180ms under load. See
+#: [Magnify the
+#: signal](../docs/repo-lifecycle.md#the-three-ways-a-wall-clock-assertion-is-fixed).
 _UNMISTAKABLE_GRACE = 100 * TERMINATION_GRACE
 
 

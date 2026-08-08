@@ -209,13 +209,11 @@ def test_a_gate_that_restarts_its_worker_while_it_is_stopped_is_still_stopped_wh
     # a skipped assertion: a run where nothing was restarted proves nothing here.
     assert replacement.is_file(), "the gate never restarted its worker"
     _await_gone(int(replacement.read_text(encoding="utf-8")), "the restarted gate worker")
-    # And the bound still reported at its own deadline rather than at the drain's: a
-    # single escapee holding git's pipes is what turns a 3s bound into a 33s one. Half
-    # the drain ceiling is the budget for that gap because it has to sit under the whole
-    # of it to discriminate at all, and it clears the overshoot this path actually pays
-    # by two orders of magnitude — 61ms to 85ms over the bound across six runs at load
-    # 10. A load-scaled guard cannot be used here: at this repository's scale of four it
-    # would reach past the 33 seconds it exists to catch.
+    # And the bound reported at its own deadline rather than at the drain's. Half the
+    # drain ceiling: under what one escapee costs, so it discriminates, and far above
+    # the 61-85ms this path overshoots by under load. A load-scaled guard would reach
+    # past the failure — see [Bound by what the failure
+    # costs](../../docs/repo-lifecycle.md#the-three-ways-a-wall-clock-assertion-is-fixed).
     elapsed = reported["elapsed"]
     assert isinstance(elapsed, float) and 3 <= elapsed < 3 + gitops._DRAIN_SECONDS / 2
 

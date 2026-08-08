@@ -1945,25 +1945,12 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   const stateBadge = page.locator('.node-view-facts > [data-slot="badge"]');
 
   /**
-   * Open one node's view and wait for the state being read to be the one on screen.
-   *
-   * The *click* retries here, not only the reading of what it produced. Opening a node
-   * unmounts the canvas and closing it mounts a fresh one, and a click delivered into
-   * that remount selects nothing — it is simply lost, and no assertion under it can
-   * wait that out. This journey is the only one exposed to it, because it is the only
-   * one that opens eight node views in sequence; every other node-open in this suite
-   * is a single click in a test of its own.
-   *
-   * That is a measurement, not a theory. Under a 20x CPU throttle the pre-fix cycle
-   * lost a click in its second round, on the first card clicked after an `Escape`,
-   * with exactly the signature seen once on this host at load 26-48: the state badge
-   * never arriving inside its 15s budget because no node view had opened at all. The
-   * cards themselves hold still across the remount — 25 samples each, one distinct
-   * bounding box — so it is not a click aimed at a card that has since moved.
-   *
-   * It weakens nothing: the first attempt is exactly the old one, the colour
-   * assertions below keep their own full budget, and a card that genuinely stopped
-   * opening its node view still fails — three attempts later, in 45s.
+   * Open one node's view, retrying the *click* and not only the reading of what it
+   * produced: closing a view mounts a fresh canvas, and a click delivered into that
+   * remount selects nothing, which no assertion under it can wait out. Only this
+   * journey opens eight views in sequence, so only it is exposed. See [The three ways
+   * a wall-clock assertion is
+   * fixed](../../../docs/repo-lifecycle.md#the-three-ways-a-wall-clock-assertion-is-fixed).
    */
   const openNode = async (card: Locator, state: string): Promise<void> => {
     await expect(async () => {
