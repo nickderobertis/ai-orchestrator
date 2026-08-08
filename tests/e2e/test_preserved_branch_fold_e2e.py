@@ -89,6 +89,16 @@ git -C {rival} push -q origin HEAD:main
 exit 0
 """
 
+#: Rejects the publication *and* takes the base out from under the settlement, the way a
+#: concurrent merge that deletes the remote-tracking ref does. Git hands a hook the
+#: invoking repository's location, and remote refs live in the clone every worktree of
+#: this run shares, so the deletion is the one the recorder then runs into.
+_BASE_DELETING_PRE_PUSH_HOOK = """#!/bin/sh
+git update-ref -d refs/remotes/origin/main
+printf 'pre-push: complete gate failed\\n' >&2
+exit 1
+"""
+
 
 def _just(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["just", *args], cwd=REPO_ROOT, text=True, capture_output=True)
@@ -437,3 +447,45 @@ def test_a_branch_that_lost_every_publication_race_is_continued_onto_the_moved_b
     assert "chore: rival publication 1" in subjects
     assert "chore: rival publication 2" in subjects
     assert _step_event_kinds(runs, run, 2) == ["step-settled"]
+
+
+def test_a_settlement_whose_base_stopped_resolving_keeps_its_own_outcome(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    """Both preservation questions are questions about branch history, asked on the way
+    out of a run that may have settled *because* that history stopped answering.
+
+    Every one of them is `base..HEAD`, so a base ref a concurrent merge deleted makes
+    them unanswerable. Neither the recording nor the handover may turn that into an
+    exception: the run reached ``gate-failed``, and replacing it with a failure of this
+    harness's own bookkeeping would lose the verdict an operator has to act on. Nothing
+    is recorded and nothing is claimed — which is honest, because there is no checkpoint
+    to name and no branch this run can prove it handed anywhere.
+    """
+    run = RunId("base-vanished")
+    checkout = _registered_checkout(tmp_path, bare_origin(), "base-deleting-canonical")
+    _install_hook(checkout, "pre-push", _BASE_DELETING_PRE_PUSH_HOOK)
+    runs = tmp_path / "runs"
+    plan = _plan(
+        tmp_path / "base-vanished.json",
+        name=str(run),
+        checkout=checkout,
+        task="complete-now write-change publish onto a vanishing base",
+    )
+    common = _common(runs, command_base(), onejudge_bin)
+
+    settled = _just(
+        "run-plan", str(plan), "--run", str(run), "--workspace", str(tmp_path / "wt"), *common
+    )
+    assert settled.returncode == 1, settled.stderr
+
+    node = _recorded(runs, run, 1, "result.json")["results"]["publish"]
+    # The outcome the run actually reached, recorded whole.
+    assert node["outcome"] == "gate-failed", node["detail"]
+    assert node["status"] == "failed"
+    # No continuation: a pin needs a checkpoint, and nothing here could compute one.
+    assert node["resume"] is None, node["resume"]
+    # And no handover claimed. A gate rejection whose branch reached the checkout says
+    # so in its detail — that line is how an operator finds the preserved work — so its
+    # absence is where this settlement stopped: before the mirror, not after a failed one.
+    assert "preserved on local branch" not in node["detail"]
