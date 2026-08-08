@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -11,9 +14,12 @@ import yaml
 from orchestrator import REPO_ROOT
 from orchestrator.cli_contract import ROUND_BUDGET_OPTION
 from orchestrator.config import ConfigError
+from orchestrator.coordination import process_start_identity
 from orchestrator.dispatch import (
     ORCHESTRATOR_ONEHARNESS_BIN,
     DispatchError,
+    _claim_driver_attribution,
+    _hand_driver_its_attribution,
     launch_orchestrator,
     main_orchestrate,
 )
@@ -30,6 +36,11 @@ from orchestrator.launch import (
     read_provenance,
     read_run_owner,
     session_key,
+)
+from orchestrator.scratch import (
+    AGENT_STATUS_DIR_ENV,
+    AGENT_STATUS_DIR_NAME,
+    OWNER_LOCK_NAME,
 )
 
 
@@ -568,3 +579,121 @@ def test_orchestrate_refuses_a_parked_threshold_it_cannot_use(
         assert (
             "--parked-after must be a positive, finite number of seconds" in capsys.readouterr().err
         )
+
+
+# The spawn path itself is proven end to end by
+# `tests/e2e/test_orchestrate_driver_survival_e2e.py`, which tears down a real launching
+# turn and sweeps a real scratch root. What only a unit can reach is the pair of
+# degrades: this host refusing the claim, and refusing to identify the process the claim
+# was made for. Both have to keep the run and say so, because the line they print is the
+# operator's only warning that the driver is reapable behind its launcher again.
+
+
+def test_a_launch_with_no_dispatch_stamp_claims_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    environment: dict[str, str] = {}
+
+    assert _claim_driver_attribution(environment) is None
+    assert environment == {}
+    assert sorted(tmp_path.iterdir()) == []
+
+
+def test_a_claimed_directory_names_its_launcher_and_then_the_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record never names a process that is not running, at either end."""
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    environment = {AGENT_STATUS_DIR_ENV: str(tmp_path / "launcher" / AGENT_STATUS_DIR_NAME)}
+
+    claimed = _claim_driver_attribution(environment)
+
+    assert claimed is not None
+    assert environment[AGENT_STATUS_DIR_ENV] == str(claimed)
+    record = claimed.parent / OWNER_LOCK_NAME
+    assert record.read_text(encoding="utf-8").split()[0] == str(os.getpid())
+    # Deliberately not the held `flock` a dispatcher takes, so the driver never reads as
+    # a live dispatch with no turn and no role.
+    assert not (claimed.parent / "pid").exists()
+
+    # A real second process, because the handover's whole job is to move the record off
+    # the launcher and onto something that outlives it.
+    driver = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        _hand_driver_its_attribution(claimed, driver.pid)
+        assert record.read_text(encoding="utf-8").split()[0] == str(driver.pid)
+        # And by the identity the sweeper judges liveness with, not by the pid alone.
+        assert record.read_text(encoding="utf-8").split()[1:] == [
+            str(process_start_identity(driver.pid))
+        ]
+    finally:
+        driver.kill()
+        driver.wait(timeout=30)
+
+
+def test_a_claim_this_host_refuses_keeps_the_launching_stamp_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inherited = str(tmp_path / "launcher" / AGENT_STATUS_DIR_NAME)
+    environment = {AGENT_STATUS_DIR_ENV: inherited}
+    monkeypatch.setattr("orchestrator.dispatch.claim_successor_scratch_directory", lambda: None)
+
+    assert _claim_driver_attribution(environment) is None
+
+    assert environment[AGENT_STATUS_DIR_ENV] == inherited
+    reported = capsys.readouterr().err
+    assert "no scratch directory of its own could be claimed" in reported
+    assert "runs under the launching dispatch's attribution" in reported
+
+
+def test_a_handover_this_host_cannot_make_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    claimed = _claim_driver_attribution(
+        {AGENT_STATUS_DIR_ENV: str(tmp_path / "launcher" / AGENT_STATUS_DIR_NAME)}
+    )
+    assert claimed is not None
+    # A pid this host will not be handing out, so the identity behind it cannot be read.
+    _hand_driver_its_attribution(claimed, 999999999)
+
+    reported = capsys.readouterr().err
+    assert "could not record the orchestrator (pid 999999999) as the owner" in reported
+    assert "remains reapable by the sweep behind the launching dispatch" in reported
+
+
+def test_a_handover_the_filesystem_refuses_is_reported_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other way the record cannot be written, and it fails the same way.
+
+    A real unwritable record rather than a patched writer: it is a file, and a full or
+    read-only scratch filesystem is how a live host stops one being written. The driver
+    is already running by then, so this may only report.
+    """
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    claimed = _claim_driver_attribution(
+        {AGENT_STATUS_DIR_ENV: str(tmp_path / "launcher" / AGENT_STATUS_DIR_NAME)}
+    )
+    assert claimed is not None
+    if os.geteuid() == 0:
+        pytest.skip("root writes through a read-only file, so no refusal can be provoked")
+    record = claimed.parent / OWNER_LOCK_NAME
+    record.chmod(0o400)
+    try:
+        _hand_driver_its_attribution(claimed, os.getpid())
+    finally:
+        record.chmod(0o600)
+
+    reported = capsys.readouterr().err
+    assert f"could not record the orchestrator (pid {os.getpid()}) as the owner" in reported
+    assert "remains reapable by the sweep behind the launching dispatch" in reported
+
+
+def test_nothing_is_handed_over_when_nothing_was_claimed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _hand_driver_its_attribution(None, os.getpid())
+
+    assert capsys.readouterr().err == ""

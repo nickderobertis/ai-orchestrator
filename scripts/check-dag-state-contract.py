@@ -734,6 +734,42 @@ def literal_values(path: Path, name: str) -> list[str]:
     return values
 
 
+def zod_property_enum_members(path: Path, schema_name: str, prop: str) -> list[str]:
+    """The string members of a ``z.enum([...])`` on one property of a schema object.
+
+    The sibling below reads a *schema* that is an enum. A vocabulary small enough to
+    live inline on a property — a resume ``mode`` — is declared there instead, and it is
+    exactly as much of a cross-language contract: a value Python starts recording that
+    this parser rejects fails every run carrying it, in a browser, after the fact.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(
+            f"read TypeScript {schema_name}.{prop} contract: {exc}; restore {path} from "
+            "the repository and retry"
+        )
+    matches = re.findall(
+        rf"const\s+{re.escape(schema_name)}\s*=\s*openObject\(\{{.*?"
+        rf"^\s+{re.escape(prop)}:\s*z\.enum\(\[(.*?)\]\)",
+        source,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    if len(matches) != 1:
+        fail(
+            f"packages/dag-model/src/index.ts must declare exactly one "
+            f"`{prop}: z.enum([...])` on {schema_name}; restore it and remove duplicates"
+        )
+    members = re.findall(r'"([^"]+)"', matches[0])
+    remainder = re.sub(r'"[^"]+"\s*,?', "", matches[0])
+    if remainder.strip() or not members or len(members) != len(set(members)):
+        fail(
+            f"packages/dag-model/src/index.ts {schema_name}.{prop} must contain unique "
+            "string members; remove duplicates or non-string entries"
+        )
+    return members
+
+
 def zod_enum_members(path: Path, name: str) -> list[str]:
     """The string members of one exported ``z.enum([...])`` schema."""
     try:
@@ -975,6 +1011,31 @@ def main() -> None:
                 list(interface_fields(design, documented)),
             ),
         )
+    # A resume's `mode` decides which preconditions the next round validates the
+    # continuation against, so it is a vocabulary rather than an opaque string — and it
+    # is declared four times: the Python Literal, the schema a browser parses with, the
+    # documented contract, and the recorded-result golden. The golden already pins the
+    # Python side; these two reconcile the copies no Python test can see, and a mode
+    # added to one alone rejects every run carrying it in whichever reader missed it.
+    for where, members in (
+        (
+            "docs/dag-ui/design.md PlanTaskResume.mode",
+            union_members(design, "PlanTaskResume", "mode"),
+        ),
+        (
+            "packages/dag-model/src/index.ts planTaskResumeSchema.mode",
+            zod_property_enum_members(dag_model, "planTaskResumeSchema", "mode"),
+        ),
+    ):
+        reconcile(
+            "resume mode vocabulary",
+            (
+                "orchestrator/runs.py ResumeMode",
+                literal_values(root / "orchestrator/runs.py", "ResumeMode"),
+            ),
+            (where, members),
+        )
+
     # The provider-refusal record: owned in Python, restated for the client that
     # parses it and for the contract a reader trusts. Fields as well as vocabularies,
     # because a field added on one side alone reaches a client as an untyped

@@ -89,7 +89,13 @@ from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
 from orchestrator.relaunch import RELAUNCH_MARK
 from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
 from orchestrator.results import main as results_main
-from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.runs import (
+    RECORDED_RESULT_SCHEMA_VERSION,
+    NodeId,
+    RunId,
+    prepare_round,
+    write_result,
+)
 from orchestrator.verify import PRESERVED_GATE_LOG_ATTEMPTS, preserved_gate_log_dir
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
@@ -1686,7 +1692,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 6
+    assert first_result["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -1765,7 +1771,8 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 6 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == RECORDED_RESULT_SCHEMA_VERSION
+    assert "round" not in unrecorded
 
 
 def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever(
@@ -4711,6 +4718,67 @@ def test_gate_failure_says_so_when_rejected_work_could_not_be_preserved(
     # The other run's commit is still the one the checkout carries.
     assert not _has_file(safety, branch, "rejected.txt")
     assert not _has_file(origin, "main", "rejected.txt")
+
+
+def test_a_refused_handover_is_reported_for_an_outcome_no_gate_rejected(
+    tmp_path, bare_origin
+) -> None:
+    """The same refusal, on the ending that is *not* a merge-path rejection.
+
+    Preservation is keyed on the outcome domain now, so every eligible ending hands its
+    branch to the registered checkout — but only the rejection above used to say when
+    the handover was refused. That silence is the expensive half: this settlement
+    records a continuation naming the branch, the fast-forward-only copy refuses it to
+    protect the run already holding that name, and the checkout the next round resumes
+    from does not carry the work. Without this line the result claims a continuation and
+    nothing anywhere says it cannot be adopted.
+
+    ``not-completed`` is the ending driven here because it records its own continuation
+    before this ever runs, so the recorded pin and the refused handover are genuinely
+    independent — which is exactly the pair that used to disagree in silence.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-unpreservable-partial")
+    safety = gitops.clone(origin, tmp_path / "safety-unpreservable-partial")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+    branch = "feature/unpreservable-partial-work"
+    writes = make_writing_dispatch(filename="partial.txt", completed=False)
+
+    def writes_while_another_run_claims_the_branch(
+        persona: str, task: str, *, project_dir: str, **kwargs: object
+    ) -> Report:
+        report = writes(persona, task, project_dir=project_dir, **kwargs)
+        # A concurrent run put its own commit on this branch name in the shared
+        # checkout. This run's tip is not a fast-forward of it, so the handover has to
+        # refuse rather than discard that run's only record of its work.
+        tree = git("rev-parse", "origin/main^{tree}", cwd=safety).strip()
+        other = git("commit-tree", tree, "-p", "origin/main", "-m", "other run", cwd=safety).strip()
+        git("branch", branch, other, cwd=safety)
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "Leave work unfinished on a branch the registered checkout cannot take.",
+        "engineer",
+        workspace=Workspace(tmp_path / "unpreservable-partial-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=writes_while_another_run_claims_the_branch,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "not-completed", result.detail
+    # No gate refused this tree, so the rejection wording would be a lie about it.
+    assert "could not preserve work" in result.detail
+    assert "rejected work" not in result.detail
+    assert branch in result.detail and str(safety) in result.detail
+    # The continuation the settlement recorded names a branch the checkout cannot
+    # produce — which is precisely what the detail above has to warn about.
+    assert result.resume is not None and result.resume.branch == branch
+    assert not _has_file(safety, branch, "partial.txt")
+    assert not _has_file(origin, "main", "partial.txt")
 
 
 # A hook that lets the feature branch through and rejects the direct base push, so
@@ -8151,6 +8219,54 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
     assert sleeps == []
     assert github.status_polls == 2
     assert _tip(origin, "main") == before  # required check failed → nothing merged
+    # The branch is whole, pushed, and refused — so the round that follows has to be
+    # able to continue it rather than re-derive it beside this one.
+    assert result.resume is not None, result.detail
+    assert result.resume.branch == result.branch
+    assert result.resume.checkpoint == _tip(origin, result.branch)
+    assert result.resume.mode == "continue"
+    # The required checks refused this *content*, so a continuation that skipped the
+    # step as completed would push the identical tree back at them.
+    assert result.resume.completed_steps == ()
+
+
+def test_a_pull_request_closed_without_merging_leaves_its_branch_continuable(
+    tmp_path, bare_origin
+) -> None:
+    """Somebody closed the PR, and the commits it was opened from are still whole work.
+
+    ``closed`` is not a verdict on the tree — no gate and no required check refused it —
+    so the settlement records a continuation and the next round republishes the same
+    commits rather than paying an agent to write them again.
+    """
+    origin = bare_origin()
+
+    class ClosedGitHub(FakeGitHub):
+        def status(self, pr):
+            self._prs[pr.number].closed = True
+            return super().status(pr)
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose pull request somebody closes.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        merge=GitHubMergeStrategy(ClosedGitHub(origin)),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        recorded_gate=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=lambda _seconds: None,
+    )
+
+    assert not result.ok and result.outcome == "closed", result.detail
+    assert result.resume is not None, result.detail
+    assert result.resume.branch == result.branch
+    assert result.resume.checkpoint == _tip(origin, result.branch)
+    assert result.resume.mode == "continue"
+    done = tuple(step.id for step in result.steps if step.status == "done")
+    assert done and result.resume.completed_steps == done
 
 
 def test_github_pending_required_check_keeps_polling_then_merges(tmp_path, bare_origin) -> None:
@@ -8263,6 +8379,16 @@ def test_github_unreported_required_checks_wait_until_timeout(tmp_path, bare_ori
     assert sleeps == [15.0]
     assert github.status_polls == 3
     assert _tip(origin, "main") == before
+    # Waiting for a verdict that never arrived is not a verdict: the branch is whole and
+    # pushed, so the round after this one continues it instead of re-deriving it.
+    assert result.resume is not None, result.detail
+    assert result.resume.branch == result.branch
+    assert result.resume.checkpoint == _tip(origin, result.branch)
+    assert result.resume.mode == "continue"
+    # Nothing judged this tree, so its completed steps are kept and the continuation
+    # retries the publication alone.
+    done = tuple(step.id for step in result.steps if step.status == "done")
+    assert done and result.resume.completed_steps == done
 
 
 def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, bare_origin) -> None:
@@ -8945,6 +9071,10 @@ def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_or
     assert child.outcome == "stack-conflict" and child.pr_base == "main"
     assert "belongs to root 'release'" in child.detail
     assert dispatched == []
+    # `stack-conflict` is preservation-*eligible*, which is a question and not a promise:
+    # this one settled before dispatch, so there is no branch content and no pin. A
+    # continuation recorded here would point the next round at nothing.
+    assert child.resume is None
 
 
 def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_origin) -> None:

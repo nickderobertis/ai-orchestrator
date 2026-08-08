@@ -300,6 +300,13 @@ def claim_successor_scratch_directory() -> Path | None:
     is still the identity of the process running after it. There is no window in which
     this directory names an owner that is not the one working in it.
 
+    A successor that is *spawned* rather than re-``exec``ed cannot do that for itself —
+    the environment naming the directory has to exist before the process does — so its
+    launcher claims one here and hands it over with
+    `hand_successor_scratch_directory_to` the moment the child has a pid. The launcher
+    is a live process while it holds the record, so the window between the two calls is
+    one in which the tree is owned by something running, exactly as it is after.
+
     ``None`` when no durable claim can be made, which leaves the caller to run
     unattributed rather than under a directory the sweeper would call reclaimable.
     """
@@ -315,6 +322,31 @@ def claim_successor_scratch_directory() -> Path | None:
     except OSError:
         return None
     return directory / AGENT_STATUS_DIR_NAME
+
+
+def hand_successor_scratch_directory_to(status_dir: Path, pid: int) -> bool:
+    """Re-record ``pid`` as the owner of a directory claimed on its behalf.
+
+    The other half of `claim_successor_scratch_directory` for a successor the harness
+    **spawns** — `just orchestrate`'s driver is the one — where the claim cannot be made
+    by the process that will own it. Until this lands the record names the launcher,
+    which is about to end its turn; once it lands, the tree is judged by the driver's
+    own liveness and the sweep behind that launcher leaves it, and everything below it,
+    alone.
+
+    Reports whether the handover happened. ``False`` means this host could not identify
+    the spawned process at all — it is already gone, or procfs is unreadable — and the
+    caller has to say so, because the directory then names an owner that will die with
+    the launching turn and the driver goes back to being reapable.
+    """
+    owner = _OwnerIdentity.current(pid)
+    if owner is None:
+        return False
+    try:
+        (status_dir.parent / OWNER_LOCK_NAME).write_text(owner.render(), encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def _legacy_watchdog_is_reclaimable(path: Path) -> bool:

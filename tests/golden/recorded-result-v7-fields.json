@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "artifact_paths": [
     "gate_log",
     "oneharness_session",
@@ -64,5 +64,10 @@
     "attempts",
     "mode",
     "source_round"
+  ],
+  "resume_modes": [
+    "continue",
+    "pause",
+    "retry"
   ]
 }

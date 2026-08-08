@@ -532,6 +532,28 @@ finished dispatch that did not re-attribute is still reaped, in the same sweep t
 spares the round — which is what
 `tests/e2e/test_successor_survival_e2e.py` asserts in one run.
 
+#### The driver a launch spawns
+
+One tier above every round is the orchestrator `just orchestrate` starts, and it is the
+longest-lived process a run has. It cannot re-`exec` itself into an attribution: it is
+**spawned**, and the environment naming a directory has to exist before the process
+does. So the launcher makes the claim on its behalf — `claim_successor_scratch_directory`
+before the spawn, `hand_successor_scratch_directory_to` the instant the driver has a pid
+— and the record names a live process throughout: the launcher until the handover, the
+driver from then on. Nothing in between is reclaimable.
+
+It is claimed **only** when the launch carries a stamp of its own. A planner's terminal
+is not a dispatch and has nothing to escape, so nothing is claimed there and no directory
+is left behind per launch. A claim or a handover this host cannot make is reported on
+stderr rather than raised — the run is worth more than its attribution, and that line is
+the operator's only warning that the driver is reapable behind its launcher again.
+
+`tests/e2e/test_orchestrate_driver_survival_e2e.py` drives the whole sequence: a real
+attached `just orchestrate` under a real dispatch's stamp, that turn's group torn down,
+the dispatch's ownership released, `just sweep-scratch` over the same root, and then the
+driver going on to settle its round. The leaked tree beside it is still reaped by that
+same sweep.
+
 ### One judged diff, one verdict
 
 A gate tier can end in a judge that is not reproducible — this repository's
@@ -1172,6 +1194,59 @@ draft; a pause with no commits creates no empty draft. Later pauses reuse the PR
 On final success the existing draft is marked ready, then the repository's normal
 `auto`, `direct`, or `none` publication policy applies. Each checkpoint must be an
 ancestor of the continued branch, so force-rewritten history cannot be blessed.
+
+### Preserved committed work implies a recorded continuation
+
+A pause is not the only settlement that leaves commits on a branch, and the fold carries
+a preserved branch into the next round **only** when the recorded result names one
+(`orchestrator.replan`: `status in _PRESERVING_STATUSES and resume is not None`). So an
+ending that preserved work without recording `resume` silently discarded it: the next
+round compiled the node unpinned and dispatched it against a fresh branch beside
+finished work nothing would look at again. A merge-path gate rejection and a publication
+that refused its own commit subject — both after every step had settled `done` — cost
+one planner three hand-written branch pins in a single run.
+
+Recording is therefore keyed on the **outcome domain**, not on the endings somebody
+remembered. `orchestrator.outcomes` states the *exceptions* and derives
+`PRESERVATION_ELIGIBLE_OUTCOMES` by subtraction, so an outcome added to `LifecycleOutcome`
+is eligible until somebody decides otherwise — the failure that costs work is the one
+nobody classified. Eligibility is a question, not a verdict: `error`, `timeout`, and
+`not-completed` can each settle before the agent commits anything, so the branch is what
+answers it. `orchestrator.lifecycle._record_preserved_resume` runs in the one
+`finally` every exit passes through and records a complete `Resume` for any eligible
+outcome whose branch carries commits, skipping the settlements that already recorded
+their own (the cooperative cancel, the human pause, the workstream that did not
+complete) because those know which steps still have to run.
+`tests/test_preserved_work_invariant.py` holds the invariant across the whole domain
+against real git; `tests/e2e/test_preserved_branch_fold_e2e.py` drives a rejected tree, a
+refused publication commit, and a lost publication race through the real fold into rounds
+that continue their branches; and the journeys in `tests/e2e/test_lifecycle_e2e.py` assert
+the same recording where a required check, an unreported one, or a closed pull request
+settles a workstream — and its absence where a settlement never reached a commit.
+
+A continuation is only worth what the checkout can produce, so every eligible outcome
+also hands its branch to the registered execution checkout before teardown — the run's
+own clone is disposable. That copy is fast-forward only, to protect a concurrent run
+holding the same branch name, and a refusal is reported in the settlement's detail for
+**every** eligible outcome rather than only for the merge-path rejection: the pin the
+next round would otherwise adopt names a branch nothing outside this run carries, and
+that line is the only warning it does.
+
+Two things about that recording are decided by branch state rather than chosen:
+
+* **The mode.** `retry` is the mode whose validation *demands* unattested incomplete
+  provenance, and a whole branch carries none — claiming it produces a pin the next
+  round declines in favour of a fresh branch, which is the discarded work again. A
+  branch that carries a marker gets `retry`; a whole one gets `continue`. Marking a
+  gate-rejected branch instead would be a lie about it, and `just recoverable` reads
+  that marker to decide which command it offers an operator — so the branch would be
+  handed to `just repo-recover`, which recovers an interrupted step, rather than to
+  `just integrate`, which publishes finished work.
+* **The completed steps.** An outcome where the merge path refused the *content*
+  (`gate-failed`, `checks-failed`) records none, so the continuation re-dispatches its
+  steps; skipping them as completed would republish the identical rejected tree. Every
+  other preserving outcome carries its done steps forward, because what failed there was
+  publication rather than the work.
 
 ## Adaptive replanning: adjust between rounds
 

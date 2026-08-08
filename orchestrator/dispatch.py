@@ -112,6 +112,8 @@ from .scratch import (
     AGENT_ACTIVITY_NAME,
     AGENT_STATUS_DIR_ENV,
     AGENT_STATUS_DIR_NAME,
+    claim_successor_scratch_directory,
+    hand_successor_scratch_directory_to,
     owned_scratch_directory,
     processes_stamped_for,
 )
@@ -1808,6 +1810,58 @@ def _relaunch_record(
     return record
 
 
+def _claim_driver_attribution(process_env: dict[str, str]) -> Path | None:
+    """Give the orchestrator about to be spawned a dispatch attribution of its own.
+
+    The driver is the longest-lived process a run has, and until this it inherited the
+    stamp of whatever dispatch typed `just orchestrate`. `start_new_session` already
+    took it out of that turn's process group, but the stamp is a second, independent
+    killer: once the launching dispatch settles, the scratch sweep reads it as proof of
+    a leaked tree and terminates the driver and every round under it. That is the same
+    mechanism `orchestrator.detach` moved round owners and publication drivers out of;
+    this is the tier above them, which the fix did not reach.
+
+    A launch from an ordinary shell carries no attribution to leave behind, so nothing
+    is claimed there and the driver runs as it always has.
+    """
+    if not process_env.get(AGENT_STATUS_DIR_ENV):
+        return None
+    status_dir = claim_successor_scratch_directory()
+    if status_dir is None:
+        print(
+            "orchestrate: no scratch directory of its own could be claimed for the "
+            "orchestrator; it runs under the launching dispatch's attribution",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    process_env[AGENT_STATUS_DIR_ENV] = os.fspath(status_dir)
+    return status_dir
+
+
+def _hand_driver_its_attribution(status_dir: Path | None, pid: int) -> None:
+    """Record the spawned orchestrator as the owner of the directory claimed for it.
+
+    Called the instant the driver exists, because until it does the record names this
+    process — which is live, so the tree is never reclaimable in between, but which is
+    also the process the launching turn's teardown ends.
+
+    A handover this host cannot make is reported rather than raised: the run is worth
+    more than its attribution, and this line is the operator's only warning that the
+    driver is back to being reapable by the sweep behind its launcher.
+    """
+    if status_dir is None:
+        return
+    if not hand_successor_scratch_directory_to(status_dir, pid):
+        print(
+            f"orchestrate: could not record the orchestrator (pid {pid}) as the owner of "
+            f"{status_dir.parent}; it remains reapable by the sweep behind the launching "
+            "dispatch",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 # llmlint: ignore[structural_pattern_matching] provider_kind is first validated as the
 # discriminator, then each open-ended provider mapping receives variant-specific checks.
 def _start_orchestrator_process(
@@ -1950,6 +2004,7 @@ def _start_orchestrator_process(
     except LabelError as exc:
         raise DispatchError(f"invalid launch label: {exc}") from exc
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
+    driver_status_dir = _claim_driver_attribution(process_env)
     try:
         with (
             report_path.open("w", encoding="utf-8") as stdout,
@@ -1966,6 +2021,7 @@ def _start_orchestrator_process(
             )
     except FileNotFoundError as exc:
         raise DispatchError(f"onejudge binary not found: {onejudge_bin!r}") from exc
+    _hand_driver_its_attribution(driver_status_dir, proc.pid)
     atomic_json(
         effective.parent / "status.json",
         {

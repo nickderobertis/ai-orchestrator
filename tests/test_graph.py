@@ -48,6 +48,7 @@ from orchestrator.lifecycle import (
 from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
 from orchestrator.runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
+    RESUME_MODES,
     ArtifactPaths,
     GraphPayload,
     GraphResultItem,
@@ -1533,9 +1534,9 @@ def test_goal_validation_rejects_malformed_contract(goal: object, message: str) 
         )
 
 
-def test_recorded_result_schema_v6_field_golden_cannot_drift() -> None:
+def test_recorded_result_schema_v7_field_golden_cannot_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "recorded-result-v6-fields.json").read_text(
+        (Path(__file__).parent / "golden" / "recorded-result-v7-fields.json").read_text(
             encoding="utf-8"
         )
     )
@@ -1560,6 +1561,10 @@ def test_recorded_result_schema_v6_field_golden_cannot_drift() -> None:
         "step_result_optional": step_optional,
         "resume_required": resume_required,
         "resume_optional": resume_optional,
+        # `mode` is the one resume field whose *values* are a contract of their own: a
+        # round validates a continuation against different preconditions per mode, so a
+        # mode added silently is a pin an older ledger's reader refuses outright.
+        "resume_modes": sorted(RESUME_MODES),
     }
 
 

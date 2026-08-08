@@ -230,6 +230,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/launch.py",
         "orchestrator/lifecycle.py",
         "orchestrator/read_model.py",
+        "orchestrator/runs.py",
         "orchestrator/supervisory.py",
         "orchestrator/telemetry.py",
         "orchestrator/timeline.py",
@@ -1881,6 +1882,52 @@ def test_dag_state_contract_checker_reports_provenance_record_drift(tmp_path: Pa
 
     assert result.returncode != 0
     assert "LaunchProvenance declares ['renamed_session']" in result.stderr
+
+
+@pytest.mark.reads_docs
+def test_dag_state_contract_checker_reports_resume_mode_drift(tmp_path: Path) -> None:
+    """A mode Python starts recording that a reader would reject has to fail here.
+
+    Each side is checked on its own, because a mode reaching only one of them fails
+    somewhere different: the TypeScript schema rejects the plan a browser renders, and
+    the documented contract is what the next reader implements against.
+    """
+    for restated, where in (
+        ("packages/dag-model/src/index.ts", "planTaskResumeSchema.mode"),
+        ("docs/dag-ui/design.md", "PlanTaskResume.mode"),
+    ):
+        checkout = _dag_state_contract_checkout(tmp_path / where)
+        runs = checkout / "orchestrator/runs.py"
+        runs.write_text(
+            runs.read_text().replace(
+                'ResumeMode = Literal["pause", "retry", "continue"]',
+                'ResumeMode = Literal["pause", "retry", "continue", "adopt"]',
+                1,
+            )
+        )
+        # Kept in step on the *other* restatement, so the failure names this one alone.
+        for kept in ("packages/dag-model/src/index.ts", "docs/dag-ui/design.md"):
+            if kept == restated:
+                continue
+            mirrored = checkout / kept
+            mirrored.write_text(
+                mirrored.read_text()
+                .replace(
+                    'z.enum(["pause", "retry", "continue"])',
+                    'z.enum(["pause", "retry", "continue", "adopt"])',
+                    1,
+                )
+                .replace(
+                    '"pause" | "retry" | "continue"', '"pause" | "retry" | "continue" | "adopt"', 1
+                )
+            )
+
+        result = _dag_state_contract_run(checkout)
+
+        assert result.returncode != 0, result.stdout
+        assert "resume mode vocabulary" in result.stderr
+        assert where in result.stderr, result.stderr
+        assert "reconcile them in one change" in result.stderr
 
 
 @pytest.mark.reads_docs
