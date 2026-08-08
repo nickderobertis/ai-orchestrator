@@ -21,9 +21,14 @@ about the other:
   incidents above). The tree was never judged, so the continuation keeps its completed
   steps and the next round retries the publication alone rather than paying an agent to
   re-derive work nothing objected to.
+* **Nothing refused it and it still did not land** (``publication-retries-exhausted``,
+  from a sibling publisher landing on the base inside every attempt's race window).
+  Reached from the merge path's own retry loop rather than from a single verdict, so it
+  is the ending most likely to be left out of a recorder keyed on remembered endings —
+  and the branch it settles is whole, pushed, and one clean sync away from merging.
 
 `tests/test_preserved_work_invariant.py` holds the recording invariant across the whole
-`LifecycleOutcome` domain against real git; these two prove that what it records
+`LifecycleOutcome` domain against real git; these three prove that what it records
 survives a real round fold and drives the round after it.
 
 Everything here is real: a real bare origin, real repository hooks rejecting the way a
@@ -56,6 +61,31 @@ if [ -z "$(sed -e '1d' -e '/^#/d' -e '/^[[:space:]]*$/d' "$1" | tr -d '[:space:]
   printf 'commit-msg: every commit must explain why; add a body\\n' >&2
   exit 1
 fi
+exit 0
+"""
+
+#: A sibling publisher landing on the base while this run builds its publication commit.
+#: That window is exactly where `commit-msg` runs: the merge path reads the base sha,
+#: squashes the branch onto it, then re-fetches and refuses to push onto a base that
+#: moved. Firing only on a subject-only message confines it to the publication commit, so
+#: it races every attempt — which is what exhausts them — and leaves the agent's own
+#: step commits, which carry a body, alone.
+_RIVAL_PUBLISHER_COMMIT_MSG_HOOK = """#!/bin/sh
+if [ -n "$(sed -e '1d' -e '/^#/d' -e '/^[[:space:]]*$/d' "$1" | tr -d '[:space:]')" ]; then
+  exit 0
+fi
+# Git exports the invoking repository's location into every hook, and `git -C` does
+# not clear it: without this the sibling publisher's commands would run against the
+# very repository whose hook called them.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_COMMON_DIR
+unset GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+attempt=$(cat {counter} 2>/dev/null || echo 0)
+attempt=$((attempt + 1))
+printf '%s' "$attempt" > {counter}
+: > {rival}/rival-$attempt.txt
+git -C {rival} add -A
+git -C {rival} commit -q -m "chore: rival publication $attempt"
+git -C {rival} push -q origin HEAD:main
 exit 0
 """
 
@@ -315,4 +345,95 @@ def test_a_branch_whose_publication_failed_is_continued_without_redoing_its_step
     # settled the same one having started nothing.
     assert [step["status"] for step in republished["steps"]] == ["done"] * len(completed)
     assert _step_event_kinds(runs, run, 1) == ["step-started", "step-settled"]
+    assert _step_event_kinds(runs, run, 2) == ["step-settled"]
+
+
+def test_a_branch_that_lost_every_publication_race_is_continued_onto_the_moved_base(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    """The ending the merge path's own retry loop produces, rather than a verdict.
+
+    Nothing refused this work: a sibling publisher simply reached the base first inside
+    every attempt's race window, and the loop ran out of attempts. That makes it the
+    ending most easily missed by a recorder keyed on remembered failures — and the one
+    where re-deriving the branch would be most obviously wasted, because the very next
+    sync lands it.
+    """
+    run = RunId("publication-raced")
+    origin = bare_origin()
+    checkout = _registered_checkout(tmp_path, origin, "race-losing-canonical")
+    rival = gitops.clone(str(origin), tmp_path / "rival-publisher")
+    started_at = gitops.ref_sha(checkout, "origin/main")
+    _install_hook(
+        checkout,
+        "commit-msg",
+        _RIVAL_PUBLISHER_COMMIT_MSG_HOOK.format(counter=tmp_path / "races", rival=rival),
+    )
+    runs = tmp_path / "runs"
+    plan = _plan(
+        tmp_path / "publication-raced.json",
+        name=str(run),
+        checkout=checkout,
+        task="complete-now write-change publish onto a moving base",
+    )
+    common = _common(runs, command_base(), onejudge_bin)
+
+    raced = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        str(run),
+        "--workspace",
+        str(tmp_path / "wt"),
+        # Two, so the loop exhausts on the second lost race rather than the default
+        # third: the ending under test is reached the same way either way.
+        "--publication-attempts",
+        "2",
+        *common,
+    )
+    assert raced.returncode == 1, raced.stderr
+
+    node = _recorded(runs, run, 1, "result.json")["results"]["publish"]
+    assert node["outcome"] == "publication-retries-exhausted", node["detail"]
+    # Every attempt lost, which is what the outcome claims and what the hook staged.
+    assert (tmp_path / "races").read_text(encoding="utf-8") == "2"
+    resume = node["resume"]
+    assert resume is not None, f"the raced branch was discarded: {node['detail']}"
+    branch = resume["branch"]
+    assert branch == node["branch"]
+    assert resume["base_branch"] == "main" and resume["pr_base"] == "main"
+    # No gate and no reviewer objected to this tree, so its steps are kept and the
+    # continuation is a publication retry rather than a second dispatch.
+    completed = [step["id"] for step in node["steps"] if step["status"] == "done"]
+    assert completed and resume["completed_steps"] == completed
+    assert resume["mode"] == "continue"
+    assert not incomplete_commits(checkout, "origin/main", branch)
+    assert gitops.branch_exists(checkout, branch)
+    assert resume["checkpoint"] == gitops.ref_sha(checkout, branch)
+
+    # The sibling publisher stops, the way a publication queue drains. Nothing else is
+    # repaired: the base has genuinely moved, and the continuation has to land on it.
+    _install_hook(checkout, "commit-msg", "#!/bin/sh\nexit 0\n")
+
+    folded = _just("next-round", str(run), "--workspace", str(tmp_path / "wt"), *common)
+    assert folded.returncode == 0, folded.stderr
+
+    (carried,) = [
+        task for task in _recorded(runs, run, 2, "plan.json")["tasks"] if task["id"] == "publish"
+    ]
+    assert carried["resume"]["branch"] == branch
+    assert carried["resume"]["checkpoint"] == resume["checkpoint"]
+    assert carried["resume"]["completed_steps"] == completed
+    assert carried["resume"]["attempts"] == 1
+
+    republished = _recorded(runs, run, 2, "result.json")["results"]["publish"]
+    assert republished["outcome"] == "merged", republished["detail"]
+    assert republished["branch"] == branch
+    assert _branch_discoveries(runs, run, 2) == [(branch, resume["checkpoint"])]
+    # Onto the base the rivals moved, not the one round one read. Both of their commits
+    # are still on it, so the continuation published over the race rather than through it.
+    gitops.fetch(checkout)
+    subjects = [commit.subject for commit in gitops.log_delta(checkout, started_at, "origin/main")]
+    assert "chore: rival publication 1" in subjects
+    assert "chore: rival publication 2" in subjects
     assert _step_event_kinds(runs, run, 2) == ["step-settled"]

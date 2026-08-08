@@ -653,10 +653,10 @@ def _record_preserved_resume(
     keyed on the *outcome domain* rather than on the handful of endings somebody
     remembered: `replan` carries a preserved branch into the next round only when the
     recorded result names one, so an unrecorded continuation silently discards a
-    finished branch and the round after re-derives hours of work. It cost a planner
-    three hand-written branch pins in one run — a merge-path gate rejection and a
-    publication that refused its own commit subject, both after every step had settled
-    ``done``. `orchestrator.outcomes.PRESERVATION_ELIGIBLE_OUTCOMES` is the classifying
+    finished branch and the round after re-derives hours of work. A settlement that
+    failed is not a settlement that left nothing: every step can have settled ``done``
+    and only the *publication* be refused.
+    `orchestrator.outcomes.PRESERVATION_ELIGIBLE_OUTCOMES` is the classifying
     set, and it is a subtraction so that an outcome nobody classifies is eligible.
     Eligible is all it is: membership admits an outcome to the branch questions below,
     which are what decide whether anything is actually recorded.

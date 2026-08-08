@@ -1217,9 +1217,12 @@ answers it. `orchestrator.lifecycle._record_preserved_resume` runs in the one
 outcome whose branch carries commits, skipping the settlements that already recorded
 their own (the cooperative cancel, the human pause, the workstream that did not
 complete) because those know which steps still have to run.
-`tests/test_preserved_work_invariant.py` holds the invariant across the whole domain and
-`tests/e2e/test_preserved_branch_fold_e2e.py` drives a real gate rejection through the
-real fold into a round that continues the branch.
+`tests/test_preserved_work_invariant.py` holds the invariant across the whole domain
+against real git; `tests/e2e/test_preserved_branch_fold_e2e.py` drives a rejected tree, a
+refused publication commit, and a lost publication race through the real fold into rounds
+that continue their branches; and the journeys in `tests/e2e/test_lifecycle_e2e.py` assert
+the same recording where a required check, an unreported one, or a closed pull request
+settles a workstream — and its absence where a settlement never reached a commit.
 
 Two things about that recording are decided by branch state rather than chosen:
 

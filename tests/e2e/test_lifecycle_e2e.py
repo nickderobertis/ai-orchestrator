@@ -8169,6 +8169,45 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
     assert result.resume.completed_steps == ()
 
 
+def test_a_pull_request_closed_without_merging_leaves_its_branch_continuable(
+    tmp_path, bare_origin
+) -> None:
+    """Somebody closed the PR, and the commits it was opened from are still whole work.
+
+    ``closed`` is not a verdict on the tree — no gate and no required check refused it —
+    so the settlement records a continuation and the next round republishes the same
+    commits rather than paying an agent to write them again.
+    """
+    origin = bare_origin()
+
+    class ClosedGitHub(FakeGitHub):
+        def status(self, pr):
+            self._prs[pr.number].closed = True
+            return super().status(pr)
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose pull request somebody closes.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        merge=GitHubMergeStrategy(ClosedGitHub(origin)),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        recorded_gate=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=lambda _seconds: None,
+    )
+
+    assert not result.ok and result.outcome == "closed", result.detail
+    assert result.resume is not None, result.detail
+    assert result.resume.branch == result.branch
+    assert result.resume.checkpoint == _tip(origin, result.branch)
+    assert result.resume.mode == "continue"
+    done = tuple(step.id for step in result.steps if step.status == "done")
+    assert done and result.resume.completed_steps == done
+
+
 def test_github_pending_required_check_keeps_polling_then_merges(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     github = FakeGitHub(origin, check_states=("PENDING", "PENDING", "SUCCESS"))
@@ -8279,6 +8318,16 @@ def test_github_unreported_required_checks_wait_until_timeout(tmp_path, bare_ori
     assert sleeps == [15.0]
     assert github.status_polls == 3
     assert _tip(origin, "main") == before
+    # Waiting for a verdict that never arrived is not a verdict: the branch is whole and
+    # pushed, so the round after this one continues it instead of re-deriving it.
+    assert result.resume is not None, result.detail
+    assert result.resume.branch == result.branch
+    assert result.resume.checkpoint == _tip(origin, result.branch)
+    assert result.resume.mode == "continue"
+    # Nothing judged this tree, so its completed steps are kept and the continuation
+    # retries the publication alone.
+    done = tuple(step.id for step in result.steps if step.status == "done")
+    assert done and result.resume.completed_steps == done
 
 
 def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, bare_origin) -> None:
@@ -8961,6 +9010,10 @@ def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_or
     assert child.outcome == "stack-conflict" and child.pr_base == "main"
     assert "belongs to root 'release'" in child.detail
     assert dispatched == []
+    # `stack-conflict` is preservation-*eligible*, which is a question and not a promise:
+    # this one settled before dispatch, so there is no branch content and no pin. A
+    # continuation recorded here would point the next round at nothing.
+    assert child.resume is None
 
 
 def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_origin) -> None:
