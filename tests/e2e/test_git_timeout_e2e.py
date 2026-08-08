@@ -210,9 +210,14 @@ def test_a_gate_that_restarts_its_worker_while_it_is_stopped_is_still_stopped_wh
     assert replacement.is_file(), "the gate never restarted its worker"
     _await_gone(int(replacement.read_text(encoding="utf-8")), "the restarted gate worker")
     # And the bound still reported at its own deadline rather than at the drain's: a
-    # single escapee holding git's pipes is what turns a 3s bound into a 33s one.
+    # single escapee holding git's pipes is what turns a 3s bound into a 33s one. Half
+    # the drain ceiling is the budget for that gap because it has to sit under the whole
+    # of it to discriminate at all, and it clears the overshoot this path actually pays
+    # by two orders of magnitude — 61ms to 85ms over the bound across six runs at load
+    # 10. A load-scaled guard cannot be used here: at this repository's scale of four it
+    # would reach past the 33 seconds it exists to catch.
     elapsed = reported["elapsed"]
-    assert isinstance(elapsed, float) and 3 <= elapsed < 3 + e2e_timeout(20)
+    assert isinstance(elapsed, float) and 3 <= elapsed < 3 + gitops._DRAIN_SECONDS / 2
 
 
 def test_a_fetch_from_a_remote_that_never_answers_is_bounded_separately(tmp_path: Path) -> None:
