@@ -1945,13 +1945,37 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   const stateBadge = page.locator('.node-view-facts > [data-slot="badge"]');
 
   /**
-   * Open one node's view, once the previous reading's `Escape` has landed: opening a
-   * node unmounts the canvas, so a click before that aims at one being replaced.
+   * Open one node's view and wait for the state being read to be the one on screen.
+   *
+   * The *click* retries here, not only the reading of what it produced. Opening a node
+   * unmounts the canvas and closing it mounts a fresh one, and a click delivered into
+   * that remount selects nothing — it is simply lost, and no assertion under it can
+   * wait that out. This journey is the only one exposed to it, because it is the only
+   * one that opens eight node views in sequence; every other node-open in this suite
+   * is a single click in a test of its own.
+   *
+   * That is a measurement, not a theory. Under a 20x CPU throttle the pre-fix cycle
+   * lost a click in its second round, on the first card clicked after an `Escape`,
+   * with exactly the signature seen once on this host at load 26-48: the state badge
+   * never arriving inside its 15s budget because no node view had opened at all. The
+   * cards themselves hold still across the remount — 25 samples each, one distinct
+   * bounding box — so it is not a click aimed at a card that has since moved.
+   *
+   * It weakens nothing: the first attempt is exactly the old one, the colour
+   * assertions below keep their own full budget, and a card that genuinely stopped
+   * opening its node view still fails — three attempts later, in 45s.
    */
   const openNode = async (card: Locator, state: string): Promise<void> => {
-    await expect(page.locator(".node-view")).toHaveCount(0);
-    await card.click();
-    await expect(stateBadge).toHaveText(state);
+    await expect(async () => {
+      // Whatever a previous attempt opened has to close again before the canvas is
+      // back on screen to be clicked at all.
+      if ((await page.locator(".node-view").count()) > 0) {
+        await page.keyboard.press("Escape");
+        await expect(page.locator(".node-view")).toHaveCount(0);
+      }
+      await card.click();
+      await expect(stateBadge).toHaveText(state);
+    }).toPass({ timeout: 45_000 });
   };
 
   // Reading a state costs an operator nothing only while the outcomes look different:
