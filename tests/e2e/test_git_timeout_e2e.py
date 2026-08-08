@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 from conftest import install_pre_push_hook
+from process_tree import is_running
+from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT, gitops
@@ -45,6 +47,31 @@ import time
 from pathlib import Path
 
 Path(sys.argv[1]).write_text(str(os.getpid()), encoding="utf-8")
+time.sleep(3600)
+"""
+
+#: The same stand-in, restarting its worker as it is stopped — git's own transport,
+#: which it restarts when the connection dies. `sleep` rather than an interpreter
+#: keeps that start inside the grace the teardown holds its `SIGKILL` back for.
+_RESPAWNING = """
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+worker, replacement = sys.argv[1:3]
+
+
+def restart_the_worker(_signal, _frame):
+    child = subprocess.Popen(["sleep", "3600"])
+    Path(replacement).write_text(str(child.pid), encoding="utf-8")
+    raise SystemExit(0)
+
+
+signal.signal(signal.SIGTERM, restart_the_worker)
+Path(worker).write_text(str(os.getpid()), encoding="utf-8")
 time.sleep(3600)
 """
 
@@ -90,15 +117,29 @@ def _drive(operation: str, target: Path, branch: str, **environment: str) -> dic
 
 
 def _await_gone(pid: int, what: str) -> None:
-    """Block until a process is no longer running, whatever became of its parent."""
-    guard = time.monotonic() + e2e_timeout(30)
-    while True:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        assert time.monotonic() < guard, f"{what} (pid {pid}) outlived the bound that fired"
+    """Block until a process is no longer running, whatever became of its parent.
+
+    `is_running` rather than ``kill(pid, 0)``, which counts a zombie — a killed orphan
+    waiting to be collected is a function of the host's load, not of this bound. The
+    state is reported on expiry because the two look alike from the wall clock alone.
+    """
+    guard = deadline(30)
+    while is_running(pid):
+        assert time.monotonic() < guard, (
+            f"{what} (pid {pid}) outlived the bound that fired: {_process_state(pid)}"
+        )
         time.sleep(0.01)
+
+
+def _process_state(pid: int) -> str:
+    """Whatever procfs still says about ``pid``, for a wait that gave up on it."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+    except OSError:
+        return "no longer listed in procfs"
+    fields = raw[raw.rfind(")") + 2 :].split()
+    return f"state {fields[0]}, parent {fields[1]}, command {command.strip()!r}"
 
 
 def test_push_past_its_bound_reports_the_command_and_leaves_no_gate_running(
@@ -133,6 +174,48 @@ def test_push_past_its_bound_reports_the_command_and_leaves_no_gate_running(
     _await_gone(int(marker.read_text(encoding="utf-8")), "the wedged pre-push gate")
     # Nothing reached the remote: an aborted push publishes no ref.
     assert branch not in gitops.branches(origin)
+
+
+def test_a_gate_that_restarts_its_worker_while_it_is_stopped_is_still_stopped_whole(
+    bare_origin: Callable[..., Path], tmp_path: Path
+) -> None:
+    """The bound stops what git starts *during* the teardown, not only what it found.
+
+    A process born after a walk of git's tree is in no set that walk named, so it
+    keeps git's pipes and outlives the bound. Driven deterministically here rather
+    than waiting for a host loaded enough to produce it.
+    """
+    origin = bare_origin()
+    checkout = tmp_path / "checkout"
+    gitops.clone(str(origin), checkout)
+    worker = tmp_path / "gate.pid"
+    replacement = tmp_path / "restarted-gate.pid"
+    install_pre_push_hook(
+        checkout,
+        " ".join(
+            shlex.quote(part)
+            for part in (sys.executable, "-c", _RESPAWNING, str(worker), str(replacement))
+        ),
+    )
+    branch = "publish-me"
+    gitops._git(["checkout", "-b", branch], cwd=checkout)
+    gitops.commit_empty(checkout, "chore: something to publish")
+
+    reported = _drive("push", checkout, branch, **{GIT_HOOK_TIMEOUT_ENV: "3"})
+
+    assert f"bound 3s; raise it with {GIT_HOOK_TIMEOUT_ENV}" in str(reported["message"])
+    _await_gone(int(worker.read_text(encoding="utf-8")), "the wedged pre-push gate")
+    # The restart is the point of the journey, so its absence is a failure rather than
+    # a skipped assertion: a run where nothing was restarted proves nothing here.
+    assert replacement.is_file(), "the gate never restarted its worker"
+    _await_gone(int(replacement.read_text(encoding="utf-8")), "the restarted gate worker")
+    # And the bound reported at its own deadline rather than at the drain's. Half the
+    # drain ceiling: under what one escapee costs, so it discriminates, and far above
+    # the 61-85ms this path overshoots by under load. A load-scaled guard would reach
+    # past the failure — see [Bound by what the failure
+    # costs](../../docs/repo-lifecycle.md#the-three-ways-a-wall-clock-assertion-is-fixed).
+    elapsed = reported["elapsed"]
+    assert isinstance(elapsed, float) and 3 <= elapsed < 3 + gitops._DRAIN_SECONDS / 2
 
 
 def test_a_fetch_from_a_remote_that_never_answers_is_bounded_separately(tmp_path: Path) -> None:

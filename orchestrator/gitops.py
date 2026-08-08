@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
-from .watchdog import ProcessId, terminate_tree
+from .watchdog import ProcessId, terminate_process_group
 
 __all__ = [
     "Commit",
@@ -98,7 +98,7 @@ HOOK_RUNNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("worktree", "add"),
     }
 )
-#: How long the timeout path waits for git's pipes after terminating its tree. Only
+#: How long the timeout path waits for git's pipes after terminating its group. Only
 #: a descendant this process could not signal can hold them past that, and hanging
 #: there would defeat the bound that just fired.
 _DRAIN_SECONDS = 30.0
@@ -190,11 +190,15 @@ def _drain_after_timeout(proc: subprocess.Popen[str]) -> None:
     `subprocess.run` would kill git and then read its pipes to EOF — but a hook's
     own children inherit those pipes and outlive the shell that started them, so
     that read blocks on processes the bound was meant to stop waiting for. Killing
-    the whole tree first is therefore not a courtesy: it is what makes the timeout
-    path terminate at all, and it is also what stops a fired bound from leaving the
+    them first is therefore not a courtesy: it is what makes the timeout path
+    terminate at all, and it is also what stops a fired bound from leaving the
     orphaned gate run behind that this harness then has to recognise days later.
+
+    The *group*, not a walk from the root, because git can start a replacement after
+    any walk that named the set: [Every git command is
+    bounded](../docs/repo-lifecycle.md#every-git-command-is-bounded).
     """
-    terminate_tree(ProcessId(proc.pid))
+    terminate_process_group(ProcessId(proc.pid))
     try:
         proc.communicate(timeout=_DRAIN_SECONDS)
     # A descendant this process is not permitted to signal is the only thing that can
@@ -228,6 +232,10 @@ def _git(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, **env} if env is not None else None,
+        # A session of its own, so the bound has one handle covering every process git
+        # starts however late — see `_drain_after_timeout`. Nothing here is
+        # interactive, so the controlling terminal it gives up is not a loss.
+        start_new_session=True,
     ) as process:
         try:
             stdout, stderr = process.communicate(timeout=bound)
