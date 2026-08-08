@@ -1230,8 +1230,10 @@ Two things about that recording are decided by branch state rather than chosen:
   provenance, and a whole branch carries none — claiming it produces a pin the next
   round declines in favour of a fresh branch, which is the discarded work again. A
   branch that carries a marker gets `retry`; a whole one gets `continue`. Marking a
-  gate-rejected branch instead would be a lie about it and would move it from
-  `just integrate` to `just repo-recover` in [`just recoverable`](#complete-branch-after-publication-failure).
+  gate-rejected branch instead would be a lie about it, and `just recoverable` reads
+  that marker to decide which command it offers an operator — so the branch would be
+  handed to `just repo-recover`, which recovers an interrupted step, rather than to
+  `just integrate`, which publishes finished work.
 * **The completed steps.** An outcome where the merge path refused the *content*
   (`gate-failed`, `checks-failed`) records none, so the continuation re-dispatches its
   steps; skipping them as completed would republish the identical rejected tree. Every
