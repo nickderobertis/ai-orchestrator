@@ -1224,6 +1224,14 @@ that continue their branches; and the journeys in `tests/e2e/test_lifecycle_e2e.
 the same recording where a required check, an unreported one, or a closed pull request
 settles a workstream — and its absence where a settlement never reached a commit.
 
+A continuation is only worth what the checkout can produce, so every eligible outcome
+also hands its branch to the registered execution checkout before teardown — the run's
+own clone is disposable. That copy is fast-forward only, to protect a concurrent run
+holding the same branch name, and a refusal is reported in the settlement's detail for
+**every** eligible outcome rather than only for the merge-path rejection: the pin the
+next round would otherwise adopt names a branch nothing outside this run carries, and
+that line is the only warning it does.
+
 Two things about that recording are decided by branch state rather than chosen:
 
 * **The mode.** `retry` is the mode whose validation *demands* unattested incomplete

@@ -4720,6 +4720,67 @@ def test_gate_failure_says_so_when_rejected_work_could_not_be_preserved(
     assert not _has_file(origin, "main", "rejected.txt")
 
 
+def test_a_refused_handover_is_reported_for_an_outcome_no_gate_rejected(
+    tmp_path, bare_origin
+) -> None:
+    """The same refusal, on the ending that is *not* a merge-path rejection.
+
+    Preservation is keyed on the outcome domain now, so every eligible ending hands its
+    branch to the registered checkout — but only the rejection above used to say when
+    the handover was refused. That silence is the expensive half: this settlement
+    records a continuation naming the branch, the fast-forward-only copy refuses it to
+    protect the run already holding that name, and the checkout the next round resumes
+    from does not carry the work. Without this line the result claims a continuation and
+    nothing anywhere says it cannot be adopted.
+
+    ``not-completed`` is the ending driven here because it records its own continuation
+    before this ever runs, so the recorded pin and the refused handover are genuinely
+    independent — which is exactly the pair that used to disagree in silence.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-unpreservable-partial")
+    safety = gitops.clone(origin, tmp_path / "safety-unpreservable-partial")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+    branch = "feature/unpreservable-partial-work"
+    writes = make_writing_dispatch(filename="partial.txt", completed=False)
+
+    def writes_while_another_run_claims_the_branch(
+        persona: str, task: str, *, project_dir: str, **kwargs: object
+    ) -> Report:
+        report = writes(persona, task, project_dir=project_dir, **kwargs)
+        # A concurrent run put its own commit on this branch name in the shared
+        # checkout. This run's tip is not a fast-forward of it, so the handover has to
+        # refuse rather than discard that run's only record of its work.
+        tree = git("rev-parse", "origin/main^{tree}", cwd=safety).strip()
+        other = git("commit-tree", tree, "-p", "origin/main", "-m", "other run", cwd=safety).strip()
+        git("branch", branch, other, cwd=safety)
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "Leave work unfinished on a branch the registered checkout cannot take.",
+        "engineer",
+        workspace=Workspace(tmp_path / "unpreservable-partial-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=writes_while_another_run_claims_the_branch,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "not-completed", result.detail
+    # No gate refused this tree, so the rejection wording would be a lie about it.
+    assert "could not preserve work" in result.detail
+    assert "rejected work" not in result.detail
+    assert branch in result.detail and str(safety) in result.detail
+    # The continuation the settlement recorded names a branch the checkout cannot
+    # produce — which is precisely what the detail above has to warn about.
+    assert result.resume is not None and result.resume.branch == branch
+    assert not _has_file(safety, branch, "partial.txt")
+    assert not _has_file(origin, "main", "partial.txt")
+
+
 # A hook that lets the feature branch through and rejects the direct base push, so
 # the *second* gated push — the rebuilt squash publication tree — is the one that
 # fails. Git feeds `<local-ref> <local-sha> <remote-ref> <remote-sha>` on stdin.

@@ -726,10 +726,16 @@ def _preserve_settled_branch(
     The run's own clone is disposable, so the checkout is where a recorded `Resume` has
     to be able to find the branch again. Every eligible outcome that turns out to have
     commits hands them over for that reason — the same two questions the recorder asks,
-    in the same order, so nothing is recorded that the checkout cannot then produce.
-    Only a merge-path *rejection* says so in its detail, because that
-    is the outcome whose whole point is that finished work was refused and is sitting
-    somewhere an operator has to be told about.
+    in the same order, so the handover is attempted for everything a continuation can
+    name.
+
+    A *refused* handover is reported for every one of them, not only for the merge-path
+    rejection whose detail also announces where the work is waiting. The copy is
+    fast-forward only, so it refuses whenever another run holds the same branch name —
+    and the continuation this settlement recorded then names a branch nothing outside
+    this run can produce. That is the discarded work this preservation exists to
+    prevent, whichever ending recorded it, and the detail is the operator's one warning
+    before the next round declines the pin.
 
     A base ref that stopped resolving — the failure that settles a run ``error`` in the
     first place — leaves nothing to compare against, and this reports no handover rather
@@ -742,14 +748,14 @@ def _preserve_settled_branch(
             return
     except GitError:
         return
-    mirrored = workspace.mirror_branch(ref, result.branch)
-    if result.outcome != "gate-failed":
-        return
-    if not mirrored:
+    if not workspace.mirror_branch(ref, result.branch):
+        kind = "rejected work" if result.outcome == "gate-failed" else "work"
         result.detail += (
-            f"; could not preserve rejected work on branch {result.branch!r} in registered "
+            f"; could not preserve {kind} on branch {result.branch!r} in registered "
             f"execution checkout {result.execution_checkout}"
         )
+        return
+    if result.outcome != "gate-failed":
         return
     result.detail += (
         f"; rejected work was not published and is preserved on local branch "
