@@ -12,6 +12,9 @@ import {
   runDetail,
   runList,
   runTimeline,
+  WORKER_SESSION,
+  workerConversation,
+  workerTurnsTimeline,
 } from "./fixtures";
 
 // A unit fixture that drifts from the served contract would let the views under
@@ -30,4 +33,17 @@ test("every fixture payload satisfies the published read-API contract", () => {
       conversation.conversation.id,
     );
   }
+});
+
+// A session that is still being written moves both payloads at once, and the views
+// that follow one read the other; a fixture that grew only one would prove nothing.
+test("a growing worker session grows its transcript and its timeline together", () => {
+  expect(
+    dagConversationSchema.parse(workerConversation(3)).conversation.turns,
+  ).toHaveLength(3);
+  const dispatched = parseRunTimeline(workerTurnsTimeline(3)).spans.filter(
+    ({ id }) => id === `dispatch-${WORKER_SESSION}`,
+  );
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0]?.events).toHaveLength(3);
 });

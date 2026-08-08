@@ -1316,6 +1316,39 @@ def publish_dashboard_activity_and_history(workspace: Path) -> int:
     return completed.returncode
 
 
+def grow_worker_session(workspace: Path, turns: int) -> int:
+    """Record turns onto the live dashboard's worker session until it has ``turns``.
+
+    A dispatched session grows one appended record at a time, which is what the served
+    transcript and the served timeline are both projected from. Absolute rather than
+    incremental so a journey states the session's length it wants and gets it whatever
+    the journeys before it left behind.
+    """
+    record = workspace / "worker-session.jsonl"
+    recorded = [line for line in record.read_text(encoding="utf-8").splitlines() if line]
+    with record.open("a", encoding="utf-8") as growing:
+        for index in range(len(recorded), turns):
+            growing.write(
+                json.dumps(
+                    {
+                        "session": "worker-session",
+                        "name": "engineer-dashboard",
+                        "harness": "claude-code",
+                        "model": "claude-sonnet-5",
+                        "timestamp": _stamp(datetime.now(UTC)),
+                        "prompt": "Keep going",
+                        "text": f"Dashboard turn {index} arrived",
+                        "status": "ok",
+                        "session_id": "worker-session",
+                        "usage": {"input_tokens": 1200, "output_tokens": 340},
+                        "events": [],
+                    }
+                )
+                + "\n"
+            )
+    return 0
+
+
 def clear_dashboard_activity(workspace: Path) -> int:
     """Model a streamed dispatch ending by removing its live-only publication."""
     (
@@ -1351,6 +1384,11 @@ def main(argv: list[str] | None = None) -> int:
         "--clear-dashboard-stream",
         action="store_true",
         help="remove the dashboard's live activity publication",
+    )
+    parser.add_argument(
+        "--grow-worker-session",
+        type=int,
+        help="record turns onto the served worker session until it has this many",
     )
     parser.add_argument(
         "--remove-run",
@@ -1390,6 +1428,8 @@ def main(argv: list[str] | None = None) -> int:
         return publish_dashboard_activity_and_history(workspace)
     if args.clear_dashboard_stream:
         return clear_dashboard_activity(workspace)
+    if args.grow_worker_session is not None:
+        return grow_worker_session(workspace, args.grow_worker_session)
     if args.remove_run is not None:
         return remove_run(workspace, args.remove_run)
     if args.remove_page_runs:

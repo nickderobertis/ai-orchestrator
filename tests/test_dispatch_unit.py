@@ -19,7 +19,7 @@ import pytest
 from onejudge_sdk import RunResult
 from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
-from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, watchdog
 from orchestrator import dispatch as dispatch_module
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
@@ -1563,7 +1563,16 @@ def test_watchdog_lets_a_signalled_worker_shut_itself_down(tmp_path) -> None:
     assert not is_running(process.pid)
 
 
-def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path) -> None:
+#: The grace raised until it cannot be confused with the cost the teardown *must* pay
+#: — three walks of the host's whole process table, measured at 180ms under load. See
+#: [Magnify the
+#: signal](../docs/repo-lifecycle.md#the-three-ways-a-wall-clock-assertion-is-fixed).
+_UNMISTAKABLE_GRACE = 100 * TERMINATION_GRACE
+
+
+def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     """Tearing down a dispatch that already exited costs nothing but the `/proc` walks.
 
     Every completed dispatch runs this cleanup, and every one of them used to sleep out
@@ -1571,6 +1580,7 @@ def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path)
     where the tree it is being graceful toward has already gone. Across a suite that
     dispatches hundreds of times that was the single largest cost in the lifecycle e2e.
     """
+    monkeypatch.setattr(watchdog, "TERMINATION_GRACE", _UNMISTAKABLE_GRACE)
     process = subprocess.Popen([sys.executable, "-c", ""], start_new_session=True)
     assert process.wait(timeout=5) == 0
     finished = ProcessId(process.pid)
@@ -1581,9 +1591,10 @@ def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path)
     terminate_tree(finished)
     elapsed = time.monotonic() - start
 
-    # Those three calls sleep four grace periods between them when the grace is
-    # unconditional; the bound is under that and above the `/proc` walks that remain.
-    assert elapsed < 3 * TERMINATION_GRACE, elapsed
+    # Five times the dearest teardown measured under load, and a fifth of one of the
+    # four grace periods the unconditional form sleeps: too much room to fail on the
+    # walks, too little to pass on even one grace.
+    assert elapsed < _UNMISTAKABLE_GRACE / 5, elapsed
 
 
 def test_watchdog_terminates_live_process_tree() -> None:

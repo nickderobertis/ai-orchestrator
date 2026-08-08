@@ -190,7 +190,6 @@ export function App({
                     nodes={nodes}
                     timeline={telemetry.timeline}
                     timelineError={telemetry.timelineError}
-                    conversationRevision={telemetry.conversationRevision}
                     onSelectNode={selection.selectNode}
                     onSelectItem={selection.selectItem}
                     selectedItemId={selection.itemId}
@@ -200,7 +199,6 @@ export function App({
                   // one breadcrumb away rather than one narrow column beside it.
                   <NodeTimelineView
                     client={client}
-                    conversationRevision={telemetry.conversationRevision}
                     node={selectedNode}
                     onBack={() => selection.selectNode(undefined)}
                     onSelectItem={selection.selectItem}

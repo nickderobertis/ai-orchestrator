@@ -805,8 +805,11 @@ is polled from oneharness history on its own slower interval and only when the
 request names a single `run_id`, because each poll spawns a real history subprocess.
 `activity.changed` is likewise run-scoped and carries the current validated,
 bounded activity summaries read from the configured dispatch scratch root (the
-system temporary directory by default). It invalidates the visible run and open
-transcript while also giving the UI immediate progress to display.
+system temporary directory by default). It invalidates the visible run while also
+giving the UI immediate progress to display. None of these events re-reads an open
+transcript by itself: they invalidate the run's detail and timeline, and the client
+re-reads a transcript only when the timeline it just took says that session recorded
+something.
 Backpressure coalesces repeated changes to the same run, never unboundedly queues
 them. Clients refetch run detail after a change event; SSE is invalidation, not a
 second state model.
