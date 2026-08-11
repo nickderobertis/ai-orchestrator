@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -220,6 +221,30 @@ def test_the_recipe_refuses_a_port_that_is_not_one(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "DAG_UI_PORT must be a port number, not not-a-port" in result.stderr
+
+
+def test_a_read_api_address_file_that_is_not_one_is_refused(tmp_path: Path) -> None:
+    """A misshapen address would become a proxy target that fails later as a 502.
+
+    Blaming the read API for a file this repository got wrong is the failure this
+    check exists to prevent, so the server refuses at startup and names the file.
+    """
+    server = tmp_path / "scripts"
+    server.mkdir()
+    shutil.copy2(REPO_ROOT / "scripts/dag-ui-server.js", server / "dag-ui-server.js")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "read-api.address").write_text("not an address\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bun", str(server / "dag-ui-server.js")],
+        env={**os.environ, "DAG_UI_DIST": str(REPO_ROOT / "node_modules/onepipeline-ui/dist")},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+    )
+
+    assert result.returncode == 2, result.stdout
+    assert "read-api.address must hold one HOST:PORT, not not an address" in result.stderr
 
 
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:

@@ -17,8 +17,22 @@
 // other serving nothing.
 const here = import.meta.dir;
 const dist = process.env.DAG_UI_DIST ?? `${here}/../node_modules/onepipeline-ui/dist`;
-const address = (await Bun.file(`${here}/../config/read-api.address`).text()).trim();
-const api = (process.env.DAG_UI_API_URL ?? `http://${address}`).replace(/\/+$/, "");
+
+// Read only when it is needed: an invocation that names its own API address never
+// consults the file, and validated when it is, because an empty or misshapen one
+// would otherwise become a proxy target that fails later as a 502 blaming the read
+// API for a file this repository got wrong.
+const defaultApi = async () => {
+  const source = `${here}/../config/read-api.address`;
+  const address = (await Bun.file(source).text().catch(() => "")).trim();
+  if (!/^[^\s:]+:\d{1,5}$/.test(address)) {
+    console.error(`dag-ui: ${source} must hold one HOST:PORT, not ${address || "nothing"}`);
+    process.exit(2);
+  }
+  return `http://${address}`;
+};
+
+const api = (process.env.DAG_UI_API_URL ?? (await defaultApi())).replace(/\/+$/, "");
 
 const requested = process.env.DAG_UI_PORT ?? "4173";
 const port = Number(requested);
