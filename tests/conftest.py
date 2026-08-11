@@ -42,10 +42,13 @@ DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
 READS_RECIPES_MARKER = "reads_recipes"
 
-#: The gate-comparison identity `scripts/comparison-base.sh` and `.githooks/pre-push`
-#: read. Restated here rather than imported: the publishing side that exports it is
-#: `onevcs` now, and this suite's need is only to drop whatever it inherited.
-COMPARISON_ENV_PREFIX = "ORCHESTRATOR_COMPARISON_"
+#: Every spelling of the gate-comparison identity `scripts/comparison-base.sh` and
+#: `.githooks/pre-push` read. Both are live: `onevcs` exports the `ONEVCS_*` pair on
+#: every lifecycle path and the `ORCHESTRATOR_*` pair is the operator's override, so
+#: dropping one prefix alone leaves the suite inheriting the other. Restated here
+#: rather than imported — the exporting side is a published CLI — and reconciled
+#: against those readers by `tests/test_dispatch_environment_contract.py`.
+COMPARISON_ENV_PREFIXES = ("ORCHESTRATOR_COMPARISON_", "ONEVCS_COMPARISON_")
 #: The dispatch ownership stamp `scripts/oneharness-agent.sh` branches on: with one
 #: exported it streams into that directory, without one it takes its `--events`
 #: branch. `tests/e2e/test_quota_fallthrough_e2e.py` drives the second branch.
@@ -82,13 +85,13 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the enclosing dispatch's comparison base out of the suite's own pushes.
 
     The publication path exports one comparison identity to every process judging a
-    change, so this suite run inside a dispatch inherits `ORCHESTRATOR_COMPARISON_BASE`
-    from the branch it is proving. Git hands a `pre-push` hook the whole environment,
-    so a test push that deliberately carries no publication base would silently arrive
+    change, so this suite run inside a dispatch inherits `ONEVCS_COMPARISON_BASE` from
+    the branch it is proving. Git hands a `pre-push` hook the whole environment, so a
+    test push that deliberately carries no publication base would silently arrive
     carrying the outer branch's.
     """
     for key in tuple(os.environ):
-        if key.startswith(COMPARISON_ENV_PREFIX):
+        if key.startswith(COMPARISON_ENV_PREFIXES):
             monkeypatch.delenv(key)
 
 
