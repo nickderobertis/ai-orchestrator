@@ -111,13 +111,16 @@ to change the graph without waiting for a round boundary.
 The three planner-facing recipes are:
 
 ```sh
-just orchestrate plan.json --runs-dir /host/path/runs
-just channel-next RUN --runs-dir /host/path/runs
-just channel-reply RUN reply.json --runs-dir /host/path/runs
-just channel-approve RUN --runs-dir /host/path/runs
-just channel-reject RUN "verification failed" --runs-dir /host/path/runs
-just channel-continue RUN "apply the edit and continue" --runs-dir /host/path/runs
+just orchestrate plan.json
+just channel-next RUN
+just channel-reply RUN reply.json
+just channel-approve RUN
+just channel-reject RUN "verification failed"
+just channel-continue RUN "apply the edit and continue"
 ```
+
+The ledger lives under `runs/` in the working directory; `ONEPIPELINE_RUNS_DIR`
+moves it, and every one of these verbs reads the same variable.
 
 `orchestrate` prints a JSON launch record containing `run_id`, `channel_id`, and
 literal `commands.channel_next` / `commands.monitor` values, and persists the same
@@ -315,7 +318,7 @@ surfaces are queued, how stale the oldest one is, and the command that reads the
 
 ```
 * harness-fixes-cont  [mine]  ACTIVE  (orchestrator running)
-    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont --runs-dir runs
+    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont
 ```
 
 The queue is `channel/heartbeat-surface.json` (a check-in update) and
@@ -352,9 +355,9 @@ shape for a non-rejection instruction.
 
 Only the orchestrator crosses round boundaries. Worker onejudge processes remain
 bounded to the graph round that dispatched them and never use the planner channel.
-The orchestrator may author in an isolated execution checkout, but its
-`--runs-dir` must resolve to the same host-visible path for the detached process
-and planner. The round ledger and its sibling `channel/` directory cannot live
+The orchestrator may author in an isolated execution checkout, but the runs
+directory it uses must resolve to the same host-visible path for the detached
+process and the planner. The round ledger and its sibling `channel/` directory cannot live
 only inside a disposable worktree or container-private filesystem.
 
 ### Live graph edits
@@ -363,7 +366,7 @@ Send a version-1 edit envelope to `channel-reply`; this is the shape exercised b
 `tests/e2e/test_live_edit_e2e.py`:
 
 ```sh
-just channel-reply RUN --runs-dir /host/path/runs <<'JSON'
+just channel-reply RUN <<'JSON'
 {"version":1,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
 JSON
 ```
@@ -747,11 +750,10 @@ runs/<run-id>/round-01/<node>[/<step>]/oneharness-session.json
 runs/<run-id>/humans.json
 ```
 
-Without `--run`, the id is derived from the plan's `name` or filename and made
-unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
-claims a `running` or `abandoned` round only after its recorded owner is proven
-gone. Plan and result writes are atomic; a live round cannot be claimed by
-another process.
+The id is derived from the plan's `name` or filename and made unique. Plan and
+result writes are atomic; a live round cannot be claimed by another process, and a
+run whose driver died is picked up with `just orchestrate --adopt <run-id>` rather
+than by claiming its round directly.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks, then points to `just results <run>`. The results
 view lists every node's status and outcome, links its typed-id detail view, and
@@ -834,10 +836,10 @@ tier for a finding that tier cannot re-check.
 Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable
 frontier, and reacts to each completion until the graph is terminal. Journal
-schema 2 terminal node events carry the complete serialized node result, so
-`--recover` can replay a dead round's prefix, retain settled nodes byte-for-byte,
-resume nodes that were running without another start transition, and converge the
-remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
+schema 2 terminal node events carry the complete serialized node result, so a
+reclaimed round replays its dead predecessor's prefix, retains settled nodes
+byte-for-byte, resumes nodes that were running without another start transition,
+and converges the remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
 The journal record contract is schema version 10, pinned by
@@ -911,8 +913,8 @@ as the unfinished round that also exits 1.
 
 A round that stops without recording a result never stays `running`. Its owner writes
 `{"status": "abandoned", "reason": ...}` on any catchable teardown signal and on any
-other exit that recorded no result, and `--recover` reclaims an `abandoned` round the
-same way it reclaims a dead `running` one. SIGKILL is the one death nothing can
+other exit that recorded no result, and an `abandoned` round is reclaimed the same
+way a dead `running` one is. SIGKILL is the one death nothing can
 record, so `just runs` and `just status` derive abandonment from the recorded owner's
 pid: a dead owner is reported as `round-NN ABANDONED (...)` with the reclaiming
 command, never as work in flight.
@@ -1051,8 +1053,8 @@ the launch parameters the run recorded (`orchestrator/relaunch.json` — the pla
 the runs root, the base config, each side's harness *and* model, the round budget),
 registers
 the new process as the owner, reopens the channel, and drives the next round from
-the journal-folded plan of record with `--recover`, so the round its predecessor
-left claimed is reclaimed rather than replaced. The run id, the journal, and the
+the journal-folded plan of record, reclaiming the round its predecessor left
+claimed rather than replacing it. The run id, the journal, and the
 anchors are the ones it already had; minting a new run id and pinning a resume was
 what stranded publication anchors before this existed.
 
@@ -1097,57 +1099,19 @@ poller or bespoke lifecycle watch script. Start with `just monitor`; a targeted
 `gh` query remains appropriate for a one-off detail absent from its stream.
 
 ```sh
-just monitor                      # newest active run
-just monitor RUN_ID               # one named run
-just monitor --once               # replay what is known, report state, exit 0
-just monitor --follow             # follow even when output is captured
-just monitor --until-settled      # follow either way, return when the run settles
-just monitor --format jsonl       # one JSON record per line, no header
-just monitor --heartbeat 30 --poll-interval 5
+just monitor RUN_ID               # stream one named run's merged events
 ```
 
-Unchanged polls back off exponentially to a configurable bounded interval.
-`--max-poll-interval` changes that bound. New observations reset the
-initial interval. Silence heartbeats remain independent of polling frequency.
+The run id is required — there is no "newest active run" default — and
+`ONEPIPELINE_RUNS_DIR` moves the ledger as everywhere else.
 
-Without `RUN_ID` it picks the **newest active** run — anything that has not
-completed successfully, including one merely waiting on a human, since that is the
-most important state to be watching. If nothing is active it watches the newest
-run. `--runs-dir` moves the ledger as everywhere else.
-
-**When it follows, and when it returns.** Following is a terminal affordance: the
-stream is flushed line by line and Ctrl-C is how a person ends it. A caller whose
-stdout is a pipe or a file sees none of that — it gets the whole output when the
-process exits — so on a terminal `just monitor` follows, and off one it makes a
-single pass and exits 0, exactly as `--once`. `--follow` asks for the follow
-anyway, for a reader that does consume the stream incrementally. This is not a
-convenience: the planner is an automated supervisor whose invocations are always
-captured, so the command `launch.json` advertises was, for it, one that produced
-nothing and never returned, and every status check was done by reading
-`events.jsonl` and `/proc` by hand instead.
-
-**The bound that pass returns within.** `onepipeline` holds the command to a
-bounded return on a runs root the size of the planner's own. Nothing in the command
-computes that bound; what it enforces is its per-source timeout, and the bound is
-derived from it so the two cannot drift. The journal, the ledger, the snapshot, and
-git are local reads; the two
-sources that are not — oneharness history, a subprocess over a store that only
-grows, and `gh`, which is the network — each carry that deadline. `gh` carries it
-twice: per call *and* as a budget for the whole source, so a run with many linked
-PRs cannot spend one timeout per PR. An expired read is the same silence an absent
-`gh` or history store already degrades to. `--source-timeout` moves that deadline;
-a real root answers in about a second, so the bound is the guarantee, not the
-expectation.
-
-**Exit contract.** Only a graph that *completed successfully* ends the *follow*
-(exit 0). Waiting on a human, a failed node, and an executor that died all keep
-heartbeating, because each is a state a person acts on and the run then continues
-— through `next-round`, whose new round directory the next poll picks up. A
-monitor that exited on them would report "finished" for a run that is merely
-stuck. `--once` — and every non-terminal invocation — always exits 0 after one
-pass; only follow mode encodes completion in its status. A completed graph reads
-the same either way (`graph complete`), because that detail is about the run and
-not about how it was being watched. Exit 2 is an unresolvable run or bad input.
+**Following is a terminal affordance**: the stream is flushed line by line and
+Ctrl-C is how a person ends it. That is why the *supervision* entry point is `just
+orchestrate`, which streams exactly this and then **returns** when the run settles
+— see [When an attach returns](#when-an-attach-returns). The planner is an
+automated supervisor whose invocations are always captured, so a command that
+produced nothing and never returned was one it could not use, and every status
+check got done by reading `events.jsonl` and `/proc` by hand instead.
 
 ### What is running right now, and on what
 
@@ -1212,8 +1176,8 @@ safe beside live dispatches.
 
 ### When an attach returns
 
-`--until-settled` is the third ending, and the one the foreground `just
-orchestrate` waits on. **Settled** is a property of the run: it is no longer
+The foreground `just orchestrate` waits on this ending. **Settled** is a property
+of the run: it is no longer
 advancing on its own, so the next move is the planner's. It is deliberately
 neither of the two readings that are easy to reach for. *The round finished*
 returns while the orchestrator is still scheduling, abandoning a graph that is
@@ -1234,12 +1198,10 @@ would walk away from a working run. `unattended` exits non-zero because it is th
 state a planner must intervene in, and because a launch that parked reads exactly
 like one that is merely quiet to anyone who is not watching the stream.
 
-`--until-settled` follows on a terminal and off one alike: the one-pass default
-exists for a caller that could neither observe nor end a follow, and this mode
-ends itself. It composes with `--format jsonl`, where the final heartbeat record
-carries a `settlement` field naming which of the three it was. `--once` and
-`--until-settled` ask opposite things and are refused together; without either
-flag, nothing about the follow or the one-pass default changes.
+This ending is why `just orchestrate` can be run on a terminal and off one alike:
+it ends itself rather than needing a reader to end it. `--detach` asks for the
+other shape — return at the launch record and leave the run unattended — and
+`just monitor RUN_ID` re-attaches to the same stream afterwards.
 
 **Output shape.** The text stream's first line is exactly:
 
@@ -1280,13 +1242,11 @@ instead of ending the stream.
 All three read-only views take the run id `launch.json` advertises: `just monitor
 RUN_ID`, `just status RUN_ID`, and `just telemetry RUN_ID`. Each resolves it the
 same way — an exact run directory, or a plan name that names exactly one active
-launch. `status`'s positional keeps its original count meaning for a plain
-integer (`just status 5` still lists five recent tasks), so a run whose id is all
-digits is addressed through `just monitor` or `just results` instead. Scoped,
-`status` reports only that run's indicators and the sessions its own scopes
-labelled; `telemetry` reports that run whether or not it has settled, since naming
-it is the request and the settled-run filter exists only to keep the *unscoped*
-index about live work.
+launch — and each takes a run id and nothing else, so an id that is all digits is
+addressed no differently from any other. Scoped, `status` reports only that run's
+indicators and the sessions its own scopes labelled; `telemetry` reports that run
+whether or not it has settled, since naming it is the request and the settled-run
+filter exists only to keep the *unscoped* index about live work.
 
 An unsettled round has written no `result.json`, so both `telemetry` and the DAG
 read model describe its nodes from the journal itself: a node is `running` only
@@ -1324,17 +1284,16 @@ shapes, and event vocabulary are fixed by
 
 ## Human completion attestations
 
-After doing a reported action, attest it explicitly:
+After doing a reported action, attest it explicitly, over the live channel:
 
 ```sh
-just next-round RUN --complete-human HUMAN_ID
-just next-round RUN --complete-human NODE_ID/STEP_ID
+just channel-reply RUN <<'JSON'
+{"version":1,"commands":[{"op":"attest","ref":"HUMAN_ID"},{"op":"attest","ref":"NODE_ID/STEP_ID"}]}
+JSON
 ```
 
-The same operation can be supplied in an edits file as `"complete_human":
-["HUMAN_ID"]`. Multiple CLI flags and file entries combine, but references must
-be unique. Only a human action recorded as `waiting` in the latest completed
-round can be attested. Unknown ids, blocked nodes/steps, agent ids, and previously
+Several `attest` commands combine in one envelope, but references must be unique.
+Only a human action recorded as `waiting` can be attested. Unknown ids, blocked nodes/steps, agent ids, and previously
 completed humans are invalid and exit 2.
 
 The harness never guesses that a meeting, approval, deployment, or other human
@@ -1347,24 +1306,25 @@ continuation round so `just runs` no longer reports the finished run as waiting.
 
 ## Replanning
 
-`just next-round RUN [edits.json]` reads the latest plan and result, writes the
-next numbered plan, runs it, and records the result. `--plan-only` stops after
-derivation. Edits may `retry` with overrides, `split`, `add`, `drop`, or
-`complete_human`. Completed nodes fall out of the next plan, satisfied dependency
+`just next-round RUN` reads the latest plan and result, writes the next numbered
+plan, runs it, and records the result. The edits it folds in are the ones
+`channel-reply` accepted while the round ran — `retry` with overrides, `split`,
+`add`, `drop`, or `attest` — rather than a file passed here. Completed nodes fall out of the next plan, satisfied dependency
 ids are removed, and unresolved lifecycle stack anchors/resume checkpoints are
 preserved. An unresolved same-repository publication anchor passes through removed
 human gates (and other non-publication nodes), so attestation cannot silently cut a
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
 
-**An edits file this input cannot fully apply is refused, never partly applied.**
-The vocabulary is exactly `retry`, `split`, `add`, `drop`, and `complete_human`;
-any other top-level key exits non-zero naming it, and no round directory or ledger
-entry is written. The [version-1 live-edit envelope](#live-graph-edits) is the near
-miss that motivated this: `{"version": 1, "commands": [...]}` shares no key with
-that vocabulary, so `next-round` read the whole thing as *no edits*, derived the
-unedited round, and exited 0 — the planner learned the edit had not applied a full
-round of quota later, when the round dispatched the stale node definition. That
+**An edit this input cannot fully apply is refused, never partly applied.** The
+vocabulary is [the version-1 live-edit envelope](#live-graph-edits); anything else
+is rejected with the reason, and no round directory or ledger entry is written.
+That envelope becoming the one input is what closed the near miss that motivated
+this: while a separate edits *file* also existed, `{"version": 1, "commands":
+[...]}` shared no key with that file's vocabulary, so `next-round` read the whole
+thing as *no edits*, derived the unedited round, and exited 0 — the planner learned
+the edit had not applied a full round of quota later, when the round dispatched the
+stale node definition. That
 envelope is `channel-reply`'s schema and stays there; `next-round`'s job is to
 refuse it by name and say which command applies it.
 
@@ -1448,13 +1408,12 @@ too: pointed at a run whose latest round has already finished, it derives the ne
 round from that round's executed graph and says so on stderr, rather than starting it
 from the plan file it was handed. That covers a round the budget cancelled and a
 round whose owner died between `round-finished` and `result.json` — the journal says
-a round is over, so a re-run of the launch file is a transition however it is spelled.
-Without it the fold was one command wide: `run-plan runs/<id>/round-01/plan.json --run
-<id>` is what an orchestrator reaches for to reclaim a run it is already driving, and
-on `dag-observatory-ux-2` it started rounds 2 and 3 from the untouched round-1 launch
-file — re-dispatching merged work and discarding every accepted live edit, which cost
-two rounds of hand repair. `run-plan` still runs the file it is given whenever the
-latest round has *not* finished, which is the ordinary claim and `--recover`. The
+a round is over, so re-entering a finished round is a transition however it is
+spelled. Without it the fold was one command wide, and on `dag-observatory-ux-2`
+rounds 2 and 3 started from the untouched round-1 launch file — re-dispatching
+merged work and discarding every accepted live edit, which cost two rounds of hand
+repair. `run-plan` still executes the round it is pointed at whenever that round
+has *not* finished, which is the ordinary claim. The
 lifecycle-only plan executor (`lifecycle.main_plan`, kept for the old mappings and no
 longer a command) is excluded: it journals no authoritative stream, so there is
 nothing to fold from.

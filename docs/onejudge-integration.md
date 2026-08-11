@@ -925,7 +925,7 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   agents, repository lifecycle agents, and explicit human nodes in one recorded
   DAG. A lifecycle `steps` list may mix agent steps with `kind: human` steps on a
   resumable branch. Human nodes never call onejudge; after a person performs the
-  reported action, `just next-round RUN --complete-human NODE[/STEP]` records an
+  reported action, an `attest` command over `just channel-reply` records an
   attestation and releases only its dependents. Completed direct agents and
   lifecycle steps are not dispatched again.
 - **Run one subtask as a one-node plan.** There is no separate single-dispatch

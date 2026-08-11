@@ -186,8 +186,9 @@ graph completed, a blocking planner surface is waiting on you, or nothing is
 driving the run any more (exit 3, and the state to intervene in). Ctrl-C detaches
 without stopping the run. Pass `--detach` when a run should go unattended — several
 runs supervised at once, where you launch each one and come back to it — and
-`just monitor <run-id>` re-attaches to any of them, with `--until-settled` for the
-same return contract. Do **not** background a launch by hand to watch it; that is
+`just monitor <run-id>` re-attaches to any of them, streaming the same events
+without the settle-and-return contract the foreground launch has. Do **not**
+background a launch by hand to watch it; that is
 what the foreground default replaced. Rebuilding run state
 from `events.jsonl`, `ps`, or `git log` in a run clone instead is the omission
 the read-only views now prevent: `just runs` and `just status` name every unread

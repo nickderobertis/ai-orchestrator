@@ -999,8 +999,8 @@ records step results plus `resume` metadata: branch, root base, PR base,
 checkpoint SHA, completed steps, and optional draft PR URL. The temporary
 worktree is always removed, but the branch and commits are preserved.
 
-After `just next-round RUN --complete-human NODE_ID/STEP_ID`, the derived node
-carries that validated resume metadata. Continuation fetches the branch,
+Once that step is attested, the derived node carries that validated resume
+metadata. Continuation fetches the branch,
 fast-forwards safely, requires the recorded checkpoint to remain in its history,
 and skips every recorded completed agent/human step. A missing or rewritten
 branch/checkpoint fails as `resume-failed`; a recorded draft closed without merge
@@ -1076,8 +1076,8 @@ Two things about that recording are decided by branch state rather than chosen:
 
 The DAG is static within a `run-plan` invocation; the orchestrator adapts between
 rounds. Every round returns direct reports, lifecycle results, and ready human
-actions. `orchestrator.replan.next_round` applies a small **edits** mapping:
-`retry`, `split`, `add`, `drop`, and `complete_human`. Completed nodes landed on
+actions. The transition applies the **edits** the channel accepted while the round
+ran — `retry`, `split`, `add`, `drop`, and `attest`. Completed nodes landed on
 root are removed as satisfied. Completed-but-open dependencies become
 `stack_bases` anchors before their IDs are removed; a merge into a feature or
 synthetic base carries that landed base until the content reaches root. Those
@@ -1108,32 +1108,30 @@ recorded worktrees and then use `just orchestrate --adopt <run-id>`; recovery is
 explicit and never silently overwrites a result. `just runs` and `just status`
 report a round whose recorded owner no longer exists as `ABANDONED` rather than as
 in flight, so a lifecycle round that lost its executor is visibly waiting for that
-recovery rather than looking like work in progress. Pass `--run <id>` to name a
-run; without it, a fresh unique run id comes from the plan's top-level `name` or
-filename. The continuation trailer is written to stderr, so `--format json` stdout
-remains machine-readable. Use `--no-record` to opt out — it claims no round and so
-has no ledger to abandon or recover, though it detaches like any other round — or
-`--runs-dir` to move the ledger.
+recovery rather than looking like work in progress. A fresh unique run id comes
+from the plan's top-level `name` or filename; `ONEPIPELINE_RUNS_DIR` moves the
+ledger. Every run is recorded — there is no unrecorded mode — which is what keeps
+a running dispatch inside the ledger and the views built on it.
 
-After inspecting a round, put retry/split/add/drop or `complete_human` decisions
-in `edits.json`, or attest a ready human on the CLI:
+After inspecting a round, send retry/split/add/drop decisions and human
+attestations over the live channel, then transition:
 
 ```
 just runs
-just next-round <run-id> [edits.json]
-just next-round <run-id> --complete-human <node-id>
-just next-round <run-id> --complete-human <node-id>/<step-id>
-just next-round <run-id> [edits.json] --plan-only
+just channel-reply <run-id> <<'JSON'
+{"version":1,"commands":[{"op":"attest","ref":"<node-id>/<step-id>"}]}
+JSON
+just next-round <run-id>
 ```
 
-`next-round` writes `round-02/plan.json`, runs it with the canonical executor, and
-records its result. A human completion is accepted only when the latest recorded
-result names that exact ready action; unknown, blocked, agent, and already
-completed references exit 2. Each accepted attestation is appended to
-`runs/<run-id>/humans.json` with its reference, waiting round, and UTC timestamp.
-`--plan-only` stops after writing the derived plan. There is no lower-level
-derivation command: `just replan` exits naming `just next-round`, which reads the
-run's ledger and derives from the graph the round executed.
+`next-round` writes `round-02/plan.json`, runs it, and records its result, folding
+in the edits the channel accepted while the last round ran. A human completion is
+accepted only when the recorded result names that exact ready action; unknown,
+blocked, agent, and already completed references are refused. Each accepted
+attestation is appended to `runs/<run-id>/humans.json` with its reference, waiting
+round, and UTC timestamp. There is no lower-level derivation command: `just
+replan` exits naming `just next-round`, which reads the run's ledger and derives
+from the graph the round executed.
 
 The graph result state is `complete`, `waiting`, or `failed`; `ok` is true only
 for complete. Node states are `done`, `waiting`, `blocked`, `failed`, or `skipped`.
@@ -1141,44 +1139,41 @@ Waiting output includes action prose and direct `unblocks`; blocked nodes includ
 transitive `blocked_by`. Failure takes precedence over waiting. Exit status is 0
 only for complete, 1 for waiting or failed, and 2 for invalid input.
 
-Use `just status` for the joined operational view: worker history, its latest
-agent output and commands, commits on the checked-out lifecycle branch, and the
-latest ledger round that names that branch. By default it shows only running
-tasks. A task is running when its latest history status is explicitly
-non-terminal (`pending`, `started`, `running`, or `in_progress`) **and** its
-branch is still checked out in the recorded project worktree. This conservative,
-testable rule avoids treating an abandoned branch as a live process. Pass a
-positive limit (`just status 10`) or `--all` to include recent finished sessions;
-use `--format json` for pure machine-readable stdout.
+Use `just status [RUN]` for the joined operational view: what is driving the run,
+and what is running under it. Named, it covers one run; omitted, it covers every
+one. There is no count argument and no finished-session window — a run whose work
+has settled is read with `just results` and `just telemetry`.
 
 ## Integrating completed workstreams
 
-For a repository explicitly registered with `workflow: local`, `just integrate`
+For a repository whose identity resolves to `workflow: local`, `just integrate`
 runs a merge train without letting one failure block the others:
 
 ```sh
 just integrate claude/api claude/docs --push
-just integrate --refresh                 # update discovered claude/* branches only
-just integrate --format json             # machine-readable result
 ```
+
+The branches are named, always: `onevcs integrate` takes a required
+`<BRANCHES>...`, so omitting them is a usage error rather than a train over
+everything outstanding. `just recoverable` is where that discovery lives — it
+lists every preserved unpublished branch and the command that lands each one, and
+its output is what feeds this argument list.
 
 Before any mutation, integration resolves the supplied checkout back to its
 canonical registry entry. Remote and unregistered repositories reject normal
-integration and `--push` with exit 2; there is no routine bypass. `--refresh`
-remains available because it updates candidate branches without advancing base.
+integration and `--push` with exit 2; there is no routine bypass.
 
 Each permitted candidate fetches the selected remote, merges current
 `<remote>/<base>` (then earlier train candidates) in its own worktree, and runs
-the gate with `ORCHESTRATOR_COMPARISON_REMOTE` and `ORCHESTRATOR_COMPARISON_BASE`.
-Unlike the lifecycle's own gate runs, this one is kept even with `--push`: every
-candidate fast-forwards the local base *before* the single push, so the pre-push
-hook does not stand between an unverified candidate and the local base, and an
-aggregate rejection could not say which branch of the train caused it. A passing
-branch fast-forwards the local base. Conflicts and gate failures are reported as
-skips. `--push` updates the remote only when the base advanced. Omit branch names to
-discover checked-out worktree branches and local branches matching `claude/*`;
-use `--pattern` to change the glob or `--gate` to inject a different gate command.
-The base and candidate worktrees must be clean.
+the gate under the comparison identity `onevcs` exports, so the gate and the
+publishing push judge the same diff. Unlike the lifecycle's own gate runs, this
+one is kept even with `--push`: every candidate fast-forwards the local base
+*before* the single push, so the pre-push hook does not stand between an
+unverified candidate and the local base, and an aggregate rejection could not say
+which branch of the train caused it. A passing branch fast-forwards the local
+base. Conflicts and gate failures are reported as skips. `--push` updates the
+remote only when the base advanced. The base and candidate worktrees must be
+clean.
 
 An incomplete dispatch commit carries the stable trailers
 `Orchestrator-Status: incomplete` and `Orchestrator-PR-Base: <branch>`; legacy
@@ -1406,9 +1401,9 @@ provenance: it has commits ahead of origin/<base>, and all of them are complete.
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
 it skips a candidate for incomplete provenance. A recovery whose push a pre-push
 hook gates also preserves that gate run under the recovery workspace's
-[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named in the reported
-detail and in `--format json` as `gate_log`, so consecutive attempts on one branch
-are comparable instead of reading alike.
+[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named as `gate_log` in
+the reported detail, so consecutive attempts on one branch are comparable instead
+of reading alike.
 An identity covered by required PR checks instead has no gate at its push — the
 checks decide afterwards — so no verdict is recorded there.
 
@@ -1457,9 +1452,9 @@ the result.
   otherwise use a bare origin.
 
 The ledger is machine-local, not a global liveness source. On the launching
-machine use `just runs`, `just status --all`, and `just history` /
+machine use `just runs`, `just status`, and `just history` /
 `just history-show <id>`. The recorded branch and worktree are the recovery source
-of truth. Resume an intentional branch with `--branch <branch>`. For an interrupted
+of truth. For an interrupted
 round, inspect its worktrees and remote branch, then attach a fresh driver with
 `just orchestrate --adopt <run-id>`. Recovery may reclaim a `running` record, so
 use it only after proving its owner is gone; never remove or reset an active
