@@ -20,8 +20,7 @@ from pathlib import Path
 
 from orchestrator import REPO_ROOT
 
-#: The key `orchestrator:test` and `orchestrator:test-serial` are memoized on: the
-#: workspace minus its prose.
+#: The key `orchestrator:test` is memoized on: the workspace minus its prose.
 CODE_WORKSPACE = "codeWorkspace"
 #: The key `orchestrator:test-recipes` is memoized on: what the recipe journeys
 #: drive, plus the modules that define and collect them.

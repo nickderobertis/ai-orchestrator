@@ -16,11 +16,19 @@ from orchestrator import REPO_ROOT
 
 
 class PublishedTool(NamedTuple):
-    """One adopted published tool: where its release is declared, and what carries it."""
+    """One adopted published tool: where its release is declared, and what carries it.
+
+    ``npm_package`` is set only for a tool this repository also installs from npm.
+    `onepipeline-ui` ships as two artifacts of one release — the read API as a wheel
+    and the browser bundle as an npm package — and `just dag-ui` serves the second
+    against the first, so a pin that moved on one side alone would serve a bundle
+    against an API of another release.
+    """
 
     version_file: str
     distribution: str
     binary: str
+    npm_package: str | None = None
 
     @property
     def adopted_version(self) -> str:
@@ -43,7 +51,9 @@ PUBLISHED_TOOLS = (
     PublishedTool("oneagentgraph.version", "oneagentgraph-cli", "oneagentgraph"),
     PublishedTool("onevcs.version", "onevcs-cli", "onevcs"),
     PublishedTool("onepipeline.version", "onepipeline-cli", "onepipeline"),
-    PublishedTool("onepipeline-ui.version", "onepipeline-api-cli", "onepipeline-api"),
+    PublishedTool(
+        "onepipeline-ui.version", "onepipeline-api-cli", "onepipeline-api", "onepipeline-ui"
+    ),
 )
 #: onejudge and oneharness are pinned here too, but each is read and verified by its
 #: own named function — onejudge's check also proves the `onejudge_sdk` import — so

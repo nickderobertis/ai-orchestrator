@@ -57,10 +57,10 @@ it wrote under `.screenshots/`. Two of these at once neither collide nor leave t
 tree dirty. Extra arguments reach `playwright screenshot`, so `--full-page` and
 friends work.
 
-The viewport matrix is `1920x1080`, `1440x900`, `1280x800`, `1024x768`, and
-`390x844` — the desktop sizes this view is read at, down to the smallest laptop
-still in use, plus the one phone width where the shell's two columns stop fitting
-and every reflow defect shows up first.
+The viewport matrix is declared once, in `scripts/dag-ui-screens.sh`: the desktop
+sizes this view is read at, down to the smallest laptop still in use, plus one
+phone width — the only entry where the shell's two columns stop fitting, and
+therefore where every reflow defect shows up first.
 
 What it photographs is bounded by what the published packages ship. `onepipeline-ui`
 publishes the built bundle alone — no fixture server, and no screenshot surface

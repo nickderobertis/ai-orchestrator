@@ -1,9 +1,9 @@
 # Command surface for ai-orchestrator. `just --list` is the index.
 #
 # `just bootstrap` must work from a clean clone; `just check` is the deterministic
-# quality tier (fails on any issue, no warnings-only mode). The e2e drives the real
-# `onejudge` CLI with only the paid model faked (onejudge's `command` provider →
-# tests/e2e/fake_backend.py).
+# quality tier (fails on any issue, no warnings-only mode). Every verb below the
+# quality tier is a thin wrapper over one of the published CLIs this repository
+# pins, and the e2e suite drives these recipes for real.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
@@ -71,7 +71,7 @@ gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=
 test *nx_args:
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs,test-recipes,coverage {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
-# The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
+# The e2e suite alone (the real recipes, wrappers, and harness CLI) — quick inner loop.
 #
 # Same worker count and distribution as the `test` tier, for the same reason: the
 # journeys wait on subprocesses rather than compute, so the wall clock is latency

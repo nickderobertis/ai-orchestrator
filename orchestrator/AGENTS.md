@@ -1,11 +1,11 @@
 # Orchestrator project
 
-This Nx project owns the Python this configuration layer still decides on its
-own: the history-label contract validated before it reaches a subprocess, and the
-redaction rule `scripts/preserved-log.sh` mirrors. Everything the recipes used to
-run lives in the published CLIs now.
+This Nx project owns two trust boundaries and nothing else: the history labels
+validated before they reach a dispatched subprocess, and the redaction rule
+`scripts/preserved-log.sh` mirrors.
 
-Keep serialized contracts backward compatible, validate external records at their
-reader boundary, and exercise behavior through the real CLI/subprocess boundary.
-Coverage here is enforced at 100%: what is left is all trust boundary, so an
-uncovered statement is an unproven one.
+- Keep serialized contracts backward compatible, and validate an external record at
+  its reader boundary rather than at its use.
+- Exercise behavior through the real CLI or subprocess boundary.
+- Coverage here is enforced at 100%: everything in this package is a boundary, so
+  an uncovered statement is an unproven one.

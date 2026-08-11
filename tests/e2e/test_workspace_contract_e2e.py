@@ -468,6 +468,45 @@ def test_dag_ui_screens_recipe_photographs_every_view_of_a_named_run(
 
 
 @pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_photographs_the_runs_root_it_is_given(
+    tmp_path: Path,
+) -> None:
+    """An operator photographing another store must not silently get the default one."""
+    checkout, trace = _screens_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens", "--runs-root", str(tmp_path / "store"))
+
+    assert result.returncode == 0, result.stderr
+    served = [line for line in trace.read_text().splitlines() if "onepipeline-api serve" in line]
+    assert len(served) == 1, served
+    assert f"--runs-root {tmp_path / 'store'}" in served[0]
+    # And the gallery says which store it photographed, because an image of the
+    # wrong runs root is indistinguishable from an image of the right one.
+    gallery = re.search(r"gallery at (\S+)/index\.html", result.stdout)
+    assert gallery is not None, result.stdout
+    assert str(tmp_path / "store") in (Path(gallery.group(1)) / "index.html").read_text()
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("flag", "reason"),
+    [("--runs-root", "--runs-root needs a directory"), ("--run", "--run needs a run id")],
+    ids=("runs-root", "run"),
+)
+def test_dag_ui_screens_recipe_names_the_flag_it_was_given_nothing_for(
+    tmp_path: Path, flag: str, reason: str
+) -> None:
+    """A flag with its value missing must not be passed on to Playwright as an argument."""
+    checkout, trace = _screens_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens", flag)
+
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr
+    assert not trace.exists() or "playwright" not in trace.read_text()
+
+
+@pytest.mark.reads_recipes
 def test_dag_ui_screens_recipe_names_the_gallery_a_failed_capture_left(
     tmp_path: Path,
 ) -> None:

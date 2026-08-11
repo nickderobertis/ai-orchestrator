@@ -5,9 +5,9 @@ target replays a recorded answer, and `orchestrator:test` — the tier the cover
 and correctness invariants rest on — is one of them. A memo is only sound when its
 key covers everything the check reads, and this suite reads far beyond
 `orchestrator/` and `tests/`: it asserts on `AGENTS.md`, `docs/`, the `justfile`,
-`llmlint.yml`, `scripts/`, `.githooks/pre-push`, and `apps/dag-ui/vite.config.ts`.
-Keyed on a hand-listed subset, a change to any of those replayed a green verdict
-for a tree whose tests would have failed had they run.
+`llmlint.yml`, `scripts/`, and `.githooks/pre-push`. Keyed on a hand-listed
+subset, a change to any of those replayed a green verdict for a tree whose tests
+would have failed had they run.
 
 The suite answers at three scopes, so it is keyed at three. Only a handful of tests
 assert on this repository's prose, and charging every documentation edit eight
@@ -16,12 +16,10 @@ the whole-workspace key. Narrower again, the two costliest journeys in the suite
 build real worktrees and run real package installs to drive `just` recipes and
 shell scripts, and read no prose and no `orchestrator/` at all:
 `orchestrator:test-recipes` runs those under a key of exactly what they drive.
-`orchestrator:test` and `orchestrator:test-serial` run the remainder, keyed on the
-workspace minus its documentation and minus the front-end projects no Python test
-opens — one scope split into two tasks so the serial invocation the
-`single_threaded` tests need blocks nothing. Every half of
-that claim is load bearing — each key must still invalidate on what its tier reads,
-and must still replay on what it does not — so each is proved here, along with the
+`orchestrator:test` runs the remainder, keyed on the workspace minus its
+documentation. Every half of that claim is load bearing — each key must still
+invalidate on what its tier reads, and must still replay on what it does not — so
+each is proved here, along with the
 cross-worktree cache check `just check` now replays through Nx as well, and the
 uncached `orchestrator:coverage` step that turns what those tiers measured into
 the one comparison against the floor.
@@ -36,19 +34,9 @@ computed from the declared inputs before the command runs and deliberately does
 not include ambient environment. Running the whole suite three times would prove
 the same thing about the same hashes, twenty-two minutes more slowly.
 
-The browser tier is keyed the same way and for the same reason. `dag-ui:test` is
-vitest plus two Playwright configs, and it named all of `orchestrator/**/*` while
-running one door into it — the fixture server Playwright starts, which imports the
-read API — so every commit to a command-side module the served process never loads
-charged a real browser. `dagUiServerSurface` states what that door reaches, and
-both halves are proved below.
-
-llmlint: ignore-file[e2e_not_mocked] Nothing is faked here. The only substitutions
-shorten what a real target *runs* without touching the declared inputs these
-journeys are about: `PYTEST_ADDOPTS` for the Python tiers, and `Checkout.shorten`
-for the browser tier, which has no such lever and would otherwise spend half an
-hour of vitest and Playwright proving something about hashes computed before its
-command starts.
+llmlint: ignore-file[e2e_not_mocked] Nothing is faked here. The only substitution
+shortens what a real target *runs* without touching the declared inputs these
+journeys are about: `PYTEST_ADDOPTS` for the Python tiers.
 """
 
 from __future__ import annotations
@@ -180,29 +168,12 @@ class Checkout:
         assert old in text, f"{relative} no longer contains the text this journey edits"
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-    def shorten(self, project_root: str, target: str) -> None:
-        """Replace one target's command, leaving the inputs that key it untouched.
-
-        The same substitution `PYTEST_ADDOPTS` makes for the Python tiers, reached
-        the only way a target with no such lever offers: the browser tier is vitest
-        and two Playwright configs — two and a half minutes, five servers, a real
-        browser — and the four runs the journeys below need would prove the same
-        thing about the same hashes half an hour more slowly. Nx computes a task's
-        hash from its declared inputs, which is what these journeys are about, and
-        this leaves every one of them exactly as the repository declares it.
-        """
-        path = self.root / project_root / "project.json"
-        project = json.loads(path.read_text(encoding="utf-8"))
-        assert target in project["targets"], f"{project_root} declares no {target} target"
-        project["targets"][target]["command"] = "true"
-        path.write_text(f"{json.dumps(project, indent=2)}\n", encoding="utf-8")
-
     def append(self, relative: str, line: str) -> None:
         """Change a file's content without changing what it means.
 
         Some witnesses are read by the very checks these journeys run — the Nx
-        cache fixture is typechecked, `vite.config.ts` is held against a contract —
-        so the edit has to move the hash and nothing else.
+        cache fixture is typechecked — so the edit has to move the hash and nothing
+        else.
         """
         path = self.root / relative
         assert path.is_file(), f"{relative} is no longer a file this journey can witness"

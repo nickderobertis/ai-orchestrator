@@ -9,12 +9,21 @@
 //
 // That is this file's whole job. It holds no knowledge of the API's routes beyond
 // the two prefixes above, and none at all of the view.
-const dist = process.env.DAG_UI_DIST;
-const api = (process.env.DAG_UI_API_URL ?? "http://127.0.0.1:8765").replace(/\/+$/, "");
-const port = Number(process.env.DAG_UI_PORT ?? 4173);
+// The read API's own address has one source, `config/read-api.address`, because
+// `just telemetry-server` binds it and this proxies to it: two literals would let
+// the two recipes stop finding each other. The published bundle's location has one
+// source for the same reason — both `just dag-ui` and `just dag-ui-screens` start
+// this server, and a bundle layout corrected in one of them only would leave the
+// other serving nothing.
+const here = import.meta.dir;
+const dist = process.env.DAG_UI_DIST ?? `${here}/../node_modules/onepipeline-ui/dist`;
+const address = (await Bun.file(`${here}/../config/read-api.address`).text()).trim();
+const api = (process.env.DAG_UI_API_URL ?? `http://${address}`).replace(/\/+$/, "");
 
-if (!dist) {
-  console.error("dag-ui: DAG_UI_DIST must name the published bundle; run this through 'just dag-ui'");
+const requested = process.env.DAG_UI_PORT ?? "4173";
+const port = Number(requested);
+if (!Number.isInteger(port) || port < 0 || port > 65535) {
+  console.error(`dag-ui: DAG_UI_PORT must be a port number, not ${requested}`);
   process.exit(2);
 }
 

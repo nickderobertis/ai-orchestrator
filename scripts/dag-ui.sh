@@ -9,13 +9,13 @@
 set -euo pipefail
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-repo_root="$(dirname -- "$script_dir")"
 
 # Bun is not running a build here, but the bundle arrives through the same locked
 # install every other worktree-local dependency does, and a freshly created
 # worktree has none. This is the self-heal `scripts/nx.sh` performs.
 "$script_dir/workspace-install.sh" || exit 1
 
-export DAG_UI_DIST="${DAG_UI_DIST:-$repo_root/node_modules/onepipeline-ui/dist}"
+# Where the bundle is and which address the read API answers on are both the
+# server's to know, from their own one source; this recipe only starts it.
 # llmlint: ignore[tool_output_is_signal] The served URL and the browser's requests are what this foreground command is for.
 exec bun "$script_dir/dag-ui-server.js"

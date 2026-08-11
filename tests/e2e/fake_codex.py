@@ -7,8 +7,8 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Two environment variables steer it, and each exists because a journey has to tell
-one outcome from another deterministically:
+Three environment variables steer it, and each exists because a journey has to
+tell one outcome from another deterministically:
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
   which is how a journey counts the turns a chain actually spent.

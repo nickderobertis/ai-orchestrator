@@ -76,8 +76,7 @@ trap cleanup EXIT
 
 uv run onepipeline-api serve --runs-root "$runs_root" --bind "127.0.0.1:$api_port" >"$gallery/api.log" 2>&1 &
 api_pid=$!
-DAG_UI_DIST="${DAG_UI_DIST:-$repo_root/node_modules/onepipeline-ui/dist}" \
-    DAG_UI_API_URL="http://127.0.0.1:$api_port" \
+DAG_UI_API_URL="http://127.0.0.1:$api_port" \
     DAG_UI_PORT="$ui_port" \
     bun "$script_dir/dag-ui-server.js" >"$gallery/ui.log" 2>&1 &
 ui_pid=$!
@@ -144,10 +143,16 @@ for surface in "${surfaces[@]}"; do
     done
 done
 
+# The caption names a directory and a run id that arrived from a flag, an
+# environment variable, or the read API's own JSON, so they are escaped rather than
+# interpolated: an unescaped `<` in either would corrupt the one artifact this
+# script exists to produce, silently and at the top of the page.
+caption="$(python3 -c 'import html,sys; print(html.escape(sys.argv[1]))' \
+    "runs root: $runs_root${run_id:+ · run: $run_id}")"
 {
     echo "<!doctype html><meta charset=utf-8><title>DAG Observatory gallery</title>"
     echo "<h1>DAG Observatory — published bundle</h1>"
-    echo "<p>runs root: $runs_root${run_id:+ · run: $run_id}</p>"
+    echo "<p>$caption</p>"
     for image in "${captured[@]}"; do
         echo "<figure><figcaption>$image</figcaption><img src=\"$image\" width=\"900\"></figure>"
     done

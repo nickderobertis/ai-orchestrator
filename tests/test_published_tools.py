@@ -12,6 +12,7 @@ at the environment step, because `uv sync` could never have produced it.
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import subprocess
 import tomllib
 
@@ -102,6 +103,31 @@ def test_session_setup_declares_every_published_tool(tool: PublishedTool) -> Non
     assert f'"{tool.binary}|{tool.distribution}|{tool.version_file}"' in script, (
         f"scripts/session-setup.sh must carry {tool.binary} in PUBLISHED_TOOL_SPECS as "
         f"'{tool.binary}|{tool.distribution}|{tool.version_file}'"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [tool for tool in PUBLISHED_TOOLS if tool.npm_package is not None],
+    ids=[tool.npm_package for tool in PUBLISHED_TOOLS if tool.npm_package is not None],
+)
+def test_the_npm_half_of_a_release_is_pinned_to_the_same_version(tool: PublishedTool) -> None:
+    """A tool published as two artifacts is installed here as one release.
+
+    `just dag-ui` serves the npm bundle against the wheel's read API, so a bundle
+    pinned to another release would be a view built for a contract this host does
+    not serve — and nothing else in the workspace reads `package.json`'s pin.
+    """
+    assert tool.npm_package is not None
+    manifest = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+    declared = {
+        **manifest.get("dependencies", {}),
+        **manifest.get("devDependencies", {}),
+    }
+
+    assert declared.get(tool.npm_package) == tool.adopted_version, (
+        f"package.json must pin {tool.npm_package} exactly to config/{tool.version_file} "
+        f"({tool.adopted_version}); found {declared.get(tool.npm_package)!r}"
     )
 
 

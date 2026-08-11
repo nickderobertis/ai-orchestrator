@@ -89,7 +89,11 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     (checkout / "scripts").mkdir(parents=True)
     (checkout / "bin").mkdir()
     (checkout / "personas").mkdir()
+    (checkout / "config").mkdir()
     shutil.copy2(ROOT / "justfile", checkout / "justfile")
+    # The one source the wrappers read the read API's address from; a checkout
+    # without it is not one these recipes can run in.
+    shutil.copy2(ROOT / "config/read-api.address", checkout / "config/read-api.address")
     for name in WRAPPER_SCRIPTS:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)
@@ -254,6 +258,62 @@ def test_the_telemetry_server_recipe_renders_host_and_port_as_one_bind(
         "uv run onepipeline-api serve --runs-root runs --bind 127.0.0.1:9000",
         "uv run onepipeline-api serve --runs-root /elsewhere --bind 0.0.0.0:8765",
     ]
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("invocation", "delegated"),
+    [
+        (
+            ("telemetry-server", "--runs-dir=/elsewhere"),
+            "uv run onepipeline-api serve --runs-root /elsewhere",
+        ),
+        (
+            ("telemetry-server", "--runs-root=/elsewhere"),
+            "uv run onepipeline-api serve --runs-root /elsewhere",
+        ),
+        (
+            ("telemetry-server", "--port=9000"),
+            "uv run onepipeline-api serve --runs-root runs --bind 127.0.0.1:9000",
+        ),
+        (
+            ("telemetry-server", "--host=0.0.0.0"),
+            "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:8765",
+        ),
+    ],
+    ids=("runs-dir", "runs-root", "port", "host"),
+)
+def test_the_telemetry_server_recipe_takes_a_flag_in_either_spelling(
+    tmp_path: Path, invocation: tuple[str, ...], delegated: str
+) -> None:
+    """`--flag value` and `--flag=value` are one flag, and an operator types both."""
+    checkout, trace = _checkout(tmp_path)
+
+    assert _run(checkout, trace, *invocation).returncode == 0
+    assert trace.read_text().splitlines() == [delegated]
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("flag", "reason"),
+    [
+        ("--runs-dir", "--runs-dir needs a directory"),
+        ("--host", "--host needs an address"),
+        ("--port", "--port needs a port"),
+    ],
+    ids=("runs-dir", "host", "port"),
+)
+def test_the_telemetry_server_recipe_names_the_flag_it_was_given_nothing_for(
+    tmp_path: Path, flag: str, reason: str
+) -> None:
+    """A flag with its value missing must not be forwarded as if it had one."""
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "telemetry-server", flag)
+
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr
+    assert not trace.exists(), "a refused invocation must not reach the read API at all"
 
 
 @pytest.mark.reads_recipes

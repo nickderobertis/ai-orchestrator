@@ -22,6 +22,7 @@
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/config/read-api.address",
       "{workspaceRoot}/tests/fixtures/**/*",
       "{workspaceRoot}/tests/conftest.py",
       "{workspaceRoot}/tests/nx_inputs.py",
