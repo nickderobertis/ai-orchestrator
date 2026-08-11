@@ -31,7 +31,7 @@ dist/
 # Screenshot galleries (`just dag-ui-screens`). One directory per invocation, so two
 # concurrent runs never write into each other's; they are evidence to look at, not
 # repository content, and nothing here is ever compared against a checked-in image.
-/apps/dag-ui/.screenshots/
+/.screenshots/
 
 # Preserved command output (scripts/preserved-log.sh). Deliberately per-worktree
 # and deliberately ignored: it is diagnostic evidence, not repository content.

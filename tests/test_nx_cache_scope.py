@@ -13,26 +13,16 @@ date in the first place.
 The Python suite is keyed at three scopes rather than one, because "keyed on
 everything it reads" and "keyed on the whole workspace" are not the same
 requirement. Only a handful of tests assert on this repository's prose, and the
-two costliest read neither prose nor orchestrator code — they drive `just` recipes
-and shell scripts. `test-docs` runs the prose contracts and keeps the
-whole-workspace key; `test-recipes` runs the recipe journeys under the narrow key
-those journeys actually read; `test` and `test-serial` run the remainder, keyed on
-the workspace minus its prose and minus the front-end projects no Python test
-opens. Those last two are one scope split into two tasks, not a fourth key: the
-`single_threaded` tests need a process with no execnet thread in it and read
-exactly what the bulk reads. What keeps the narrowed keys honest is not this file
-— a static scan cannot see every read — but `tests/conftest.py`, which fails a
-test the moment it opens something its own tier's key does not carry.
-
-The browser tier is keyed at its own scope for the same reason. `dag-ui:test` runs
-vitest and two Playwright configs against a fixture server that imports this
-repository's read API, and it used to name the whole `orchestrator/` package —
-which is far more Python than it loads. `dagUiServerSurface` states what that one
-door reaches, and because an import is a read no runtime guard can see, the
-declaration is held to the fixture's own import closure here.
+costliest read neither prose nor orchestrator code — they drive `just` recipes and
+shell scripts. `test-docs` runs the prose contracts and keeps the whole-workspace
+key; `test-recipes` runs the recipe journeys under the narrow key those journeys
+actually read; `test` runs the remainder, keyed on the workspace minus its prose.
+What keeps the narrowed keys honest is not this file — a static scan cannot see
+every read — but `tests/conftest.py`, which fails a test the moment it opens
+something its own tier's key does not carry.
 
 `coverage` is the one target here with nothing to keep honest, and deliberately:
-it combines what the measuring tiers wrote and compares that total to the declared
+it reads what the measuring tier wrote and compares that total to the declared
 floor, so it is uncached and there is no memo to be wrong about.
 """
 
@@ -42,56 +32,35 @@ import ast
 import json
 import re
 import subprocess
-from pathlib import Path
 
-import pytest
 from conftest import READS_DOCS_MARKER, READS_RECIPES_MARKER
 from nx_inputs import (
-    BROWSER_PROJECT,
-    BROWSER_SCOPED,
     CODE_SCOPED,
     CODE_WORKSPACE,
     COVERAGE_SCOPED,
-    DAG_UI_SERVER_SURFACE,
     DOCS_SCOPED,
     NX_CACHE_CHECK,
     RECIPE_SCOPED,
     RECIPE_WORKSPACE,
-    SERIAL_SCOPED,
     covers,
     named_input_globs,
 )
-from scheduling import LOAD_SENSITIVE_MARKER
 
 from orchestrator import REPO_ROOT
 
 WHOLE_WORKSPACE = "wholeWorkspace"
-#: The browser tier's project root. Its own key covers everything under here; what
-#: the narrowed named input has to state is what these files reach *outside* it.
-DAG_UI_ROOT = f"apps/{BROWSER_PROJECT}"
-#: The one door from that tier into this repository's Python: Playwright starts this
-#: fixture server, and it imports the read API the journeys drive.
-DAG_UI_FIXTURE = f"{DAG_UI_ROOT}/e2e/fixtures/serve_fixture.py"
-
 #: Every one of these runs from the workspace root against the whole tree — ruff
 #: over `.`, shellcheck over `scripts/`, persona validation over `personas/`, and
 #: the prose-contract tests, which exist to read documentation.
 WORKSPACE_SCOPED = ("lint", "typecheck", "format-check", DOCS_SCOPED)
 #: The tiers keyed on less than the whole workspace, and the exact globs that earn
-#: it: the workspace with its documentation and its front-end projects removed,
-#: and nothing else. Both halves of the Python code suite share it — they read the
-#: same tree and differ only in the process shape their tests need.
-CODE_KEYED = (CODE_SCOPED, SERIAL_SCOPED)
+#: it: the workspace with its documentation removed, and nothing else.
+CODE_KEYED = (CODE_SCOPED,)
 CODE_WORKSPACE_GLOBS = [
     "{workspaceRoot}/**/*",
     "!{workspaceRoot}/docs/**/*",
     "!{workspaceRoot}/**/*.md",
-    "!{workspaceRoot}/apps/**/*",
-    "!{workspaceRoot}/packages/**/*",
 ]
-#: The front-end project roots the code key drops. No Python test reads them; the
-#: whole-workspace tier covers the DAG contract checks that do.
-FRONT_END_ROOTS = ("apps/", "packages/")
 
 
 def _tracked() -> frozenset[str]:
@@ -171,10 +140,6 @@ def _named_repository_paths(text: str, tracked: frozenset[str]) -> set[str]:
 
 def _is_documentation(relative: str) -> bool:
     return relative.startswith("docs/") or relative.endswith(".md")
-
-
-def _is_front_end(relative: str) -> bool:
-    return relative.startswith(FRONT_END_ROOTS)
 
 
 def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
@@ -280,97 +245,6 @@ def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
     assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
 
 
-#: How a journey starts a real process it does not then wait for. Each of these
-#: leaves that process running alongside the assertions: a `multiprocessing` spawn,
-#: a `Popen` the test keeps a handle on, or a launcher that detaches an orchestrator
-#: and returns its run id.
-_UNAWAITED_LAUNCH = (".Popen(", "MP.Process(", "multiprocessing.Process(", "_launch_cli(")
-#: How it then holds a *second* real process against the first, so that the interval
-#: between the two is what its assertions measure. A `Rendezvous` parks a real
-#: dispatched agent turn inside the faked model until the test lets go; a
-#: `multiprocessing` queue carries the same handshake between spawned lifecycles.
-#: The queue was once the whole signature — it is kept as one arm of it so widening
-#: the shape takes nothing out of the family.
-_HELD_COUNTERPART = ("Rendezvous", ".Queue(")
-
-
-def _readiness_journeys() -> tuple[dict[str, list[str]], list[str]]:
-    """Every e2e test of the co-scheduling-sensitive shape, undeclared ones first.
-
-    Read per test function rather than per module. The shape is common enough that
-    whole-module granularity would either drag unrelated tests into the family or let
-    a new journey ride into it on a sibling's declaration — and the second is part of
-    the hole this exists to close. A module-level ``pytestmark`` still declares for
-    every test in its file, because that is what it means.
-    """
-    found: dict[str, list[str]] = {}
-    joined: list[str] = []
-    for module in sorted((REPO_ROOT / "tests" / "e2e").glob("test_*.py")):
-        source = module.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        module_declares = any(
-            isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "pytestmark"
-                for target in node.targets
-            )
-            and LOAD_SENSITIVE_MARKER in ast.unparse(node.value)
-            for node in tree.body
-        )
-        for node in tree.body:
-            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
-                continue
-            body = ast.get_source_segment(source, node) or ""
-            if not any(launch in body for launch in _UNAWAITED_LAUNCH):
-                continue
-            if not any(held in body for held in _HELD_COUNTERPART):
-                continue
-            declared = module_declares or any(
-                LOAD_SENSITIVE_MARKER in ast.unparse(decorator) for decorator in node.decorator_list
-            )
-            if declared:
-                joined.append(f"{module.name}::{node.name}")
-            else:
-                found.setdefault(module.name, []).append(node.name)
-    return found, joined
-
-
-def test_every_multiprocess_readiness_journey_declares_its_scheduling_constraint() -> None:
-    """A new journey of that shape joins the family or says why it need not.
-
-    The constraint is between these tests rather than inside any one of them, so
-    nothing inside a new one fails when it is missing — it just makes a rotating
-    subset of the suite flaky, which reads as a bad host rather than as a missing
-    declaration. Naming the shape is what keeps the family from going stale silently,
-    exactly as the tier keys above are kept from narrowing silently.
-
-    The shape is *co-scheduling sensitivity*, not one transport. It was first written
-    as "waits on a multiprocessing queue", and journeys that race real subprocesses
-    over a FIFO and over the filesystem instead went on blocking publication from
-    outside the family it was meant to define. What those have in common is not the
-    queue: it is a real process left running while the test asserts, with a second
-    one held against it, so the interval between them is what the assertions measure
-    and another journey of the same kind in flight is what moves it.
-    """
-    # Spelled once, by the plugin that acts on it. A scan hunting its own literal
-    # would keep passing through a rename that left the plugin grouping nothing.
-    manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert LOAD_SENSITIVE_MARKER in re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE), (
-        f"pytest must register {LOAD_SENSITIVE_MARKER!r} in [tool.pytest.ini_options] markers"
-    )
-
-    undeclared, declared = _readiness_journeys()
-    assert not undeclared, (
-        f"these journeys hold a real process against another one they launched without "
-        f"declaring @pytest.mark.{LOAD_SENSITIVE_MARKER}, so xdist may run two of them at "
-        f"once: {undeclared}"
-    )
-    assert declared, (
-        "the shape signature above matches no journey at all; it has drifted away from "
-        "the suite and this gate would pass vacuously"
-    )
-
-
 def _collected(selector: str) -> set[str]:
     """Every test id pytest selects for one marker expression, from a real collection.
 
@@ -388,44 +262,41 @@ def _collected(selector: str) -> set[str]:
     return {line.strip() for line in collected.stdout.splitlines() if "::" in line}
 
 
-def test_the_code_tiers_parallel_and_serial_invocations_partition_it() -> None:
-    """The code suite runs in two tiers, so neither may drop a test on the floor.
+def test_the_three_tiers_partition_the_suite_between_them() -> None:
+    """Three selectors, one suite: no test may be collected twice or not at all.
 
-    `single_threaded` splits the code suite because those tests need a process with
-    no execnet thread in it, and everything else runs across xdist workers. Two
-    commands selecting on one marker is exactly the shape that loses a test in
-    silence: a typo in either expression leaves tests that no invocation collects,
-    and a suite that runs fewer tests reports the same green as one that runs them
-    all. Separate targets make that easier to get wrong, not harder — nothing
-    chains them any more — so the partition is derived from the real targets and
-    checked against real collections rather than read off the JSON.
+    The tiers exist because they are keyed on different trees, and a test lands in
+    exactly one of them by marker. That is the shape that loses a test in silence —
+    a typo in any of the three expressions leaves tests no invocation collects, and
+    a suite that runs fewer tests reports the same green as one that runs them all.
+    So the partition is derived from the real targets and checked against real
+    collections rather than read off the JSON.
     """
     targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
         "targets"
     ]
     selectors = [
-        selector
-        for target in CODE_KEYED
-        for selector in re.findall(r"-m '([^']+)'", targets[target]["command"])
+        re.search(r"-m '?([^'\s]+(?: [^'-][^']*)?)'?", targets[target]["command"])
+        for target in (CODE_SCOPED, DOCS_SCOPED, RECIPE_SCOPED)
     ]
-    assert len(selectors) == 2, f"the code suite no longer runs two invocations: {selectors}"
+    assert all(selectors), f"a tier no longer selects on a marker: {selectors}"
+    parts = [_collected(found.group(1)) for found in selectors if found is not None]
 
-    parts = [_collected(selector) for selector in selectors]
-    assert not parts[0] & parts[1], (
-        f"both code-tier invocations collect {sorted(parts[0] & parts[1])[:5]}"
+    for first in range(len(parts)):
+        for second in range(first + 1, len(parts)):
+            overlap = parts[first] & parts[second]
+            assert not overlap, f"two tiers both collect {sorted(overlap)[:5]}"
+    whole = _collected("")
+    collected = set().union(*parts)
+    assert collected == whole, (
+        f"the tiers no longer cover the suite: {sorted(whole - collected)[:5]} is "
+        "collected by none of them"
     )
-    whole = _collected(f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER}")
-    assert parts[0] | parts[1] == whole, (
-        "the code suite's tiers no longer cover it: "
-        f"{sorted(whole - (parts[0] | parts[1]))[:5]} is collected by neither"
-    )
-    # Both halves have to be non-empty, or the split is silently doing nothing and
-    # the marker it rests on could have been deleted without anything noticing.
     assert all(parts), [len(part) for part in parts]
 
 
-def test_the_code_only_test_key_drops_prose_and_the_front_end_and_nothing_else() -> None:
-    """The narrowed key is narrowed by exactly two things, both of which have a tier."""
+def test_the_code_only_test_key_drops_prose_and_nothing_else() -> None:
+    """The narrowed key is narrowed by exactly one thing, which has a tier of its own."""
     named = _nx_config()["namedInputs"]
     assert named[CODE_WORKSPACE] == CODE_WORKSPACE_GLOBS, (
         "orchestrator:test replays a verdict for every tracked path this key covers, "
@@ -441,25 +312,20 @@ def test_the_code_only_test_key_drops_prose_and_the_front_end_and_nothing_else()
 
     globs = _effective_inputs("orchestrator", CODE_SCOPED)
     missed = sorted(path for path in _tracked() if not covers(globs, path))
-    assert missed and all(_is_documentation(path) or _is_front_end(path) for path in missed), (
-        f"only documentation and the front-end projects may fall outside this key: {missed}"
+    assert missed and all(_is_documentation(path) for path in missed), (
+        f"only documentation may fall outside this key: {missed}"
     )
-    # Both halves have to be real, or one exclusion is silently doing nothing.
-    assert any(_is_documentation(path) for path in missed)
-    assert any(_is_front_end(path) for path in missed)
     # The whole-workspace tier is what covers the rest, so it must actually exist.
     assert DOCS_SCOPED in project["targets"]
 
 
-def test_the_coverage_tier_is_unmemoized_and_waits_for_every_measuring_tier() -> None:
-    """The floor is enforced once, on data no tier can be missing from.
+def test_the_coverage_tier_is_unmemoized_and_waits_for_the_tier_that_measures() -> None:
+    """The floor is enforced once, on data the tier that measured it actually wrote.
 
-    Splitting the code suite into two targets split its coverage data with it, so
-    the enforced total is now assembled by a third target rather than by appending
-    inside one command. Two things make that sound, and both are declarations
-    rather than conventions: the tier waits on every measuring tier, so it can
-    never report on a subset; and it is uncached, so a replayed test verdict still
-    pays for a fresh combine and a fresh comparison against the floor.
+    Two things make that sound, and both are declarations rather than conventions:
+    the tier waits on the measuring tier, so it can never report on a subset; and it
+    is uncached, so a replayed test verdict still pays for a fresh comparison against
+    the floor.
     """
     project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
     coverage = project["targets"][COVERAGE_SCOPED]
@@ -472,16 +338,12 @@ def test_the_coverage_tier_is_unmemoized_and_waits_for_every_measuring_tier() ->
         "a memoized floor could be replayed for a tree it never measured; this tier "
         "is seconds of work and is deliberately re-run every time"
     )
-    # And every measuring tier has to actually write the data it combines, under a
-    # name of its own — one shared file is how the two invocations were chained.
-    written = {
-        project["targets"][target]["outputs"][0].removeprefix("{workspaceRoot}/")
-        for target in CODE_KEYED
-    }
-    assert len(written) == len(CODE_KEYED), f"the measuring tiers share a data file: {written}"
-    for data_file in written:
+    # And the measuring tier has to actually write the data this one reads, or the
+    # floor is judged against whatever an earlier run happened to leave behind.
+    for target in CODE_KEYED:
+        data_file = project["targets"][target]["outputs"][0].removeprefix("{workspaceRoot}/")
         assert data_file in coverage["command"], (
-            f"{data_file} is measured but never combined, so its lines do not count "
+            f"{data_file} is measured but never read, so its lines do not count "
             f"towards the enforced floor: {coverage['command']}"
         )
 
@@ -497,7 +359,7 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     # A guard that found nothing would pass silently forever.
     assert {"AGENTS.md", "justfile", "scripts/session-setup.sh"} <= read, read
     uncovered = sorted(path for path in read if not covers(globs, path))
-    assert all(_is_documentation(path) or _is_front_end(path) for path in uncovered), (
+    assert all(_is_documentation(path) for path in uncovered), (
         "orchestrator:test reads these repository paths but is not keyed on them, "
         f"so a change to one replays a stale verdict: {uncovered}"
     )
@@ -506,9 +368,6 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     # and `conftest.py` is what holds each of those reads to that tier.
     assert "AGENTS.md" in uncovered, (
         "the sentinel prose read moved; keep a real one here or this guard stops guarding"
-    )
-    assert "apps/dag-ui/vite.config.ts" in uncovered, (
-        "the sentinel front-end read moved; keep a real one here or this guard stops guarding"
     )
 
 
@@ -639,118 +498,4 @@ def test_the_nx_cache_check_key_covers_every_repository_path_that_check_reads() 
     # Narrow on purpose: a key that had quietly widened to the whole workspace would
     # pass the assertion above and replay nothing.
     assert not covers(globs, "AGENTS.md")
-    assert not covers(globs, "orchestrator/lifecycle.py")
-
-
-def _orchestrator_modules_imported_by(relative: str) -> set[str]:
-    """The `orchestrator` modules ``relative`` imports, transitively, as file paths.
-
-    An import is a read the file-read guards cannot see, and for this tier it is
-    nearly the whole read: the fixture server imports `orchestrator.server`, and
-    importing that compiles every module its own imports reach. Deferred imports
-    inside a function body count too — `ast.walk` finds them wherever they sit —
-    which errs towards a wider surface than a given run may execute, and wider is
-    the safe direction for a cache key.
-    """
-    package = REPO_ROOT / "orchestrator"
-    modules = {source.stem for source in package.glob("*.py")}
-
-    def imported(source: Path) -> set[str]:
-        found: set[str] = set()
-        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
-            match node:
-                case ast.Import():
-                    found |= {
-                        alias.name.split(".")[1]
-                        for alias in node.names
-                        if alias.name.startswith("orchestrator.")
-                    }
-                case ast.ImportFrom(level=1, module=str() as module):
-                    found.add(module.split(".")[0])
-                case ast.ImportFrom(level=1, module=None):
-                    found |= {alias.name for alias in node.names}
-                case ast.ImportFrom(level=0, module="orchestrator"):
-                    # `from orchestrator import REPO_ROOT` names a symbol, not a
-                    # module; only the ones that are modules contribute a file.
-                    found |= {alias.name for alias in node.names}
-                case ast.ImportFrom(level=0, module=str() as module) if module.startswith(
-                    "orchestrator."
-                ):
-                    found.add(module.split(".")[1])
-            # Importing any of them imports the package itself.
-        return found & modules
-
-    reached: set[str] = set()
-    pending = imported(REPO_ROOT / relative)
-    while pending:
-        current = pending.pop()
-        if current in reached:
-            continue
-        reached.add(current)
-        pending |= imported(package / f"{current}.py") - reached
-    return {f"orchestrator/{name}.py" for name in reached} | {"orchestrator/__init__.py"}
-
-
-@pytest.mark.reads_docs
-def test_the_browser_tier_is_keyed_on_the_python_it_runs_rather_than_all_of_it() -> None:
-    """`dag-ui:test` used to name all of `orchestrator/**/*`, and reads far less.
-
-    The tier is vitest plus two Playwright configs — two and a half minutes — and it
-    reaches this repository's Python through one door: the fixture server the
-    Playwright config starts, which imports the read API. Keyed on the whole
-    package, every edit to a command-side module the served process never loads
-    charged that. Keyed on what the door reaches, those edits replay.
-
-    Marked `reads_docs` because it reads the front-end project the code-only key
-    drops, which is the same reason the DAG contract checks live in that tier.
-    """
-    project = json.loads((REPO_ROOT / "apps/dag-ui/project.json").read_text(encoding="utf-8"))
-    assert project["targets"][BROWSER_SCOPED]["inputs"] == ["default", DAG_UI_SERVER_SURFACE], (
-        f"{BROWSER_PROJECT}:{BROWSER_SCOPED} must be keyed on its own project and on the "
-        "named input that states which of this repository's Python it runs"
-    )
-
-    globs = _effective_inputs(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
-    package = sorted(path for path in _tracked() if path.startswith("orchestrator/"))
-    excluded = [path for path in package if not covers(globs, path)]
-    assert excluded, (
-        "this key covers the whole package again, so the browser tier is back to "
-        "re-running on every edit to Python it never loads"
-    )
-    # The other half: the modules it does load have to still be in it.
-    assert covers(globs, "orchestrator/server.py")
-    assert covers(globs, "tests/e2e/fake_oneharness.py")
-
-
-@pytest.mark.reads_docs
-def test_every_repository_path_the_browser_tier_reads_is_part_of_its_key() -> None:
-    """The narrowing's own staleness guard: a new read must widen the named input.
-
-    A Python file the fixture stack starts importing, or a repository path one of
-    its journeys starts naming, is a file that can change what the browser tier
-    reports without changing its hash — the false green every key here exists to
-    prevent. The declaration is enforced against the globs Nx hashes rather than
-    against a restatement of them, so the two cannot drift apart.
-
-    A literal cannot always be told from a read: the fixture records
-    `.githooks/pre-push` as the *value* of a journal detail it never opens. The key
-    carries it anyway, because the two errors are not symmetric — a key wider than
-    the reads costs one browser run nobody needed, and a key narrower than them
-    reports a pass for a tree the tier never ran.
-    """
-    globs = _effective_inputs(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
-    tracked = _tracked()
-    read = _orchestrator_modules_imported_by(DAG_UI_FIXTURE)
-    for relative in sorted(path for path in tracked if path.startswith(f"{DAG_UI_ROOT}/")):
-        read |= _named_repository_paths((REPO_ROOT / relative).read_text(encoding="utf-8"), tracked)
-
-    # A guard that found nothing would pass silently forever. These are the two
-    # doors: the served API, and the harness history store its fixture shells to.
-    assert {"orchestrator/server.py", "tests/e2e/fake_oneharness.py"} <= read, sorted(read)
-    uncovered = sorted(path for path in read if not covers(globs, path))
-    assert not uncovered, (
-        f"the {BROWSER_PROJECT} browser tier reads these repository paths but "
-        f"nx.json's {DAG_UI_SERVER_SURFACE} does not carry them, so editing one "
-        f"replays a browser verdict for a tree that tier never ran against; widen "
-        f"that named input to cover them: {uncovered}"
-    )
+    assert not covers(globs, "orchestrator/labels.py")

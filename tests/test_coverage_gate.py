@@ -6,22 +6,21 @@ total rounded up to 95, the command exited 0, and only the terminal summary said
 "FAIL ... not reached". Every caller — the Nx targets, ``just check``, ``just
 gate``, the pre-push hook — read that zero as a pass.
 
-Since the code suite was split into tiers that run concurrently, the floor is no
-longer evaluated inside a test invocation at all. ``orchestrator:test`` and
-``orchestrator:test-serial`` each **measure** into their own data file and decide
-nothing; ``orchestrator:coverage`` combines those files and compares the combined
-total to ``[tool.coverage.report] fail_under``. That moved the enforcement point
-but not the requirement: the floor still has exactly one source, and it still has
-to be able to fail the build.
+Since the code suite became a memoized tier, the floor is no longer evaluated
+inside a test invocation at all. ``orchestrator:test`` **measures** into its own
+data file and decides nothing; the uncached ``orchestrator:coverage`` reads that
+file and compares its total to ``[tool.coverage.report] fail_under``. That moved
+the enforcement point but not the requirement: the floor still has exactly one
+source, and it still has to be able to fail the build.
 
-These tests drive that whole shape at the real boundary — two measuring
-invocations, then a real ``coverage combine`` and ``coverage report`` — over a
+These tests drive that whole shape at the real boundary — a real measuring
+invocation, then a real ``coverage combine`` and ``coverage report`` — over a
 generated package whose total is exact arithmetic and lands inside the band the
 regression once forgave, configured with the floor and precision this repository
 actually declares. They fail if either setting drifts back to a combination that
-cannot fail the build, if a measuring tier starts deciding the floor, if the
-enforced total stops counting a tier that measured, or if a measured data file
-stops being portable enough to enforce in a checkout that did not write it.
+cannot fail the build, if the measuring tier starts deciding the floor, if the
+enforced total stops counting what was measured, or if a measured data file stops
+being portable enough to enforce in a checkout that did not write it.
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED, SERIAL_SCOPED
+from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED
 
 from orchestrator import REPO_ROOT
 
@@ -46,15 +45,10 @@ from orchestrator import REPO_ROOT
 # branches, so the fixture's coverage total is exact arithmetic.
 FUNCTIONS = 200
 STATEMENTS = FUNCTIONS * 2
-#: The data file each measuring tier writes, and the one the combine produces,
-#: named as the real targets name them.
-SERIAL_DATA = ".coverage.serial"
+#: The data file the measuring tier writes, and the one the combine produces, named
+#: as the real targets name them.
 PARALLEL_DATA = ".coverage.parallel"
 COMBINED_DATA = ".coverage"
-#: How many of the called functions the serial tier covers. Deliberately a small
-#: share: neither tier reaches the floor on its own, so a tier that decided the
-#: floor shows up as a failed command rather than as luck.
-SERIAL_SHARE = 20
 
 
 @pytest.fixture(scope="module")
@@ -119,28 +113,18 @@ def _uncalled_for_band(floor: float) -> int:
 def _write_project(
     root: Path, *, uncalled: int, fail_under: float, precision: int, relative_files: bool
 ) -> float:
-    """Generate a package plus the two tiers' tests, with an exactly known total.
-
-    The called functions are split between a serial module and a parallel one so
-    the combined total is reachable only by combining both tiers' data — which is
-    the property the split has to preserve.
-    """
+    """Generate a package plus the tier's tests, with an exactly known total."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "sample.py").write_text(
         "".join(f"def f{index}() -> int:\n    return {index}\n\n\n" for index in range(FUNCTIONS)),
         encoding="utf-8",
     )
     called = FUNCTIONS - uncalled
-    assert called > SERIAL_SHARE, "the fixture must leave the parallel tier work of its own"
-    for module, indexes in (
-        ("test_serial", range(SERIAL_SHARE)),
-        ("test_parallel", range(SERIAL_SHARE, called)),
-    ):
-        (root / f"{module}.py").write_text(
-            f"import sample\n\n\ndef {module}() -> None:\n"
-            + "".join(f"    assert sample.f{index}() == {index}\n" for index in indexes),
-            encoding="utf-8",
-        )
+    (root / "test_parallel.py").write_text(
+        "import sample\n\n\ndef test_parallel() -> None:\n"
+        + "".join(f"    assert sample.f{index}() == {index}\n" for index in range(called)),
+        encoding="utf-8",
+    )
     (root / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         'testpaths = ["."]\n\n'
@@ -185,23 +169,8 @@ def _run(
     )
 
 
-def _measure_serial(root: Path) -> subprocess.CompletedProcess[str]:
-    """Run the serial tier the way ``orchestrator:test-serial`` runs: no pytest-cov."""
-    return _run(
-        root,
-        "coverage",
-        "run",
-        "-m",
-        "pytest",
-        "test_serial.py",
-        "--no-cov",
-        "-q",
-        data_file=SERIAL_DATA,
-    )
-
-
-def _measure_parallel(root: Path) -> subprocess.CompletedProcess[str]:
-    """Run the parallel tier the way ``orchestrator:test`` runs: pytest-cov across workers."""
+def _measure(root: Path) -> subprocess.CompletedProcess[str]:
+    """Run the measuring tier the way ``orchestrator:test`` runs: pytest-cov across workers."""
     return _run(
         root,
         "pytest",
@@ -219,9 +188,9 @@ def _measure_parallel(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _enforce(root: Path) -> subprocess.CompletedProcess[str]:
-    """Combine both tiers and compare the total to the floor, as ``coverage`` does."""
+    """Read what the tier measured and compare its total to the floor, as ``coverage`` does."""
     (root / COMBINED_DATA).unlink(missing_ok=True)
-    combined = _run(root, "coverage", "combine", SERIAL_DATA, PARALLEL_DATA)
+    combined = _run(root, "coverage", "combine", PARALLEL_DATA)
     assert combined.returncode == 0, combined.stdout + combined.stderr
     return _run(root, "coverage", "report")
 
@@ -233,15 +202,15 @@ def _reported_total(output: str) -> float:
     return float(match.group(1))
 
 
-def test_neither_measuring_tier_decides_the_floor(
+def test_the_measuring_tier_does_not_decide_the_floor(
     tmp_path: Path, floor: float, precision: int, relative_files: bool
 ) -> None:
-    """Both tiers run below the floor and both succeed: measuring is not judging.
+    """The tier runs below the floor and still succeeds: measuring is not judging.
 
-    The tiers run concurrently, so neither can see the combined total. A tier that
-    still evaluated ``fail_under`` would fail every run on its own share — and a
-    tier told to ignore the floor is the only way the declared one stays the only
-    floor there is.
+    Its verdict is memoized and the floor's is not, so a tier that still evaluated
+    ``fail_under`` would let a replayed pass stand in for a comparison nobody made.
+    A tier told to ignore the floor is what keeps the declared one the only floor
+    there is.
     """
     root = tmp_path / "measure"
     _write_project(
@@ -252,25 +221,22 @@ def test_neither_measuring_tier_decides_the_floor(
         relative_files=relative_files,
     )
 
-    serial = _measure_serial(root)
-    parallel = _measure_parallel(root)
+    measured = _measure(root)
 
-    assert serial.returncode == 0, serial.stdout + serial.stderr
-    assert parallel.returncode == 0, parallel.stdout + parallel.stderr
-    assert "fail-under" not in serial.stdout + parallel.stdout, serial.stdout + parallel.stdout
-    for data_file in (SERIAL_DATA, PARALLEL_DATA):
-        assert (root / data_file).is_file(), f"{data_file} was not measured"
-        alone = _reported_total(_run(root, "coverage", "report", data_file=data_file).stdout)
-        assert alone < floor, (
-            f"{data_file} reaches {alone}% alone, so this fixture would pass even if that "
-            "tier enforced the floor; it has to prove the tier is not enforcing"
-        )
+    assert measured.returncode == 0, measured.stdout + measured.stderr
+    assert "fail-under" not in measured.stdout, measured.stdout
+    assert (root / PARALLEL_DATA).is_file(), f"{PARALLEL_DATA} was not measured"
+    alone = _reported_total(_run(root, "coverage", "report", data_file=PARALLEL_DATA).stdout)
+    assert alone < floor, (
+        f"the fixture reaches {alone}%, so it would pass even if the measuring tier "
+        "enforced the floor; it has to prove the tier is not enforcing"
+    )
 
 
-def test_the_enforced_total_combines_every_tier_and_can_fail_the_build(
+def test_the_enforced_total_is_what_was_measured_and_can_fail_the_build(
     tmp_path: Path, floor: float, precision: int, relative_files: bool
 ) -> None:
-    """The floor is decided once, on data no tier is missing from, and it can fail."""
+    """The floor is decided once, on the data the tier wrote, and it can fail."""
     root = tmp_path / "below"
     total = _write_project(
         root,
@@ -279,24 +245,19 @@ def test_the_enforced_total_combines_every_tier_and_can_fail_the_build(
         precision=precision,
         relative_files=relative_files,
     )
-    _measure_serial(root)
-    _measure_parallel(root)
-    # Read before enforcing: combining consumes the per-tier data files, exactly as
-    # it does in the real target.
-    alone = {
-        data_file: _reported_total(_run(root, "coverage", "report", data_file=data_file).stdout)
-        for data_file in (SERIAL_DATA, PARALLEL_DATA)
-    }
+    _measure(root)
+    # Read before enforcing: combining consumes the tier's data file, exactly as it
+    # does in the real target.
+    alone = _reported_total(_run(root, "coverage", "report", data_file=PARALLEL_DATA).stdout)
 
     result = _enforce(root)
 
     combined = _reported_total(result.stdout)
     assert combined == pytest.approx(total, abs=0.01), result.stdout
-    for data_file, measured in alone.items():
-        assert combined > measured, (
-            f"the enforced total {combined}% is not above {data_file}'s {measured}%, so the "
-            "tier that wrote it is not counted towards the floor"
-        )
+    assert combined == pytest.approx(alone, abs=0.01), (
+        f"the enforced total {combined}% is not what the tier measured ({alone}%), so the "
+        "floor is judged against something other than this suite"
+    )
     assert f"less than fail-under={floor:.{precision}f}" in result.stdout, result.stdout
     assert result.returncode != 0, (
         "the configured floor did not fail the command; coverage enforcement is advisory "
@@ -307,13 +268,13 @@ def test_the_enforced_total_combines_every_tier_and_can_fail_the_build(
 def test_a_tier_that_did_not_measure_fails_the_enforcement(
     tmp_path: Path, floor: float, precision: int, relative_files: bool
 ) -> None:
-    """A missing tier must stop the run, not quietly shrink the total it is judged on.
+    """A tier that did not measure must stop the run, not leave the floor judged on nothing.
 
-    This is why the enforcing command names each tier's data file instead of
-    letting `coverage report` discover whatever is lying about: a tier whose data
-    never arrived would otherwise leave the floor evaluated against the tiers that
-    did — a lower total judged as if it were the whole suite's, which is a failure
-    that reads as a coverage regression rather than as a missing tier.
+    This is why the enforcing command names the tier's data file instead of letting
+    `coverage report` discover whatever is lying about: data that never arrived
+    would otherwise leave the floor evaluated against a stale file, or against
+    nothing at all — a failure that reads as a coverage regression rather than as a
+    tier that never ran.
     """
     root = tmp_path / "missing"
     _write_project(
@@ -323,11 +284,10 @@ def test_a_tier_that_did_not_measure_fails_the_enforcement(
         precision=precision,
         relative_files=relative_files,
     )
-    _measure_serial(root)
-    _measure_parallel(root)
+    _measure(root)
     (root / PARALLEL_DATA).unlink()
 
-    result = _run(root, "coverage", "combine", SERIAL_DATA, PARALLEL_DATA)
+    result = _run(root, "coverage", "combine", PARALLEL_DATA)
 
     assert result.returncode != 0, result.stdout + result.stderr
     assert PARALLEL_DATA in result.stdout + result.stderr, result.stdout + result.stderr
@@ -346,8 +306,7 @@ def test_at_or_above_floor_run_exits_zero(
         precision=precision,
         relative_files=relative_files,
     )
-    _measure_serial(root)
-    _measure_parallel(root)
+    _measure(root)
 
     result = _enforce(root)
 
@@ -361,8 +320,8 @@ def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
 ) -> None:
     """A measured data file is a statement about the tree, not about one directory.
 
-    Both measuring tiers declare their data file as an Nx output, so a cache hit
-    hands the enforcing tier a file some *other* checkout wrote. On this host that
+    The measuring tier declares its data file as an Nx output, so a cache hit hands
+    the enforcing tier a file some *other* checkout wrote. On this host that
     other checkout is a per-dispatch worktree which is usually deleted by then, so
     coverage recording absolute paths turned the saving into a failure: combine
     succeeded, and the report then said "No source for code" about a file sitting
@@ -380,8 +339,7 @@ def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
         precision=precision,
         relative_files=relative_files,
     )
-    _measure_serial(measured)
-    _measure_parallel(measured)
+    _measure(measured)
 
     replayed = tmp_path / "replayed"
     shutil.copytree(measured, replayed)
@@ -396,20 +354,17 @@ def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_every_measuring_tier_writes_data_only_the_coverage_tier_judges(
+def test_the_measuring_tier_writes_data_only_the_coverage_tier_judges(
     targets: dict[str, dict], floor: float
 ) -> None:
     """The real targets must keep measuring and judging in different commands.
 
-    Without ``--cov``/``coverage run`` a tier contributes nothing and the combined
-    total silently drops it. A ``--cov-fail-under`` naming a real floor anywhere
-    would outrank ``pyproject.toml`` and give the repository two floors, which is
-    the drift this whole module exists to catch.
+    Without ``--cov`` the tier contributes nothing and the total silently drops it.
+    A ``--cov-fail-under`` naming a real floor anywhere would outrank
+    ``pyproject.toml`` and give the repository two floors, which is the drift this
+    whole module exists to catch.
     """
     assert "--cov=orchestrator" in targets[CODE_SCOPED]["command"], targets[CODE_SCOPED]["command"]
-    assert "coverage run -m pytest" in targets[SERIAL_SCOPED]["command"], targets[SERIAL_SCOPED][
-        "command"
-    ]
 
     judging = targets[COVERAGE_SCOPED]["command"]
     assert "coverage combine" in judging and "coverage report" in judging, judging

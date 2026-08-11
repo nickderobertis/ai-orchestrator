@@ -58,12 +58,9 @@ def _setup_repo(
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, repo / name)
     shutil.copy2(REPO_ROOT / "justfile", repo / "justfile")
-    # The sweep is the only orchestrator code session setup runs, so the fixture
-    # carries exactly its module and the helpers it imports: procfs identity from
-    # `coordination`, and the termination the reap of a finished dispatch's leavings
-    # performs from `watchdog`.
-    for module in ("scratch.py", "coordination.py", "watchdog.py"):
-        shutil.copy2(REPO_ROOT / "orchestrator" / module, package / module)
+    # Session setup runs no orchestrator code — the scratch sweep it invokes is a
+    # published CLI now — so the package exists here only because `pyproject.toml`
+    # declares it as the wheel's one package and `uv sync` builds it.
     if dependency_oneharness != ONEHARNESS_VERSION:
         pyproject = repo / "pyproject.toml"
         pyproject.write_text(
@@ -149,7 +146,7 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
 
     assert installed.returncode == 0, installed.stderr
     assert f"at {repo / '.venv' / 'bin' / 'onejudge'}" in installed.stderr
-    assert "sweep-scratch: removed" in installed.stderr
+    assert "sweep: examined family" in installed.stderr
     assert (
         subprocess.run(
             [repo / ".venv" / "bin" / "oneharness", "--version"],
@@ -226,7 +223,7 @@ def test_session_setup_continues_when_scratch_sweep_fails(tmp_path: Path) -> Non
     justfile = repo / "justfile"
     justfile.write_text(
         justfile.read_text(encoding="utf-8").replace(
-            '@uv run orchestrator-sweep-scratch "$@"',
+            '@uv run oneagentgraph sweep "$@"',
             "@false",
         ),
         encoding="utf-8",

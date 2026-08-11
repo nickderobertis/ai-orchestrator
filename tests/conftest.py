@@ -1,16 +1,14 @@
 """Shared test fixtures.
 
-The e2e fixtures build a onejudge base whose provider is `command`, pointed at
-`tests/e2e/fake_backend.py`. That swaps only the paid model/harness for a
-deterministic double; everything else (the merge, the effective config, the real
-`onejudge` CLI and its loop) runs for real.
-"""
+What this suite proves is this repository's own configuration layer: the `just`
+recipes, the harness wrappers, the llmlint tier, the Nx cache keys, and the
+provisioning that installs the published CLIs everything else here delegates to.
+The engines themselves are proven in their own repositories.
 
-# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The adopted version files
-# remain authoritative targets. These e2e fixtures deliberately permit only the immediately
-# preceding onejudge release during the one-step 0.3.3->0.3.4 bootstrap:
-# installing the target binaries inside their own running lifecycle would replace and crash
-# the shared supervisor. session-setup restores exact-match enforcement after publication.
+The environment fixtures below all exist for one reason: every worker verifies
+itself by running this suite from *inside* a dispatch, so the suite inherits that
+dispatch's environment, and a test's environment is the test's to state.
+"""
 
 from __future__ import annotations
 
@@ -19,20 +17,12 @@ import importlib.metadata
 import io
 import os
 import re
-import shutil
 import subprocess
-import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-
-# Re-exported rather than defined here: `leak_guard` is a self-contained pytest
-# plugin, so a session that loads it with `-p leak_guard` — which is how the guard's
-# own e2e drives a real session — gets exactly the fixtures this suite runs under.
-from leak_guard import resource_leak_guard, session_leak_guard  # noqa: F401
 from nx_inputs import (
     CODE_WORKSPACE,
     RECIPE_WORKSPACE,
@@ -41,129 +31,61 @@ from nx_inputs import (
     repository_relative,
 )
 
-# Re-exported for the same reason, and for one more: this hook has to run before
-# xdist's implementation of the same hook, so it belongs to a plugin the suite loads
-# rather than to a fixture module.
-from scheduling import pytest_collection_modifyitems  # noqa: F401
+from orchestrator import REPO_ROOT
 
-from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops, provider_health
-from orchestrator.config import load_yaml
-from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
-from orchestrator.harnesses import DISPATCH_SELECTION_ENV
-from orchestrator.scratch import AGENT_STATUS_DIR_ENV
-
-FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The marker that moves a test from the code-only key to the whole-workspace one.
 #: Its one source is `pyproject.toml`'s marker registration, and `orchestrator`'s
 #: `test` / `test-docs` targets select on it.
 READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
-#: The front-end project roots `codeWorkspace` drops, as they appear inside a path.
-#: `site-packages` is why each carries its separators: a bare `packages` would send
-#: every import-adjacent open in the suite through a `resolve()` for nothing.
-FRONT_END_SUBSTRINGS = ("/apps/", "/packages/")
-#: The marker that moves a test from the code-only key to the recipe-scoped one.
-#: Registered in `pyproject.toml` and selected on by `orchestrator`'s `test` /
-#: `test-recipes` targets, exactly as `reads_docs` is.
+#: The marker that moves a test into the narrow recipe-scoped key.
 READS_RECIPES_MARKER = "reads_recipes"
+
+#: The gate-comparison identity `scripts/comparison-base.sh` and `.githooks/pre-push`
+#: read. Restated here rather than imported: the publishing side that exports it is
+#: `onevcs` now, and this suite's need is only to drop whatever it inherited.
+COMPARISON_ENV_PREFIX = "ORCHESTRATOR_COMPARISON_"
+#: The dispatch ownership stamp `scripts/oneharness-agent.sh` branches on: with one
+#: exported it streams into that directory, without one it takes its `--events`
+#: branch. `tests/e2e/test_quota_fallthrough_e2e.py` drives the second branch.
+AGENT_STATUS_DIR_ENV = "ORCHESTRATOR_AGENT_STATUS_DIR"
+#: Every variable a per-side harness or model choice reaches a child through, as
+#: `scripts/oneharness-agent.sh` resolves them. The wrapper turns its own per-side
+#: variables into oneharness's process-wide ones, so dropping only the first pair
+#: would leave the resolved value the suite actually inherited in place.
+DISPATCH_SELECTION_ENV = (
+    "ORCHESTRATOR_WORKER_HARNESSES",
+    "ORCHESTRATOR_JUDGE_HARNESSES",
+    "ORCHESTRATOR_WORKER_MODEL",
+    "ORCHESTRATOR_JUDGE_MODEL",
+    "ONEHARNESS_HARNESSES",
+    "ONEHARNESS_MODEL",
+)
 
 
 @pytest.fixture(scope="session")
 def workspace_install() -> None:
-    """Provision the locked workspace install the real-Nx journeys drive.
+    """Provision `node_modules` once per session, as `scripts/nx.sh` would.
 
-    Nx runs from `node_modules/.bin`, which a freshly created worktree does not
-    have. Skipping used to be the answer, which quietly withdrew the journeys that
-    prove Nx's cache accounting from every bare `pytest` run — exactly where a
-    worker looks first, and exactly where a green run then meant less than the
-    gate's. The step asked for here is the one `scripts/nx.sh` already performs and
-    `just bootstrap` forces, so it is free once the workspace is provisioned and
-    asks no operator to run Bun by hand.
-
-    Session-scoped because it is one idempotent step for a whole run: the first
-    journey to ask for it pays the Bun install, and every later one finds it done.
+    A journey that copies this checkout and runs Nx in the copy needs the install to
+    have happened here first; paying for it once per session is what keeps that from
+    being a per-journey cost.
     """
-    result = subprocess.run([WORKSPACE_INSTALL], text=True, capture_output=True)
+    result = subprocess.run([str(WORKSPACE_INSTALL)], text=True, capture_output=True)
     if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "no output"
-        pytest.fail(f"could not provision the workspace Nx install: {detail}")
-
-
-def install_pre_push_hook(checkout: Path, body: str = "exit 0") -> Path:
-    """Install a real `pre-push` hook: the merge-path gate production requires.
-
-    Nothing here is faked — Git runs this hook for real on every push out of the
-    checkout and its worktrees, which is exactly the boundary the lifecycle now
-    relies on instead of running the gate itself.
-    """
-    hooks = gitops.hooks_dir(checkout)
-    hooks.mkdir(parents=True, exist_ok=True)
-    hook = hooks / "pre-push"
-    hook.write_text(f"#!/bin/sh\nset -eu\n{body}\n", encoding="utf-8")
-    hook.chmod(0o755)
-    return hook
-
-
-@pytest.fixture(autouse=True)
-def _cover_real_git_clone_merge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give every checkout the suite clones the coverage dispatch demands.
-
-    Real checkouts carry hooks their operator installed; test fixtures clone bare
-    origins that carry none. Rather than repeat the installation in every fixture,
-    hang it off the real `gitops.clone` so the default checkout is a covered one.
-    Tests that need the uncovered or failing case override the hook themselves.
-    """
-    clone = gitops.clone
-
-    def covered_clone(*args: object, **kwargs: object) -> Path:
-        checkout = clone(*args, **kwargs)
-        install_pre_push_hook(checkout)
-        return checkout
-
-    monkeypatch.setattr(gitops, "clone", covered_clone)
-
-
-@pytest.fixture(autouse=True)
-def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep nested real CLI tests off the parent orchestrator's live channel."""
-    for key in tuple(os.environ):
-        if key.startswith(CHANNEL_ENV_PREFIX):
-            monkeypatch.delenv(key)
-
-
-@pytest.fixture(autouse=True)
-def _isolate_dispatch_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the enclosing dispatch's ownership stamp out of the suite's own processes.
-
-    Every worker verifies itself by running this suite from inside a dispatch, so the
-    suite inherits that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` — and anything it
-    starts inherits it in turn. Two behaviors then depend on where the suite happens to
-    be running rather than on what a test states: a `just run-plan` re-attributes itself
-    to a scratch directory of its own (`orchestrator.detach.run_successor`) only when a
-    stamp is there to leave, and the sweep's reaper claims a process only when one is.
-    Both would answer differently for a developer running the suite from a shell than
-    for the gate that has to pass, which is the one difference a suite may never have.
-
-    A test that is *about* the stamp states it — `tests/e2e/test_successor_survival_e2e.py`
-    launches under one deliberately, and `process_tree.spawn_reparented_leaving` sets the
-    exact one it means. The same rule as the comparison identity below: a test's
-    environment is the test's to state.
-    """
-    monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
+        pytest.fail(f"workspace-install failed: {result.stderr or result.stdout}")
 
 
 @pytest.fixture(autouse=True)
 def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the enclosing dispatch's comparison base out of the suite's own pushes.
 
-    The lifecycle exports one comparison identity to every process judging a change,
-    so this suite run inside a dispatch — which is how every worker verifies itself —
-    inherits `ORCHESTRATOR_COMPARISON_BASE` from the branch it is proving. Git hands a
-    `pre-push` hook the whole environment, so a test push that deliberately carries no
-    publication base silently arrived carrying the outer branch's, and the journeys
-    asserting which pushes name a base failed on the inherited value rather than on
-    anything they did. A test's environment is the test's to state.
+    The publication path exports one comparison identity to every process judging a
+    change, so this suite run inside a dispatch inherits `ORCHESTRATOR_COMPARISON_BASE`
+    from the branch it is proving. Git hands a `pre-push` hook the whole environment,
+    so a test push that deliberately carries no publication base would silently arrive
+    carrying the outer branch's.
     """
     for key in tuple(os.environ):
         if key.startswith(COMPARISON_ENV_PREFIX):
@@ -171,46 +93,22 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep an enclosing dispatch's per-side choice — by any of its names — out of this suite.
-
-    A dispatch launched with `--worker-harness` / `--judge-harness` — or with
-    `--worker-model` / `--judge-model` — exports that choice to everything it runs,
-    including the worker's own gate, which is this suite. The journeys that assert
-    what a side selects would then be reading the outer run's choice instead of
-    their own, exactly as with the comparison identity above: a test's environment
-    is the test's to state.
-
-    The per-side variables alone do not cover that: `scripts/oneharness-agent.sh`
-    resolves each side's value into oneharness's own process-wide
-    `ONEHARNESS_HARNESSES` / `ONEHARNESS_MODEL` and exports *those*, so the variable
-    this suite actually inherited from an enclosing per-side dispatch was the one
-    nothing dropped — and the journeys below failed on unmodified `main` whenever
-    the outer run used an override. `DISPATCH_SELECTION_ENV` names every one of them
-    in one place so the seam cannot fall behind the wrapper again.
-    """
-    for key in DISPATCH_SELECTION_ENV:
-        monkeypatch.delenv(key, raising=False)
+def _isolate_dispatch_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the enclosing dispatch's ownership stamp out of the suite's own processes."""
+    monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)
-def _isolate_provider_usage_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Keep the suite's planner views off the real providers' usage endpoints.
+def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep an enclosing dispatch's per-side choice — by any of its names — out of this suite.
 
-    `just status`, `just runs`, and the read API all render provider capacity, so
-    every journey that drives one would otherwise spend a probe against this host's
-    configured identities — real network, real accounts, and a subprocess tree the
-    leak guard would have to chase. The variable is exported rather than patched
-    because most of those journeys run the recipe as its own process.
-
-    A test that means to exercise the probe turns it back on and states its own
-    boundary; the cache is dropped either way so one test's answer is never
-    replayed into the next.
+    A dispatch launched against a chosen harness or model exports that choice to
+    everything it runs, including the worker's own gate, which is this suite. The
+    journeys that assert what a side selects would then be reading the outer run's
+    choice instead of their own.
     """
-    monkeypatch.setenv(provider_health.PROBE_ENV, "0")
-    provider_health.forget_probes()
-    yield
-    provider_health.forget_probes()
+    for key in DISPATCH_SELECTION_ENV:
+        monkeypatch.delenv(key, raising=False)
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:
@@ -254,13 +152,9 @@ def _outside_the_code_key(file: object, globs: list[str]) -> str | None:
     if isinstance(named, bytes):
         named = named.decode("utf-8", "replace")
     # Every open in the suite passes through here, so decide on a substring before
-    # paying for a syscall. The code key drops exactly two things: this repository's
-    # prose, and its front-end projects.
-    if not (
-        named.endswith(".md")
-        or DOCUMENTATION_DIRECTORY in named
-        or any(part in named for part in FRONT_END_SUBSTRINGS)
-    ):
+    # paying for a syscall. The code key drops exactly one thing: this repository's
+    # prose.
+    if not (named.endswith(".md") or DOCUMENTATION_DIRECTORY in named):
         return None
     relative = repository_relative(named)
     if relative is None or covers(globs, relative):
@@ -274,13 +168,11 @@ def _code_key_reads_are_declared(
 ) -> None:
     """Hold a test to the cache key its tier is memoized on.
 
-    `orchestrator:test` is keyed on less than the workspace so that editing prose —
-    or a front-end project no Python test reads — stops charging eight minutes for a
-    suite that would return the same verdict. That key is only sound while the tests
-    it covers genuinely ignore what it drops, and "genuinely" cannot be a reviewer's
-    recollection: a test that quietly starts asserting on `AGENTS.md`, or on
-    `apps/dag-ui/vite.config.ts`, would replay a green verdict for a tree whose tests
-    would have failed.
+    `orchestrator:test` is keyed on less than the workspace so that editing prose
+    stops charging for a suite that would return the same verdict. That key is only
+    sound while the tests it covers genuinely ignore what it drops, and "genuinely"
+    cannot be a reviewer's recollection: a test that quietly starts asserting on
+    `AGENTS.md` would replay a green verdict for a tree whose tests would have failed.
 
     So the declaration is enforced where it is made. An undeclared test that opens
     what the key drops fails here and is told to join the whole-workspace tier
@@ -322,26 +214,19 @@ def _recipe_reads_are_declared(
 ) -> None:
     """Hold the recipe tier to the narrow key its verdict is memoized on.
 
-    `orchestrator:test-recipes` exists because the two costliest journeys in this
-    suite drive `just` recipes and shell scripts and read nothing else of this
-    repository — so a commit that touches neither may replay their verdict instead
-    of paying for them again. That is a much narrower claim than the code-only key
-    makes, and a narrower claim needs stricter enforcement, not looser: any read
-    outside `recipeWorkspace` is a file that can change this tier's answer without
-    changing its hash.
+    `orchestrator:test-recipes` exists because the costliest journeys in this suite
+    drive `just` recipes and shell scripts and read nothing else of this repository —
+    so a commit that touches neither may replay their verdict instead of paying for
+    them again. That is a much narrower claim than the code-only key makes, and a
+    narrower claim needs stricter enforcement, not looser: any read outside
+    `recipeWorkspace` is a file that can change this tier's answer without changing
+    its hash.
 
     So the same enforcement `reads_docs` gets, against the same declaration Nx
     hashes rather than a restatement of it — a marked test that opens anything else
     in this checkout fails here, naming the path and the tier it belongs in. The
     test module itself is checked too, because a marked test in an unkeyed file
     would replay a verdict recorded before the test was written.
-
-    What this guard cannot see is the import that collected the test: `conftest.py`
-    imports `orchestrator`, which the key deliberately does not carry. That is
-    sound rather than overlooked — the package reaches this tier only as the
-    collection harness `orchestrator:test` and `orchestrator:test-docs` both import
-    and *are* keyed on, so a change that breaks it fails there, in the same
-    `just check`, rather than replaying green anywhere.
     """
     if request.node.get_closest_marker(READS_RECIPES_MARKER) is None:
         return
@@ -384,31 +269,12 @@ def _git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(key, val)
 
 
-@pytest.fixture(autouse=True)
-def _isolate_orchestrator_home(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Keep the suite off the real ``~/.ai-orchestrator`` state and dev checkouts.
-
-    A default ``Registry``/``Workspace`` reads the real registry file, and
-    ``resolve()`` scans ``$HOME`` for a matching checkout — which could find and then
-    mutate the real canonical checkout. Point both the state root and the disk-search
-    roots at throwaway temp dirs so no test can read or write the developer's state.
-    """
-    base = tmp_path_factory.mktemp("ao-state")
-    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(base / ".ai-orchestrator"))
-    search = base / "search"
-    search.mkdir()
-    monkeypatch.setenv("AI_ORCHESTRATOR_SEARCH_ROOTS", str(search))
-
-
 @pytest.fixture
 def bare_origin(tmp_path: Path) -> Callable[..., Path]:
     """Return a factory that seeds a bare git 'origin' (a real remote, no network).
 
     The bare repo has one commit on ``main`` plus any extra ``files`` (relpath →
-    content). A bare remote accepts pushes to any branch, which is what the
-    lifecycle's push + merge need.
+    content). A bare remote accepts pushes to any branch.
     """
     counter = {"n": 0}
 
@@ -440,37 +306,6 @@ def adopted_onejudge_version() -> str:
 
 
 @pytest.fixture(scope="session")
-def installed_onejudge_version(adopted_onejudge_version: str) -> str:
-    """Validate the CLI version, including the one allowed transition window."""
-    found = shutil.which("onejudge")
-    if not found:
-        pytest.fail("onejudge not on PATH — run 'just bootstrap' (the e2e gate needs it)")
-    version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
-    match = re.fullmatch(r"onejudge ([0-9]+\.[0-9]+\.[0-9]+)", version.stdout.strip())
-    installed = match.group(1) if version.returncode == 0 and match is not None else None
-    allowed = {adopted_onejudge_version}
-    if adopted_onejudge_version == "0.3.4":
-        allowed.add("0.3.3")
-    if installed not in allowed:
-        actual = version.stdout.strip() or version.stderr.strip() or "<no version output>"
-        pytest.fail(
-            f"wrong onejudge on PATH: expected one of {sorted(allowed)!r}, "
-            f"got {actual!r} from {found} — "
-            "run 'just bootstrap'"
-        )
-    assert installed is not None
-    return installed
-
-
-@pytest.fixture(scope="session")
-def onejudge_bin(installed_onejudge_version: str) -> str:
-    """Resolve the validated real onejudge CLI used by the e2e suite."""
-    found = shutil.which("onejudge")
-    assert found is not None
-    return found
-
-
-@pytest.fixture(scope="session")
 def adopted_oneharness_version() -> str:
     """Read and validate the repository's exact oneharness version declaration."""
     adopted = (REPO_ROOT / "config" / "oneharness.version").read_text(encoding="utf-8").strip()
@@ -495,38 +330,11 @@ def oneharness_bin(adopted_oneharness_version: str) -> str:
             f"expected {adopted_oneharness_version!r}, got {distribution_version!r}"
         )
     version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
-    allowed = {adopted_oneharness_version}
     actual_version = version.stdout.strip().removeprefix("oneharness ")
-    if version.returncode != 0 or actual_version not in allowed:
+    if version.returncode != 0 or actual_version != adopted_oneharness_version:
         actual = version.stdout.strip() or version.stderr.strip() or "<no version output>"
         pytest.fail(
-            f"wrong oneharness on PATH: expected one of {sorted(allowed)!r}, "
-            f"got {actual!r} from {found} — "
-            "run 'just bootstrap'"
+            f"wrong oneharness on PATH: expected {adopted_oneharness_version!r}, "
+            f"got {actual!r} from {found} — run 'just bootstrap'"
         )
     return str(found)
-
-
-@pytest.fixture
-def command_base(tmp_path: Path) -> Callable[..., Path]:
-    """Return a factory that writes a `command`-provider base config.
-
-    Derived from the real base so the shared agent preamble is genuine; only the
-    provider is swapped to the fake backend and the turn cap lowered for speed.
-    """
-
-    def _make(max_turns: int = 4) -> Path:
-        base = load_yaml(BASE_CONFIG)
-        base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
-        base.setdefault("user", {})["max_turns"] = max_turns
-        base["session"] = "e2e"
-        path = tmp_path / "command.base.yaml"
-        path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
-        return path
-
-    return _make
-
-
-@pytest.fixture
-def personas_dir() -> Path:
-    return PERSONA_DIR

@@ -569,6 +569,9 @@ sleep 60
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+        # Its own process group: the signal under test is one sent to a whole group,
+        # and `os.killpg` names a group only if this process leads one.
+        start_new_session=True,
     )
     try:
         limit = time.monotonic() + 30
@@ -577,8 +580,7 @@ sleep 60
         assert held.is_file(), "the call never reached the replacement it was to be killed during"
         assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"]
         # The whole group, which is what a dispatch teardown signals: the held
-        # replacement dies with the shell that is running it. The leak guard starts
-        # every test subprocess as its own group leader, so this pid names one.
+        # replacement dies with the shell that is running it.
         os.killpg(process.pid, sent)
         process.communicate(timeout=30)
     finally:

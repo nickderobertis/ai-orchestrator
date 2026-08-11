@@ -62,11 +62,8 @@ from pathlib import Path
 
 import pytest
 from nx_inputs import (
-    BROWSER_PROJECT,
-    BROWSER_SCOPED,
     CODE_SCOPED,
     COVERAGE_SCOPED,
-    SERIAL_SCOPED,
 )
 from nx_workspace import copy_checkout, requires_workspace_install
 
@@ -91,31 +88,13 @@ CODE_TEXT = "# List available recipes."
 CODE_EDIT = "# List the available recipes."
 #: Python the code tier reads and the recipe tier does not: editing it must re-run
 #: one and replay the other, which is the whole reason the recipe key is narrow.
-PYTHON_WITNESS = "orchestrator/lifecycle.py"
-#: A front-end project the Python suite never opens. Its contract is checked by the
-#: whole-workspace tier, so editing it must re-run that tier and replay the code one.
-FRONT_END_WITNESS = "apps/dag-ui/vite.config.ts"
+PYTHON_WITNESS = "orchestrator/labels.py"
 #: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
 FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
-#: Python the browser tier's fixture server imports, so editing it must re-run that
-#: tier — and Python nothing the served process loads imports, so editing that one
-#: must replay it. `orchestrator.status` is a command-side verb: `just status`
-#: renders with it and no HTTP route reaches it.
-SERVED_WITNESS = "orchestrator/timeline.py"
-UNSERVED_WITNESS = "orchestrator/status.py"
-#: The two files outside `orchestrator/` the browser tier runs: the fixture server
-#: Playwright starts, and the harness history store that server shells out to.
-FIXTURE_SERVER_WITNESS = "apps/dag-ui/e2e/fixtures/serve_fixture.py"
-FAKE_HARNESS_WITNESS = "tests/e2e/fake_oneharness.py"
-#: The browser tier itself: vitest plus two Playwright configs.
-BROWSER_TIER = f"{BROWSER_PROJECT}:{BROWSER_SCOPED}"
-#: The project every Python tier belongs to, and the two tiers the code suite runs
-#: in. They share `codeWorkspace` and are separate Nx tasks, so neither waits for
-#: the other and each has to notice everything the suite reads on its own.
+#: The project every Python tier belongs to, and the tier the code suite runs in.
 PROJECT = "orchestrator"
 CODE_TIER = f"{PROJECT}:{CODE_SCOPED}"
-SERIAL_TIER = f"{PROJECT}:{SERIAL_SCOPED}"
-#: The uncached tier that combines what those two measured and judges the floor.
+#: The uncached tier that reads what that one measured and judges the floor.
 COVERAGE_TIER = f"{PROJECT}:{COVERAGE_SCOPED}"
 #: What every journey below shortens the Python suite to. The claim under test is
 #: the *key*, computed from the declared inputs before the command runs.
@@ -298,65 +277,21 @@ def test_skip_nx_cache_forces_one_tier_to_re_run_an_unchanged_tree(checkout: Che
     assert not checkout.ran_the_command("orchestrator:test")
 
 
-def test_the_serial_tier_is_keyed_on_the_same_tree_as_the_bulk_it_left(
+def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_the_tier_that_measures(
     checkout: Checkout,
 ) -> None:
-    """Splitting the code suite in two split its cache key claim in two with it.
+    """The floor is enforced by a task Nx will never replay.
 
-    `single_threaded` tests read the same tree as the bulk they were split out of —
-    the split is about the process they need, not about what they open — so this
-    tier gets the same `codeWorkspace` key and has to behave the same way at both
-    edges: prose it cannot read replays, Python it can read misses.
-    """
-    assert checkout.ran_the_command(SERIAL_TIER)
-    assert not checkout.ran_the_command(SERIAL_TIER), (
-        "an unchanged tree must replay its recorded verdict rather than re-run"
-    )
-
-    checkout.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
-
-    assert not checkout.ran_the_command(SERIAL_TIER), (
-        f"changing {PROSE_WITNESS} must not re-run a tier whose tests cannot read it"
-    )
-
-    checkout.append(PYTHON_WITNESS, "# nx cache scope journey")
-
-    assert checkout.ran_the_command(SERIAL_TIER), (
-        f"changing {PYTHON_WITNESS} must re-run the tier keyed on the code"
-    )
-
-
-def test_neither_half_of_the_code_suite_waits_for_the_other(checkout: Checkout) -> None:
-    """The point of the split: running one tier must not consume the other.
-
-    The two invocations used to be chained by `&&` inside one target, so a serial
-    failure meant the parallel half never reported at all and re-running the
-    one-second serial test dragged three minutes of parallel suite with it. As
-    separate tasks neither is the other's dependency, which is exactly what running
-    one and finding the other still cold demonstrates.
-    """
-    assert checkout.ran_the_command(SERIAL_TIER)
-
-    assert checkout.ran_the_command(CODE_TIER), (
-        f"{CODE_TIER} replayed a verdict it never recorded, so {SERIAL_TIER} ran it"
-    )
-
-
-def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_both(
-    checkout: Checkout,
-) -> None:
-    """The floor is enforced by a task Nx will never replay, once both tiers exist.
-
-    Its inputs are two files on disk rather than the tree, so a cached verdict here
-    would be a claim about coverage data Nx does not hash. It is seconds of work;
-    it re-runs. And it must wait on every tier that measures, or the combined total
-    it judges is a total the whole suite never produced.
+    Its input is a file on disk rather than the tree, so a cached verdict here would
+    be a claim about coverage data Nx does not hash. It is seconds of work; it
+    re-runs. And it must wait on the tier that measures, or the total it judges is a
+    total this suite never produced.
     """
     resolved = checkout.resolved_target(COVERAGE_SCOPED)
 
     assert resolved.get("cache") is False, resolved
-    assert sorted(resolved["dependsOn"]) == sorted([CODE_SCOPED, SERIAL_SCOPED]), resolved
-    for tier in (CODE_SCOPED, SERIAL_SCOPED):
+    assert sorted(resolved["dependsOn"]) == [CODE_SCOPED], resolved
+    for tier in (CODE_SCOPED,):
         measuring = checkout.resolved_target(tier)
         assert measuring.get("cache") is True, (
             f"{tier} measures into a file the coverage tier needs restored on a cache "
@@ -402,67 +337,6 @@ def test_editing_orchestrator_code_replays_only_the_recipe_tier(checkout: Checko
     )
 
 
-def test_editing_a_front_end_project_replays_the_python_code_tier(checkout: Checkout) -> None:
-    """No Python test opens `apps/` or `packages/`, so no Python tier is keyed on them.
-
-    The DAG state contract does read them, and it runs in the whole-workspace tier,
-    which is what keeps this narrowing from dropping the check on the floor.
-    """
-    assert checkout.ran_the_command("orchestrator:test")
-    assert checkout.ran_the_command("orchestrator:test-docs")
-
-    checkout.append(FRONT_END_WITNESS, "// nx cache scope journey")
-
-    assert checkout.ran_the_command("orchestrator:test-docs"), (
-        f"changing {FRONT_END_WITNESS} must re-run the tier that checks its contract"
-    )
-    assert not checkout.ran_the_command("orchestrator:test"), (
-        f"changing {FRONT_END_WITNESS} must not re-run a tier whose tests never open it"
-    )
-
-
-def test_editing_python_the_browser_tier_never_loads_replays_it(checkout: Checkout) -> None:
-    """The case this narrowing exists for: backend churn stops paying for a browser.
-
-    The tier reaches this repository's Python through one door — the fixture server
-    Playwright starts, which imports the read API — and most commits here touch
-    modules that door never opens. Keyed on all of `orchestrator/**/*`, every one of
-    them charged vitest and two Playwright configs for a verdict that could not have
-    differed.
-    """
-    checkout.shorten(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
-
-    assert checkout.ran_the_command(BROWSER_TIER)
-    assert not checkout.ran_the_command(BROWSER_TIER), (
-        "an unchanged tree must replay its recorded verdict rather than re-run"
-    )
-
-    checkout.append(UNSERVED_WITNESS, "# nx cache scope journey")
-
-    assert not checkout.ran_the_command(BROWSER_TIER), (
-        f"changing {UNSERVED_WITNESS} must not re-run a tier that never loads it"
-    )
-
-
-def test_the_browser_tier_still_re_runs_on_everything_it_does_load(checkout: Checkout) -> None:
-    """The other half of the claim, and the half that keeps the narrowing sound.
-
-    A key that covers less than its check reads fails *open*: the tier would report
-    a pass for a served contract it never exercised. So each of the three things it
-    genuinely runs — a module the read API imports, the fixture that builds and
-    serves the run directory, and the fake harness that fixture shells out to — has
-    to still miss.
-    """
-    checkout.shorten(f"apps/{BROWSER_PROJECT}", BROWSER_SCOPED)
-    assert checkout.ran_the_command(BROWSER_TIER)
-
-    for witness in (SERVED_WITNESS, FIXTURE_SERVER_WITNESS, FAKE_HARNESS_WITNESS):
-        checkout.append(witness, "# nx cache scope journey")
-        assert checkout.ran_the_command(BROWSER_TIER), (
-            f"changing {witness} must re-run the browser tier that runs it"
-        )
-
-
 def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
     checkout: Checkout,
 ) -> None:
@@ -470,7 +344,7 @@ def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
 
     The two measuring tiers are cached and the tier that judges the floor is not, so
     on every replayed commit the combine runs against data no run in this checkout
-    produced. That only works because each measuring tier declares its data file as
+    produced. That only works because the measuring tier declares its data file as
     an Nx output and Nx restores it — an `outputs` declaration that fell off, or a
     tier that stopped writing the file it names, would leave the combine with
     nothing and turn a saving into a failed gate.
@@ -481,8 +355,8 @@ def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
     fraction of the package, and `tests/test_coverage_gate.py` is where the declared
     floor's own value is proven at the real boundary.
     """
-    checkout.edit("pyproject.toml", "fail_under = 95", "fail_under = 0")
-    measured = {CODE_TIER: ".coverage.parallel", SERIAL_TIER: ".coverage.serial"}
+    checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
+    measured = {CODE_TIER: ".coverage.parallel"}
     for tier in measured:
         assert checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED)
     for tier, data_file in measured.items():

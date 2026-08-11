@@ -1,9 +1,14 @@
-"""E2E coverage for the public Nx workspace command and contract surfaces.
+"""E2E coverage for this repository's own command surface.
+
+Two kinds of journey live here. The quality recipes — `bootstrap`, `check`, `test`,
+`gate`, `upgrade` — are proven for the sequencing, capture, and stop behaviour they
+own. The delegated recipes are proven for the one thing a wrapper is: that the
+published CLI it names is reached, with the arguments the recipe promised.
 
 llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage] Recipe tests own shell
-sequencing, capture, and stop behavior, so uv/Nx/checker subprocesses are deterministic
-command doubles; real Bun upgrade, package-consumer layout, contract hashing, and
-cross-worktree Nx cache boundaries run separately.
+sequencing, capture, and stop behavior, so the uv/Nx/CLI subprocesses they wrap are
+deterministic command doubles; the real Bun upgrade and the cross-worktree Nx cache
+boundary run separately.
 """
 
 from __future__ import annotations
@@ -21,20 +26,19 @@ import pytest
 from nx_workspace import copy_working_tree
 from waits import timeout as e2e_timeout
 
-# Deliberately no module-level tier mark. Some contracts checked here span the
-# whole tree — `docs/dag-ui.md` and `docs/dag-ui/design.md` are inputs to the DAG
-# state contract, not commentary — but most of this file drives `just` recipes and
-# shell scripts that never open this repository's prose, and a blanket declaration
-# charged every documentation edit for all fifty of them. Each test declares what
-# it actually reads, and `tests/conftest.py` fails one that declares wrong.
+# Deliberately no module-level tier mark. Most of this file drives `just` recipes
+# and shell scripts that never open this repository's prose, and a blanket
+# declaration would charge every documentation edit for all of them. Each test
+# declares what it actually reads, and `tests/conftest.py` fails one that declares
+# wrong.
 ROOT = Path(__file__).resolve().parents[2]
 #: The Nx target lists the root quality recipes route through, restated here
 #: rather than read from the `justfile` — this suite exists to catch one of them
-#: drifting. `coverage` is last in each: it waits on both measuring tiers and
-#: enforces the floor on their combined data.
-CHECK_TARGETS = "format-check,lint,typecheck,test,test-serial,test-docs,test-recipes,coverage"
-TEST_TARGETS = "test,test-serial,test-docs,test-recipes,coverage"
-UPGRADE_TARGETS = "build,lint,typecheck,test,test-serial,test-docs,test-recipes,coverage"
+#: drifting. `coverage` is last in each: it waits on the measuring tier and enforces
+#: the floor on what that tier wrote.
+CHECK_TARGETS = "format-check,lint,typecheck,test,test-docs,test-recipes,coverage"
+TEST_TARGETS = "test,test-docs,test-recipes,coverage"
+UPGRADE_TARGETS = "build,lint,typecheck,test,test-docs,test-recipes,coverage"
 
 
 def _run(
@@ -115,488 +119,6 @@ def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> 
     assert "just bootstrap" in result.stderr
 
 
-def _contract_checkout(tmp_path: Path) -> Path:
-    checkout = tmp_path / "checkout"
-    for relative in (
-        "scripts/check-oneharness-ui-contract.sh",
-        "config/oneharness-ui.commit",
-        "config/oneharness-ui.types.sha256",
-        "docs/dag-ui/design.md",
-        "docs/dag-ui/oneharness-ui-contract.d.ts",
-    ):
-        target = checkout / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, target)
-    _run("git", "init", "-q", cwd=checkout)
-    return checkout
-
-
-def _contract_run(checkout: Path, source: Path) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["ONEHARNESS_UI_TYPES_URL"] = source.as_uri()
-    return _run("bash", "scripts/check-oneharness-ui-contract.sh", cwd=checkout, env=env)
-
-
-@pytest.mark.reads_docs
-def test_contract_checker_accepts_the_exact_pinned_declaration(tmp_path: Path) -> None:
-    checkout = _contract_checkout(tmp_path)
-    source = checkout / "docs/dag-ui/oneharness-ui-contract.d.ts"
-
-    result = _contract_run(checkout, source)
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "oneharness-ui contract: pinned upstream source verified\n"
-
-
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    [
-        ("commit", "repair invalid commit pin"),
-        ("hash", "update reviewed fixture and hash together"),
-        ("mirror", "regenerate the checked-in declaration"),
-        ("design", "synchronize design pin"),
-    ],
-)
-@pytest.mark.reads_docs
-def test_contract_checker_reports_actionable_drift(
-    tmp_path: Path, mutation: str, message: str
-) -> None:
-    checkout = _contract_checkout(tmp_path)
-    source = tmp_path / "source.ts"
-    shutil.copy2(checkout / "docs/dag-ui/oneharness-ui-contract.d.ts", source)
-    match mutation:
-        case "commit":
-            (checkout / "config/oneharness-ui.commit").write_text("invalid\n")
-        case "hash":
-            (checkout / "config/oneharness-ui.types.sha256").write_text(f"{'0' * 64}\n")
-        case "mirror":
-            (checkout / "docs/dag-ui/oneharness-ui-contract.d.ts").write_text("drift\n")
-        case "design":
-            (checkout / "docs/dag-ui/design.md").write_text("missing pin\n")
-        case _:
-            raise AssertionError(f"unknown contract mutation {mutation!r}")
-
-    result = _contract_run(checkout, source)
-
-    assert result.returncode != 0
-    assert message in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_contract_checker_reports_fetch_failure(tmp_path: Path) -> None:
-    checkout = _contract_checkout(tmp_path)
-
-    result = _contract_run(checkout, tmp_path / "missing.ts")
-
-    assert result.returncode != 0
-    assert "fetch pinned source and retry" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_contract_checker_rejects_malformed_hash_pin(tmp_path: Path) -> None:
-    checkout = _contract_checkout(tmp_path)
-    source = tmp_path / "source.ts"
-    shutil.copy2(checkout / "docs/dag-ui/oneharness-ui-contract.d.ts", source)
-    (checkout / "config/oneharness-ui.types.sha256").write_text("invalid\n")
-
-    result = _contract_run(checkout, source)
-
-    assert result.returncode != 0
-    assert "repair invalid SHA-256 pin" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_contract_checker_rejects_unsupported_source_scheme(tmp_path: Path) -> None:
-    checkout = _contract_checkout(tmp_path)
-    env = os.environ.copy()
-    env["ONEHARNESS_UI_TYPES_URL"] = "ftp://example.invalid/types.ts"
-
-    result = _run("bash", "scripts/check-oneharness-ui-contract.sh", cwd=checkout, env=env)
-
-    assert result.returncode != 0
-    assert "source URL must use https:// or file://" in result.stderr
-
-
-def _dag_state_contract_checkout(tmp_path: Path) -> Path:
-    checkout = tmp_path / "dag-state-contract"
-    for relative in (
-        "scripts/check-dag-state-contract.py",
-        "orchestrator/projection.py",
-        "orchestrator/activity.py",
-        "orchestrator/conversations.py",
-        "orchestrator/provider_failure.py",
-        "orchestrator/history.py",
-        "orchestrator/labels.py",
-        "orchestrator/launch.py",
-        "orchestrator/lifecycle.py",
-        "orchestrator/read_model.py",
-        "orchestrator/runs.py",
-        "orchestrator/supervisory.py",
-        "orchestrator/telemetry.py",
-        "orchestrator/timeline.py",
-        "orchestrator/server.py",
-        "packages/dag-layout/src/index.ts",
-        "packages/dag-model/src/index.ts",
-        "packages/telemetry-client/src/index.ts",
-        "tests/golden/run-detail-v2.json",
-        "tests/golden/run-timeline-v2.json",
-        "apps/dag-ui/vite.config.ts",
-        "apps/dag-ui/e2e/viewports.ts",
-        "apps/dag-ui/e2e/gallery.screens.spec.ts",
-        "docs/dag-ui.md",
-        "docs/dag-ui/design.md",
-        "docs/dag-ui/oneharness-ui-contract.d.ts",
-        "oneharness.judge.toml",
-    ):
-        target = checkout / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        source = ROOT / relative
-        if source.exists():
-            shutil.copy2(source, target)
-    _run("git", "init", "-q", cwd=checkout)
-    return checkout
-
-
-def _dag_state_contract_run(checkout: Path) -> subprocess.CompletedProcess[str]:
-    return _run("python3", "scripts/check-dag-state-contract.py", cwd=checkout)
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_accepts_matching_public_states(
-    tmp_path: Path,
-) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == (
-        "dag state contract: Python, TypeScript, docs, and judge config agree\n"
-    )
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-    layout = checkout / "packages/dag-layout/src/index.ts"
-    layout.write_text(layout.read_text().replace('"cancelled",', '"paused",'))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "packages/dag-layout/src/index.ts DAG_NODE_STATES" in result.stderr
-    assert "orchestrator/projection.py NodeStatus" in result.stderr
-    assert "reconcile the TypeScript list with it" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_node_status_drift(tmp_path: Path) -> None:
-    """The served node vocabulary has four copies; adding one to Python alone fails."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    projection = checkout / "orchestrator/projection.py"
-    projection.write_text(
-        projection.read_text().replace('    "unknown",\n]', '    "unknown",\n    "paused",\n]')
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "paused" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_a_plan_task_typed_as_a_scalar(
-    tmp_path: Path,
-) -> None:
-    """`resume` is continuation metadata; calling it a boolean severed replanned runs.
-
-    Field types are otherwise out of this gate's scope, so the reference itself is what
-    is checked: every field name still agreed while the contract rejected whole runs.
-    """
-    checkout = _dag_state_contract_checkout(tmp_path)
-    model = checkout / "packages/dag-model/src/index.ts"
-    model.write_text(
-        model.read_text().replace(
-            "    resume: planTaskResumeSchema.optional(),", "    resume: z.boolean().optional(),"
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "planTaskSchema.resume is not built from planTaskResumeSchema" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_plan_task_optionality_drift(tmp_path: Path) -> None:
-    """A lifecycle node that delegates to `steps` has no `task`, and the docs say so."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    model = checkout / "packages/dag-model/src/index.ts"
-    model.write_text(
-        model.read_text().replace(
-            "    task: z.string().min(1).optional(),\n    repo:",
-            "    task: z.string().min(1),\n    repo:",
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "disagree about whether ['task'] is optional" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_resume_field_drift(tmp_path: Path) -> None:
-    """`orchestrator.lifecycle` owns the resume fields; the docs may not lag them."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    lifecycle = checkout / "orchestrator/lifecycle.py"
-    lifecycle.write_text(
-        lifecycle.read_text().replace(
-            '        "source_round",\n        "attempts",\n    }\n)',
-            '        "source_round",\n        "attempts",\n        "worktree",\n    }\n)',
-            1,
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "plan task PlanTaskResume fields" in result.stderr
-    assert "worktree" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_requires_every_projected_state_to_be_servable(
-    tmp_path: Path,
-) -> None:
-    """A state the strict fold can produce but the API cannot serve is a broken read."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    projection = checkout / "orchestrator/projection.py"
-    original = projection.read_text()
-    broken = original.replace(
-        'NodeState = Literal["running", "done", "failed", "waiting", "parked", "cancelled"]',
-        'NodeState = Literal["running", "done", "failed", "waiting", "paused"]',
-    )
-    # A substitution that quietly matched nothing would leave this asserting that a
-    # *correct* contract fails the checker, which is how adding a state to `NodeState`
-    # turned this test red for a reason that had nothing to do with the checker.
-    assert broken != original, "the NodeState literal moved; restate it here"
-    projection.write_text(broken)
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "is not contained in its NodeStatus" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_failure_class_drift(tmp_path: Path) -> None:
-    """The failure classification the node banner states is mirrored three ways."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    telemetry = checkout / "orchestrator/telemetry.py"
-    telemetry.write_text(telemetry.read_text().replace('"provider", "configuration"', '"provider"'))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "FailureClass vocabulary" in result.stderr
-    assert "configuration" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_usage_field_drift(tmp_path: Path) -> None:
-    """Renaming a usage field in Python alone must fail, not silently break the UI."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    conversations = checkout / "orchestrator/conversations.py"
-    conversations.write_text(
-        conversations.read_text().replace('"cost_usd": "costUsd"', '"cost_usd": "costUSD"')
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "ConversationUsage rename targets" in result.stderr
-    assert "costUSD" in result.stderr
-    assert "reconcile them in one change" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> None:
-    """An SSE event renamed in the server alone must fail against the design contract."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    server = checkout / "orchestrator/server.py"
-    server.write_text(
-        server.read_text().replace('RUN_REMOVED = "run.removed"', 'RUN_REMOVED = "run.deleted"')
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "SSE event vocabulary" in result.stderr
-    assert "run.deleted" in result.stderr
-    assert "docs/dag-ui/design.md" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_timeline_span_drift(tmp_path: Path) -> None:
-    """A timeline span kind added in Python alone must fail, not ship unparseable."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    timeline = checkout / "orchestrator/timeline.py"
-    timeline.write_text(
-        timeline.read_text().replace('    "rollup",\n]', '    "rollup",\n    "recovery",\n]')
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "TimelineSpanKind vocabulary" in result.stderr
-    assert "recovery" in result.stderr
-    assert "packages/dag-model/src/index.ts timelineSpanKindSchema" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_timeline_payload_drift(tmp_path: Path) -> None:
-    """A timeline field invented server-side must fail against the design contract."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    timeline = checkout / "orchestrator/timeline.py"
-    timeline.write_text(
-        timeline.read_text().replace(
-            "    kind: TimelineReferenceKind\n    value: str",
-            "    kind: TimelineReferenceKind\n    value: str\n    body: str",
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "TimelineReference declares ['body']" in result.stderr
-    assert "design.md does not" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -> None:
-    """A UI proxying somewhere the server does not bind must fail before it ships."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    config = checkout / "apps/dag-ui/vite.config.ts"
-    config.write_text(config.read_text().replace("127.0.0.1:8787", "127.0.0.1:9999"))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "default port" in result.stderr
-    assert "apps/dag-ui/vite.config.ts proxy default says 9999" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_dag_ui_viewport_matrix_drift(
-    tmp_path: Path,
-) -> None:
-    """A width the gallery captures but the operator table never names must fail.
-
-    The screenshot tier and the navigation journeys share one declared matrix, and
-    `docs/dag-ui.md` restates it as the table an operator reads before capturing.
-    """
-    checkout = _dag_state_contract_checkout(tmp_path)
-    viewports = checkout / "apps/dag-ui/e2e/viewports.ts"
-    moved = viewports.read_text().replace("sized(1024, 768)", "sized(1024, 760)")
-    assert "sized(1024, 760)" in moved, "the matrix no longer declares the size this moves"
-    viewports.write_text(moved)
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "DAG UI viewport matrix" in result.stderr
-    assert "1024x760" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_run_timeline_version_drift(
-    tmp_path: Path,
-) -> None:
-    """A timeline payload whose meaning moved in one copy and not the others must fail.
-
-    The number exists so a consumer can tell which meaning of a rollup it is holding.
-    A bump that reaches the serializer and leaves the contract, the schema a client
-    parses with, or the checked-in golden behind is exactly the drift that makes it
-    worthless — so each of those three is reconciled against Python here.
-    """
-    checkout = _dag_state_contract_checkout(tmp_path)
-    timeline = checkout / "orchestrator/timeline.py"
-    bumped = timeline.read_text().replace(
-        "TIMELINE_SCHEMA_VERSION = 2", "TIMELINE_SCHEMA_VERSION = 3"
-    )
-    assert "TIMELINE_SCHEMA_VERSION = 3" in bumped, "timeline.py no longer owns the version"
-    timeline.write_text(bumped)
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "run timeline schema version" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_run_scope_rollup_field_drift(
-    tmp_path: Path,
-) -> None:
-    """A rollup that stops carrying a declared key must fail, not merely parse.
-
-    Every key the pair lives in is optional on `TimelineSpan`, so dropping one from a
-    rollup violates no schema on either side. Only a declaration of what *this* span
-    carries can catch it, which is what this rule is.
-    """
-    checkout = _dag_state_contract_checkout(tmp_path)
-    timeline = checkout / "orchestrator/timeline.py"
-    dropped = timeline.read_text().replace('        "transport_role",\n', "", 1)
-    assert '"transport_role"' not in dropped.split("RUN_SCOPE_ROLLUP_FIELDS")[1].split(")")[0], (
-        "RUN_SCOPE_ROLLUP_FIELDS no longer declares the key this drops"
-    )
-    timeline.write_text(dropped)
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "run-scope rollup fields" in result.stderr
-    assert "transport_role" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_dag_ui_surface_drift(
-    tmp_path: Path,
-) -> None:
-    """A surface the gallery photographs but the operator table never names must fail.
-
-    Each entry names the PNG it writes at every viewport, and `docs/dag-ui.md` lists
-    those names as how to find a capture in the gallery it just wrote.
-    """
-    checkout = _dag_state_contract_checkout(tmp_path)
-    surfaces = checkout / "apps/dag-ui/e2e/gallery.screens.spec.ts"
-    renamed = surfaces.read_text().replace('"08-conversation"', '"08-transcript"')
-    assert '"08-transcript"' in renamed, "SURFACES no longer declares the capture this renames"
-    surfaces.write_text(renamed)
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "DAG UI screenshot surfaces" in result.stderr
-    assert "08-transcript" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_dag_ui_documented_port_drift(
-    tmp_path: Path,
-) -> None:
-    """Operator documentation that names a port the app does not serve must fail."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    doc = checkout / "docs/dag-ui.md"
-    doc.write_text(doc.read_text().replace("`http://127.0.0.1:4173`", "`http://127.0.0.1:4999`"))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "DAG UI development port" in result.stderr
-    assert "docs/dag-ui.md says 4999" in result.stderr
-
-
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
     checkout = tmp_path / "recipes"
     scripts = checkout / "scripts"
@@ -628,13 +150,9 @@ fi
     nx = scripts / "nx.sh"
     nx.write_text(command)
     nx.chmod(0o755)
-    for name in ("check-oneharness-ui-contract.sh", "check-nx-cache.sh"):
-        path = scripts / name
-        path.write_text(command)
-        path.chmod(0o755)
-    python = binaries / "python3"
-    python.write_text(command)
-    python.chmod(0o755)
+    check_nx_cache = scripts / "check-nx-cache.sh"
+    check_nx_cache.write_text(command)
+    check_nx_cache.chmod(0o755)
     session_setup = scripts / "session-setup.sh"
     session_setup.write_text(command)
     session_setup.chmod(0o755)
@@ -788,8 +306,6 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     assert result.stdout == "check: all deterministic checks passed\n"
     assert trace.read_text().splitlines() == [
         f"nx.sh run-many -t {CHECK_TARGETS}",
-        "check-oneharness-ui-contract.sh ",
-        "python3 ./scripts/check-dag-state-contract.py",
         "nx.sh run workspace:check-nx-cache",
     ]
 
@@ -857,25 +373,46 @@ def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
 
 
 def _screens_checkout(tmp_path: Path) -> tuple[Path, Path]:
-    """A recipe checkout `just dag-ui-screens` runs in, with only Playwright doubled.
+    """A recipe checkout `just dag-ui-screens` runs in, with the servers doubled.
 
-    `scripts/dag-ui-screens.sh` is the real file, because what is under test is the
-    directory it chooses and the path it reports — not what the browser tier does once
-    it has one. The `apps/dag-ui` directory has to exist because the script runs
-    Playwright from inside it.
+    `scripts/dag-ui-screens.sh` and `scripts/dag-ui-server.js` are the real files,
+    because what is under test is the gallery the recipe chooses, the surfaces and
+    viewports it drives, and the path it reports — not what a browser renders once it
+    has them. So Playwright, the published read API, the bundle server, and the
+    readiness probe are doubled, and the ports and the gallery it derives are real.
     """
     checkout, trace = _recipe_checkout(tmp_path)
-    screens = checkout / "scripts/dag-ui-screens.sh"
-    shutil.copy2(ROOT / "scripts/dag-ui-screens.sh", screens)
-    screens.chmod(0o755)
-    (checkout / "apps/dag-ui").mkdir(parents=True)
-    bunx = checkout / "bin/bunx"
-    bunx.write_text((checkout / "scripts/nx.sh").read_text())
-    bunx.chmod(0o755)
+    for name in ("dag-ui-screens.sh", "dag-ui-server.js"):
+        copied = checkout / "scripts" / name
+        shutil.copy2(ROOT / "scripts" / name, copied)
+        copied.chmod(0o755)
+    for name in ("bunx", "bun"):
+        double = checkout / "bin" / name
+        double.write_text((checkout / "scripts/nx.sh").read_text())
+        double.chmod(0o755)
+    # The readiness probe is doubled into a bare success rather than traced: it polls,
+    # so tracing it would put a variable number of lines between the ones that matter.
+    curl = checkout / "bin/curl"
+    curl.write_text("#!/usr/bin/env bash\nexit 0\n")
+    curl.chmod(0o755)
     # Provisioned already, so the real `workspace-install.sh` this script heals
     # through exits without reaching for Bun.
     _mark_nx_installed(checkout)
     return checkout, trace
+
+
+def _captures(trace: Path) -> list[str]:
+    """Every Playwright capture the traced run made, as `<viewport> <url>`."""
+    captures = []
+    for line in trace.read_text().splitlines():
+        match = re.fullmatch(
+            r"bunx playwright screenshot --viewport-size=(\S+) --wait-for-timeout=\d+ ?"
+            r"(?P<extra>.*?) ?(?P<url>http://\S+) \S+",
+            line,
+        )
+        if match is not None:
+            captures.append(f"{match.group(1)} {match.group('url')}")
+    return captures
 
 
 @pytest.mark.reads_recipes
@@ -884,13 +421,13 @@ def test_dag_ui_screens_recipe_gives_every_invocation_a_gallery_of_its_own(
 ) -> None:
     """Two operators capturing at once must not photograph into one directory.
 
-    The browser configs already choose their ports and fixture directory per run; the
-    gallery is the one thing they do not know about, so this recipe owns it.
+    The servers already get ports of this run's own; the gallery is the other thing
+    two concurrent captures would collide on, so this recipe owns it.
     """
     checkout, trace = _screens_checkout(tmp_path)
 
     first = _recipe_run(checkout, trace, "dag-ui-screens")
-    second = _recipe_run(checkout, trace, "dag-ui-screens", "--grep", "at 390x844")
+    second = _recipe_run(checkout, trace, "dag-ui-screens", "--full-page")
 
     galleries = []
     for result in (first, second):
@@ -900,13 +437,34 @@ def test_dag_ui_screens_recipe_gives_every_invocation_a_gallery_of_its_own(
         galleries.append(Path(reported.group(1)))
     assert galleries[0] != galleries[1]
     for gallery in galleries:
-        assert gallery.is_dir()
-        assert gallery.parent == checkout / "apps/dag-ui/.screenshots"
-    # And whatever the caller added reaches Playwright, so one width can be recaptured.
-    assert trace.read_text().splitlines() == [
-        "bunx playwright test --config screenshots.config.ts",
-        "bunx playwright test --config screenshots.config.ts --grep at 390x844",
-    ]
+        assert (gallery / "index.html").is_file()
+        assert gallery.parent == checkout / ".screenshots"
+    # Every viewport in the matrix was photographed, against the bundle server this
+    # run started rather than any address baked into the recipe.
+    viewports = [capture.split(" ")[0] for capture in _captures(trace)]
+    assert viewports == ["1920,1080", "1440,900", "1280,800", "1024,768", "390,844"] * 2
+    # And whatever the caller added reaches Playwright, so one capture can be varied.
+    assert "--full-page" in trace.read_text()
+
+
+@pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_photographs_every_view_of_a_named_run(
+    tmp_path: Path,
+) -> None:
+    """A run id names three more surfaces than the run list, at every viewport."""
+    checkout, trace = _screens_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens", "--run", "run 1/2")
+
+    assert result.returncode == 0, result.stderr
+    surfaces = sorted({capture.split(" ")[1].partition("/?")[2] for capture in _captures(trace)})
+    assert surfaces == [
+        "",
+        "run=run%201%2F2&view=graph",
+        "run=run%201%2F2&view=overall",
+        "run=run%201%2F2&view=timeline",
+    ], surfaces
+    assert len(_captures(trace)) == 20
 
 
 @pytest.mark.reads_recipes
@@ -934,9 +492,10 @@ def test_dag_ui_screens_recipe_stops_when_provisioning_fails(
 ) -> None:
     """A workspace that could not be provisioned must not be photographed anyway.
 
-    Playwright lives in `node_modules`, so a failed install is the one thing that makes
-    every capture below meaningless; the recipe owes the provisioner's own failure
-    rather than a screenful of missing-module noise after it.
+    Playwright and the published bundle both live in `node_modules`, so a failed
+    install is the one thing that makes every capture below meaningless; the recipe
+    owes the provisioner's own failure rather than a screenful of missing-module
+    noise after it.
     """
     checkout, trace = _screens_checkout(tmp_path)
     install = checkout / "scripts/workspace-install.sh"
@@ -949,7 +508,7 @@ def test_dag_ui_screens_recipe_stops_when_provisioning_fails(
     assert "workspace-install.sh: captured failure detail" in result.stderr
     # Nothing was captured, and no gallery was left behind to look at.
     assert "playwright" not in trace.read_text()
-    assert not (checkout / "apps/dag-ui/.screenshots").exists()
+    assert not (checkout / ".screenshots").exists()
 
 
 @pytest.mark.reads_recipes
@@ -958,29 +517,30 @@ def test_dag_ui_screens_recipe_reports_a_gallery_root_it_cannot_create(
 ) -> None:
     """Nowhere to write the images is a diagnosis, not a Playwright failure.
 
-    An `apps/dag-ui` the invoking user cannot write is what a read-only checkout, or one
-    owned by another operator, actually looks like from here.
+    A checkout the invoking user cannot write into is what a read-only checkout, or
+    one owned by another operator, actually looks like from here.
     """
     checkout, trace = _screens_checkout(tmp_path)
-    readonly = checkout / "apps/dag-ui"
-    readonly.chmod(0o500)
+    # The doubles append to it, and a directory nothing may be created in is exactly
+    # what this journey installs.
+    trace.touch()
+    checkout.chmod(0o500)
     try:
         result = _recipe_run(checkout, trace, "dag-ui-screens")
     finally:
-        readonly.chmod(0o700)
+        checkout.chmod(0o700)
 
     assert result.returncode != 0
     assert "cannot create the gallery root" in result.stderr
     # It named the repair rather than leaving the operator to infer one, and never
-    # started a capture that had nowhere to land — the trace is empty because the run
-    # stopped before reaching any command at all.
+    # started a capture that had nowhere to land.
     assert "permissions" in result.stderr
-    assert "playwright" not in (trace.read_text() if trace.exists() else "")
+    assert "playwright" not in trace.read_text()
 
 
 def test_the_screenshot_gallery_root_is_ignored() -> None:
     """A recipe an operator runs while iterating must not be able to dirty the tree."""
-    ignored = _run("git", "check-ignore", "apps/dag-ui/.screenshots/gallery-aBcD1234/index.html")
+    ignored = _run("git", "check-ignore", ".screenshots/gallery-aBcD1234/index.html")
 
     assert ignored.returncode == 0, ignored.stdout + ignored.stderr
 
@@ -1256,7 +816,8 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
 #: the shape that used to skip there — and a skip is what made a worker's own
 #: `pytest` say something different from the gate's.
 FRESH_WORKTREE_JOURNEY = (
-    "tests/e2e/test_dispatch_e2e.py::test_just_llmlint_recipes_pin_the_dedicated_harness_boundary"
+    "tests/e2e/test_llmlint_cache_e2e.py::"
+    "test_an_unresolvable_base_is_rejected_before_the_judge_is_paid"
 )
 
 
@@ -1719,230 +1280,3 @@ def test_cache_check_refuses_a_cache_directory_it_cannot_place(cache_home: str) 
 
     assert result.returncode != 0
     assert "must name an absolute directory" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: Path) -> None:
-    """A Python field no contract declares would be served to a client expecting none."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    read_model = checkout / "orchestrator/read_model.py"
-    read_model.write_text(
-        read_model.read_text().replace(
-            "    attestations: list[str]", "    attestations: list[str]\n    invented: str"
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "read_model.py Round declares ['invented']" in result.stderr
-    assert "add it to the contract or drop it" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_live_activity_drift(tmp_path: Path) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-    activity = checkout / "orchestrator/activity.py"
-    activity.write_text(
-        activity.read_text().replace("    events: int", "    events: int\n    invented: str")
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "live activity payload" in result.stderr
-    assert "orchestrator/activity.py NodeActivity" in result.stderr
-    assert "'invented'" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_a_dropped_required_field(tmp_path: Path) -> None:
-    """A required contract field the server stops serving leaves a documented gap."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    conversations = checkout / "orchestrator/conversations.py"
-    conversations.write_text(conversations.read_text().replace("    canContinue: bool\n", "", 1))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "omits required" in result.stderr
-    assert "canContinue" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_network_default_drift(tmp_path: Path) -> None:
-    """A default changed in the server alone leaves the documented one wrong."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    server = checkout / "orchestrator/server.py"
-    server.write_text(server.read_text().replace("DEFAULT_PORT = 8787", "DEFAULT_PORT = 9999"))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "default port" in result.stderr
-    assert "is 9999 but" in result.stderr
-    assert "design.md says 8787" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_heartbeat_drift(tmp_path: Path) -> None:
-    """The documented 15-second SSE heartbeat and the server constant stay together."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    server = checkout / "orchestrator/server.py"
-    server.write_text(
-        server.read_text().replace(
-            "DEFAULT_HEARTBEAT_INTERVAL = 15.0", "DEFAULT_HEARTBEAT_INTERVAL = 30.0"
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "SSE heartbeat interval" in result.stderr
-    assert "reconcile them in one change" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-    model = checkout / "packages/dag-model/src/index.ts"
-    model.write_text(model.read_text().replace('  "check-in",\n', ""))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "semantic agent roles disagree" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_judge_config_role_drift(tmp_path: Path) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-    judge_config = checkout / "oneharness.judge.toml"
-    judge_config.write_text(
-        judge_config.read_text().replace('agent_role = "judge"', 'agent_role = "worker"')
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "oneharness.judge.toml history_labels.agent_role 'worker' disagrees" in result.stderr
-    assert 'restore `agent_role = "judge"`' in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-    model = checkout / "packages/dag-model/src/index.ts"
-    model.write_text(model.read_text().replace('  "check-in",\n', '  "check-in",\n  "check-in",\n'))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "agentRoleSchema must contain unique string members" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
-    """A bumped index version with a contract that still states the old one; gate it.
-
-    The declared number is read from the checkout rather than written here, so the
-    gate stays under test across the next bump instead of silently passing on a
-    literal that no longer appears in the file.
-    """
-    checkout = _dag_state_contract_checkout(tmp_path)
-    telemetry = checkout / "orchestrator/telemetry.py"
-    declared = re.search(r"^TELEMETRY_SCHEMA_VERSION = (\d+)$", telemetry.read_text(), re.M)
-    assert declared is not None, "the copied checkout must still declare the schema version"
-    current = int(declared.group(1))
-    telemetry.write_text(
-        telemetry.read_text().replace(
-            f"TELEMETRY_SCHEMA_VERSION = {current}",
-            f"TELEMETRY_SCHEMA_VERSION = {current + 1}",
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "telemetry schema version" in result.stderr
-    assert f"is {current + 1} but" in result.stderr
-    assert "reconcile them in one change" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_provenance_record_drift(tmp_path: Path) -> None:
-    """The out-of-repo record's shape is documented; renaming a field alone must fail."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    launch = checkout / "orchestrator/launch.py"
-    launch.write_text(
-        launch.read_text().replace("    launcher_session_id: str", "    renamed_session: str", 1)
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "LaunchProvenance declares ['renamed_session']" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_resume_mode_drift(tmp_path: Path) -> None:
-    """A mode Python starts recording that a reader would reject has to fail here.
-
-    Each side is checked on its own, because a mode reaching only one of them fails
-    somewhere different: the TypeScript schema rejects the plan a browser renders, and
-    the documented contract is what the next reader implements against.
-    """
-    for restated, where in (
-        ("packages/dag-model/src/index.ts", "planTaskResumeSchema.mode"),
-        ("docs/dag-ui/design.md", "PlanTaskResume.mode"),
-    ):
-        checkout = _dag_state_contract_checkout(tmp_path / where)
-        runs = checkout / "orchestrator/runs.py"
-        runs.write_text(
-            runs.read_text().replace(
-                'ResumeMode = Literal["pause", "retry", "continue"]',
-                'ResumeMode = Literal["pause", "retry", "continue", "adopt"]',
-                1,
-            )
-        )
-        # Kept in step on the *other* restatement, so the failure names this one alone.
-        for kept in ("packages/dag-model/src/index.ts", "docs/dag-ui/design.md"):
-            if kept == restated:
-                continue
-            mirrored = checkout / kept
-            mirrored.write_text(
-                mirrored.read_text()
-                .replace(
-                    'z.enum(["pause", "retry", "continue"])',
-                    'z.enum(["pause", "retry", "continue", "adopt"])',
-                    1,
-                )
-                .replace(
-                    '"pause" | "retry" | "continue"', '"pause" | "retry" | "continue" | "adopt"', 1
-                )
-            )
-
-        result = _dag_state_contract_run(checkout)
-
-        assert result.returncode != 0, result.stdout
-        assert "resume mode vocabulary" in result.stderr
-        assert where in result.stderr, result.stderr
-        assert "reconcile them in one change" in result.stderr
-
-
-@pytest.mark.reads_docs
-def test_dag_state_contract_checker_reports_provenance_version_drift(tmp_path: Path) -> None:
-    """Bumping the record's schema version without the contract must fail."""
-    checkout = _dag_state_contract_checkout(tmp_path)
-    launch = checkout / "orchestrator/launch.py"
-    launch.write_text(
-        launch.read_text().replace(
-            "PROVENANCE_SCHEMA_VERSION = 1", "PROVENANCE_SCHEMA_VERSION = 2", 1
-        )
-    )
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "provenance schema version" in result.stderr
-    assert "reconcile them in one change" in result.stderr

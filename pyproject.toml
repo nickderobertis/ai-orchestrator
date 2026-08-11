@@ -10,47 +10,14 @@ dependencies = [
     "onepipeline-api-cli==0.3.2",
     "onepipeline-cli==0.1.6",
     "onevcs-cli==0.2.1",
-    "pyyaml>=6.0",
-    "fastapi>=0.115",
-    "uvicorn>=0.30",
 ]
 
 [project.scripts]
-orchestrator-run-plan = "orchestrator.graph:main_cli"
-orchestrator-replan = "orchestrator.replan:main"
-orchestrator-next-round = "orchestrator.next_round:main_cli"
-orchestrator-runs = "orchestrator.next_round:main_runs"
-orchestrator-stop = "orchestrator.stop:main"
-orchestrator-goals = "orchestrator.goals:main"
-orchestrator-results = "orchestrator.results:main"
-orchestrator-new-persona = "orchestrator.personas:main_new"
-orchestrator-validate-personas = "orchestrator.personas:main_validate"
-orchestrator-history = "orchestrator.history:main_list"
-orchestrator-history-show = "orchestrator.history:main_show"
-orchestrator-monitor = "orchestrator.monitor:main"
+# The one command this repository still owns. Every other verb is a thin `just`
+# wrapper over a published CLI; this one exists because `just lint-llm` has to hand
+# a tool it shells out to a merged `ONEHARNESS_HISTORY_LABELS` value, and the merge
+# has to preserve an inherited value whose shape the recipe does not know.
 orchestrator-history-labels = "orchestrator.labels:main"
-orchestrator-status = "orchestrator.status:main"
-orchestrator-host = "orchestrator.host:main"
-orchestrator-recoverable = "orchestrator.recoverable:main"
-orchestrator-telemetry = "orchestrator.telemetry:main"
-orchestrator-telemetry-server = "orchestrator.server:main"
-orchestrator-smoke = "orchestrator.smoke:main"
-orchestrator-integrate = "orchestrator.integrate:main_cli"
-orchestrator-repo-recover = "orchestrator.recover:main_cli"
-orchestrator-register-repo = "orchestrator.registry:main_register"
-orchestrator-migrate-repo-workflow = "orchestrator.registry:main_migrate_workflow"
-orchestrator-migrate-repo-type = "orchestrator.registry:main_migrate_type"
-orchestrator-migrate-repo-gate = "orchestrator.registry:main_migrate_gate"
-orchestrator-repos = "orchestrator.registry:main_repos"
-orchestrator-orchestrate = "orchestrator.dispatch:main_orchestrate"
-orchestrator-channel-next = "orchestrator.channel:main_next"
-orchestrator-channel-reply = "orchestrator.channel:main_reply"
-orchestrator-channel-surface = "orchestrator.channel:main_surface"
-orchestrator-channel-approve = "orchestrator.channel:main_approve"
-orchestrator-channel-reject = "orchestrator.channel:main_reject"
-orchestrator-channel-continue = "orchestrator.channel:main_continue"
-orchestrator-relay-supervisor = "orchestrator.channel:main_relay"
-orchestrator-sweep-scratch = "orchestrator.scratch:main"
 
 [dependency-groups]
 dev = [
@@ -59,8 +26,6 @@ dev = [
     "pytest-xdist>=3.6",
     "ruff>=0.6",
     "mypy>=1.11",
-    "types-PyYAML>=6.0",
-    "httpx>=0.27",
 ]
 
 [build-system]
@@ -90,8 +55,6 @@ tmp_path_retention_count = 3
 markers = [
     "reads_docs: asserts on this repository's own prose, so it belongs to the whole-workspace test tier rather than the code-only one",
     "reads_recipes: drives this repository's own recipes and scripts and reads nothing else of it, so it belongs to the recipe-scoped test tier rather than the code-only one",
-    "single_threaded: asserts on a process-directed signal, so it needs a process whose every thread it controls; xdist workers carry execnet's receiver thread, so these run in their own serial invocation",
-    "load_sensitive: races several real processes and waits on a readiness handshake between them, so two of them in flight at once measure the host rather than the code; xdist runs the whole family on one worker",
 ]
 
 [tool.coverage.run]
@@ -112,7 +75,12 @@ show_missing = true
 # `--cov-fail-under` overrides it. `precision` is load-bearing, not cosmetic — the
 # fail decision compares `round(total, precision)`, so at the default precision 0 a
 # 94.93% total rounded up to 95 and exited 0 while printing "FAIL ... not reached".
-fail_under = 95
+#
+# Raised to 100 when this repository became a configuration layer: what is left of
+# the package is the label contract, the redaction rule, and the paths they read,
+# all of them small trust boundaries that are fully exercised. A single uncovered
+# statement fails this, which is what makes it a bar rather than a description.
+fail_under = 100
 precision = 2
 exclude_lines = [
     "pragma: no cover",

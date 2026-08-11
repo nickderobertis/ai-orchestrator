@@ -21,39 +21,21 @@ from pathlib import Path
 from orchestrator import REPO_ROOT
 
 #: The key `orchestrator:test` and `orchestrator:test-serial` are memoized on: the
-#: workspace minus its prose and minus the front-end projects no Python test reads.
+#: workspace minus its prose.
 CODE_WORKSPACE = "codeWorkspace"
 #: The key `orchestrator:test-recipes` is memoized on: what the recipe journeys
 #: drive, plus the modules that define and collect them.
 RECIPE_WORKSPACE = "recipeWorkspace"
 #: The key `workspace:check-nx-cache` is memoized on: what that script reads.
 NX_CACHE_CHECK = "nxCacheCheck"
-#: The key `dag-ui:test` is memoized on beyond its own project: the part of this
-#: repository's Python the browser tier actually runs — the read API server and
-#: everything its import reaches, plus the fixture stack that feeds it. The tier
-#: used to name all of `orchestrator/**/*`, which charged two and a half minutes of
-#: vitest and Playwright to every edit of a command-side module the served process
-#: never loads.
-DAG_UI_SERVER_SURFACE = "dagUiServerSurface"
-
-#: The browser tier: vitest, the Playwright journeys, and the isolation config that
-#: runs two of them at once.
-BROWSER_SCOPED = "test"
-#: The project that tier belongs to.
-BROWSER_PROJECT = "dag-ui"
-
 #: The tier that runs the bulk of the Python suite across xdist workers.
 CODE_SCOPED = "test"
-#: The tier that runs the `single_threaded` tests, in a process carrying no execnet
-#: receiver thread. Split out of `test` so it blocks nothing, and keyed on the same
-#: `codeWorkspace`: a different process shape, not a different tree.
-SERIAL_SCOPED = "test-serial"
 #: The tier that runs the tests asserting on this repository's own prose.
 DOCS_SCOPED = "test-docs"
 #: The tier that drives this repository's `just` recipes and shell scripts.
 RECIPE_SCOPED = "test-recipes"
-#: The uncached tier that combines every measuring tier's coverage data and
-#: enforces the declared floor against the combined total. Deliberately unmemoized:
+#: The uncached tier that reads the measuring tier's coverage data and enforces the
+#: declared floor against it. Deliberately unmemoized:
 #: it is seconds of work, and a floor that always runs is one no replay can skip.
 COVERAGE_SCOPED = "coverage"
 

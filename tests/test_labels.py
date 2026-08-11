@@ -16,7 +16,6 @@ from orchestrator.labels import (
     MAX_VALUE_CODEPOINTS,
     LabelError,
     format_labels,
-    graph_labels,
     main,
     merge_labels,
     parse_labels,
@@ -110,23 +109,6 @@ def test_merge_labels_preserves_inherited_and_lets_ours_win() -> None:
 def test_merge_labels_with_no_inherited_value() -> None:
     assert merge_labels(None, {"run_id": "r"}) == "run_id=r"
     assert merge_labels("", {"run_id": "r"}) == "run_id=r"
-
-
-def test_graph_labels_omits_absent_components() -> None:
-    # An untracked lifecycle run has no run/node; empty values would break the contract.
-    assert graph_labels() == {}
-    assert graph_labels(run_id="r", round_number=0) == {"run_id": "r", "round": "0"}
-    assert graph_labels(run_id="r", round_number=2, node="api", step="impl") == {
-        "run_id": "r",
-        "round": "2",
-        "node": "api",
-        "step": "impl",
-    }
-
-
-def test_graph_labels_feed_format_labels_cleanly() -> None:
-    labels = graph_labels(run_id="run-1", round_number=1, node="api", step="impl")
-    assert format_labels(labels) == "run_id=run-1,round=1,node=api,step=impl"
 
 
 def test_history_labels_cli_layers_labels_at_the_public_boundary() -> None:
