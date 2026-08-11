@@ -282,6 +282,65 @@ def test_a_read_api_address_file_that_is_not_one_is_refused(tmp_path: Path) -> N
     assert "read-api.address must hold one HOST:PORT, not not an address" in result.stderr
 
 
+def test_the_address_file_is_what_an_unnamed_api_proxies_to(tmp_path: Path) -> None:
+    """`just dag-ui` with nothing named is the documented invocation, and it reads a file.
+
+    Every other journey here names `DAG_UI_API_URL`, so only the refusal arm of that
+    read runs and a target hardcoded beside it would pass the whole suite while the
+    two recipes stopped finding each other. Driven the way the failure arm is — a
+    throwaway tree carrying its own `config/read-api.address` — because the checked-in
+    address is the one port a suite must not bind if it is to run twice at once.
+    """
+    api_port = _free_port()
+    ui_port = _free_port()
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    server = tmp_path / "scripts"
+    server.mkdir()
+    shutil.copy2(REPO_ROOT / "scripts/dag-ui-server.js", server / "dag-ui-server.js")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "read-api.address").write_text(
+        f"127.0.0.1:{api_port}\n", encoding="utf-8"
+    )
+
+    api = subprocess.Popen(
+        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    unnamed = {key: value for key, value in os.environ.items() if key != "DAG_UI_API_URL"}
+    recipe = subprocess.Popen(
+        ["bun", str(server / "dag-ui-server.js")],
+        env={
+            **unnamed,
+            "DAG_UI_DIST": str(REPO_ROOT / "node_modules/onepipeline-ui/dist"),
+            "DAG_UI_PORT": str(ui_port),
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    base = f"http://127.0.0.1:{ui_port}"
+    try:
+        _await_ready(f"http://127.0.0.1:{api_port}/healthz", api, "the read API")
+        _await_ready(f"{base}/", recipe, "the bundle server")
+        status, body, content_type = Served(base=base, api=f"http://127.0.0.1:{api_port}").get(
+            "/api/v2/runs"
+        )
+    finally:
+        for process in (recipe, api):
+            process.terminate()
+            process.communicate(timeout=e2e_timeout(30))
+
+    # The read API's own contract, which nothing but the read API produces — so the
+    # proxy reached the address the file named rather than answering for it.
+    assert status == 200, body
+    assert content_type == "application/json"
+    assert json.loads(body)["api_version"] == 2
+
+
 def test_a_missing_published_bundle_is_named_rather_than_served_empty(tmp_path: Path) -> None:
     """A worktree with no install is the ordinary case a fresh clone is in.
 

@@ -25,6 +25,7 @@ def _resolve(
         env={
             **os.environ,
             "ORCHESTRATOR_COMPARISON_BASE": "",
+            "ORCHESTRATOR_COMPARISON_REMOTE": "",
             "ONEVCS_COMPARISON_BASE": "",
             "ONEVCS_COMPARISON_REMOTE": "",
             **(env or {}),
@@ -126,6 +127,49 @@ def test_an_explicit_operator_base_still_beats_the_lifecycles(tmp_path, bare_ori
 
     assert resolved.returncode == 0, resolved.stderr
     assert resolved.stdout.strip() == "origin/main"
+
+
+def test_comparison_base_takes_the_remote_the_lifecycle_names(tmp_path, bare_origin) -> None:
+    """A comparison ref has two halves, and a checkout need not call its remote `origin`.
+
+    Resolving the exported base against a hardcoded `origin` is the same two-diffs
+    failure as not reading the base at all, in a clone whose publication remote has
+    any other name.
+    """
+    origin = bare_origin(branch="main")
+    clone = tmp_path / "clone"
+    git("clone", str(origin), str(clone))
+    git("remote", "rename", "origin", "upstream", cwd=clone)
+
+    resolved = _resolve(
+        clone,
+        env={"ONEVCS_COMPARISON_REMOTE": "upstream", "ONEVCS_COMPARISON_BASE": "main"},
+    )
+
+    assert resolved.returncode == 0, resolved.stderr
+    assert resolved.stdout.strip() == "upstream/main"
+
+
+def test_an_explicit_operator_remote_still_beats_the_lifecycles(tmp_path, bare_origin) -> None:
+    """The remote half honours the same precedence its base half does."""
+    origin = bare_origin(branch="main")
+    clone = tmp_path / "clone"
+    git("clone", str(origin), str(clone))
+    git("remote", "rename", "origin", "upstream", cwd=clone)
+    git("remote", "add", "mirror", str(origin), cwd=clone)
+    git("fetch", "mirror", cwd=clone)
+
+    resolved = _resolve(
+        clone,
+        env={
+            "ORCHESTRATOR_COMPARISON_REMOTE": "upstream",
+            "ONEVCS_COMPARISON_REMOTE": "mirror",
+            "ONEVCS_COMPARISON_BASE": "main",
+        },
+    )
+
+    assert resolved.returncode == 0, resolved.stderr
+    assert resolved.stdout.strip() == "upstream/main"
 
 
 def test_the_pre_push_hook_reads_the_base_the_lifecycle_exported(tmp_path) -> None:

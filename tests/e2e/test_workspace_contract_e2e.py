@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from nx_workspace import copy_working_tree
@@ -422,8 +423,15 @@ def _screens_checkout(tmp_path: Path) -> tuple[Path, Path]:
     return checkout, trace
 
 
-def _captures(trace: Path) -> list[str]:
-    """Every Playwright capture the traced run made, as `<viewport> <url>`."""
+class Capture(NamedTuple):
+    """One Playwright capture the traced run made."""
+
+    viewport: str
+    url: str
+
+
+def _captures(trace: Path) -> list[Capture]:
+    """Every Playwright capture the traced run made, in the order it made them."""
     captures = []
     for line in trace.read_text().splitlines():
         match = re.fullmatch(
@@ -432,7 +440,7 @@ def _captures(trace: Path) -> list[str]:
             line,
         )
         if match is not None:
-            captures.append(f"{match.group(1)} {match.group('url')}")
+            captures.append(Capture(viewport=match.group(1), url=match.group("url")))
     return captures
 
 
@@ -462,7 +470,7 @@ def test_dag_ui_screens_recipe_gives_every_invocation_a_gallery_of_its_own(
         assert gallery.parent == checkout / ".screenshots"
     # Every viewport in the matrix was photographed, against the bundle server this
     # run started rather than any address baked into the recipe.
-    viewports = [capture.split(" ")[0] for capture in _captures(trace)]
+    viewports = [capture.viewport for capture in _captures(trace)]
     assert viewports == ["1920,1080", "1440,900", "1280,800", "1024,768", "390,844"] * 2
     # And whatever the caller added reaches Playwright, so one capture can be varied.
     assert "--full-page" in trace.read_text()
@@ -478,7 +486,7 @@ def test_dag_ui_screens_recipe_photographs_every_view_of_a_named_run(
     result = _recipe_run(checkout, trace, "dag-ui-screens", "--run", "run 1/2")
 
     assert result.returncode == 0, result.stderr
-    surfaces = sorted({capture.split(" ")[1].partition("/?")[2] for capture in _captures(trace)})
+    surfaces = sorted({capture.url.partition("/?")[2] for capture in _captures(trace)})
     assert surfaces == [
         "",
         "run=run%201%2F2&view=graph",
