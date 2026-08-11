@@ -54,7 +54,7 @@ check:
 # commit it covers, before it settles. The coverage total is measured either
 # way; printing it here is what stops a reader opening `.coverage` by hand.
 # llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the tier whose provenance is passed through here is proven end to end in tests/e2e/test_llmlint_cache_e2e.py.
-gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
+gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", env_var_or_default("ONEVCS_COMPARISON_REMOTE", "origin")) base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", env_var_or_default("ONEVCS_COMPARISON_BASE", "")):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate' (full output: $log)" >&2; exit 1; }
     @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
@@ -184,8 +184,26 @@ channel-reject *args:
 channel-continue *args:
     @./scripts/planner-verdict.sh continue "$@"
 
-# Remove dead watchdog scratch and conservatively stale known third-party scratch.
-# Pass `--dry-run` to inspect candidates without removing them.
+# Reclaim the scratch `oneagentgraph` itself produces. Pass `--dry-run` to inspect
+# candidates without removing them, `--min-age-hours` to move the stale threshold.
+#
+# This verb is narrower than the sweep it replaced, and the difference is operational
+# rather than cosmetic. `orchestrator-sweep-scratch` examined seven families —
+# `watchdog`, `nx-install`, `nx-native-file-cache`, `pytest-runs`, `onejudge-scratch`,
+# `dispatch-orphans`, `third-party`; `oneagentgraph sweep` examines the two it owns
+# (`runs`, `temp`). The families it dropped are the *volume* ones: the private `nx`
+# install every `bunx nx` leaves behind, the native-binary cache Nx keys on each
+# worktree, pytest run directories, and onejudge scratch. Nothing reclaims those now,
+# so they accumulate for as long as this host dispatches.
+#
+# It also no longer reaps processes. The old sweep terminated the trees a *finished*
+# dispatch left running, proving ownership from the `ORCHESTRATOR_AGENT_STATUS_DIR`
+# stamp plus the dispatcher's ownership lock; `oneagentgraph sweep` names no process
+# at all. A leaked worker is now nobody's to collect.
+#
+# Both are reported rather than papered over here: a wrapper cannot sweep a family
+# the published verb does not implement, and inventing a second sweeper beside it is
+# how two cleaners come to race one directory.
 sweep-scratch *args:
     @uv run oneagentgraph sweep "$@"
 

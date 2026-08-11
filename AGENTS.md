@@ -636,8 +636,9 @@ whose contract is cache replay. When a
 miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
 on an unchanged tree is a changed judge, not a changed diff. The cached green for
 one content, base commit, and judge configuration is authoritative and the
-worker's own gate pays for it: `verify.comparison_env` is that identity's one
-source, and the lifecycle exports it to every dispatch and every publishing push
+worker's own gate pays for it: `ONEVCS_COMPARISON_REMOTE` / `ONEVCS_COMPARISON_BASE`
+is that identity's one source, and the lifecycle exports it to every dispatch and
+every publishing push
 of a workstream so the `pre-push` hook replays what the worker cleared instead of
 re-rolling against findings it never saw — a push that resolved its own base could
 merge work whose own gate had failed. See

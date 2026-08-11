@@ -440,10 +440,12 @@ run-level flag, including `false` to opt a node out.
 This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
-ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
-`ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every publishing push of a
+ambiguous. The lifecycle exports `ONEVCS_COMPARISON_REMOTE` and
+`ONEVCS_COMPARISON_BASE` to **every dispatch and every publishing push of a
 workstream**, and the pre-push hook reads that base and
-uses the remote name Git passes as its first argument. Invalid names, missing
+uses the remote name Git passes as its first argument. `ORCHESTRATOR_COMPARISON_*`
+is the same pair under this repository's own older spelling and still wins where it
+is set, because it is also the operator's documented override. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
 back to `main`. `just sync` fast-forwards the publication checkout to its
 origin, and `just sync <branch>` names one rather than the registered base.
@@ -669,9 +671,14 @@ base resolves the remote HEAD, while the publishing push judges the workstream's
 `pr_base` — the parent branch for a stacked node, not the repository default. Two
 different base commits are two different diffs and therefore two independent
 judge rolls, the second one invisible to the only party who could act on it. So
-`verify.comparison_env` is the one source of that identity, and the lifecycle
-exports it into every dispatch of a workstream **and into every publishing push**,
-where the hook reads it. Nothing else stands between the worker's verdict and the
+`onevcs`'s comparison environment is the one source of that identity, and the
+lifecycle exports it into every dispatch of a workstream **and into every publishing
+push**, where `scripts/comparison-base.sh` and the pre-push hook read it. Reading
+only the older `ORCHESTRATOR_*` spelling is how that identity was lost once already:
+the names moved with the engine, nothing here followed them, and every lifecycle
+path silently fell back to resolving its own base — which is exactly the drift this
+section exists to prevent, wearing the appearance of a working mechanism.
+Nothing else stands between the worker's verdict and the
 merge, so a push that resolved its own base could merge work whose own gate had
 failed.
 
