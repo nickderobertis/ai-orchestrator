@@ -18,7 +18,7 @@ import json
 import re
 from pathlib import Path
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 #: The key `orchestrator:test` is memoized on: the workspace minus its prose.
 CODE_WORKSPACE = "codeWorkspace"

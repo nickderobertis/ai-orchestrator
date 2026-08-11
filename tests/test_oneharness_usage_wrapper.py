@@ -15,7 +15,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-usage.sh"
 HELPERS = (

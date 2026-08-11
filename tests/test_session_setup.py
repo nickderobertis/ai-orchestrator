@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from published_tools import PUBLISHED_TOOLS
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 ADOPTED_ONEJUDGE_VERSION = (
     (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()

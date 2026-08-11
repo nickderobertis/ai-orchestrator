@@ -19,7 +19,7 @@ import tomllib
 import pytest
 from published_tools import PUBLISHED_TOOLS, SEPARATELY_GATED_VERSION_FILES, PublishedTool
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 PUBLISHED_TOOL_IDS = [tool.distribution for tool in PUBLISHED_TOOLS]
 #: What a PyPI-resolved lockfile entry names as its source. Anything else — a git

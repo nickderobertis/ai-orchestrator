@@ -32,7 +32,7 @@ import pytest
 from nx_workspace import requires_workspace_install
 from waits import timeout as e2e_timeout
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 pytestmark = [requires_workspace_install]
 

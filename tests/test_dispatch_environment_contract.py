@@ -22,7 +22,7 @@ import sys
 import pytest
 from conftest import AGENT_STATUS_DIR_ENV, COMPARISON_ENV_PREFIXES, DISPATCH_SELECTION_ENV
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 #: The wrapper that resolves a per-side choice into the process-wide variables
 #: oneharness itself reads. It is the declaring side of that contract.

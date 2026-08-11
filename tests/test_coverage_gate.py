@@ -38,7 +38,7 @@ from pathlib import Path
 import pytest
 from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 # Each generated function contributes exactly two statements (its ``def`` line,
 # executed at import, and its ``return`` line, executed only when called) and no

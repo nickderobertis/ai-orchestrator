@@ -11,7 +11,7 @@ from pathlib import Path
 
 from published_tools import PUBLISHED_TOOLS
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 ONEJUDGE_VERSION = (REPO_ROOT / "config" / "onejudge.version").read_text().strip()
 ONEHARNESS_VERSION = (REPO_ROOT / "config" / "oneharness.version").read_text().strip()

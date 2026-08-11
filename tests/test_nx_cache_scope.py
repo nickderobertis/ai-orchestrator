@@ -46,7 +46,7 @@ from nx_inputs import (
     named_input_globs,
 )
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 WHOLE_WORKSPACE = "wholeWorkspace"
 #: Every one of these runs from the workspace root against the whole tree — ruff

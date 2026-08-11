@@ -31,7 +31,7 @@ from nx_inputs import (
     repository_relative,
 )
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The marker that moves a test from the code-only key to the whole-workspace one.

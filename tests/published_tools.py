@@ -12,7 +12,7 @@ from typing import NamedTuple
 
 import pytest
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 
 class PublishedTool(NamedTuple):

@@ -55,7 +55,7 @@ from nx_inputs import (
 )
 from nx_workspace import copy_checkout, requires_workspace_install
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 # Copying the whole tree is this journey's premise, and the tree includes its
 # prose: these belong to the whole-workspace tier by construction.

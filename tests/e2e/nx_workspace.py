@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 NODE_MODULES = REPO_ROOT / "node_modules"
 

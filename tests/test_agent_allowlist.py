@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 REQUIRED = (

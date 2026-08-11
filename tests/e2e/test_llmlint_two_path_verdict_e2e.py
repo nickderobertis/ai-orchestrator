@@ -56,7 +56,7 @@ import pytest
 from conftest import git
 from nx_workspace import copy_working_tree, requires_workspace_install
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 BASE_BRANCH = "main"
 FEATURE_BRANCH = "feature"

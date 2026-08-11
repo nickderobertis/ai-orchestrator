@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 # DRIFT-GATE: config/onejudge.version is the single source of truth. Keep this
 # explicit list aligned with unavoidable human-readable version literals, such

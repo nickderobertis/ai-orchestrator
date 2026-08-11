@@ -10,7 +10,6 @@ from functools import cache
 
 import pytest
 
-from orchestrator import REPO_ROOT
 from orchestrator.labels import (
     LABEL_ENV,
     MAX_VALUE_CODEPOINTS,
@@ -22,6 +21,7 @@ from orchestrator.labels import (
     validate_key,
     validate_value,
 )
+from orchestrator.root import REPO_ROOT
 
 
 def test_label_env_name() -> None:
