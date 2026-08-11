@@ -190,7 +190,7 @@ def _measure(root: Path) -> subprocess.CompletedProcess[str]:
 def _enforce(root: Path) -> subprocess.CompletedProcess[str]:
     """Read what the tier measured and compare its total to the floor, as ``coverage`` does."""
     (root / COMBINED_DATA).unlink(missing_ok=True)
-    combined = _run(root, "coverage", "combine", PARALLEL_DATA)
+    combined = _run(root, "coverage", "combine", "--keep", PARALLEL_DATA)
     assert combined.returncode == 0, combined.stdout + combined.stderr
     return _run(root, "coverage", "report")
 
@@ -246,8 +246,6 @@ def test_the_enforced_total_is_what_was_measured_and_can_fail_the_build(
         relative_files=relative_files,
     )
     _measure(root)
-    # Read before enforcing: combining consumes the tier's data file, exactly as it
-    # does in the real target.
     alone = _reported_total(_run(root, "coverage", "report", data_file=PARALLEL_DATA).stdout)
 
     result = _enforce(root)
@@ -352,6 +350,26 @@ def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
     )
     assert _reported_total(result.stdout) == pytest.approx(total, abs=0.01), result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_enforcing_command_keeps_the_data_the_measuring_tier_declared(
+    targets: dict[str, dict],
+) -> None:
+    """Combining must not consume the file the measuring tier declares as its output.
+
+    `coverage combine` deletes its inputs by default, and the measuring tier declares
+    that same file as an Nx output — so a combine that consumed it raced Nx's capture
+    of the task that wrote it. Losing that race records a cache entry with nothing in
+    it, and every later replay of that entry then hands the floor no data at all:
+    `Couldn't combine from non-existent path`, on a tree whose suite had passed.
+    """
+    judging = targets[COVERAGE_SCOPED]["command"]
+    measured = targets[CODE_SCOPED]["outputs"][0].removeprefix("{workspaceRoot}/")
+
+    assert f"coverage combine --keep {measured}" in judging, (
+        "the combine has to keep what it read, or the tier that measured it can be "
+        f"cached with its output already deleted: {judging}"
+    )
 
 
 def test_the_measuring_tier_writes_data_only_the_coverage_tier_judges(
