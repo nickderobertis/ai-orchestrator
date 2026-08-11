@@ -221,7 +221,14 @@ replan *args:
     @echo "replan: the next round is derived by the round transition itself — run 'just next-round <run-id>'; there is no standalone derive-and-print verb on the published surface" >&2; exit 2
 
 # Update, verify, fast-forward, and optionally push completed workstream branches:
-# `just integrate claude/a claude/b --push`; omit branches to auto-discover them.
+# `just integrate claude/a claude/b --push`.
+#
+# The branches have to be named. `onevcs integrate` takes a required `<BRANCHES>...`,
+# so the auto-discovery this recipe used to do when given none is gone — omitting
+# them is a usage error rather than a train over everything outstanding. `just
+# recoverable` is where that discovery lives now: it lists every preserved
+# unpublished branch and the command that lands each one, and its output is what
+# feeds this argument list.
 # llmlint: ignore[tool_output_is_signal] the requested readable per-branch train summary is this verb's product.
 integrate *args:
     @uv run onevcs integrate "$@"
