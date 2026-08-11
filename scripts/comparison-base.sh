@@ -2,8 +2,18 @@
 # Resolve the remote-tracking ref used by the complete gate and publication.
 set -euo pipefail
 
-remote=${1:-${ORCHESTRATOR_COMPARISON_REMOTE:-origin}}
-base=${2:-${ORCHESTRATOR_COMPARISON_BASE:-}}
+# The lifecycle names the comparison ref so the worker's gate and the publishing
+# push judge the same diff — see docs/repo-lifecycle.md, "One judged diff, one
+# verdict". That identity now arrives under `onevcs`'s own names: it exports
+# `ONEVCS_COMPARISON_REMOTE` / `ONEVCS_COMPARISON_BASE` into the gate it runs and
+# into the push it makes, where `orchestrator/verify.py` used to export
+# `ORCHESTRATOR_COMPARISON_*`. Reading only the old names left the base unset on
+# every lifecycle path, so each side resolved its own — two base commits, two
+# independent judge rolls, and a push that could land work whose own gate had
+# failed. The `ORCHESTRATOR_*` spelling still wins where it is set, because it is
+# also the operator's documented override.
+remote=${1:-${ORCHESTRATOR_COMPARISON_REMOTE:-${ONEVCS_COMPARISON_REMOTE:-origin}}}
+base=${2:-${ORCHESTRATOR_COMPARISON_BASE:-${ONEVCS_COMPARISON_BASE:-}}}
 
 git check-ref-format --allow-onelevel "refs/remotes/$remote" >/dev/null 2>&1 || {
   echo "comparison-base: '$remote' is not a valid remote name" >&2; exit 2;

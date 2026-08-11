@@ -1,13 +1,15 @@
-<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Operator-facing wire examples are required here; orchestrator/channel.py remains authoritative and its exact contract is exercised by channel unit/e2e tests. -->
+<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Operator-facing wire examples are required here; the published `onepipeline` channel remains authoritative and its exact contract is exercised by that crate's own tests. -->
 <!-- llmlint: ignore-file[no_redundant_instruction_pointers] Live cancellation can preserve incomplete commits; the recovery command must link its safety contract at the point of use. -->
 
 # Tracked graph orchestration
 
-`just run-plan` turns one large task into one recorded hierarchical DAG. It is
-the **only** executor for direct onejudge work, full repository lifecycles, and
-explicit actions that only a person can complete: a single dispatch is a plan file
-holding one node, so every piece of running work has a journal, an ownership row,
-surfaces, and a place in the DAG UI. See
+`just orchestrate <plan.json>` turns one large task into one recorded hierarchical
+DAG. It is the **only** way to dispatch direct agent work, full repository
+lifecycles, and explicit actions that only a person can complete: a single dispatch
+is a plan file holding one node, so every piece of running work has a journal, an
+ownership row, surfaces, and a place in the DAG UI. `just run-plan` and `just
+next-round` are the engine verbs the driver it launches calls, and each names a
+run rather than a plan file. See
 `examples/single-node-direct.plan.json` and
 `examples/single-node-lifecycle.plan.json`. Old lifecycle-only plan mappings —
 no `schema_version`, lifecycle nodes only — are still accepted unchanged.
@@ -82,7 +84,7 @@ At each round boundary the orchestrator emits JSON in its final assistant messag
 {"kind":"blocker","message":"Node X failed its gate; retry with a corrected fixture?","options":["retry X","drop X"]}
 ```
 
-`orchestrator.channel.relay_supervisor` validates that emission and sends this
+The channel's server side validates that emission and sends this
 newline-delimited JSON frame to the planner:
 
 ```json
@@ -109,13 +111,16 @@ to change the graph without waiting for a round boundary.
 The three planner-facing recipes are:
 
 ```sh
-just orchestrate plan.json --runs-dir /host/path/runs
-just channel-next RUN --runs-dir /host/path/runs
-just channel-reply RUN reply.json --runs-dir /host/path/runs
-just channel-approve RUN --runs-dir /host/path/runs
-just channel-reject RUN "verification failed" --runs-dir /host/path/runs
-just channel-continue RUN "apply the edit and continue" --runs-dir /host/path/runs
+just orchestrate plan.json
+just channel-next RUN
+just channel-reply RUN reply.json
+just channel-approve RUN
+just channel-reject RUN "verification failed"
+just channel-continue RUN "apply the edit and continue"
 ```
+
+The ledger lives under `runs/` in the working directory; `ONEPIPELINE_RUNS_DIR`
+moves it, and every one of these verbs reads the same variable.
 
 `orchestrate` prints a JSON launch record containing `run_id`, `channel_id`, and
 literal `commands.channel_next` / `commands.monitor` values, and persists the same
@@ -230,13 +235,13 @@ recorded since it was dispatched. The dispatch has not failed — decide whether
 cancel it, retry it, or let it run.
 ```
 
-"Last activity" is the live stream a dispatch publishes (`orchestrator/activity.py`),
+"Last activity" is the live stream a dispatch publishes,
 falling back to when the round dispatched the node when nothing has published at
 all — which is itself the answer for a worker that died before its first turn. The
 threshold defaults to 2400 seconds, comfortably past the 600-2000 second first turns
-this host runs; set it per round with `just run-plan --stall-after SECONDS`, or for a
-whole run by exporting `ORCHESTRATOR_STALL_AFTER_SECONDS` before `just orchestrate`,
-which every round of that run inherits.
+this host runs; set it for a whole run by exporting
+`ORCHESTRATOR_STALL_AFTER_SECONDS` before `just orchestrate`, which every round of
+that run inherits.
 
 It is non-blocking because a stall is evidence rather than a verdict: the planner
 decides whether to `cancel` the node, `retry` it, or let it run, and a blocking
@@ -313,7 +318,7 @@ surfaces are queued, how stale the oldest one is, and the command that reads the
 
 ```
 * harness-fixes-cont  [mine]  ACTIVE  (orchestrator running)
-    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont --runs-dir runs
+    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont
 ```
 
 The queue is `channel/heartbeat-surface.json` (a check-in update) and
@@ -350,9 +355,9 @@ shape for a non-rejection instruction.
 
 Only the orchestrator crosses round boundaries. Worker onejudge processes remain
 bounded to the graph round that dispatched them and never use the planner channel.
-The orchestrator may author in an isolated execution checkout, but its
-`--runs-dir` must resolve to the same host-visible path for the detached process
-and planner. The round ledger and its sibling `channel/` directory cannot live
+The orchestrator may author in an isolated execution checkout, but the runs
+directory it uses must resolve to the same host-visible path for the detached
+process and the planner. The round ledger and its sibling `channel/` directory cannot live
 only inside a disposable worktree or container-private filesystem.
 
 ### Live graph edits
@@ -361,7 +366,7 @@ Send a version-1 edit envelope to `channel-reply`; this is the shape exercised b
 `tests/e2e/test_live_edit_e2e.py`:
 
 ```sh
-just channel-reply RUN --runs-dir /host/path/runs <<'JSON'
+just channel-reply RUN <<'JSON'
 {"version":1,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
 JSON
 ```
@@ -704,79 +709,37 @@ adds structured provider failure attribution; schema v5 added the terminal
 
 Recording is on by default:
 
-Before each recorded round is claimed, the executor runs the same conservative
-scratch sweep exposed as `just sweep-scratch`. Dead `orchestrator-watchdog-*`
-directories are identified by the ownership proof described under
-[dispatch scratch ownership](onejudge-integration.md#dispatch-scratch-ownership),
-and every directory that proof does not clear is reported as retained rather
-than removed. Known third-party scratch is
-eligible only after the conservative age threshold and only when no lifecycle
-dispatch holds the host scratch shared lock. A destructive sweep takes the
-exclusive lock without waiting; when a dispatch is active it skips third-party
-scratch, reports that decision, and still removes definite dead watchdog
-directories. Use
-`just sweep-scratch --dry-run` to inspect candidates;
-`orchestrator.scratch.THIRD_PARTY_PATTERNS` is the authoritative documented
-pattern list and extension point.
+The conservative scratch sweep exposed as `just sweep-scratch` reclaims what a
+finished dispatch left behind. A directory its ownership proof does not clear is
+reported as retained rather than removed, and scratch that is only stale is
+eligible after the conservative age threshold alone. Use `just sweep-scratch
+--dry-run` to inspect candidates without removing any of them.
 
-Scratch the harness itself produces cannot wait for quiescence: a private `nx`
-install per `bunx nx` invocation, a copy of Nx's ~22 MB native binary per workspace
-root, a run directory per pytest session, and an
-effective-config directory per onejudge dispatch appear *because* dispatches are
-running, at gigabytes per hour. `orchestrator.scratch.UNREFERENCED_FAMILIES` is the
-authoritative family list and extension point for these, and they are swept while
-dispatches run, without the exclusive lock. What replaces quiescence is proven
-non-reference: the sweep reads every live process's argv, environment, working
-directory, root and executable links, open descriptors, and file-backed memory
-mappings, and a candidate any of them names is retained and reported —
-`retained N directories referenced by live processes`. Mappings are load-bearing
-rather than belt-and-suspenders: Nx `dlopen`s its cached native binary and keeps no
-descriptor, so a running `nx` names that cache nowhere else. That proof is retaken
-against fresh procfs state immediately before removal. A procfs that cannot show
-the sweeping process itself cannot answer the question at all, which is not the
-same as answering "nothing is referenced": these families are then left alone
-entirely and the run reports that it could not prove them unused. A short minimum age
-(`UNREFERENCED_MIN_AGE_SECONDS`, 15 minutes) covers only the gap between creating a
-directory and the first instant a process names it; the 24-hour default still
-governs `THIRD_PARTY_PATTERNS`, which have no such proof behind them.
-`--min-age-hours` can shorten that age but never lengthens it past the family
-default. A name too generic to sweep on is not swept on: an Nx temp install is
-recognized by its shape — one `nx` devDependency, an installed `node_modules`, and
-nothing else — an Nx native cache by its exact `nx-native-file-cache-<7 hex>` name
-holding nothing but `.node` copies, and each family honors its producer's own
-retention, so pytest keeps
-the newest three runs per root, a run whose `.lock` names a live session, and
-whatever `pytest-current` points at.
+Scratch a dispatch itself produces cannot wait for quiescence, so what replaces
+quiescence is proven non-reference: a candidate a live process names — in its argv,
+environment, working directory, root or executable links, open descriptors, or
+file-backed memory mappings — is retained and reported. A procfs that cannot answer
+the question at all is not the same as one answering "nothing is referenced": those
+families are then left alone and the run reports that it could not prove them
+unused. A short minimum age covers only the gap between creating a directory and the
+first instant a process names it, and `--min-age-hours` governs the scratch that has
+no such proof behind it.
 
-The same sweep reclaims processes, not only directories. A dispatch whose
-dispatcher dies leaves its tree adopted by init, and every walk this harness
-terminates trees with — `terminate_tree`, `terminate_processes`,
-`terminate_process_group` — starts from a parent that no longer exists, so such a
-survivor is outside all of them. Two were found resident on this host at two days
-twenty hours and two days, from dispatches long finished, with nothing left to say
-whose they were. What does survive reparenting is the environment: the kernel fixes
-`/proc/<pid>/environ` at `exec`, and every dispatch exports
-`ORCHESTRATOR_AGENT_STATUS_DIR` naming a directory inside its own
-`orchestrator-watchdog-*` scratch tree. That stamp is the ownership evidence, read
-as a whole NUL-delimited entry and required to name a direct child of the swept
-root carrying the watchdog prefix — a name nothing but `owned_scratch_directory`
-produces. Whether the dispatch behind it is *over* is the same question the
-watchdog family already answers: an absent directory means its whole scope exited,
-and a present one is judged by the ownership lock. Anything else — a stamp for a
-live dispatch, no stamp at all, a directory under some other root, the sweeping
-process and its own ancestry — is left running and reported as such. The
-`dispatch-orphans` family appears in the swept/skipped lists like any other, and a
-destructive run reports `reaped N process(es) left running by a finished dispatch`
-with their pids. Reaping happens *before* the reference proof is taken, so a
-directory whose last claimant was one of these leavings is reclaimed in the same
-pass rather than protected by the process the sweep just ended.
+What that covers is narrower than it once was, and the difference is operational.
+`oneagentgraph sweep` examines the two families it owns, `runs` and `temp`. The
+families it does not — a private `nx` install per `bunx nx` invocation, a copy of
+Nx's native binary per workspace root, a run directory per pytest session, and
+onejudge's own scratch — are the *volume* ones, appearing because dispatches are
+running, and nothing reclaims them now. Neither does anything reclaim the
+**processes** a finished dispatch left running, which reparenting to init puts
+outside every tree walk; the engines that start them own keeping them alive and
+reaping them. `just sweep-scratch` says the same at the seam an operator touches.
 
 Every sweep names the families it examined and, separately, the families it could
-not — `swept families: watchdog, nx-install, …` and `skipped families: third-party
-(lifecycle dispatch active)`. Each family appears in exactly one of the two lists,
-so `reclaimed 0 bytes` always means "nothing was reclaimable", never "a family was
-never looked at". A cleanup run that silently skips the family filling the disk
-reads as a clean bill of health, which is worse than no cleanup at all.
+not. Each family appears in exactly one of the two lists, so a sweep that reclaimed
+nothing always means "nothing was reclaimable", never "a family was never looked
+at". A cleanup run that silently skips the family filling the disk reads as a clean
+bill of health, which is worse than no cleanup at all.
 
 ```text
 runs/<run-id>/round-01/plan.json
@@ -787,11 +750,10 @@ runs/<run-id>/round-01/<node>[/<step>]/oneharness-session.json
 runs/<run-id>/humans.json
 ```
 
-Without `--run`, the id is derived from the plan's `name` or filename and made
-unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
-claims a `running` or `abandoned` round only after its recorded owner is proven
-gone. Plan and result writes are atomic; a live round cannot be claimed by
-another process.
+The id is derived from the plan's `name` or filename and made unique. Plan and
+result writes are atomic; a live round cannot be claimed by another process, and a
+run whose driver died is picked up with `just orchestrate --adopt <run-id>` rather
+than by claiming its round directly.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks, then points to `just results <run>`. The results
 view lists every node's status and outcome, links its typed-id detail view, and
@@ -874,10 +836,10 @@ tier for a finding that tier cannot re-check.
 Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable
 frontier, and reacts to each completion until the graph is terminal. Journal
-schema 2 terminal node events carry the complete serialized node result, so
-`--recover` can replay a dead round's prefix, retain settled nodes byte-for-byte,
-resume nodes that were running without another start transition, and converge the
-remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
+schema 2 terminal node events carry the complete serialized node result, so a
+reclaimed round replays its dead predecessor's prefix, retains settled nodes
+byte-for-byte, resumes nodes that were running without another start transition,
+and converges the remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
 The journal record contract is schema version 10, pinned by
@@ -921,7 +883,7 @@ A round must not die because the orchestrator surfaced an update and ended its t
 leads a session of its own and owns the round, while the parent exists only to relay
 its exit status. The launching turn's teardown — and `uv run`, which forwards the
 signal it receives to its own direct child and then escalates to SIGKILL — reaches
-only that parent. `orchestrator/detach.py` holds the full reasoning; the practical
+only that parent. `onepipeline` holds the full reasoning; the practical
 consequence is that Ctrl-C reaches the relaying parent rather than the round, so the
 round announces the pid to signal when you do want it stopped.
 
@@ -935,24 +897,14 @@ decides only whether this command waits, and Ctrl-C ends the attachment, not the
 run. Inside the run, `run-plan` still forks: the orchestrator agent surfaces an
 update and ends its turn, and the round must survive that.
 
-Escaping the launching turn's *signals* is only half of it. Everything a dispatch
-starts carries that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` stamp, and once the
-launching step settles the scratch sweep reads that stamp as proof of a leaked tree
-and terminates what carries it — a contract that is right for real leaks and was
-wrong for these. So a **launched round or publication driver re-attributes itself as
-part of forking**: in `just run-plan`, `just next-round`, `just repo-recover`, and
-`just integrate`, the forked round takes a scratch directory of its own and `exec`s
-under it, so the sweep judges it by its own liveness rather than by its launcher's.
-The relaying parent deliberately keeps the launcher's stamp — it outlives the round
-by the moment it takes to collect the exit status, and a parent stamped for the
-round's directory would spend exactly that moment looking like a leak. See
-[The successor contract](repo-lifecycle.md#the-successor-contract) for what the
-sweeper is then allowed to conclude, and why an `exec` is the only thing that works.
-The two protections are independent and both are needed: without the fork a round
-dies at teardown, without the re-attribution it dies at the next sweep. Nothing else
-needs it — a `just` recipe an agent runs to completion inside its turn is not a
-successor, and neither is `just orchestrate`, which is launched as a program of its
-own rather than from inside a dispatch.
+Escaping the launching turn's *signals* used to be only half of it: a second
+protection re-attributed a launched round away from its launcher's
+`ORCHESTRATOR_AGENT_STATUS_DIR` stamp, because the sweep read that stamp as proof of
+a leaked tree once the launching step settled. That half is no longer needed here —
+`oneagentgraph sweep` terminates nothing, so there is no reaper left for a round to
+be mistaken by. See [Keeping a process that outlives its
+launcher](repo-lifecycle.md#keeping-a-process-that-outlives-its-launcher) for what
+that leaves, and for the leaked worker nothing collects any more.
 
 The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
 rejected input, 128+N signalled. An exception escaping the round is the exception: it
@@ -961,8 +913,8 @@ as the unfinished round that also exits 1.
 
 A round that stops without recording a result never stays `running`. Its owner writes
 `{"status": "abandoned", "reason": ...}` on any catchable teardown signal and on any
-other exit that recorded no result, and `--recover` reclaims an `abandoned` round the
-same way it reclaims a dead `running` one. SIGKILL is the one death nothing can
+other exit that recorded no result, and an `abandoned` round is reclaimed the same
+way a dead `running` one is. SIGKILL is the one death nothing can
 record, so `just runs` and `just status` derive abandonment from the recorded owner's
 pid: a dead owner is reported as `round-NN ABANDONED (...)` with the reclaiming
 command, never as work in flight.
@@ -1011,7 +963,7 @@ the environment the harness exports — never from process ancestry — and
 `$ORCHESTRATOR_LAUNCHER_SESSION`) still override it. A launch nothing identifies,
 and every run recorded before this was populated, resolves to `unknown`: missing,
 malformed, and expired records are all read the same way, and none of them is ever
-attributed to the reader. `orchestrator/launch.py` is the single source for the
+attributed to the reader. The launch record is the single source for the
 scheme.
 
 ```sh
@@ -1046,8 +998,8 @@ non-zero status rather than hidden under a success.
 
 Stopping records nothing about the run itself: the round is abandoned by its own
 owner, exactly as an interrupted round is, so `just runs` reports
-`round-NN ABANDONED (owner pid N took SIGTERM); reclaim with: just run-plan ... --recover`
-and the work is reclaimable. `complete` on the channel is a completion verdict and
+the round as abandoned and the work stays reclaimable — `just orchestrate --adopt
+<run-id>` attaches a fresh driver to it. `complete` on the channel is a completion verdict and
 does not stop scheduling; `just stop` is what ends a run.
 
 ### Retrying the requests a round boundary depends on
@@ -1058,7 +1010,7 @@ orchestrator asking its provider what to do next — with the quota that round j
 spent. One refusal there used to kill the process that owned the whole run.
 
 Two requests are now retried with bounded backoff before the process is allowed to
-die, under one policy (`orchestrator/boundary.py`):
+die, under one policy:
 
 * **The orchestrator's own post-round turn**, in `scripts/oneharness-orchestrator.sh`.
   Only an attempt that produced *no* stdout is asked again — onejudge parses that
@@ -1101,8 +1053,8 @@ the launch parameters the run recorded (`orchestrator/relaunch.json` — the pla
 the runs root, the base config, each side's harness *and* model, the round budget),
 registers
 the new process as the owner, reopens the channel, and drives the next round from
-the journal-folded plan of record with `--recover`, so the round its predecessor
-left claimed is reclaimed rather than replaced. The run id, the journal, and the
+the journal-folded plan of record, reclaiming the round its predecessor left
+claimed rather than replacing it. The run id, the journal, and the
 anchors are the ones it already had; minting a new run id and pinning a resume was
 what stranded publication anchors before this existed.
 
@@ -1147,57 +1099,19 @@ poller or bespoke lifecycle watch script. Start with `just monitor`; a targeted
 `gh` query remains appropriate for a one-off detail absent from its stream.
 
 ```sh
-just monitor                      # newest active run
-just monitor RUN_ID               # one named run
-just monitor --once               # replay what is known, report state, exit 0
-just monitor --follow             # follow even when output is captured
-just monitor --until-settled      # follow either way, return when the run settles
-just monitor --format jsonl       # one JSON record per line, no header
-just monitor --heartbeat 30 --poll-interval 5
+just monitor RUN_ID               # stream one named run's merged events
 ```
 
-Unchanged polls back off exponentially to a configurable bounded interval.
-`--max-poll-interval` changes that bound. New observations reset the
-initial interval. Silence heartbeats remain independent of polling frequency.
+The run id is required — there is no "newest active run" default — and
+`ONEPIPELINE_RUNS_DIR` moves the ledger as everywhere else.
 
-Without `RUN_ID` it picks the **newest active** run — anything that has not
-completed successfully, including one merely waiting on a human, since that is the
-most important state to be watching. If nothing is active it watches the newest
-run. `--runs-dir` moves the ledger as everywhere else.
-
-**When it follows, and when it returns.** Following is a terminal affordance: the
-stream is flushed line by line and Ctrl-C is how a person ends it. A caller whose
-stdout is a pipe or a file sees none of that — it gets the whole output when the
-process exits — so on a terminal `just monitor` follows, and off one it makes a
-single pass and exits 0, exactly as `--once`. `--follow` asks for the follow
-anyway, for a reader that does consume the stream incrementally. This is not a
-convenience: the planner is an automated supervisor whose invocations are always
-captured, so the command `launch.json` advertises was, for it, one that produced
-nothing and never returned, and every status check was done by reading
-`events.jsonl` and `/proc` by hand instead.
-
-**The bound that pass returns within.** `tests/e2e/test_monitor_e2e.py` holds the
-real command to `orchestrator.monitor.RETURN_BOUND_SECONDS` on a runs root the size
-of the planner's own. Nothing in the command computes that bound; what it enforces
-is `SOURCE_TIMEOUT_SECONDS`, and the bound is derived from it so the two cannot
-drift. The journal, the ledger, the snapshot, and git are local reads; the two
-sources that are not — oneharness history, a subprocess over a store that only
-grows, and `gh`, which is the network — each carry that deadline. `gh` carries it
-twice: per call *and* as a budget for the whole source, so a run with many linked
-PRs cannot spend one timeout per PR. An expired read is the same silence an absent
-`gh` or history store already degrades to. `--source-timeout` moves that deadline;
-a real root answers in about a second, so the bound is the guarantee, not the
-expectation.
-
-**Exit contract.** Only a graph that *completed successfully* ends the *follow*
-(exit 0). Waiting on a human, a failed node, and an executor that died all keep
-heartbeating, because each is a state a person acts on and the run then continues
-— through `next-round`, whose new round directory the next poll picks up. A
-monitor that exited on them would report "finished" for a run that is merely
-stuck. `--once` — and every non-terminal invocation — always exits 0 after one
-pass; only follow mode encodes completion in its status. A completed graph reads
-the same either way (`graph complete`), because that detail is about the run and
-not about how it was being watched. Exit 2 is an unresolvable run or bad input.
+**Following is a terminal affordance**: the stream is flushed line by line and
+Ctrl-C is how a person ends it. That is why the *supervision* entry point is `just
+orchestrate`, which streams exactly this and then **returns** when the run settles
+— see [When an attach returns](#when-an-attach-returns). The planner is an
+automated supervisor whose invocations are always captured, so a command that
+produced nothing and never returned was one it could not use, and every status
+check got done by reading `events.jsonl` and `/proc` by hand instead.
 
 ### What is running right now, and on what
 
@@ -1207,7 +1121,7 @@ turn on this host runs for 600-2000 seconds. A planner needing more than that ha
 tool — matching `ps` output by pattern — which is how six live dispatches were counted
 where there were two and a judge turn wedged for 1h54m was missed entirely.
 
-`orchestrator/dispatches.py` is the answer that does not guess, and its candidate set
+The dispatch ownership registry is the answer that does not guess, and its candidate set
 is the ownership registry the scratch sweep already trusts: the
 `ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into the environment of
 everything a dispatch starts, paired with the owner lock a live dispatcher holds for
@@ -1240,7 +1154,7 @@ the registry must have seen at least one live dispatch, which shows this reader 
 looking at the scratch root the dispatchers write into, and the run's launch must be
 observably working, which distinguishes one node losing its dispatch from the whole
 run stopping — the second is already reported one level up by
-`orchestrator/liveness.py`. Every other uncertainty resolves toward "still working",
+the liveness verdict. Every other uncertainty resolves toward "still working",
 and a view that can observe nothing reports exactly what it reported before any of
 this existed.
 
@@ -1262,8 +1176,8 @@ safe beside live dispatches.
 
 ### When an attach returns
 
-`--until-settled` is the third ending, and the one the foreground `just
-orchestrate` waits on. **Settled** is a property of the run: it is no longer
+The foreground `just orchestrate` waits on this ending. **Settled** is a property
+of the run: it is no longer
 advancing on its own, so the next move is the planner's. It is deliberately
 neither of the two readings that are easy to reach for. *The round finished*
 returns while the orchestrator is still scheduling, abandoning a graph that is
@@ -1284,12 +1198,10 @@ would walk away from a working run. `unattended` exits non-zero because it is th
 state a planner must intervene in, and because a launch that parked reads exactly
 like one that is merely quiet to anyone who is not watching the stream.
 
-`--until-settled` follows on a terminal and off one alike: the one-pass default
-exists for a caller that could neither observe nor end a follow, and this mode
-ends itself. It composes with `--format jsonl`, where the final heartbeat record
-carries a `settlement` field naming which of the three it was. `--once` and
-`--until-settled` ask opposite things and are refused together; without either
-flag, nothing about the follow or the one-pass default changes.
+This ending is why `just orchestrate` can be run on a terminal and off one alike:
+it ends itself rather than needing a reader to end it. `--detach` asks for the
+other shape — return at the launch record and leave the run unattended — and
+`just monitor RUN_ID` re-attaches to the same stream afterwards.
 
 **Output shape.** The text stream's first line is exactly:
 
@@ -1298,7 +1210,7 @@ Concise graph events; run just history-show <stream-id> for full detail.
 ```
 
 That is the contract, not a banner. Every event line carries exactly one strict
-typed id (`graph:`/`oh:`/`git:`/`pr:` — see `orchestrator/ids.py`), which is
+typed id (`graph:`/`oh:`/`git:`/`pr:`), which is
 precisely the argument `just history-show` resolves, so each summary can stay one
 control-stripped line capped at 96 characters derived from recorded status/result
 values. The monitor never tries to *be* the detail; it tells you the id to ask
@@ -1330,13 +1242,11 @@ instead of ending the stream.
 All three read-only views take the run id `launch.json` advertises: `just monitor
 RUN_ID`, `just status RUN_ID`, and `just telemetry RUN_ID`. Each resolves it the
 same way — an exact run directory, or a plan name that names exactly one active
-launch. `status`'s positional keeps its original count meaning for a plain
-integer (`just status 5` still lists five recent tasks), so a run whose id is all
-digits is addressed through `just monitor` or `just results` instead. Scoped,
-`status` reports only that run's indicators and the sessions its own scopes
-labelled; `telemetry` reports that run whether or not it has settled, since naming
-it is the request and the settled-run filter exists only to keep the *unscoped*
-index about live work.
+launch — and each takes a run id and nothing else, so an id that is all digits is
+addressed no differently from any other. Scoped, `status` reports only that run's
+indicators and the sessions its own scopes labelled; `telemetry` reports that run
+whether or not it has settled, since naming it is the request and the settled-run
+filter exists only to keep the *unscoped* index about live work.
 
 An unsettled round has written no `result.json`, so both `telemetry` and the DAG
 read model describe its nodes from the journal itself: a node is `running` only
@@ -1374,17 +1284,16 @@ shapes, and event vocabulary are fixed by
 
 ## Human completion attestations
 
-After doing a reported action, attest it explicitly:
+After doing a reported action, attest it explicitly, over the live channel:
 
 ```sh
-just next-round RUN --complete-human HUMAN_ID
-just next-round RUN --complete-human NODE_ID/STEP_ID
+just channel-reply RUN <<'JSON'
+{"version":1,"commands":[{"op":"attest","ref":"HUMAN_ID"},{"op":"attest","ref":"NODE_ID/STEP_ID"}]}
+JSON
 ```
 
-The same operation can be supplied in an edits file as `"complete_human":
-["HUMAN_ID"]`. Multiple CLI flags and file entries combine, but references must
-be unique. Only a human action recorded as `waiting` in the latest completed
-round can be attested. Unknown ids, blocked nodes/steps, agent ids, and previously
+Several `attest` commands combine in one envelope, but references must be unique.
+Only a human action recorded as `waiting` can be attested. Unknown ids, blocked nodes/steps, agent ids, and previously
 completed humans are invalid and exit 2.
 
 The harness never guesses that a meeting, approval, deployment, or other human
@@ -1397,24 +1306,25 @@ continuation round so `just runs` no longer reports the finished run as waiting.
 
 ## Replanning
 
-`just next-round RUN [edits.json]` reads the latest plan and result, writes the
-next numbered plan, runs it, and records the result. `--plan-only` stops after
-derivation. Edits may `retry` with overrides, `split`, `add`, `drop`, or
-`complete_human`. Completed nodes fall out of the next plan, satisfied dependency
+`just next-round RUN` reads the latest plan and result, writes the next numbered
+plan, runs it, and records the result. The edits it folds in are the ones
+`channel-reply` accepted while the round ran — `retry` with overrides, `split`,
+`add`, `drop`, or `attest` — rather than a file passed here. Completed nodes fall out of the next plan, satisfied dependency
 ids are removed, and unresolved lifecycle stack anchors/resume checkpoints are
 preserved. An unresolved same-repository publication anchor passes through removed
 human gates (and other non-publication nodes), so attestation cannot silently cut a
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
 
-**An edits file this input cannot fully apply is refused, never partly applied.**
-The vocabulary is exactly `retry`, `split`, `add`, `drop`, and `complete_human`;
-any other top-level key exits non-zero naming it, and no round directory or ledger
-entry is written. The [version-1 live-edit envelope](#live-graph-edits) is the near
-miss that motivated this: `{"version": 1, "commands": [...]}` shares no key with
-that vocabulary, so `next-round` read the whole thing as *no edits*, derived the
-unedited round, and exited 0 — the planner learned the edit had not applied a full
-round of quota later, when the round dispatched the stale node definition. That
+**An edit this input cannot fully apply is refused, never partly applied.** The
+vocabulary is [the version-1 live-edit envelope](#live-graph-edits); anything else
+is rejected with the reason, and no round directory or ledger entry is written.
+That envelope becoming the one input is what closed the near miss that motivated
+this: while a separate edits *file* also existed, `{"version": 1, "commands":
+[...]}` shared no key with that file's vocabulary, so `next-round` read the whole
+thing as *no edits*, derived the unedited round, and exited 0 — the planner learned
+the edit had not applied a full round of quota later, when the round dispatched the
+stale node definition. That
 envelope is `channel-reply`'s schema and stays there; `next-round`'s job is to
 refuse it by name and say which command applies it.
 
@@ -1453,23 +1363,23 @@ nothing. It carries its checkpoint forward regardless, because that preserved
 branch is exactly what a later [`requeue`](#parking-a-node-and-picking-it-up-again)
 has to pick up rather than cutting a fresh one beside it.
 
-`just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
-derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
-results without `state` remain readable. It derives from the two files it is given
-and therefore carries no context; `next-round` reads the run's ledger and does.
+There is no lower-level derivation command any more: the across-round derivation
+happens inside the round transition, which reads the run's ledger and therefore
+carries its context. `just replan` remains only to say so and to name
+`just next-round`.
 
 ### The plan of record is the graph the round executed
 
 `round-NN/plan.json` is the round's **launch record** and the reconciler never
 rewrites it. `next-round` therefore does not derive the next round from it: it folds
-the round's own authoritative journal (`orchestrator/projection.py`, the same strict
-reader `run-plan --recover` replays with) and derives from the graph the round
+the round's own authoritative journal (the same strict
+reader an adopted run replays with) and derives from the graph the round
 actually ran. Every live edit the reconciler committed is in that graph — an `add`,
 a `drop`, a `reparent`, a `retry` replacement and its new id, an amended `task`,
 `done_when` or `max_turns`, a branch pin. Only edits the reconciler *rejected* are
 absent, and their submitter was told so synchronously. A journal that cannot be
 folded strictly falls back to the launch record, which is the same state that makes
-`run-plan --recover` report rather than guess.
+an adopted run report rather than guess.
 
 This replaced an earlier rule under which the transition re-read the launch file and
 structural live edits were round-scoped. Two failures are not separable from that
@@ -1498,13 +1408,12 @@ too: pointed at a run whose latest round has already finished, it derives the ne
 round from that round's executed graph and says so on stderr, rather than starting it
 from the plan file it was handed. That covers a round the budget cancelled and a
 round whose owner died between `round-finished` and `result.json` — the journal says
-a round is over, so a re-run of the launch file is a transition however it is spelled.
-Without it the fold was one command wide: `run-plan runs/<id>/round-01/plan.json --run
-<id>` is what an orchestrator reaches for to reclaim a run it is already driving, and
-on `dag-observatory-ux-2` it started rounds 2 and 3 from the untouched round-1 launch
-file — re-dispatching merged work and discarding every accepted live edit, which cost
-two rounds of hand repair. `run-plan` still runs the file it is given whenever the
-latest round has *not* finished, which is the ordinary claim and `--recover`. The
+a round is over, so re-entering a finished round is a transition however it is
+spelled. Without it the fold was one command wide, and on `dag-observatory-ux-2`
+rounds 2 and 3 started from the untouched round-1 launch file — re-dispatching
+merged work and discarding every accepted live edit, which cost two rounds of hand
+repair. `run-plan` still executes the round it is pointed at whenever that round
+has *not* finished, which is the ordinary claim. The
 lifecycle-only plan executor (`lifecycle.main_plan`, kept for the old mappings and no
 longer a command) is excluded: it journals no authoritative stream, so there is
 nothing to fold from.
@@ -1544,17 +1453,17 @@ before: context rides alongside them and changes none of them.
 
 ## Where this lives
 
-- `orchestrator/graph.py` — canonical mixed-node validation, scheduling, result,
-  output, and exit semantics.
-- `orchestrator/plan.py` — direct-agent parsing and the shared DAG reconciler.
-- `orchestrator/lifecycle.py` — repository nodes and resumable step workstreams.
-- `orchestrator/runs.py`, `next_round.py`, `replan.py` — durable rounds,
-  attestations, and continuation.
-- `orchestrator/journal.py`, `ids.py` — the append-only per-transition record and
-  the strict typed ids its details point at.
-- `orchestrator/monitor.py` — the four-source aggregation, dedup, and the
-  `just monitor` stream/exit contract.
-- `orchestrator/channel.py` — the surface FIFO, the durable reply and command
-  queues, surface/reply validation, and the live `relay_supervisor` command judge.
-- `orchestrator/dispatch.py` — one worker subprocess, plus `launch_orchestrator`'s
-  detached orchestrator path and split-provider wiring.
+Everything on this page is implemented by the published CLIs this repository
+pins, and each recipe named above is a thin wrapper over one of their verbs.
+
+- **`onepipeline`** — the plan and its validation, round scheduling and
+  transition, the run ledger and its journal, the planner channel (surfaces,
+  replies, live edits, attestation), the read-only views, and the driver
+  `just orchestrate` launches.
+- **`oneagentgraph`** — one dispatched agent turn and the graph of members a run
+  drives, its history records, and its scratch.
+- **`onevcs`** — repository identity, the rules that resolve a policy from it,
+  sessions over isolated worktrees, publication, recovery, and integration.
+
+Their contracts are documented in their own repositories; this page holds the
+judgment and the operating protocol a planner works this host through.

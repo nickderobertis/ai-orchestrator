@@ -12,7 +12,7 @@ from typing import Any
 from waits import deadline
 from waits import timeout as e2e_timeout
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
 

@@ -8,11 +8,13 @@ import signal
 import subprocess
 import time
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from published_tools import PUBLISHED_TOOLS
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 ADOPTED_ONEJUDGE_VERSION = (
     (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()
@@ -20,6 +22,13 @@ ADOPTED_ONEJUDGE_VERSION = (
 ADOPTED_ONEHARNESS_VERSION = (
     (REPO_ROOT / "config" / "oneharness.version").read_text(encoding="utf-8").strip()
 )
+#: What the fake `python` these fixtures install answers `importlib.metadata.version`
+#: with, per distribution — the published tools alongside oneharness, since session
+#: setup now verifies every one of them as a distribution as well as a CLI.
+ADOPTED_DISTRIBUTION_VERSIONS = {
+    "oneharness-cli": ADOPTED_ONEHARNESS_VERSION,
+    **{tool.distribution: tool.adopted_version for tool in PUBLISHED_TOOLS},
+}
 
 
 def test_onejudge_dependency_pin_matches_authoritative_version() -> None:
@@ -63,6 +72,16 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _write_adopted_version_files(config_dir: Path) -> None:
+    """Give a copied session-setup the same adopted-release declarations the real one reads.
+
+    Copied rather than enumerated, so adopting a further tool needs no fixture edit.
+    """
+    config_dir.mkdir(parents=True, exist_ok=True)
+    for declared in (REPO_ROOT / "config").glob("*.version"):
+        (config_dir / declared.name).write_bytes(declared.read_bytes())
+
+
 def _write_onejudge(path: Path, version: str) -> None:
     _write_executable(path, f"#!/bin/sh\nprintf 'onejudge {version}\\n'\n")
 
@@ -75,8 +94,18 @@ def _write_bun(path: Path, version: str = "1.2.3") -> None:
     _write_executable(path, f"#!/bin/sh\nprintf '{version}\\n'\n")
 
 
+def _write_published_tool_clis(bin_dir: Path) -> None:
+    """Install a stand-in for every published tool session setup verifies as a CLI."""
+    for tool in PUBLISHED_TOOLS:
+        _write_executable(
+            bin_dir / tool.binary,
+            f"#!/bin/sh\nprintf '{tool.binary} {tool.adopted_version}\\n'\n",
+        )
+
+
 def _fake_install_commands(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
+    _write_published_tool_clis(tmp_path / "pinned-tools")
     uv = tools / "uv"
     _write_executable(
         uv,
@@ -89,9 +118,8 @@ mkdir -p "$TEST_REPO/.venv/bin"
 cp "$TEST_ONEJUDGE_BINARY" "$TEST_REPO/.venv/bin/onejudge"
 cp "$TEST_ONEHARNESS_BINARY" "$TEST_REPO/.venv/bin/oneharness"
 cp "$TEST_SDK_PYTHON" "$TEST_REPO/.venv/bin/python"
-chmod +x "$TEST_REPO/.venv/bin/onejudge" \
-  "$TEST_REPO/.venv/bin/oneharness" \
-  "$TEST_REPO/.venv/bin/python"
+cp "$TEST_PUBLISHED_TOOL_DIR"/* "$TEST_REPO/.venv/bin/"
+chmod +x "$TEST_REPO/.venv/bin/"*
 """,
     )
 
@@ -109,18 +137,14 @@ def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.Complet
         (REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (test_repo / "config" / "onejudge.version").write_text(
-        f"{ADOPTED_ONEJUDGE_VERSION}\n", encoding="utf-8"
-    )
-    (test_repo / "config" / "oneharness.version").write_text(
-        f"{ADOPTED_ONEHARNESS_VERSION}\n", encoding="utf-8"
-    )
+    _write_adopted_version_files(test_repo / "config")
     tools = tmp_path / "tools"
     env = {
         "HOME": str(tmp_path),
         "PATH": f"{tools}:/usr/bin:/bin",
         "TEST_REPO": str(test_repo),
         "TEST_UV_ARGS": str(tmp_path / "uv.args"),
+        "TEST_PUBLISHED_TOOL_DIR": str(tmp_path / "pinned-tools"),
         **extra_env,
     }
     return subprocess.run(
@@ -545,6 +569,9 @@ sleep 60
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+        # Its own process group: the signal under test is one sent to a whole group,
+        # and `os.killpg` names a group only if this process leads one.
+        start_new_session=True,
     )
     try:
         limit = time.monotonic() + 30
@@ -553,8 +580,7 @@ sleep 60
         assert held.is_file(), "the call never reached the replacement it was to be killed during"
         assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"]
         # The whole group, which is what a dispatch teardown signals: the held
-        # replacement dies with the shell that is running it. The leak guard starts
-        # every test subprocess as its own group leader, so this pid names one.
+        # replacement dies with the shell that is running it.
         os.killpg(process.pid, sent)
         process.communicate(timeout=30)
     finally:
@@ -1379,8 +1405,13 @@ def test_full_setup_trusts_distinct_managed_and_worktree_roots(tmp_path: Path) -
 
 
 def _run_full_setup_without_bun(
-    tmp_path: Path, **extra_env: str
+    tmp_path: Path, *, declared: Mapping[str, str | None] | None = None, **extra_env: str
 ) -> subprocess.CompletedProcess[str]:
+    """Run the whole script against a fixture host that has every tool but bun.
+
+    `declared` restates one `config/<tool>.version` after the real ones are copied in:
+    a string replaces its contents, and `None` removes the file outright.
+    """
     test_repo = tmp_path / "repo"
     scripts = test_repo / "scripts"
     config = test_repo / "config"
@@ -1400,11 +1431,16 @@ def _run_full_setup_without_bun(
         encoding="utf-8",
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
-    (config / "onejudge.version").write_text(f"{ADOPTED_ONEJUDGE_VERSION}\n", encoding="utf-8")
-    (config / "oneharness.version").write_text(f"{ADOPTED_ONEHARNESS_VERSION}\n", encoding="utf-8")
+    _write_adopted_version_files(config)
+    for name, adopted in (declared or {}).items():
+        if adopted is None:
+            (config / name).unlink()
+        else:
+            (config / name).write_text(adopted, encoding="utf-8")
     _write_onejudge(test_repo / ".venv" / "bin" / "onejudge", ADOPTED_ONEJUDGE_VERSION)
     _write_sdk_python(test_repo / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
     _write_oneharness(test_repo / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
+    _write_published_tool_clis(test_repo / ".venv" / "bin")
     return subprocess.run(
         ["bash", str(session_setup)],
         text=True,
@@ -1414,23 +1450,38 @@ def _run_full_setup_without_bun(
 
 
 def _write_sdk_python(
-    path: Path, onejudge_version: str, oneharness_version: str = ADOPTED_ONEHARNESS_VERSION
+    path: Path,
+    onejudge_version: str,
+    oneharness_version: str = ADOPTED_ONEHARNESS_VERSION,
+    distribution_versions: Mapping[str, str] | None = None,
 ) -> None:
+    """Install a stand-in `python` answering every metadata query session setup makes.
+
+    One branch per distribution, so a test can move one version without moving the
+    rest; the default branch answers the `onejudge_sdk` import instead of metadata.
+    """
+    answers = {
+        **ADOPTED_DISTRIBUTION_VERSIONS,
+        "oneharness-cli": oneharness_version,
+        **(distribution_versions or {}),
+    }
+    branches = "".join(
+        f"*{distribution}*) printf '{version}\\n' ;; " for distribution, version in answers.items()
+    )
     _write_executable(
         path,
-        "#!/bin/sh\n"
-        f"case \"$*\" in *oneharness-cli*) printf '{oneharness_version}\\n' ;; "
-        f"*) printf '{onejudge_version}\\n' ;; esac\n",
+        f"#!/bin/sh\ncase \"$*\" in {branches}*) printf '{onejudge_version}\\n' ;; esac\n",
     )
 
 
-def test_project_install_skips_sync_when_both_pinned_tools_are_compliant(tmp_path: Path) -> None:
+def test_project_install_skips_sync_when_every_pinned_tool_is_compliant(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
     _write_onejudge(tmp_path / "repo" / ".venv" / "bin" / "onejudge", ADOPTED_ONEJUDGE_VERSION)
     _write_sdk_python(tmp_path / "repo" / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
     _write_oneharness(
         tmp_path / "repo" / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION
     )
+    _write_published_tool_clis(tmp_path / "repo" / ".venv" / "bin")
 
     proc = _run_project_install(tmp_path)
 
@@ -1477,7 +1528,10 @@ def test_project_install_surfaces_uv_sync_failure(tmp_path: Path) -> None:
         f"sync --project {tmp_path}/repo"
     )
     assert "project dependency sync failed" in proc.stderr
-    assert "required pinned onejudge and oneharness dependencies are unavailable" in proc.stderr
+    assert (
+        "required pinned onejudge, oneharness, and published-tool dependencies are unavailable"
+        in proc.stderr
+    )
 
 
 def test_project_install_rejects_wrong_sdk_version(tmp_path: Path) -> None:
@@ -1499,7 +1553,115 @@ def test_project_install_rejects_wrong_sdk_version(tmp_path: Path) -> None:
 
     assert proc.returncode == 1
     assert f"expected '{ADOPTED_ONEJUDGE_VERSION}', got '{wrong_version}'" in proc.stderr
-    assert "required pinned onejudge and oneharness dependencies" in proc.stderr
+    assert "required pinned onejudge, oneharness, and published-tool dependencies" in proc.stderr
+
+
+def _run_project_install_with_real_pins(
+    tmp_path: Path, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
+    """Install with every adopted release compliant except what the caller staged."""
+    onejudge = tmp_path / "onejudge"
+    sdk_python = tmp_path / "sdk-python"
+    harness = tmp_path / "oneharness"
+    _write_onejudge(onejudge, ADOPTED_ONEJUDGE_VERSION)
+    _write_oneharness(harness, ADOPTED_ONEHARNESS_VERSION)
+    if not sdk_python.exists():
+        _write_sdk_python(sdk_python, ADOPTED_ONEJUDGE_VERSION)
+    return _run_project_install(
+        tmp_path,
+        TEST_ONEJUDGE_BINARY=str(onejudge),
+        TEST_ONEHARNESS_BINARY=str(harness),
+        TEST_SDK_PYTHON=str(sdk_python),
+        **extra_env,
+    )
+
+
+def test_project_install_rejects_a_published_tool_left_at_a_stale_release(tmp_path: Path) -> None:
+    """A CLI still on a previous release fails setup rather than passing unnoticed.
+
+    These four tools are the published implementations this repository configures, so
+    a venv holding a stale one is a working host quietly running different code —
+    exactly the drift onejudge's own version check has always refused.
+    """
+    _fake_install_commands(tmp_path)
+    stale = PUBLISHED_TOOLS[0]
+    _write_executable(
+        tmp_path / "pinned-tools" / stale.binary,
+        f"#!/bin/sh\nprintf '{stale.binary} 99.99.99\\n'\n",
+    )
+
+    proc = _run_project_install_with_real_pins(tmp_path)
+
+    assert proc.returncode == 1
+    assert (
+        f"{stale.binary} verification failed: expected '{stale.binary} {stale.adopted_version}', "
+        f"got '{stale.binary} 99.99.99'"
+    ) in proc.stderr
+    assert "required pinned onejudge, oneharness, and published-tool dependencies" in proc.stderr
+
+
+def test_project_install_rejects_a_published_tool_whose_distribution_drifted(
+    tmp_path: Path,
+) -> None:
+    """The wheel and the console script it installs are checked separately.
+
+    A distribution that no longer matches the CLI beside it means the venv holds two
+    releases at once, which is a resolution failure rather than a stale binary.
+    """
+    _fake_install_commands(tmp_path)
+    drifted = PUBLISHED_TOOLS[-1]
+    sdk_python = tmp_path / "sdk-python"
+    _write_sdk_python(
+        sdk_python,
+        ADOPTED_ONEJUDGE_VERSION,
+        distribution_versions={drifted.distribution: "99.99.99"},
+    )
+
+    proc = _run_project_install_with_real_pins(tmp_path)
+
+    assert proc.returncode == 1
+    assert (
+        f"{drifted.binary} distribution verification failed: "
+        f"expected '{drifted.adopted_version}', got '99.99.99'"
+    ) in proc.stderr
+
+
+def test_full_setup_reports_every_published_tool_it_verified(tmp_path: Path) -> None:
+    """The session log names each adopted release, so an operator can read the host."""
+    result = _run_full_setup_without_bun(tmp_path)
+
+    # Bun is deliberately absent from this fixture; the published tools still verified.
+    assert result.returncode == 1
+    for tool in PUBLISHED_TOOLS:
+        assert f"ready ({tool.binary}: {tool.adopted_version} at " in result.stderr
+    assert "releases are required" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("adopted", "reported"),
+    [("0.2\n", "0.2"), ("v0.2.2\n", "v0.2.2"), (None, "")],
+    ids=["not-semver", "tagged", "absent"],
+)
+def test_full_setup_refuses_a_published_tool_without_one_adopted_release(
+    tmp_path: Path, adopted: str | None, reported: str
+) -> None:
+    """An undeclared or unreadable pin aborts setup by name before anything is installed.
+
+    The version file is the pin, so a host that could not read one has no adopted
+    release to hold its CLI to — provisioning on anyway would install whatever
+    `uv sync` resolved and then verify it against nothing.
+    """
+    undeclared = PUBLISHED_TOOLS[0]
+
+    result = _run_full_setup_without_bun(tmp_path, declared={undeclared.version_file: adopted})
+
+    assert result.returncode == 1
+    assert (
+        f"invalid adopted {undeclared.binary} version in "
+        f"{tmp_path / 'repo' / 'config' / undeclared.version_file}: '{reported}'"
+    ) in result.stderr
+    # Aborting means aborting: no tool is verified and no provisioning is attempted.
+    assert "ready (" not in result.stderr
 
 
 def test_install_bun_skips_invocable_binary(tmp_path: Path) -> None:

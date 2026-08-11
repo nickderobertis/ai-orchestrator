@@ -1,7 +1,7 @@
 """`.claude/settings.json` must allow the commands this repo's own agents run.
 
 The orchestrator persona mandates commands (`just monitor`) and the planner surface
-documents others (`just repos`, the migrations, read-only `git -C` inspection). A
+documents others (`just repos`, the run views, read-only `git -C` inspection). A
 claude-code agent whose permission environment forbids a command its instructions
 require cannot supervise its own run, so the allowlist is part of that contract —
 while staying narrow: routine, read-only entries, never a blanket wildcard.
@@ -11,14 +11,17 @@ from __future__ import annotations
 
 import json
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 REQUIRED = (
     "Bash(just monitor:*)",
     "Bash(just repos:*)",
-    "Bash(just migrate-repo-type:*)",
-    "Bash(just migrate-repo-gate:*)",
+    "Bash(just runs:*)",
+    "Bash(just status:*)",
+    "Bash(just results:*)",
+    "Bash(just channel-next:*)",
+    "Bash(just channel-reply:*)",
     "Bash(git -C * status*)",
     "Bash(git -C * log*)",
     "Bash(git -C * diff*)",

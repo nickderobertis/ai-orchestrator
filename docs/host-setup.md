@@ -27,6 +27,10 @@ idempotent. It:
 - `uv sync`s the exact `onejudge` (`config/onejudge.version`) and `oneharness`
   (`config/oneharness.version`) versions into the worktree's `.venv` and verifies
   each as both a distribution and a CLI;
+- brings the four published tools this repository configures — `oneagentgraph`,
+  `onevcs`, `onepipeline`, and `onepipeline-ui` (PyPI's `onepipeline-api-cli`) —
+  from PyPI through that same `uv sync`, at the releases adopted in
+  `config/<tool>.version`, and verifies each one the same two ways;
 - sweeps reclaimable scratch (`just sweep-scratch`);
 - installs `bun` via npm, and `codex` via npm when it is absent, exposing a stable
   `~/.local/bin/codex`;

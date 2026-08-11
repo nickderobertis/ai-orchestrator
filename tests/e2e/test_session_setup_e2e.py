@@ -6,9 +6,12 @@ import functools
 import os
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
-from orchestrator import REPO_ROOT
+from published_tools import PUBLISHED_TOOLS
+
+from orchestrator.root import REPO_ROOT
 
 ONEJUDGE_VERSION = (REPO_ROOT / "config" / "onejudge.version").read_text().strip()
 ONEHARNESS_VERSION = (REPO_ROOT / "config" / "oneharness.version").read_text().strip()
@@ -42,6 +45,7 @@ def _setup_repo(
     adopted_onejudge: str = ONEJUDGE_VERSION,
     adopted_oneharness: str = ONEHARNESS_VERSION,
     dependency_oneharness: str = ONEHARNESS_VERSION,
+    adopted_published: Mapping[str, str] | None = None,
 ) -> Path:
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -54,12 +58,9 @@ def _setup_repo(
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, repo / name)
     shutil.copy2(REPO_ROOT / "justfile", repo / "justfile")
-    # The sweep is the only orchestrator code session setup runs, so the fixture
-    # carries exactly its module and the helpers it imports: procfs identity from
-    # `coordination`, and the termination the reap of a finished dispatch's leavings
-    # performs from `watchdog`.
-    for module in ("scratch.py", "coordination.py", "watchdog.py"):
-        shutil.copy2(REPO_ROOT / "orchestrator" / module, package / module)
+    # Session setup runs no orchestrator code — the scratch sweep it invokes is a
+    # published CLI now — so the package exists here only because `pyproject.toml`
+    # declares it as the wheel's one package and `uv sync` builds it.
     if dependency_oneharness != ONEHARNESS_VERSION:
         pyproject = repo / "pyproject.toml"
         pyproject.write_text(
@@ -71,8 +72,14 @@ def _setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
+    # Every adopted release is copied, so a further pinned tool needs no fixture edit;
+    # the parameters below then restate only what a journey deliberately moves.
+    for declared in (REPO_ROOT / "config").glob("*.version"):
+        shutil.copy2(declared, config / declared.name)
     (config / "onejudge.version").write_text(f"{adopted_onejudge}\n", encoding="utf-8")
     (config / "oneharness.version").write_text(f"{adopted_oneharness}\n", encoding="utf-8")
+    for version_file, adopted in (adopted_published or {}).items():
+        (config / version_file).write_text(f"{adopted}\n", encoding="utf-8")
     return repo
 
 
@@ -139,7 +146,7 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
 
     assert installed.returncode == 0, installed.stderr
     assert f"at {repo / '.venv' / 'bin' / 'onejudge'}" in installed.stderr
-    assert "sweep-scratch: removed" in installed.stderr
+    assert "sweep: examined family" in installed.stderr
     assert (
         subprocess.run(
             [repo / ".venv" / "bin" / "oneharness", "--version"],
@@ -156,6 +163,48 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     assert "cannot install required project dependencies" not in without_uv.stderr
 
 
+def test_session_setup_syncs_every_published_tool_from_pypi(tmp_path: Path) -> None:
+    """The four adopted pins are real releases a real `uv sync` installs and runs.
+
+    This is the only proof that matters for a pin: the sync resolves each
+    distribution from PyPI into a fresh venv, and the CLI it lands reports the
+    version `config/<tool>.version` adopted. A version nobody published, a git ref,
+    or a vendored copy cannot survive it.
+    """
+    repo = _setup_repo(tmp_path)
+
+    installed = _run_setup(repo, tmp_path)
+
+    assert installed.returncode == 0, installed.stderr
+    for tool in PUBLISHED_TOOLS:
+        executable = repo / ".venv" / "bin" / tool.binary
+        assert f"ready ({tool.binary}: {tool.adopted_version} at {executable})" in installed.stderr
+        reported = subprocess.run(
+            [executable, "--version"], text=True, capture_output=True, check=True
+        )
+        assert reported.stdout.strip() == f"{tool.binary} {tool.adopted_version}"
+
+
+def test_session_setup_fails_when_a_published_tool_misses_its_adopted_version(
+    tmp_path: Path,
+) -> None:
+    """A published tool is held to its adopted release exactly as oneharness is."""
+    stale = PUBLISHED_TOOLS[0]
+    repo = _setup_repo(tmp_path, adopted_published={stale.version_file: "99.99.99"})
+
+    result = _run_setup(repo, tmp_path)
+
+    assert result.returncode == 1
+    assert (
+        f"{stale.binary} verification failed: expected '{stale.binary} 99.99.99', "
+        f"got '{stale.binary} {stale.adopted_version}'"
+    ) in result.stderr
+    assert (
+        "required pinned onejudge, oneharness, and published-tool dependencies are unavailable"
+        in result.stderr
+    )
+
+
 def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path, adopted_oneharness="99.99.99")
 
@@ -163,7 +212,10 @@ def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Pa
 
     assert result.returncode == 1
     assert "oneharness verification failed" in result.stderr
-    assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
+    assert (
+        "required pinned onejudge, oneharness, and published-tool dependencies are unavailable"
+        in result.stderr
+    )
 
 
 def test_session_setup_continues_when_scratch_sweep_fails(tmp_path: Path) -> None:
@@ -171,7 +223,7 @@ def test_session_setup_continues_when_scratch_sweep_fails(tmp_path: Path) -> Non
     justfile = repo / "justfile"
     justfile.write_text(
         justfile.read_text(encoding="utf-8").replace(
-            '@uv run orchestrator-sweep-scratch "$@"',
+            '@uv run oneagentgraph sweep "$@"',
             "@false",
         ),
         encoding="utf-8",
@@ -202,7 +254,10 @@ def test_session_setup_fails_when_synced_onejudge_misses_adopted_version(
 
     assert result.returncode == 1
     assert "onejudge verification failed" in result.stderr
-    assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
+    assert (
+        "required pinned onejudge, oneharness, and published-tool dependencies are unavailable"
+        in result.stderr
+    )
 
 
 def test_session_setup_surfaces_real_uv_resolution_failure(tmp_path: Path) -> None:
@@ -212,7 +267,10 @@ def test_session_setup_surfaces_real_uv_resolution_failure(tmp_path: Path) -> No
 
     assert result.returncode == 1
     assert "project dependency sync failed" in result.stderr
-    assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
+    assert (
+        "required pinned onejudge, oneharness, and published-tool dependencies are unavailable"
+        in result.stderr
+    )
 
 
 def test_session_setup_reports_missing_uv_at_full_entry_point(tmp_path: Path) -> None:

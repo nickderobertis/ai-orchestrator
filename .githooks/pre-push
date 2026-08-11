@@ -10,7 +10,11 @@ if ! command -v llmlint >/dev/null 2>&1; then
 fi
 
 remote=${1:-origin}
-base=${ORCHESTRATOR_COMPARISON_BASE:-}
+# The base the *worker's* gate cleared, so this hook replays that verdict instead of
+# re-rolling a non-deterministic judge against a base it resolved itself. `onevcs`
+# is what exports it now, under its own name; `scripts/comparison-base.sh` carries
+# the same precedence and says why.
+base=${ORCHESTRATOR_COMPARISON_BASE:-${ONEVCS_COMPARISON_BASE:-}}
 hook_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 updates=$(mktemp)
 trap 'rm -f "$updates"' EXIT

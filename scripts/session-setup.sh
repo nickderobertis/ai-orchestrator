@@ -10,16 +10,20 @@
 #   2. The exact `oneharness` version adopted in `config/oneharness.version` is
 #      installed into this worktree's project venv by the same `uv sync` and
 #      verified as both a distribution and CLI.
-#   3. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
+#   3. The four published tools this repository is a configuration layer over —
+#      oneagentgraph, onevcs, onepipeline, and onepipeline-ui — arrive from PyPI
+#      through that same `uv sync` at the versions adopted in `config/`, and are
+#      verified as both a distribution and a CLI (see PUBLISHED_TOOL_SPECS below).
+#   4. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
-#   4. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
+#   5. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
 #      can run in dispatched worktrees.
-#   5. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
+#   6. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
 # `set -e` is omitted so optional tool failures do not prevent the remaining
-# setup steps. Missing or unusable onejudge, oneharness, or bun binaries are
-# different: the script finishes the other setup work, then exits non-zero because
-# dispatch and the complete local gate require them.
+# setup steps. Missing or unusable onejudge, oneharness, published-tool, or bun
+# binaries are different: the script finishes the other setup work, then exits
+# non-zero because dispatch and the complete local gate require them.
 # llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge, oneharness, and bun dependencies are verified explicitly and control the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
 set -uo pipefail
 
@@ -29,6 +33,20 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly ONEJUDGE_VERSION_FILE="$REPO_ROOT/config/onejudge.version"
 readonly ONEHARNESS_VERSION_FILE="$REPO_ROOT/config/oneharness.version"
+# The published tools this repository is a configuration layer over, as
+# `<CLI binary>|<PyPI distribution>|<config version file>`. Each publishes a
+# binary wheel whose console script reports `<binary> <version>`, so one table
+# drives reading, validating, and verifying all four. `onepipeline-ui` is the
+# tool's name and `onepipeline-api-cli` the distribution PyPI carries it under;
+# its npm counterpart is out of scope here because this repo provisions its
+# Python-side tooling from PyPI.
+readonly PUBLISHED_TOOL_SPECS=(
+  "oneagentgraph|oneagentgraph-cli|oneagentgraph.version"
+  "onevcs|onevcs-cli|onevcs.version"
+  "onepipeline|onepipeline-cli|onepipeline.version"
+  "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
+)
+declare -A PUBLISHED_TOOL_VERSIONS=()
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
 readonly ADOPTED_ONEJUDGE_VERSION
 ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
@@ -67,6 +85,21 @@ if [[ ! $ADOPTED_ONEHARNESS_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   fi
   exit 1
 fi
+for published_tool_spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
+  IFS='|' read -r published_tool_binary _ published_tool_version_file <<<"$published_tool_spec"
+  published_tool_version_path="$REPO_ROOT/config/$published_tool_version_file"
+  # An unreadable file answers empty, which the pattern below rejects by name
+  # rather than as raw redirect noise.
+  published_tool_version="$(tr -d '[:space:]' <"$published_tool_version_path" 2>/dev/null)"
+  if [[ ! $published_tool_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    log "invalid adopted $published_tool_binary version in $published_tool_version_path: '$published_tool_version'"
+    if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+      return 1
+    fi
+    exit 1
+  fi
+  PUBLISHED_TOOL_VERSIONS["$published_tool_binary"]="$published_tool_version"
+done
 
 # CI never needs this provisioning; keep it a no-op there.
 if [ -n "${CI:-}" ]; then
@@ -75,7 +108,8 @@ if [ -n "${CI:-}" ]; then
 fi
 
 install_project_dependencies() {
-  if verify_onejudge >/dev/null 2>&1 && verify_oneharness >/dev/null 2>&1; then
+  if verify_onejudge >/dev/null 2>&1 && verify_oneharness >/dev/null 2>&1 \
+    && verify_published_tools >/dev/null 2>&1; then
     return 0
   fi
   if ! command -v uv >/dev/null 2>&1; then
@@ -85,13 +119,13 @@ install_project_dependencies() {
   log "syncing pinned project dependencies into $REPO_ROOT/.venv"
   if uv sync --project "$REPO_ROOT" >&2; then
     hash -r
-    if verify_onejudge && verify_oneharness; then
+    if verify_onejudge && verify_oneharness && verify_published_tools; then
       return 0
     fi
   else
     log "project dependency sync failed"
   fi
-  log "required pinned onejudge and oneharness dependencies are unavailable after uv sync"
+  log "required pinned onejudge, oneharness, and published-tool dependencies are unavailable after uv sync"
   return 1
 }
 
@@ -187,6 +221,50 @@ verify_oneharness() {
     return 1
   fi
   return 0
+}
+
+verify_published_tool() {
+  # One published tool, checked the same two ways `oneharness` is: the
+  # worktree-local CLI reports the adopted release, and the distribution the
+  # wheel installed carries that same version.
+  local binary="$1" distribution="$2" expected_version="$3" python_bin="$4"
+  local path actual
+  path="$PROJECT_VENV_BIN/$binary"
+  if [ ! -x "$path" ]; then
+    log "$binary verification failed: expected '$binary $expected_version' at $path"
+    return 1
+  fi
+  if ! actual="$("$path" --version 2>&1)"; then
+    log "$binary verification failed: $path could not report its version"
+    return 1
+  fi
+  if [[ $actual != "$binary $expected_version" ]]; then
+    log "$binary verification failed: expected '$binary $expected_version', got '$actual' from $path"
+    return 1
+  fi
+  if ! actual="$("$python_bin" -c \
+    "import importlib.metadata as metadata; print(metadata.version('$distribution'))" 2>&1)"; then
+    log "$binary distribution verification failed: $distribution metadata is unavailable from $python_bin"
+    return 1
+  fi
+  if [[ $actual != "$expected_version" ]]; then
+    log "$binary distribution verification failed: expected '$expected_version', got '$actual'"
+    return 1
+  fi
+  return 0
+}
+
+verify_published_tools() {
+  # Every tool is reported on, not just the first failure: an operator fixing a
+  # stale environment should see the whole list in one pass.
+  local spec binary distribution python_bin status=0
+  python_bin="$PROJECT_VENV_BIN/python"
+  for spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
+    IFS='|' read -r binary distribution _ <<<"$spec"
+    verify_published_tool \
+      "$binary" "$distribution" "${PUBLISHED_TOOL_VERSIONS[$binary]}" "$python_bin" || status=1
+  done
+  return "$status"
 }
 
 install_bun() {
@@ -335,6 +413,15 @@ else
 fi
 if ! verify_oneharness; then
   log "oneharness $ADOPTED_ONEHARNESS_VERSION is required — 'just check' will fail until setup succeeds"
+  toolchain_failed=1
+fi
+if verify_published_tools; then
+  for published_tool_spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
+    IFS='|' read -r published_tool_binary _ _ <<<"$published_tool_spec"
+    log "ready ($published_tool_binary: ${PUBLISHED_TOOL_VERSIONS[$published_tool_binary]} at $PROJECT_VENV_BIN/$published_tool_binary)"
+  done
+else
+  log "the adopted oneagentgraph, onevcs, onepipeline, and onepipeline-ui releases are required — 'just check' will fail until setup succeeds"
   toolchain_failed=1
 fi
 if ! verify_bun; then

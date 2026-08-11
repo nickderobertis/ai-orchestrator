@@ -4,7 +4,8 @@ The orchestrator doesn't only dispatch a onejudge at a directory — it manages 
 **full life cycle** of a change against any repo: acquire the repo, do the work
 in isolation, verify it locally, get it reviewed by CI, and merge it. One larger
 task becomes **multiple isolated PRs**, coordinated by a dependency DAG. This doc
-is the reference for that layer (`orchestrator/lifecycle.py` and friends); the
+is the reference for that layer, implemented by `onevcs` and driven by
+`onepipeline`; the
 onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integration.md).
 
 ## The unit of work: `run_repo_task`
@@ -22,7 +23,7 @@ ensure clone (once per repo)  →  fresh worktree on a new branch off base
 Everything up to "publish + merge" is identical for every repo; only the last
 step differs by where the repo lives (see *Merge strategies*). The authoritative
 closed `LifecycleResult.outcome` domain is `LifecycleOutcome` in
-`orchestrator/outcomes.py`; recorded values outside that type are rejected during
+the published outcome type; recorded values outside it are rejected during
 recovery. In its common publication states, `merged` means publication created
 and landed a commit, `pr-open` means policy `none` left a successful publication
 open, and `already-integrated` means the verified content was already present in
@@ -40,7 +41,7 @@ Lifecycle agent steps use a larger turn segment than the shared direct-dispatch
 budget: repository orientation, implementation, and the complete gate commonly
 need more than one short conversation. The executable segment size and bounded
 continuation count live in `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` and
-`MAX_AUTOMATIC_STEP_RESUMES` in `orchestrator/lifecycle.py`. A step that hits its
+the engine's automatic step-resume ceiling. A step that hits its
 cap and leaves a preserved incomplete commit automatically continues on the same
 branch, carrying completed step IDs so earlier steps are not re-run. An explicit
 step or node `max_turns` replaces the default segment size. Cancellation, a
@@ -70,7 +71,7 @@ that reports a turn or that a signal ended is a work stop whatever the tree show
 and the workstream answers it
 from `MAX_EMPTY_DEATH_RELAUNCHES`, waiting `RELAUNCH_BACKOFF_SECONDS` times the
 relaunch number first — the "only the launch is retried" shape
-`orchestrator/smoke.py` already uses. Unlike the work path it does not require the
+`oneagentgraph smoke` already uses. Unlike the work path it does not require the
 branch to carry commits. Under a round the cancellation event is that wait, so a
 cancel does not have to outlast a backoff before the branch is preserved; a
 cancelled workstream is reported as the cancellation it was.
@@ -101,7 +102,7 @@ refused. Reusing its name asks that identity for a session it may no longer hold
 and `No conversation found with session ID ...` is another death, which earns
 another relaunch, which asks again; whole lineages have been spent on that loop
 without one turn of work. So relaunch *N* dispatches as `<session>#relaunchN`
-(`orchestrator/relaunch.py`), which is also what frees the fallback chain to run
+(the run's own recorded launch parameters), which is also what frees the fallback chain to run
 the turn on whichever identity still can — a fresh conversation carries no binding
 across harnesses.
 
@@ -114,9 +115,9 @@ recorded — degrades to the task alone, because the seed improves a relaunch an
 never a precondition for one. The turn-cap resume is deliberately *not* a relaunch
 and keeps its conversation: it is continuing work the harness still holds.
 
-`just run-plan <plan.json>` runs one, over a plan holding a single lifecycle node
-(`examples/single-node-lifecycle.plan.json`); it is the only executor, so there is
-no second path a single workstream can take. The node's `repo` is a GitHub
+`just orchestrate <plan.json>` runs one, over a plan holding a single lifecycle
+node (`examples/single-node-lifecycle.plan.json`); it is the only way to dispatch,
+so there is no second path a single workstream can take. The node's `repo` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
 shown by `just repos`. It selects the publication repository identity and checkout.
 For self-dispatch safety, the node's `execution_checkout` likewise accepts a path or
@@ -125,8 +126,8 @@ publication workflow and post-merge fast-forward.
 
 Before resolving or cloning the target, lifecycle dispatch checks free space on
 the filesystem backing Python's temporary directory. It refuses to start below
-the conservative default in `orchestrator.scratch.DEFAULT_MIN_FREE_BYTES` and
-reports the scratch path, available bytes, and `just sweep-scratch`.
+a conservative default and reports the scratch path, available bytes, and
+`just sweep-scratch`.
 Set `ORCHESTRATOR_MIN_FREE_BYTES` to a non-negative byte count when a host needs a
 different threshold. This preflight is a terminal infrastructure failure in a
 tracked graph, so it does not consume another round.
@@ -191,8 +192,8 @@ into one group the kernel keeps valid across all of that reparenting.
 
 ## Repository identity, checkout roles, and isolation
 
-`Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through
-the persistent registry (`orchestrator/registry.py`): the **publication checkout**
+`onevcs` resolves two independent decisions through
+its persistent registry: the **publication checkout**
 selected by the repository argument and the **execution checkout** used to create
 the task worktree. Normally they are the same. `--execution-checkout` deliberately
 separates them for a safety clone. The lifecycle reports the exact execution path,
@@ -210,14 +211,16 @@ the migration detects a gate from a registered checkout or stores `<no-op>`:
 the normalized GitHub origin owner case-insensitively with `gh api user --jq
 .login`. Missing authentication or a non-GitHub origin fails before dispatch
 unless the run supplies `--repo-type`. Conflicting legacy
-entries fail with every alias/path/workflow and the exact migration command; no
+entries fail with every alias/path/workflow and the rule to correct; no
 workflow is selected implicitly.
 
-`--repo-type` on `register-repo` persists. The same option on `repo-recover` or
-`run-plan` is run-only. A plan node's `repo_type` beats the
-command option, which beats stored or inferred type. Change stored type with
-`just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
-also normalizes workflow to `remote`.
+Type is not a command option on any of these verbs any more: `just register-repo`
+resolves it from the rules file the identity matches, and `just run-plan` names a
+run rather than carrying repository options. A plan node's `repo_type` still beats
+the stored or inferred type for that node. Change the resolved type by editing the
+rule that matches the repository in the rules file — `onevcs rules check` reports
+which rule a repository matches and the policy that follows; a team repository's
+workflow is `remote`.
 
 Each run cuts a **private clone** from the execution checkout and hands out a **git
 worktree per branch** from that clone, under
@@ -257,7 +260,7 @@ exclusive section, so one slow origin cannot hold another run out.
 
 Contended locks **queue** in the kernel's own `flock` line rather than racing a
 non-blocking retry, under a watchdog set by `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS`
-whose default is `DEFAULT_LOCK_TIMEOUT` in `orchestrator/coordination.py` — minutes,
+whose default is the engine's own lock timeout — minutes,
 not seconds, because a legitimate turn can hold a gate run. `flock` releases on
 process death, so a crashed holder hands the queue to the next waiter instead of
 wedging it. A timeout reports the owning PID/host. The slow agent dispatch remains unlocked. Default lifecycle branches
@@ -349,8 +352,9 @@ check`, `make check`, `npm test`, Cargo, or pytest). Accept one, override it wit
 that it is unproven. The stored identity gate describes the repository's complete
 bar and remains available to agents and recovery metadata. The merge path itself
 is authoritative: an executable pre-push hook runs the local bar, or required PR
-status checks gate remote-first publication. Correct an existing identity across
-every alias with `just migrate-repo-gate <repo> --gate '<complete-gate-command>'`.
+status checks gate remote-first publication. Correct an identity's gate by editing the rule
+that matches it; the change reaches every alias at once, because the rule is what
+resolves the policy.
 
 Registration also audits whether the merge path itself runs a gate. It reports an
 executable effective `pre-push` hook (respecting `core.hooksPath`) and required
@@ -380,13 +384,9 @@ a run that publishes locally cannot qualify on required checks a local push neve
 triggers. The command only reports coverage; it never installs
 hooks or changes branch protection.
 
-A contradictory `--workflow` is rejected. Change publication policy only through
-the identity-wide migration command. For the current ai-orchestrator aliases, the
-remediation is:
-
-```sh
-just migrate-repo-workflow local/ai-orchestrator --workflow local
-```
+A contradictory `--workflow` is rejected. Change publication policy in the rules
+file — the rule that matches the repository names the workflow that follows — and
+confirm what it resolved to with `just repos`.
 
 ## Merge-path verification
 
@@ -443,13 +443,15 @@ run-level flag, including `false` to opt a node out.
 This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
-ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
-`ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every publishing push of a
+ambiguous. The lifecycle exports `ONEVCS_COMPARISON_REMOTE` and
+`ONEVCS_COMPARISON_BASE` to **every dispatch and every publishing push of a
 workstream**, and the pre-push hook reads that base and
-uses the remote name Git passes as its first argument. Invalid names, missing
+uses the remote name Git passes as its first argument. `ORCHESTRATOR_COMPARISON_*`
+is the same pair under this repository's own older spelling and still wins where it
+is set, because it is also the operator's documented override. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
-back to `main`. `just sync` discovers the same branch; `just sync <branch>
-<remote>` is the explicit form.
+back to `main`. `just sync` fast-forwards the publication checkout to its
+origin, and `just sync <branch>` names one rather than the registered base.
 
 ### Where a merge-path verdict is preserved
 
@@ -480,79 +482,26 @@ a branch that re-pushes through a red gate all night cannot grow the directory w
 end. The single `gate.log` a branch recovered before this split still has is neither
 counted nor pruned: it is the whole history of those attempts.
 
-### The successor contract
+### Keeping a process that outlives its launcher
 
-A process a dispatch starts inherits its `ORCHESTRATOR_AGENT_STATUS_DIR`, and the
-sweep's process reaper acts on exactly that stamp: a live process stamped for a
-dispatch that is over is a leaked tree, and it is terminated. That is correct for what
-a finished dispatch actually leaves behind, and it was catastrophic for the two things
-that are *meant* to outlive their launcher — a round owner (`just run-plan`, `just
-next-round`) and a publication driver (`just repo-recover`, `just integrate`). One
-round owner died sixty-six seconds in; two recoveries died at exit 143 with their gate
-already green.
+Some processes here are *meant* to outlive the thing that started them: a round owner
+(`just run-plan`, `just next-round`), a publication driver (`just repo-recover`, `just
+integrate`), and above them the driver `just orchestrate` spawns. Reparenting to init
+puts every one of them outside the tree walk its launcher would be found by.
 
-Those four entry points therefore go through `orchestrator.detach.run_successor`, which
-adds one step to the fork the round already made: the forked round claims a watchdog
-directory of its own and **re-`exec`s** under it. An `exec` and nothing less, because
-`/proc/<pid>/environ` is the memory the kernel wrote at the last `exec` and `os.environ`
-does not touch it — a process cannot shed an inherited stamp in place, and everything it
-starts afterwards would inherit the launcher's stamp anyway.
+This repository no longer arbitrates that. The sweep it used to arbitrate with is gone
+with the rest of the implementation: `oneagentgraph sweep` reclaims the two scratch
+families it owns and terminates nothing, so there is no reaper here for a long-lived
+process to be spared from, and no stamp for it to re-attribute itself under. Keeping
+these processes alive, and reaping them once they are done, belongs to the engines that
+start them.
 
-It is the **round** that re-`exec`s, not the process that forked it, and the difference
-is not cosmetic. The relaying parent outlives the round by the moment it takes to collect
-its exit status. A parent stamped for the round's directory spends that moment as a live
-process whose recorded owner is already dead — which is the reaper's definition of a
-leaked tree — so a sweep landing in that window kills the parent before it can report
-how the round ended, and a completed round reaches its caller as `143`. The parent
-therefore keeps the launcher's stamp, which describes it correctly: it belongs to the
-launcher and is meant to die with it.
-
-Re-stamping rather than scrubbing, because the reaper's reach was never the problem.
-The directory a successor claims makes it *reapable under its own identity*: while the
-successor runs the sweep retains its whole tree, and once it is gone the same tree
-becomes exactly the kind of leaving this reaper exists for. An unstamped process would
-be neither, forever.
-
-What the sweeper reads there is deliberately the weaker of its two ownership proofs.
-`claim_successor_scratch_directory` records an identity in `owner.lock` **without**
-holding the `flock` a dispatcher holds, so:
-
-* `_watchdog_is_reclaimable` — which accepts a recorded live identity — retains the
-  tree, and reclaims it once that identity is gone; while
-* `watchdog_has_a_live_owner` — which takes only a held lock — says no, so a round
-  owner never appears in `just host` or `just status` as a live dispatch with no turn
-  and no role.
-
-The claim is written by the process that will own the tree, before its `exec`, and there
-is no window: an `exec` carries a pid and its start token across unchanged, so the
-identity recorded before it still describes the process working there afterwards.
-
-Nothing about the reaper's proof standard moves for this. A process stamped for a
-finished dispatch that did not re-attribute is still reaped, in the same sweep that
-spares the round — which is what
-`tests/e2e/test_successor_survival_e2e.py` asserts in one run.
-
-#### The driver a launch spawns
-
-One tier above every round is the orchestrator `just orchestrate` starts, and it is the
-longest-lived process a run has. It cannot re-`exec` itself into an attribution: it is
-**spawned**, and the environment naming a directory has to exist before the process
-does. So the launcher makes the claim on its behalf — `claim_successor_scratch_directory`
-before the spawn, `hand_successor_scratch_directory_to` the instant the driver has a pid
-— and the record names a live process throughout: the launcher until the handover, the
-driver from then on. Nothing in between is reclaimable.
-
-It is claimed **only** when the launch carries a stamp of its own. A planner's terminal
-is not a dispatch and has nothing to escape, so nothing is claimed there and no directory
-is left behind per launch. A claim or a handover this host cannot make is reported on
-stderr rather than raised — the run is worth more than its attribution, and that line is
-the operator's only warning that the driver is reapable behind its launcher again.
-
-`tests/e2e/test_orchestrate_driver_survival_e2e.py` drives the whole sequence: a real
-attached `just orchestrate` under a real dispatch's stamp, that turn's group torn down,
-the dispatch's ownership released, `just sweep-scratch` over the same root, and then the
-driver going on to settle its round. The leaked tree beside it is still reaped by that
-same sweep.
+What that leaves for an operator is a gap worth knowing about rather than a mechanism to
+drive. A leaked worker from a dispatch that ended is nobody's to collect, and it will sit
+there until the host is restarted or someone kills it by hand — `just host` is where it
+shows up. Never work around that with `nohup` or `setsid` by hand: a process detached
+that way loses the attribution the run views are built on, which trades a visible leak
+for an invisible one.
 
 ### One judged diff, one verdict
 
@@ -607,7 +556,7 @@ the whole mechanism: neither end can read a value the other did not.
 
 `LLMLINT_ONEHARNESS_BIN` is the input that actually varied. `llmlint config`
 renders it into its output as `oneharness.bin`, and it is not one value: a
-dispatched agent inherits `orchestrator/dispatch.py`'s `REPO_ROOT` — the
+dispatched agent inherits the dispatching checkout's root — the
 orchestrator's own checkout, never the worktree being linted, so the fingerprint's
 `{root}` fold-out cannot strip it — or `scripts/session-setup.sh`'s session path,
 or nothing at all where `dispatch.py` and `watchdog.py` drop it and the config
@@ -672,9 +621,14 @@ base resolves the remote HEAD, while the publishing push judges the workstream's
 `pr_base` — the parent branch for a stacked node, not the repository default. Two
 different base commits are two different diffs and therefore two independent
 judge rolls, the second one invisible to the only party who could act on it. So
-`verify.comparison_env` is the one source of that identity, and the lifecycle
-exports it into every dispatch of a workstream **and into every publishing push**,
-where the hook reads it. Nothing else stands between the worker's verdict and the
+`onevcs`'s comparison environment is the one source of that identity, and the
+lifecycle exports it into every dispatch of a workstream **and into every publishing
+push**, where `scripts/comparison-base.sh` and the pre-push hook read it. Reading
+only the older `ORCHESTRATOR_*` spelling is how that identity was lost once already:
+the names moved with the engine, nothing here followed them, and every lifecycle
+path silently fell back to resolving its own base — which is exactly the drift this
+section exists to prevent, wearing the appearance of a working mechanism.
+Nothing else stands between the worker's verdict and the
 merge, so a push that resolved its own base could merge work whose own gate had
 failed.
 
@@ -749,7 +703,7 @@ failed.
 `orchestrator:test` used to be keyed on a hand-listed subset:
 `orchestrator/`, `tests/`, `personas/`, `config/`, `pyproject.toml`, `uv.lock`. The
 suite reads well past that list — `AGENTS.md`, `docs/`, the `justfile`,
-`llmlint.yml`, `scripts/`, `.githooks/pre-push`, `apps/dag-ui/vite.config.ts` — so
+`llmlint.yml`, `scripts/`, `.githooks/pre-push` — so
 editing any of them replayed a green verdict on a tree carrying a real regression.
 So the Python targets, which all run from the workspace root over the whole tree,
 share the `wholeWorkspace` named input in `nx.json` with the llmlint tier.
@@ -769,30 +723,13 @@ split at those seams rather than at convenient ones:
   `scripts/**`, the root manifests, the fixtures, and the modules that define and
   collect those tests. They read no prose and no `orchestrator/` at all, and most
   commits here touch nothing else, so most commits replay them.
-- **`orchestrator:test`** runs everything else that can share a process with
-  execnet's receiver thread, keyed on `codeWorkspace` — the whole workspace with
-  `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test opens
-  removed.
-- **`orchestrator:test-serial`** runs the `single_threaded` remainder under the
-  same `codeWorkspace` key. Same tree, same reads; a different process shape is
-  not a different scope, so this is a task boundary rather than a key boundary.
+- **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
+  whole workspace with `docs/**` and `**/*.md` removed.
 
 `workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
 it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
 real `scripts/nx.sh` in both, so `nxCacheCheck` carries that fixture, those
 scripts, and the root manifest — and nothing else.
-
-`dag-ui:test` — vitest plus two Playwright configs, around two and a half minutes
-of real browser — is narrowed the same way. It used to name all of
-`orchestrator/**/*`, which is far more than it runs: the tier reaches this
-repository's Python through exactly one door, the fixture server
-`apps/dag-ui/e2e/fixtures/serve_fixture.py` that Playwright starts, and that
-server imports the read API. So `dagUiServerSurface` carries the package minus the
-command-side verbs nothing served imports — `integrate`, `next_round`, `recover`,
-`replan`, `results`, `smoke`, `status`, `stop` — plus the two files outside it the
-fixture runs: `tests/e2e/fake_oneharness.py` and `scripts/oneharness-stream.py`.
-That second one is a read the blanket key never covered at all, which is the usual
-shape of a coarse key: wide enough to look safe, and still missing something.
 
 Where a literal cannot be told from a read the key is deliberately the wider one —
 the fixture records `.githooks/pre-push` as a journal detail *value* and never
@@ -847,166 +784,53 @@ Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its
 own suite — so they are comparable to each other and pessimistic in absolute
 terms: `-n 4` 322s, `-n 6` 386s, `-n 8` 354s, `-n 14` — what `-n auto` resolves to
-here — 345s, and one serial sample at 843s. That serial figure is a single
-exploratory reading of the code tier alone, not the tier's baseline; the
-pre-parallel median for the whole suite was about seventeen minutes.
+here — 345s, and one serial sample at 843s.
 
 The curve is flat past four, because what the run cannot beat is its longest
-single test (about 143s), not its core count; more workers buy no wall clock and
-take cores this host wants for live dispatches. `--dist loadfile` measured 331s but
-raises that floor from the longest *test* to the longest *file*
-(`test_workspace_contract_e2e.py`, 293s), which is nearly the whole measurement —
-it has no headroom left when the box is quiet. `--dist worksteal` measured fastest
-at 280s, but that sample failed a race-window test and the run-to-run spread at a
-fixed configuration is the same size as its lead.
+single test, not its core count; more workers buy no wall clock and take cores this
+host wants for live dispatches. `--dist loadfile` measured 331s but raises that
+floor from the longest *test* to the longest *file*, which is nearly the whole
+measurement. `--dist worksteal` measured fastest at 280s, but that sample failed a
+race-window test and the run-to-run spread at a fixed configuration is the same
+size as its lead.
 
-Five consecutive runs of both tiers at the chosen setting settled at a 614.5s
-median (469.5s / 591.6s / 614.5s / 623.6s / 637.8s), each one 2140 passed, 4
-skipped, 125 prose tests, 96.03% coverage. Those totals run the two tiers one after
-the other, which is not the shape anything here actually uses: `just test` runs
-them concurrently through Nx, and forcing both fresh with `--skip-nx-cache`
-measured 311s against the roughly seventeen-minute median the tier cost before.
+A test whose subject is a process-wide or machine-wide resource declares that as a
+scheduling constraint rather than as a loosened assertion. Two markers used to
+carry those constraints here — one for a test whose subject is the process itself,
+selected into a serial tier, and one for a family of journeys whose constraint
+lives *between* tests and which therefore share an xdist group. Both went with the
+dispatch journeys that needed them when this repository became a configuration
+layer. Neither was ever a place to put "this was flaky once", and a test of either
+shape reintroduces its marker, its tier, and its reason together; a test that is
+merely slow, or that races something it does not own, is a test to fix.
 
-The code suite therefore runs in **two invocations**, and the second is not an
-optimization but a correctness requirement.
-`tests/test_runs.py::test_a_signalled_round_records_its_abandonment_and_stops_being_live`
-blocks SIGTERM on its own thread and then calls a handler that re-raises that
-signal at the whole process. Blocking is per thread, so this only survives in a
-process the test is the only thread of — and an xdist worker always carries
-execnet's receiver thread, which blocks nothing and dies of the default
-disposition the handler just restored. It fails at `-n 1` too: the constraint is
-the process, not the load. So it is marked `single_threaded` and scheduled into a
-serial invocation rather than rewritten to survive a worker.
+#### One tier measures, another judges
 
-`loadgroup` is `load` plus one thing: a test carrying `@pytest.mark.xdist_group`
-runs on the worker its group runs on, and everything else still distributes by
-load. One group holds this repository's `load_sensitive` family, which
-`tests/scheduling.py` translates into that mark. A member starts a real process it
-does not then wait for and holds a second one against it, so what its assertions
-measure is the interval between them: two members in flight at once contend for the
-same cores and the same advisory locks, and what fails is the handshake — a
-`_queue.Empty` on a readiness wait, a `ChannelTimeout` on a FIFO, a rendezvous file
-that arrives a second late — on a subset that rotates per run. That is the one
-constraint this suite has that lives *between* tests rather than inside one, which
-is why no assertion inside any of them can express it and why the answer is the
-distribution rather than a longer timeout.
-
-What it costs is the group's own serial time, because one worker runs all of it:
-measured at `-n 1` on a quiet box, 40s for the 28 members it had when the guard
-below only knew about multiprocessing queues, and 221s for the 47 it has now. That
-raises this worker's floor above the tier's longest single test (about 143s) without
-reaching the tier's own wall clock (311s for `just test` forced fresh), so the group
-is the binding floor for one worker rather than the critical path. It buys back far
-more than it spends: three publications of one branch were rejected by journeys of
-this shape, each costing a verify cycle of an hour or more.
-
-The transport is not the shape, and reading it as one cost three publications.
-`tests/e2e/test_contention_e2e.py` declares for its whole module and was for a while
-the entire family, because the guard that finds new members looked for a
-multiprocessing queue. Journeys that hold the same two processes apart over a FIFO
-(`test_real_run_plan_round_budget_surfaces_blocking_proposal`) and over the
-filesystem (`test_a_queued_update_nobody_read_is_reported_until_it_is_consumed`) sat
-outside it and went on failing the merge-path gate under ordinary host load.
-`tests/test_nx_cache_scope.py` now reads the shape per test function — an unawaited
-launch plus a held counterpart — so a new journey of it joins the family or fails
-that gate by name.
-
-Neither marker is a place to put "this was flaky once". `single_threaded` names a
-subject that is the process; `load_sensitive` names a handshake between processes
-the test itself starts. A test that is merely slow, or that races something it does
-not own, is a test to fix.
-
-##### The three ways a wall-clock assertion is fixed
-
-Neither marker helps a test whose own budget is the problem, and those failed five
-gate runs on one branch whose diff touched none of them. Three shapes of fix, none
-of which is a looser bound:
-
-**Magnify the signal.** `test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace
-_period` proves a teardown skips the `SIGTERM`-to-`SIGKILL` grace when nothing is
-left to be graceful toward. Against the real 50ms grace, "skipped it" and "the host
-was busy" are the same 150ms, and the `/proc` walks the teardown must pay measured
-15-19ms idle and 180ms under load. So the test raises the grace a hundredfold for
-itself: what it now separates is a budget twenty-five times the dearest walk from
-one grace period five times larger again. The contract is untouched — restoring the
-unconditional sleep fails it at 20s against 1s.
-
-**Bound by what the failure costs.** The journey that proves a fired bound stops a
-gate restarting its worker had a budget the e2e load scale of four expanded to 83
-seconds — past the 33 a single escapee actually costs, so it could not have caught
-one. It is now half the drain ceiling: under what the failure costs, and two orders
-of magnitude above the 61-85ms this path overshoots its bound by under load.
-
-**Wait for the thing, not for a duration.** `_await_gone` polled `kill(pid, 0)`,
-which counts a *zombie* — so it waited on init's reaping rather than on the bound,
-and expired by 8-10ms after its full guard. It asks `is_running` now.
-
-The fourth shape is a test racing something it does not own, and the answer there is
-to retry the action rather than widen the wait on its result. The DAG UI's palette
-journey opens eight node views in sequence, and closing one mounts a fresh canvas: a
-click delivered into that remount selects nothing at all. Under a 20x CPU throttle
-its pre-fix form lost one at its ninth open; the retrying form ran 40 opens clean.
-
-#### Two invocations, two tasks, one floor
-
-Those two invocations were chained inside one Nx target by `&&`, which bought
-three costs for one line: the four workers idled through the serial run, one
-change invalidated both halves, and a serial failure meant the parallel half never
-reported at all. They are now `orchestrator:test` and `orchestrator:test-serial` —
-separate tasks, neither depending on the other, keyed identically because they
-read one tree.
-
-The `&&` was not really about ordering, though; it was about `--cov-append`. The
-serial run wrote `.coverage` and the parallel one appended to it, and only the
-second reported, which is what kept `[tool.coverage.report] fail_under` evaluated
-once against a combined total. Splitting the tasks splits that data, so each tier
-now **measures and judges nothing**: `orchestrator:test-serial` measures under
-`coverage run` into `.coverage.serial`, `orchestrator:test` measures under
-pytest-cov — which is what carries coverage into the xdist workers — into
-`.coverage.parallel`, and the uncached `orchestrator:coverage` waits on both,
-combines them into `.coverage`, and reports.
+`orchestrator:test` measures under pytest-cov — which is what carries coverage into
+the xdist workers — into `.coverage.parallel`, and **judges nothing**. The uncached
+`orchestrator:coverage` waits on it, reads that file, and reports.
 
 `coverage report` is what compares the total to the declared floor, so the floor
-still has exactly one source and is still evaluated exactly once. The parallel
-tier carries a `--cov-fail-under=0` because pytest-cov otherwise adopts
-`fail_under` from the config and would fail every run on its own share; that zero
-is the tier declining to judge, not a second floor, and
-`tests/test_coverage_gate.py` holds every target to it — no target may name a
-non-zero floor, and none but `coverage` may report. That module also drives the
-whole shape for real, over a generated package whose total lands in the rounding
-band the floor once forgave, and proves the combined total exceeds what either
-tier measured alone.
+has exactly one source and is evaluated exactly once. The measuring tier carries a
+`--cov-fail-under=0` because pytest-cov otherwise adopts `fail_under` from the
+config, and a memoized tier that judged the floor would let a replayed pass stand
+in for a comparison nobody made; that zero is the tier declining to judge, not a
+second floor, and `tests/test_coverage_gate.py` holds every target to it — no
+target may name a non-zero floor, and none but `coverage` may report. That module
+also drives the whole shape for real, over a generated package whose total lands in
+the rounding band the floor once forgave.
 
-Two more things follow from the split, and both are declarations rather than
-conventions. The combine names each tier's data file, so a tier whose data never
-arrived fails the command instead of quietly lowering the total the floor is
-judged against. And `orchestrator:coverage` is **uncached**: its inputs are two
-files on disk rather than the tree, it costs seconds, and a floor that always runs
-is one no replay can skip.
+Two more things follow, and both are declarations rather than conventions. The
+enforcing command names the data file it reads, so a tier whose data never arrived
+fails the command instead of quietly lowering the total the floor is judged
+against. And `orchestrator:coverage` is **uncached**: its input is a file on disk
+rather than the tree, it costs seconds, and a floor that always runs is one no
+replay can skip.
 
-`tests/test_nx_cache_scope.py` holds the two tiers to a real partition —
+`tests/test_nx_cache_scope.py` holds the three tiers to a real partition —
 collecting each selector for real and requiring their union to equal the suite —
-because two commands selecting on one marker is exactly the shape that drops tests
-in silence, and separate targets make that easier to get wrong rather than harder.
-
-**The wall clock is a wash, and the measurement says so.** Three interleaved
-samples of each shape on this host: chained 191.8s / 163.1s / 119.0s, split
-126.8s / 130.8s / 117.1s. The medians look like a 36s win, but the spread inside
-one shape is larger than the gap between them — this box also runs live
-dispatches — and the structural difference cannot be that big. Head-of-line
-blocking is bounded by the serial invocation's own runtime, and that tier is a
-single test: 0.9s. The parallel tier stops rendering its own terminal report and
-`orchestrator:coverage` renders it instead, measured at 0.9s. Those cancel.
-
-So the split is not a speed-up, and the third cost the `&&` carried is the one
-worth having. Chained, a serial-tier failure meant the parallel half never ran, so
-a cycle reported one failure where the suite had several; and re-running the
-one-second serial test meant re-running three minutes of parallel suite with it.
-Split, both halves report in one cycle and
-`nx run orchestrator:test-serial --skip-nx-cache` re-runs a second's work alone.
-The two still share `codeWorkspace`, so an edit still invalidates both — that is
-correct, because both read the same tree — but they are separate cache entries and
-either can be forced on its own.
+because commands selecting on markers is exactly the shape that drops tests in
+silence.
 
 ## Merge strategies (where the change lands)
 
@@ -1091,7 +915,7 @@ from both the release and `CHANGELOG`.
 
 ## Lifecycle nodes in the tracked graph
 
-A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
+A lifecycle node is an `agent` node in a plan with a `repo` and either a
 `persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
 `branch`, `title`, `recorded_gate`, `verify_via_ci`, `merge_policy`, `workflow`,
 `repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
@@ -1144,8 +968,8 @@ publication. Both failed attempts retain their underlying dispatch or harness
 detail in the node journal's drafting-fallback event and in the lifecycle
 follow-up surfaced to the planner.
 
-Run these nodes with `just run-plan`, the one executor; it still accepts old
-lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
+Run these nodes with `just orchestrate`, the one way to dispatch; it still accepts
+old lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
 `examples/repo-plan.example.json`, and the one-node forms in
 `examples/single-node-lifecycle.plan.json` and
 `examples/single-node-direct.plan.json`.
@@ -1175,8 +999,8 @@ records step results plus `resume` metadata: branch, root base, PR base,
 checkpoint SHA, completed steps, and optional draft PR URL. The temporary
 worktree is always removed, but the branch and commits are preserved.
 
-After `just next-round RUN --complete-human NODE_ID/STEP_ID`, the derived node
-carries that validated resume metadata. Continuation fetches the branch,
+Once that step is attested, the derived node carries that validated resume
+metadata. Continuation fetches the branch,
 fast-forwards safely, requires the recorded checkpoint to remain in its history,
 and skips every recorded completed agent/human step. A missing or rewritten
 branch/checkpoint fails as `resume-failed`; a recorded draft closed without merge
@@ -1252,8 +1076,8 @@ Two things about that recording are decided by branch state rather than chosen:
 
 The DAG is static within a `run-plan` invocation; the orchestrator adapts between
 rounds. Every round returns direct reports, lifecycle results, and ready human
-actions. `orchestrator.replan.next_round` applies a small **edits** mapping:
-`retry`, `split`, `add`, `drop`, and `complete_human`. Completed nodes landed on
+actions. The transition applies the **edits** the channel accepted while the round
+ran — `retry`, `split`, `add`, `drop`, and `attest`. Completed nodes landed on
 root are removed as satisfied. Completed-but-open dependencies become
 `stack_bases` anchors before their IDs are removed; a merge into a feature or
 synthetic base carries that landed base until the content reaches root. Those
@@ -1280,35 +1104,34 @@ payload. The round directory and `running` status are committed before dispatch;
 the result and `completed` status are atomic updates, and an owner that stops
 without recording a result leaves `abandoned` instead of `running`. A second
 process cannot claim the same explicit run/round. If a process died, inspect its
-recorded worktrees and then use `just run-plan ... --run <id> --recover`; recovery
-is explicit and never silently overwrites a result. `just runs` and `just status`
+recorded worktrees and then use `just orchestrate --adopt <run-id>`; recovery is
+explicit and never silently overwrites a result. `just runs` and `just status`
 report a round whose recorded owner no longer exists as `ABANDONED` rather than as
 in flight, so a lifecycle round that lost its executor is visibly waiting for that
-recovery rather than looking like work in progress. Pass `--run <id>` to name a
-run; without it, a fresh unique run id comes from the plan's top-level `name` or
-filename. The continuation trailer is written to stderr, so `--format json` stdout
-remains machine-readable. Use `--no-record` to opt out — it claims no round and so
-has no ledger to abandon or recover, though it detaches like any other round — or
-`--runs-dir` to move the ledger.
+recovery rather than looking like work in progress. A fresh unique run id comes
+from the plan's top-level `name` or filename; `ONEPIPELINE_RUNS_DIR` moves the
+ledger. Every run is recorded — there is no unrecorded mode — which is what keeps
+a running dispatch inside the ledger and the views built on it.
 
-After inspecting a round, put retry/split/add/drop or `complete_human` decisions
-in `edits.json`, or attest a ready human on the CLI:
+After inspecting a round, send retry/split/add/drop decisions and human
+attestations over the live channel, then transition:
 
 ```
 just runs
-just next-round <run-id> [edits.json]
-just next-round <run-id> --complete-human <node-id>
-just next-round <run-id> --complete-human <node-id>/<step-id>
-just next-round <run-id> [edits.json] --plan-only
+just channel-reply <run-id> <<'JSON'
+{"version":1,"commands":[{"op":"attest","ref":"<node-id>/<step-id>"}]}
+JSON
+just next-round <run-id>
 ```
 
-`next-round` writes `round-02/plan.json`, runs it with the canonical executor, and
-records its result. A human completion is accepted only when the latest recorded
-result names that exact ready action; unknown, blocked, agent, and already
-completed references exit 2. Each accepted attestation is appended to
-`runs/<run-id>/humans.json` with its reference, waiting round, and UTC timestamp.
-`--plan-only` stops after writing the derived plan. The lower-level `just replan
-<prev-plan.json> <result.json> [edits.json]` remains available.
+`next-round` writes `round-02/plan.json`, runs it, and records its result, folding
+in the edits the channel accepted while the last round ran. A human completion is
+accepted only when the recorded result names that exact ready action; unknown,
+blocked, agent, and already completed references are refused. Each accepted
+attestation is appended to `runs/<run-id>/humans.json` with its reference, waiting
+round, and UTC timestamp. There is no lower-level derivation command: `just
+replan` exits naming `just next-round`, which reads the run's ledger and derives
+from the graph the round executed.
 
 The graph result state is `complete`, `waiting`, or `failed`; `ok` is true only
 for complete. Node states are `done`, `waiting`, `blocked`, `failed`, or `skipped`.
@@ -1316,44 +1139,41 @@ Waiting output includes action prose and direct `unblocks`; blocked nodes includ
 transitive `blocked_by`. Failure takes precedence over waiting. Exit status is 0
 only for complete, 1 for waiting or failed, and 2 for invalid input.
 
-Use `just status` for the joined operational view: worker history, its latest
-agent output and commands, commits on the checked-out lifecycle branch, and the
-latest ledger round that names that branch. By default it shows only running
-tasks. A task is running when its latest history status is explicitly
-non-terminal (`pending`, `started`, `running`, or `in_progress`) **and** its
-branch is still checked out in the recorded project worktree. This conservative,
-testable rule avoids treating an abandoned branch as a live process. Pass a
-positive limit (`just status 10`) or `--all` to include recent finished sessions;
-use `--format json` for pure machine-readable stdout.
+Use `just status [RUN]` for the joined operational view: what is driving the run,
+and what is running under it. Named, it covers one run; omitted, it covers every
+one. There is no count argument and no finished-session window — a run whose work
+has settled is read with `just results` and `just telemetry`.
 
 ## Integrating completed workstreams
 
-For a repository explicitly registered with `workflow: local`, `just integrate`
+For a repository whose identity resolves to `workflow: local`, `just integrate`
 runs a merge train without letting one failure block the others:
 
 ```sh
 just integrate claude/api claude/docs --push
-just integrate --refresh                 # update discovered claude/* branches only
-just integrate --format json             # machine-readable result
 ```
+
+The branches are named, always: `onevcs integrate` takes a required
+`<BRANCHES>...`, so omitting them is a usage error rather than a train over
+everything outstanding. `just recoverable` is where that discovery lives — it
+lists every preserved unpublished branch and the command that lands each one, and
+its output is what feeds this argument list.
 
 Before any mutation, integration resolves the supplied checkout back to its
 canonical registry entry. Remote and unregistered repositories reject normal
-integration and `--push` with exit 2; there is no routine bypass. `--refresh`
-remains available because it updates candidate branches without advancing base.
+integration and `--push` with exit 2; there is no routine bypass.
 
 Each permitted candidate fetches the selected remote, merges current
 `<remote>/<base>` (then earlier train candidates) in its own worktree, and runs
-the gate with `ORCHESTRATOR_COMPARISON_REMOTE` and `ORCHESTRATOR_COMPARISON_BASE`.
-Unlike the lifecycle's own gate runs, this one is kept even with `--push`: every
-candidate fast-forwards the local base *before* the single push, so the pre-push
-hook does not stand between an unverified candidate and the local base, and an
-aggregate rejection could not say which branch of the train caused it. A passing
-branch fast-forwards the local base. Conflicts and gate failures are reported as
-skips. `--push` updates the remote only when the base advanced. Omit branch names to
-discover checked-out worktree branches and local branches matching `claude/*`;
-use `--pattern` to change the glob or `--gate` to inject a different gate command.
-The base and candidate worktrees must be clean.
+the gate under the comparison identity `onevcs` exports, so the gate and the
+publishing push judge the same diff. Unlike the lifecycle's own gate runs, this
+one is kept even with `--push`: every candidate fast-forwards the local base
+*before* the single push, so the pre-push hook does not stand between an
+unverified candidate and the local base, and an aggregate rejection could not say
+which branch of the train caused it. A passing branch fast-forwards the local
+base. Conflicts and gate failures are reported as skips. `--push` updates the
+remote only when the base advanced. The base and candidate worktrees must be
+clean.
 
 An incomplete dispatch commit carries the stable trailers
 `Orchestrator-Status: incomplete` and `Orchestrator-PR-Base: <branch>`; legacy
@@ -1581,9 +1401,9 @@ provenance: it has commits ahead of origin/<base>, and all of them are complete.
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
 it skips a candidate for incomplete provenance. A recovery whose push a pre-push
 hook gates also preserves that gate run under the recovery workspace's
-[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named in the reported
-detail and in `--format json` as `gate_log`, so consecutive attempts on one branch
-are comparable instead of reading alike.
+[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named as `gate_log` in
+the reported detail, so consecutive attempts on one branch are comparable instead
+of reading alike.
 An identity covered by required PR checks instead has no gate at its push — the
 checks decide afterwards — so no verdict is recorded there.
 
@@ -1632,16 +1452,17 @@ the result.
   otherwise use a bare origin.
 
 The ledger is machine-local, not a global liveness source. On the launching
-machine use `just runs`, `just status --all`, and `just history` /
+machine use `just runs`, `just status`, and `just history` /
 `just history-show <id>`. The recorded branch and worktree are the recovery source
-of truth. Resume an intentional branch with `--branch <branch>`. For an interrupted
-round, inspect its worktrees and remote branch, then run `just run-plan <plan>
---run <id> --recover`. Recovery may reclaim a `running` record, so use it only
-after proving its owner is gone; never remove or reset an active worktree.
+of truth. For an interrupted
+round, inspect its worktrees and remote branch, then attach a fresh driver with
+`just orchestrate --adopt <run-id>`. Recovery may reclaim a `running` record, so
+use it only after proving its owner is gone; never remove or reset an active
+worktree.
 
-Switch registry workflow metadata only between runs and only with `just
-migrate-repo-workflow <alias-or-checkout> --workflow <local|remote>`, which updates
-every alias of the normalized identity in one atomic replacement. First finish or recover
+Switch publication workflow only between runs, and only by editing the rule that
+matches the repository — one rule resolves the policy for every alias of the
+normalized identity. First finish or recover
 active publication, fetch, and confirm the canonical checkout is clean and
 fast-forwarded. Before switching to `remote`, configure GitHub permissions,
 branch protection, and required checks. Before switching to `local`, confirm all
@@ -1649,13 +1470,13 @@ machines can reach the origin and it accepts safe base updates. Do not switch
 metadata to bypass an in-flight PR or failed gate; close or recover that run under
 its original workflow.
 
-Switch identity type only between runs with `just migrate-repo-type
-<alias-or-checkout> --repo-type <single-owner|team>`. Team selection atomically
-normalizes workflow to remote. Finish or recover active publication first.
+Switch identity type only between runs, by editing the rule that matches the
+repository; a team repository publishes remotely. Finish or recover active
+publication first.
 
-Switch the identity gate only between runs with `just migrate-repo-gate
-<alias-or-checkout> --gate '<command>'`. Templates may use `{base}` for the
-comparison ref, and the replacement is atomic for every alias.
+Switch the identity gate the same way, and between runs. A gate template may use
+`{base}` for the comparison ref, and because the policy is resolved from the rule
+rather than stored per alias, the change reaches every alias at once.
 
 ## Auto mode without approvals — and why bypass
 
@@ -1719,7 +1540,7 @@ It was slept out unconditionally, including on the overwhelmingly common path
 where the dispatch had already finished and there was nothing left to be graceful
 toward — four grace periods, 200ms, per dispatch, which was 2.49s of a 9.04s
 `test_ordinary_next_round_resumes_committed_lifecycle_branch`. `_await_shutdown`
-in `orchestrator/watchdog.py` now waits on the processes rather than on the clock:
+in the engine's teardown now waits on the processes rather than on the clock:
 same ceiling for anything still running, nothing for anything already gone. It is
 a per-dispatch saving, so it applies to every journey in the suite. It is also a
 *latency* saving — the waits it removes consumed no CPU, so it shows up in full on

@@ -3,62 +3,97 @@
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "orchestrator",
-  "tags": ["scope:orchestrator", "lang:python"],
+  "tags": [
+    "scope:orchestrator",
+    "lang:python"
+  ],
   "targets": {
     "build": {
       "command": "uv build",
-      "options": { "cwd": "." },
-      "outputs": ["{workspaceRoot}/dist"]
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/dist"
+      ]
     },
     "lint": {
-      "command": "uv run ruff check . && { command -v shellcheck >/dev/null || { echo \"lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry\" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
-      "options": { "cwd": "." },
-      "inputs": ["wholeWorkspace"]
+      "command": "uv run ruff check . && { command -v shellcheck >/dev/null || { echo \"lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry\" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/pre-push && uv run oneagentgraph persona validate personas",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest -m 'not reads_docs and not reads_recipes and not single_threaded' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
-      "options": { "cwd": "." },
-      "outputs": ["{workspaceRoot}/.coverage.parallel"],
-      "inputs": ["codeWorkspace"]
-    },
-    "test-serial": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.serial uv run coverage run -m pytest -m 'not reads_docs and not reads_recipes and single_threaded' --no-cov",
-      "options": { "cwd": "." },
-      "outputs": ["{workspaceRoot}/.coverage.serial"],
-      "inputs": ["codeWorkspace"]
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest -m 'not reads_docs and not reads_recipes' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.parallel"
+      ],
+      "inputs": [
+        "codeWorkspace"
+      ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine .coverage.serial .coverage.parallel && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
-      "options": { "cwd": "." },
-      "dependsOn": ["test", "test-serial"]
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "options": {
+        "cwd": "."
+      },
+      "dependsOn": [
+        "test"
+      ]
     },
     "test-docs": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_docs --no-cov -n 4 --dist loadgroup",
-      "options": { "cwd": "." },
-      "inputs": ["wholeWorkspace"]
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
     },
     "test-recipes": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_recipes --no-cov -n 4 --dist loadgroup",
-      "options": { "cwd": "." },
-      "inputs": ["recipeWorkspace"]
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "recipeWorkspace"
+      ]
     },
     "typecheck": {
       "command": "uv run mypy",
-      "options": { "cwd": "." },
-      "inputs": ["wholeWorkspace"]
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
     },
     "format": {
       "command": "uv run ruff format .",
-      "options": { "cwd": "." }
+      "options": {
+        "cwd": "."
+      }
     },
     "format-check": {
       "command": "uv run ruff format --check .",
-      "options": { "cwd": "." },
-      "inputs": ["wholeWorkspace"]
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
     },
     "bootstrap": {
       "command": "uv sync --locked",
-      "options": { "cwd": "." }
+      "options": {
+        "cwd": "."
+      }
     }
   }
 }

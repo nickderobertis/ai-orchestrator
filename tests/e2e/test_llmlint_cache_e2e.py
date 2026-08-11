@@ -281,7 +281,7 @@ def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
     base = workspace.head()
     workspace.lint(base)
 
-    changed = workspace.root / "orchestrator/dispatch.py"
+    changed = workspace.root / "orchestrator/labels.py"
     changed.write_text(changed.read_text() + "\n# judged again\n", encoding="utf-8")
     second = workspace.lint(base)
 
@@ -473,7 +473,7 @@ def test_a_cleared_red_caches_the_green_that_replaced_it(workspace: Workspace) -
     base = workspace.head()
 
     red = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
-    cleared = workspace.root / "orchestrator/dispatch.py"
+    cleared = workspace.root / "orchestrator/labels.py"
     cleared.write_text(cleared.read_text() + "\n# the finding, cleared\n", encoding="utf-8")
     green = workspace.lint(base)
     settled = workspace.lint(base)

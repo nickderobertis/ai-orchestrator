@@ -56,8 +56,7 @@ import pytest
 from conftest import git
 from nx_workspace import copy_working_tree, requires_workspace_install
 
-from orchestrator import REPO_ROOT, gitops
-from orchestrator.verify import comparison_env
+from orchestrator.root import REPO_ROOT
 
 BASE_BRANCH = "main"
 FEATURE_BRANCH = "feature"
@@ -73,6 +72,16 @@ CACHE_MISS = "judged this diff against base"
 #: caller-supplied value reaches the key, so pinning this to one producer's output
 #: would test less, not more.
 DISPATCH_AMBIENT_BIN = "/dispatch/checkout/scripts/llmlint-oneharness.sh"
+
+#: The one comparison identity every process judging a change resolves, as
+#: `scripts/comparison-base.sh` and `.githooks/pre-push` read it. Every gate a change
+#: meets — the one its worker runs before it settles, and the one the merge path runs
+#: at the publishing push — has to judge it against the same base ref, or the cached
+#: verdict is recorded under a different key than the push looks up.
+COMPARISON_ENV = {
+    "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+    "ORCHESTRATOR_COMPARISON_BASE": BASE_BRANCH,
+}
 
 pytestmark = [
     pytest.mark.skipif(
@@ -123,16 +132,17 @@ class TwoPaths:
         comparison identity and nothing else, exactly as the lifecycle rebuilds and
         judges a publication before pushing it.
         """
-        gitops.fetch(self.clone)
+        git("fetch", "--prune", "origin", cwd=self.clone)
         self.rebuilt += 1
         scratch = self.scratch_parent / f"orchestrator-merge-{self.rebuilt}" / "worktree"
-        gitops.worktree_add_detached(self.clone, scratch, f"origin/{BASE_BRANCH}")
+        git("worktree", "add", "--detach", str(scratch), f"origin/{BASE_BRANCH}", cwd=self.clone)
         (scratch / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
-        gitops.merge_squash(scratch, f"origin/{FEATURE_BRANCH}", message="publication")
+        git("merge", "--squash", f"origin/{FEATURE_BRANCH}", cwd=scratch)
+        git("commit", "-m", "publication", cwd=scratch)
         try:
             return self._llmlint_tier(scratch, {}, overrides)
         finally:
-            gitops.worktree_remove(self.clone, scratch)
+            git("worktree", "remove", "--force", str(scratch), cwd=self.clone)
 
     def _llmlint_tier(
         self, cwd: Path, caller: dict[str, str], overrides: dict[str, str]
@@ -141,15 +151,16 @@ class TwoPaths:
         return subprocess.run(
             ["bash", "-c", 'just lint-llm-diff "$(./scripts/comparison-base.sh)"'],
             cwd=cwd,
-            env={**self.env, **comparison_env(BASE_BRANCH), **caller, **overrides},
+            env={**self.env, **COMPARISON_ENV, **caller, **overrides},
             check=False,
             text=True,
             capture_output=True,
         )
 
     def commit_on_branch(self, message: str) -> str:
-        gitops.add_all(self.worker)
-        return gitops.commit(self.worker, message)
+        git("add", "-A", cwd=self.worker)
+        git("commit", "-m", message, cwd=self.worker)
+        return git("rev-parse", "HEAD", cwd=self.worker).strip()
 
     def push_branch(self) -> None:
         """Get the branch to origin so the merge path can rebuild it.
@@ -162,12 +173,13 @@ class TwoPaths:
 
     def advance_base(self, message: str) -> str:
         """Move `origin/main` without changing any file, isolating the base commit."""
-        advanced = gitops.commit_empty(self.seed, message)
+        git("commit", "--allow-empty", "-m", message, cwd=self.seed)
+        advanced = git("rev-parse", "HEAD", cwd=self.seed).strip()
         git("push", str(self.origin), BASE_BRANCH, cwd=self.seed)
         return advanced
 
     def base_sha(self) -> str:
-        return gitops.ref_sha(self.origin, BASE_BRANCH)
+        return git("rev-parse", BASE_BRANCH, cwd=self.origin).strip()
 
 
 def _write_fake_judge(directory: Path) -> None:
@@ -218,8 +230,8 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
         encoding="utf-8",
     )
     git("init", "-q", "-b", BASE_BRANCH, str(seed))
-    gitops.add_all(seed)
-    gitops.commit(seed, "the repository under test")
+    git("add", "-A", cwd=seed)
+    git("commit", "-m", "the repository under test", cwd=seed)
     # Bare, like every remote the lifecycle publishes to: a checked-out branch
     # refuses a push for a reason that has nothing to do with the gate.
     origin = tmp_path / "origin.git"
@@ -227,17 +239,18 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
 
     # The per-run clone the lifecycle cuts every worktree from — both paths' trees
     # come out of this one, which is what makes them two views of one repository.
-    clone = gitops.clone_sharing(origin, tmp_path / "clone", origin=str(origin), base=BASE_BRANCH)
+    clone = tmp_path / "clone"
+    git("clone", "--shared", "-q", "--branch", BASE_BRANCH, str(origin), str(clone))
     # Each worktree borrows this checkout's install through a symlink, and
     # `.gitignore`'s `node_modules/` does not match one. Excluding it in the clone
     # keeps that plumbing out of every commit, so the tree the merge path rebuilds
     # is byte-identical to the tree the worker judged.
-    exclude = gitops.common_dir(clone) / "info" / "exclude"
+    common = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=clone).strip())
+    exclude = common / "info" / "exclude"
     exclude.parent.mkdir(parents=True, exist_ok=True)
     exclude.write_text("node_modules\n", encoding="utf-8")
-    worker = gitops.worktree_add(
-        clone, tmp_path / "run" / "worker", FEATURE_BRANCH, base=f"origin/{BASE_BRANCH}"
-    )
+    worker = tmp_path / "run" / "worker"
+    git("worktree", "add", "-b", FEATURE_BRANCH, str(worker), f"origin/{BASE_BRANCH}", cwd=clone)
     (worker / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
 
     binaries = tmp_path / "bin"
@@ -278,11 +291,11 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
     )
     # The lifecycle releases a task worktree when its workstream settles; a linked
     # worktree left behind is a leak the suite's guard fails on, and rightly.
-    gitops.worktree_remove(clone, worker)
+    git("worktree", "remove", "--force", str(worker), cwd=clone)
 
 
 def _work(paths: TwoPaths, note: str = "the change under test") -> None:
-    changed = paths.worker / "orchestrator/dispatch.py"
+    changed = paths.worker / "orchestrator/labels.py"
     changed.write_text(f"{changed.read_text()}\n# {note}\n", encoding="utf-8")
     paths.commit_on_branch(note)
 

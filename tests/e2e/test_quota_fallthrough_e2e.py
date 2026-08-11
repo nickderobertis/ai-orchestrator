@@ -41,7 +41,7 @@ from typing import TypedDict
 from mock_oneharness import main as _mock_oneharness_main
 from waits import timeout
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 MOCK_ONEHARNESS = Path(_mock_oneharness_main.__globals__["__file__"]).resolve()
 #: The candidate that takes the turn over: a real codex-shaped stream, this

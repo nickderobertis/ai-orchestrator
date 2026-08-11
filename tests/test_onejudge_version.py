@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 # DRIFT-GATE: config/onejudge.version is the single source of truth. Keep this
 # explicit list aligned with unavoidable human-readable version literals, such
@@ -45,20 +45,17 @@ def test_onejudge_version_references_match_single_source(
 
 
 #: Every place the model-precedence measurement is restated, and the sentence each
-#: must spell for the adopted release. Three sites rather than one, because the
-#: measurement is the *reason* the code has the shape it does — the wrapper names
-#: each side's model on its own `oneharness run` AND exports the variable — so the
-#: module documenting that seam and the wrapper implementing it each say why. A gate
-#: over the reference document alone leaves both of those asserting a precedence
+#: must spell for the adopted release. Two sites rather than one, because the
+#: measurement is the *reason* the wrapper has the shape it does — it names each
+#: side's model on its own `oneharness run` AND exports the variable — so the
+#: document describing that seam and the wrapper implementing it each say why. A
+#: gate over the reference document alone leaves the wrapper asserting a precedence
 #: measured against the previous release, with the copy an operator is least likely
-#: to be reading when they change the code as the only thing that fails.
+#: to be reading when they change it as the only thing that fails.
 MODEL_PRECEDENCE_CLAIMS = {
     "docs/onejudge-integration.md": (
         "Measured against the adopted oneharness {version}, a config's "
         "per-harness `model` **beats** the variable"
-    ),
-    "orchestrator/harnesses.py": (
-        "measured against oneharness {version}, a config's per-harness ``model`` beats it"
     ),
     "scripts/oneharness-agent.sh": "oneharness {version} lets that config value beat",
 }

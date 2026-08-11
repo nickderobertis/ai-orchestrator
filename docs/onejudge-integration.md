@@ -62,8 +62,8 @@ This repository uses three onejudge provider arrangements:
   judge calls mirror the persisted planner verdict; the launch removes standalone
   model evals and assessment because the live planner is completion authority.
 
-`orchestrator.dispatch.launch_orchestrator` creates this split config and launches
-`onejudge run` with a detached `subprocess.Popen`. This wiring is specific to the
+`onepipeline start` creates this split config and launches the orchestrator's own
+detached `onejudge run`. This wiring is specific to the
 orchestrator persona; worker dispatch retains its ordinary oneharness or command
 provider and simulated-user loop.
 
@@ -305,7 +305,7 @@ therefore never inherits the other side's, nor an ambient process-wide one the
 parent exported. `just orchestrate` carries the pair in the launched process's
 environment, so every round's workers and judges inherit the same choice.
 
-`orchestrator/harnesses.py` validates each value against **that side's** config
+`scripts/oneharness-agent.sh` validates each value against **that side's** config
 before anything is dispatched, and names every selectable identity when it refuses:
 
 ```
@@ -369,7 +369,7 @@ the model together.
 ```
 
 Both halves of that rule are enforced **twice**, in the two places a choice can enter.
-`orchestrator/harnesses.py` refuses them before a dispatch starts, which is what an
+the wrapper refuses them before a dispatch starts, which is what an
 operator sees; `scripts/oneharness-agent.sh` refuses them again on the branch it
 resolves each side on, because `ORCHESTRATOR_WORKER_MODEL` and
 `ORCHESTRATOR_JUDGE_MODEL` are ordinary environment variables and a hand-set one
@@ -458,10 +458,12 @@ process-wide ones they are resolved into — in one place, so a reader that drop
 list is genuinely isolated rather than isolated from half of it.
 
 The two are told apart by **provenance, not by value**. Every selection is dropped at
-each process boundary the suite owns (`tests/conftest.py` for its own environment,
-`_provider_environment` for the environment a dispatch under test is launched with),
-and each journey then states the value it wants; so a selection a recorded turn
-observes is one that journey put there, and an inherited one reaches nothing.
+each process boundary the suite owns — `tests/conftest.py` for its own environment,
+and a journey that launches the wrapper builds that launch's environment from
+nothing rather than inheriting one (`tests/e2e/test_quota_fallthrough_e2e.py`'s
+`_agent_turn` passes `PATH`, `HOME`, and the values it is asserting on, and no
+more) — and each journey then states the value it wants; so a selection a recorded
+turn observes is one that journey put there, and an inherited one reaches nothing.
 
 Do not "adapt" a selection journey to a value you did not state. Reading the single
 identity a run happened to be routed to — `codex` on *both* sides of the default path,
@@ -540,8 +542,8 @@ contradictory record still fails. Its quota cost is one real harness invocation;
 the provider may leave dollar cost unreported (Codex does). It is not part of
 `just gate`.
 
-The *launch* — and only the launch — is retried, up to
-`orchestrator.smoke.LAUNCH_ATTEMPTS` times with a short backoff between attempts.
+The *launch* — and only the launch — is retried, a bounded number of times with a
+short backoff between attempts.
 This is the half of the check the host can break while nothing is wrong with the
 launch path: under a concurrent e2e load, oneharness has reported `fallback harness
 … ran but did not succeed` for a harness that started and then died, and the same
@@ -573,8 +575,7 @@ touching `scripts/`, it blocked publication of work that had already passed its
 gate.
 
 A candidate only counts as fallen through when its own record says it never ran the
-task: `failure_kind` of `quota` or `auth`
-(`orchestrator.telemetry.FALLTHROUGH_FAILURE_KINDS`), or a `skipped` status, which
+task: `failure_kind` of `quota` or `auth`, or a `skipped` status, which
 carries no exit code, no duration, and no accounting at all. `rate_limit` is
 deliberately not in that set — oneharness stops the chain on one, because that
 record carries work the provider already billed for (see
@@ -589,7 +590,7 @@ records are read back out of a store nothing in the smoke wrote, and each one
 reaches both the verdict and the operator's report, so a record must *back* the
 reason it names: it has to identify the harness it was written for, and it has to
 show that nothing was spent — no successful turn, and every counter it reports at
-zero (`orchestrator.telemetry.history_record_fallthrough_failure`). Absent
+zero. Absent
 accounting is not evidence of spend and is accepted: a skipped candidate records a
 null for every counter, and so does an auth refusal on this host. A refusal that
 names no identity would otherwise be reported as "an unidentified harness fell
@@ -609,11 +610,11 @@ smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)
 Both lines name the *identity* rather than the harness, because a chain's two
 Claude subscriptions are one harness and differ only by variant.
 
-`tests/e2e/test_smoke_fallback_e2e.py` drives that whole path for real — the
-recipe, the wrapper, the chain, the classifier, and the history the verdict is read
-back out of — with both candidates replaced at oneharness's own `ONEHARNESS_BIN_*`
-seam. Two things make that journey possible to write safely, and both are easy to
-get wrong:
+`tests/e2e/test_quota_fallthrough_e2e.py` drives that path for real — the wrapper,
+the chain, the classifier, and the record the verdict is read back out of — with
+both candidates replaced at oneharness's own `ONEHARNESS_BIN_*` seam. Two things
+make a journey of that shape possible to write safely, and both are easy to get
+wrong:
 
 - **Drop the dispatch's harness pin.** This repository runs its own suite from
   inside a dispatch, which exports `ORCHESTRATOR_WORKER_HARNESSES`;
@@ -626,13 +627,12 @@ get wrong:
 
 Together they are a money hazard rather than a style point: a journey that misses
 either one spawns a live subscription with its double sitting unused, and a billed
-run and a free one look identical from the assertions. `fake_codex.py`'s
-`unpinned_worker_side` is the single source for the first, and
-`test_no_smoke_journey_inherits_the_dispatch_s_harness_pin` holds both — over the
-three builders (`chain_environment`, `provider_environment`,
-`uninstalled_provider_environment`) that are every environment a smoke journey
-launches through. Build the selection there rather than spelling one inline in a
-journey, which is how a launch would escape that guard.
+run and a free one look identical from the assertions. The guard against the first
+is that `_agent_turn` builds its launch environment from nothing, so there is no
+inherited pin to apply over what the journey sets; against the second, that it
+names plain `claude-code` and `codex`. A new journey of this shape launches
+through that builder rather than spelling an environment inline, which is how one
+would escape both.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
@@ -695,8 +695,8 @@ the turn runs exactly as it did before, transcript and all. A turn with no statu
 directory — nothing is watching it — keeps `--events` for the same reason, since a
 stream would have nowhere to publish.
 
-**The reader.** `orchestrator/activity.py` reads those publications back out of the
-scratch root `orchestrator.scratch` sweeps, which is the only place a dispatch's
+**The reader.** The published views read those publications back out of the
+scratch root the sweep examines, which is the only place a dispatch's
 watchdog directory is: the run directory never learns that path and the dispatch
 never learns the run directory, so each summary carries the graph locator it was
 dispatched with. It is a trust boundary — the files sit under a shared root and a
@@ -925,7 +925,7 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   agents, repository lifecycle agents, and explicit human nodes in one recorded
   DAG. A lifecycle `steps` list may mix agent steps with `kind: human` steps on a
   resumable branch. Human nodes never call onejudge; after a person performs the
-  reported action, `just next-round RUN --complete-human NODE[/STEP]` records an
+  reported action, an `attest` command over `just channel-reply` records an
   attestation and releases only its dependents. Completed direct agents and
   lifecycle steps are not dispatched again.
 - **Run one subtask as a one-node plan.** There is no separate single-dispatch
@@ -943,10 +943,9 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   from authenticated GitHub login versus normalized origin owner; pass
   `--repo-type` when that cannot resolve. Team defaults to a ready-for-review open
   PR; single-owner preserves local direct or remote auto publication. Multiple
-  aliases share one identity. Migrate every alias atomically with `just
-  migrate-repo-type <alias> --repo-type <single-owner|team>` or `just
-  migrate-repo-workflow <alias> --workflow <local|remote>`. Configure a local
-  single-owner repository's
+  aliases share one identity, and one rule in the rules file resolves the policy
+  for all of them: edit that rule to change type or workflow, and confirm the
+  result with `just repos`. Configure a local single-owner repository's
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.
@@ -964,15 +963,16 @@ bump each consumer's `LLMLINT_MIN` floor and refresh its lock/install state; tha
 floor bump is the rollout switch that makes the normal gate use the new bundled
 rule. Run the llmlint release gate before downstream consumer gates.
 
-## Testing against onejudge without a paid model
+## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
 ([onejudge v0.3.4 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.4/docs/protocol.md)),
-so any command can stand in for the harness. The e2e suite points it at
-`tests/e2e/fake_backend.py` — a deterministic backend — so the gate drives the
-**real** onejudge CLI and loop across a real subprocess boundary, faking only the
-paid model/harness. This is the one sanctioned mock (a genuinely external service),
-and it is confined to the provider seam; the merge, SDK dispatch, CLI, and report
-validation all run for real. That backend implements the adopted version's protocol v4 unified
-`supervisor` operation; the e2e fixture rejects any real CLI whose version is not
-the adopted `config/onejudge.version` value.
+so any command can stand in for the harness — which is how the engines that
+dispatch prove themselves in their own repositories. What this repository's own
+suite drives is the layer above: the real recipes, the real wrapper scripts, and
+the **real** `oneharness` CLI over this repository's own configs and fallback
+chain, with the paid model replaced at oneharness's own shipped mock-responder
+seam (`tests/e2e/mock_oneharness.py`, `tests/e2e/fake_codex.py`). That is the one
+sanctioned mock of a genuinely external service; the wrapper, the CLI, the chain,
+and the recorded history all run for real, and the fixtures reject any CLI whose
+version is not the adopted `config/oneharness.version` value.

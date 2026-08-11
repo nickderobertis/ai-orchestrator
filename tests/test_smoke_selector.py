@@ -7,20 +7,20 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
-from orchestrator import gitops
+from conftest import git
 
 ROOT = Path(__file__).parents[1]
 
 
 @pytest.mark.reads_docs
 def test_smoke_selector_covers_exact_documented_launch_paths(tmp_path: Path) -> None:
-    clone = gitops.clone(str(ROOT), tmp_path / "clone")
+    clone = tmp_path / "clone"
+    git("clone", "-q", str(ROOT), str(clone))
 
     def commit(message: str) -> str:
-        gitops._git(["add", "-A"], cwd=clone)
-        gitops._git(["commit", "-m", message], cwd=clone)
-        return gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
+        git("add", "-A", cwd=clone)
+        git("commit", "-m", message, cwd=clone)
+        return git("rev-parse", "HEAD", cwd=clone).strip()
 
     def selected(before: str, after: str) -> bool:
         proc = subprocess.run(
@@ -33,7 +33,7 @@ def test_smoke_selector_covers_exact_documented_launch_paths(tmp_path: Path) -> 
         assert proc.returncode in {0, 1}, proc.stderr
         return proc.returncode == 0
 
-    base = gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
+    base = git("rev-parse", "HEAD", cwd=clone).strip()
     (clone / "README.md").write_text("ordinary\n", encoding="utf-8")
     ordinary = commit("docs: ordinary")
     assert not selected(base, ordinary)

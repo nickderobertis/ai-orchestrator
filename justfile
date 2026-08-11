@@ -1,9 +1,9 @@
 # Command surface for ai-orchestrator. `just --list` is the index.
 #
 # `just bootstrap` must work from a clean clone; `just check` is the deterministic
-# quality tier (fails on any issue, no warnings-only mode). The e2e drives the real
-# `onejudge` CLI with only the paid model faked (onejudge's `command` provider →
-# tests/e2e/fake_backend.py).
+# quality tier (fails on any issue, no warnings-only mode). Every verb below the
+# quality tier is a thin wrapper over one of the published CLIs this repository
+# pins, and the e2e suite drives these recipes for real.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
@@ -33,7 +33,8 @@ bootstrap:
     git config receive.denyCurrentBranch updateInstead
 
 # Full quality gate: format check, lint, type check, persona validation, tests
-# (unit + e2e, coverage enforced). Must pass before any commit.
+# (unit + e2e, coverage enforced), and the Nx cache contract. Must pass before any
+# commit.
 #
 # Every captured stage writes through `scripts/preserved-log.sh` to `.logs/<label>.log`
 # (owner-only, credential values redacted, truncated per run). That log survives the
@@ -41,7 +42,7 @@ bootstrap:
 # followed with `tail -f .logs/check.log` instead of through /proc.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test,test-serial,test-docs,test-recipes,coverage && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/nx.sh run workspace:check-nx-cache; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes,coverage && ./scripts/nx.sh run workspace:check-nx-cache; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
@@ -53,15 +54,16 @@ check:
 # commit it covers, before it settles. The coverage total is measured either
 # way; printing it here is what stops a reader opening `.coverage` by hand.
 # llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the tier whose provenance is passed through here is proven end to end in tests/e2e/test_llmlint_cache_e2e.py.
-gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
+# Both arguments default to empty and are passed straight through, because
+# `scripts/comparison-base.sh` is the one source of which remote and base the gate
+# judges against — including the environment chain the lifecycle exports it under.
+# Restating that chain here would not merely duplicate it: these values are passed
+# positionally, so the copy would always win and a name changed in the script would
+# silently keep resolving through the stale one.
+gate remote="" base="":
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate' (full output: $log)" >&2; exit 1; }
-    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
-
-# Spend one real harness turn proving prompt delivery and complete history telemetry.
-# Kept out of `gate`; pre-push selects it only for launch-path changes.
-smoke:
-    @uv run orchestrator-smoke
+    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 #
@@ -73,18 +75,16 @@ smoke:
 # A green run says one line, like `check`: the suite's own output is the failure
 # report, and it is streamed in full when there is one.
 test *nx_args:
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-serial,test-docs,test-recipes,coverage {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs,test-recipes,coverage {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
-# The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
+# The e2e suite alone (the real recipes, wrappers, and harness CLI) — quick inner loop.
 #
 # Same worker count and distribution as the `test` tier, for the same reason: the
 # journeys wait on subprocesses rather than compute, so the wall clock is latency
-# and the workers are nearly free. `single_threaded` is deselected here too — those
-# tests need a process with no execnet thread in it, and `orchestrator:test-serial`
-# is the tier that owns them.
+# and the workers are nearly free.
 test-e2e:
     # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
-    @uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist loadgroup
+    @uv run pytest tests/e2e -n 4 --dist loadgroup
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
@@ -93,10 +93,6 @@ lint:
 # Static type check.
 typecheck:
     ./scripts/nx.sh affected -t typecheck
-
-# Validate every persona against the delta contract (also part of `check`).
-validate-personas:
-    uv run orchestrator-validate-personas
 
 # Format the codebase in place.
 format:
@@ -114,206 +110,246 @@ format-check:
 # file an EXIT trap removes takes that account with it.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-serial,test-docs,test-recipes,coverage; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx playwright typescript@6 && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-docs,test-recipes,coverage; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
-# Local-first runs no CI, but origin is the shared source of truth: push every
-# change that lands on main. The pre-push hook gates this like any push; if git
-# refuses a non-fast-forward, fetch and rebase before retrying.
-sync branch="" remote="origin":
-    @comparison=$(scripts/comparison-base.sh "$2" "$1"); branch=${comparison#"$2/"}; git push --quiet -- "$2" "$branch" || { echo "sync: push failed; fetch '$2' and rebase '$branch', then retry" >&2; exit 1; }
-
-# --- orchestrator verbs ---------------------------------------------------
-
-# Run the canonical tracked graph: direct agents, lifecycle agents, and humans.
-# `just run-plan <plan.json>`. One subtask is a one-node plan — see
-# `examples/single-node-direct.plan.json` and
-# `examples/single-node-lifecycle.plan.json`. `--worker-harness` /
-# `--judge-harness` pick the provider each dispatch of the graph uses for its
-# worker and its judge, and `--worker-model` / `--judge-model` the model that side
-# runs on; see docs/onejudge-integration.md#choosing-a-harness-per-side.
+# --- delegated verbs ------------------------------------------------------
 #
-# The summary is a `[doc]` attribute rather than the comment because `just --list`
-# renders only the LAST comment line — which on these recipes is a wrapped fragment,
-# or an llmlint directive that has to stay next to the recipe it silences.
-[doc('Run the canonical tracked graph of direct agents, lifecycle agents, and humans: `just run-plan <plan.json>`; --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes, and --worker-model / --judge-model the model it runs on.')]
-run-plan *args:
-    @uv run orchestrator-run-plan "$@"
+# Every recipe in this section is a thin wrapper over one of the published CLIs
+# pinned in `config/*.version`: `onepipeline` (runs and the planner channel),
+# `oneagentgraph` (dispatch, personas, scratch), `onevcs` (repository identities
+# and publication), and `onepipeline-api` (the read API and the browser view).
+#
+# The recipe names and argument shapes are the operating surface of this host —
+# every planner habit and every doc reference here names them — so a wrapper
+# absorbs a CLI whose shape differs rather than passing the difference on. Where a
+# published verb genuinely does something else than the recipe used to, the recipe
+# that lost it says so in its own comment rather than pretending inside the shell.
 
 # Launch the dedicated orchestrator with a host-visible live planner channel, then
 # stay attached: it streams what `just monitor` streams and returns when the run
 # settles — the graph completed, a blocking planner surface is waiting, or nothing
 # is driving the run (exit 3). `--detach` returns at the launch record instead,
 # for a long unattended run. Either way the run leads its own session, so Ctrl-C
-# detaches rather than stopping it. `--worker-harness` / `--judge-harness` pick the
-# provider each dispatch of the run uses for its worker and its judge, and
-# `--worker-model` / `--judge-model` the model that side runs on.
+# detaches rather than stopping it.
+#
+# `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
+# splits adoption into its own verb, and this recipe keeps the one spelling the
+# planner doctrine names. `--adopt` has to lead, because everything after it is the
+# adopt verb's own.
+#
+# The per-side `--worker-harness` / `--judge-harness` / `--worker-model` /
+# `--judge-model` flags have no successor on `onepipeline start`: which harness and
+# model each side of the conversation runs on is now a property of the run's agent
+# graph, overridden per run with `oneagentgraph run --set`.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
-[doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes, and --worker-model / --judge-model the model it runs on.')]
+[doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:
-    @uv run orchestrator-orchestrate "$@"
+    @if [[ "${1:-}" == "--adopt" ]]; then uv run onepipeline adopt "${@:2}"; else uv run onepipeline start "$@"; fi
+
+# Execute the current round of a launched run: `just run-plan <run-id>`.
+#
+# This is the engine verb the orchestrator member drives, not the plan launcher it
+# used to be. A plan file is launched by `just orchestrate`, which starts the run
+# and the driver that calls this; a plan file passed here is not a run id and the
+# CLI says so.
+[doc('Execute the current round of a launched run: `just run-plan <run-id>`. A plan file is launched with `just orchestrate`.')]
+run-plan *args:
+    @uv run onepipeline round run "$@"
+
+# Transition a run to its next round, folding the last round's results and the
+# planner edits accepted while it ran: `just next-round <run-id>`.
+# llmlint: ignore[tool_output_is_signal] the tracked result and continuation guidance are this command's product.
+next-round *args:
+    @uv run onepipeline round next "$@"
 
 # Bounded host-side reads and replies for the live planner channel.
 # llmlint: ignore[tool_output_is_signal] channel-next returns a structured bounded status or a validated transport error for planner recovery.
 channel-next *args:
-    @uv run orchestrator-channel-next "$@"
+    @uv run onepipeline next "$@"
 
+# `just channel-reply <run-id> [FILE]` — the envelope is read from FILE, or from
+# stdin when none is named. It carries a legacy verdict, versioned live graph
+# edits, or both.
 # llmlint: ignore[tool_output_is_signal] channel-reply validates the reply and names transport/rendezvous failures so the planner can reattach and retry.
 channel-reply *args:
-    @uv run orchestrator-channel-reply "$@"
+    @uv run onepipeline reply "$@"
 
+# Raise a non-blocking planner status update: `just channel-surface <run-id> [TEXT]`.
 channel-surface *args:
-    @uv run orchestrator-channel-surface "$@"
+    @./scripts/planner-surface.sh "$@"
 
+# The three legacy verdicts, each rendered as the reply envelope
+# `onepipeline reply` accepts: `just channel-approve <run-id>`,
+# `just channel-reject <run-id> <why>`, `just channel-continue <run-id> <what-next>`.
 channel-approve *args:
-    @uv run orchestrator-channel-approve "$@"
+    @./scripts/planner-verdict.sh approve "$@"
 
 channel-reject *args:
-    @uv run orchestrator-channel-reject "$@"
+    @./scripts/planner-verdict.sh reject "$@"
 
 channel-continue *args:
-    @uv run orchestrator-channel-continue "$@"
+    @./scripts/planner-verdict.sh continue "$@"
 
-# Remove dead watchdog scratch and conservatively stale known third-party scratch.
-# Pass `--dry-run` to inspect candidates without removing them.
+# Reclaim the scratch `oneagentgraph` itself produces. Pass `--dry-run` to inspect
+# candidates without removing them, `--min-age-hours` to move the stale threshold.
+#
+# This reclaims less than the name suggests, which is worth knowing before trusting
+# it with a full disk: it sweeps the two families that engine owns (`runs`, `temp`)
+# and reaps no processes. The volume families a dispatch leaves — the per-invocation
+# `nx` install, Nx's per-worktree native binary, pytest run directories, onejudge
+# scratch — and a leaked worker are nobody's to collect here. Not papered over with a
+# second sweeper beside this one: two cleaners racing one directory is worse. See
+# docs/orchestration.md, "Recorded rounds".
 sweep-scratch *args:
-    @uv run orchestrator-sweep-scratch "$@"
+    @uv run oneagentgraph sweep "$@"
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow.
 # `just repo-recover <branch> --repo <canonical-checkout>`.
 repo-recover *args:
-    @uv run orchestrator-repo-recover "$@"
+    @uv run onevcs recover "$@"
 
-# Derive the next round's plan from the last round's results + edits.
+# The across-round derivation this recipe used to print is no longer a verb of its
+# own: `onepipeline round next` folds the last round's results and the accepted
+# planner edits into the next round itself, so the plan of record is derived where
+# it is executed rather than in a separate file-in/file-out step. `just next-round`
+# is that verb. This recipe stays only to say so.
 replan *args:
-    @uv run orchestrator-replan "$@"
+    @echo "replan: the next round is derived by the round transition itself — run 'just next-round <run-id>'; there is no standalone derive-and-print verb on the published surface" >&2; exit 2
 
 # Update, verify, fast-forward, and optionally push completed workstream branches:
-# `just integrate claude/a claude/b --push`; omit branches to auto-discover them.
+# `just integrate claude/a claude/b --push`.
+#
+# The branches have to be named. `onevcs integrate` takes a required `<BRANCHES>...`,
+# so the auto-discovery this recipe used to do when given none is gone — omitting
+# them is a usage error rather than a train over everything outstanding. `just
+# recoverable` is where that discovery lives now: it lists every preserved
+# unpublished branch and the command that lands each one, and its output is what
+# feeds this argument list.
 # llmlint: ignore[tool_output_is_signal] the requested readable per-branch train summary is this verb's product.
 integrate *args:
-    @uv run orchestrator-integrate "$@"
-
-# Derive and run the next recorded tracked-graph round, optionally applying
-# edits and/or `--complete-human NODE_ID[/STEP_ID]` attestations.
-# llmlint: ignore[tool_output_is_signal] the tracked result and continuation guidance are this command's product.
-next-round *args:
-    @uv run orchestrator-next-round "$@"
+    @uv run onevcs integrate "$@"
 
 # List recorded tracked-graph runs, who launched them, and their latest status.
 # `just runs --mine` lists only the runs this session launched.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line run ledger is this viewing command's product.
 runs *args:
-    @uv run orchestrator-runs "$@"
+    @uv run onepipeline runs "$@"
 
 # Stop a run this session launched, tree and all: `just stop <run-id>`. Refuses a run
 # another planner launched, or one with no recorded launcher, unless given --force.
-# A stopped run stays reclaimable through `just run-plan ... --recover`.
 # llmlint: ignore[tool_output_is_signal] the ownership refusal and what was stopped are this command's product.
 stop *args:
-    @uv run orchestrator-stop "$@"
+    @uv run onepipeline stop "$@"
 
 # llmlint: ignore[tool_output_is_signal] the requested cross-project goal inventory is this viewing command's product.
 goals *args:
-    @uv run orchestrator-goals "$@"
+    @uv run onepipeline goals "$@"
 
-# Show every node outcome in one run and concrete full-log paths for failures.
+# Show every node outcome in one run and the evidence each one left.
 # llmlint: ignore[tool_output_is_signal] this command is the requested results view.
 results *args:
-    @uv run orchestrator-results "$@"
+    @uv run onepipeline results "$@"
 
-# Register a repository checkout alias. Workflow belongs to its shared identity.
+# Register a repository checkout alias. Type, workflow, and gate come from the
+# rules file the identity matches rather than from flags here.
 register-repo *args:
-    @uv run orchestrator-register-repo "$@"
+    @uv run onevcs register "$@"
 
-# Atomically migrate publication workflow for every checkout alias of one identity.
-migrate-repo-workflow *args:
-    @uv run orchestrator-migrate-repo-workflow "$@"
-
-# Atomically migrate repository type for an identity; team also selects remote workflow.
-migrate-repo-type *args:
-    @uv run orchestrator-migrate-repo-type "$@"
-
-migrate-repo-gate *args:
-    @uv run orchestrator-migrate-repo-gate "$@"
-
-# List repository identities and checkout aliases, optionally refreshing them.
+# List repository identities and checkout aliases.
+# `just repos --audit-gate-coverage` also reports which identities have merge-path
+# verification and which do not.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:
-    @uv run orchestrator-repos "$@"
+    @uv run onevcs repos "${@/--audit-gate-coverage/--audit-gates}"
 
 # List recent dispatched worker sessions across every target repo.
+# `just history [RUN]` lists one run's records; the argument is a run id rather
+# than the record count it used to be.
 # llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
 history *args:
-    uv run orchestrator-history {{args}}
+    @uv run oneagentgraph history "$@"
 
-# Show a readable progress digest for the newest matching worker session.
+# Show one recorded dispatch: `just history-show <record-id>`.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line digest is this viewing command's product.
 history-show *args:
-    uv run orchestrator-history-show {{args}}
+    @uv run oneagentgraph history show "$@"
 
-# Watch one tracked-graph run as one concise event stream, aggregating the run
-# journal, its labelled oneharness sessions, its lifecycle-branch commits, and its
-# linked PR state. `just monitor [RUN_ID]`; defaults to the newest active run.
-# Follows on a terminal, where only successful graph completion exits 0 and
-# waiting/failed/stopped heartbeat on. Off one — a pipe, a file, any captured
-# invocation — it makes one bounded pass and exits 0; `--follow` overrides.
-# `--until-settled` follows either way and returns when the run settles: complete,
-# a blocking planner surface waiting on you, or nothing driving it (exit 3).
+# Watch one tracked-graph run as one concise event stream: `just monitor <run-id>`.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
-    uv run orchestrator-monitor {{args}}
+    @uv run onepipeline monitor "$@"
 
-# Emit the schema-versioned run telemetry index, or `just telemetry <run-id>` for one
-# named run — settled or not. `--breakdown` renders the operator timing view.
+# Session timing and usage, for every run or one named run.
+# `--breakdown` renders the operator timing view.
 telemetry *args:
-    @uv run orchestrator-telemetry {{args}}
+    @uv run onepipeline telemetry "$@"
 
-# Serve the read-only DAG Observatory against a running telemetry server.
-# llmlint: ignore[tool_output_is_signal] Vite startup and request logs are the foreground development server's operator-facing product.
+# Serve the published DAG Observatory bundle against a running read API, proxying
+# `/api` and `/healthz` to it so the browser view and its data share one origin.
+# `DAG_UI_PORT` and `DAG_UI_API_URL` move either end.
+# llmlint: ignore[tool_output_is_signal] the served URL and its request log are the foreground development server's operator-facing product.
 dag-ui:
-    ./scripts/nx.sh run dag-ui:serve
+    ./scripts/dag-ui.sh
 
-# Photograph every major DAG Observatory surface at every viewport in the matrix
-# (`apps/dag-ui/e2e/viewports.ts`, documented in docs/dag-ui.md) against the browser
-# tier's own fixture server, and print the gallery it wrote. The gallery is per
+# Photograph the published DAG Observatory at every viewport in the matrix
+# (`scripts/dag-ui-screens.sh`, documented in docs/dag-ui.md) against its own
+# throwaway API and UI servers, and print the gallery it wrote. The gallery is per
 # invocation and gitignored, so two of these at once neither collide nor leave the
-# tree dirty. Extra arguments reach Playwright (`--grep "at 390x844"` for one width).
+# tree dirty. Extra arguments reach `playwright screenshot`.
 dag-ui-screens *args:
     ./scripts/dag-ui-screens.sh "$@"
 
-# Serve the read-only DAG telemetry API (FastAPI + SSE), loopback-bound by default.
+# Serve the read-only DAG telemetry API, loopback-bound by default.
+# `--runs-dir`, `--host`, and `--port` keep working; the wrapper renders them as
+# the published `--runs-root` and `--bind`.
 # llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
 telemetry-server *args:
-    uv run orchestrator-telemetry-server {{args}}
+    @./scripts/telemetry-server.sh "$@"
 
-# Show running tasks joined with recent output, branch commits, and ledger rounds.
-# Pass N or --all to include recently finished tasks, or `just status <run-id>` to
-# scope the view to one run's own indicators and dispatched sessions.
+# Show a run's live state: what is driving it, and what is running.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
-    @uv run orchestrator-status {{args}}
+    @uv run onepipeline status "$@"
 
-# Show this host's load averages and every live dispatch producing it: owning
-# session, run/node, the role and harness serving its current turn, that turn's age,
-# and its load contribution. Read-only, and proven from the dispatch ownership
-# registry rather than from process names.
+# Show every live dispatch on this host, with its owner and load contribution.
 # llmlint: ignore[tool_output_is_signal] the requested per-dispatch host inventory is this viewing command's product.
 host *args:
-    @uv run orchestrator-host "$@"
+    @uv run onepipeline host "$@"
 
 # List every preserved-but-unpublished branch across the registered repository
-# identities, why its workstream stopped, and the exact command that lands it —
-# `just repo-recover` for an incomplete-provenance branch, `just integrate` for a
-# complete one. Read-only and safe to run while dispatches are live.
+# identities and the command that lands each one.
 # llmlint: ignore[tool_output_is_signal] the requested recovery inventory is this viewing command's product.
 recoverable *args:
-    @uv run orchestrator-recoverable "$@"
+    @uv run onevcs recoverable "$@"
 
-# Scaffold a new persona: `just new-persona <name>`.
+# Fast-forward a publication checkout to its origin: `just sync [BRANCH]`.
+sync *args:
+    @uv run onevcs sync "$@"
+
+# Scaffold a new persona: `just new-persona <name>`. The published verb writes into
+# the working directory, so this runs it in `personas/` — including the
+# subdirectory a slash-qualified repo-specific name names.
 new-persona *args:
-    @uv run orchestrator-new-persona "$@"
+    @./scripts/new-persona.sh "$@"
 
-# Provision the session toolchain (installs onejudge, oneharness, bun, and llmlint).
+# Validate every persona against the delta contract (also part of `just check`).
+validate-personas *args:
+    @uv run oneagentgraph persona validate "${@:-personas}"
+
+# Spend one real harness turn proving prompt delivery and complete history telemetry.
+# Kept out of `gate`; pre-push selects it only for launch-path changes.
+#
+# `scripts/smoke.sh` is not ceremony around the published verb: `oneagentgraph
+# smoke` runs plain `oneharness` against a config it generates itself, and it takes
+# the caller's `ORCHESTRATOR_AGENT_STATUS_DIR` as-is. The wrapper supplies this
+# repository's agent harness and an isolated status directory, which is what stops a
+# smoke run from inside a dispatch — where the pre-push hook runs it — from
+# hijacking that dispatch's own liveness protocol. See the script's header.
+smoke *args:
+    @./scripts/smoke.sh "$@"
+
+# Provision the session toolchain (installs onejudge, oneharness, bun, llmlint, and
+# the four published CLIs this repository is a configuration layer over).
 # Idempotent; runs automatically via the SessionStart hook. No-ops in CI.
 session-setup:
     # llmlint: ignore[tool_output_is_signal] installation progress and per-tool verification diagnostics are the session setup's operator-facing result.

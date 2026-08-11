@@ -18,7 +18,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 FILTER = REPO_ROOT / "scripts" / "oneharness-stream.py"
 INTERPRETER = REPO_ROOT / ".venv" / "bin" / "python3"

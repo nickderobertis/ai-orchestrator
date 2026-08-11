@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from orchestrator import REPO_ROOT
+from orchestrator.root import REPO_ROOT
 
 _JUDGMENT = ("AGENTS.md", "## The granularity rule (the core judgment)")
 _MECHANICS = ("docs/orchestration.md", "## Decomposition and scheduling")
