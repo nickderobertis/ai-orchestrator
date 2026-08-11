@@ -482,79 +482,26 @@ a branch that re-pushes through a red gate all night cannot grow the directory w
 end. The single `gate.log` a branch recovered before this split still has is neither
 counted nor pruned: it is the whole history of those attempts.
 
-### The successor contract
+### Keeping a process that outlives its launcher
 
-A process a dispatch starts inherits its `ORCHESTRATOR_AGENT_STATUS_DIR`, and the
-sweep's process reaper acts on exactly that stamp: a live process stamped for a
-dispatch that is over is a leaked tree, and it is terminated. That is correct for what
-a finished dispatch actually leaves behind, and it was catastrophic for the two things
-that are *meant* to outlive their launcher — a round owner (`just run-plan`, `just
-next-round`) and a publication driver (`just repo-recover`, `just integrate`). One
-round owner died sixty-six seconds in; two recoveries died at exit 143 with their gate
-already green.
+Some processes here are *meant* to outlive the thing that started them: a round owner
+(`just run-plan`, `just next-round`), a publication driver (`just repo-recover`, `just
+integrate`), and above them the driver `just orchestrate` spawns. Reparenting to init
+puts every one of them outside the tree walk its launcher would be found by.
 
-Those four entry points therefore go through `orchestrator.detach.run_successor`, which
-adds one step to the fork the round already made: the forked round claims a watchdog
-directory of its own and **re-`exec`s** under it. An `exec` and nothing less, because
-`/proc/<pid>/environ` is the memory the kernel wrote at the last `exec` and `os.environ`
-does not touch it — a process cannot shed an inherited stamp in place, and everything it
-starts afterwards would inherit the launcher's stamp anyway.
+This repository no longer arbitrates that. The sweep it used to arbitrate with is gone
+with the rest of the implementation: `oneagentgraph sweep` reclaims the two scratch
+families it owns and terminates nothing, so there is no reaper here for a long-lived
+process to be spared from, and no stamp for it to re-attribute itself under. Keeping
+these processes alive, and reaping them once they are done, belongs to the engines that
+start them.
 
-It is the **round** that re-`exec`s, not the process that forked it, and the difference
-is not cosmetic. The relaying parent outlives the round by the moment it takes to collect
-its exit status. A parent stamped for the round's directory spends that moment as a live
-process whose recorded owner is already dead — which is the reaper's definition of a
-leaked tree — so a sweep landing in that window kills the parent before it can report
-how the round ended, and a completed round reaches its caller as `143`. The parent
-therefore keeps the launcher's stamp, which describes it correctly: it belongs to the
-launcher and is meant to die with it.
-
-Re-stamping rather than scrubbing, because the reaper's reach was never the problem.
-The directory a successor claims makes it *reapable under its own identity*: while the
-successor runs the sweep retains its whole tree, and once it is gone the same tree
-becomes exactly the kind of leaving this reaper exists for. An unstamped process would
-be neither, forever.
-
-What the sweeper reads there is deliberately the weaker of its two ownership proofs.
-`claim_successor_scratch_directory` records an identity in `owner.lock` **without**
-holding the `flock` a dispatcher holds, so:
-
-* `_watchdog_is_reclaimable` — which accepts a recorded live identity — retains the
-  tree, and reclaims it once that identity is gone; while
-* `watchdog_has_a_live_owner` — which takes only a held lock — says no, so a round
-  owner never appears in `just host` or `just status` as a live dispatch with no turn
-  and no role.
-
-The claim is written by the process that will own the tree, before its `exec`, and there
-is no window: an `exec` carries a pid and its start token across unchanged, so the
-identity recorded before it still describes the process working there afterwards.
-
-Nothing about the reaper's proof standard moves for this. A process stamped for a
-finished dispatch that did not re-attribute is still reaped, in the same sweep that
-spares the round — which is what
-`tests/e2e/test_successor_survival_e2e.py` asserts in one run.
-
-#### The driver a launch spawns
-
-One tier above every round is the orchestrator `just orchestrate` starts, and it is the
-longest-lived process a run has. It cannot re-`exec` itself into an attribution: it is
-**spawned**, and the environment naming a directory has to exist before the process
-does. So the launcher makes the claim on its behalf — `claim_successor_scratch_directory`
-before the spawn, `hand_successor_scratch_directory_to` the instant the driver has a pid
-— and the record names a live process throughout: the launcher until the handover, the
-driver from then on. Nothing in between is reclaimable.
-
-It is claimed **only** when the launch carries a stamp of its own. A planner's terminal
-is not a dispatch and has nothing to escape, so nothing is claimed there and no directory
-is left behind per launch. A claim or a handover this host cannot make is reported on
-stderr rather than raised — the run is worth more than its attribution, and that line is
-the operator's only warning that the driver is reapable behind its launcher again.
-
-`tests/e2e/test_orchestrate_driver_survival_e2e.py` drives the whole sequence: a real
-attached `just orchestrate` under a real dispatch's stamp, that turn's group torn down,
-the dispatch's ownership released, `just sweep-scratch` over the same root, and then the
-driver going on to settle its round. The leaked tree beside it is still reaped by that
-same sweep.
+What that leaves for an operator is a gap worth knowing about rather than a mechanism to
+drive. A leaked worker from a dispatch that ended is nobody's to collect, and it will sit
+there until the host is restarted or someone kills it by hand — `just host` is where it
+shows up. Never work around that with `nohup` or `setsid` by hand: a process detached
+that way loses the attribution the run views are built on, which trades a visible leak
+for an invisible one.
 
 ### One judged diff, one verdict
 

@@ -127,21 +127,28 @@ def _run(
     *args: str,
     stdin: str | None = None,
     status_dir: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["PATH"] = f"{checkout / 'bin'}{os.pathsep}{env['PATH']}"
-    env["TRACE_FILE"] = str(trace)
-    env.pop("ONEPIPELINE_RUNS_DIR", None)
-    # This suite is itself run from inside a dispatch, whose real status directory
-    # would otherwise reach the recipe under test. Each journey states the value it
-    # wants, and the default is the operator case: none.
-    env.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{checkout / 'bin'}{os.pathsep}{environment['PATH']}"
+    environment["TRACE_FILE"] = str(trace)
+    environment.pop("ONEPIPELINE_RUNS_DIR", None)
+    # This suite is itself run from inside a dispatch, whose real status directory and
+    # history store would otherwise reach the recipe under test. Each journey states
+    # the values it wants, and the default is the operator case: none of them.
+    for inherited in (
+        "ORCHESTRATOR_AGENT_STATUS_DIR",
+        "ONEHARNESS_HISTORY_DIR",
+        "ONEHARNESS_HISTORY_LABELS",
+    ):
+        environment.pop(inherited, None)
     if status_dir is not None:
-        env["ORCHESTRATOR_AGENT_STATUS_DIR"] = str(status_dir)
+        environment["ORCHESTRATOR_AGENT_STATUS_DIR"] = str(status_dir)
+    environment.update(env or {})
     return subprocess.run(
         ["just", *args],
         cwd=checkout,
-        env=env,
+        env=environment,
         check=False,
         text=True,
         capture_output=True,
@@ -500,6 +507,8 @@ set -euo pipefail
 printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
 printf 'bin %s\\n' "${ONEAGENTGRAPH_ONEHARNESS_BIN:-<unset>}" >>"$TRACE_FILE"
 printf 'status %s\\n' "${ORCHESTRATOR_AGENT_STATUS_DIR:-<unset>}" >>"$TRACE_FILE"
+printf 'history %s\\n' "${ONEHARNESS_HISTORY_DIR:-<unset>}" >>"$TRACE_FILE"
+printf 'labels %s\\n' "${ONEHARNESS_HISTORY_LABELS:-<unset>}" >>"$TRACE_FILE"
 if [ -n "${ORCHESTRATOR_AGENT_STATUS_DIR:-}" ]; then
   printf '%s\\n' "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"
   rm -f "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.done"
@@ -564,3 +573,44 @@ def test_smoke_does_not_hijack_the_live_dispatch_it_runs_inside(tmp_path: Path) 
     assert (live / "agent.done").read_text(encoding="utf-8") == "111111\n"
     # And the isolated directory did not outlive the run.
     assert not Path(handed_down).exists()
+
+
+@pytest.mark.reads_recipes
+def test_smoke_reads_back_a_history_store_nothing_else_is_writing_to(tmp_path: Path) -> None:
+    """The smoke judges the record it just wrote, so it must be the only writer.
+
+    `orchestrator-smoke` pointed the turn at its own history directory and stamped it
+    with this tier's own labels. Left inheriting the ambient store, the smoke reads
+    back whichever dispatch on this host wrote last and judges that instead.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(STATUS_CLAIMING_UV)
+    ambient = tmp_path / "ambient-history"
+    ambient.mkdir()
+
+    result = _run(
+        checkout,
+        trace,
+        "smoke",
+        env={"ONEHARNESS_HISTORY_DIR": str(ambient), "ONEHARNESS_HISTORY_LABELS": "role=agent"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    traced = dict(line.split(" ", 1) for line in trace.read_text().splitlines() if " " in line)
+    assert traced["history"] != str(ambient)
+    assert Path(traced["history"]).name == "history"
+    assert traced["labels"].startswith("role=smoke,")
+
+
+@pytest.mark.reads_recipes
+def test_the_channel_surface_recipe_refuses_an_invocation_it_cannot_act_on(
+    tmp_path: Path,
+) -> None:
+    """A surface with no run id names no channel, so it is a usage error, not an empty call."""
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "channel-surface")
+
+    assert result.returncode == 2, result.stdout
+    assert "usage: planner-surface.sh <run-id> [text]" in result.stderr
+    assert not trace.exists()

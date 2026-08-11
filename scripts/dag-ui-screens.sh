@@ -74,7 +74,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-uv run onepipeline-api serve --runs-root "$runs_root" --bind "127.0.0.1:$api_port" >"$gallery/api.log" 2>&1 &
+# Through the wrapper rather than re-rendering `onepipeline-api serve` here:
+# `scripts/telemetry-server.sh` is the one place that knows how this repository's
+# `--runs-dir` / `--host` / `--port` become the published `--runs-root` / `--bind`,
+# and a second copy of that rendering is one a flag rename would leave behind.
+"$script_dir/telemetry-server.sh" --runs-dir "$runs_root" --host 127.0.0.1 --port "$api_port" \
+    >"$gallery/api.log" 2>&1 &
 api_pid=$!
 DAG_UI_API_URL="http://127.0.0.1:$api_port" \
     DAG_UI_PORT="$ui_port" \

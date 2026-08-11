@@ -712,22 +712,25 @@ reported as retained rather than removed, and scratch that is only stale is
 eligible after the conservative age threshold alone. Use `just sweep-scratch
 --dry-run` to inspect candidates without removing any of them.
 
-Scratch a dispatch itself produces cannot wait for quiescence: a private `nx`
-install per `bunx nx` invocation, a copy of Nx's native binary per workspace root,
-a run directory per pytest session, and an effective-config directory per dispatch
-appear *because* dispatches are running, at gigabytes per hour. What replaces
-quiescence is proven non-reference: the sweep reads every live process's argv,
-environment, working directory, root and executable links, open descriptors, and
-file-backed memory mappings, and a candidate any of them names is retained and
-reported. Mappings are load-bearing rather than belt-and-suspenders: Nx `dlopen`s
-its cached native binary and keeps no descriptor, so a running `nx` names that
-cache nowhere else. A procfs that cannot answer the question at all is not the
-same as one answering "nothing is referenced": those families are then left alone
-and the run reports that it could not prove them unused. A short minimum age
-covers only the gap between creating a directory and the first instant a process
-names it, and `--min-age-hours` governs the scratch that has no such proof behind
-it. The same sweep reclaims the *processes* a finished dispatch left running,
-which reparenting to init otherwise puts outside every tree walk.
+Scratch a dispatch itself produces cannot wait for quiescence, so what replaces
+quiescence is proven non-reference: a candidate a live process names — in its argv,
+environment, working directory, root or executable links, open descriptors, or
+file-backed memory mappings — is retained and reported. A procfs that cannot answer
+the question at all is not the same as one answering "nothing is referenced": those
+families are then left alone and the run reports that it could not prove them
+unused. A short minimum age covers only the gap between creating a directory and the
+first instant a process names it, and `--min-age-hours` governs the scratch that has
+no such proof behind it.
+
+What that covers is narrower than it once was, and the difference is operational.
+`oneagentgraph sweep` examines the two families it owns, `runs` and `temp`. The
+families it does not — a private `nx` install per `bunx nx` invocation, a copy of
+Nx's native binary per workspace root, a run directory per pytest session, and
+onejudge's own scratch — are the *volume* ones, appearing because dispatches are
+running, and nothing reclaims them now. Neither does anything reclaim the
+**processes** a finished dispatch left running, which reparenting to init puts
+outside every tree walk; the engines that start them own keeping them alive and
+reaping them. `just sweep-scratch` says the same at the seam an operator touches.
 
 Every sweep names the families it examined and, separately, the families it could
 not. Each family appears in exactly one of the two lists, so a sweep that reclaimed
@@ -892,24 +895,14 @@ decides only whether this command waits, and Ctrl-C ends the attachment, not the
 run. Inside the run, `run-plan` still forks: the orchestrator agent surfaces an
 update and ends its turn, and the round must survive that.
 
-Escaping the launching turn's *signals* is only half of it. Everything a dispatch
-starts carries that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` stamp, and once the
-launching step settles the scratch sweep reads that stamp as proof of a leaked tree
-and terminates what carries it — a contract that is right for real leaks and was
-wrong for these. So a **launched round or publication driver re-attributes itself as
-part of forking**: in `just run-plan`, `just next-round`, `just repo-recover`, and
-`just integrate`, the forked round takes a scratch directory of its own and `exec`s
-under it, so the sweep judges it by its own liveness rather than by its launcher's.
-The relaying parent deliberately keeps the launcher's stamp — it outlives the round
-by the moment it takes to collect the exit status, and a parent stamped for the
-round's directory would spend exactly that moment looking like a leak. See
-[The successor contract](repo-lifecycle.md#the-successor-contract) for what the
-sweeper is then allowed to conclude, and why an `exec` is the only thing that works.
-The two protections are independent and both are needed: without the fork a round
-dies at teardown, without the re-attribution it dies at the next sweep. Nothing else
-needs it — a `just` recipe an agent runs to completion inside its turn is not a
-successor, and neither is `just orchestrate`, which is launched as a program of its
-own rather than from inside a dispatch.
+Escaping the launching turn's *signals* used to be only half of it: a second
+protection re-attributed a launched round away from its launcher's
+`ORCHESTRATOR_AGENT_STATUS_DIR` stamp, because the sweep read that stamp as proof of
+a leaked tree once the launching step settled. That half is no longer needed here —
+`oneagentgraph sweep` terminates nothing, so there is no reaper left for a round to
+be mistaken by. See [Keeping a process that outlives its
+launcher](repo-lifecycle.md#keeping-a-process-that-outlives-its-launcher) for what
+that leaves, and for the leaked worker nothing collects any more.
 
 The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
 rejected input, 128+N signalled. An exception escaping the round is the exception: it
