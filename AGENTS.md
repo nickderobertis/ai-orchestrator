@@ -790,7 +790,8 @@ protection and a CI mirror of this gate are deferred with CI. Keep the
 of re-approving it each session. Local-first is not local-only: keep the registered
 base branch in sync with its origin, and push every change that reaches it immediately rather
 than leaving verified work only in the local checkout. A dispatched `local` merge
-already pushes to origin; publish a direct commit with `just sync`. The pre-push
+already pushes to origin, and `just sync` fast-forwards a publication checkout to
+what is on it. The pre-push
 gate guards every push. Never force-push or rewrite history on the registered base.
 
 Squash-merge is what a recovered incomplete step publishes too, so **every** path

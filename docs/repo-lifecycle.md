@@ -445,8 +445,8 @@ ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
 workstream**, and the pre-push hook reads that base and
 uses the remote name Git passes as its first argument. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
-back to `main`. `just sync` discovers the same branch; `just sync <branch>
-<remote>` is the explicit form.
+back to `main`. `just sync` fast-forwards the publication checkout to its
+origin, and `just sync <branch>` names one rather than the registered base.
 
 ### Where a merge-path verdict is preserved
 
@@ -1174,8 +1174,9 @@ records its result. A human completion is accepted only when the latest recorded
 result names that exact ready action; unknown, blocked, agent, and already
 completed references exit 2. Each accepted attestation is appended to
 `runs/<run-id>/humans.json` with its reference, waiting round, and UTC timestamp.
-`--plan-only` stops after writing the derived plan. The lower-level `just replan
-<prev-plan.json> <result.json> [edits.json]` remains available.
+`--plan-only` stops after writing the derived plan. There is no lower-level
+derivation command: `just replan` exits naming `just next-round`, which reads the
+run's ledger and derives from the graph the round executed.
 
 The graph result state is `complete`, `waiting`, or `failed`; `ok` is true only
 for complete. Node states are `done`, `waiting`, `blocked`, `failed`, or `skipped`.

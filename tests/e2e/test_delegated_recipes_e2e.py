@@ -357,6 +357,39 @@ def test_a_surface_with_nothing_to_say_is_refused(tmp_path: Path) -> None:
 
 @pytest.mark.reads_recipes
 @pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (None, "could not read"),
+        ("8765\n", "must hold one HOST:PORT, not '8765'"),
+        ("\n", "must hold one HOST:PORT, not ''"),
+    ],
+    ids=("unreadable", "no-colon", "empty"),
+)
+def test_the_telemetry_server_recipe_refuses_an_address_file_that_is_not_one(
+    tmp_path: Path, content: str | None, reason: str
+) -> None:
+    """Split on a colon that is not there, `--bind 8765:8765` is what would be asked for.
+
+    The file is this repository's, not an operator's, so a broken one is a repair to
+    name rather than a value to pass on — and only an invocation that needs the
+    default ever reads it.
+    """
+    checkout, trace = _checkout(tmp_path)
+    address = checkout / "config/read-api.address"
+    if content is None:
+        address.unlink()
+    else:
+        address.write_text(content, encoding="utf-8")
+
+    result = _run(checkout, trace, "telemetry-server", "--port", "9000")
+
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr
+    assert not trace.exists(), "a refused invocation must not reach the read API at all"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
     "spelling", ["--persona-dir {dir}", "--persona-dir={dir}"], ids=("space", "equals")
 )
 def test_the_new_persona_recipe_scaffolds_where_it_is_told_to(

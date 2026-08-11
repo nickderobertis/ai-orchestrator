@@ -540,6 +540,19 @@ def test_dag_ui_screens_recipe_tells_a_silent_api_from_an_empty_store(
 
 
 @pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_says_when_the_run_list_is_not_one(tmp_path: Path) -> None:
+    """An answer that is not a run list is its own diagnosis, not an empty store."""
+    checkout, trace = _screens_checkout(tmp_path)
+    (checkout / "bin/runs-body.json").write_text("<html>not json</html>\n", encoding="utf-8")
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens")
+
+    assert result.returncode != 0
+    assert "with something that is not a run list" in result.stderr
+    assert "playwright" not in (trace.read_text() if trace.exists() else "")
+
+
+@pytest.mark.reads_recipes
 def test_dag_ui_screens_recipe_names_the_gallery_a_failed_capture_left(
     tmp_path: Path,
 ) -> None:
