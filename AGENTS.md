@@ -385,17 +385,15 @@ side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
 Choosing the identity does not choose the **tier**: every one of those files pins a
 `model` per harness, and the judge's three Claude identities are pinned to the
-cheaper supervisor model deliberately. `--worker-model` / `--judge-model`, on the
-same two commands, are the model half of that same per-side seam. A model is
-accepted only paired with that side's `--worker-harness` / `--judge-harness`, naming
-identities of one harness family — one model applies to whichever candidate the
-chain selects, and `fallback` does not fall through a task failure, so an unpaired
-model dies on a provider rejection rather than degrading. The model *value* is
-passed through unchecked, unlike the identity: it goes to the harness just named,
-where an unknown name fails loudly. Note what the seam does **not** buy — a config's
-per-harness `model` beats `ONEHARNESS_MODEL`, so the model a side exports is inert
-against `oneharness.llmlint.toml`'s own pins; a worker-side *harness* override is
-what pins which identity that tier judges on. See [Choosing a model per
+cheaper supervisor model deliberately. The model half of the per-side seam moves
+with the harness half: `oneagentgraph run --set members.<member>.agent.model=NAME`
+is where a per-run model goes, and it applies to whichever candidate the chain
+selects — `fallback` does not fall through a task failure, so a model a side's
+selected identity rejects dies on that rejection rather than degrading. Note what
+the seam does **not** buy — a config's per-harness `model` beats `ONEHARNESS_MODEL`,
+so a model exported into the environment is inert against
+`oneharness.llmlint.toml`'s own pins; overriding which *identity* that tier judges
+on is what changes its model. See [Choosing a model per
 side](docs/onejudge-integration.md#choosing-a-model-per-side).
 
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
@@ -560,8 +558,9 @@ pass the ordinary merge-path gate before publication.
 `just smoke` spends one real agent-harness turn in a throwaway directory and
 verifies exact prompt delivery plus a successful, fully accounted oneharness
 history record. Native per-phase timing is provider-optional, so its absence is a
-telemetry-quality signal rather than a launch failure. The *launch* is relaunched
-up to `orchestrator.smoke.LAUNCH_ATTEMPTS` times, and only the launch: a host under
+telemetry-quality signal rather than a launch failure. The *launch* is relaunched a
+bounded number of times — `oneagentgraph smoke` owns that policy now — and only the
+launch: a host under
 concurrent e2e load has started the selected harness and had it die, which reads as
 a launch-path outage and once cost a publication that had already passed its gate.
 A genuinely broken launch path fails every attempt and still fails, and a recorded

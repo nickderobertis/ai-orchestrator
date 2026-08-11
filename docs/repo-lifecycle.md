@@ -214,10 +214,13 @@ unless the run supplies `--repo-type`. Conflicting legacy
 entries fail with every alias/path/workflow and the rule to correct; no
 workflow is selected implicitly.
 
-`--repo-type` on `register-repo` persists. The same option on `repo-recover` or
-`run-plan` is run-only. A plan node's `repo_type` beats the
-command option, which beats stored or inferred type. Change the resolved type by editing the rule that matches the
-repository in the rules file; a team repository's workflow is `remote`.
+Type is not a command option on any of these verbs any more: `just register-repo`
+resolves it from the rules file the identity matches, and `just run-plan` names a
+run rather than carrying repository options. A plan node's `repo_type` still beats
+the stored or inferred type for that node. Change the resolved type by editing the
+rule that matches the repository in the rules file — `onevcs rules check` reports
+which rule a repository matches and the policy that follows; a team repository's
+workflow is `remote`.
 
 Each run cuts a **private clone** from the execution checkout and hands out a **git
 worktree per branch** from that clone, under
