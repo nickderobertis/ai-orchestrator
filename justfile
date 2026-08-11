@@ -317,8 +317,15 @@ validate-personas *args:
 
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.
+#
+# `scripts/smoke.sh` is not ceremony around the published verb: `oneagentgraph
+# smoke` runs plain `oneharness` against a config it generates itself, and it takes
+# the caller's `ORCHESTRATOR_AGENT_STATUS_DIR` as-is. The wrapper supplies this
+# repository's agent harness and an isolated status directory, which is what stops a
+# smoke run from inside a dispatch — where the pre-push hook runs it — from
+# hijacking that dispatch's own liveness protocol. See the script's header.
 smoke *args:
-    @uv run oneagentgraph smoke "$@"
+    @./scripts/smoke.sh "$@"
 
 # Provision the session toolchain (installs onejudge, oneharness, bun, llmlint, and
 # the four published CLIs this repository is a configuration layer over).

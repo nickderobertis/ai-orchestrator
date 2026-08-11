@@ -34,6 +34,10 @@ WRAPPER_SCRIPTS = (
     "planner-surface.sh",
     "new-persona.sh",
     "telemetry-server.sh",
+    "smoke.sh",
+    # `smoke.sh` names this one as the agent harness; the journeys below assert the
+    # path it hands down, so the file it names has to be the real one.
+    "oneharness-agent.sh",
 )
 
 #: The whole delegation table, as `just` invocation → the one command line it must
@@ -118,12 +122,22 @@ exit "${FAKE_UV_EXIT:-0}"
 
 
 def _run(
-    checkout: Path, trace: Path, *args: str, stdin: str | None = None
+    checkout: Path,
+    trace: Path,
+    *args: str,
+    stdin: str | None = None,
+    status_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PATH"] = f"{checkout / 'bin'}{os.pathsep}{env['PATH']}"
     env["TRACE_FILE"] = str(trace)
     env.pop("ONEPIPELINE_RUNS_DIR", None)
+    # This suite is itself run from inside a dispatch, whose real status directory
+    # would otherwise reach the recipe under test. Each journey states the value it
+    # wants, and the default is the operator case: none.
+    env.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+    if status_dir is not None:
+        env["ORCHESTRATOR_AGENT_STATUS_DIR"] = str(status_dir)
     return subprocess.run(
         ["just", *args],
         cwd=checkout,
@@ -460,3 +474,93 @@ def test_the_replan_recipe_says_where_its_derivation_went(tmp_path: Path) -> Non
     assert result.returncode == 2
     assert "just next-round" in result.stderr
     assert not trace.exists()
+
+
+def _live_dispatch_status_dir(tmp_path: Path) -> Path:
+    """A live dispatch's status directory, in the shape the agent wrapper validates.
+
+    `scripts/oneharness-agent.sh` accepts only `/*/orchestrator-watchdog-*/agent`, and
+    the two markers below are the ones its dispatcher watches to decide whether the
+    agent it launched is still alive.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-live" / "agent"
+    status_dir.mkdir(parents=True)
+    (status_dir / "agent.pid").write_text("111111\n", encoding="utf-8")
+    (status_dir / "agent.done").write_text("111111\n", encoding="utf-8")
+    return status_dir
+
+
+#: What `scripts/oneharness-agent.sh` does to whatever `ORCHESTRATOR_AGENT_STATUS_DIR`
+#: names, reduced to the two writes that matter here: it claims `agent.pid` for itself
+#: and clears the terminal markers. The real wrapper is doubled at this one point
+#: because it then blocks in its heartbeat loop waiting on a harness turn; the
+#: hijacking it is being held to happens before that, and this reproduces it exactly.
+STATUS_CLAIMING_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+printf 'bin %s\\n' "${ONEAGENTGRAPH_ONEHARNESS_BIN:-<unset>}" >>"$TRACE_FILE"
+printf 'status %s\\n' "${ORCHESTRATOR_AGENT_STATUS_DIR:-<unset>}" >>"$TRACE_FILE"
+if [ -n "${ORCHESTRATOR_AGENT_STATUS_DIR:-}" ]; then
+  printf '%s\\n' "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"
+  rm -f "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.done"
+fi
+"""
+
+
+@pytest.mark.reads_recipes
+def test_smoke_spends_its_turn_on_this_repositorys_agent_harness(tmp_path: Path) -> None:
+    """The published verb generates its own config, which declares none of these identities.
+
+    `oneagentgraph smoke` writes a throwaway `oneharness.toml` naming plain
+    `claude-code` and runs plain `oneharness` against it, so a bare delegation answers
+    `no harness selected` and never exercises the launch path the smoke exists to
+    prove. `scripts/oneharness-agent.sh` is what forces this repository's agent
+    config, and the recipe owes it.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(STATUS_CLAIMING_UV)
+
+    result = _run(checkout, trace, "smoke")
+
+    assert result.returncode == 0, result.stderr
+    traced = trace.read_text().splitlines()
+    assert traced[0] == "uv run oneagentgraph smoke"
+    assert traced[1] == f"bin {checkout / 'scripts/oneharness-agent.sh'}"
+
+
+@pytest.mark.reads_recipes
+def test_smoke_does_not_hijack_the_live_dispatch_it_runs_inside(tmp_path: Path) -> None:
+    """The regression three dead dispatches paid for.
+
+    The pre-push hook runs `just smoke` whenever the launch path changed, and a
+    dispatched agent pushes from inside its own dispatch — so this recipe runs with
+    that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` in its environment.
+    `scripts/oneharness-agent.sh` takes that value as-is, claims `agent.pid` for
+    itself and clears the terminal markers, so a smoke that passes its caller's value
+    down hands the nested turn the liveness protocol its own dispatcher is watching.
+    When that turn ends without writing `agent.done`, the dispatcher reads a tracked
+    pid that is gone with no exit recorded and kills the tree: "the agent harness
+    process vanished mid-turn without recording an exit".
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(STATUS_CLAIMING_UV)
+    live = _live_dispatch_status_dir(tmp_path)
+
+    result = _run(checkout, trace, "smoke", status_dir=live)
+
+    assert result.returncode == 0, result.stderr
+    handed_down = next(
+        line.removeprefix("status ")
+        for line in trace.read_text().splitlines()
+        if line.startswith("status ")
+    )
+    # Isolated, and in the shape the real wrapper accepts — a smoke that picked any
+    # other shape would be refused by `scripts/oneharness-agent.sh` rather than run.
+    assert handed_down != str(live)
+    assert Path(handed_down).name == "agent"
+    assert Path(handed_down).parent.name.startswith("orchestrator-watchdog-")
+    # The live dispatch's own protocol is exactly as it was.
+    assert (live / "agent.pid").read_text(encoding="utf-8") == "111111\n"
+    assert (live / "agent.done").read_text(encoding="utf-8") == "111111\n"
+    # And the isolated directory did not outlive the run.
+    assert not Path(handed_down).exists()
