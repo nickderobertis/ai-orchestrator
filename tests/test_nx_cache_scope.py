@@ -179,10 +179,9 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
         "targets"
     ]
-    # The code suite runs in more than one invocation — the parallel bulk and the
-    # serial `single_threaded` remainder, now separate targets — so every one of
-    # their selectors has to exclude both narrower tiers, not merely the first one
-    # written down.
+    # Every code-keyed selector has to exclude both narrower tiers, not merely the
+    # first one written down: a tier that dropped one of them would run those tests
+    # twice and key the second run on a tree they do not read.
     code_selectors = [
         selector
         for target in CODE_KEYED

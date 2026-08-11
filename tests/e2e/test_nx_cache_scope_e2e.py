@@ -313,8 +313,8 @@ def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
 ) -> None:
     """A cache hit has to hand the floor the measurement it stood in for.
 
-    The two measuring tiers are cached and the tier that judges the floor is not, so
-    on every replayed commit the combine runs against data no run in this checkout
+    The measuring tier is cached and the tier that judges the floor is not, so on
+    every replayed commit the combine runs against data no run in this checkout
     produced. That only works because the measuring tier declares its data file as
     an Nx output and Nx restores it — an `outputs` declaration that fell off, or a
     tier that stopped writing the file it names, would leave the combine with
