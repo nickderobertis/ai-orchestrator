@@ -53,7 +53,7 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | --- | --- |
 | [`AGENTS.md`](AGENTS.md) | The orchestrator's durable instructions: decompose → schedule → dispatch, and the granularity judgment. |
 | `config/onejudge.base.yaml` | The one base config: settings common to every subtask. |
-| `config/onejudge.version` | The exact supported onejudge SDK/CLI version. |
+| `config/*.version` | The exact adopted release of every tool session setup installs from PyPI: onejudge, oneharness, oneagentgraph, onevcs, onepipeline, and onepipeline-ui. |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
