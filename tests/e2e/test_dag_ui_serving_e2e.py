@@ -63,17 +63,25 @@ class Served:
             return refused.code, refused.read(), refused.headers.get_content_type()
 
 
-def _await_ready(base: str, process: subprocess.Popen[str]) -> None:
+def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
+    """Wait on the fact that ``url`` answers, rather than on a duration.
+
+    Both servers are waited for, not just the one under test: a proxied request that
+    arrives before the API behind it has bound answers 502 for a reason that has
+    nothing to do with the proxy.
+    """
     deadline = time.monotonic() + e2e_timeout(60)
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            pytest.fail(f"the recipe exited early: {process.communicate()[1]}")
+            pytest.fail(f"{what} exited early: {process.communicate()[1]}")
         try:
-            with urllib.request.urlopen(f"{base}/", timeout=2):
+            with urllib.request.urlopen(url, timeout=2):
                 return
+        except urllib.error.HTTPError:
+            return
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             time.sleep(0.1)
-    pytest.fail("the bundle server never answered")
+    pytest.fail(f"{what} never answered")
 
 
 @pytest.fixture
@@ -120,7 +128,9 @@ def served(tmp_path: Path) -> Iterator[Served]:
     )
     base = f"http://127.0.0.1:{ui_port}"
     try:
-        _await_ready(base, recipe)
+        _await_ready(f"http://127.0.0.1:{api_port}/healthz", api, "the stand-in read API")
+        api_requests.write_text("", encoding="utf-8")
+        _await_ready(f"{base}/", recipe, "the bundle server")
         yield Served(base=base, api_requests=api_requests)
     finally:
         recipe.terminate()
@@ -193,7 +203,7 @@ def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered(tmp_path: Pa
     )
     base = f"http://127.0.0.1:{ui_port}"
     try:
-        _await_ready(base, recipe)
+        _await_ready(f"{base}/", recipe, "the bundle server")
         status, body, content_type = Served(base=base, api_requests=tmp_path / "unused").get(
             "/api/v2/runs"
         )
