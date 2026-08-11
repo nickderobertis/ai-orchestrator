@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from pinned_tools import PINNED_TOOLS
+from published_tools import PUBLISHED_TOOLS
 
 from orchestrator import REPO_ROOT
 
@@ -27,7 +27,7 @@ ADOPTED_ONEHARNESS_VERSION = (
 #: setup now verifies every one of them as a distribution as well as a CLI.
 ADOPTED_DISTRIBUTION_VERSIONS = {
     "oneharness-cli": ADOPTED_ONEHARNESS_VERSION,
-    **{tool.distribution: tool.adopted_version for tool in PINNED_TOOLS},
+    **{tool.distribution: tool.adopted_version for tool in PUBLISHED_TOOLS},
 }
 
 
@@ -94,9 +94,9 @@ def _write_bun(path: Path, version: str = "1.2.3") -> None:
     _write_executable(path, f"#!/bin/sh\nprintf '{version}\\n'\n")
 
 
-def _write_pinned_tool_clis(bin_dir: Path) -> None:
+def _write_published_tool_clis(bin_dir: Path) -> None:
     """Install a stand-in for every published tool session setup verifies as a CLI."""
-    for tool in PINNED_TOOLS:
+    for tool in PUBLISHED_TOOLS:
         _write_executable(
             bin_dir / tool.binary,
             f"#!/bin/sh\nprintf '{tool.binary} {tool.adopted_version}\\n'\n",
@@ -105,7 +105,7 @@ def _write_pinned_tool_clis(bin_dir: Path) -> None:
 
 def _fake_install_commands(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
-    _write_pinned_tool_clis(tmp_path / "pinned-tools")
+    _write_published_tool_clis(tmp_path / "pinned-tools")
     uv = tools / "uv"
     _write_executable(
         uv,
@@ -118,7 +118,7 @@ mkdir -p "$TEST_REPO/.venv/bin"
 cp "$TEST_ONEJUDGE_BINARY" "$TEST_REPO/.venv/bin/onejudge"
 cp "$TEST_ONEHARNESS_BINARY" "$TEST_REPO/.venv/bin/oneharness"
 cp "$TEST_SDK_PYTHON" "$TEST_REPO/.venv/bin/python"
-cp "$TEST_PINNED_TOOL_DIR"/* "$TEST_REPO/.venv/bin/"
+cp "$TEST_PUBLISHED_TOOL_DIR"/* "$TEST_REPO/.venv/bin/"
 chmod +x "$TEST_REPO/.venv/bin/"*
 """,
     )
@@ -144,7 +144,7 @@ def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.Complet
         "PATH": f"{tools}:/usr/bin:/bin",
         "TEST_REPO": str(test_repo),
         "TEST_UV_ARGS": str(tmp_path / "uv.args"),
-        "TEST_PINNED_TOOL_DIR": str(tmp_path / "pinned-tools"),
+        "TEST_PUBLISHED_TOOL_DIR": str(tmp_path / "pinned-tools"),
         **extra_env,
     }
     return subprocess.run(
@@ -1403,8 +1403,13 @@ def test_full_setup_trusts_distinct_managed_and_worktree_roots(tmp_path: Path) -
 
 
 def _run_full_setup_without_bun(
-    tmp_path: Path, **extra_env: str
+    tmp_path: Path, *, declared: Mapping[str, str | None] | None = None, **extra_env: str
 ) -> subprocess.CompletedProcess[str]:
+    """Run the whole script against a fixture host that has every tool but bun.
+
+    `declared` restates one `config/<tool>.version` after the real ones are copied in:
+    a string replaces its contents, and `None` removes the file outright.
+    """
     test_repo = tmp_path / "repo"
     scripts = test_repo / "scripts"
     config = test_repo / "config"
@@ -1425,10 +1430,15 @@ def _run_full_setup_without_bun(
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
     _write_adopted_version_files(config)
+    for name, adopted in (declared or {}).items():
+        if adopted is None:
+            (config / name).unlink()
+        else:
+            (config / name).write_text(adopted, encoding="utf-8")
     _write_onejudge(test_repo / ".venv" / "bin" / "onejudge", ADOPTED_ONEJUDGE_VERSION)
     _write_sdk_python(test_repo / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
     _write_oneharness(test_repo / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
-    _write_pinned_tool_clis(test_repo / ".venv" / "bin")
+    _write_published_tool_clis(test_repo / ".venv" / "bin")
     return subprocess.run(
         ["bash", str(session_setup)],
         text=True,
@@ -1469,7 +1479,7 @@ def test_project_install_skips_sync_when_every_pinned_tool_is_compliant(tmp_path
     _write_oneharness(
         tmp_path / "repo" / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION
     )
-    _write_pinned_tool_clis(tmp_path / "repo" / ".venv" / "bin")
+    _write_published_tool_clis(tmp_path / "repo" / ".venv" / "bin")
 
     proc = _run_project_install(tmp_path)
 
@@ -1572,7 +1582,7 @@ def test_project_install_rejects_a_published_tool_left_at_a_stale_release(tmp_pa
     exactly the drift onejudge's own version check has always refused.
     """
     _fake_install_commands(tmp_path)
-    stale = PINNED_TOOLS[0]
+    stale = PUBLISHED_TOOLS[0]
     _write_executable(
         tmp_path / "pinned-tools" / stale.binary,
         f"#!/bin/sh\nprintf '{stale.binary} 99.99.99\\n'\n",
@@ -1597,7 +1607,7 @@ def test_project_install_rejects_a_published_tool_whose_distribution_drifted(
     releases at once, which is a resolution failure rather than a stale binary.
     """
     _fake_install_commands(tmp_path)
-    drifted = PINNED_TOOLS[-1]
+    drifted = PUBLISHED_TOOLS[-1]
     sdk_python = tmp_path / "sdk-python"
     _write_sdk_python(
         sdk_python,
@@ -1620,9 +1630,36 @@ def test_full_setup_reports_every_published_tool_it_verified(tmp_path: Path) -> 
 
     # Bun is deliberately absent from this fixture; the published tools still verified.
     assert result.returncode == 1
-    for tool in PINNED_TOOLS:
+    for tool in PUBLISHED_TOOLS:
         assert f"ready ({tool.binary}: {tool.adopted_version} at " in result.stderr
     assert "releases are required" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("adopted", "reported"),
+    [("0.2\n", "0.2"), ("v0.2.2\n", "v0.2.2"), (None, "")],
+    ids=["not-semver", "tagged", "absent"],
+)
+def test_full_setup_refuses_a_published_tool_without_one_adopted_release(
+    tmp_path: Path, adopted: str | None, reported: str
+) -> None:
+    """An undeclared or unreadable pin aborts setup by name before anything is installed.
+
+    The version file is the pin, so a host that could not read one has no adopted
+    release to hold its CLI to — provisioning on anyway would install whatever
+    `uv sync` resolved and then verify it against nothing.
+    """
+    undeclared = PUBLISHED_TOOLS[0]
+
+    result = _run_full_setup_without_bun(tmp_path, declared={undeclared.version_file: adopted})
+
+    assert result.returncode == 1
+    assert (
+        f"invalid adopted {undeclared.binary} version in "
+        f"{tmp_path / 'repo' / 'config' / undeclared.version_file}: '{reported}'"
+    ) in result.stderr
+    # Aborting means aborting: no tool is verified and no provisioning is attempted.
+    assert "ready (" not in result.stderr
 
 
 def test_install_bun_skips_invocable_binary(tmp_path: Path) -> None:

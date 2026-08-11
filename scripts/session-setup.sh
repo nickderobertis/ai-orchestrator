@@ -13,7 +13,7 @@
 #   3. The four published tools this repository is a configuration layer over —
 #      oneagentgraph, onevcs, onepipeline, and onepipeline-ui — arrive from PyPI
 #      through that same `uv sync` at the versions adopted in `config/`, and are
-#      verified as both a distribution and a CLI (see PINNED_TOOL_SPECS below).
+#      verified as both a distribution and a CLI (see PUBLISHED_TOOL_SPECS below).
 #   4. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
 #   5. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
@@ -40,13 +40,13 @@ readonly ONEHARNESS_VERSION_FILE="$REPO_ROOT/config/oneharness.version"
 # tool's name and `onepipeline-api-cli` the distribution PyPI carries it under;
 # its npm counterpart is out of scope here because this repo provisions its
 # Python-side tooling from PyPI.
-readonly PINNED_TOOL_SPECS=(
+readonly PUBLISHED_TOOL_SPECS=(
   "oneagentgraph|oneagentgraph-cli|oneagentgraph.version"
   "onevcs|onevcs-cli|onevcs.version"
   "onepipeline|onepipeline-cli|onepipeline.version"
   "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
 )
-declare -A PINNED_TOOL_VERSIONS=()
+declare -A PUBLISHED_TOOL_VERSIONS=()
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
 readonly ADOPTED_ONEJUDGE_VERSION
 ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
@@ -85,20 +85,20 @@ if [[ ! $ADOPTED_ONEHARNESS_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   fi
   exit 1
 fi
-for pinned_tool_spec in "${PINNED_TOOL_SPECS[@]}"; do
-  IFS='|' read -r pinned_tool_binary _ pinned_tool_version_file <<<"$pinned_tool_spec"
-  pinned_tool_version_path="$REPO_ROOT/config/$pinned_tool_version_file"
+for published_tool_spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
+  IFS='|' read -r published_tool_binary _ published_tool_version_file <<<"$published_tool_spec"
+  published_tool_version_path="$REPO_ROOT/config/$published_tool_version_file"
   # An unreadable file answers empty, which the pattern below rejects by name
   # rather than as raw redirect noise.
-  pinned_tool_version="$(tr -d '[:space:]' <"$pinned_tool_version_path" 2>/dev/null)"
-  if [[ ! $pinned_tool_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    log "invalid adopted $pinned_tool_binary version in $pinned_tool_version_path: '$pinned_tool_version'"
+  published_tool_version="$(tr -d '[:space:]' <"$published_tool_version_path" 2>/dev/null)"
+  if [[ ! $published_tool_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    log "invalid adopted $published_tool_binary version in $published_tool_version_path: '$published_tool_version'"
     if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
       return 1
     fi
     exit 1
   fi
-  PINNED_TOOL_VERSIONS["$pinned_tool_binary"]="$pinned_tool_version"
+  PUBLISHED_TOOL_VERSIONS["$published_tool_binary"]="$published_tool_version"
 done
 
 # CI never needs this provisioning; keep it a no-op there.
@@ -109,7 +109,7 @@ fi
 
 install_project_dependencies() {
   if verify_onejudge >/dev/null 2>&1 && verify_oneharness >/dev/null 2>&1 \
-    && verify_pinned_tools >/dev/null 2>&1; then
+    && verify_published_tools >/dev/null 2>&1; then
     return 0
   fi
   if ! command -v uv >/dev/null 2>&1; then
@@ -119,7 +119,7 @@ install_project_dependencies() {
   log "syncing pinned project dependencies into $REPO_ROOT/.venv"
   if uv sync --project "$REPO_ROOT" >&2; then
     hash -r
-    if verify_onejudge && verify_oneharness && verify_pinned_tools; then
+    if verify_onejudge && verify_oneharness && verify_published_tools; then
       return 0
     fi
   else
@@ -223,7 +223,7 @@ verify_oneharness() {
   return 0
 }
 
-verify_pinned_tool() {
+verify_published_tool() {
   # One published tool, checked the same two ways `oneharness` is: the
   # worktree-local CLI reports the adopted release, and the distribution the
   # wheel installed carries that same version.
@@ -254,15 +254,15 @@ verify_pinned_tool() {
   return 0
 }
 
-verify_pinned_tools() {
+verify_published_tools() {
   # Every tool is reported on, not just the first failure: an operator fixing a
   # stale environment should see the whole list in one pass.
   local spec binary distribution python_bin status=0
   python_bin="$PROJECT_VENV_BIN/python"
-  for spec in "${PINNED_TOOL_SPECS[@]}"; do
+  for spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
     IFS='|' read -r binary distribution _ <<<"$spec"
-    verify_pinned_tool \
-      "$binary" "$distribution" "${PINNED_TOOL_VERSIONS[$binary]}" "$python_bin" || status=1
+    verify_published_tool \
+      "$binary" "$distribution" "${PUBLISHED_TOOL_VERSIONS[$binary]}" "$python_bin" || status=1
   done
   return "$status"
 }
@@ -415,10 +415,10 @@ if ! verify_oneharness; then
   log "oneharness $ADOPTED_ONEHARNESS_VERSION is required — 'just check' will fail until setup succeeds"
   toolchain_failed=1
 fi
-if verify_pinned_tools; then
-  for pinned_tool_spec in "${PINNED_TOOL_SPECS[@]}"; do
-    IFS='|' read -r pinned_tool_binary _ _ <<<"$pinned_tool_spec"
-    log "ready ($pinned_tool_binary: ${PINNED_TOOL_VERSIONS[$pinned_tool_binary]} at $PROJECT_VENV_BIN/$pinned_tool_binary)"
+if verify_published_tools; then
+  for published_tool_spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
+    IFS='|' read -r published_tool_binary _ _ <<<"$published_tool_spec"
+    log "ready ($published_tool_binary: ${PUBLISHED_TOOL_VERSIONS[$published_tool_binary]} at $PROJECT_VENV_BIN/$published_tool_binary)"
   done
 else
   log "the adopted oneagentgraph, onevcs, onepipeline, and onepipeline-ui releases are required — 'just check' will fail until setup succeeds"

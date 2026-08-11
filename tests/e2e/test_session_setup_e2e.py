@@ -9,7 +9,7 @@ import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
-from pinned_tools import PINNED_TOOLS
+from published_tools import PUBLISHED_TOOLS
 
 from orchestrator import REPO_ROOT
 
@@ -179,7 +179,7 @@ def test_session_setup_syncs_every_published_tool_from_pypi(tmp_path: Path) -> N
     installed = _run_setup(repo, tmp_path)
 
     assert installed.returncode == 0, installed.stderr
-    for tool in PINNED_TOOLS:
+    for tool in PUBLISHED_TOOLS:
         executable = repo / ".venv" / "bin" / tool.binary
         assert f"ready ({tool.binary}: {tool.adopted_version} at {executable})" in installed.stderr
         reported = subprocess.run(
@@ -192,7 +192,7 @@ def test_session_setup_fails_when_a_published_tool_misses_its_adopted_version(
     tmp_path: Path,
 ) -> None:
     """A published tool is held to its adopted release exactly as oneharness is."""
-    stale = PINNED_TOOLS[0]
+    stale = PUBLISHED_TOOLS[0]
     repo = _setup_repo(tmp_path, adopted_published={stale.version_file: "99.99.99"})
 
     result = _run_setup(repo, tmp_path)

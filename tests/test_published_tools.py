@@ -16,19 +16,19 @@ import subprocess
 import tomllib
 
 import pytest
-from pinned_tools import LEGACY_VERSION_FILES, PINNED_TOOLS, PinnedTool
+from published_tools import PUBLISHED_TOOLS, SEPARATELY_GATED_VERSION_FILES, PublishedTool
 
 from orchestrator import REPO_ROOT
 
-PINNED_TOOL_IDS = [tool.distribution for tool in PINNED_TOOLS]
+PUBLISHED_TOOL_IDS = [tool.distribution for tool in PUBLISHED_TOOLS]
 #: What a PyPI-resolved lockfile entry names as its source. Anything else — a git
 #: ref, a local path, a directory — is what this repository's pins exclude.
 PYPI_REGISTRY = "https://pypi.org/simple"
 
 
-@pytest.mark.parametrize("tool", PINNED_TOOLS, ids=PINNED_TOOL_IDS)
-def test_pyproject_pins_the_distribution_to_the_adopted_version(tool: PinnedTool) -> None:
-    """DRIFT-GATE the installed distribution against its config version file."""
+@pytest.mark.parametrize("tool", PUBLISHED_TOOLS, ids=PUBLISHED_TOOL_IDS)
+def test_pyproject_pins_the_distribution_to_the_adopted_version(tool: PublishedTool) -> None:
+    """`config/<tool>.version` is the pin, so the dependency spec may not drift from it."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = pyproject["project"]["dependencies"]
     specs = [item for item in dependencies if item.split("==")[0] == tool.distribution]
@@ -39,8 +39,8 @@ def test_pyproject_pins_the_distribution_to_the_adopted_version(tool: PinnedTool
     )
 
 
-@pytest.mark.parametrize("tool", PINNED_TOOLS, ids=PINNED_TOOL_IDS)
-def test_the_lockfile_resolves_the_pin_from_pypi(tool: PinnedTool) -> None:
+@pytest.mark.parametrize("tool", PUBLISHED_TOOLS, ids=PUBLISHED_TOOL_IDS)
+def test_the_lockfile_resolves_the_pin_from_pypi(tool: PublishedTool) -> None:
     """A pin is a published release only if the lockfile resolved it from PyPI."""
     lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
     locked = [package for package in lock["package"] if package["name"] == tool.distribution]
@@ -56,8 +56,8 @@ def test_the_lockfile_resolves_the_pin_from_pypi(tool: PinnedTool) -> None:
     assert locked[0]["wheels"], f"{tool.distribution} must publish an installable wheel"
 
 
-@pytest.mark.parametrize("tool", PINNED_TOOLS, ids=PINNED_TOOL_IDS)
-def test_the_adopted_release_is_installed_and_reports_its_version(tool: PinnedTool) -> None:
+@pytest.mark.parametrize("tool", PUBLISHED_TOOLS, ids=PUBLISHED_TOOL_IDS)
+def test_the_adopted_release_is_installed_and_reports_its_version(tool: PublishedTool) -> None:
     """The pin is installable: `uv sync` put this exact release in the project venv.
 
     Both halves are checked because either can drift on its own — the wheel that
@@ -87,8 +87,8 @@ def test_the_adopted_release_is_installed_and_reports_its_version(tool: PinnedTo
     )
 
 
-@pytest.mark.parametrize("tool", PINNED_TOOLS, ids=PINNED_TOOL_IDS)
-def test_session_setup_installs_and_verifies_every_pinned_tool(tool: PinnedTool) -> None:
+@pytest.mark.parametrize("tool", PUBLISHED_TOOLS, ids=PUBLISHED_TOOL_IDS)
+def test_session_setup_installs_and_verifies_every_published_tool(tool: PublishedTool) -> None:
     """Session setup provisions the host, so a tool it does not name is not installed.
 
     Its table drives reading the version file, the `uv sync` decision, and the
@@ -98,18 +98,18 @@ def test_session_setup_installs_and_verifies_every_pinned_tool(tool: PinnedTool)
     script = (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8")
 
     assert f'"{tool.binary}|{tool.distribution}|{tool.version_file}"' in script, (
-        f"scripts/session-setup.sh must carry {tool.binary} in PINNED_TOOL_SPECS as "
+        f"scripts/session-setup.sh must carry {tool.binary} in PUBLISHED_TOOL_SPECS as "
         f"'{tool.binary}|{tool.distribution}|{tool.version_file}'"
     )
 
 
 def test_every_adopted_version_file_is_covered_by_a_gate() -> None:
     """A new `config/<tool>.version` joins this gate rather than going unchecked."""
-    declared = {tool.version_file for tool in PINNED_TOOLS} | set(LEGACY_VERSION_FILES)
+    declared = {tool.version_file for tool in PUBLISHED_TOOLS} | SEPARATELY_GATED_VERSION_FILES
     on_disk = {path.name for path in (REPO_ROOT / "config").glob("*.version")}
 
     assert on_disk == declared, (
-        "every adopted published tool must be listed in PINNED_TOOLS; "
+        "every adopted published tool must be listed in PUBLISHED_TOOLS; "
         f"unlisted: {sorted(on_disk - declared)}, absent from config/: {sorted(declared - on_disk)}"
     )
 
@@ -123,6 +123,6 @@ def test_the_version_file_format_matches_the_established_pins() -> None:
     established = (REPO_ROOT / "config" / "onejudge.version").read_bytes()
     assert established.decode().strip().encode() + b"\n" == established
 
-    for tool in PINNED_TOOLS:
+    for tool in PUBLISHED_TOOLS:
         content = (REPO_ROOT / "config" / tool.version_file).read_bytes()
         assert content == f"{tool.adopted_version}\n".encode()
