@@ -62,8 +62,8 @@ This repository uses three onejudge provider arrangements:
   judge calls mirror the persisted planner verdict; the launch removes standalone
   model evals and assessment because the live planner is completion authority.
 
-`orchestrator.dispatch.launch_orchestrator` creates this split config and launches
-`onejudge run` with a detached `subprocess.Popen`. This wiring is specific to the
+`onepipeline start` creates this split config and launches the orchestrator's own
+detached `onejudge run`. This wiring is specific to the
 orchestrator persona; worker dispatch retains its ordinary oneharness or command
 provider and simulated-user loop.
 
@@ -458,10 +458,12 @@ process-wide ones they are resolved into — in one place, so a reader that drop
 list is genuinely isolated rather than isolated from half of it.
 
 The two are told apart by **provenance, not by value**. Every selection is dropped at
-each process boundary the suite owns (`tests/conftest.py` for its own environment,
-`_provider_environment` for the environment a dispatch under test is launched with),
-and each journey then states the value it wants; so a selection a recorded turn
-observes is one that journey put there, and an inherited one reaches nothing.
+each process boundary the suite owns — `tests/conftest.py` for its own environment,
+and a journey that launches the wrapper builds that launch's environment from
+nothing rather than inheriting one (`tests/e2e/test_quota_fallthrough_e2e.py`'s
+`_agent_turn` passes `PATH`, `HOME`, and the values it is asserting on, and no
+more) — and each journey then states the value it wants; so a selection a recorded
+turn observes is one that journey put there, and an inherited one reaches nothing.
 
 Do not "adapt" a selection journey to a value you did not state. Reading the single
 identity a run happened to be routed to — `codex` on *both* sides of the default path,
@@ -540,8 +542,8 @@ contradictory record still fails. Its quota cost is one real harness invocation;
 the provider may leave dollar cost unreported (Codex does). It is not part of
 `just gate`.
 
-The *launch* — and only the launch — is retried, up to
-`orchestrator.smoke.LAUNCH_ATTEMPTS` times with a short backoff between attempts.
+The *launch* — and only the launch — is retried, a bounded number of times with a
+short backoff between attempts.
 This is the half of the check the host can break while nothing is wrong with the
 launch path: under a concurrent e2e load, oneharness has reported `fallback harness
 … ran but did not succeed` for a harness that started and then died, and the same
@@ -573,8 +575,7 @@ touching `scripts/`, it blocked publication of work that had already passed its
 gate.
 
 A candidate only counts as fallen through when its own record says it never ran the
-task: `failure_kind` of `quota` or `auth`
-(`orchestrator.telemetry.FALLTHROUGH_FAILURE_KINDS`), or a `skipped` status, which
+task: `failure_kind` of `quota` or `auth`, or a `skipped` status, which
 carries no exit code, no duration, and no accounting at all. `rate_limit` is
 deliberately not in that set — oneharness stops the chain on one, because that
 record carries work the provider already billed for (see
@@ -589,7 +590,7 @@ records are read back out of a store nothing in the smoke wrote, and each one
 reaches both the verdict and the operator's report, so a record must *back* the
 reason it names: it has to identify the harness it was written for, and it has to
 show that nothing was spent — no successful turn, and every counter it reports at
-zero (`orchestrator.telemetry.history_record_fallthrough_failure`). Absent
+zero. Absent
 accounting is not evidence of spend and is accepted: a skipped candidate records a
 null for every counter, and so does an auth refusal on this host. A refusal that
 names no identity would otherwise be reported as "an unidentified harness fell
@@ -609,11 +610,11 @@ smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)
 Both lines name the *identity* rather than the harness, because a chain's two
 Claude subscriptions are one harness and differ only by variant.
 
-`tests/e2e/test_smoke_fallback_e2e.py` drives that whole path for real — the
-recipe, the wrapper, the chain, the classifier, and the history the verdict is read
-back out of — with both candidates replaced at oneharness's own `ONEHARNESS_BIN_*`
-seam. Two things make that journey possible to write safely, and both are easy to
-get wrong:
+`tests/e2e/test_quota_fallthrough_e2e.py` drives that path for real — the wrapper,
+the chain, the classifier, and the record the verdict is read back out of — with
+both candidates replaced at oneharness's own `ONEHARNESS_BIN_*` seam. Two things
+make a journey of that shape possible to write safely, and both are easy to get
+wrong:
 
 - **Drop the dispatch's harness pin.** This repository runs its own suite from
   inside a dispatch, which exports `ORCHESTRATOR_WORKER_HARNESSES`;
@@ -626,13 +627,12 @@ get wrong:
 
 Together they are a money hazard rather than a style point: a journey that misses
 either one spawns a live subscription with its double sitting unused, and a billed
-run and a free one look identical from the assertions. `fake_codex.py`'s
-`unpinned_worker_side` is the single source for the first, and
-`test_no_smoke_journey_inherits_the_dispatch_s_harness_pin` holds both — over the
-three builders (`chain_environment`, `provider_environment`,
-`uninstalled_provider_environment`) that are every environment a smoke journey
-launches through. Build the selection there rather than spelling one inline in a
-journey, which is how a launch would escape that guard.
+run and a free one look identical from the assertions. The guard against the first
+is that `_agent_turn` builds its launch environment from nothing, so there is no
+inherited pin to apply over what the journey sets; against the second, that it
+names plain `claude-code` and `codex`. A new journey of this shape launches
+through that builder rather than spelling an environment inline, which is how one
+would escape both.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
@@ -696,7 +696,7 @@ directory — nothing is watching it — keeps `--events` for the same reason, s
 stream would have nowhere to publish.
 
 **The reader.** The published views read those publications back out of the
-scratch root `orchestrator.scratch` sweeps, which is the only place a dispatch's
+scratch root the sweep examines, which is the only place a dispatch's
 watchdog directory is: the run directory never learns that path and the dispatch
 never learns the run directory, so each summary carries the graph locator it was
 dispatched with. It is a trust boundary — the files sit under a shared root and a
