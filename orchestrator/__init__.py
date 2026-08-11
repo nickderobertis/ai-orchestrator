@@ -1,18 +1,14 @@
-"""Local orchestration harness over onejudge.
+"""What is left of this repository's own Python: label rendering, and where it lives.
 
-The orchestrator decomposes a large task into a dependency graph of subtasks and
-drives each to completion by dispatching a onejudge process with a fitting
-persona. This package holds the deterministic mechanics — config merging, single
-dispatch, and DAG scheduling — that the orchestrator (an agent following
-AGENTS.md) calls; the judgment (decomposition, granularity, persona choice) stays
-in the instructions.
+The deterministic mechanics this package used to hold — config merging, dispatch,
+DAG scheduling, and the repository lifecycle — are the published CLIs now, and the
+`just` recipes are thin wrappers over them. What stays here is the one thing no
+recipe can do in shell (`orchestrator.labels`), the redaction its logs share, and
+this checkout's own root, which the suite resolves its fixtures against.
 """
 
 from pathlib import Path
 
-__all__ = ["REPO_ROOT", "BASE_CONFIG", "PERSONA_DIR", "TEMPLATE"]
+__all__ = ["REPO_ROOT"]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BASE_CONFIG = REPO_ROOT / "config" / "onejudge.base.yaml"
-PERSONA_DIR = REPO_ROOT / "personas"
-TEMPLATE = PERSONA_DIR / "_template.yaml"
