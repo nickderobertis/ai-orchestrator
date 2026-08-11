@@ -305,7 +305,7 @@ therefore never inherits the other side's, nor an ambient process-wide one the
 parent exported. `just orchestrate` carries the pair in the launched process's
 environment, so every round's workers and judges inherit the same choice.
 
-`orchestrator/harnesses.py` validates each value against **that side's** config
+`scripts/oneharness-agent.sh` validates each value against **that side's** config
 before anything is dispatched, and names every selectable identity when it refuses:
 
 ```
@@ -369,7 +369,7 @@ the model together.
 ```
 
 Both halves of that rule are enforced **twice**, in the two places a choice can enter.
-`orchestrator/harnesses.py` refuses them before a dispatch starts, which is what an
+the wrapper refuses them before a dispatch starts, which is what an
 operator sees; `scripts/oneharness-agent.sh` refuses them again on the branch it
 resolves each side on, because `ORCHESTRATOR_WORKER_MODEL` and
 `ORCHESTRATOR_JUDGE_MODEL` are ordinary environment variables and a hand-set one
@@ -695,7 +695,7 @@ the turn runs exactly as it did before, transcript and all. A turn with no statu
 directory — nothing is watching it — keeps `--events` for the same reason, since a
 stream would have nowhere to publish.
 
-**The reader.** `orchestrator/activity.py` reads those publications back out of the
+**The reader.** The published views read those publications back out of the
 scratch root `orchestrator.scratch` sweeps, which is the only place a dispatch's
 watchdog directory is: the run directory never learns that path and the dispatch
 never learns the run directory, so each summary carries the graph locator it was
@@ -943,10 +943,9 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   from authenticated GitHub login versus normalized origin owner; pass
   `--repo-type` when that cannot resolve. Team defaults to a ready-for-review open
   PR; single-owner preserves local direct or remote auto publication. Multiple
-  aliases share one identity. Migrate every alias atomically with `just
-  migrate-repo-type <alias> --repo-type <single-owner|team>` or `just
-  migrate-repo-workflow <alias> --workflow <local|remote>`. Configure a local
-  single-owner repository's
+  aliases share one identity, and one rule in the rules file resolves the policy
+  for all of them: edit that rule to change type or workflow, and confirm the
+  result with `just repos`. Configure a local single-owner repository's
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.
@@ -964,15 +963,16 @@ bump each consumer's `LLMLINT_MIN` floor and refresh its lock/install state; tha
 floor bump is the rollout switch that makes the normal gate use the new bundled
 rule. Run the llmlint release gate before downstream consumer gates.
 
-## Testing against onejudge without a paid model
+## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
 ([onejudge v0.3.4 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.4/docs/protocol.md)),
-so any command can stand in for the harness. The e2e suite points it at
-`tests/e2e/fake_backend.py` — a deterministic backend — so the gate drives the
-**real** onejudge CLI and loop across a real subprocess boundary, faking only the
-paid model/harness. This is the one sanctioned mock (a genuinely external service),
-and it is confined to the provider seam; the merge, SDK dispatch, CLI, and report
-validation all run for real. That backend implements the adopted version's protocol v4 unified
-`supervisor` operation; the e2e fixture rejects any real CLI whose version is not
-the adopted `config/onejudge.version` value.
+so any command can stand in for the harness — which is how the engines that
+dispatch prove themselves in their own repositories. What this repository's own
+suite drives is the layer above: the real recipes, the real wrapper scripts, and
+the **real** `oneharness` CLI over this repository's own configs and fallback
+chain, with the paid model replaced at oneharness's own shipped mock-responder
+seam (`tests/e2e/mock_oneharness.py`, `tests/e2e/fake_codex.py`). That is the one
+sanctioned mock of a genuinely external service; the wrapper, the CLI, the chain,
+and the recorded history all run for real, and the fixtures reject any CLI whose
+version is not the adopted `config/oneharness.version` value.

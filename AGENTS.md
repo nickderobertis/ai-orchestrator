@@ -6,8 +6,9 @@
 # AGENTS.md
 
 Durable instructions for the **planner** and any agent working in this repo.
-Write for a future maintainer, not as a session log. Deterministic steps live in
-`orchestrator/` (run via `just`); this file holds the judgment.
+Write for a future maintainer, not as a session log. The deterministic steps are
+the `just` recipes, each a thin wrapper over one of the published CLIs this
+repository configures; this file holds the judgment.
 
 > `CLAUDE.md` is a symlink to this file — edit `AGENTS.md` only.
 
@@ -30,14 +31,12 @@ origin to one **repository identity**, choose a registered publication checkout,
 do the work in an **isolated worktree cut from a per-run clone of an execution
 checkout**, verify it with the repo's own gate, and merge it. That per-run clone
 shares the execution checkout's object store and is what keeps concurrent
-orchestrators from racing one worktree registry. Checkout aliases share identity-level
-`workflow`, `repo_type` (`single-owner` or `team`), and verification `gate`.
-Schema-v4 identities infer
-an omitted type from `gh api user --jq .login` versus the normalized GitHub origin
-owner; legacy `local` workflow is affirmative single-owner evidence. Type and
-workflow migrations are atomic (`just migrate-repo-type` /
-`migrate-repo-workflow` / `migrate-repo-gate`). Gate candidates are ranked during
-onboarding; dispatch uses the stored identity gate and never auto-detects one.
+orchestrators from racing one worktree registry. Checkout aliases share one identity, and its
+`workflow`, `repo_type` (`single-owner` or `team`), and verification `gate` come
+from the **rules file** the identity matches rather than from anything stored per
+identity. Editing that file is how routing changes; there is no migration verb,
+and `just repos` is what shows the policy an identity ends up with.
+Dispatch uses the gate that file resolves and never auto-detects one.
 Team repositories default to an ordinary ready-for-review
 open PR; explicit `auto` or `direct` merges their remote PR. Single-owner
 repositories preserve local direct or remote auto behavior, while explicit `none`
@@ -127,8 +126,11 @@ dispatch onejudge.
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
    lifecycle run, use `just repos` to confirm its repository identity, type,
-   workflow, and available checkout aliases; make durable routing changes with
-   the register/migration recipes rather than accidental run-only overrides. Run
+   workflow, and available checkout aliases. Durable routing is the **rules
+   file**'s: a rule matches a repository by pattern and names the type, workflow,
+   and gate that follow, so a routing change is an edit to that file rather than a
+   command, and `just repos` reports what it resolved to. Change it there rather
+   than reaching for an accidental run-only override. Run
    `just repos --audit-gate-coverage` before relying on hooks or required PR checks
    as merge-path verification; keep missing and unknown coverage visible. Treat
    an unfamiliar project-sounding name as a lookup, not a question: search local
@@ -368,13 +370,16 @@ deliberate trade: those tiers can now contend for that Claude quota, and that is
 accepted because a supervisory tier that can still run beats one isolated from the
 quota that is left. Do not reorder these to restore the old isolation.
 
-Those files decide every run on this host, so pair the two sides differently for
-**one** dispatch with `--worker-harness` / `--judge-harness` rather than by editing
-a config concurrent runs also read. `just run-plan` and `just orchestrate` both
-take them; each side is validated against its own config and refused by name when
-it is not one this repo configures, and with neither flag set nothing changes.
-oneharness's own `ONEHARNESS_HARNESSES` cannot express this: it is process-wide
-and beats config, so it moves both sides at once. See [Choosing a harness per
+Those files decide every run on this host. Pairing the two sides differently for
+**one** run is no longer a flag on a recipe: which harness and model each side runs
+on is a property of that run's agent graph, so `oneagentgraph run --set
+members.<member>.agent.model=NAME` (and the same for its harness) is where a
+per-run override goes, rather than an edit to a config concurrent runs also read.
+`scripts/oneharness-agent.sh` still resolves the per-side variables
+`ORCHESTRATOR_WORKER_HARNESSES` / `ORCHESTRATOR_JUDGE_HARNESSES` and their model
+halves, because oneharness's own `ONEHARNESS_HARNESSES` cannot express a per-side
+choice: it is process-wide and beats config, so it moves both sides at once. See
+[Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
 Choosing the identity does not choose the **tier**: every one of those files pins a
@@ -426,8 +431,7 @@ with `onejudge init --force`.
 **Live dispatch** picks a harness via `oneharness.toml`'s fallback (alternate
 Claude subscription primary, codex secondary).
 The lifecycle *and the orchestrator process itself* dispatch in **`bypass`** mode by
-default — the no-approval mode; `just run-plan` and `just orchestrate` both take
-the same `--oneharness-mode`. It is correct here because the **whole environment
+default — the no-approval mode. It is correct here because the **whole environment
 is a sandbox** (a container):
 codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
 namespaces this host disables, so `bypass` (no approvals, no inner sandbox) is the
@@ -454,12 +458,12 @@ exported `ORCHESTRATOR_PRESERVED_LOGS` claim list, and a nested run that finds i
 path already claimed by a live enclosing one writes `.logs/<label>.<pid>.log`
 instead and names that path in its own failure. This matters here because the
 suite runs `just lint-llm-diff` against this checkout from inside `just check`.
-`just run-plan`
-is the recorded mixed-graph executor driven internally by the dedicated
-orchestrator onejudge process. The planner launches multi-node work with `just
-orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
-over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
-does not invoke `run-plan` directly. There is no single-dispatch command: one
+`just run-plan` and `just next-round` are the engine verbs the orchestrator member
+drives, each naming a run rather than a plan file. The planner launches multi-node
+work with `just orchestrate <plan.json>` and supervises its surfaced boundaries and
+proposals over the [live
+channel](docs/orchestration.md#the-plannerorchestrator-channel); it invokes neither
+engine verb directly. There is no single-dispatch command: one
 subtask is a one-node plan (`examples/single-node-direct.plan.json`,
 `examples/single-node-lifecycle.plan.json`), so no running work falls outside the
 run ledger and the views built on it.
@@ -525,53 +529,27 @@ nothing, and a whole night was once lost to a judge-chain quota that read as a
 bare `harness failed (quota)`. `just results` and the read API carry the same
 attribution per node with the harness's own bounded output. See [Diagnosing a
 provider failure](docs/telemetry.md#diagnosing-a-provider-failure).
-`just telemetry-server` serves the read-only DAG API over a runs root and
-`just dag-ui` serves the browser view against it; both are read-only and mutate
-no run. `just dag-ui-screens` photographs every major surface of that view at every
-viewport in its declared matrix, against the browser tier's own fixture server rather
-than any real run, and prints the gitignored per-invocation gallery it wrote — which
-is how a change to this UI is checked across resolutions without starting it by hand.
-Operational detail lives in [`docs/dag-ui.md`](docs/dag-ui.md).
-Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch,
-harness scratch no live process still references, and conservatively stale known
-third-party scratch; omit `--dry-run` to reclaim it.
-Session setup and every recorded round transition run this sweep automatically.
-An active lifecycle makes third-party cleanup skip without waiting;
-ownership-proven dead watchdog cleanup still proceeds.
-The families an active dispatch itself produces — the private `nx` install every
-`bunx nx` leaves behind, the native-binary cache Nx keys on each worktree's
-workspace root, pytest run directories, onejudge scratch — are the
-volume, so waiting for quiescence never reclaims them. They are swept **during**
-dispatches instead, on proven non-reference: a candidate no live process names in
-its argv, environment, `cwd`/`root`/`exe`, open descriptors, or memory mappings,
-past a short age that only covers the gap
-between creating a directory and first naming it. Mappings are not optional there:
-a `dlopen`ed native binary leaves no descriptor, so for a running `nx` the mapping
-is the only place its cache appears. Names too generic to sweep on are
-identified by shape, and each family honors its producer's own retention. The sweep
-also reaps *processes* a finished dispatch left running. Once a dispatcher dies its
-tree is adopted by init, so every walk this harness terminates trees with starts
-from a parent that no longer exists; what survives that is the environment the
-kernel fixed at `exec`, and `ORCHESTRATOR_AGENT_STATUS_DIR` names the dispatch's own
-watchdog scratch directory. A stamp for a dispatch that is over — its directory gone,
-or its ownership lock free — is proof; a live dispatch's worker, an unstamped
-process, one stamped for another root, and the sweeping process's own ancestry are
-left running. The processes that are *meant* to outlive their launcher carry no
-exemption and need none: `run-plan`, `next-round`, `repo-recover`, and `integrate`
-each fork a round that claims a watchdog directory of its own and `exec`s under it, so
-the sweep judges a round owner or a publication driver by its own liveness rather
-than by the dispatch that started it — and still reaps that tree once it is gone. It
-is the *forked round* that re-`exec`s, never the parent relaying its exit status, and
-it is an `exec` because an inherited stamp cannot be shed in place. The **driver**
-`orchestrate` launches is the tier above them and gets the same protection by the one
-route a *spawned* process can: its launcher claims the directory before the spawn and
-hands it over the instant the driver has a pid, and only when the launch carries a
-stamp to escape at all. See [The successor
-contract](docs/repo-lifecycle.md#the-successor-contract); never work around a kill
-here with `nohup`/`setsid` by hand. Every
-sweep names the families it examined and the families it could not, so `reclaimed
-0 bytes` never hides an unswept one. See
-[`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
+`just telemetry-server` serves the published read-only DAG API over a runs root and
+`just dag-ui` serves the published browser bundle against it; both are read-only and
+mutate no run. Neither is built here any more — the API is `onepipeline-api` and the
+view is the `onepipeline-ui` bundle — so `just dag-ui` puts the two behind one origin
+and `just dag-ui-screens` photographs that bundle at every viewport in the matrix,
+printing the gitignored per-invocation gallery it wrote. Operational detail lives in
+[`docs/dag-ui.md`](docs/dag-ui.md).
+`just sweep-scratch` reclaims the scratch a dispatch leaves behind — the families
+`oneagentgraph` itself produces, each judged on proven non-reference: a candidate no
+live process names in its argv, environment, `cwd`/`root`/`exe`, open descriptors,
+or memory mappings, past a short age that only covers the gap between creating a
+directory and first naming it. `--dry-run` inspects without removing, and
+`--min-age-hours` moves the conservative threshold for scratch that is only stale.
+Session setup runs it automatically. Every sweep names the families it examined and
+the families it could not, so a sweep that reclaimed nothing never hides an unswept
+one.
+
+The processes that are *meant* to outlive their launcher — the driver `just
+orchestrate` starts, and the rounds and publications it forks — are the engines'
+own to keep alive and to reap; never work around a kill here with `nohup`/`setsid`
+by hand.
 Dead lifecycle runs form a separate bounded recovery history: retain the newest
 **3** run roots with unpublished work. A retry or `repo-recover` adopts the exact
 worktree only after claiming its free occupancy lease and rejecting a live
@@ -675,24 +653,14 @@ narrowings that earn their keep answer at the scope their tests read:
 `orchestrator:test-docs` runs the handful that assert on this repository's prose
 and keeps the whole-workspace key; `orchestrator:test-recipes` runs the journeys
 that drive `just` recipes and shell scripts under `recipeWorkspace`, exactly what
-they drive; `orchestrator:test` and `orchestrator:test-serial` run the rest under
-`codeWorkspace` — the workspace
-minus `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test
-opens. Those two share one key because they read one tree; they are separate tasks
-so each half reports its own failures and the one-second serial tier can be forced
-to re-run without the three-minute bulk.
+they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the
+workspace minus `docs/**` and `**/*.md`.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
-scripts it builds its two worktrees from, and `dag-ui:test` — vitest plus two
-Playwright configs — onto `dagUiServerSurface`: the Python its fixture server
-actually runs, which is the read API and everything that import reaches, rather
-than all of `orchestrator/**/*`. A documentation edit stops charging eight
-minutes, and an edit to a command-side module the served process never loads stops
-charging a browser. No split may go stale silently: an undeclared test that opens
+scripts it builds its two worktrees from. A documentation edit stops charging for
+the whole suite. No split may go stale silently: an undeclared test that opens
 this checkout's own documentation fails in `tests/conftest.py` and is told to carry
-`@pytest.mark.reads_docs`, a `@pytest.mark.reads_recipes` test that opens
-anything outside its narrower key fails the same way, and a fixture that starts
-importing Python outside the served surface fails in `tests/test_nx_cache_scope.py`
-and is told to widen that named input. See
+`@pytest.mark.reads_docs`, and a `@pytest.mark.reads_recipes` test that opens
+anything outside its narrower key fails the same way. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
@@ -731,19 +699,19 @@ self-dispatch result.
 
 How this polyglot monorepo was built up from the create-repo reference pieces:
 
-- **Product shape:** Nx monorepo containing a config/orchestration engine, shared
-  libraries, and React applications. Its orchestration core remains closest to
-  `shapes/skills-repo.md` (determinism-vs-judgment split, validate-in-gate,
-  narrow allowlist), applied to onejudge configs + personas rather than skills.
-- **Language(s):** Python (uv, ruff, mypy, pytest) for the Nx `orchestrator` project
-  in `orchestrator/` — including the repo-lifecycle layer (`workspace`, `gitops`,
-  `verify`, `github`, `merge`, `lifecycle`, `replan`) that shells to real
-  `git`/`gh`; TypeScript and React (Bun, Nx, Biome, ESLint) for `apps/` and
-  framework-independent `packages/`; Bash for provisioning and wrappers; YAML,
-  JSON, and TOML for configs.
-- **Composed:** `base.md` (always) + `shapes/skills-repo.md` +
-  `monorepo.md` + the React and TypeScript references. Nx provides the project
-  graph, affected execution, module boundaries, and computation caching; the
+- **Product shape:** a configuration layer over four published CLIs, kept as an Nx
+  workspace for its computation cache and its uniform target set. It remains
+  closest to `shapes/skills-repo.md` (determinism-vs-judgment split,
+  validate-in-gate, narrow allowlist), applied to onejudge configs + personas
+  rather than skills. The engine, the lifecycle, and the browser view are no longer
+  built here: `onepipeline`, `oneagentgraph`, `onevcs`, and `onepipeline-ui` own
+  them, and the `just` recipes are thin wrappers over their verbs.
+- **Language(s):** Bash for the recipes' wrappers, the harness routing, and
+  provisioning; Python (uv, ruff, mypy, pytest) for the Nx `orchestrator` project —
+  now the label contract, the redaction rule, and the suite that proves this
+  layer; YAML, JSON, and TOML for configs.
+- **Composed:** `base.md` (always) + `shapes/skills-repo.md` + `monorepo.md`. Nx
+  provides the project graph, affected execution, and computation caching; the
   underlying language tools remain the source of each check.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
@@ -759,44 +727,36 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
 
 - The gate is strict: format check, lint, type check, and tests all fail on
   issues — no warnings-only mode.
-- **Coverage is enforced at 95% line coverage** on the `orchestrator/` package
+- **Coverage is enforced at 100% line coverage** on the `orchestrator/` package
   (`just test`); the gate fails below it. `[tool.coverage.report]` in
   `pyproject.toml` is the floor's one source — `fail_under` sets it and
   `precision` decides it, because pytest-cov compares the total *after* rounding
   at that precision. `tests/test_coverage_gate.py` holds that combination to one
-  that can actually fail the build. Two tiers measure and neither judges —
-  `orchestrator:test-serial` under `coverage run` for the `single_threaded` tests
-  and `orchestrator:test` across the workers for the rest, each writing its own
-  data file — and the uncached `orchestrator:coverage` combines them and compares
-  that one total to the declared floor. Nothing else may name a floor, and a
-  measuring tier that did not write its data fails the combine rather than
-  lowering the total silently.
+  that can actually fail the build. The floor is 100 because what is left of the
+  package is small and is all trust boundary: the label contract handed to a
+  subprocess, the redaction rule `scripts/preserved-log.sh` mirrors, and the paths
+  both read. `orchestrator:test` measures and judges nothing; the uncached
+  `orchestrator:coverage` reads what it wrote and compares that total to the
+  declared floor. Nothing else may name a floor, and a measuring tier that did not
+  write its data fails that read rather than lowering the total silently.
 - **The suite runs across four xdist workers** (`-n 4 --dist loadgroup`), chosen
   from measurement rather than from `auto`: it is latency-bound, its floor is its
   longest single test, and the curve is flat past four while this host also runs
   live dispatches. A test whose subject is a process-wide or machine-wide
   resource declares that as a scheduling constraint — never as a loosened
-  assertion, and never as a per-run solo re-proof by hand. Two markers carry
-  those constraints. `single_threaded` names a test whose subject is the process
-  itself; it is selected out of the parallel tier into `orchestrator:test-serial`.
-  `load_sensitive` names a journey that races several real processes and waits on
-  a readiness handshake between them, where the constraint is *between* tests
-  rather than inside one: the whole family declares one xdist group, so the
-  distribution never has two of them in flight at once. Both are registered in
-  `pyproject.toml` with their reason, and `tests/test_nx_cache_scope.py` fails a
-  new journey of that shape that does not join the family. See [Four workers, and
-  the tests that cannot have
-  any](docs/repo-lifecycle.md#four-workers-and-the-tests-that-cannot-have-any).
-- **Tests are realistic, not mocked.** The e2e suite drives the *real* `onejudge`
-  CLI as a subprocess through the same `dispatch`/`run-plan` code the orchestrator
-  uses. Only the paid model/harness is faked — via onejudge's own `command`
-  provider pointed at `tests/e2e/fake_backend.py` (a deterministic backend
-  speaking onejudge's JSON-lines protocol), which is the one genuinely external
-  thing we can't run for free. Never mock the merge, the dispatch, or onejudge
-  itself.
-- Validate external inputs at trust boundaries: persona/plan files are validated
-  before dispatch (`validate-personas`, and the plan loader), and onejudge report
-  JSON is parsed defensively.
+  assertion, and never as a per-run solo re-proof by hand. The two markers that
+  used to carry those constraints went with the dispatch journeys that needed
+  them; a test of that shape reintroduces the marker, its tier, and its reason
+  together rather than weakening an assertion to survive a worker.
+- **Tests are realistic, not mocked.** What this repository still owns is its
+  command surface, so the suite drives the *real* `just` recipes, the real wrapper
+  scripts, the real `oneharness` CLI, and real Nx. The published CLIs a recipe
+  delegates to are doubled at that boundary and nothing above it: each engine is
+  proven in its own repository, and a real `onepipeline start` here would launch
+  agents. Never double a recipe, a wrapper script, or the shell they run in.
+- Validate external inputs at trust boundaries: a persona is validated before
+  dispatch (`just validate-personas`), and the label contract handed to a
+  subprocess is validated in `orchestrator/labels.py` before it can reach one.
 - Do not commit secrets or credentials. Harness credentials (e.g.
   `CLAUDE_CODE_OAUTH_TOKEN`) live in the environment, referenced by name; the
   agent allowlist in `.claude/settings.json` stays narrow.
@@ -805,19 +765,17 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
 
 This repo runs on agents, so the suite is the only QA loop.
 
-- **e2e** (`tests/e2e/`) proves the real journeys against the real boundaries:
-  onejudge dispatch and tracked direct graphs (including recorded human pause /
-  attestation / release and compatibility inputs), and the **repo lifecycle**
-  against a real bare git origin — local direct-merge, resumable local human
-  workstreams, remote draft checkpoints, GitHub PR+auto-merge, gate-failure,
-  not-completed (including recovery of partial work committed on its unmerged
-  branch), no-changes, checks-failed, and a multi-PR DAG. Only
-  the paid harness and GitHub's PR/CI decisioning are faked; git and the merge are
-  real (`docs/repo-lifecycle.md`).
-- **unit** (`tests/`) covers the pure logic: base⊕persona merge, plan topological
-  scheduling / concurrency / skip-on-failure, persona scaffolding, and validation
-  rejecting malformed configs.
-- A new orchestrator verb isn't done until its real journey lands in `tests/e2e/`.
+- **e2e** (`tests/e2e/`) proves the real journeys against the real boundaries: the
+  whole delegation table driven through the real recipes and wrapper scripts, the
+  llmlint tier's cached verdict and its two judging paths, the Nx cache keys
+  against real Nx in real linked worktrees, the harness wrapper against the real
+  `oneharness` CLI and its fallback chain, and session setup installing the
+  adopted releases for real from PyPI. Only the paid model and the published CLIs
+  a recipe delegates to are doubled.
+- **unit** (`tests/`) covers what this layer decides on its own: the label
+  contract, the redaction rule, the coverage floor's enforceability, and the drift
+  gates over the pins and the prose.
+- A recipe is not done until a journey drives it end to end in `tests/e2e/`.
 
 ## Commits and merging
 

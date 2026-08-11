@@ -1,4 +1,4 @@
-<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Operator-facing wire examples are required here; orchestrator/channel.py remains authoritative and its exact contract is exercised by channel unit/e2e tests. -->
+<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Operator-facing wire examples are required here; the published `onepipeline` channel remains authoritative and its exact contract is exercised by that crate's own tests. -->
 <!-- llmlint: ignore-file[no_redundant_instruction_pointers] Live cancellation can preserve incomplete commits; the recovery command must link its safety contract at the point of use. -->
 
 # Tracked graph orchestration
@@ -82,7 +82,7 @@ At each round boundary the orchestrator emits JSON in its final assistant messag
 {"kind":"blocker","message":"Node X failed its gate; retry with a corrected fixture?","options":["retry X","drop X"]}
 ```
 
-`orchestrator.channel.relay_supervisor` validates that emission and sends this
+The channel's server side validates that emission and sends this
 newline-delimited JSON frame to the planner:
 
 ```json
@@ -230,7 +230,7 @@ recorded since it was dispatched. The dispatch has not failed — decide whether
 cancel it, retry it, or let it run.
 ```
 
-"Last activity" is the live stream a dispatch publishes (`orchestrator/activity.py`),
+"Last activity" is the live stream a dispatch publishes,
 falling back to when the round dispatched the node when nothing has published at
 all — which is itself the answer for a worker that died before its first turn. The
 threshold defaults to 2400 seconds, comfortably past the 600-2000 second first turns
@@ -704,79 +704,34 @@ adds structured provider failure attribution; schema v5 added the terminal
 
 Recording is on by default:
 
-Before each recorded round is claimed, the executor runs the same conservative
-scratch sweep exposed as `just sweep-scratch`. Dead `orchestrator-watchdog-*`
-directories are identified by the ownership proof described under
-[dispatch scratch ownership](onejudge-integration.md#dispatch-scratch-ownership),
-and every directory that proof does not clear is reported as retained rather
-than removed. Known third-party scratch is
-eligible only after the conservative age threshold and only when no lifecycle
-dispatch holds the host scratch shared lock. A destructive sweep takes the
-exclusive lock without waiting; when a dispatch is active it skips third-party
-scratch, reports that decision, and still removes definite dead watchdog
-directories. Use
-`just sweep-scratch --dry-run` to inspect candidates;
-`orchestrator.scratch.THIRD_PARTY_PATTERNS` is the authoritative documented
-pattern list and extension point.
+The conservative scratch sweep exposed as `just sweep-scratch` reclaims what a
+finished dispatch left behind. A directory its ownership proof does not clear is
+reported as retained rather than removed, and scratch that is only stale is
+eligible after the conservative age threshold alone. Use `just sweep-scratch
+--dry-run` to inspect candidates without removing any of them.
 
-Scratch the harness itself produces cannot wait for quiescence: a private `nx`
-install per `bunx nx` invocation, a copy of Nx's ~22 MB native binary per workspace
-root, a run directory per pytest session, and an
-effective-config directory per onejudge dispatch appear *because* dispatches are
-running, at gigabytes per hour. `orchestrator.scratch.UNREFERENCED_FAMILIES` is the
-authoritative family list and extension point for these, and they are swept while
-dispatches run, without the exclusive lock. What replaces quiescence is proven
-non-reference: the sweep reads every live process's argv, environment, working
-directory, root and executable links, open descriptors, and file-backed memory
-mappings, and a candidate any of them names is retained and reported —
-`retained N directories referenced by live processes`. Mappings are load-bearing
-rather than belt-and-suspenders: Nx `dlopen`s its cached native binary and keeps no
-descriptor, so a running `nx` names that cache nowhere else. That proof is retaken
-against fresh procfs state immediately before removal. A procfs that cannot show
-the sweeping process itself cannot answer the question at all, which is not the
-same as answering "nothing is referenced": these families are then left alone
-entirely and the run reports that it could not prove them unused. A short minimum age
-(`UNREFERENCED_MIN_AGE_SECONDS`, 15 minutes) covers only the gap between creating a
-directory and the first instant a process names it; the 24-hour default still
-governs `THIRD_PARTY_PATTERNS`, which have no such proof behind them.
-`--min-age-hours` can shorten that age but never lengthens it past the family
-default. A name too generic to sweep on is not swept on: an Nx temp install is
-recognized by its shape — one `nx` devDependency, an installed `node_modules`, and
-nothing else — an Nx native cache by its exact `nx-native-file-cache-<7 hex>` name
-holding nothing but `.node` copies, and each family honors its producer's own
-retention, so pytest keeps
-the newest three runs per root, a run whose `.lock` names a live session, and
-whatever `pytest-current` points at.
-
-The same sweep reclaims processes, not only directories. A dispatch whose
-dispatcher dies leaves its tree adopted by init, and every walk this harness
-terminates trees with — `terminate_tree`, `terminate_processes`,
-`terminate_process_group` — starts from a parent that no longer exists, so such a
-survivor is outside all of them. Two were found resident on this host at two days
-twenty hours and two days, from dispatches long finished, with nothing left to say
-whose they were. What does survive reparenting is the environment: the kernel fixes
-`/proc/<pid>/environ` at `exec`, and every dispatch exports
-`ORCHESTRATOR_AGENT_STATUS_DIR` naming a directory inside its own
-`orchestrator-watchdog-*` scratch tree. That stamp is the ownership evidence, read
-as a whole NUL-delimited entry and required to name a direct child of the swept
-root carrying the watchdog prefix — a name nothing but `owned_scratch_directory`
-produces. Whether the dispatch behind it is *over* is the same question the
-watchdog family already answers: an absent directory means its whole scope exited,
-and a present one is judged by the ownership lock. Anything else — a stamp for a
-live dispatch, no stamp at all, a directory under some other root, the sweeping
-process and its own ancestry — is left running and reported as such. The
-`dispatch-orphans` family appears in the swept/skipped lists like any other, and a
-destructive run reports `reaped N process(es) left running by a finished dispatch`
-with their pids. Reaping happens *before* the reference proof is taken, so a
-directory whose last claimant was one of these leavings is reclaimed in the same
-pass rather than protected by the process the sweep just ended.
+Scratch a dispatch itself produces cannot wait for quiescence: a private `nx`
+install per `bunx nx` invocation, a copy of Nx's native binary per workspace root,
+a run directory per pytest session, and an effective-config directory per dispatch
+appear *because* dispatches are running, at gigabytes per hour. What replaces
+quiescence is proven non-reference: the sweep reads every live process's argv,
+environment, working directory, root and executable links, open descriptors, and
+file-backed memory mappings, and a candidate any of them names is retained and
+reported. Mappings are load-bearing rather than belt-and-suspenders: Nx `dlopen`s
+its cached native binary and keeps no descriptor, so a running `nx` names that
+cache nowhere else. A procfs that cannot answer the question at all is not the
+same as one answering "nothing is referenced": those families are then left alone
+and the run reports that it could not prove them unused. A short minimum age
+covers only the gap between creating a directory and the first instant a process
+names it, and `--min-age-hours` governs the scratch that has no such proof behind
+it. The same sweep reclaims the *processes* a finished dispatch left running,
+which reparenting to init otherwise puts outside every tree walk.
 
 Every sweep names the families it examined and, separately, the families it could
-not — `swept families: watchdog, nx-install, …` and `skipped families: third-party
-(lifecycle dispatch active)`. Each family appears in exactly one of the two lists,
-so `reclaimed 0 bytes` always means "nothing was reclaimable", never "a family was
-never looked at". A cleanup run that silently skips the family filling the disk
-reads as a clean bill of health, which is worse than no cleanup at all.
+not. Each family appears in exactly one of the two lists, so a sweep that reclaimed
+nothing always means "nothing was reclaimable", never "a family was never looked
+at". A cleanup run that silently skips the family filling the disk reads as a clean
+bill of health, which is worse than no cleanup at all.
 
 ```text
 runs/<run-id>/round-01/plan.json
@@ -921,7 +876,7 @@ A round must not die because the orchestrator surfaced an update and ended its t
 leads a session of its own and owns the round, while the parent exists only to relay
 its exit status. The launching turn's teardown — and `uv run`, which forwards the
 signal it receives to its own direct child and then escalates to SIGKILL — reaches
-only that parent. `orchestrator/detach.py` holds the full reasoning; the practical
+only that parent. `onepipeline` holds the full reasoning; the practical
 consequence is that Ctrl-C reaches the relaying parent rather than the round, so the
 round announces the pid to signal when you do want it stopped.
 
@@ -1011,7 +966,7 @@ the environment the harness exports — never from process ancestry — and
 `$ORCHESTRATOR_LAUNCHER_SESSION`) still override it. A launch nothing identifies,
 and every run recorded before this was populated, resolves to `unknown`: missing,
 malformed, and expired records are all read the same way, and none of them is ever
-attributed to the reader. `orchestrator/launch.py` is the single source for the
+attributed to the reader. The launch record is the single source for the
 scheme.
 
 ```sh
@@ -1058,7 +1013,7 @@ orchestrator asking its provider what to do next — with the quota that round j
 spent. One refusal there used to kill the process that owned the whole run.
 
 Two requests are now retried with bounded backoff before the process is allowed to
-die, under one policy (`orchestrator/boundary.py`):
+die, under one policy:
 
 * **The orchestrator's own post-round turn**, in `scripts/oneharness-orchestrator.sh`.
   Only an attempt that produced *no* stdout is asked again — onejudge parses that
@@ -1176,11 +1131,11 @@ captured, so the command `launch.json` advertises was, for it, one that produced
 nothing and never returned, and every status check was done by reading
 `events.jsonl` and `/proc` by hand instead.
 
-**The bound that pass returns within.** `tests/e2e/test_monitor_e2e.py` holds the
-real command to `orchestrator.monitor.RETURN_BOUND_SECONDS` on a runs root the size
-of the planner's own. Nothing in the command computes that bound; what it enforces
-is `SOURCE_TIMEOUT_SECONDS`, and the bound is derived from it so the two cannot
-drift. The journal, the ledger, the snapshot, and git are local reads; the two
+**The bound that pass returns within.** `onepipeline` holds the command to a
+bounded return on a runs root the size of the planner's own. Nothing in the command
+computes that bound; what it enforces is its per-source timeout, and the bound is
+derived from it so the two cannot drift. The journal, the ledger, the snapshot, and
+git are local reads; the two
 sources that are not — oneharness history, a subprocess over a store that only
 grows, and `gh`, which is the network — each carry that deadline. `gh` carries it
 twice: per call *and* as a budget for the whole source, so a run with many linked
@@ -1207,7 +1162,7 @@ turn on this host runs for 600-2000 seconds. A planner needing more than that ha
 tool — matching `ps` output by pattern — which is how six live dispatches were counted
 where there were two and a judge turn wedged for 1h54m was missed entirely.
 
-`orchestrator/dispatches.py` is the answer that does not guess, and its candidate set
+The dispatch ownership registry is the answer that does not guess, and its candidate set
 is the ownership registry the scratch sweep already trusts: the
 `ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into the environment of
 everything a dispatch starts, paired with the owner lock a live dispatcher holds for
@@ -1240,7 +1195,7 @@ the registry must have seen at least one live dispatch, which shows this reader 
 looking at the scratch root the dispatchers write into, and the run's launch must be
 observably working, which distinguishes one node losing its dispatch from the whole
 run stopping — the second is already reported one level up by
-`orchestrator/liveness.py`. Every other uncertainty resolves toward "still working",
+the liveness verdict. Every other uncertainty resolves toward "still working",
 and a view that can observe nothing reports exactly what it reported before any of
 this existed.
 
@@ -1298,7 +1253,7 @@ Concise graph events; run just history-show <stream-id> for full detail.
 ```
 
 That is the contract, not a banner. Every event line carries exactly one strict
-typed id (`graph:`/`oh:`/`git:`/`pr:` — see `orchestrator/ids.py`), which is
+typed id (`graph:`/`oh:`/`git:`/`pr:`), which is
 precisely the argument `just history-show` resolves, so each summary can stay one
 control-stripped line capped at 96 characters derived from recorded status/result
 values. The monitor never tries to *be* the detail; it tells you the id to ask
@@ -1462,7 +1417,7 @@ and therefore carries no context; `next-round` reads the run's ledger and does.
 
 `round-NN/plan.json` is the round's **launch record** and the reconciler never
 rewrites it. `next-round` therefore does not derive the next round from it: it folds
-the round's own authoritative journal (`orchestrator/projection.py`, the same strict
+the round's own authoritative journal (the same strict
 reader `run-plan --recover` replays with) and derives from the graph the round
 actually ran. Every live edit the reconciler committed is in that graph — an `add`,
 a `drop`, a `reparent`, a `retry` replacement and its new id, an amended `task`,
@@ -1544,17 +1499,17 @@ before: context rides alongside them and changes none of them.
 
 ## Where this lives
 
-- `orchestrator/graph.py` — canonical mixed-node validation, scheduling, result,
-  output, and exit semantics.
-- `orchestrator/plan.py` — direct-agent parsing and the shared DAG reconciler.
-- `orchestrator/lifecycle.py` — repository nodes and resumable step workstreams.
-- `orchestrator/runs.py`, `next_round.py`, `replan.py` — durable rounds,
-  attestations, and continuation.
-- `orchestrator/journal.py`, `ids.py` — the append-only per-transition record and
-  the strict typed ids its details point at.
-- `orchestrator/monitor.py` — the four-source aggregation, dedup, and the
-  `just monitor` stream/exit contract.
-- `orchestrator/channel.py` — the surface FIFO, the durable reply and command
-  queues, surface/reply validation, and the live `relay_supervisor` command judge.
-- `orchestrator/dispatch.py` — one worker subprocess, plus `launch_orchestrator`'s
-  detached orchestrator path and split-provider wiring.
+Everything on this page is implemented by the published CLIs this repository
+pins, and each recipe named above is a thin wrapper over one of their verbs.
+
+- **`onepipeline`** — the plan and its validation, round scheduling and
+  transition, the run ledger and its journal, the planner channel (surfaces,
+  replies, live edits, attestation), the read-only views, and the driver
+  `just orchestrate` launches.
+- **`oneagentgraph`** — one dispatched agent turn and the graph of members a run
+  drives, its history records, and its scratch.
+- **`onevcs`** — repository identity, the rules that resolve a policy from it,
+  sessions over isolated worktrees, publication, recovery, and integration.
+
+Their contracts are documented in their own repositories; this page holds the
+judgment and the operating protocol a planner works this host through.

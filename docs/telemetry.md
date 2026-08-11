@@ -200,9 +200,9 @@ readable head, so it stays sized by the tier rather than by the run.
 The upstream defect it exists for is oneharness refusing a history write with
 `new history run lacks complete v1.0 telemetry` (and the `cannot write vN history
 telemetry` variants), raised in `crates/oneharness-core/src/io/history.rs`.
-`orchestrator/supervisory.py` owns those patterns; `orchestrator/graph.py` classifies
-a dispatch that died on one as an infrastructure failure, and the capture records the
-same string as the reason a session is missing.
+`onepipeline` owns those patterns now: it classifies a dispatch that died on one as
+an infrastructure failure, and its capture records the same string as the reason a
+session is missing.
 
 That refusal is not codex-specific, though it was assumed to be, and the assumption
 sent a night's debugging at the wrong harness. A refused write leaves nothing behind,

@@ -1,15 +1,22 @@
 # ai-orchestrator
 
-A local **orchestration harness** over
-[onejudge](https://github.com/nickderobertis/onejudge). An orchestrator agent
-takes one large task, splits it into a dependency graph of smaller subtasks, and
-drives each to completion by dispatching a onejudge process with a fitting
-**persona** — a coding agent supervised by a simulated user that pushes back until
-the subtask is actually done. Independent subtasks run in parallel; dependents
-wait only for what they need.
+A local **orchestration harness**: an orchestrator agent takes one large task,
+splits it into a dependency graph of smaller subtasks, and drives each to
+completion by dispatching a coding agent with a fitting **persona**, supervised by
+a simulated user that pushes back until the subtask is actually done. Independent
+subtasks run in parallel; dependents wait only for what they need.
 
-The orchestrator is an agent following [`AGENTS.md`](AGENTS.md); this repo gives it
-the config, personas, and deterministic scripts to do the mechanical parts.
+The engines are published and installed, not built here:
+[onepipeline](https://github.com/nickderobertis/onepipeline) owns the plan, its
+rounds, and the planner channel;
+[oneagentgraph](https://github.com/nickderobertis/oneagentgraph) owns the
+dispatches; [onevcs](https://github.com/nickderobertis/onevcs) owns repository
+identity and publication; and
+[onepipeline-ui](https://github.com/nickderobertis/onepipeline-ui) owns the read
+API and the browser view. What lives here is the configuration layer over them:
+the personas, the harness routing, the llmlint tier, and a `just` recipe per verb.
+
+The orchestrator is an agent following [`AGENTS.md`](AGENTS.md).
 
 ## Quick start
 
@@ -18,33 +25,26 @@ On a brand-new machine, do the manual one-time steps in
 and the per-machine repository registry are not in this repository.
 
 ```sh
-just bootstrap          # install the adopted onejudge SDK/CLI + sync the Python env
+just bootstrap          # install the adopted CLIs + sync the Python env
 just check              # deterministic gate (format, lint, types, personas, tests)
 just gate               # complete pre-push gate, including llmlint
 
-# Run one recorded graph mixing agents, repos, and human gates:
-just run-plan examples/tracked-graph.example.json
+# Launch one recorded graph mixing agents, repos, and human gates, and supervise it:
+just orchestrate examples/tracked-graph.example.json
 
-# One subtask is a one-node plan — the same executor, the same ledger:
-just run-plan examples/single-node-direct.plan.json
-just run-plan examples/single-node-lifecycle.plan.json
+# One subtask is a one-node plan — the same engine, the same ledger:
+just orchestrate examples/single-node-direct.plan.json
+just orchestrate examples/single-node-lifecycle.plan.json
 
-# After doing a reported human action, attest it and release its dependents:
-just next-round <run-id> --complete-human release-approval
+# Read the next planner surface, and reply to it:
+just channel-next <run-id>
+just channel-approve <run-id>
 
-# Integrate completed workstreams for a repo explicitly registered local:
+# Integrate completed workstreams for a repo whose rules say local:
 just integrate claude/api claude/docs --push
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow:
 just repo-recover ai-orchestrator/engineer/abc123 --repo /path/to/checkout
-
-# Self-dispatch from a safety clone while publishing through the canonical identity
-# (set `execution_checkout` on the lifecycle node in the plan file):
-just run-plan self-dispatch.plan.json
-
-# Deliberately change publication policy for every alias of one repository identity:
-just migrate-repo-workflow local/ai-orchestrator --workflow local
-just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 ```
 
 ## How it fits together
@@ -56,40 +56,33 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | `config/*.version` | The exact adopted release of every tool session setup installs from PyPI: onejudge, oneharness, oneagentgraph, onevcs, onepipeline, and onepipeline-ui. |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
-| `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
+| `justfile` | The command surface: one thin wrapper per published verb, plus this repository's own quality tier. |
+| `orchestrator/` | What this layer still decides on its own: the history-label contract and the redaction rule. |
 | `docs/` | [Host setup](docs/host-setup.md) · [tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) · [DAG Observatory](docs/dag-ui.md) |
 
 ## DAG Observatory
 
-The web UI in `apps/dag-ui` shows current and historical DAGs grouped by their
-launching Claude or Codex session. It provides a live React Flow graph, node
-tasks and results, PR/check/gate/log detail, per-role oneharness transcripts,
-and a whole-run planner view.
-
-With the read-only telemetry server listening on its default loopback address,
-run:
+The published browser view shows current and historical DAGs grouped by their
+launching Claude or Codex session: a live graph, node tasks and results,
+PR/check/gate/log detail, per-role transcripts, and a whole-run planner view.
 
 ```sh
-just bootstrap
-just dag-ui
+just telemetry-server   # the published read API over ./runs
+just dag-ui             # the published bundle, on the same origin
 ```
 
-Then open the address Vite prints.
+Then open the address `just dag-ui` prints. See [`docs/dag-ui.md`](docs/dag-ui.md).
 
 ## One tracked graph
 
-`just run-plan` is the canonical executor. Omitted `kind` means `agent`: without
-`repo` it dispatches onejudge directly, while with `repo` it runs the isolated
-clone→gate→publish lifecycle. `kind: human` records an action for a person and
-never invokes a harness. Lifecycle nodes may contain a nested `steps` DAG mixing
-agent and human steps on one resumable branch.
+`just orchestrate` launches one. Omitted `kind` means `agent`: without `repo` it
+dispatches directly, while with `repo` it runs the isolated clone→gate→publish
+lifecycle. `kind: human` records an action for a person and never invokes a
+harness. Lifecycle nodes may contain a nested `steps` DAG mixing agent and human
+steps on one resumable branch.
 
-Every invocation is recorded under `runs/<run-id>/round-NN` unless `--no-record`
-is passed. Results have top-level state `complete`, `waiting`, or `failed` and
-node statuses `done`, `waiting`, `blocked`, `failed`, or `skipped`. Waiting output
-names the action and what it directly unblocks; blocked nodes name the transitive
-human references in `blocked_by`. A complete graph exits 0, waiting or failed
-exits 1, and invalid input exits 2. See the
+Every run is recorded, and `just runs`, `just status`, `just monitor`, `just
+results`, and `just goals` are the read-only views over that record. See the
 [orchestration model](docs/orchestration.md) for tracking and attestation details.
 
 ## Status
@@ -97,5 +90,6 @@ exits 1, and invalid input exits 2. See the
 An early, local, private proof-of-concept — "enough to prove the setup natively
 manages multiple onejudge processes." The full gate runs locally (`just check`);
 CI and repo governance are deliberately deferred (see the "Stack and composition"
-section of [`AGENTS.md`](AGENTS.md)). The e2e suite drives the real onejudge CLI
-with only the paid model faked.
+section of [`AGENTS.md`](AGENTS.md)). The e2e suite drives the real recipes, the
+real harness CLI, and real Nx, doubling only the paid model and the published CLIs
+each recipe delegates to.
