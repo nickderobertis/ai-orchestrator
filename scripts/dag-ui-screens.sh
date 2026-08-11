@@ -97,12 +97,19 @@ done
 }
 
 if [ -z "$run_id" ]; then
-    run_id="$(curl -sf "$base/api/v2/runs" 2>/dev/null | python3 -c 'import json,sys
-try:
-    runs = json.load(sys.stdin).get("runs", [])
-except ValueError:
-    runs = []
-print(runs[0]["run_id"] if runs else "")' 2>/dev/null || true)"
+    # A request that failed and a store with no runs in it are different answers, and
+    # only one of them is this recipe's to report: swallowing the first would
+    # photograph an empty run list and call it an empty runs root.
+    listed="$(curl -sf "$base/api/v2/runs")" || {
+        echo "dag-ui-screens: the read API did not answer $base/api/v2/runs; its output is in $gallery" >&2
+        exit 1
+    }
+    run_id="$(printf '%s' "$listed" | python3 -c 'import json,sys
+runs = json.load(sys.stdin).get("runs", [])
+print(runs[0]["run_id"] if runs else "")')" || {
+        echo "dag-ui-screens: the read API answered $base/api/v2/runs with something that is not a run list; its output is in $gallery" >&2
+        exit 1
+    }
 fi
 
 surfaces=("01-run-list:/")

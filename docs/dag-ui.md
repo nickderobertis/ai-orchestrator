@@ -27,7 +27,8 @@ just telemetry-server   # the read API; reads ./runs, or --runs-dir elsewhere
 just dag-ui             # the bundle, in a second shell
 ```
 
-Open the address `just dag-ui` prints (`http://127.0.0.1:4173` by default).
+Open the address `just dag-ui` prints — it names the port it bound, which
+`DAG_UI_PORT` moves.
 
 The bundle asks for `/api/v2/...` relative to wherever it was served from — it
 declares no API host — and the read API serves the data but not the bundle. So

@@ -115,9 +115,9 @@ recorded — degrades to the task alone, because the seed improves a relaunch an
 never a precondition for one. The turn-cap resume is deliberately *not* a relaunch
 and keeps its conversation: it is continuing work the harness still holds.
 
-`just run-plan <plan.json>` runs one, over a plan holding a single lifecycle node
-(`examples/single-node-lifecycle.plan.json`); it is the only executor, so there is
-no second path a single workstream can take. The node's `repo` is a GitHub
+`just orchestrate <plan.json>` runs one, over a plan holding a single lifecycle
+node (`examples/single-node-lifecycle.plan.json`); it is the only way to dispatch,
+so there is no second path a single workstream can take. The node's `repo` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
 shown by `just repos`. It selects the publication repository identity and checkout.
 For self-dispatch safety, the node's `execution_checkout` likewise accepts a path or
@@ -958,7 +958,7 @@ from both the release and `CHANGELOG`.
 
 ## Lifecycle nodes in the tracked graph
 
-A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
+A lifecycle node is an `agent` node in a plan with a `repo` and either a
 `persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
 `branch`, `title`, `recorded_gate`, `verify_via_ci`, `merge_policy`, `workflow`,
 `repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
@@ -1011,8 +1011,8 @@ publication. Both failed attempts retain their underlying dispatch or harness
 detail in the node journal's drafting-fallback event and in the lifecycle
 follow-up surfaced to the planner.
 
-Run these nodes with `just run-plan`, the one executor; it still accepts old
-lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
+Run these nodes with `just orchestrate`, the one way to dispatch; it still accepts
+old lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
 `examples/repo-plan.example.json`, and the one-node forms in
 `examples/single-node-lifecycle.plan.json` and
 `examples/single-node-direct.plan.json`.
@@ -1147,8 +1147,8 @@ payload. The round directory and `running` status are committed before dispatch;
 the result and `completed` status are atomic updates, and an owner that stops
 without recording a result leaves `abandoned` instead of `running`. A second
 process cannot claim the same explicit run/round. If a process died, inspect its
-recorded worktrees and then use `just run-plan ... --run <id> --recover`; recovery
-is explicit and never silently overwrites a result. `just runs` and `just status`
+recorded worktrees and then use `just orchestrate --adopt <run-id>`; recovery is
+explicit and never silently overwrites a result. `just runs` and `just status`
 report a round whose recorded owner no longer exists as `ABANDONED` rather than as
 in flight, so a lifecycle round that lost its executor is visibly waiting for that
 recovery rather than looking like work in progress. Pass `--run <id>` to name a

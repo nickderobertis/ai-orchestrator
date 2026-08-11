@@ -117,7 +117,9 @@ exit "${FAKE_UV_EXIT:-0}"
     return checkout, trace
 
 
-def _run(checkout: Path, trace: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    checkout: Path, trace: Path, *args: str, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PATH"] = f"{checkout / 'bin'}{os.pathsep}{env['PATH']}"
     env["TRACE_FILE"] = str(trace)
@@ -129,7 +131,8 @@ def _run(checkout: Path, trace: Path, *args: str) -> subprocess.CompletedProcess
         check=False,
         text=True,
         capture_output=True,
-        stdin=subprocess.DEVNULL,
+        input=stdin,
+        stdin=None if stdin is not None else subprocess.DEVNULL,
     )
 
 
@@ -314,6 +317,83 @@ def test_the_telemetry_server_recipe_names_the_flag_it_was_given_nothing_for(
     assert result.returncode == 2, result.stdout
     assert reason in result.stderr
     assert not trace.exists(), "a refused invocation must not reach the read API at all"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    "invocation",
+    [("channel-surface", "run-1"), ("channel-surface", "run-1", "-")],
+    ids=("no-text", "dash"),
+)
+def test_a_surface_with_no_text_is_read_from_stdin(
+    tmp_path: Path, invocation: tuple[str, ...]
+) -> None:
+    """How an agent pipes a long update in: no text, or `-`, means read it."""
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, *invocation, stdin="a long update\nover two lines\n")
+
+    assert result.returncode == 0, result.stderr
+    # The trace records one line per argument break, so a multi-line message arrives
+    # as the two lines it was piped in as — which is the point: the whole update
+    # reaches the CLI rather than its first line.
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline surface --kind check-in --message a long update",
+        "over two lines run-1",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_a_surface_with_nothing_to_say_is_refused(tmp_path: Path) -> None:
+    """An empty update would reset the planner's pacemaker while saying nothing."""
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "channel-surface", "run-1", stdin="   \n")
+
+    assert result.returncode == 2, result.stdout
+    assert "status update must be a non-empty string" in result.stderr
+    assert not trace.exists()
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    "spelling", ["--persona-dir {dir}", "--persona-dir={dir}"], ids=("space", "equals")
+)
+def test_the_new_persona_recipe_scaffolds_where_it_is_told_to(
+    tmp_path: Path, spelling: str
+) -> None:
+    """A persona tree elsewhere is what a scratch persona is drafted in."""
+    checkout, trace = _checkout(tmp_path)
+    elsewhere = tmp_path / "scratch" / "personas"
+
+    result = _run(
+        checkout, trace, "new-persona", "draft", *spelling.format(dir=elsewhere).split(" ")
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == ["uv run oneagentgraph persona new draft"]
+    assert elsewhere.is_dir(), "the named directory is where the CLI has to have run"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("invocation", "reason"),
+    [
+        (("new-persona", "--persona-dir"), "--persona-dir needs a directory"),
+        (("new-persona",), "usage: new-persona.sh"),
+    ],
+    ids=("no-directory", "no-name"),
+)
+def test_the_new_persona_recipe_refuses_an_invocation_it_cannot_act_on(
+    tmp_path: Path, invocation: tuple[str, ...], reason: str
+) -> None:
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, *invocation)
+
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr
+    assert not trace.exists()
 
 
 @pytest.mark.reads_recipes

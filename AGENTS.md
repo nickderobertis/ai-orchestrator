@@ -48,8 +48,8 @@ not bypass an incomplete provenance marker with a normal commit. The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
 after a merge lands; it must be clean with the selected root checked out before
 dispatch. Preserved stacked branches record their PR base so recovery targets the
-stack rather than the root. `just run-plan` is the one tracked hierarchical graph
-executor: its top-level DAG may mix direct agents, lifecycle agents, and explicit
+stack rather than the root. A plan is the one tracked hierarchical graph: its
+top-level DAG may mix direct agents, lifecycle agents, and explicit
 human actions; a lifecycle node may itself run **several agent and human steps in
 sequence on one branch**. Its reconciler accepts planner-issued graph edits while
 a round is running; rounds are checkpoints, not adaptation barriers. Review
@@ -60,7 +60,7 @@ protocol](docs/orchestration.md#live-graph-edits) to change the desired frontier
 
 In this repo, an **agent** (or **subagent**) is a **dispatched onejudge process** —
 a coding agent run under a simulated-user supervisor as a node of a plan launched
-by `just orchestrate` (or run directly by `just run-plan`). This is the default
+by `just orchestrate`. This is the default
 sense of the word everywhere below and in requests to you. When a task says "use
 an agent," "have an agent do X," "dispatch an agent," or "spin up a subagent" —
 including for research or investigation, not just code changes — dispatch
@@ -207,7 +207,8 @@ matched, and it has already interrupted another planner mid-supervision here.
 `just stop <run-id>` is the supported way to stop a run; it refuses another
 planner's run and an unattributable one, naming the owner, and `--force` reports
 that owner before overriding. A stopped run is left reclaimable exactly as an
-interrupted round is (`just run-plan ... --recover`). `complete` is a completion
+interrupted round is: `just orchestrate --adopt <run-id>` attaches a fresh driver
+to its intact ledger. `complete` is a completion
 verdict on the channel and deliberately does **not** stop scheduling; use `just
 stop` when a run must actually end. `stop` is deliberately **not** in
 `.claude/settings.json`'s allowlist: it ends live work, and `--force` overrides the

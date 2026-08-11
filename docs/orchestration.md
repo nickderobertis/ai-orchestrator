@@ -3,11 +3,13 @@
 
 # Tracked graph orchestration
 
-`just run-plan` turns one large task into one recorded hierarchical DAG. It is
-the **only** executor for direct onejudge work, full repository lifecycles, and
-explicit actions that only a person can complete: a single dispatch is a plan file
-holding one node, so every piece of running work has a journal, an ownership row,
-surfaces, and a place in the DAG UI. See
+`just orchestrate <plan.json>` turns one large task into one recorded hierarchical
+DAG. It is the **only** way to dispatch direct agent work, full repository
+lifecycles, and explicit actions that only a person can complete: a single dispatch
+is a plan file holding one node, so every piece of running work has a journal, an
+ownership row, surfaces, and a place in the DAG UI. `just run-plan` and `just
+next-round` are the engine verbs the driver it launches calls, and each names a
+run rather than a plan file. See
 `examples/single-node-direct.plan.json` and
 `examples/single-node-lifecycle.plan.json`. Old lifecycle-only plan mappings —
 no `schema_version`, lifecycle nodes only — are still accepted unchanged.
@@ -234,9 +236,9 @@ cancel it, retry it, or let it run.
 falling back to when the round dispatched the node when nothing has published at
 all — which is itself the answer for a worker that died before its first turn. The
 threshold defaults to 2400 seconds, comfortably past the 600-2000 second first turns
-this host runs; set it per round with `just run-plan --stall-after SECONDS`, or for a
-whole run by exporting `ORCHESTRATOR_STALL_AFTER_SECONDS` before `just orchestrate`,
-which every round of that run inherits.
+this host runs; set it for a whole run by exporting
+`ORCHESTRATOR_STALL_AFTER_SECONDS` before `just orchestrate`, which every round of
+that run inherits.
 
 It is non-blocking because a stall is evidence rather than a verdict: the planner
 decides whether to `cancel` the node, `retry` it, or let it run, and a blocking
@@ -1001,8 +1003,8 @@ non-zero status rather than hidden under a success.
 
 Stopping records nothing about the run itself: the round is abandoned by its own
 owner, exactly as an interrupted round is, so `just runs` reports
-`round-NN ABANDONED (owner pid N took SIGTERM); reclaim with: just run-plan ... --recover`
-and the work is reclaimable. `complete` on the channel is a completion verdict and
+the round as abandoned and the work stays reclaimable — `just orchestrate --adopt
+<run-id>` attaches a fresh driver to it. `complete` on the channel is a completion verdict and
 does not stop scheduling; `just stop` is what ends a run.
 
 ### Retrying the requests a round boundary depends on
@@ -1408,23 +1410,23 @@ nothing. It carries its checkpoint forward regardless, because that preserved
 branch is exactly what a later [`requeue`](#parking-a-node-and-picking-it-up-again)
 has to pick up rather than cutting a fresh one beside it.
 
-`just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
-derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
-results without `state` remain readable. It derives from the two files it is given
-and therefore carries no context; `next-round` reads the run's ledger and does.
+There is no lower-level derivation command any more: the across-round derivation
+happens inside the round transition, which reads the run's ledger and therefore
+carries its context. `just replan` remains only to say so and to name
+`just next-round`.
 
 ### The plan of record is the graph the round executed
 
 `round-NN/plan.json` is the round's **launch record** and the reconciler never
 rewrites it. `next-round` therefore does not derive the next round from it: it folds
 the round's own authoritative journal (the same strict
-reader `run-plan --recover` replays with) and derives from the graph the round
+reader an adopted run replays with) and derives from the graph the round
 actually ran. Every live edit the reconciler committed is in that graph — an `add`,
 a `drop`, a `reparent`, a `retry` replacement and its new id, an amended `task`,
 `done_when` or `max_turns`, a branch pin. Only edits the reconciler *rejected* are
 absent, and their submitter was told so synchronously. A journal that cannot be
 folded strictly falls back to the launch record, which is the same state that makes
-`run-plan --recover` report rather than guess.
+an adopted run report rather than guess.
 
 This replaced an earlier rule under which the transition re-read the launch file and
 structural live edits were round-scoped. Two failures are not separable from that

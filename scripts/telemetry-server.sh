@@ -62,6 +62,13 @@ if [ -n "$host" ] || [ -n "$port" ]; then
         echo "telemetry-server: could not read $address_file; restore it and retry" >&2
         exit 2
     }
+    # Checked rather than assumed, as `scripts/dag-ui-server.js` checks the same
+    # file: split on a colon that is not there, `--bind 8765:8765` is what the
+    # published CLI would be asked to bind.
+    [[ "$default_address" =~ ^[^[:space:]:]+:[0-9]{1,5}$ ]] || {
+        echo "telemetry-server: $address_file must hold one HOST:PORT, not '${default_address}'" >&2
+        exit 2
+    }
     args+=(--bind "${host:-${default_address%%:*}}:${port:-${default_address##*:}}")
 fi
 

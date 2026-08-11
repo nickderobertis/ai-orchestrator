@@ -390,10 +390,24 @@ def _screens_checkout(tmp_path: Path) -> tuple[Path, Path]:
         double = checkout / "bin" / name
         double.write_text((checkout / "scripts/nx.sh").read_text())
         double.chmod(0o755)
-    # The readiness probe is doubled into a bare success rather than traced: it polls,
-    # so tracing it would put a variable number of lines between the ones that matter.
+    # The read API is doubled at the one place this script talks to it: the readiness
+    # probe and the run-list query. Not traced — the probe polls, so tracing it would
+    # put a variable number of lines between the ones that matter — and answering
+    # with a real run list, because an API with no runs and an API that did not
+    # answer are two things this script has to tell apart.
+    body = checkout / "bin/runs-body.json"
+    body.write_text('{"runs": []}\n', encoding="utf-8")
     curl = checkout / "bin/curl"
-    curl.write_text("#!/usr/bin/env bash\nexit 0\n")
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'case "${*: -1}" in\n'
+        "  */api/v2/runs)\n"
+        '    [ "${FAIL_RUNS_QUERY:-}" = "1" ] && exit 22\n'
+        f'    cat "{body}"\n'
+        "    ;;\n"
+        "esac\n"
+    )
     curl.chmod(0o755)
     # Provisioned already, so the real `workspace-install.sh` this script heals
     # through exits without reaching for Bun.
@@ -504,6 +518,25 @@ def test_dag_ui_screens_recipe_names_the_flag_it_was_given_nothing_for(
     assert result.returncode == 2, result.stdout
     assert reason in result.stderr
     assert not trace.exists() or "playwright" not in trace.read_text()
+
+
+@pytest.mark.reads_recipes
+def test_dag_ui_screens_recipe_tells_a_silent_api_from_an_empty_store(
+    tmp_path: Path,
+) -> None:
+    """A read API that did not answer must not be photographed as "no runs yet".
+
+    Swallowing the failure captures the empty run list and reports it as the state
+    of the runs root, which is a fuller claim than the run made.
+    """
+    checkout, trace = _screens_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "dag-ui-screens", FAIL_RUNS_QUERY="1")
+
+    assert result.returncode != 0
+    assert "the read API did not answer" in result.stderr
+    assert "holds no runs" not in result.stderr
+    assert "playwright" not in (trace.read_text() if trace.exists() else "")
 
 
 @pytest.mark.reads_recipes

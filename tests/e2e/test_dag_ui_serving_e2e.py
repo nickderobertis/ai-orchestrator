@@ -247,6 +247,25 @@ def test_a_read_api_address_file_that_is_not_one_is_refused(tmp_path: Path) -> N
     assert "read-api.address must hold one HOST:PORT, not not an address" in result.stderr
 
 
+def test_a_missing_published_bundle_is_named_rather_than_served_empty(tmp_path: Path) -> None:
+    """A worktree with no install is the ordinary case a fresh clone is in.
+
+    Serving an empty directory would answer every request with a 404 that reads as
+    a broken app rather than as an install nobody ran yet.
+    """
+    result = subprocess.run(
+        ["bun", str(REPO_ROOT / "scripts/dag-ui-server.js")],
+        env={**os.environ, "DAG_UI_DIST": str(tmp_path / "nothing-here")},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+    )
+
+    assert result.returncode == 2, result.stdout
+    assert "no published bundle at" in result.stderr
+    assert "just bootstrap" in result.stderr
+
+
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
     """`just dag-ui` finds `just telemetry-server` only while they agree on it."""
     address = READ_API_ADDRESS.read_text(encoding="utf-8").strip()
