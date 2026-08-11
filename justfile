@@ -193,23 +193,13 @@ channel-continue *args:
 # Reclaim the scratch `oneagentgraph` itself produces. Pass `--dry-run` to inspect
 # candidates without removing them, `--min-age-hours` to move the stale threshold.
 #
-# This verb is narrower than the sweep it replaced, and the difference is operational
-# rather than cosmetic. `orchestrator-sweep-scratch` examined seven families —
-# `watchdog`, `nx-install`, `nx-native-file-cache`, `pytest-runs`, `onejudge-scratch`,
-# `dispatch-orphans`, `third-party`; `oneagentgraph sweep` examines the two it owns
-# (`runs`, `temp`). The families it dropped are the *volume* ones: the private `nx`
-# install every `bunx nx` leaves behind, the native-binary cache Nx keys on each
-# worktree, pytest run directories, and onejudge scratch. Nothing reclaims those now,
-# so they accumulate for as long as this host dispatches.
-#
-# It also no longer reaps processes. The old sweep terminated the trees a *finished*
-# dispatch left running, proving ownership from the `ORCHESTRATOR_AGENT_STATUS_DIR`
-# stamp plus the dispatcher's ownership lock; `oneagentgraph sweep` names no process
-# at all. A leaked worker is now nobody's to collect.
-#
-# Both are reported rather than papered over here: a wrapper cannot sweep a family
-# the published verb does not implement, and inventing a second sweeper beside it is
-# how two cleaners come to race one directory.
+# This reclaims less than the name suggests, which is worth knowing before trusting
+# it with a full disk: it sweeps the two families that engine owns (`runs`, `temp`)
+# and reaps no processes. The volume families a dispatch leaves — the per-invocation
+# `nx` install, Nx's per-worktree native binary, pytest run directories, onejudge
+# scratch — and a leaked worker are nobody's to collect here. Not papered over with a
+# second sweeper beside this one: two cleaners racing one directory is worse. See
+# docs/orchestration.md, "Recorded rounds".
 sweep-scratch *args:
     @uv run oneagentgraph sweep "$@"
 

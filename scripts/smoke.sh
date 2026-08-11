@@ -1,34 +1,21 @@
 #!/usr/bin/env bash
 # `just smoke` — spend one real agent-harness turn and prove the launch path works.
 #
-# `oneagentgraph smoke` is the published verb, but it is not the whole recipe: the
-# implementation it replaced supplied three things around that turn, and a bare
-# delegation dropped all three. What each one is, and what dropping it cost:
+# `oneagentgraph smoke` runs plain `oneharness` against a config it generates itself,
+# and takes the caller's environment as-is, so the three values below are the recipe
+# rather than ceremony around it:
 #
-#   1. THE AGENT HARNESS BINARY. The published verb generates its own throwaway
-#      `oneharness.toml` (`harnesses = ["claude-code"]`) and runs plain `oneharness`
-#      against it, so it never sees this repository's five-identity fallback chain
-#      and answers `no harness selected: pass --all or --harness <id>`.
-#      `scripts/oneharness-agent.sh` is the one thing that forces this repo's agent
-#      config, and it is precisely what a launch-path smoke exists to exercise.
-#
-#   2. AN ISOLATED WORKER STATUS DIRECTORY. This is the safety check, not a detail.
-#      `scripts/oneharness-agent.sh` takes `ORCHESTRATOR_AGENT_STATUS_DIR` from its
-#      environment, overwrites `agent.pid` with its own pid, and deletes the terminal
-#      markers (`agent.done`, `agent.exit_code`). Run from inside a dispatch — which
-#      is exactly where the pre-push hook runs this — an inherited value names the
-#      *live* dispatch's status directory, so a nested turn hijacks the liveness
-#      protocol its own dispatcher is watching. When that turn ends without writing
-#      `agent.done`, the dispatcher reads a tracked pid that is gone with no exit
-#      recorded and declares "the agent harness process vanished mid-turn without
-#      recording an exit". `orchestrator-smoke` created its own directory for this
-#      reason; three dispatches died to its absence. The shape below is the one
-#      `scripts/oneharness-agent.sh` validates: `/*/orchestrator-watchdog-*/agent`.
-#
-#   3. AN ISOLATED HISTORY STORE AND THIS TIER'S OWN LABELS. The smoke judges the
-#      record it just wrote, so it reads a store nothing else is writing to, and
-#      stamps `role=agent` plus a per-invocation smoke id the way every other
-#      harness-backed tier here stamps its sessions.
+#   1. The agent harness. `scripts/oneharness-agent.sh` is what forces this
+#      repository's five-identity chain, which is the launch path being proven.
+#   2. A status directory of this run's own — the safety check. The pre-push hook
+#      runs this from inside a dispatch, and the wrapper claims `agent.pid` and
+#      clears the terminal markers in whatever directory it is handed: an inherited
+#      one is the live dispatch's, so the nested turn hijacks the liveness protocol
+#      its own dispatcher is watching and that dispatch dies mid-turn. The shape
+#      created below is the one the wrapper validates,
+#      `/*/orchestrator-watchdog-*/agent`.
+#   3. A history store nothing else writes to, because the smoke judges the record it
+#      just wrote, plus this tier's own labels.
 #
 # Extra arguments reach `oneagentgraph smoke` (`--dir` chooses where to spend the
 # turn). Everything this wrapper creates is removed on the way out.
