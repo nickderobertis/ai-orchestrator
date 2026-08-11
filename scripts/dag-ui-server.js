@@ -15,8 +15,26 @@
 // source for the same reason — both `just dag-ui` and `just dag-ui-screens` start
 // this server, and a bundle layout corrected in one of them only would leave the
 // other serving nothing.
+// Every environment value below is checked before it is used, because each one
+// becomes something whose own failure blames the wrong thing: a served directory,
+// a proxy target, and a listening address. Refusing at startup names the variable
+// that is wrong; the alternative is a page of 404s, a 502 attributed to the read
+// API, or a server listening somewhere nobody asked for.
+const refuse = (why) => {
+  console.error(`dag-ui: ${why}`);
+  process.exit(2);
+};
+
 const here = import.meta.dir;
 const dist = process.env.DAG_UI_DIST ?? `${here}/../node_modules/onepipeline-ui/dist`;
+if (!(await Bun.file(`${dist}/index.html`).exists())) {
+  refuse(
+    process.env.DAG_UI_DIST
+      ? `DAG_UI_DIST must name a directory holding a published bundle; ${dist} has no index.html`
+      : `no published bundle at ${dist}; run 'just bootstrap' to install it, then retry`,
+  );
+}
+const index = Bun.file(`${dist}/index.html`);
 
 // Read only when it is needed: an invocation that names its own API address never
 // consults the file, and validated when it is, because an empty or misshapen one
@@ -26,30 +44,39 @@ const defaultApi = async () => {
   const source = `${here}/../config/read-api.address`;
   const address = (await Bun.file(source).text().catch(() => "")).trim();
   if (!/^[^\s:]+:\d{1,5}$/.test(address)) {
-    console.error(`dag-ui: ${source} must hold one HOST:PORT, not ${address || "nothing"}`);
-    process.exit(2);
+    refuse(`${source} must hold one HOST:PORT, not ${address || "nothing"}`);
   }
   return `http://${address}`;
 };
 
-const api = (process.env.DAG_UI_API_URL ?? (await defaultApi())).replace(/\/+$/, "");
+// A named address is held to the same shape the file is: it is the origin every
+// proxied request is prefixed with, so anything but an absolute http(s) origin
+// produces a fetch that throws and is reported as the read API refusing.
+const named = process.env.DAG_UI_API_URL;
+if (named !== undefined) {
+  const parsed = URL.parse(named);
+  if (parsed === null || !["http:", "https:"].includes(parsed.protocol)) {
+    refuse(`DAG_UI_API_URL must be an http(s) URL, not ${named || "nothing"}`);
+  }
+}
+const api = (named ?? (await defaultApi())).replace(/\/+$/, "");
 
 const requested = process.env.DAG_UI_PORT ?? "4173";
 const port = Number(requested);
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
-  console.error(`dag-ui: DAG_UI_PORT must be a port number, not ${requested}`);
-  process.exit(2);
+  refuse(`DAG_UI_PORT must be a port number, not ${requested}`);
 }
 
-const index = Bun.file(`${dist}/index.html`);
-if (!(await index.exists())) {
-  console.error(`dag-ui: no published bundle at ${dist}; run 'just bootstrap' to install it, then retry`);
-  process.exit(2);
+// Bun takes an unresolvable hostname as a reason to throw from `serve`, which reads
+// as the server crashing rather than as one variable being wrong.
+const hostname = process.env.DAG_UI_HOST ?? "127.0.0.1";
+if (!/^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])$/.test(hostname)) {
+  refuse(`DAG_UI_HOST must be a hostname, an IPv4 address, or a bracketed IPv6 address, not ${hostname || "nothing"}`);
 }
 
 const server = Bun.serve({
   port,
-  hostname: process.env.DAG_UI_HOST ?? "127.0.0.1",
+  hostname,
   // The bundle is a single-page app, so an unknown path is a client route rather
   // than a missing file. `..` is refused outright: this serves one directory, and
   // a path that climbs out of it is never a route the app asked for.

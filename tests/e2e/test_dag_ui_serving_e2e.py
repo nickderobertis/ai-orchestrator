@@ -218,19 +218,37 @@ def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered(tmp_path: Pa
     assert "just telemetry-server" in reported["message"]
 
 
-def test_the_recipe_refuses_a_port_that_is_not_one(tmp_path: Path) -> None:
-    """A misspelled port is a request this host cannot honour, not one to guess at."""
+@pytest.mark.parametrize(
+    ("variable", "value", "reason"),
+    [
+        ("DAG_UI_PORT", "not-a-port", "DAG_UI_PORT must be a port number, not not-a-port"),
+        ("DAG_UI_HOST", "127.0.0.1:8765", "DAG_UI_HOST must be a hostname"),
+        ("DAG_UI_API_URL", "127.0.0.1:8765", "DAG_UI_API_URL must be an http(s) URL"),
+        ("DAG_UI_API_URL", "", "DAG_UI_API_URL must be an http(s) URL, not nothing"),
+    ],
+    ids=("port", "host", "api-url", "empty-api-url"),
+)
+def test_the_recipe_refuses_an_environment_value_that_is_not_one(
+    variable: str, value: str, reason: str
+) -> None:
+    """Each of these becomes something whose own failure would blame the wrong thing.
+
+    A misspelled port binds an arbitrary one, a host Bun cannot resolve throws out
+    of `serve` and reads as a crash, and an address that is not an absolute origin
+    makes every proxied request throw and be reported as the read API refusing. So
+    each is refused at startup, naming the variable rather than the symptom.
+    """
     result = subprocess.run(
         ["just", "dag-ui"],
         cwd=REPO_ROOT,
-        env={**os.environ, "DAG_UI_PORT": "not-a-port"},
+        env={**os.environ, variable: value},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
     )
 
     assert result.returncode != 0
-    assert "DAG_UI_PORT must be a port number, not not-a-port" in result.stderr
+    assert reason in result.stderr
 
 
 def test_a_read_api_address_file_that_is_not_one_is_refused(tmp_path: Path) -> None:
@@ -261,7 +279,34 @@ def test_a_missing_published_bundle_is_named_rather_than_served_empty(tmp_path: 
     """A worktree with no install is the ordinary case a fresh clone is in.
 
     Serving an empty directory would answer every request with a 404 that reads as
-    a broken app rather than as an install nobody ran yet.
+    a broken app rather than as an install nobody ran yet. Driven at the default
+    location — the server copied into a tree that genuinely has no `node_modules` —
+    because that is the state the advice it gives is advice for.
+    """
+    server = tmp_path / "scripts"
+    server.mkdir()
+    shutil.copy2(REPO_ROOT / "scripts/dag-ui-server.js", server / "dag-ui-server.js")
+
+    environment = {key: value for key, value in os.environ.items() if key != "DAG_UI_DIST"}
+    result = subprocess.run(
+        ["bun", str(server / "dag-ui-server.js")],
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+    )
+
+    assert result.returncode == 2, result.stdout
+    assert "no published bundle at" in result.stderr
+    assert "just bootstrap" in result.stderr
+
+
+def test_a_named_bundle_directory_that_holds_none_names_the_variable(tmp_path: Path) -> None:
+    """`DAG_UI_DIST` is how the screenshot tier points the server elsewhere.
+
+    Pointed at a directory with no bundle in it, the advice to run `just bootstrap`
+    would be wrong: the install is fine and the variable is not. So this path says
+    which variable to fix instead.
     """
     result = subprocess.run(
         ["bun", str(REPO_ROOT / "scripts/dag-ui-server.js")],
@@ -272,8 +317,7 @@ def test_a_missing_published_bundle_is_named_rather_than_served_empty(tmp_path: 
     )
 
     assert result.returncode == 2, result.stdout
-    assert "no published bundle at" in result.stderr
-    assert "just bootstrap" in result.stderr
+    assert "DAG_UI_DIST must name a directory holding a published bundle" in result.stderr
 
 
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
