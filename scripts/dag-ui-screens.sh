@@ -109,9 +109,25 @@ if [ -z "$run_id" ]; then
         echo "dag-ui-screens: the read API did not answer $base/api/v2/runs; its output is in $gallery" >&2
         exit 1
     }
+    # Every level is checked rather than indexed into. An answer whose `run_id` is a
+    # number or null still indexes, and would be photographed as the run `7` or the
+    # run `None`; one whose `run_id` is empty reads as an empty store, which is this
+    # recipe reporting a fuller claim than the API made.
     run_id="$(printf '%s' "$listed" | python3 -c 'import json,sys
-runs = json.load(sys.stdin).get("runs", [])
-print(runs[0]["run_id"] if runs else "")')" || {
+try:
+    payload = json.load(sys.stdin)
+except json.JSONDecodeError:
+    raise SystemExit(1)
+runs = payload.get("runs") if isinstance(payload, dict) else None
+if not isinstance(runs, list):
+    raise SystemExit(1)
+if not runs:
+    raise SystemExit(0)
+first = runs[0]
+found = first.get("run_id") if isinstance(first, dict) else None
+if not isinstance(found, str) or not found.strip():
+    raise SystemExit(1)
+print(found)')" || {
         echo "dag-ui-screens: the read API answered $base/api/v2/runs with something that is not a run list; its output is in $gallery" >&2
         exit 1
     }

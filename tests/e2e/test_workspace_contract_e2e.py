@@ -547,15 +547,36 @@ def test_dag_ui_screens_recipe_tells_a_silent_api_from_an_empty_store(
 
 
 @pytest.mark.reads_recipes
-def test_dag_ui_screens_recipe_says_when_the_run_list_is_not_one(tmp_path: Path) -> None:
-    """An answer that is not a run list is its own diagnosis, not an empty store."""
+@pytest.mark.parametrize(
+    "answered",
+    [
+        "<html>not json</html>",
+        '["run-1"]',
+        '{"runs": {"run-1": {}}}',
+        '{"runs": [{}]}',
+        '{"runs": [{"run_id": 7}]}',
+        '{"runs": [{"run_id": null}]}',
+        '{"runs": [{"run_id": "   "}]}',
+    ],
+    ids=("html", "bare-list", "runs-mapping", "no-id", "numeric-id", "null-id", "blank-id"),
+)
+def test_dag_ui_screens_recipe_says_when_the_run_list_is_not_one(
+    tmp_path: Path, answered: str
+) -> None:
+    """An answer that is not a run list is its own diagnosis, not an empty store.
+
+    Checked at every level, because the shapes that still index are the dangerous
+    ones: a numeric or null `run_id` would be photographed as the run `7` or the run
+    `None`, and a blank one would be reported as a runs root holding nothing.
+    """
     checkout, trace = _screens_checkout(tmp_path)
-    (checkout / "bin/runs-body.json").write_text("<html>not json</html>\n", encoding="utf-8")
+    (checkout / "bin/runs-body.json").write_text(f"{answered}\n", encoding="utf-8")
 
     result = _recipe_run(checkout, trace, "dag-ui-screens")
 
     assert result.returncode != 0
     assert "with something that is not a run list" in result.stderr
+    assert "holds no runs" not in result.stderr
     assert "playwright" not in (trace.read_text() if trace.exists() else "")
 
 
