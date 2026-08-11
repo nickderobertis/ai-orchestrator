@@ -88,12 +88,14 @@ def test_the_adopted_release_is_installed_and_reports_its_version(tool: Publishe
 
 
 @pytest.mark.parametrize("tool", PUBLISHED_TOOLS, ids=PUBLISHED_TOOL_IDS)
-def test_session_setup_installs_and_verifies_every_published_tool(tool: PublishedTool) -> None:
-    """Session setup provisions the host, so a tool it does not name is not installed.
+def test_session_setup_declares_every_published_tool(tool: PublishedTool) -> None:
+    """DRIFT-GATE `PUBLISHED_TOOLS` against the table session setup provisions from.
 
-    Its table drives reading the version file, the `uv sync` decision, and the
-    post-install verification alike, so a dropped entry would silently leave that
-    tool unprovisioned on every session.
+    Session setup's own table drives reading the version file, the `uv sync` decision,
+    and the post-install verification alike, so an entry missing there would silently
+    leave that tool unprovisioned on every session. That the declared tools are then
+    really installed and verified is proven by
+    `tests/e2e/test_session_setup_e2e.py::test_session_setup_syncs_every_published_tool_from_pypi`.
     """
     script = (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8")
 
