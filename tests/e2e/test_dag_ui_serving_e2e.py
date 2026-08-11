@@ -6,11 +6,12 @@ and `onepipeline-api` serves that data and not the bundle. A browser accepts onl
 one arrangement of those two — same origin — because the read API sends no CORS
 headers, so the proxy this recipe starts is load-bearing rather than convenience.
 
-Everything here is real: the real recipe, the real server, the real published
-bundle out of `node_modules`, and a real HTTP server standing in for the read API
-at the address the recipe was pointed at. That stand-in is the boundary below the
-seam under test — the API is proven in its own repository — and it is what lets
-these journeys assert what came back rather than only that something did.
+Nothing here is doubled. Both recipes run for real — `just telemetry-server` starts
+the published read API and `just dag-ui` serves the published bundle against it —
+so what a proxied request returns is what the read API itself said, and the two
+recipes finding each other is part of what these journeys prove rather than
+something a stand-in arranged. Both are free to run: the read API serves a local
+run store and starts no agents.
 """
 
 from __future__ import annotations
@@ -49,10 +50,10 @@ def _free_port() -> int:
 
 @dataclass
 class Served:
-    """The bundle server this recipe started, and the API it was pointed at."""
+    """The bundle server this recipe started, and the read API it was pointed at."""
 
     base: str
-    api_requests: Path
+    api: str
 
     def get(self, path: str) -> tuple[int, bytes, str]:
         request = urllib.request.Request(f"{self.base}{path}")
@@ -86,33 +87,25 @@ def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
 
 @pytest.fixture
 def served(tmp_path: Path) -> Iterator[Served]:
-    """`just dag-ui`, running against a stand-in read API on a port of its own."""
+    """Both recipes, for real: `just telemetry-server` behind `just dag-ui`.
+
+    This is the arrangement the documentation tells an operator to start in two
+    shells, and the published read API is the thing the proxy exists to reach — so
+    it is what runs here. Ports are chosen per test rather than taken from
+    `config/read-api.address`, because a suite that bound the one documented address
+    could not run twice at once; the two are still wired to each other through the
+    recipes' own flags.
+    """
     api_port = _free_port()
     ui_port = _free_port()
-    api_requests = tmp_path / "api-requests"
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
     api = subprocess.Popen(
-        [
-            "python3",
-            "-c",
-            "import http.server, json, sys\n"
-            "class Handler(http.server.BaseHTTPRequestHandler):\n"
-            "    def do_GET(self):\n"
-            "        open(sys.argv[2], 'a').write(self.path + chr(10))\n"
-            "        body = json.dumps({'served': self.path}).encode()\n"
-            "        self.send_response(200)\n"
-            "        self.send_header('content-type', 'application/json')\n"
-            "        self.send_header('content-length', str(len(body)))\n"
-            "        self.end_headers()\n"
-            "        self.wfile.write(body)\n"
-            "    def log_message(self, *args):\n"
-            "        pass\n"
-            "http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()\n",
-            str(api_port),
-            str(api_requests),
-        ],
+        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
+        cwd=REPO_ROOT,
         text=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     recipe = subprocess.Popen(
         ["just", "dag-ui"],
@@ -128,15 +121,13 @@ def served(tmp_path: Path) -> Iterator[Served]:
     )
     base = f"http://127.0.0.1:{ui_port}"
     try:
-        _await_ready(f"http://127.0.0.1:{api_port}/healthz", api, "the stand-in read API")
-        api_requests.write_text("", encoding="utf-8")
+        _await_ready(f"http://127.0.0.1:{api_port}/healthz", api, "the read API")
         _await_ready(f"{base}/", recipe, "the bundle server")
-        yield Served(base=base, api_requests=api_requests)
+        yield Served(base=base, api=f"http://127.0.0.1:{api_port}")
     finally:
-        recipe.terminate()
-        recipe.communicate(timeout=e2e_timeout(30))
-        api.terminate()
-        api.communicate(timeout=e2e_timeout(30))
+        for process in (recipe, api):
+            process.terminate()
+            process.communicate(timeout=e2e_timeout(30))
 
 
 def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
@@ -156,18 +147,39 @@ def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
 
 
 def test_the_read_api_answers_on_the_same_origin_as_the_view(served: Served) -> None:
-    """The bundle asks for `/api/v2/...` where it was served from, and nowhere else."""
-    status, body, _ = served.get("/api/v2/runs")
-    assert status == 200
-    assert json.loads(body) == {"served": "/api/v2/runs"}
+    """The bundle asks for `/api/v2/...` where it was served from, and nowhere else.
 
-    status, body, _ = served.get("/healthz")
-    assert status == 200
-    assert json.loads(body) == {"served": "/healthz"}
+    Asserted against what the read API itself answers directly, so the claim is that
+    the proxy carried its answer rather than that something answered: a body the
+    proxy could have synthesized proves nothing about which process produced it.
+    """
+    for path in ("/healthz", "/api/v2/runs"):
+        status, body, content_type = served.get(path)
+        direct = urllib.request.urlopen(f"{served.api}{path}", timeout=e2e_timeout(10))
 
-    # Reaching the API at all is the claim, so it is asserted where it arrived: the
-    # stand-in records every path it was asked for.
-    assert served.api_requests.read_text().split() == ["/api/v2/runs", "/healthz"]
+        assert status == 200, path
+        assert content_type == "application/json", path
+        assert json.loads(body).keys() == json.loads(direct.read()).keys(), path
+
+    # And the read API's own contract, which nothing but the read API produces.
+    listed = json.loads(served.get("/api/v2/runs")[1])
+    assert listed["api_version"] == 2
+    assert listed["runs"] == []
+
+
+def test_an_api_path_the_read_api_refuses_is_passed_back_as_it_refused_it(
+    served: Served,
+) -> None:
+    """A proxy that invented its own answers would hide exactly this.
+
+    The view distinguishes a route the read API does not serve from one it served
+    empty, so the status and the body have to be the API's rather than the proxy's.
+    """
+    status, body, content_type = served.get("/api/v2/no-such-route")
+
+    assert status == 404
+    assert content_type == "application/json"
+    assert json.loads(body) != {}
 
 
 def test_a_client_route_falls_back_to_the_view_and_a_climb_out_does_not(served: Served) -> None:
@@ -181,7 +193,7 @@ def test_a_client_route_falls_back_to_the_view_and_a_climb_out_does_not(served: 
     assert b"ai-orchestrator" not in body
 
 
-def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered(tmp_path: Path) -> None:
+def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered() -> None:
     """Starting the two in two shells means one is often not up yet.
 
     A thrown proxy fetch renders a runtime error page into an XHR, which tells the
@@ -189,14 +201,11 @@ def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered(tmp_path: Pa
     the view already reads.
     """
     ui_port = _free_port()
+    api = f"http://127.0.0.1:{_free_port()}"
     recipe = subprocess.Popen(
         ["just", "dag-ui"],
         cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "DAG_UI_PORT": str(ui_port),
-            "DAG_UI_API_URL": f"http://127.0.0.1:{_free_port()}",
-        },
+        env={**os.environ, "DAG_UI_PORT": str(ui_port), "DAG_UI_API_URL": api},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -204,9 +213,7 @@ def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered(tmp_path: Pa
     base = f"http://127.0.0.1:{ui_port}"
     try:
         _await_ready(f"{base}/", recipe, "the bundle server")
-        status, body, content_type = Served(base=base, api_requests=tmp_path / "unused").get(
-            "/api/v2/runs"
-        )
+        status, body, content_type = Served(base=base, api=api).get("/api/v2/runs")
     finally:
         recipe.terminate()
         recipe.communicate(timeout=e2e_timeout(30))
