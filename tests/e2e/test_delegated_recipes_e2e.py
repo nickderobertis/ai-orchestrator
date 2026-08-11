@@ -254,13 +254,81 @@ def test_the_telemetry_server_recipe_supplies_the_runs_root_the_other_views_read
 
     So the wrapper defaults it to the same directory `just runs` and `just status`
     read, which is what keeps the API serving the runs the planner is looking at.
+    The address is supplied on this path too, from `config/read-api.address`: leaving
+    the published CLI's own default to stand there is what would let `just dag-ui`
+    and this recipe stop finding each other after that file moved.
     """
     checkout, trace = _checkout(tmp_path)
+    address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
 
     assert _run(checkout, trace, "telemetry-server").returncode == 0
     assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --runs-root runs",
+        f"uv run onepipeline-api serve --runs-root runs --bind {address}",
     ]
+
+
+@pytest.mark.reads_recipes
+def test_the_telemetry_server_recipe_binds_the_address_its_one_source_moved_to(
+    tmp_path: Path,
+) -> None:
+    """Move `config/read-api.address` and the no-flag invocation follows it.
+
+    The assertion above would hold against a hardcoded default that happened to
+    match; this is the one that fails if the recipe stops reading the file.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "config/read-api.address").write_text("0.0.0.0:19000\n", encoding="utf-8")
+
+    assert _run(checkout, trace, "telemetry-server").returncode == 0
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:19000",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_the_telemetry_server_recipe_leaves_an_explicit_bind_alone(tmp_path: Path) -> None:
+    """A caller spelling the published flag owns the whole address, and gets it."""
+    checkout, trace = _checkout(tmp_path)
+
+    assert _run(checkout, trace, "telemetry-server", "--bind", "0.0.0.0:19000").returncode == 0
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:19000",
+    ]
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("invocation", "reason"),
+    [
+        (
+            ("telemetry-server", "--port", "not-a-port"),
+            "--port must be a port number in 0-65535",
+        ),
+        (("telemetry-server", "--port", "70000"), "--port must be a port number in 0-65535"),
+        (("telemetry-server", "--host", "127.0.0.1:8765"), "--host must be a hostname"),
+        (
+            ("telemetry-server", "--bind", "0.0.0.0:19000", "--port", "9000"),
+            "--bind names the whole address",
+        ),
+    ],
+    ids=("port-word", "port-range", "host-with-port", "bind-and-port"),
+)
+def test_the_telemetry_server_recipe_refuses_an_address_half_it_cannot_join(
+    tmp_path: Path, invocation: tuple[str, ...], reason: str
+) -> None:
+    """`--host` and `--port` are joined into one `HOST:PORT` word before they leave.
+
+    So a host carrying its own colon, or a port that is not a number, would reach
+    `--bind` as an address neither this script nor the caller meant — and the CLI
+    would report a bind failure for a value it was never given.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, *invocation)
+
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr
+    assert not trace.exists(), "a refused invocation must not reach the read API at all"
 
 
 @pytest.mark.reads_recipes
@@ -290,11 +358,11 @@ def test_the_telemetry_server_recipe_renders_host_and_port_as_one_bind(
     [
         (
             ("telemetry-server", "--runs-dir=/elsewhere"),
-            "uv run onepipeline-api serve --runs-root /elsewhere",
+            "uv run onepipeline-api serve --runs-root /elsewhere --bind 127.0.0.1:8765",
         ),
         (
             ("telemetry-server", "--runs-root=/elsewhere"),
-            "uv run onepipeline-api serve --runs-root /elsewhere",
+            "uv run onepipeline-api serve --runs-root /elsewhere --bind 127.0.0.1:8765",
         ),
         (
             ("telemetry-server", "--port=9000"),
