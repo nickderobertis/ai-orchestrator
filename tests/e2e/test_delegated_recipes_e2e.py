@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -40,50 +41,81 @@ WRAPPER_SCRIPTS = (
     "oneharness-agent.sh",
 )
 
+
+class Delegation(NamedTuple):
+    """One promise this repository makes: a recipe an operator types, and where it lands.
+
+    The two sides are named because they are different things — the operating
+    surface, which is meant to outlive the implementation, and the published command
+    line behind it today. A row read as `[0]` and `[1]` invites a third element that
+    has to be positioned rather than named.
+    """
+
+    recipe: str
+    #: What an operator types after the recipe name.
+    arguments: tuple[str, ...]
+    #: The one command line that invocation must produce, whole.
+    published: str
+
+    @property
+    def invocation(self) -> tuple[str, ...]:
+        """The `just` invocation, as it is typed."""
+        return (self.recipe, *self.arguments)
+
+
 #: The whole delegation table, as `just` invocation → the one command line it must
 #: produce. This is the mapping this repository promises, in one place: a recipe
 #: that starts naming a different verb, or dropping an argument on the way, fails
 #: here rather than in an operator's terminal.
 DELEGATIONS = (
-    (("orchestrate", "plan.json"), "uv run onepipeline start plan.json"),
-    (("orchestrate", "plan.json", "--detach"), "uv run onepipeline start plan.json --detach"),
-    (("orchestrate", "--adopt", "run-1"), "uv run onepipeline adopt run-1"),
-    (("run-plan", "run-1"), "uv run onepipeline round run run-1"),
-    (("next-round", "run-1"), "uv run onepipeline round next run-1"),
-    (("channel-next", "run-1"), "uv run onepipeline next run-1"),
-    (("channel-reply", "run-1", "reply.json"), "uv run onepipeline reply run-1 reply.json"),
-    (
-        ("channel-surface", "run-1", "a status update"),
+    Delegation("orchestrate", ("plan.json",), "uv run onepipeline start plan.json"),
+    Delegation(
+        "orchestrate", ("plan.json", "--detach"), "uv run onepipeline start plan.json --detach"
+    ),
+    Delegation("orchestrate", ("--adopt", "run-1"), "uv run onepipeline adopt run-1"),
+    Delegation("run-plan", ("run-1",), "uv run onepipeline round run run-1"),
+    Delegation("next-round", ("run-1",), "uv run onepipeline round next run-1"),
+    Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
+    Delegation(
+        "channel-reply", ("run-1", "reply.json"), "uv run onepipeline reply run-1 reply.json"
+    ),
+    Delegation(
+        "channel-surface",
+        ("run-1", "a status update"),
         "uv run onepipeline surface --kind check-in --message a status update run-1",
     ),
-    (("stop", "run-1", "--force"), "uv run onepipeline stop run-1 --force"),
-    (("runs", "--mine"), "uv run onepipeline runs --mine"),
-    (("status", "run-1"), "uv run onepipeline status run-1"),
-    (("host",), "uv run onepipeline host"),
-    (("monitor", "run-1"), "uv run onepipeline monitor run-1"),
-    (("results", "run-1"), "uv run onepipeline results run-1"),
-    (("goals",), "uv run onepipeline goals"),
-    (("telemetry", "run-1", "--breakdown"), "uv run onepipeline telemetry run-1 --breakdown"),
-    (("history",), "uv run oneagentgraph history"),
-    (("history-show", "oh:abc123"), "uv run oneagentgraph history show oh:abc123"),
-    (("smoke",), "uv run oneagentgraph smoke"),
-    (("sweep-scratch", "--dry-run"), "uv run oneagentgraph sweep --dry-run"),
-    (("validate-personas",), "uv run oneagentgraph persona validate personas"),
-    (("register-repo", "/checkout"), "uv run onevcs register /checkout"),
-    (("repos",), "uv run onevcs repos"),
+    Delegation("stop", ("run-1", "--force"), "uv run onepipeline stop run-1 --force"),
+    Delegation("runs", ("--mine",), "uv run onepipeline runs --mine"),
+    Delegation("status", ("run-1",), "uv run onepipeline status run-1"),
+    Delegation("host", (), "uv run onepipeline host"),
+    Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
+    Delegation("results", ("run-1",), "uv run onepipeline results run-1"),
+    Delegation("goals", (), "uv run onepipeline goals"),
+    Delegation(
+        "telemetry", ("run-1", "--breakdown"), "uv run onepipeline telemetry run-1 --breakdown"
+    ),
+    Delegation("history", (), "uv run oneagentgraph history"),
+    Delegation("history-show", ("oh:abc123",), "uv run oneagentgraph history show oh:abc123"),
+    Delegation("smoke", (), "uv run oneagentgraph smoke"),
+    Delegation("sweep-scratch", ("--dry-run",), "uv run oneagentgraph sweep --dry-run"),
+    Delegation("validate-personas", (), "uv run oneagentgraph persona validate personas"),
+    Delegation("register-repo", ("/checkout",), "uv run onevcs register /checkout"),
+    Delegation("repos", (), "uv run onevcs repos"),
     # The published flag is spelled differently; the recipe keeps the spelling the
     # planner doctrine names and the wrapper absorbs the difference.
-    (("repos", "--audit-gate-coverage"), "uv run onevcs repos --audit-gates"),
-    (
-        ("repo-recover", "claude/work", "--repo", "/checkout"),
+    Delegation("repos", ("--audit-gate-coverage",), "uv run onevcs repos --audit-gates"),
+    Delegation(
+        "repo-recover",
+        ("claude/work", "--repo", "/checkout"),
         "uv run onevcs recover claude/work --repo /checkout",
     ),
-    (("recoverable",), "uv run onevcs recoverable"),
-    (
-        ("integrate", "claude/a", "claude/b", "--push"),
+    Delegation("recoverable", (), "uv run onevcs recoverable"),
+    Delegation(
+        "integrate",
+        ("claude/a", "claude/b", "--push"),
         "uv run onevcs integrate claude/a claude/b --push",
     ),
-    (("sync", "main"), "uv run onevcs sync main"),
+    Delegation("sync", ("main",), "uv run onevcs sync main"),
 )
 
 
@@ -158,16 +190,16 @@ def _run(
 
 
 @pytest.mark.reads_recipes
-@pytest.mark.parametrize(("invocation", "delegated"), DELEGATIONS, ids=lambda v: " ".join(v))
+@pytest.mark.parametrize("delegation", DELEGATIONS, ids=lambda row: " ".join(row.invocation))
 def test_a_delegated_recipe_reaches_its_published_verb(
-    tmp_path: Path, invocation: tuple[str, ...], delegated: str
+    tmp_path: Path, delegation: Delegation
 ) -> None:
     checkout, trace = _checkout(tmp_path)
 
-    result = _run(checkout, trace, *invocation)
+    result = _run(checkout, trace, *delegation.invocation)
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [delegated]
+    assert trace.read_text().splitlines() == [delegation.published]
 
 
 @pytest.mark.reads_recipes
