@@ -33,14 +33,30 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api") || url.pathname === "/healthz") {
-      return fetch(`${api}${url.pathname}${url.search}`, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-        signal: request.signal,
-        // Bun requires this for a request that streams a body; a GET has none.
-        duplex: "half",
-      });
+      try {
+        return await fetch(`${api}${url.pathname}${url.search}`, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          signal: request.signal,
+          // Bun requires this for a request that streams a body; a GET has none.
+          duplex: "half",
+        });
+      } catch (reason) {
+        // The read API not being up is the ordinary case here — an operator starts
+        // the two in two shells — so it is answered in the shape the view already
+        // knows how to read, naming the address that refused. A thrown fetch would
+        // otherwise render a runtime error page into an XHR.
+        return Response.json(
+          {
+            error: {
+              code: "read_api_unreachable",
+              message: `${api} did not answer (${reason}); start it with 'just telemetry-server', or point DAG_UI_API_URL elsewhere`,
+            },
+          },
+          { status: 502 },
+        );
+      }
     }
     if (url.pathname.includes("..")) {
       return new Response("not found", { status: 404 });
