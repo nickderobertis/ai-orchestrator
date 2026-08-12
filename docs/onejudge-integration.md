@@ -321,10 +321,8 @@ cannot route an adopted run.
 Picking the identity does not pick the tier. Every role's config pins a `model` per
 harness — `oneharness.judge.toml` pins `claude-sonnet-5` on all three of its Claude
 identities *by design*.
-That config is the one source of the tier and the count; the sentence above restates
-them because an operator has to read them here, and
-`tests/test_harness_routing.py::test_documentation_states_the_judge_tier_its_config_pins`
-derives both from `oneharness.judge.toml` and fails when the two disagree.
+That config is the authority for the tier and identity count; inspect it when either
+changes rather than treating this explanatory sentence as a second contract.
 Model overrides are graph-native fields:
 
 ```sh

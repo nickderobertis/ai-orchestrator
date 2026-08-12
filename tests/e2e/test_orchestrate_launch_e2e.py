@@ -342,6 +342,8 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
         check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
+    # The fake backend writes this JSONL itself; PromptRecord states the one field
+    # this test consumes from that test-owned schema.
     prompts = [
         cast(PromptRecord, json.loads(line))["prompt"]
         for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
