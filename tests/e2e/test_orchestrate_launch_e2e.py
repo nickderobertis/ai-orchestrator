@@ -116,6 +116,7 @@ def _environment(
     # the derivation is what this journey holds.
     environment["CLAUDE_CODE_SESSION_ID"] = session
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     # Keeps this run's graph scratch, its history, and its sibling state out of the

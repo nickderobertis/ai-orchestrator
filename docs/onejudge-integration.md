@@ -283,10 +283,11 @@ just orchestrate plan.json \
 ```
 
 `onepipeline start` forwards each `--node-set` opaquely to every node-scope
+<!-- llmlint: ignore[changed_behavior_has_e2e] The real node-scope journey proves
+this repository's forwarding path; dag-scope forwarding is owned by onepipeline. -->
 `oneagentgraph run`; use `--set` with the corresponding dag member path for the
-dag-scope conversation instead. The launch record preserves the refs across
-`adopt`. oneagentgraph resolves each ref independently and invokes oneharness
-directly with that side's resolved config.
+dag-scope conversation instead. oneagentgraph resolves each ref independently and
+invokes oneharness directly with that side's resolved config.
 
 Do not put `ONEHARNESS_HARNESSES` in the graph's `env`: it is process-wide **and
 beats config**, so using it to move the worker silently moves the judge too.

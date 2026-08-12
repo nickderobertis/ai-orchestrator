@@ -5,7 +5,7 @@
     "": {
       "name": "ai-orchestrator",
       "dependencies": {
-        "onepipeline-ui": "^0.3.3",
+        "onepipeline-ui": "0.3.3",
       },
       "devDependencies": {
         "nx": "23.1.0",
