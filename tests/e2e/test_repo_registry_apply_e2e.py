@@ -234,6 +234,34 @@ def test_apply_reports_the_resolved_policy_table(applied: Applied) -> None:
     assert "change-open" in applied.result.stdout
 
 
+def test_resolve_accepts_registered_spellings_and_refuses_bare_owner_name(
+    applied: Applied,
+) -> None:
+    """Plans may name registry identities, aliases, origins, or checkout paths."""
+    identity = IDENTITIES[0]
+    registry = json.loads((applied.home / "registry.json").read_text(encoding="utf-8"))
+    alias, checkout_record = next(
+        (alias, record)
+        for alias, record in registry["checkouts"].items()
+        if record["identity"] == identity.key
+    )
+    accepted = (
+        identity.key,
+        alias,
+        identity.origin,
+        checkout_record["path"],
+    )
+    for spelling in accepted:
+        resolved = onevcs(applied.home, "resolve", spelling)
+        assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+        assert identity.key in resolved.stdout
+
+    owner_name = identity.key.removeprefix("github.com/")
+    refused = onevcs(applied.home, "resolve", owner_name)
+    assert refused.returncode != 0, refused.stdout
+    assert owner_name in refused.stderr
+
+
 @pytest.mark.parametrize("identity", IDENTITIES, ids=lambda identity: identity.key)
 def test_each_identity_publishes_the_way_it_did(applied: Applied, identity: Identity) -> None:
     checked = onevcs(applied.home, "rules", "check", identity.key)

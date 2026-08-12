@@ -82,6 +82,16 @@ class Launched(NamedTuple):
     launch: subprocess.CompletedProcess[str]
 
 
+class RoutedPersonaRun(NamedTuple):
+    """A run that exercises graph overrides and both persona paths."""
+
+    environment: dict[str, str]
+    launch: subprocess.CompletedProcess[str]
+    worker_config: Path
+    judge_config: Path
+    prompt_log: Path
+
+
 def _environment(
     tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION
 ) -> dict[str, str]:
@@ -143,6 +153,73 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
 
 
 @pytest.fixture(scope="module")
+def routed_persona_run(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[RoutedPersonaRun]:
+    """Launch distinct side configs with one named and one omitted persona."""
+    tmp_path = tmp_path_factory.mktemp("routed-persona")
+    environment = _environment(tmp_path, oneharness_bin)
+    worker_config = tmp_path / "worker.toml"
+    judge_config = tmp_path / "judge.toml"
+    worker_config.write_bytes((REPO_ROOT / "oneharness.toml").read_bytes())
+    judge_config.write_bytes((REPO_ROOT / "oneharness.judge.toml").read_bytes())
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment["FAKE_BACKEND_PROMPT_LOG"] = str(prompt_log)
+    plan = tmp_path / "routed-persona.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": "routed-persona-e2e",
+                "concurrency": 1,
+                "tasks": [
+                    {
+                        "id": "named",
+                        "persona": "docs-writer",
+                        "task": "Report without changing files.",
+                        "done_when": "the stand-in report is accepted",
+                    },
+                    {
+                        "id": "default",
+                        "task": "Report without changing files.",
+                        "expects_no_diff": True,
+                        "deps": ["named"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launch = _just(
+        "orchestrate",
+        str(plan),
+        "--node-set",
+        f"members.worker.agent.oneharness_config={worker_config}",
+        "--node-set",
+        f"members.worker.judge.oneharness_config={judge_config}",
+        environment=environment,
+    )
+    try:
+        yield RoutedPersonaRun(environment, launch, worker_config, judge_config, prompt_log)
+    finally:
+        _just("stop", "routed-persona-e2e", environment=environment, seconds=60)
+
+
+def _graph_history(run: str, environment: dict[str, str]) -> dict[str, object]:
+    shown = subprocess.run(
+        ["oneagentgraph", "history", "show", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    return json.loads(shown.stdout)
+
+
+@pytest.fixture(scope="module")
 def dag_scope_members() -> int:
     """How many members `graphs/dag-scope.yaml` declares, counted by its own reader.
 
@@ -187,6 +264,41 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
     assert stream.returncode == 0, stream.stderr
     assert "node-settled done" in stream.stdout, stream.stdout
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_node_overrides_and_optional_personas_reach_the_dispatched_graphs(
+    routed_persona_run: RoutedPersonaRun,
+) -> None:
+    """The launch forwards each side config and only the persona a node names."""
+    launch = routed_persona_run.launch
+    assert launch.returncode == 0, launch.stdout + launch.stderr
+    stream = _just(
+        "monitor", "routed-persona-e2e", environment=routed_persona_run.environment, seconds=60
+    )
+    assert stream.returncode == 0, stream.stderr
+    node_runs = re.findall(r"agent:(node-scope-\S+) graph-started", stream.stdout)
+    assert node_runs, stream.stdout
+
+    histories = [_graph_history(run, routed_persona_run.environment) for run in node_runs]
+    origins = [
+        {str(ref["origin"]) for ref in history["refs"]}  # type: ignore[index]
+        for history in histories
+    ]
+    expected_configs = {
+        str(routed_persona_run.worker_config),
+        str(routed_persona_run.judge_config),
+    }
+    assert expected_configs <= origins[0], origins
+    prompts = [
+        json.loads(line)["prompt"]
+        for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        "You are an editor who values concision and accuracy" in prompt for prompt in prompts
+    )
+    assert "graph:default" in stream.stdout
+    assert "node-settled done no-changes" in stream.stdout
 
 
 @pytest.mark.xdist_group("orchestrate-launch")

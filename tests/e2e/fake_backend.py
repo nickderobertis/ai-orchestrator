@@ -89,6 +89,9 @@ EVALUATION_MARKER = '{"value": true or false'
 #: failure to report, and a test that hangs on it says nothing.
 MAX_TRANSITIONS = 12
 
+#: Optional test-owned transcript sink for assertions about the effective prompt.
+PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
+
 
 def _config(argv: list[str]) -> str | None:
     """The `--config` this invocation was pinned with, if any."""
@@ -183,6 +186,9 @@ def main(argv: list[str]) -> int:
         return 2
     argv, prompt = _prompt(argv)
     config = _config(argv)
+    if prompt_log := os.environ.get(PROMPT_LOG_ENV):
+        with Path(prompt_log).open("a", encoding="utf-8") as recorded:
+            recorded.write(json.dumps({"config": config, "prompt": prompt}) + "\n")
     if config and Path(config).name == JUDGE_CONFIG_NAME:
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))
