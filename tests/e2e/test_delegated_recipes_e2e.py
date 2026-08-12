@@ -39,6 +39,11 @@ WRAPPER_SCRIPTS = (
     # `smoke.sh` names this one as the agent harness; the journeys below assert the
     # path it hands down, so the file it names has to be the real one.
     "oneharness-agent.sh",
+    # Every `onepipeline` recipe goes through this one, which is where the planner's
+    # identity and a launch's harness environment are established.
+    "onepipeline.sh",
+    "claude-alt-config-dir.sh",
+    "codex-alt-home.sh",
 )
 
 
