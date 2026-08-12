@@ -200,38 +200,78 @@ session once the binary is on `PATH`, and the log line above stops appearing.
 
 ## 7. Rebuild the repository registry
 
-The registry lives at `~/.ai-orchestrator/repos.json` (override the state root with
-`AI_ORCHESTRATOR_HOME`). It is **per-machine and untracked**, so a new host starts
-with none of it. Register each repository you dispatch against; at minimum, this
-repository's two checkouts:
+The registry lives under `~/.onevcs` (override the whole state root with
+`ONEVCS_HOME`) and is **per-machine and untracked**, so a new host starts with none
+of it and no lifecycle dispatch can resolve a repository. What it should hold *is*
+tracked, in two files, and one recipe applies them:
 
 ```sh
-just register-repo ~/projects/ai-orchestrator --workflow local --repo-type single-owner --gate 'just gate'
-just register-repo ~/projects/ai-orchestrator-isolated
+just repos-apply
 ```
 
-The first registration establishes the shared identity — workflow, repository type,
-and gate belong to the identity, so the second alias inherits them:
+- **`config/onevcs.checkouts`** — every checkout to register, one path per line.
+  `onevcs register` resolves each path's own `origin` to a repository identity, so
+  several checkouts of one origin (this repository's publication checkout and its
+  two safety clones) share one identity and therefore one policy.
+- **`config/onevcs.rules.yml`** — the rules file, installed to
+  `$ONEVCS_HOME/rules.yml`. First match wins; each rule names a repository and sets
+  how it publishes (`publication`), whether somebody else has to approve
+  (`approvals`), and what verifies it (`gate`). Its `trailer_prefix` is separate
+  from the rules and applies to all of them: `Orchestrator-` is the prefix every
+  provenance trailer on this host is spelled under, and a preserved branch whose
+  marker uses a prefix the rules file does not name is reported unrecognized and
+  refused publication — so dropping that key strands every branch preserved before
+  the adoption. `just recoverable` is where you would see it.
 
-```
-registered checkout=/home/nick/projects/ai-orchestrator alias=local/ai-orchestrator identity=https://github.com/nickderobertis/ai-orchestrator repository_type=single-owner publication_workflow=local gate=just gate
-```
+The recipe is re-runnable and idempotent — registration is keyed by alias and the
+rules file is replaced whole, so a second run leaves the registry a first one did.
+Run it again after editing either file, and after cloning a repository onto the
+host. A path this host does not have is reported as skipped rather than failing, so
+a machine holding a subset of these checkouts still registers what it has.
+`--dry-run` reports what would change and changes nothing.
 
-Then confirm the routing, and that each identity's merge path actually runs a gate:
+It finishes by resolving every checkout it registered and printing the policy each
+one landed on, and it **fails** if any of them matched no rule. That is not
+pedantry: an unmatched repository falls through to the file's `default`, which is
+the reviewed path — safe, but nobody's configured policy, and a silent pass there
+is how a mistyped `owner` goes unnoticed.
+
+### `just repos` does not report the routing; `just repo-policy` does
+
+`just repos` prints each identity's stored `workflow`, `repo_type`, and `gate`.
+Those three are **`onevcs register`'s own derivation from the origin** — every
+hosted origin is recorded `remote` / `team`, and the gate is guessed from the build
+file it finds in the checkout. There is no surface that sets them, and nothing on
+the publication path reads them: what a change actually does comes from the rules
+file. So `just repos` answers *which repositories and checkouts exist*, and this
+answers what one of them will do:
 
 ```sh
-just repos
-just repos --audit-gate-coverage
+just repo-policy ai-orchestrator     # an alias, identity, origin, or path
 ```
+
+```
+repo: ai-orchestrator
+identity: github.com/nickderobertis/ai-orchestrator
+matched: rule 1 {host: github.com, owner: nickderobertis, name: ai-orchestrator}
+publication: local-direct (from rule 1)
+approvals: none (from rule 1)
+gate: command: just gate (from rule 1)
+```
+
+Change the routing by editing the rule and re-running `just repos-apply`. Confirm
+each identity's merge path actually runs a gate with `just repos
+--audit-gate-coverage`.
 
 ### Register with the checkout path, never the alias
 
-`local/ai-orchestrator` is the **alias** a path registration produces; it is not an
-input you can feed back in. Passing it is parsed as a GitHub `owner/name`:
+An alias is what a path registration **produces** — `onevcs` derives it from the
+checkout's directory name — and it is not an input you can feed back in to
+`register`. Passing an `owner/name` spelling is parsed as exactly that:
 
 | Spec you pass | Identity it resolves to |
 | --- | --- |
-| `~/projects/ai-orchestrator` | a local checkout at that path, alias `local/ai-orchestrator` |
+| `~/ai-orchestrator` | a checkout at that path, alias `ai-orchestrator` |
 | `local/ai-orchestrator` | `https://github.com/local/ai-orchestrator.git` — a different repository entirely |
 
 On this host the alias form fails loudly, because that GitHub repository does not
@@ -244,8 +284,21 @@ git clone https://github.com/local/ai-orchestrator.git ... failed (exit 128): re
 
 The dangerous case is the one where such an owner and name *do* exist: the alias
 would then register a genuinely unrelated repository under the name you wanted.
-Always pass the path. `tests/test_registry.py` pins both outcomes above so this
-warning cannot rot.
+Always pass the path, which is what `config/onevcs.checkouts` holds.
+
+### What the migration off `repos.json` could not carry
+
+This host ran on a pre-adoption registry at `~/.ai-orchestrator/repos.json` before
+`onevcs` owned it. `tests/fixtures/pre-adoption-repos.json` is that registry, and
+`tests/e2e/test_repo_registry_apply_e2e.py` holds `config/onevcs.rules.yml` to
+reproducing every identity's publication behaviour from it. Three things changed
+shape on the way across, none of them silently:
+
+| Was | Is | Why |
+| --- | --- | --- |
+| alias `local/ai-orchestrator`, `nickderobertis/crozier` | `ai-orchestrator`, `nickderobertis__crozier` | `onevcs` derives the alias from the checkout's directory name; no surface names one. |
+| identity `repo_type` / `workflow` / merge strategy | a rule's `publication` + `approvals` | The registry's own copies are `register`'s derivation and unsettable; the rules file is what publication reads. |
+| a gate template with `{base}` | `bash -c` reading `$ONEVCS_COMPARISON_BASE` | A `command:` gate is argv run without a shell and with no substitution; the comparison identity arrives as environment instead. |
 
 ## 8. Verify the host
 

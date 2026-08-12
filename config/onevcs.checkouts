@@ -1,0 +1,37 @@
+# Every checkout `just repos-apply` registers with `onevcs`, one path per line.
+#
+# Blank lines and `#` comments are ignored; a leading `~` expands against `$HOME`.
+# Registration resolves each path's own `origin` to a repository identity, so the
+# policy a checkout gets comes from `config/onevcs.rules.yml` matching that
+# identity — not from anything written here. Several checkouts of one origin (a
+# canonical checkout, a safety clone, an execution clone) therefore share one
+# policy by construction.
+#
+# Always list the path. `onevcs` derives the alias from the checkout's directory
+# name; an `owner/name` spelling passed here would be resolved as a GitHub
+# repository of that name instead. See `docs/host-setup.md`.
+#
+# A path this host does not have is reported as skipped rather than failing the
+# run, so a second machine registers the checkouts it does have.
+
+# This repository: the publication checkout, then the two safety clones every
+# self-dispatch executes in.
+~/ai-orchestrator
+~/ai-orchestrator-isolated
+~/ai-orchestrator-isolated-2
+
+# The published CLIs this repository configures.
+~/projects/oneagentgraph
+~/projects/onepipeline
+~/projects/onepipeline-ui
+~/projects/onevcs
+~/.ai-orchestrator/repos/nickderobertis__oneharness
+~/.ai-orchestrator/repos/nickderobertis__oneharness-ui
+~/.ai-orchestrator/repos/nickderobertis__onejudge
+
+# Other repositories dispatched against from this host.
+~/.ai-orchestrator/repos/nickderobertis__crozier
+~/.ai-orchestrator/repos/nickderobertis__dero-skills
+~/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site
+~/.ai-orchestrator/repos/nickderobertis__screencomp
+~/projects/org-apps

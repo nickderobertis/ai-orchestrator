@@ -34,8 +34,13 @@ shares the execution checkout's object store and is what keeps concurrent
 orchestrators from racing one worktree registry. Checkout aliases share one identity, and its
 `workflow`, `repo_type` (`single-owner` or `team`), and verification `gate` come
 from the **rules file** the identity matches rather than from anything stored per
-identity. Editing that file is how routing changes; there is no migration verb,
-and `just repos` is what shows the policy an identity ends up with.
+identity. This host's copy of it is tracked as `config/onevcs.rules.yml` beside the
+checkout list `config/onevcs.checkouts`, and `just repos-apply` installs both —
+idempotently, so it is re-run after an edit rather than migrated. Editing that file
+is how routing changes, and `onevcs rules check <repo>` is what shows the resolved
+policy an identity ends up with. `just repos` only lists registered identities and
+checkouts: the `workflow` and `repo_type` it also prints are `onevcs register`'s
+derivation from the origin, unsettable and read by nothing on the publication path.
 Dispatch uses the gate that file resolves and never auto-detects one.
 Team repositories default to an ordinary ready-for-review
 open PR; explicit `change-auto` or `change-direct` merges their remote PR.
@@ -128,11 +133,14 @@ dispatch onejudge.
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
-   lifecycle run, use `just repos` to confirm its repository identity, type,
-   workflow, and available checkout aliases. Durable routing is the **rules
-   file**'s: a rule matches a repository by pattern and names the type, workflow,
-   and gate that follow, so a routing change is an edit to that file rather than a
-   command, and `just repos` reports what it resolved to. Change it there rather
+   lifecycle run, use `just repos` to confirm its registered identity and available
+   checkout aliases, and `onevcs rules check <repo>` for its resolved publication,
+   approvals, and gate — `just repos`'s type, workflow, and gate columns are not the
+   routing. Durable routing is the
+   **rules file**'s: a rule matches a repository by pattern and names the
+   publication policy, approvals, and gate that follow, so a routing change is an
+   edit to `config/onevcs.rules.yml` plus `just repos-apply` rather than a command
+   that writes a policy. Change it there rather
    than reaching for an accidental run-only override. Run
    `just repos --audit-gate-coverage` before relying on hooks or required PR checks
    as merge-path verification; keep missing and unknown coverage visible. Treat
@@ -704,7 +712,7 @@ local-mode case of the same rule.
 **Self-dispatch rule (this repo).** Never author working-tree changes in the shared
 canonical checkout: concurrent orchestrators use it and direct edits race them.
 Every change — including plans, personas, docs, and `AGENTS.md` — must be dispatched
-into an isolated worktree cut from the registered `local/ai-orchestrator-isolated`
+into an isolated worktree cut from the registered `ai-orchestrator-isolated`
 safety clone, with the canonical checkout retained as the node's `repo` publication
 repository and only fast-forwarded after integration. Set `execution_checkout` on
 each lifecycle node of the plan rather than passing a top-level flag.
@@ -819,7 +827,11 @@ model. The attestation is not dropped — the publication commit's message ends 
 `Orchestrator-Recovered-Incomplete: <marker sha>` trailer per marker it recovered,
 so the base still records that a step was left incomplete and a green gate cleared
 it. A published subject names the change only; a marker's text never appears in
-one. See [What the base branch carries for a recovered incomplete
+one. That `Orchestrator-` prefix is this host's, not the published default —
+`config/onevcs.rules.yml`'s `trailer_prefix` is its one source, and a marker under a
+prefix the rules file does not name is reported unrecognized and refused
+publication rather than read or ignored. See [What the base branch carries for a
+recovered incomplete
 step](docs/repo-lifecycle.md#what-the-base-branch-carries-for-a-recovered-incomplete-step).
 Provenance commits and marker-fragment subjects that already reached `main` stay
 where they are: that history is never rewritten.

@@ -296,7 +296,7 @@ Multiple orchestrators operate concurrently from this repository's canonical
 checkout. Treat that checkout strictly as the publication checkout: never author
 changes in its working tree, including temporary plan files, personas, or docs.
 Dispatch every change into a worktree created from the registered
-`local/ai-orchestrator-isolated` execution clone, then let the registered local
+`ai-orchestrator-isolated` execution clone, then let the registered local
 workflow integrate it and fast-forward the canonical checkout. This preserves the
 orchestrator's narrow authority to merge, fast-forward, sync, or resolve a small
 conflict in already-dispatched work; it prohibits using the shared tree to author

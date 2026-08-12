@@ -1,0 +1,145 @@
+{
+  "checkouts": {
+    "local/ai-orchestrator": {
+      "identity": "https://github.com/nickderobertis/ai-orchestrator",
+      "path": "/home/nick.guest/ai-orchestrator"
+    },
+    "local/ai-orchestrator-isolated": {
+      "identity": "https://github.com/nickderobertis/ai-orchestrator",
+      "path": "/home/nick.guest/ai-orchestrator-isolated"
+    },
+    "local/ai-orchestrator-isolated-2": {
+      "identity": "https://github.com/nickderobertis/ai-orchestrator",
+      "path": "/home/nick.guest/ai-orchestrator-isolated-2"
+    },
+    "nickderobertis/crozier": {
+      "identity": "https://github.com/nickderobertis/crozier",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__crozier"
+    },
+    "nickderobertis/dero-skills": {
+      "identity": "https://github.com/nickderobertis/dero-skills",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__dero-skills"
+    },
+    "nickderobertis/nick-derobertis-site": {
+      "identity": "https://github.com/nickderobertis/nick-derobertis-site",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site"
+    },
+    "nickderobertis/oneagentgraph": {
+      "identity": "https://github.com/nickderobertis/oneagentgraph",
+      "path": "/home/nick.guest/projects/oneagentgraph"
+    },
+    "nickderobertis/oneharness": {
+      "identity": "https://github.com/nickderobertis/oneharness",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__oneharness"
+    },
+    "nickderobertis/oneharness-ui": {
+      "identity": "https://github.com/nickderobertis/oneharness-ui",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__oneharness-ui"
+    },
+    "nickderobertis/onejudge": {
+      "identity": "https://github.com/nickderobertis/onejudge",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__onejudge"
+    },
+    "nickderobertis/onepipeline": {
+      "identity": "https://github.com/nickderobertis/onepipeline",
+      "path": "/home/nick.guest/projects/onepipeline"
+    },
+    "nickderobertis/onepipeline-ui": {
+      "identity": "https://github.com/nickderobertis/onepipeline-ui",
+      "path": "/home/nick.guest/projects/onepipeline-ui"
+    },
+    "nickderobertis/onevcs": {
+      "identity": "https://github.com/nickderobertis/onevcs",
+      "path": "/home/nick.guest/projects/onevcs"
+    },
+    "nickderobertis/screencomp": {
+      "identity": "https://github.com/nickderobertis/screencomp",
+      "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__screencomp"
+    },
+    "petsinc/org-apps": {
+      "identity": "https://github.com/petsinc/org-apps",
+      "path": "/home/nick.guest/projects/org-apps"
+    }
+  },
+  "identities": {
+    "https://github.com/nickderobertis/ai-orchestrator": {
+      "gate": "just gate",
+      "origin": "https://github.com/nickderobertis/ai-orchestrator.git",
+      "repo_type": "single-owner",
+      "workflow": "local"
+    },
+    "https://github.com/nickderobertis/crozier": {
+      "gate": "just check",
+      "origin": "https://github.com/nickderobertis/crozier",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/dero-skills": {
+      "gate": "just check && just lint-llm-diff {base}",
+      "origin": "https://github.com/nickderobertis/dero-skills.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/nick-derobertis-site": {
+      "gate": "env NX_BASE={base} bash -c 'just bootstrap && just gate'",
+      "origin": "https://github.com/nickderobertis/nick-derobertis-site.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/oneagentgraph": {
+      "gate": "just check",
+      "origin": "https://github.com/nickderobertis/oneagentgraph.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/oneharness": {
+      "gate": "just gate",
+      "origin": "https://github.com/nickderobertis/oneharness.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/oneharness-ui": {
+      "gate": "npx nx affected --target=check --base={base}",
+      "origin": "https://github.com/nickderobertis/oneharness-ui.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/onejudge": {
+      "gate": "just check",
+      "origin": "https://github.com/nickderobertis/onejudge.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/onepipeline": {
+      "gate": "just check",
+      "origin": "https://github.com/nickderobertis/onepipeline.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/onepipeline-ui": {
+      "gate": "just check",
+      "origin": "https://github.com/nickderobertis/onepipeline-ui.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/onevcs": {
+      "gate": "just check",
+      "origin": "https://github.com/nickderobertis/onevcs.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/nickderobertis/screencomp": {
+      "gate": "just gate",
+      "origin": "https://github.com/nickderobertis/screencomp.git",
+      "repo_type": "single-owner",
+      "workflow": "remote"
+    },
+    "https://github.com/petsinc/org-apps": {
+      "gate": "just check",
+      "origin": "https://github.com/petsinc/org-apps.git",
+      "repo_type": "team",
+      "workflow": "remote"
+    }
+  },
+  "version": 4
+}

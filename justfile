@@ -262,6 +262,24 @@ register-repo *args:
 repos *args:
     @uv run onevcs repos "${@/--audit-gate-coverage/--audit-gates}"
 
+# Report the policy one repository publishes under, and the rule that decided it:
+# `just repo-policy <identity|alias|origin|path>`.
+#
+# This is the routing answer, and `just repos` is not: the type and workflow that
+# listing prints are `onevcs register`'s own derivation from the origin, while what
+# a publication actually does comes from the rules file — see `docs/host-setup.md`.
+# llmlint: ignore[tool_output_is_signal] the matched rule and the policy that followed are this viewing command's product.
+repo-policy *args:
+    @uv run onevcs rules check "$@"
+
+# Bring this host's registry up to the tracked repository configuration: register
+# every checkout in `config/onevcs.checkouts`, install `config/onevcs.rules.yml` as
+# the rules file, and prove every registered checkout matched a rule. Re-runnable —
+# run it after editing either file, and on a new host. `--dry-run` changes nothing.
+# llmlint: ignore[tool_output_is_signal] the per-checkout resolved policy this prints is what an operator applies the configuration to read.
+repos-apply *args:
+    @./scripts/apply-repo-registry.sh "$@"
+
 # List recent dispatched worker sessions across every target repo.
 # `just history [RUN]` lists one run's records; the argument is a run id rather
 # than the record count it used to be.

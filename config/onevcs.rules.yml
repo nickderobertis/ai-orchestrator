@@ -1,0 +1,137 @@
+# How each repository on this host publishes a change, and what verifies it.
+#
+# `onevcs` reads this file from `$ONEVCS_HOME/rules.yml` (`~/.onevcs/rules.yml` by
+# default); `just repos-apply` installs this tracked copy there. Editing *this*
+# file and re-running that recipe is how routing changes — there is no command that
+# writes a policy, and `onevcs rules check <repo>` reports which rule a repository
+# matched and the policy that followed.
+#
+# First match wins, and every rule here names one repository outright. A repository
+# no rule matches falls through to `default:`, which is the reviewed path — so
+# forgetting a rule costs a pull request nobody asked for rather than a direct merge
+# nobody reviewed. `just repos-apply` fails on any registered checkout that lands
+# there, because the default is safe but is not this host's policy for any of them.
+#
+# The three fields carry what the pre-adoption registry held per identity:
+#
+# | pre-adoption                        | here                       |
+# | ----------------------------------- | -------------------------- |
+# | `workflow: local`, strategy direct  | `publication: local-direct` |
+# | `workflow: remote`, strategy auto   | `publication: change-auto`  |
+# | `workflow: remote`, strategy none   | `publication: change-open`  |
+# | `repo_type: single-owner`           | `approvals: none`           |
+# | `repo_type: team`                   | `approvals: required`       |
+# | `gate: "<command>"`                 | `gate: {command: [...]}`    |
+#
+# `tests/e2e/test_repo_registry_apply_e2e.py` holds every row of that mapping against
+# `tests/fixtures/pre-adoption-repos.json`, so a rule edited to disagree with the
+# registry this host was migrated from fails the gate rather than changing a merge
+# path quietly.
+#
+# A `command:` gate is argv this crate runs directly — no shell, and no `{base}`
+# substitution. The comparison identity arrives as `ONEVCS_COMPARISON_REMOTE` and
+# `ONEVCS_COMPARISON_BASE` instead, which is why the three gates that took a base
+# ref are spelled `bash -c` here: the shell is what reads them.
+version: 2
+
+# The prefix every provenance trailer key on a preserved branch is spelled under.
+# `onevcs` writes `Onevcs-` when nothing configures one, but every branch this host
+# has preserved — and every recovery attestation already on a base branch here —
+# carries `Orchestrator-`, which is the spelling `AGENTS.md` documents. A marker
+# written under a prefix the host is not configured with is neither read nor
+# ignored: it is reported as unrecognized and refused publication, so leaving this
+# unset strands every preserved branch that predates the adoption.
+trailer_prefix: Orchestrator-
+
+rules:
+  # This repository's own publication path: merged in the local checkout and
+  # pushed, never through a pull request. `local-direct` is the only policy here
+  # that opens no change request, so it is the one to be most careful editing.
+  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
+    publication: local-direct
+    approvals: none
+    gate: {command: ["just", "gate"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: crozier}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: dero-skills}
+    publication: change-auto
+    approvals: none
+    gate:
+      command:
+        - bash
+        - -c
+        - just check && just lint-llm-diff "${ONEVCS_COMPARISON_REMOTE:-origin}/${ONEVCS_COMPARISON_BASE:-main}"
+
+  - match: {host: github.com, owner: nickderobertis, name: nick-derobertis-site}
+    publication: change-auto
+    approvals: none
+    gate:
+      command:
+        - bash
+        - -c
+        - export NX_BASE="${ONEVCS_COMPARISON_REMOTE:-origin}/${ONEVCS_COMPARISON_BASE:-main}"; just bootstrap && just gate
+
+  - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: oneharness}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "gate"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: oneharness-ui}
+    publication: change-auto
+    approvals: none
+    gate:
+      command:
+        - bash
+        - -c
+        - npx nx affected --target=check --base="${ONEVCS_COMPARISON_REMOTE:-origin}/${ONEVCS_COMPARISON_BASE:-main}"
+
+  - match: {host: github.com, owner: nickderobertis, name: onejudge}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: onepipeline}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: onevcs}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
+  - match: {host: github.com, owner: nickderobertis, name: screencomp}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "gate"]}
+
+  # The one team repository on this host. `change-open` leaves an ordinary
+  # ready-for-review pull request and `approvals: required` is what keeps somebody
+  # else in the path; re-registering it as either of the rows above is how a direct
+  # merge happens where a review was intended.
+  - match: {host: github.com, owner: petsinc, name: org-apps}
+    publication: change-open
+    approvals: required
+    gate: {command: ["just", "check"]}
+
+# The policy for a repository no rule above names: reviewed, approved, and verified
+# by the host's own required checks. This is `onevcs`'s own built-in default,
+# restated so that reading this file tells you what an unlisted repository gets.
+default:
+  publication: change-open
+  approvals: required
+  gate: {kind: checks}
