@@ -94,6 +94,12 @@ def _environment(
     return environment
 
 
+def _events(launched: Launched) -> list[dict]:
+    """Every envelope the run recorded, from its own merged store."""
+    store = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "events.jsonl"
+    return [json.loads(line) for line in store.read_text(encoding="utf-8").splitlines()]
+
+
 def _just(*args: str, environment: dict, seconds: float = 300) -> subprocess.CompletedProcess[str]:
     """Run one real recipe from this checkout."""
     return subprocess.run(
@@ -149,13 +155,26 @@ def test_both_dag_scope_members_start(launched: Launched) -> None:
     the graph rather than at its first tick, so the run's own event store answers
     for both of them within seconds.
     """
-    store = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "events.jsonl"
+    events = _events(launched)
     started = {
-        json.loads(line)["labels"].get("member")
-        for line in store.read_text(encoding="utf-8").splitlines()
-        if json.loads(line)["kind"] == "member-started"
+        event["labels"].get("member") for event in events if event["kind"] == "member-started"
     }
     assert {"orchestrator", "check-in"} <= started, f"only {sorted(started)} started"
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_no_turn_of_this_run_reached_a_paid_provider(launched: Launched) -> None:
+    """Nothing in the launched run did real model work.
+
+    Not a hypothetical: `--mock-harness ID` replaces the provider of that exact
+    identity and no other, so an earlier revision of `tests/e2e/fake_backend.py`
+    mocked `codex` and left the four other candidates of a fallback chain able to
+    run. One suite run then spent twenty minutes of a paid Claude subscription
+    exploring this checkout. A stand-in turn calls no tools, so a `turn-activity`
+    anywhere in this run is a real agent working and the whole journey is void.
+    """
+    acted = [event for event in _events(launched) if event["kind"] == "turn-activity"]
+    assert not acted, f"{len(acted)} real tool calls ran; the first was {acted[0]['payload']}"
 
 
 @pytest.mark.xdist_group("orchestrate-launch")

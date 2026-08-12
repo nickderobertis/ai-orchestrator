@@ -58,8 +58,15 @@ from pathlib import Path
 #: name again would re-enter this script.
 REAL_BINARY_ENV = "REAL_ONEHARNESS_BIN"
 
-#: The harness identity the shipped mock responder stands in for. Every role's
-#: chain names `codex` first or second, so one value covers all of them.
+#: The one identity every delegated turn is pinned to, and mocked at.
+#:
+#: Both flags, and neither is optional. `--mock-harness ID` replaces the provider
+#: process of **that exact identity** and no other — not `ID:variant`, and not the
+#: rest of a `run_mode = "fallback"` chain — so mocking one candidate of a chain
+#: that names five leaves the other four able to run for real. They can and did:
+#: a suite run whose `claude-code:alternate` had quota spent twenty minutes of a
+#: paid subscription exploring this checkout before the stall watchdog killed it.
+#: `--harness` is what makes the mock total, by leaving exactly one candidate.
 MOCK_HARNESS = "codex"
 
 #: How the shipped mock responder is told what to answer.
@@ -130,7 +137,7 @@ def _answer(argv: list[str], text: str) -> int:
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
     completed = subprocess.run(
-        [real, argv[0], "--mock-harness", MOCK_HARNESS, *argv[1:]],
+        [real, argv[0], "--harness", MOCK_HARNESS, "--mock-harness", MOCK_HARNESS, *argv[1:]],
         env=environment,
         stdin=subprocess.DEVNULL,
         check=False,
