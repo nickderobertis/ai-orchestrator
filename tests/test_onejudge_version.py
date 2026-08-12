@@ -14,6 +14,10 @@ from orchestrator.root import REPO_ROOT
 # as links to versioned external documentation.
 ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     Path("docs/onejudge-integration.md"): 2,
+    # The dag-scope graph names the release whose onejudge cannot serve the
+    # planner channel as a command provider. Dating that observation is what makes
+    # it honest, and it is exactly the literal an upgrade has to re-measure.
+    Path("graphs/dag-scope.yaml"): 1,
 }
 ONEJUDGE_VERSION_REFERENCE = re.compile(
     r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+|/onejudge/(?:blob/)?)"
@@ -41,6 +45,51 @@ def test_onejudge_version_references_match_single_source(
     assert referenced_versions == {adopted_onejudge_version}, (
         f"{relative_path} references onejudge versions {sorted(referenced_versions)}; "
         f"expected only config/onejudge.version ({adopted_onejudge_version})"
+    )
+
+
+#: Human-readable literals of a *published CLI's* adopted release, as tool name →
+#: file → how many the file is meant to carry. Same contract as the onejudge gate
+#: above and for the same reason: a per-release behaviour claim has to name the
+#: release it was measured against, and `config/<tool>.version` is the one source
+#: of what that release is. Restating it uncovered is how a claim outlives the
+#: bump that invalidated it.
+PUBLISHED_VERSION_REFERENCE_COUNTS = {
+    "onepipeline": {Path("graphs/node-scope.yaml"): 1},
+}
+
+
+def _published_version_reference(tool: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\b{re.escape(tool)}(?:-cli)?(?:'s)?(?: version)?[\s`*(=]+v?(?P<version>\d+\.\d+\.\d+)"
+    )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(
+    ("tool", "relative_path", "expected_count"),
+    [
+        (tool, path, count)
+        for tool, files in PUBLISHED_VERSION_REFERENCE_COUNTS.items()
+        for path, count in files.items()
+    ],
+)
+def test_published_cli_version_references_match_single_source(
+    tool: str, relative_path: Path, expected_count: int
+) -> None:
+    """Reject a stale published-CLI literal in every file covered by this drift gate."""
+    adopted = (REPO_ROOT / "config" / f"{tool}.version").read_text(encoding="utf-8").strip()
+    text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    matches = list(_published_version_reference(tool).finditer(text))
+    referenced = {match.group("version") for match in matches}
+
+    assert len(matches) == expected_count, (
+        f"drift gate parsed {len(matches)} of {expected_count} intended {tool} version "
+        f"references in {relative_path}"
+    )
+    assert referenced == {adopted}, (
+        f"{relative_path} references {tool} versions {sorted(referenced)}; "
+        f"expected only config/{tool}.version ({adopted})"
     )
 
 
