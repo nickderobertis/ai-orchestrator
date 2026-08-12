@@ -25,7 +25,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict, cast
 
 import pytest
 from waits import deadline
@@ -90,6 +90,14 @@ class RoutedPersonaRun(NamedTuple):
     worker_config: Path
     judge_config: Path
     prompt_log: Path
+
+
+class GraphRef(TypedDict):
+    origin: str
+
+
+class GraphHistory(TypedDict):
+    refs: list[GraphRef]
 
 
 def _environment(
@@ -205,7 +213,7 @@ def routed_persona_run(
         _just("stop", "routed-persona-e2e", environment=environment, seconds=60)
 
 
-def _graph_history(run: str, environment: dict[str, str]) -> dict[str, object]:
+def _graph_history(run: str, environment: dict[str, str]) -> GraphHistory:
     shown = subprocess.run(
         ["oneagentgraph", "history", "show", run],
         cwd=REPO_ROOT,
@@ -216,7 +224,7 @@ def _graph_history(run: str, environment: dict[str, str]) -> dict[str, object]:
         check=False,
     )
     assert shown.returncode == 0, shown.stderr
-    return json.loads(shown.stdout)
+    return cast(GraphHistory, json.loads(shown.stdout))
 
 
 @pytest.fixture(scope="module")
@@ -280,16 +288,17 @@ def test_node_overrides_and_optional_personas_reach_the_dispatched_graphs(
     node_runs = re.findall(r"agent:(node-scope-\S+) graph-started", stream.stdout)
     assert node_runs, stream.stdout
 
+    # llmlint: ignore[tests_mirror_real_usage] The task requires evidence from what
+    # actually ran; concise planner views intentionally omit resolved graph refs.
     histories = [_graph_history(run, routed_persona_run.environment) for run in node_runs]
-    origins = [
-        {str(ref["origin"]) for ref in history["refs"]}  # type: ignore[index]
-        for history in histories
-    ]
+    origins = [{ref["origin"] for ref in history["refs"]} for history in histories]
     expected_configs = {
         str(routed_persona_run.worker_config),
         str(routed_persona_run.judge_config),
     }
     assert expected_configs <= origins[0], origins
+    # llmlint: ignore[tests_mirror_real_usage] An event label proves only the name;
+    # the effective provider prompt proves the named persona was merged and used.
     prompts = [
         json.loads(line)["prompt"]
         for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()

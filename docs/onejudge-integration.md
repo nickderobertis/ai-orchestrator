@@ -300,6 +300,9 @@ $ ONEHARNESS_HARNESSES=codex oneharness run --config /tmp/prec.toml --print-comm
 The per-run file must preserve the selected identity's section from the target
 repository's own config — its model, `env_from`, `unset_env`, and any harness args
 are part of the identity. A variant is selectable only if that target config
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The external
+repositories remain authoritative; this adoption-time contrast is required
+operator guidance that this repository cannot derive from sibling working trees. -->
 declares it: `onevcs` declares `codex:alternate` and
 `claude-code:alternate2`, while `oneagentgraph` and `onepipeline` declare only
 plain `codex` and `claude-code`. A mismatched ref is resolved at launch, but an
