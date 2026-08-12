@@ -139,7 +139,7 @@ upgrade:
 #
 # Per-side routing is a property of the launched graphs. `onepipeline start`
 # forwards `--set` to the dag graph and `--node-set` to every dispatched node
-# graph; docs/onejudge-integration.md gives the exact environment-field overrides.
+# graph; docs/onejudge-integration.md gives the exact config-ref overrides.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
 [doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:
