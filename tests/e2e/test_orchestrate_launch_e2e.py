@@ -263,10 +263,10 @@ def test_the_read_only_planner_views_answer_for_the_settled_run(
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_the_planner_channel_carries_a_surface_and_its_reply(
+def test_a_settled_run_carries_a_surface_but_refuses_an_unreadable_reply(
     launched: Launched,
 ) -> None:
-    """A surface reaches the planner and the planner's answer reaches the run."""
+    """A surface remains readable, while quiescence makes a reply impossible."""
     environment = launched.environment
     raised = _just(
         "channel-surface",
@@ -292,8 +292,8 @@ def test_the_planner_channel_carries_a_surface_and_its_reply(
         timeout=e2e_timeout(60),
         check=False,
     )
-    assert answered.returncode == 0, f"the reply was refused:\n{answered.stderr}"
-    assert json.loads(answered.stdout)["state"] == "delivered"
+    assert answered.returncode == 2, answered.stderr
+    assert "has settled, so nothing will ever read a reply" in answered.stderr
 
     read = _just("channel-next", SHIPPED_RUN, environment=environment, seconds=60)
     assert read.returncode == 0, read.stderr

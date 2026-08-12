@@ -272,19 +272,22 @@ that at the real oneharness boundary.
 
 ### Choosing a harness per side
 
-The two sides are different jobs, and the providers are not equally good at them —
-one can be the stronger author while another is the stronger reviewer. Say so per
-dispatch:
+The two sides are different jobs, and the providers are not equally good at them.
+Route every node conversation in one run without editing shared config:
 
 ```sh
-just run-plan plan.json --worker-harness codex --judge-harness claude-code:alternate
-just orchestrate plan.json --worker-harness codex --judge-harness claude-code:alternate2
+just orchestrate plan.json \
+  --node-set env.ORCHESTRATOR_WORKER_HARNESSES=codex \
+  --node-set env.ORCHESTRATOR_JUDGE_HARNESSES=claude-code:alternate2
 ```
 
-Both flags take an identity exactly as a config's `harnesses` chain writes one,
-comma-separated for a fallback chain of the operator's own. They reach every
-dispatch a plan makes, direct and lifecycle alike — including a plan holding a
-single node, which is how one subtask is run.
+`onepipeline start` forwards each `--node-set` opaquely to every node-scope
+`oneagentgraph run`; use `--set` for the dag-scope orchestrator conversation
+instead. The graph's `env` values reach `scripts/oneharness-agent.sh`, which is
+still the `oneharness` binary selected by `ONEAGENTGRAPH_ONEHARNESS_BIN`. That
+wrapper applies the worker value only to agent turns and the judge value only to
+judge turns. Values are identities exactly as the corresponding config's
+`harnesses` chain writes them; comma-separated values request a fallback chain.
 
 Neither flag is oneharness's `ONEHARNESS_HARNESSES`, and that is the whole point:
 that variable is process-wide **and beats config**, so exporting it to move the
@@ -296,23 +299,23 @@ $ ONEHARNESS_HARNESSES=codex oneharness run --config /tmp/prec.toml --print-comm
   selected: codex
 ```
 
-Each flag instead sets its own variable — `ORCHESTRATOR_WORKER_HARNESSES` or
+Each graph override sets its own variable — `ORCHESTRATOR_WORKER_HARNESSES` or
 `ORCHESTRATOR_JUDGE_HARNESSES` — and `scripts/oneharness-agent.sh` resolves them
 per branch: the agent turn (no `--config` in its args) reads the worker one, the
 judge turn (already carrying `--config <judge_config>`) reads the judge one, and
 each is applied to only that branch's own `exec`. A side carrying an explicit value
 therefore never inherits the other side's, nor an ambient process-wide one the
-parent exported. `just orchestrate` carries the pair in the launched process's
-environment, so every round's workers and judges inherit the same choice.
+parent exported. The launch record preserves both `--node-set` values, including
+across `adopt`, so every round's workers and judges inherit the same choice.
 
 `scripts/oneharness-agent.sh` validates each value against **that side's** config
-before anything is dispatched, and names every selectable identity when it refuses:
+when its turn starts, and names every selectable identity when it refuses:
 
 ```
-$ just run-plan plan.json --worker-harness opencode
-run-plan: --worker-harness 'opencode': 'opencode' is not a harness oneharness.toml
-configures; select from claude-code:alternate, claude-code:alternate2, codex,
-codex:alternate, claude-code:primary
+$ just orchestrate plan.json --node-set env.ORCHESTRATOR_WORKER_HARNESSES=opencode
+oneharness-agent: ORCHESTRATOR_WORKER_HARNESSES 'opencode': 'opencode' is not a
+harness oneharness.toml configures; select from claude-code:alternate,
+claude-code:alternate2, codex, codex:alternate, claude-code:primary
 ```
 
 A run that quietly used a different provider than it was told to is worse than one
@@ -320,9 +323,15 @@ that refused to start — which is also why an override is taken **verbatim**: t
 absent-alternate substitution above narrows a chain nobody chose, but dropping an
 identity an operator named would run a provider they did not ask for. An
 unauthenticated one falls through, or fails the dispatch when it is the only
-candidate, and either way says so.
+candidate, and either way says so. The check is against the config resolved in
+the **target repository**. An identity variant is selectable only if that target's
+own `oneharness.toml` declares it: `onevcs` declares `codex:alternate` and
+`claude-code:alternate2`, while `oneagentgraph` and `onepipeline` declare only
+plain `codex` and `claude-code`. A target-mismatched variant currently passes the
+outer launch and is refused when its dispatch starts, so inspect the target config
+before spending a long gate run.
 
-With neither flag set nothing changes: each side resolves its own config chain, and
+With neither override set nothing changes: each side resolves its own config chain, and
 the agent branch still substitutes a chain without an absent alternate Claude
 identity. The other two roles are out of scope — `oneharness.orchestrator.toml` and
 `oneharness.llmlint.toml` keep resolving through their own wrappers, untouched by
@@ -338,12 +347,14 @@ That config is the one source of the tier and the count; the sentence above rest
 them because an operator has to read them here, and
 `tests/test_harness_routing.py::test_documentation_states_the_judge_tier_its_config_pins`
 derives both from `oneharness.judge.toml` and fails when the two disagree.
-`--worker-model` / `--judge-model` are the second half of the same seam:
+The corresponding graph environment fields are the second half of the same seam:
 
 ```sh
 just orchestrate plan.json \
-  --worker-harness claude-code:primary --worker-model claude-opus-5 \
-  --judge-harness claude-code:primary --judge-model claude-opus-5
+  --node-set env.ORCHESTRATOR_WORKER_HARNESSES=claude-code:primary \
+  --node-set env.ORCHESTRATOR_WORKER_MODEL=claude-opus-5 \
+  --node-set env.ORCHESTRATOR_JUDGE_HARNESSES=claude-code:primary \
+  --node-set env.ORCHESTRATOR_JUDGE_MODEL=claude-opus-5
 ```
 
 Each sets its own variable — `ORCHESTRATOR_WORKER_MODEL` or
@@ -360,8 +371,9 @@ dispatch on a provider rejection instead of degrading. Requiring both in one bre
 makes that unconstructable:
 
 ```
-$ just run-plan plan.json --worker-model claude-opus-5
-run-plan: --worker-model 'claude-opus-5': requires --worker-harness. A model name
+$ just orchestrate plan.json --node-set env.ORCHESTRATOR_WORKER_MODEL=claude-opus-5
+oneharness-agent: ORCHESTRATOR_WORKER_MODEL 'claude-opus-5': requires
+ORCHESTRATOR_WORKER_HARNESSES. A model name
 belongs to one provider, and oneharness's fallback chain does not fall through a
 task failure — so an unpaired model reaches whichever candidate oneharness.toml's
 chain selects and kills the dispatch on a provider rejection. Name the identity and

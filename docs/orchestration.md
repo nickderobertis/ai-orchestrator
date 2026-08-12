@@ -95,10 +95,10 @@ stands in for, through `ONEAGENTGRAPH_ONEHARNESS_BIN`.
 
 Two things about them are worth knowing before reading a surprising run:
 
-- A node's `persona` reaches the dispatch as an event **label** and not as the
-  graph's persona, so `graphs/node-scope.yaml` names the role every node
-  dispatches under. A node that needs a different one names its own graph with
-  `agent_graph`.
+- A node's `persona` is both an event label and the `worker` member's persona
+  override. `onepipeline` appends that override after the launch's `--node-set`
+  values, so the plan is authoritative. Nodes with no dispatch (human and
+  `expects_no_diff` nodes) name no persona and still settle normally.
 - The orchestrator's judge side is a simulated-user harness rather than the
   planner channel, so the planner steers a live run through `just channel-next`
   and `just channel-reply` — surfaces and graph edits — rather than by answering

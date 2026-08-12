@@ -117,9 +117,11 @@ and keeps its conversation: it is continuing work the harness still holds.
 
 `just orchestrate <plan.json>` runs one, over a plan holding a single lifecycle
 node (`examples/single-node-lifecycle.plan.json`); it is the only way to dispatch,
-so there is no second path a single workstream can take. The node's `repo` is a GitHub
-`name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
-shown by `just repos`. It selects the publication repository identity and checkout.
+so there is no second path a single workstream can take. The node's `repo` is a
+registered identity key, an exact checkout alias shown by `just repos`, an origin
+URL, or a **local filesystem path**. Bare `owner/name` is not an identity spelling
+accepted by `onevcs resolve`; use the full origin URL when a plan should be
+portable. The value selects the publication repository identity and checkout.
 For self-dispatch safety, the node's `execution_checkout` likewise accepts a path or
 alias and cuts the task worktree from that exact clone while keeping `repo`'s
 publication workflow and post-merge fast-forward.

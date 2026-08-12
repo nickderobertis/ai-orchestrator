@@ -54,9 +54,7 @@ def test_onejudge_version_references_match_single_source(
 #: release it was measured against, and `config/<tool>.version` is the one source
 #: of what that release is. Restating it uncovered is how a claim outlives the
 #: bump that invalidated it.
-PUBLISHED_VERSION_REFERENCE_COUNTS = {
-    "onepipeline": {Path("graphs/node-scope.yaml"): 1},
-}
+PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {}
 
 
 def _published_version_reference(tool: str) -> re.Pattern[str]:
