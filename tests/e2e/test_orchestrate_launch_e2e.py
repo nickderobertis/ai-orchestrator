@@ -100,6 +100,10 @@ class GraphHistory(TypedDict):
     refs: list[GraphRef]
 
 
+class PromptRecord(TypedDict):
+    prompt: str
+
+
 def _environment(
     tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION
 ) -> dict[str, str]:
@@ -224,6 +228,8 @@ def _graph_history(run: str, environment: dict[str, str]) -> GraphHistory:
         check=False,
     )
     assert shown.returncode == 0, shown.stderr
+    # The published history command owns this schema; GraphHistory states the
+    # two fields this test consumes after a successful command response.
     return cast(GraphHistory, json.loads(shown.stdout))
 
 
@@ -275,7 +281,7 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_node_overrides_and_optional_personas_reach_the_dispatched_graphs(
+def test_node_overrides_and_named_or_omitted_persona_paths_work(
     routed_persona_run: RoutedPersonaRun,
 ) -> None:
     """The launch forwards each side config and only the persona a node names."""
@@ -288,8 +294,7 @@ def test_node_overrides_and_optional_personas_reach_the_dispatched_graphs(
     node_runs = re.findall(r"agent:(node-scope-\S+) graph-started", stream.stdout)
     assert node_runs, stream.stdout
 
-    # llmlint: ignore[tests_mirror_real_usage] The task requires evidence from what
-    # actually ran; concise planner views intentionally omit resolved graph refs.
+    # llmlint: ignore[tests_mirror_real_usage] Required proof reads refs omitted by planner views.
     histories = [_graph_history(run, routed_persona_run.environment) for run in node_runs]
     origins = [{ref["origin"] for ref in history["refs"]} for history in histories]
     expected_configs = {
@@ -297,10 +302,9 @@ def test_node_overrides_and_optional_personas_reach_the_dispatched_graphs(
         str(routed_persona_run.judge_config),
     }
     assert expected_configs <= origins[0], origins
-    # llmlint: ignore[tests_mirror_real_usage] An event label proves only the name;
-    # the effective provider prompt proves the named persona was merged and used.
+    # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     prompts = [
-        json.loads(line)["prompt"]
+        cast(PromptRecord, json.loads(line))["prompt"]
         for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()
     ]
     assert any(

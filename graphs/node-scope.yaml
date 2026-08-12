@@ -13,9 +13,10 @@ members:
     kind: onejudge
     base_config: ../config/onejudge.base.yaml
     # The task comes from the node over `--task`, and `onepipeline` forwards a
-    # plan node's optional `persona` as this member's persona override. A node
-    # with no persona leaves the base config's complete role and review contract
-    # intact. See docs/orchestration.md, "The agent graphs a run launches".
+    # dispatched plan node's `persona` as this member's persona override. Nodes
+    # that do not dispatch (`expects_no_diff` and human nodes) need no persona;
+    # a direct graph invocation with no override uses the base config's generic
+    # role. See docs/orchestration.md, "The agent graphs a run launches".
     agent:
       oneharness_config: ../oneharness.toml
     judge:
