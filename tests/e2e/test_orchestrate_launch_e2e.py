@@ -304,6 +304,8 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
     }
     assert expected_configs <= origins[0], origins
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
+    # The fake backend writes this JSONL itself; PromptRecord states the one field
+    # this test consumes from that test-owned schema.
     prompts = [
         cast(PromptRecord, json.loads(line))["prompt"]
         for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()

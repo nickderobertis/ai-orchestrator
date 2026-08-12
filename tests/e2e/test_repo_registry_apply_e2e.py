@@ -26,7 +26,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, TypedDict
 
 import pytest
 
@@ -196,6 +196,15 @@ class Applied(NamedTuple):
     result: subprocess.CompletedProcess[str]
 
 
+class RegisteredCheckout(TypedDict):
+    identity: str
+    path: str
+
+
+class RegistryDocument(TypedDict):
+    checkouts: dict[str, RegisteredCheckout]
+
+
 @pytest.fixture(scope="module")
 def applied(tmp_path_factory: pytest.TempPathFactory) -> Applied:
     """The pre-adoption registry's checkouts, registered by the real recipe."""
@@ -213,7 +222,9 @@ def applied(tmp_path_factory: pytest.TempPathFactory) -> Applied:
 
 
 def test_every_pre_adoption_identity_and_checkout_is_registered(applied: Applied) -> None:
-    registry = json.loads((applied.home / "registry.json").read_text(encoding="utf-8"))
+    registry: RegistryDocument = json.loads(
+        (applied.home / "registry.json").read_text(encoding="utf-8")
+    )
     assert set(registry["identities"]) == {identity.key for identity in IDENTITIES}
     actual = {(record["path"], record["identity"]) for record in registry["checkouts"].values()}
     expected = {
