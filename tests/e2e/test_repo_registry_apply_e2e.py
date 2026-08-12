@@ -202,6 +202,7 @@ class RegisteredCheckout(TypedDict):
 
 
 class RegistryDocument(TypedDict):
+    identities: dict[str, object]
     checkouts: dict[str, RegisteredCheckout]
 
 
@@ -250,7 +251,9 @@ def test_resolve_accepts_registered_spellings_and_refuses_bare_owner_name(
 ) -> None:
     """Plans may name registry identities, aliases, origins, or checkout paths."""
     identity = IDENTITIES[0]
-    registry = json.loads((applied.home / "registry.json").read_text(encoding="utf-8"))
+    registry: RegistryDocument = json.loads(
+        (applied.home / "registry.json").read_text(encoding="utf-8")
+    )
     alias, checkout_record = next(
         (alias, record)
         for alias, record in registry["checkouts"].items()

@@ -317,6 +317,37 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
     assert "node-settled done no-changes" in stream.stdout
 
 
+def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A direct graph invocation needs no persona override."""
+    environment = _environment(tmp_path, oneharness_bin)
+    environment["FAKE_BACKEND_PROMPT_LOG"] = str(tmp_path / "prompts.jsonl")
+    run = subprocess.run(
+        [
+            "oneagentgraph",
+            "run",
+            "graphs/node-scope.yaml",
+            "--task",
+            "Report without changing files.",
+            "--dir",
+            str(REPO_ROOT),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    prompts = [
+        cast(PromptRecord, json.loads(line))["prompt"]
+        for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any("Verify the requested task against its acceptance criteria" in p for p in prompts)
+
+
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_every_dag_scope_member_starts_with_the_graph(
     launched: Launched, dag_scope_members: int
