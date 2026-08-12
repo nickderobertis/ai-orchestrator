@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
+from fake_backend import PROMPT_LOG_ENV
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -177,7 +178,7 @@ def routed_persona_run(
     worker_config.write_bytes((REPO_ROOT / "oneharness.toml").read_bytes())
     judge_config.write_bytes((REPO_ROOT / "oneharness.judge.toml").read_bytes())
     prompt_log = tmp_path / "prompts.jsonl"
-    environment["FAKE_BACKEND_PROMPT_LOG"] = str(prompt_log)
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
     plan = tmp_path / "routed-persona.plan.json"
     plan.write_text(
         json.dumps(
@@ -303,9 +304,9 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
         str(routed_persona_run.judge_config),
     }
     assert expected_configs <= origins[0], origins
-    # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     # The fake backend writes this JSONL itself; PromptRecord states the one field
     # this test consumes from that test-owned schema.
+    # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     prompts = [
         cast(PromptRecord, json.loads(line))["prompt"]
         for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()
@@ -322,7 +323,7 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
 ) -> None:
     """A direct graph invocation needs no persona override."""
     environment = _environment(tmp_path, oneharness_bin)
-    environment["FAKE_BACKEND_PROMPT_LOG"] = str(tmp_path / "prompts.jsonl")
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
     run = subprocess.run(
         [
             "oneagentgraph",
