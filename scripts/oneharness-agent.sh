@@ -22,7 +22,7 @@
 # same seam, applied the same way and on the same two branches. Each is applied
 # twice, because the two mechanisms cover different ground: `--model` on this
 # branch's own `oneharness run` is the only one that beats the `model` a config pins
-# for the selected harness (oneharness 0.6.6 lets that config value beat
+# for the selected harness (oneharness 0.6.15 lets that config value beat
 # ONEHARNESS_MODEL), and the exported ONEHARNESS_MODEL is what carries the side's
 # choice to everything it subsequently runs. That precedence is a fact about one
 # release, so config/oneharness.version owns the literal above and
@@ -522,6 +522,7 @@ wait "$agent_pid"
 exit_code=$?
 wait "$capture_pid"
 capture_exit_code=$?
+# llmlint: ignore[robust_shell] Cleanup is best-effort after both processes have settled; a stale FIFO makes the next launch fail closed at mkfifo with its actionable diagnostic.
 rm -f "$stdout_fifo"
 set -e
 if [ "$capture_exit_code" -ne 0 ]; then

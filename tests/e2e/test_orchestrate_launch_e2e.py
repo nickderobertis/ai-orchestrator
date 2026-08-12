@@ -22,11 +22,13 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -121,6 +123,17 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     tmp_path = tmp_path_factory.mktemp("orchestrate-launch")
     environment = _environment(tmp_path, oneharness_bin)
     launch = _just("orchestrate", SHIPPED_PLAN, environment=environment)
+    # The newer graph/pipeline pair can have its already-running orchestrator begin
+    # one final reconciliation round just after the attached launcher observes the
+    # first complete boundary. Hand tests a quiescent run, as this fixture promises.
+    settling = deadline(10)
+    while True:
+        status = _just("status", SHIPPED_RUN, environment=environment, seconds=60)
+        if status.returncode == 0 and "SETTLED" in status.stdout:
+            break
+        if time.monotonic() >= settling:
+            pytest.fail(f"the launched run did not quiesce:\n{status.stdout}\n{status.stderr}")
+        time.sleep(0.05)
     try:
         yield Launched(environment, launch)
     finally:

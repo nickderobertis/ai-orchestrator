@@ -177,6 +177,10 @@ print(json.dumps({
         encoding="utf-8",
     )
     fake_claude.chmod(0o755)
+    # oneharness 0.6.8 classifies an absent env_from home as auth without spawning.
+    # An existing home lets this real boundary test reach its purpose: inspecting
+    # the argv handed to the selected custom Claude binary.
+    (tmp_path / "claude-alt").mkdir()
 
     proc = subprocess.run(
         [

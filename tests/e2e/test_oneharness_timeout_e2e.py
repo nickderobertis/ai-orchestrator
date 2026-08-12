@@ -73,6 +73,8 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
     assert proc.returncode == 1, proc.stderr
     assert elapsed >= 0.9, f"timeout returned before its configured deadline: {elapsed:.3f}s"
     assert elapsed < 3, f"timeout did not return near its deadline: {elapsed:.3f}s"
+    # The public CLI report is intentionally schemaless here: this cross-version
+    # boundary test probes additive nested fields without duplicating its contract.
     report: dict[str, Any] = json.loads(proc.stdout)
     result = report["results"][0]
     assert result["status"] == "timeout"
@@ -103,10 +105,24 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
     assert "native child stderr" in result["stderr"]
     assert result["stdout"].endswith('{"type":"incomplete"')
 
-    # The timed-out transcript has no complete provider timing trace. The released
-    # CLI preserves the partial result but gracefully omits its history record.
+    # A timed-out transcript has no complete provider timing trace. Since oneharness
+    # 0.6.7, failed runs are still durable: their history record carries the honest
+    # partial timing and failure evidence instead of disappearing from diagnostics.
     history_file = Path(report["history_file"])
-    assert not history_file.exists()
-    assert "could not write history record" in proc.stderr
+    assert history_file.exists()
+    records = [
+        entry
+        for line in history_file.read_text(encoding="utf-8").splitlines()
+        if (entry := json.loads(line))["type"] == "run"
+    ]
+    assert len(records) == 1
+    assert records[0]["status"] == "timeout"
+    # Status is the timeout signal; a candidate that ran but timed out carries no
+    # launch-classification failure_kind in the normalized history contract.
+    assert records[0]["failure_kind"] is None
+    assert records[0]["error"]
+    assert records[0]["started_at"]
+    assert records[0]["finished_at"] is None
+    assert "could not write history record" not in proc.stderr
 
     _assert_descendant_stopped(tick_file)

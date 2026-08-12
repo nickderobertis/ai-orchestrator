@@ -28,7 +28,7 @@ members:
     # what the published crate's own example graph shows.
     #
     # `judge: {command: ["onepipeline", "channel", "serve", RUN]}` is what that
-    # example names, and it cannot run against onejudge 0.3.4: a onejudge
+    # example names, and it cannot run against onejudge 0.3.8: a onejudge
     # command provider is handed `{"op": ..., "messages": [...]}` on stdin, and
     # `channel serve` parses its stdin as its own boundary frame
     # (`{kind, message, blocking?, node?}`, unknown fields refused). The

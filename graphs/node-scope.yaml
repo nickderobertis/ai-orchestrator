@@ -15,7 +15,7 @@ members:
     # The task comes from the node being dispatched, over `--task`.
     #
     # The persona does NOT, and that is the one thing this file has to say out
-    # loud: `onepipeline` 0.1.6 stamps a node's `persona` as an event label and
+    # loud: `onepipeline` 0.1.7 stamps a node's `persona` as an event label and
     # never passes it to the graph, so the merged config would be missing the
     # required `user.persona` and every dispatch would die before its first
     # turn. Naming one here is what keeps dispatch working at all; a node that
