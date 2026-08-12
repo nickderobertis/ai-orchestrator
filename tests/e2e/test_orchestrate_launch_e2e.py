@@ -139,6 +139,26 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
+def test_both_dag_scope_members_start(launched: Launched) -> None:
+    """The pacemaker member launches alongside the orchestrator, not only after its interval.
+
+    `graphs/dag-scope.yaml` declares two members and the second one is the easy one
+    to ship broken: its schedule is half an hour, so a persona ref, an oneharness
+    config, or a schedule shape this graph got wrong would first be heard from
+    thirty minutes into a real run. `oneagentgraph` starts a scheduled member with
+    the graph rather than at its first tick, so the run's own event store answers
+    for both of them within seconds.
+    """
+    store = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "events.jsonl"
+    started = {
+        json.loads(line)["labels"].get("member")
+        for line in store.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["kind"] == "member-started"
+    }
+    assert {"orchestrator", "check-in"} <= started, f"only {sorted(started)} started"
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
 def test_the_read_only_planner_views_answer_for_the_settled_run(
     launched: Launched,
 ) -> None:

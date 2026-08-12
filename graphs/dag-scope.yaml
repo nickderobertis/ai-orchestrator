@@ -5,8 +5,9 @@
 # Nothing scaffolds it: the published crate ships the *default path*, not the
 # file, because the file names the operator's own onejudge and oneharness
 # configs. This repository is that operator, and this is its file.
-# `ONEPIPELINE_DAG_GRAPH` names a different one, which is how the e2e suite
-# launches a real run against a stand-in harness.
+# `ONEPIPELINE_DAG_GRAPH` names a different one, which is how the e2e suite proves
+# the refusal a checkout without this file gets. That suite's real launch uses
+# this file, with a stand-in for the paid model behind it.
 #
 # Every ref below is relative to THIS file's directory, not the working
 # directory: `oneagentgraph` resolves a relative ref against the directory the

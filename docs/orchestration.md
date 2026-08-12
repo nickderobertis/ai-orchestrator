@@ -88,8 +88,10 @@ graphs/dag-scope.yaml`. Check one with `just validate-personas`' sibling,
 Both paths are resolved **relative to the directory the run is launched from**,
 which is why `just orchestrate` is run from the repository root; every ref *inside*
 a graph is resolved relative to that graph file instead. `ONEPIPELINE_DAG_GRAPH`
-and `ONEPIPELINE_NODE_GRAPH` name different files, which is how the e2e suite
-launches a real run against a stand-in harness.
+and `ONEPIPELINE_NODE_GRAPH` name different files, which is how
+`tests/e2e/test_orchestrate_launch_e2e.py` proves the refusal a checkout without
+them gets. That suite's real launch uses these files: the paid model is what it
+stands in for, through `ONEAGENTGRAPH_ONEHARNESS_BIN`.
 
 Two things about them are worth knowing before reading a surprising run:
 
@@ -249,7 +251,11 @@ checking that clock independently of graph reconciliation, including while a nod
 is inside a long-running agent step. When due, it claims and dispatches a dedicated
 check-in agent. That read-only actor synthesizes a concise per-workstream update
 from the run journal, status, monitor, telemetry, and labeled history, then sends
-it exactly once with `just channel-surface`. The command queues the non-blocking
+it exactly once with `onepipeline surface` — the verb
+[`personas/check-in.yaml`](../personas/check-in.yaml) names, because that member's
+working directory is the graph member's own scratch and there is no `justfile`
+there to reach. `just channel-surface` is the operator's spelling of the same
+verb. The command queues the non-blocking
 surface without waiting for a planner reply; the reconciler neither authors nor
 relays its content.
 
