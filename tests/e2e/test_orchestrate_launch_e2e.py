@@ -22,7 +22,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -41,6 +41,12 @@ SHIPPED_PLAN = "examples/single-node-direct.plan.json"
 
 #: The run id `onepipeline` mints from that plan's `name`.
 SHIPPED_RUN = "scheduler-research"
+
+#: The dag-scope agent graph every run launches, and how `just monitor` labels the
+#: envelope stream it produces. `oneagentgraph` suffixes the run's own id, so this
+#: is a prefix and the node-scope graph's members do not answer to it.
+DAG_SCOPE_GRAPH = "graphs/dag-scope.yaml"
+DAG_SCOPE_STREAM = "agent:dag-scope-"
 
 #: A launching session the journey states rather than inherits. The suite runs
 #: inside a dispatch whose own harness session would otherwise decide these
@@ -94,12 +100,6 @@ def _environment(
     return environment
 
 
-def _events(launched: Launched) -> list[dict]:
-    """Every envelope the run recorded, from its own merged store."""
-    store = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "events.jsonl"
-    return [json.loads(line) for line in store.read_text(encoding="utf-8").splitlines()]
-
-
 def _just(*args: str, environment: dict, seconds: float = 300) -> subprocess.CompletedProcess[str]:
     """Run one real recipe from this checkout."""
     return subprocess.run(
@@ -129,6 +129,28 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         _just("stop", SHIPPED_RUN, environment=environment, seconds=60)
 
 
+@pytest.fixture(scope="module")
+def dag_scope_members() -> int:
+    """How many members `graphs/dag-scope.yaml` declares, counted by its own reader.
+
+    A declaration lookup rather than an observation: `oneagentgraph validate` is how
+    this repository's graph documents are checked, and asking it keeps the expected
+    count off a literal here and out of a hand-rolled YAML parser.
+    """
+    validated = subprocess.run(
+        ["oneagentgraph", "validate", DAG_SCOPE_GRAPH],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert validated.returncode == 0, f"{DAG_SCOPE_GRAPH} did not validate:\n{validated.stderr}"
+    declared = re.search(r"(\d+) member\(s\)", validated.stdout)
+    assert declared is not None, f"no member count in:\n{validated.stdout}"
+    return int(declared.group(1))
+
+
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     """`just orchestrate` drives a shipped example to a complete settlement."""
@@ -138,43 +160,64 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     assert settlement == {"run_id": SHIPPED_RUN, "settlement": "complete"}
     # The attached launch streams what `just monitor` streams — on standard error,
     # keeping the settlement record on standard output the only thing a caller has
-    # to parse. The node the plan declares has to appear in that stream having
-    # actually been dispatched and settled, or "complete" describes an empty run.
+    # to parse. That it dispatched the node the plan declares is what the live
+    # stream answers for.
     assert "node-dispatched" in launch.stderr
-    assert "node-settled done" in launch.stderr
+    # Whether the node then *settled* is read from the replayed stream instead. A
+    # node settling and its round finishing are written in the same millisecond,
+    # and an attached launch returns on the second — so the first has no obligation
+    # to have reached standard error yet, and under suite load it has been observed
+    # missing from a launch that settled `complete`. `just monitor` replays a
+    # settled run's whole stream, so what it reports is the run rather than a race.
+    # Without this the assertion is the one it is here to make: that "complete" is
+    # not describing an empty run.
+    stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    assert stream.returncode == 0, stream.stderr
+    assert "node-settled done" in stream.stdout, stream.stdout
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_both_dag_scope_members_start(launched: Launched) -> None:
+def test_every_dag_scope_member_starts_with_the_graph(
+    launched: Launched, dag_scope_members: int
+) -> None:
     """The pacemaker member launches alongside the orchestrator, not only after its interval.
 
-    `graphs/dag-scope.yaml` declares two members and the second one is the easy one
-    to ship broken: its schedule is half an hour, so a persona ref, an oneharness
-    config, or a schedule shape this graph got wrong would first be heard from
-    thirty minutes into a real run. `oneagentgraph` starts a scheduled member with
-    the graph rather than at its first tick, so the run's own event store answers
-    for both of them within seconds.
+    `graphs/dag-scope.yaml`'s second member is the easy one to ship broken: its
+    schedule is half an hour, so a persona ref, an oneharness config, or a schedule
+    shape this graph got wrong would first be heard from thirty minutes into a real
+    run. `oneagentgraph` starts a scheduled member with the graph rather than at its
+    first tick, so `just monitor` — the stream a planner watches a run through —
+    reports every one of them within seconds of the launch.
+
+    How many to expect is the graph's own declaration rather than a number written
+    here, so a member added to `graphs/dag-scope.yaml` has to start too.
     """
-    events = _events(launched)
-    started = {
-        event["labels"].get("member") for event in events if event["kind"] == "member-started"
-    }
-    assert {"orchestrator", "check-in"} <= started, f"only {sorted(started)} started"
+    stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    assert stream.returncode == 0, stream.stderr
+    started = [
+        line
+        for line in stream.stdout.splitlines()
+        if DAG_SCOPE_STREAM in line and line.endswith("member-started")
+    ]
+    assert len(started) == dag_scope_members, (
+        f"{dag_scope_members} dag-scope member(s) are declared but monitor reported "
+        f"{len(started)} started:\n{stream.stdout}"
+    )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_no_turn_of_this_run_reached_a_paid_provider(launched: Launched) -> None:
     """Nothing in the launched run did real model work.
 
-    Not a hypothetical: `--mock-harness ID` replaces the provider of that exact
-    identity and no other, so an earlier revision of `tests/e2e/fake_backend.py`
-    mocked `codex` and left the four other candidates of a fallback chain able to
-    run. One suite run then spent twenty minutes of a paid Claude subscription
-    exploring this checkout. A stand-in turn calls no tools, so a `turn-activity`
-    anywhere in this run is a real agent working and the whole journey is void.
+    A stand-in turn calls no tools, so a single tool call recorded anywhere in this
+    run means the mock did not cover every candidate of a fallback chain and a real
+    agent was working — which voids every other assertion here, because they would
+    then be about a different run than the one this journey claims to prove.
     """
-    acted = [event for event in _events(launched) if event["kind"] == "turn-activity"]
-    assert not acted, f"{len(acted)} real tool calls ran; the first was {acted[0]['payload']}"
+    stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    assert stream.returncode == 0, stream.stderr
+    acted = [line for line in stream.stdout.splitlines() if line.endswith("turn-activity")]
+    assert not acted, f"{len(acted)} real tool call(s) ran; the first was {acted[0]}"
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
@@ -341,3 +384,127 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
         refused = _just("orchestrate", str(plan), "--detach", environment=environment, seconds=120)
         reported = refused.stderr + refused.stdout
         assert "dag-scope.yaml" in reported, f"{origin} was not accepted as a plan:\n{reported}"
+
+
+#: Every file that restates the `merge_policy` vocabulary in prose. Three, because
+#: the routing policy, the plan schema, and the planner doctrine each need it in
+#: front of the reader; none of them is its source.
+MERGE_POLICY_PROSE = ("AGENTS.md", "docs/orchestration.md", "docs/repo-lifecycle.md")
+
+#: A policy name as those files write it. Every published name is `local-` or
+#: `change-` prefixed, which is what lets a whole document be swept for the
+#: vocabulary rather than one sentence parsed out of it — so a name dropped from a
+#: list and a name invented in a paragraph both fail.
+POLICY_IN_PROSE = re.compile(r"`((?:local|change)-[a-z]+)`")
+
+#: The retired spellings, anchored on the "old"/"older" each file introduces them
+#: with so the pattern cannot wander onto another slash-separated triple. Prose is
+#: hard-wrapped, so every gap here is any whitespace rather than a space.
+RETIRED_IN_PROSE = re.compile(r"\bold(?:er)?\s+`([a-z-]+)`\s+/\s+`([a-z-]+)`\s+/\s+`([a-z-]+)`")
+
+#: A `merge_policy` no vocabulary will contain, used to make the launcher enumerate
+#: the one it does accept.
+UNKNOWN_POLICY = "no-such-merge-policy"
+
+#: How `onepipeline` refuses a policy: by naming the value, then listing what it
+#: would have taken. That list is the vocabulary's one source.
+REFUSED_POLICY = re.compile(r"unknown variant `([^`]+)`, expected one of ((?:`[^`]+`(?:, )?)+)")
+
+#: The shipped lifecycle example, which is the plan shape `merge_policy` belongs to.
+LIFECYCLE_PLAN = "examples/single-node-lifecycle.plan.json"
+
+
+@pytest.fixture(scope="module")
+def merge_policy_launch(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Callable[[str], str]:
+    """Hand the real launcher a lifecycle plan carrying one policy, and report what it said.
+
+    Pointed at an agent graph that is not there, exactly as the plan-acceptance
+    journey above is: `onepipeline start` validates the plan before it reads
+    anything else, so a policy it accepted is one whose only complaint is the graph
+    and nothing runs either way.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp_path = tmp_path_factory.mktemp("merge-policy")
+    environment = _environment(tmp_path, oneharness_bin)
+    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
+    plan = json.loads((REPO_ROOT / LIFECYCLE_PLAN).read_text(encoding="utf-8"))
+
+    def launch(policy: str) -> str:
+        plan["tasks"][0]["merge_policy"] = policy
+        written = tmp_path / "candidate.plan.json"
+        written.write_text(json.dumps(plan), encoding="utf-8")
+        refused = _just(
+            "orchestrate", str(written), "--detach", environment=environment, seconds=120
+        )
+        assert refused.returncode != 0, f"merge_policy {policy!r} reached a real launch"
+        return refused.stderr + refused.stdout
+
+    return launch
+
+
+@pytest.fixture(scope="module")
+def published_merge_policies(merge_policy_launch: Callable[[str], str]) -> frozenset[str]:
+    """The `merge_policy` vocabulary, from the only thing that decides it.
+
+    `onepipeline` enumerates what it accepts in the refusal it writes for what it
+    does not, so one deliberately impossible policy is the whole published list.
+    """
+    reported = merge_policy_launch(UNKNOWN_POLICY)
+    refusal = REFUSED_POLICY.search(reported)
+    assert refusal is not None, f"the launcher enumerated no vocabulary:\n{reported}"
+    assert refusal.group(1) == UNKNOWN_POLICY, reported
+    return frozenset(re.findall(r"`([^`]+)`", refusal.group(2)))
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("relative_path", MERGE_POLICY_PROSE)
+def test_the_merge_policy_vocabulary_in_prose_is_the_published_one(
+    relative_path: str, published_merge_policies: frozenset[str]
+) -> None:
+    """No document here names a `merge_policy` the launcher would refuse, or omits one it takes.
+
+    The vocabulary is the published crate's, and prose that restates it is a copy —
+    which is the shape that goes stale in silence. A planner following a stale copy
+    writes a plan that dies at launch, which is what the adoption of these names
+    already did once.
+    """
+    text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    named = set(POLICY_IN_PROSE.findall(text))
+    assert named == set(published_merge_policies), (
+        f"{relative_path} names merge policies {sorted(named)}; the launcher accepts "
+        f"{sorted(published_merge_policies)}"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_retired_merge_policy_spellings_are_refused_by_name(
+    merge_policy_launch: Callable[[str], str], published_merge_policies: frozenset[str]
+) -> None:
+    """Every file promising the old spellings are refused by name names spellings that are.
+
+    The other half of the same contract: a reader is told what their pre-adoption
+    plan will do, and the promise is only worth the launch that keeps it. One set of
+    launches for all three files, because a file that spelled the triple differently
+    is itself the drift this rejects.
+    """
+    quoted = {
+        relative_path: RETIRED_IN_PROSE.search(
+            (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        )
+        for relative_path in MERGE_POLICY_PROSE
+    }
+    missing = sorted(path for path, found in quoted.items() if found is None)
+    assert not missing, f"{missing} no longer name the retired merge-policy spellings"
+    spellings = {path: found.groups() for path, found in quoted.items() if found is not None}
+    assert len(set(spellings.values())) == 1, (
+        f"the files disagree on the retired spellings: {spellings}"
+    )
+
+    for spelling in next(iter(spellings.values())):
+        assert spelling not in published_merge_policies, f"`{spelling}` is a published policy"
+        assert f"unknown variant `{spelling}`" in merge_policy_launch(spelling), (
+            f"the launcher does not refuse `{spelling}` by name"
+        )

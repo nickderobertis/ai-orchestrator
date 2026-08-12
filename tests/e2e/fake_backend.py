@@ -15,10 +15,10 @@ argument validation, the real fallback chain, the real history record, and the
 real report all run, with a scripted answer substituted for the provider's.
 `MOCK_STDOUT` is how the shipped mock responder is told what to answer.
 
-This replaced a `fake_backend.py` that sat at onejudge's `command`-provider seam.
-That seam is no longer reachable for the side that does the work: a graph member's
-agent side is an oneharness config (`oneagentgraph`'s graph schema has no command
-agent), so the harness invocation is where a dispatch now meets the model.
+The harness invocation is the only seam the side that does the work can be faked
+at: a graph member's agent side is an oneharness config, because
+`oneagentgraph`'s graph schema has no command agent, so onejudge's own
+`command` provider never serves an agent turn.
 
 Which side an invocation is depends on how `oneagentgraph` pinned it, which is the
 same distinction `scripts/oneharness-agent.sh` reads:
@@ -63,10 +63,9 @@ REAL_BINARY_ENV = "REAL_ONEHARNESS_BIN"
 #: Both flags, and neither is optional. `--mock-harness ID` replaces the provider
 #: process of **that exact identity** and no other — not `ID:variant`, and not the
 #: rest of a `run_mode = "fallback"` chain — so mocking one candidate of a chain
-#: that names five leaves the other four able to run for real. They can and did:
-#: a suite run whose `claude-code:alternate` had quota spent twenty minutes of a
-#: paid subscription exploring this checkout before the stall watchdog killed it.
-#: `--harness` is what makes the mock total, by leaving exactly one candidate.
+#: that names five leaves the other four free to reach a paid subscription for
+#: real. `--harness` is what makes the mock total, by leaving exactly one
+#: candidate.
 MOCK_HARNESS = "codex"
 
 #: How the shipped mock responder is told what to answer.
@@ -136,6 +135,15 @@ def _answer(argv: list[str], text: str) -> int:
         return 2
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
+    # llmlint: ignore[e2e_not_mocked] `--mock-harness ID` replaces the selected
+    # harness's *provider process* and nothing above it — this repository's one
+    # sanctioned fake, under a different name. Proof: under `--mock-harness codex`
+    # the run record still reports `harness_id: codex`, `available: true`, and the
+    # real codex argv (`exec --dangerously-bypass-approvals-and-sandbox --json
+    # <prompt>`) with only the executable substituted, so config resolution,
+    # identity selection, the fallback chain, the history record and the report are
+    # the real ones. It is the seam `tests/e2e/mock_oneharness.py` and
+    # `tests/e2e/test_quota_fallthrough_e2e.py` already fake at.
     completed = subprocess.run(
         [real, argv[0], "--harness", MOCK_HARNESS, "--mock-harness", MOCK_HARNESS, *argv[1:]],
         env=environment,

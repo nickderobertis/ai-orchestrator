@@ -844,7 +844,12 @@ then repository-type defaults apply.
 
 The policy names are the published `merge_policy` vocabulary — `local-direct`,
 `change-open`, `change-auto`, `change-direct` — and a plan that writes the older
-`direct` / `none` / `auto` spellings is refused by name at launch.
+`direct` / `none` / `auto` spellings is refused by name at launch. That
+vocabulary is `onepipeline`'s and this list is a copy of it: the launcher
+enumerates what it accepts in the refusal it writes for what it does not, and
+`tests/e2e/test_orchestrate_launch_e2e.py` holds every copy of the list in this
+repository — here, in `AGENTS.md`, and in `docs/orchestration.md` — to that
+enumeration.
 
 - **Team** — always effective workflow `remote`. Omitted policy opens an ordinary
   ready-for-review PR and returns `pr-open` immediately, without polling checks.
