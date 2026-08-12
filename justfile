@@ -144,7 +144,7 @@ upgrade:
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
 [doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:
-    @if [[ "${1:-}" == "--adopt" ]]; then uv run onepipeline adopt "${@:2}"; else uv run onepipeline start "$@"; fi
+    @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else ./scripts/onepipeline.sh start "$@"; fi
 
 # Execute the current round of a launched run: `just run-plan <run-id>`.
 #
@@ -154,25 +154,25 @@ orchestrate *args:
 # CLI says so.
 [doc('Execute the current round of a launched run: `just run-plan <run-id>`. A plan file is launched with `just orchestrate`.')]
 run-plan *args:
-    @uv run onepipeline round run "$@"
+    @./scripts/onepipeline.sh round run "$@"
 
 # Transition a run to its next round, folding the last round's results and the
 # planner edits accepted while it ran: `just next-round <run-id>`.
 # llmlint: ignore[tool_output_is_signal] the tracked result and continuation guidance are this command's product.
 next-round *args:
-    @uv run onepipeline round next "$@"
+    @./scripts/onepipeline.sh round next "$@"
 
 # Bounded host-side reads and replies for the live planner channel.
 # llmlint: ignore[tool_output_is_signal] channel-next returns a structured bounded status or a validated transport error for planner recovery.
 channel-next *args:
-    @uv run onepipeline next "$@"
+    @./scripts/onepipeline.sh next "$@"
 
 # `just channel-reply <run-id> [FILE]` — the envelope is read from FILE, or from
 # stdin when none is named. It carries a legacy verdict, versioned live graph
 # edits, or both.
 # llmlint: ignore[tool_output_is_signal] channel-reply validates the reply and names transport/rendezvous failures so the planner can reattach and retry.
 channel-reply *args:
-    @uv run onepipeline reply "$@"
+    @./scripts/onepipeline.sh reply "$@"
 
 # Raise a non-blocking planner status update: `just channel-surface <run-id> [TEXT]`.
 channel-surface *args:
@@ -233,22 +233,22 @@ integrate *args:
 # `just runs --mine` lists only the runs this session launched.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line run ledger is this viewing command's product.
 runs *args:
-    @uv run onepipeline runs "$@"
+    @./scripts/onepipeline.sh runs "$@"
 
 # Stop a run this session launched, tree and all: `just stop <run-id>`. Refuses a run
 # another planner launched, or one with no recorded launcher, unless given --force.
 # llmlint: ignore[tool_output_is_signal] the ownership refusal and what was stopped are this command's product.
 stop *args:
-    @uv run onepipeline stop "$@"
+    @./scripts/onepipeline.sh stop "$@"
 
 # llmlint: ignore[tool_output_is_signal] the requested cross-project goal inventory is this viewing command's product.
 goals *args:
-    @uv run onepipeline goals "$@"
+    @./scripts/onepipeline.sh goals "$@"
 
 # Show every node outcome in one run and the evidence each one left.
 # llmlint: ignore[tool_output_is_signal] this command is the requested results view.
 results *args:
-    @uv run onepipeline results "$@"
+    @./scripts/onepipeline.sh results "$@"
 
 # Register a repository checkout alias. Type, workflow, and gate come from the
 # rules file the identity matches rather than from flags here.
@@ -277,12 +277,12 @@ history-show *args:
 # Watch one tracked-graph run as one concise event stream: `just monitor <run-id>`.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
-    @uv run onepipeline monitor "$@"
+    @./scripts/onepipeline.sh monitor "$@"
 
 # Session timing and usage, for every run or one named run.
 # `--breakdown` renders the operator timing view.
 telemetry *args:
-    @uv run onepipeline telemetry "$@"
+    @./scripts/onepipeline.sh telemetry "$@"
 
 # Serve the published DAG Observatory bundle against a running read API, proxying
 # `/api` and `/healthz` to it so the browser view and its data share one origin.
@@ -309,12 +309,12 @@ telemetry-server *args:
 # Show a run's live state: what is driving it, and what is running.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
-    @uv run onepipeline status "$@"
+    @./scripts/onepipeline.sh status "$@"
 
 # Show every live dispatch on this host, with its owner and load contribution.
 # llmlint: ignore[tool_output_is_signal] the requested per-dispatch host inventory is this viewing command's product.
 host *args:
-    @uv run onepipeline host "$@"
+    @./scripts/onepipeline.sh host "$@"
 
 # List every preserved-but-unpublished branch across the registered repository
 # identities and the command that lands each one.

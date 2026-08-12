@@ -38,10 +38,13 @@ identity. Editing that file is how routing changes; there is no migration verb,
 and `just repos` is what shows the policy an identity ends up with.
 Dispatch uses the gate that file resolves and never auto-detects one.
 Team repositories default to an ordinary ready-for-review
-open PR; explicit `auto` or `direct` merges their remote PR. Single-owner
-repositories preserve local direct or remote auto behavior, while explicit `none`
-forces remote open-PR publication for that run without changing stored local
-workflow. Team identities cannot use local workflow or direct integration.
+open PR; explicit `change-auto` or `change-direct` merges their remote PR.
+Single-owner repositories preserve local direct or remote auto behavior, while
+explicit `change-open` forces remote open-PR publication for that run without
+changing stored local workflow. Team identities cannot use local workflow or
+direct integration. Those four names — `local-direct`, `change-open`,
+`change-auto`, `change-direct` — are the published `merge_policy` vocabulary; the
+older `direct` / `none` / `auto` spellings are refused by name at launch.
 Recover incomplete preserved branches with `just
 repo-recover`, which verifies and publishes through the registered workflow; do
 not bypass an incomplete provenance marker with a normal commit. The selected
@@ -470,7 +473,19 @@ run ledger and the views built on it.
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the
-[ownership rule](#your-loop-as-planner) above.
+[ownership rule](#your-loop-as-planner) above. Every one of those verbs goes
+through `scripts/onepipeline.sh`, which is the one place a planner's identity is
+established: `onepipeline` decides ownership from `ONEPIPELINE_LAUNCHER` /
+`ONEPIPELINE_LAUNCHER_SESSION`, the reader's as well as the launcher's, so a view
+that did not identify itself matches no run and `--mine` lists nothing.
+
+What a run's agents *are* is [`graphs/`](docs/orchestration.md#the-agent-graphs-a-run-launches),
+and it is this repository's content rather than the engines': `onepipeline` ships
+the paths `graphs/dag-scope.yaml` and `graphs/node-scope.yaml`, not the files,
+because they name this operator's own onejudge base config, oneharness configs,
+and personas. A checkout without them refuses every plan it has. Both paths
+resolve against the directory a run is launched from, which is why `just
+orchestrate` is run from the repository root.
 
 Those views also stop guessing at what is *running*. A node the ledger records as
 started now reports which side of the conversation is serving it, on which harness
