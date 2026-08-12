@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 1,
   "concurrency": 4,
   "tasks": [
     {
@@ -15,7 +15,7 @@
       "id": "docs",
       "repo": "nickderobertis/some-docs",
       "repo_type": "team",
-      "merge_policy": "auto",
+      "merge_policy": "change-auto",
       "persona": "docs-writer",
       "task": "## What\nDocument the new `/health` endpoint: its request, its response, and worked examples.\n\n## Why\nOperators are being asked to poll an endpoint that appears in no documentation, so each of them has to read the service source to learn its response shape.\n\n## Acceptance criteria\n- The request and response are documented with field names and types.\n- Every example was run against the API and behaves as written.\n- The documented contract matches the endpoint as implemented, not as proposed.",
       "done_when": "all task acceptance criteria are met and every documented example was verified against the running API",

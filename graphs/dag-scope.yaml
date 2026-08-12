@@ -1,0 +1,53 @@
+# The dag-scope agent graph `onepipeline start` launches for every run.
+#
+# `onepipeline` reads this path — `graphs/dag-scope.yaml`, relative to the
+# directory the run is launched from — and hands it to `oneagentgraph run`.
+# Nothing scaffolds it: the published crate ships the *default path*, not the
+# file, because the file names the operator's own onejudge and oneharness
+# configs. This repository is that operator, and this is its file.
+# `ONEPIPELINE_DAG_GRAPH` names a different one, which is how the e2e suite
+# launches a real run against a stand-in harness.
+#
+# Every ref below is relative to THIS file's directory, not the working
+# directory: `oneagentgraph` resolves a relative ref against the directory the
+# document it appears in was read from.
+version: 1
+name: dag-scope
+members:
+  # The orchestrator that drives the run: it calls `just run-plan` /
+  # `just next-round` (i.e. `onepipeline round run|next`) one round at a time
+  # under the run's ownership lock.
+  orchestrator:
+    kind: onejudge
+    base_config: ../config/onejudge.base.yaml
+    persona: ../personas/orchestrator.yaml
+    agent:
+      oneharness_config: ../oneharness.orchestrator.toml
+    # A simulated-user judge, not the planner channel — deliberately, and not
+    # what the published crate's own example graph shows.
+    #
+    # `judge: {command: ["onepipeline", "channel", "serve", RUN]}` is what that
+    # example names, and it cannot run against onejudge 0.3.4: a onejudge
+    # command provider is handed `{"op": ..., "messages": [...]}` on stdin, and
+    # `channel serve` parses its stdin as its own boundary frame
+    # (`{kind, message, blocking?, node?}`, unknown fields refused). The
+    # orchestrator dies on its first supervisor turn with `the orchestrator
+    # emitted a bad frame: unknown field 'op'`. Reported upstream; when it is
+    # fixed this member's judge becomes the channel again and the planner
+    # supervises the conversation directly.
+    #
+    # Until then the planner still steers the run over the channel — surfaces
+    # with `just channel-next`, live graph edits and `complete` with
+    # `just channel-reply` — because those are queued and reconciled
+    # independently of the judge side.
+    judge:
+      oneharness_config: ../oneharness.judge.toml
+    mode: bypass
+  # The durable planner-update pacemaker. Resettable, so every planner-visible
+  # surface restarts its clock and a run that is already reporting does not also
+  # get a pacemaker surface.
+  check-in:
+    kind: oneharness
+    oneharness_config: ../oneharness.orchestrator.toml
+    persona: ../personas/check-in.yaml
+    schedule: {every: 1800, resettable: true}

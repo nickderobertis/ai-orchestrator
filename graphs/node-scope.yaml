@@ -1,0 +1,29 @@
+# The node-scope agent graph every dispatched plan node runs under: one worker,
+# supervised by one simulated-user judge. `onepipeline` reads this path —
+# `graphs/node-scope.yaml`, relative to the directory the run was launched from
+# — unless a plan node names its own with `agent_graph`. `ONEPIPELINE_NODE_GRAPH`
+# moves the default.
+#
+# Every ref below is relative to THIS file's directory, not the working
+# directory.
+version: 1
+name: node-scope
+members:
+  worker:
+    kind: onejudge
+    base_config: ../config/onejudge.base.yaml
+    # The task comes from the node being dispatched, over `--task`.
+    #
+    # The persona does NOT, and that is the one thing this file has to say out
+    # loud: `onepipeline` 0.1.6 stamps a node's `persona` as an event label and
+    # never passes it to the graph, so the merged config would be missing the
+    # required `user.persona` and every dispatch would die before its first
+    # turn. Naming one here is what keeps dispatch working at all; a node that
+    # needs a different role names a graph of its own with `agent_graph`. See
+    # docs/orchestration.md, "The agent graphs a run launches".
+    persona: ../personas/engineer.yaml
+    agent:
+      oneharness_config: ../oneharness.toml
+    judge:
+      oneharness_config: ../oneharness.judge.toml
+    mode: bypass

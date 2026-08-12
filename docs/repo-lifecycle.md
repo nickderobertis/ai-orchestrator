@@ -315,7 +315,7 @@ publication selection:
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 1,
   "tasks": [
     {
       "id": "self",

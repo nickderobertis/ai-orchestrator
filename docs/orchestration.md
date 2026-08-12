@@ -11,30 +11,38 @@ ownership row, surfaces, and a place in the DAG UI. `just run-plan` and `just
 next-round` are the engine verbs the driver it launches calls, and each names a
 run rather than a plan file. See
 `examples/single-node-direct.plan.json` and
-`examples/single-node-lifecycle.plan.json`. Old lifecycle-only plan mappings —
-no `schema_version`, lifecycle nodes only — are still accepted unchanged.
+`examples/single-node-lifecycle.plan.json`.
 
-The current tracked-plan contract is schema version 7 (`"schema_version": 7`).
-Plans that omit the version retain version-1 behavior for compatibility.
+## The plan schema
 
-Version 7 adds the optional boolean node `parked`, written by a live `cancel` and
-cleared by a live `requeue`. A parked node is carried across the round transition
-and into a continuation launch **without being dispatched**, which is what makes
-"stop for now, maybe resume later" a state rather than a lost node. Like `context`
-below it is not refused on a plan that declares an earlier version, and for the
-same reason: it is attached to a running graph. See [Live graph
+The tracked-plan contract is the published `onepipeline` plan schema, **version 1**
+(`"schema_version": 1`), and it is required: a plan that omits the version, or
+declares any other, is refused at launch. There is no compatibility ladder to read
+a version number against any more — the node shapes this repository grew through
+its own schema versions 1 to 7 were adopted whole as that crate's v1, so the
+shapes below are unchanged and only the number moved. Two of them changed spelling
+in the adoption, and a plan written before it fails at launch on either:
+
+- `merge_policy` names the publication a change reaches its base branch by, and
+  its values are now `local-direct`, `change-open`, `change-auto`, and
+  `change-direct` — the old `direct` / `none` / `auto` vocabulary is refused by
+  name.
+- `context` is **one** planner note, a string, rather than a list of them. It is
+  what a live `context` edit attaches, and it carries exactly one round. See
+  [Carried planner context](#carried-planner-context).
+
+The schema adds two optional per-node fields this repository's own never had:
+`executor`, naming which executor dispatches the node, and `agent_graph`, naming
+an agent-graph config that overrides the default node-scope one — see [The agent
+graphs a run launches](#the-agent-graphs-a-run-launches).
+
+The optional boolean node `parked` is written by a live `cancel` and cleared by a
+live `requeue`. A parked node is carried across the round transition and into a
+continuation launch **without being dispatched**, which is what makes "stop for
+now, maybe resume later" a state rather than a lost node. See [Live graph
 edits](#live-graph-edits).
 
-Version 6 adds the optional node `context`: a list of planner notes rendered as a
-trailing `## Planner context` section of every task that node dispatches. Unlike
-the fields below it is not refused on a plan that declares an earlier version,
-because it is attached to a *running* graph — a live `context` edit appends one
-note to a node the round already launched, so gating it on the version that graph
-was launched with would make a committed edit unreplayable rather than protect an
-old plan from a field it never uses. See [Carried planner
-context](#carried-planner-context).
-
-Version 4 adds an optional top-level `goal` mapping with required non-empty
+The optional top-level `goal` mapping has a required non-empty
 `text` and optional `id`; when omitted, the id is derived from the text. Active
 goals and their repository identities are visible across projects with `just goals`.
 Before a recorded run starts, `run-plan` refuses to overlap any active run that
@@ -58,6 +66,41 @@ every live run that shares this one's identities — under the same
 call a launch parked and a live neighbour in consecutive lines. Liveness is
 observed at read time and never stored, because a recorded "this run was alive"
 is false the moment its process exits.
+
+## The agent graphs a run launches
+
+Two files in `graphs/` decide what a run's agents actually are, and both are this
+repository's to write. `onepipeline` ships the **paths**, not the files: they name
+the operator's own onejudge base config, oneharness configs, and personas, so a
+crate that shipped them would be naming files it cannot know. Nothing scaffolds
+them either — `oneagentgraph` has no `init` — and a checkout without them refuses
+every plan it has, with `oneagentgraph: invalid config: cannot read
+graphs/dag-scope.yaml`. Check one with `just validate-personas`' sibling,
+`oneagentgraph validate graphs/dag-scope.yaml`.
+
+- **`graphs/dag-scope.yaml`** is what `just orchestrate` launches: the
+  `orchestrator` member that drives the run's rounds, and the resettable-cron
+  `check-in` member that paces planner updates.
+- **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
+  worker supervised by one simulated-user judge. A plan node overrides it with
+  `agent_graph`.
+
+Both paths are resolved **relative to the directory the run is launched from**,
+which is why `just orchestrate` is run from the repository root; every ref *inside*
+a graph is resolved relative to that graph file instead. `ONEPIPELINE_DAG_GRAPH`
+and `ONEPIPELINE_NODE_GRAPH` name different files, which is how the e2e suite
+launches a real run against a stand-in harness.
+
+Two things about them are worth knowing before reading a surprising run:
+
+- A node's `persona` reaches the dispatch as an event **label** and not as the
+  graph's persona, so `graphs/node-scope.yaml` names the role every node
+  dispatches under. A node that needs a different one names its own graph with
+  `agent_graph`.
+- The orchestrator's judge side is a simulated-user harness rather than the
+  planner channel, so the planner steers a live run through `just channel-next`
+  and `just channel-reply` — surfaces and graph edits — rather than by answering
+  the orchestrator's conversation directly. The graph file says why.
 
 ## The planner<->orchestrator channel
 
@@ -579,7 +622,7 @@ the final assessment and stop rather than wait.
 | Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree and publish through the repository's merge-path gate and registered policy. Dispatch refuses identities without an executable pre-push hook or required PR checks. |
 | Human | `kind: human`, `task`; no persona or execution fields | Record an action only an external person or outside system can perform. Planner review, acceptance, validation, and integration happen through live channel edits, not a human node. |
 
-An agent or lifecycle node may also carry `context`: a list of planner notes,
+An agent or lifecycle node may also carry `context`: one planner note,
 rendered after the task prose as a `## Planner context` section stating that it
 reports observed state and adds no acceptance criteria. A workstream renders it
 into every agent step, since the note is about the node they share, and leaves
@@ -1424,18 +1467,18 @@ What the planner learned while the round ran is not in the launch record, and
 restoring the opening brief over it is how a worker came to re-derive 41 commits of
 finished work.
 
-A `context` edit is where that knowledge goes. Each note is appended to the node's
-`context` list on the running graph, rendered as a `## Planner context` section of
+A `context` edit is where that knowledge goes. The note is set as the node's
+`context` on the running graph, rendered as a `## Planner context` section of
 every task the node dispatches, and — because the reconciler installs the edited
 graph immediately — already visible to a dispatch of that node which has not
 started yet, including a `retry` replacement submitted in the same envelope. A
 dispatch already running does not re-read its prompt; the note reaches its next one.
 
-At the transition `next-round` collects the notes each node was given **during**
-the round just finished and sets them on that node in the next plan. What does not
+At the transition `next-round` collects the note each node was given **during**
+the round just finished and sets it on that node in the next plan. What does not
 carry:
 
-- **The previous round's notes.** The set is replaced, not appended. A note reports
+- **The previous round's note.** It is replaced, not appended to. A note reports
   state observed while one attempt ran, so it is stale as soon as the next attempt
   moves; a note that still matters is one the planner attaches again against what
   the new round shows. This is what stops a node accumulating instructions.
@@ -1444,7 +1487,7 @@ carry:
   replacement is a new id, so notes given to the superseded node stay with it.
 
 A `next-round` `retry` edit that states `context` itself wins over the collected
-notes, empty list included. Everything *structural* now carries, because the plan of
+note, an empty one included. Everything *structural* now carries, because the plan of
 record is [the graph the round
 executed](#the-plan-of-record-is-the-graph-the-round-executed).
 
