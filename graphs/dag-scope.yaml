@@ -14,6 +14,9 @@
 # document it appears in was read from.
 version: 1
 name: dag-scope
+# The map must exist for per-run `--set env.NAME=VALUE` routing overrides;
+# oneagentgraph refuses to invent an absent map even when NAME is otherwise valid.
+env: {}
 members:
   # The orchestrator that drives the run: it calls `just run-plan` /
   # `just next-round` (i.e. `onepipeline round run|next`) one round at a time

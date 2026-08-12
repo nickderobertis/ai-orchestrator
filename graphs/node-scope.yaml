@@ -8,6 +8,9 @@
 # directory.
 version: 1
 name: node-scope
+# `onepipeline --node-set env.NAME=VALUE` writes into this existing map. Keeping
+# it empty preserves the shared config defaults when a launch names no override.
+env: {}
 members:
   worker:
     kind: onejudge
