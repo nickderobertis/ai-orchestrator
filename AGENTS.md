@@ -38,10 +38,13 @@ identity. Editing that file is how routing changes; there is no migration verb,
 and `just repos` is what shows the policy an identity ends up with.
 Dispatch uses the gate that file resolves and never auto-detects one.
 Team repositories default to an ordinary ready-for-review
-open PR; explicit `auto` or `direct` merges their remote PR. Single-owner
-repositories preserve local direct or remote auto behavior, while explicit `none`
-forces remote open-PR publication for that run without changing stored local
-workflow. Team identities cannot use local workflow or direct integration.
+open PR; explicit `change-auto` or `change-direct` merges their remote PR.
+Single-owner repositories preserve local direct or remote auto behavior, while
+explicit `change-open` forces remote open-PR publication for that run without
+changing stored local workflow. Team identities cannot use local workflow or
+direct integration. Those four names — `local-direct`, `change-open`,
+`change-auto`, `change-direct` — are the published `merge_policy` vocabulary; the
+older `direct` / `none` / `auto` spellings are refused by name at launch.
 Recover incomplete preserved branches with `just
 repo-recover`, which verifies and publishes through the registered workflow; do
 not bypass an incomplete provenance marker with a normal commit. The selected

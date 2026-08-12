@@ -55,6 +55,7 @@ just repo-recover ai-orchestrator/engineer/abc123 --repo /path/to/checkout
 | `config/onejudge.base.yaml` | The one base config: settings common to every subtask. |
 | `config/*.version` | The exact adopted release of every tool session setup installs from PyPI: onejudge, oneharness, oneagentgraph, onevcs, onepipeline, and onepipeline-ui. |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
+| `graphs/` | The two agent graphs a run launches — `dag-scope.yaml` for the orchestrator and its pacemaker, `node-scope.yaml` for every dispatched node. `onepipeline` ships these *paths*, not the files, because they name the configs and personas above. See [the tracked graph model](docs/orchestration.md#the-agent-graphs-a-run-launches). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `justfile` | The command surface: one thin wrapper per published verb, plus this repository's own quality tier. |
 | `orchestrator/` | What this layer still decides on its own: the history-label contract and the redaction rule. |

@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from waits import timeout as e2e_timeout
@@ -58,7 +60,23 @@ LAUNCHER_ENVIRONMENT = (
 )
 
 
-def _environment(tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION) -> dict:
+class Launched(NamedTuple):
+    """One launched run: the environment it lives in, and how its launch ended.
+
+    Named rather than positional because the two are different things a journey
+    reaches for one at a time — `environment` to ask the run another question,
+    `launch` to judge the launch itself — and a positional pair reads as neither.
+    """
+
+    #: What every later recipe has to be given to see the same run.
+    environment: dict[str, str]
+    #: The attached `just orchestrate` that settled it.
+    launch: subprocess.CompletedProcess[str]
+
+
+def _environment(
+    tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION
+) -> dict[str, str]:
     """The environment one launched run and its planner views share."""
     environment = dict(os.environ)
     for name in LAUNCHER_ENVIRONMENT:
@@ -90,9 +108,7 @@ def _just(*args: str, environment: dict, seconds: float = 300) -> subprocess.Com
 
 
 @pytest.fixture(scope="module")
-def launched(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[tuple[dict, subprocess.CompletedProcess[str]]]:
+def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Launched]:
     """Launch the shipped example once, and hand every question its settled run."""
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -100,7 +116,7 @@ def launched(
     environment = _environment(tmp_path, oneharness_bin)
     launch = _just("orchestrate", SHIPPED_PLAN, environment=environment)
     try:
-        yield environment, launch
+        yield Launched(environment, launch)
     finally:
         # A journey that failed mid-run leaves a driver behind; the supported way to
         # end one is the recipe, and it is the owner here.
@@ -108,11 +124,9 @@ def launched(
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_a_shipped_plan_launches_and_settles(
-    launched: tuple[dict, subprocess.CompletedProcess],
-) -> None:
+def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     """`just orchestrate` drives a shipped example to a complete settlement."""
-    _, launch = launched
+    launch = launched.launch
     assert launch.returncode == 0, f"the launch did not settle:\n{launch.stdout}\n{launch.stderr}"
     settlement = json.loads(launch.stdout.strip().splitlines()[-1])
     assert settlement == {"run_id": SHIPPED_RUN, "settlement": "complete"}
@@ -126,10 +140,10 @@ def test_a_shipped_plan_launches_and_settles(
 
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_the_read_only_planner_views_answer_for_the_settled_run(
-    launched: tuple[dict, subprocess.CompletedProcess],
+    launched: Launched,
 ) -> None:
     """Every view a planner reads a run through reports it, and reports it as this session's."""
-    environment, _ = launched
+    environment = launched.environment
     views = {
         ("runs",): f"{SHIPPED_RUN}",
         ("runs", "--mine"): "[mine]",
@@ -155,10 +169,10 @@ def test_the_read_only_planner_views_answer_for_the_settled_run(
 
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_the_planner_channel_carries_a_surface_and_its_reply(
-    launched: tuple[dict, subprocess.CompletedProcess],
+    launched: Launched,
 ) -> None:
     """A surface reaches the planner and the planner's answer reaches the run."""
-    environment, _ = launched
+    environment = launched.environment
     raised = _just(
         "channel-surface",
         SHIPPED_RUN,
@@ -195,10 +209,10 @@ def test_the_planner_channel_carries_a_surface_and_its_reply(
 
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_stop_refuses_a_run_another_planner_launched(
-    launched: tuple[dict, subprocess.CompletedProcess], tmp_path: Path, oneharness_bin: str
+    launched: Launched,
 ) -> None:
     """Ownership is recorded at launch and enforced at `just stop`."""
-    environment, _ = launched
+    environment = launched.environment
     foreign = dict(environment)
     foreign["CLAUDE_CODE_SESSION_ID"] = OTHER_SESSION
     foreign.pop("ONEPIPELINE_LAUNCHER", None)
@@ -234,3 +248,57 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
     assert refused.returncode != 0
     reported = refused.stderr + refused.stdout
     assert "dag-scope.yaml" in reported, reported
+
+
+def _plans_in_the_repository() -> list[tuple[str, str]]:
+    """Every plan document this repository ships, by where it is written.
+
+    The shipped example files, plus the plan snippets `docs/` teaches from — a
+    fenced JSON block that declares a `schema_version` is a plan an operator will
+    copy, and it drifts from the published schema exactly as silently as a file
+    does.
+    """
+    found = [
+        (str(plan.relative_to(REPO_ROOT)), plan.read_text("utf-8"))
+        for plan in sorted((REPO_ROOT / "examples").glob("*.json"))
+    ]
+    for document in sorted((REPO_ROOT / "docs").glob("*.md")):
+        blocks = re.findall(r"```json\n(.*?)```", document.read_text("utf-8"), re.DOTALL)
+        found.extend(
+            (f"{document.relative_to(REPO_ROOT)} snippet {index}", block)
+            for index, block in enumerate(blocks)
+            if '"schema_version"' in block
+        )
+    return found
+
+
+@pytest.mark.reads_docs
+def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """No plan here declares a schema version or a field value the launcher refuses.
+
+    One example is launched for real above; launching all of them would spend the
+    wall clock of a full dispatch each to re-prove the same launch path. What is
+    unproven without this is narrower and is what actually broke: the *document*.
+    `onepipeline start` loads and validates the plan before it reads anything else,
+    so pointing it at an agent graph that is not there separates the two — the plan
+    was accepted if and only if the refusal is about the graph.
+
+    One test rather than one per plan, because the documents are read here rather
+    than at collection: `docs/` is outside the code-only tier's cache key, and a
+    parametrization computed from it would be built in a tier that does not hash it.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    plans = _plans_in_the_repository()
+    assert plans, "no plan documents were found to check"
+    environment = _environment(tmp_path, oneharness_bin)
+    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
+    plan = tmp_path / "candidate.plan.json"
+
+    for origin, document in plans:
+        plan.write_text(document, encoding="utf-8")
+        refused = _just("orchestrate", str(plan), "--detach", environment=environment, seconds=120)
+        reported = refused.stderr + refused.stdout
+        assert "dag-scope.yaml" in reported, f"{origin} was not accepted as a plan:\n{reported}"

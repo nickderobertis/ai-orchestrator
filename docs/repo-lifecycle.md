@@ -25,8 +25,8 @@ step differs by where the repo lives (see *Merge strategies*). The authoritative
 closed `LifecycleResult.outcome` domain is `LifecycleOutcome` in
 the published outcome type; recorded values outside it are rejected during
 recovery. In its common publication states, `merged` means publication created
-and landed a commit, `pr-open` means policy `none` left a successful publication
-open, and `already-integrated` means the verified content was already present in
+and landed a commit, `pr-open` means policy `change-open` left a successful
+publication open, and `already-integrated` means the verified content was already present in
 the publication base. Failure and recovery outcomes retain their specific
 gate, check, conflict, timeout, or retry diagnosis rather than collapsing to a
 generic task failure.
@@ -842,22 +842,28 @@ receive an explicit type; a filesystem path is not ownership evidence. Merge-pol
 CLI defaults are intentionally unspecified: node policy beats command policy,
 then repository-type defaults apply.
 
+The policy names are the published `merge_policy` vocabulary — `local-direct`,
+`change-open`, `change-auto`, `change-direct` — and a plan that writes the older
+`direct` / `none` / `auto` spellings is refused by name at launch.
+
 - **Team** — always effective workflow `remote`. Omitted policy opens an ordinary
   ready-for-review PR and returns `pr-open` immediately, without polling checks.
-  Explicit `auto` or `direct` merges the PR by that policy. Team plus local
-  registration/workflow migration/direct integration is rejected.
-- **Single owner** — omitted policy preserves `local` direct publication or
-  `remote` auto-merge. Explicit `none` forces remote PR publication for that run
-  and leaves the PR open without mutating a stored local workflow. Because the
-  local strategy only supports direct publication, an explicit `auto` is reported
-  as the effective `direct` policy when the stored workflow remains local.
+  Explicit `change-auto` or `change-direct` merges the PR by that policy. Team
+  plus local registration/workflow migration/direct integration is rejected.
+- **Single owner** — omitted policy preserves `local-direct` publication or
+  `remote` auto-merge. Explicit `change-open` forces remote PR publication for
+  that run and leaves the PR open without mutating a stored local workflow.
+  Because the local strategy only supports direct publication, an explicit
+  `change-auto` is reported as the effective `local-direct` policy when the stored
+  workflow remains local.
 
 Single-owner automated publication is serialized by a process-shared FIFO merge
 queue keyed by the **publication** checkout's git common directory — the one thing
 every run of an identity shares, now that each run merges from a clone of its own.
 Worktrees and checkout
-aliases of one identity therefore enqueue together, including local direct merges,
-remote `auto`/`direct` merges, recovery, and the direct `integrate` train. Each
+aliases of one identity therefore enqueue together, including `local-direct`
+merges, remote `change-auto`/`change-direct` merges, recovery, and the direct
+`integrate` train. Each
 writer waits for its queue position without a bounded merge-lock timeout and runs
 its own in-memory merge context when it reaches the head; there is no daemon.
 Every waiter may act as the opportunistic queue leader: dead-PID tickets are
@@ -875,9 +881,9 @@ returns `sync-conflict` and retains the branch for manual recovery.
   once the repo's required (blocking) checks are green**. The default policy is
   GitHub **native auto-merge** (`gh pr merge --auto`), which by construction gates
   on required checks and ignores optional ones — so a non-blocking check never
-  triggers or holds a merge. Policies: `auto` (native auto-merge; falls back to
-  direct if the repo disallows it), `direct` (poll and merge ourselves on green
-  required checks), `none` (open the PR and stop). Required-vs-optional comes from
+  triggers or holds a merge. Policies: `change-auto` (native auto-merge; falls
+  back to merging directly if the repo disallows it), `change-direct` (poll and
+  merge ourselves on green required checks), `change-open` (open the PR and stop). Required-vs-optional comes from
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
   Before opening a PR, closeout queries all PR states for the same head and base.
   It adopts an existing open PR. It also treats a merged PR as authoritative
@@ -1016,7 +1022,7 @@ pre-push hook. It
 then creates or reuses a draft PR. A sync conflict or gate failure publishes no
 draft; a pause with no commits creates no empty draft. Later pauses reuse the PR.
 On final success the existing draft is marked ready, then the repository's normal
-`auto`, `direct`, or `none` publication policy applies. Each checkpoint must be an
+`change-auto`, `change-direct`, or `change-open` publication policy applies. Each checkpoint must be an
 ancestor of the continued branch, so force-rewritten history cannot be blessed.
 
 ### Preserved committed work implies a recorded continuation

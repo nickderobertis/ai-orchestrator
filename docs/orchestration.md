@@ -121,25 +121,23 @@ alongside it would race the single writer. Runs are owned by the session that
 launched them — see [Who launched a run, and who may stop
 it](#who-launched-a-run-and-who-may-stop-it).
 
-At each round boundary the orchestrator emits JSON in its final assistant message:
+At each round boundary the orchestrator raises one surface, with the verb its own
+persona names:
 
-```json
-{"kind":"blocker","message":"Node X failed its gate; retry with a corrected fixture?","options":["retry X","drop X"]}
+```sh
+onepipeline surface RUN --kind check-in --message "Node X failed its gate; retry with a corrected fixture?"
 ```
 
-The channel's server side validates that emission and sends this
-newline-delimited JSON frame to the planner:
+The planner reads it with `just channel-next RUN`, which hands out each queued
+surface once:
 
 ```json
-{"op":"supervisor","run_id":"RUN","round":1,"surface":{"kind":"blocker","message":"Node X failed its gate; retry with a corrected fixture?","options":["retry X","drop X"]},"messages":[{"role":"assistant","content":"..."}]}
+{"status":"surface","surface":{"id":0,"kind":"check-in","message":"Node X failed its gate; retry with a corrected fixture?","source":"check-in","blocking":false,"round":1,"queued_at":1786490389925}}
 ```
 
-The orchestrator persona defines the boundary-kind vocabulary. `surface.options`
-is optional and, when present, is a list of strings. `messages` is the onejudge
-conversation context. Settled workers may also surface `kind: "proposal"` while
-the round continues. Proposals are advice only: workers never receive the down
-FIFO, and only the planner can issue edits. The planner replies with one of these
-legacy verdict shapes:
+Settled workers may also surface while the round continues. A worker's surface is
+advice only: workers never receive a reply, and only the planner can issue edits.
+The planner replies with one of these legacy verdict shapes:
 
 ```json
 {"completion":false,"message":"retry X with the fixture requirement","reason":"the graph is not complete"}
