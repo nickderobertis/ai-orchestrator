@@ -26,7 +26,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, TypedDict
 
 import pytest
 
@@ -196,6 +196,16 @@ class Applied(NamedTuple):
     result: subprocess.CompletedProcess[str]
 
 
+class RegisteredCheckout(TypedDict):
+    identity: str
+    path: str
+
+
+class RegistryDocument(TypedDict):
+    identities: dict[str, object]
+    checkouts: dict[str, RegisteredCheckout]
+
+
 @pytest.fixture(scope="module")
 def applied(tmp_path_factory: pytest.TempPathFactory) -> Applied:
     """The pre-adoption registry's checkouts, registered by the real recipe."""
@@ -213,7 +223,9 @@ def applied(tmp_path_factory: pytest.TempPathFactory) -> Applied:
 
 
 def test_every_pre_adoption_identity_and_checkout_is_registered(applied: Applied) -> None:
-    registry = json.loads((applied.home / "registry.json").read_text(encoding="utf-8"))
+    registry: RegistryDocument = json.loads(
+        (applied.home / "registry.json").read_text(encoding="utf-8")
+    )
     assert set(registry["identities"]) == {identity.key for identity in IDENTITIES}
     actual = {(record["path"], record["identity"]) for record in registry["checkouts"].values()}
     expected = {
@@ -232,6 +244,36 @@ def test_apply_reports_the_resolved_policy_table(applied: Applied) -> None:
     assert "local-direct" in applied.result.stdout
     assert "org-apps" in applied.result.stdout
     assert "change-open" in applied.result.stdout
+
+
+def test_resolve_accepts_registered_spellings_and_refuses_bare_owner_name(
+    applied: Applied,
+) -> None:
+    """Plans may name registry identities, aliases, origins, or checkout paths."""
+    identity = IDENTITIES[0]
+    registry: RegistryDocument = json.loads(
+        (applied.home / "registry.json").read_text(encoding="utf-8")
+    )
+    alias, checkout_record = next(
+        (alias, record)
+        for alias, record in registry["checkouts"].items()
+        if record["identity"] == identity.key
+    )
+    accepted = (
+        identity.key,
+        alias,
+        identity.origin,
+        checkout_record["path"],
+    )
+    for spelling in accepted:
+        resolved = onevcs(applied.home, "resolve", spelling)
+        assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+        assert identity.key in resolved.stdout
+
+    owner_name = identity.key.removeprefix("github.com/")
+    refused = onevcs(applied.home, "resolve", owner_name)
+    assert refused.returncode != 0, refused.stdout
+    assert owner_name in refused.stderr
 
 
 @pytest.mark.parametrize("identity", IDENTITIES, ids=lambda identity: identity.key)

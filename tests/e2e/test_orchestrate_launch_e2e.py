@@ -25,9 +25,10 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict, cast
 
 import pytest
+from fake_backend import PROMPT_LOG_ENV
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -82,6 +83,28 @@ class Launched(NamedTuple):
     launch: subprocess.CompletedProcess[str]
 
 
+class RoutedPersonaRun(NamedTuple):
+    """A run that exercises graph overrides and both persona paths."""
+
+    environment: dict[str, str]
+    launch: subprocess.CompletedProcess[str]
+    worker_config: Path
+    judge_config: Path
+    prompt_log: Path
+
+
+class GraphRef(TypedDict):
+    origin: str
+
+
+class GraphHistory(TypedDict):
+    refs: list[GraphRef]
+
+
+class PromptRecord(TypedDict):
+    prompt: str
+
+
 def _environment(
     tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION
 ) -> dict[str, str]:
@@ -94,6 +117,7 @@ def _environment(
     # the derivation is what this journey holds.
     environment["CLAUDE_CODE_SESSION_ID"] = session
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     # Keeps this run's graph scratch, its history, and its sibling state out of the
@@ -143,6 +167,75 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
 
 
 @pytest.fixture(scope="module")
+def routed_persona_run(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[RoutedPersonaRun]:
+    """Launch distinct side configs with one named and one omitted persona."""
+    tmp_path = tmp_path_factory.mktemp("routed-persona")
+    environment = _environment(tmp_path, oneharness_bin)
+    worker_config = tmp_path / "worker.toml"
+    judge_config = tmp_path / "judge.toml"
+    worker_config.write_bytes((REPO_ROOT / "oneharness.toml").read_bytes())
+    judge_config.write_bytes((REPO_ROOT / "oneharness.judge.toml").read_bytes())
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    plan = tmp_path / "routed-persona.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": "routed-persona-e2e",
+                "concurrency": 1,
+                "tasks": [
+                    {
+                        "id": "named",
+                        "persona": "docs-writer",
+                        "task": "Report without changing files.",
+                        "done_when": "the stand-in report is accepted",
+                    },
+                    {
+                        "id": "default",
+                        "task": "Report without changing files.",
+                        "expects_no_diff": True,
+                        "deps": ["named"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launch = _just(
+        "orchestrate",
+        str(plan),
+        "--node-set",
+        f"members.worker.agent.oneharness_config={worker_config}",
+        "--node-set",
+        f"members.worker.judge.oneharness_config={judge_config}",
+        environment=environment,
+    )
+    try:
+        yield RoutedPersonaRun(environment, launch, worker_config, judge_config, prompt_log)
+    finally:
+        _just("stop", "routed-persona-e2e", environment=environment, seconds=60)
+
+
+def _graph_history(run: str, environment: dict[str, str]) -> GraphHistory:
+    shown = subprocess.run(
+        ["oneagentgraph", "history", "show", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    # The published history command owns this schema; GraphHistory states the
+    # two fields this test consumes after a successful command response.
+    return cast(GraphHistory, json.loads(shown.stdout))
+
+
+@pytest.fixture(scope="module")
 def dag_scope_members() -> int:
     """How many members `graphs/dag-scope.yaml` declares, counted by its own reader.
 
@@ -187,6 +280,75 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
     assert stream.returncode == 0, stream.stderr
     assert "node-settled done" in stream.stdout, stream.stdout
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_node_overrides_and_named_or_omitted_persona_paths_work(
+    routed_persona_run: RoutedPersonaRun,
+) -> None:
+    """The launch forwards each side config and only the persona a node names."""
+    launch = routed_persona_run.launch
+    assert launch.returncode == 0, launch.stdout + launch.stderr
+    stream = _just(
+        "monitor", "routed-persona-e2e", environment=routed_persona_run.environment, seconds=60
+    )
+    assert stream.returncode == 0, stream.stderr
+    node_runs = re.findall(r"agent:(node-scope-\S+) graph-started", stream.stdout)
+    assert node_runs, stream.stdout
+
+    # llmlint: ignore[tests_mirror_real_usage] Required proof reads refs omitted by planner views.
+    histories = [_graph_history(run, routed_persona_run.environment) for run in node_runs]
+    origins = [{ref["origin"] for ref in history["refs"]} for history in histories]
+    expected_configs = {
+        str(routed_persona_run.worker_config),
+        str(routed_persona_run.judge_config),
+    }
+    assert expected_configs <= origins[0], origins
+    # The fake backend writes this JSONL itself; PromptRecord states the one field
+    # this test consumes from that test-owned schema.
+    # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
+    prompts = [
+        cast(PromptRecord, json.loads(line))["prompt"]
+        for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        "You are an editor who values concision and accuracy" in prompt for prompt in prompts
+    )
+    assert "graph:default" in stream.stdout
+    assert "node-settled done no-changes" in stream.stdout
+
+
+def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A direct graph invocation needs no persona override."""
+    environment = _environment(tmp_path, oneharness_bin)
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
+    run = subprocess.run(
+        [
+            "oneagentgraph",
+            "run",
+            "graphs/node-scope.yaml",
+            "--task",
+            "Report without changing files.",
+            "--dir",
+            str(REPO_ROOT),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    # The fake backend writes this JSONL itself; PromptRecord states the one field
+    # this test consumes from that test-owned schema.
+    prompts = [
+        cast(PromptRecord, json.loads(line))["prompt"]
+        for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any("Verify the requested task against its acceptance criteria" in p for p in prompts)
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
@@ -263,10 +425,10 @@ def test_the_read_only_planner_views_answer_for_the_settled_run(
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_the_planner_channel_carries_a_surface_and_its_reply(
+def test_a_settled_run_carries_a_surface_but_refuses_an_unreadable_reply(
     launched: Launched,
 ) -> None:
-    """A surface reaches the planner and the planner's answer reaches the run."""
+    """A surface remains readable, while quiescence makes a reply impossible."""
     environment = launched.environment
     raised = _just(
         "channel-surface",
@@ -292,8 +454,8 @@ def test_the_planner_channel_carries_a_surface_and_its_reply(
         timeout=e2e_timeout(60),
         check=False,
     )
-    assert answered.returncode == 0, f"the reply was refused:\n{answered.stderr}"
-    assert json.loads(answered.stdout)["state"] == "delivered"
+    assert answered.returncode == 2, answered.stderr
+    assert "has settled, so nothing will ever read a reply" in answered.stderr
 
     read = _just("channel-next", SHIPPED_RUN, environment=environment, seconds=60)
     assert read.returncode == 0, read.stderr

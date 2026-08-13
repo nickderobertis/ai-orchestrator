@@ -25,7 +25,7 @@
     },
     {
       "id": "service",
-      "repo": "nickderobertis/some-service",
+      "repo": "https://github.com/nickderobertis/some-service",
       "repo_type": "team",
       "deps": ["design-approval"],
       "title": "feat: implement approved release",
@@ -46,7 +46,7 @@
     },
     {
       "id": "docs",
-      "repo": "nickderobertis/some-docs",
+      "repo": "https://github.com/nickderobertis/some-docs",
       "repo_type": "team",
       "persona": "docs-writer",
       "task": "## What\nDocument the approved API and rollout.\n\n## Why\nEnable users to adopt the release confidently with accurate operating instructions.\n\n## Acceptance criteria\n- The approved API and rollout are documented.\n- Every command is verified against the implementation.",

@@ -7,7 +7,7 @@
   "tasks": [
     {
       "id": "health",
-      "repo": "nickderobertis/some-service",
+      "repo": "https://github.com/nickderobertis/some-service",
       "repo_type": "team",
       "persona": "engineer",
       "title": "feat(api): add /health endpoint",

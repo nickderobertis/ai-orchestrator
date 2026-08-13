@@ -3,9 +3,9 @@
 # llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Worker and judge prompts intentionally repeat the follow-up categories because each model independently needs the same self-contained natural-language context at its side of the reporting boundary.
 #
 # This is a config *fragment* for the adopted onejudge version (`onejudge schema`) that carries
-# only what every persona shares. It is never run directly — `dispatch` merges it
-# with a persona delta from `personas/` and the CLI `--task`, then runs
-# `onejudge run` on the effective result. See docs/onejudge-integration.md.
+# the complete generic defaults every persona shares. `dispatch` may merge a
+# persona delta from `personas/` and the CLI `--task`, then runs `onejudge` on the
+# effective result. See docs/onejudge-integration.md.
 #
 # What a persona adds on top: the agent's role (`agent.instructions`, appended
 # after the shared preamble below) and the supervisor `user.persona` — plus an
@@ -64,9 +64,14 @@ agent:
     rely on the harness to commit for you or leave finished work uncommitted — it
     can be lost if the run ends early. Keep the tree clean at the end.
 
-# The simulated supervisor's shared defaults. A persona overrides `persona`
-# (required, role-specific) and may override these two.
+# The simulated supervisor's shared defaults. A persona overrides the generic
+# `persona` and may override the other fields.
 user:
+  # A plan persona replaces this with its role-specific review contract. The
+  # complete generic default keeps a graph invocation with no persona valid.
+  persona: >-
+    Verify the requested task against its acceptance criteria and require the
+    repository's documented checks before accepting it.
   done_when: >-
     the subtask is fully implemented, deterministic checks pass, and one complete
     closeout gate plus every lint tier has passed; when a repository documents an

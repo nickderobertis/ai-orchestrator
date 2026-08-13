@@ -137,10 +137,9 @@ upgrade:
 # planner doctrine names. `--adopt` has to lead, because everything after it is the
 # adopt verb's own.
 #
-# The per-side `--worker-harness` / `--judge-harness` / `--worker-model` /
-# `--judge-model` flags have no successor on `onepipeline start`: which harness and
-# model each side of the conversation runs on is now a property of the run's agent
-# graph, overridden per run with `oneagentgraph run --set`.
+# Per-side routing is a property of the launched graphs. `onepipeline start`
+# forwards `--set` to the dag graph and `--node-set` to every dispatched node
+# graph; docs/onejudge-integration.md gives the exact config-ref overrides.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
 [doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:

@@ -4,7 +4,7 @@
   "tasks": [
     {
       "id": "api",
-      "repo": "nickderobertis/some-service",
+      "repo": "https://github.com/nickderobertis/some-service",
       "repo_type": "team",
       "persona": "engineer",
       "task": "## What\nAdd a `POST /health` endpoint that returns build metadata, with tests that drive real requests. Keep the change scoped to the endpoint.\n\n## Why\nOperators currently learn a deploy is unhealthy from user reports, because nothing exposes build metadata to poll.\n\n## Acceptance criteria\n- `POST /health` returns the build metadata contract, proven by tests that drive real requests.\n- One failure path is proven alongside the happy path.\n- Nothing outside the endpoint and its tests changes.",
@@ -13,7 +13,7 @@
     },
     {
       "id": "docs",
-      "repo": "nickderobertis/some-docs",
+      "repo": "https://github.com/nickderobertis/some-docs",
       "repo_type": "team",
       "merge_policy": "change-auto",
       "persona": "docs-writer",
@@ -23,7 +23,7 @@
     },
     {
       "id": "client",
-      "repo": "nickderobertis/some-client",
+      "repo": "https://github.com/nickderobertis/some-client",
       "repo_type": "team",
       "persona": "engineer",
       "task": "## What\nAdd a typed `health()` method to the client that calls `GET /health`, with a test against a real local server.\n\n## Why\nEvery consumer of the new endpoint is otherwise left to hand-roll the request and its response type, which is where the contract drifts first.\n\n## Acceptance criteria\n- `health()` returns the build metadata as a declared type rather than an untyped mapping.\n- A test drives it against a real local server rather than a mocked transport.\n- One failure response is covered alongside the happy path.",
@@ -33,7 +33,7 @@
     },
     {
       "id": "dashboard",
-      "repo": "nickderobertis/some-service",
+      "repo": "https://github.com/nickderobertis/some-service",
       "repo_type": "team",
       "deps": ["api"],
       "title": "feat(admin): add dashboard",

@@ -12,16 +12,11 @@ members:
   worker:
     kind: onejudge
     base_config: ../config/onejudge.base.yaml
-    # The task comes from the node being dispatched, over `--task`.
-    #
-    # The persona does NOT, and that is the one thing this file has to say out
-    # loud: `onepipeline` 0.1.7 stamps a node's `persona` as an event label and
-    # never passes it to the graph, so the merged config would be missing the
-    # required `user.persona` and every dispatch would die before its first
-    # turn. Naming one here is what keeps dispatch working at all; a node that
-    # needs a different role names a graph of its own with `agent_graph`. See
-    # docs/orchestration.md, "The agent graphs a run launches".
-    persona: ../personas/engineer.yaml
+    # The task comes from the node over `--task`, and `onepipeline` forwards a
+    # dispatched plan node's `persona` as this member's persona override. Nodes
+    # that do not dispatch (`expects_no_diff` and human nodes) need no persona;
+    # a direct graph invocation with no override uses the base config's generic
+    # role. See docs/orchestration.md, "The agent graphs a run launches".
     agent:
       oneharness_config: ../oneharness.toml
     judge:

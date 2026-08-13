@@ -89,6 +89,9 @@ EVALUATION_MARKER = '{"value": true or false'
 #: failure to report, and a test that hangs on it says nothing.
 MAX_TRANSITIONS = 12
 
+#: Optional test-owned transcript sink for assertions about the effective prompt.
+PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
+
 
 def _config(argv: list[str]) -> str | None:
     """The `--config` this invocation was pinned with, if any."""
@@ -135,15 +138,16 @@ def _answer(argv: list[str], text: str) -> int:
         return 2
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
-    # llmlint: ignore[e2e_not_mocked] `--mock-harness ID` replaces the selected
-    # harness's *provider process* and nothing above it — this repository's one
-    # sanctioned fake, under a different name. Proof: under `--mock-harness codex`
+    # `--mock-harness ID` replaces the selected harness's *provider process* and
+    # nothing above it — this repository's one sanctioned fake, under a different
+    # name. Proof: under `--mock-harness codex`
     # the run record still reports `harness_id: codex`, `available: true`, and the
     # real codex argv (`exec --dangerously-bypass-approvals-and-sandbox --json
     # <prompt>`) with only the executable substituted, so config resolution,
     # identity selection, the fallback chain, the history record and the report are
     # the real ones. It is the seam `tests/e2e/mock_oneharness.py` and
     # `tests/e2e/test_quota_fallthrough_e2e.py` already fake at.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     completed = subprocess.run(
         [real, argv[0], "--harness", MOCK_HARNESS, "--mock-harness", MOCK_HARNESS, *argv[1:]],
         env=environment,
@@ -183,6 +187,9 @@ def main(argv: list[str]) -> int:
         return 2
     argv, prompt = _prompt(argv)
     config = _config(argv)
+    if prompt_log := os.environ.get(PROMPT_LOG_ENV):
+        with Path(prompt_log).open("a", encoding="utf-8") as recorded:
+            recorded.write(json.dumps({"config": config, "prompt": prompt}) + "\n")
     if config and Path(config).name == JUDGE_CONFIG_NAME:
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))

@@ -383,23 +383,26 @@ deliberate trade: those tiers can now contend for that Claude quota, and that is
 accepted because a supervisory tier that can still run beats one isolated from the
 quota that is left. Do not reorder these to restore the old isolation.
 
-Those files decide every run on this host. Pairing the two sides differently for
-**one** run is no longer a flag on a recipe: which harness and model each side runs
-on is a property of that run's agent graph, so `oneagentgraph run --set
-members.<member>.agent.model=NAME` (and the same for its harness) is where a
-per-run override goes, rather than an edit to a config concurrent runs also read.
-`scripts/oneharness-agent.sh` still resolves the per-side variables
-`ORCHESTRATOR_WORKER_HARNESSES` / `ORCHESTRATOR_JUDGE_HARNESSES` and their model
-halves, because oneharness's own `ONEHARNESS_HARNESSES` cannot express a per-side
-choice: it is process-wide and beats config, so it moves both sides at once. See
+Those files decide the defaults for every run on this host. Pairing the two sides
+differently for **one** run is a property of that run's agent graph: pass
+`--node-set members.worker.agent.oneharness_config=REF` and the corresponding
+`members.worker.judge.oneharness_config=REF` override to `just orchestrate`, where
+each referenced config declares the intended identity. Use `--set` instead of
+`--node-set` to override a dag-scope member. Do not edit a config concurrent runs
+also read.
+The adopted graph invokes oneharness directly; `scripts/oneharness-agent.sh` is
+still the smoke/manual boundary but its `ORCHESTRATOR_WORKER_HARNESSES` /
+`ORCHESTRATOR_JUDGE_HARNESSES` compatibility variables are not on this launch
+path. oneharness's `ONEHARNESS_HARNESSES` is process-wide and cannot express a
+per-side choice. See
 [Choosing a harness per
 side](docs/onejudge-integration.md#choosing-a-harness-per-side).
 
 Choosing the identity does not choose the **tier**: every one of those files pins a
 `model` per harness, and the judge's three Claude identities are pinned to the
-cheaper supervisor model deliberately. The model half of the per-side seam moves
-with the harness half: `oneagentgraph run --set members.<member>.agent.model=NAME`
-is where a per-run model goes, and it applies to whichever candidate the chain
+cheaper supervisor model deliberately. The model half of the per-side seam is
+graph-native: override `members.worker.agent.model` and
+`members.worker.judge.model`, and it applies to whichever candidate the chain
 selects — `fallback` does not fall through a task failure, so a model a side's
 selected identity rejects dies on that rejection rather than degrading. Note what
 the seam does **not** buy — a config's per-harness `model` beats `ONEHARNESS_MODEL`,
