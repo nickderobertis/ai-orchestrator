@@ -13,10 +13,11 @@
 # harnesses that cannot run at all — see the note in oneharness.toml.
 run_mode = "fallback"
 
-# timeout: the per-turn deadline in seconds; `0` means none, and an absent key
-# means 120. This side is the only role here with none, because one of its turns
-# is a single `just run-plan` tool call that runs a whole round. That, what it
-# cost to inherit 120 instead, and why a `0` here is safe under `mode: bypass` are
+# timeout: the per-turn deadline in seconds. Since oneharness 0.7.0 both `0` and an
+# absent key mean none; `0` stays spelled out here because this side's lack of a
+# deadline is a decision, not an inherited default — one of its turns is a single
+# `just run-plan` tool call that runs a whole round. That, what it cost to inherit
+# the old 120 instead, and why a `0` here is safe under `mode: bypass` are
 # in docs/onejudge-integration.md#choosing-a-deadline-per-side.
 timeout = 0
 
