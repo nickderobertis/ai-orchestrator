@@ -19,7 +19,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 from waits import deadline
 from waits import timeout as e2e_timeout
 

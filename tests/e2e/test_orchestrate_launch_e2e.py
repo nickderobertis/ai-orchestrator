@@ -444,9 +444,9 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
     One example is launched for real above; launching all of them would spend the
     wall clock of a full dispatch each to re-prove the same launch path. What is
     unproven without this is narrower and is what actually broke: the *document*.
-    `onepipeline start` loads and validates the plan before it reads anything else,
-    so pointing it at an agent graph that is not there separates the two — the plan
-    was accepted if and only if the refusal is about the graph.
+    `onepipeline start` loads and validates the plan before repository preflight and
+    agent-graph loading. Reaching either downstream boundary therefore proves the
+    plan was accepted without launching paid work.
 
     One test rather than one per plan, because the documents are read here rather
     than at collection: `docs/` is outside the code-only tier's cache key, and a
@@ -464,7 +464,8 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
         plan.write_text(document, encoding="utf-8")
         refused = _just("orchestrate", str(plan), "--detach", environment=environment, seconds=120)
         reported = refused.stderr + refused.stdout
-        assert "dag-scope.yaml" in reported, f"{origin} was not accepted as a plan:\n{reported}"
+        reached_downstream_boundary = "dag-scope.yaml" in reported or "session holders" in reported
+        assert reached_downstream_boundary, f"{origin} was not accepted as a plan:\n{reported}"
 
 
 #: Every file that restates the `merge_policy` vocabulary in prose. Three, because
