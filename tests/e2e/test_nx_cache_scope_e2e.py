@@ -66,8 +66,8 @@ CACHE_HIT = "read the output from the cache"
 # documented launch-path list against scripts/pre-push-smoke-needed.sh — and it
 # lives outside every project root.
 PROSE_WITNESS = "AGENTS.md"
-PROSE_TEXT = "`oneharness.orchestrator.toml`; ordinary pushes"
-PROSE_EDIT = "`oneharness.orchestrator.toml`, `docs/probe.md`; ordinary pushes"
+PROSE_TEXT = "`oneharness.check-in.toml`; ordinary pushes"
+PROSE_EDIT = "`oneharness.check-in.toml`, `docs/probe.md`; ordinary pushes"
 # Also read directly, also outside every project root, and deliberately not prose:
 # this is what proves the narrowed key was narrowed by documentation alone. It is
 # also the recipe tier's own witness, since driving it is what that tier is for.

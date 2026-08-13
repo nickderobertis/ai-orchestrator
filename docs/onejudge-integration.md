@@ -34,8 +34,13 @@ lives in an oneharness config, not in onejudge:
 
 A third role sits above both: the **orchestrator** process `just orchestrate`
 launches drives a tracked graph rather than doing the work, so it has its own
-config, `oneharness.orchestrator.toml`, forced by
-`scripts/oneharness-orchestrator.sh`.
+config, `oneharness.orchestrator.toml` — named by `graphs/dag-scope.yaml`'s
+`orchestrator` member, and forced by `scripts/oneharness-orchestrator.sh` on the
+manual and smoke path. The `check-in` pacemaker scheduled beside it in that same
+graph has a fourth, `oneharness.check-in.toml`, which is that routing verbatim and
+differs in one field only; [Choosing a deadline per
+side](#choosing-a-deadline-per-side) is why, and re-merging the two is a silent
+regression rather than a tidy-up.
 
 Edit those files to change the harness or model on a side for every run on this
 host. One run changes it with graph config-ref overrides, the only way to give
@@ -362,7 +367,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.6.15, a config's per-harness `model` **beats** the variable, while the `--model`
+0.6.16, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -407,11 +412,77 @@ With neither model flag set nothing changes here either: no branch names a model
 its own, no variable carries one, and each side runs exactly the model its config
 pins for the identity it landed on.
 
+#### Choosing a deadline per side
+
+The third thing a side has, and the one with **no graph-native field**: a member
+takes `oneharness_config`, `model`, and `stream`, and nothing else. So unlike the
+identity and the tier, a per-member `timeout` can only be expressed by giving that
+member its own config file.
+
+Absent means 120 seconds. That is oneharness's built-in default, and an absent key
+still resolves to it in the adopted release — deliberately upstream, so callers
+relying on it as a backstop keep it. `timeout = 0` (or `--timeout 0`) is the opt-out.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The per-side values
+below are read from each config by the real CLI in
+tests/e2e/test_oneharness_timeout_e2e.py; this table is the operator-facing summary
+of that check, not a second declaration of it. -->
+
+| Side | Config | Deadline |
+| --- | --- | --- |
+| Orchestrator agent | `oneharness.orchestrator.toml` | **none** (`timeout = 0`) |
+| `check-in` pacemaker | `oneharness.check-in.toml` | 120s, stated |
+| Judge / simulated user | `oneharness.judge.toml` | 120s, the release default |
+| Worker agent | `oneharness.toml` | 120s, the release default |
+| LLM lint | `oneharness.llmlint.toml` | 600s — llmlint puts `--timeout 600` on its own argv, and a flag beats config |
+
+The orchestrator is the exception because of what one of its turns *is*: a single
+tool call to `just run-plan` that dispatches every node of a round, runs their
+gates, and publishes, against a round budget of 28800 seconds. Under the 120-second
+default three consecutive runs died, each reported only as `member-died
+rule=provider-failure cause=timeout` — which reads as a provider problem and is not
+one. Two things make that diagnosis expensive, and both are worth knowing before
+reading a timeout as an outage: a timeout deliberately does **not** fall through a
+`fallback` chain (it would mask a real failure), so no identity ordering rescues it;
+and from outside, a killed process is indistinguishable from a harness that
+vanished, so unrelated dispatch failures get misattributed alongside it.
+
+**The pacemaker is why this needed a second file rather than one line.** `check-in`
+shared `oneharness.orchestrator.toml`, and a `0` written there would have given a
+scheduled member no deadline too. That is the worse failure: a killed pacemaker turn
+at least ends and is retried on the next tick, while a wedged one that never dies
+holds its slot silently forever. Everything else was rejected for being unable to
+express one member: `ONEHARNESS_TIMEOUT` is process-wide for the whole
+`oneagentgraph run` **and** beats every file, exactly like `ONEHARNESS_HARNESSES`
+above; and an `ONEHARNESS_BIN` wrapper appending `--timeout 0` is process-wide too,
+so it could only tell the members apart by pattern-matching the `--config` path it
+was handed. A per-member `timeout` in `oneagentgraph`'s member config would be
+better than any of these and is proposed upstream; until it exists, two files is the
+seam.
+
+So: never point two members at one config to save a copy, and read the difference
+from the CLI rather than the file —
+
+```
+$ oneharness config --config oneharness.orchestrator.toml | jq .timeout
+  { "value": 0,   "source": "oneharness.orchestrator.toml" }
+$ oneharness config --config oneharness.check-in.toml | jq .timeout
+  { "value": 120, "source": "oneharness.check-in.toml" }
+```
+
+`timeout = 0` also gives up the backstop oneharness keeps against a mode that can
+block on an approval prompt headlessly, and it warns about exactly that. Nothing is
+traded away on this side, and it was checked rather than assumed: the orchestrator
+member runs in `mode: bypass`, and `oneharness list` reports `bypass` as `headless:
+"clean"` for both codex and claude-code — every identity that chain names — so no
+turn on it is ever asked to approve anything. A side that could prompt must keep a
+finite deadline, or pass `--permit-prompts` deliberately.
+
 #### What a spawned provider inherits, and what that is not
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through 0.6.15, confirmed against the binary:
+candidate it ended up running — through 0.6.16, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -529,8 +600,8 @@ of real dispatches, with only the paid provider CLI doubled through oneharness's
 own `ONEHARNESS_BIN_CODEX` seam.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
-`oneharness.judge.toml`, or `oneharness.orchestrator.toml`; every other pushed diff
-skips it.
+`oneharness.judge.toml`, `oneharness.orchestrator.toml`, or
+`oneharness.check-in.toml`; every other pushed diff skips it.
 
 ### The record a fallback chain is judged by
 

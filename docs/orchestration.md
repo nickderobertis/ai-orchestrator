@@ -80,7 +80,13 @@ graphs/dag-scope.yaml`. Check one with `just validate-personas`' sibling,
 
 - **`graphs/dag-scope.yaml`** is what `just orchestrate` launches: the
   `orchestrator` member that drives the run's rounds, and the resettable-cron
-  `check-in` member that paces planner updates.
+  `check-in` member that paces planner updates. The two name **different**
+  oneharness configs, identical but for the per-turn deadline — a round-long
+  orchestrator turn has none, a scheduled pacemaker must keep one — and a member
+  has no `timeout` field of its own, so the file is the seam. See [Choosing a
+  deadline per
+  side](onejudge-integration.md#choosing-a-deadline-per-side) before re-sharing
+  one.
 - **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
   worker supervised by one simulated-user judge. A plan node overrides it with
   `agent_graph`.
