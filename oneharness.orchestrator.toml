@@ -1,13 +1,42 @@
 # Orchestrator side of the onejudge conversation: WHICH harness + model drives a
-# tracked graph. Forced by `scripts/oneharness-orchestrator.sh`, which
-# `orchestrator.dispatch.launch_orchestrator` pins as the launched process's
-# oneharness binary; discovery from the repo root would otherwise hand this role
-# the worker's `oneharness.toml`. See docs/onejudge-integration.md.
+# tracked graph. Named by `graphs/dag-scope.yaml`'s `orchestrator` member as its
+# agent side, and forced by `scripts/oneharness-orchestrator.sh` on the manual and
+# smoke path; discovery from the repo root would otherwise hand this role the
+# worker's `oneharness.toml`. See docs/onejudge-integration.md.
+#
+# This file drives ONE member's agent side. The `check-in` pacemaker used to share
+# it and now reads `oneharness.check-in.toml` — the same routing with a finite
+# deadline — because of the `timeout` below. Do not point another member here.
 
 # run_mode: how the selected harnesses are run. "fallback" tries them in priority
 # order and stops at the first that can actually run, falling through only
 # harnesses that cannot run at all — see the note in oneharness.toml.
 run_mode = "fallback"
+
+# timeout: the per-turn deadline in seconds; `0` means none. This side has none,
+# deliberately, and it is the only role here that does.
+#
+# An orchestrator turn calls `just run-plan` as a SINGLE tool call, and that one
+# call dispatches every node of a round, runs each one's gate, and publishes,
+# against a round budget of 28800 seconds. oneharness's default deadline is 120,
+# and an absent key still means 120 in the adopted release — deliberately
+# upstream, so every caller relying on that backstop keeps it. Inheriting it here
+# killed three consecutive runs at 120 seconds each, reported only as
+# `member-died rule=provider-failure cause=timeout`. That reads as a provider
+# problem and is not one: a timeout deliberately does NOT fall through a
+# `fallback` chain, so no identity ordering rescues it, and from outside a killed
+# process is indistinguishable from a harness that vanished. The pre-adoption
+# Python launcher passed this value explicitly (86400); the migration to the
+# published stack dropped it and nothing on the launch path sets
+# `ONEHARNESS_TIMEOUT` any more, so the file is the whole of it.
+#
+# `--timeout 0` also removes the backstop oneharness keeps against a mode that can
+# block on an approval prompt headlessly. Nothing is traded away here: this member
+# runs in `mode: bypass` (graphs/dag-scope.yaml), and `oneharness list` reports
+# `bypass` as `headless: "clean"` for both codex and claude-code — every identity
+# this chain names — so no turn on this side is ever asked to approve anything.
+# tests/e2e/test_oneharness_timeout_e2e.py holds that pair together.
+timeout = 0
 
 # Record this side's runs to disk too; onejudge's pinned `--config` skips the
 # user-level config.toml, so history must be enabled here.
