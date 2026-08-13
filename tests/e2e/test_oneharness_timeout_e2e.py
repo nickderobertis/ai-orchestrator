@@ -28,11 +28,6 @@ from orchestrator.root import REPO_ROOT
 TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
 DAG_SCOPE_GRAPH = REPO_ROOT / "graphs" / "dag-scope.yaml"
 NODE_SCOPE_GRAPH = REPO_ROOT / "graphs" / "node-scope.yaml"
-#: oneharness's built-in per-turn deadline, in seconds. An absent `timeout` key
-#: still resolves to this in the adopted release — deliberately upstream, so callers
-#: relying on it as a backstop keep it — which is exactly why the one side that must
-#: not have a deadline states `timeout = 0` rather than leaving the key out.
-RELEASE_DEFAULT_TIMEOUT = 120
 
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
@@ -231,10 +226,10 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
     _assert_descendant_stopped(tick_file)
 
 
-def test_the_orchestrator_agent_has_no_deadline_and_the_pacemaker_keeps_one(
+def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """The whole point of the split: one round-long turn, one bounded pacemaker."""
+    """Prove all five turn configs together from oneharness's effective values."""
     orchestrator = _named_config(DAG_SCOPE_GRAPH, "orchestrator", "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     assert orchestrator != pacemaker, (
@@ -243,31 +238,39 @@ def test_the_orchestrator_agent_has_no_deadline_and_the_pacemaker_keeps_one(
         "deadline, which fails silently — give each member its own oneharness config"
     )
 
-    driving = _effective_config(oneharness_bin, orchestrator)
-    reporting = _effective_config(oneharness_bin, pacemaker)
+    configs = {
+        "worker": _named_config(NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config"),
+        "judge": _named_config(NODE_SCOPE_GRAPH, "worker", "judge.oneharness_config"),
+        "llmlint": REPO_ROOT / "oneharness.llmlint.toml",
+        "orchestrator": orchestrator,
+        "pacemaker": pacemaker,
+    }
+    effective = {
+        side: _effective_config(oneharness_bin, config) for side, config in configs.items()
+    }
 
-    # Value AND source: a `0` that came from anywhere but this file would mean the
-    # committed configuration is not what a run resolves.
-    assert driving["timeout"] == {"value": 0, "source": str(orchestrator)}, (
-        "the orchestrator's agent side must resolve to no deadline; one of its turns "
-        "runs a whole round through `just run-plan` against a 28800s round budget, and "
-        f"an absent key still resolves to {RELEASE_DEFAULT_TIMEOUT}s"
-    )
-    assert reporting["timeout"]["source"] == str(pacemaker)
-    pacemaker_deadline = reporting["timeout"]["value"]
-    assert isinstance(pacemaker_deadline, int) and pacemaker_deadline > 0, (
-        "the check-in pacemaker must keep a finite deadline: it is scheduled every "
-        "1800s, and a wedged turn that never dies costs every tick after it"
-    )
+    for side in ("worker", "judge", "llmlint"):
+        assert effective[side]["timeout"] == {"value": None, "source": None}, (
+            f"{side} must inherit oneharness 0.7's unbounded default"
+        )
+    assert effective["orchestrator"]["timeout"] == {
+        "value": 0,
+        "source": str(orchestrator),
+    }, "the orchestrator's explicit timeout = 0 must continue to mean no deadline"
+    assert effective["pacemaker"]["timeout"] == {
+        "value": 120,
+        "source": str(pacemaker),
+    }, "the check-in pacemaker must retain its explicit finite 120-second deadline"
 
     # The split duplicated a routing, so hold the copy to one intended difference.
     # Anything else that drifts here is a pacemaker quietly authenticating, billing,
     # or reporting differently from the process it reports on.
     differing = {
         field
-        for field in _without_sources(driving)
+        for field in _without_sources(effective["orchestrator"])
         if field != "config_files"
-        and _without_sources(driving)[field] != _without_sources(reporting)[field]
+        and _without_sources(effective["orchestrator"])[field]
+        != _without_sources(effective["pacemaker"])[field]
     }
     assert differing == {"timeout"}, (
         f"oneharness.check-in.toml must be oneharness.orchestrator.toml's routing with "
@@ -275,39 +278,19 @@ def test_the_orchestrator_agent_has_no_deadline_and_the_pacemaker_keeps_one(
     )
 
 
-@pytest.mark.parametrize(
-    ("graph", "member", "field"),
-    [
-        (DAG_SCOPE_GRAPH, "orchestrator", "judge.oneharness_config"),
-        (NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config"),
-        (NODE_SCOPE_GRAPH, "worker", "judge.oneharness_config"),
-    ],
-)
-def test_every_other_side_still_takes_the_release_default_deadline(
-    graph: Path, member: str, field: str, oneharness_bin: str
-) -> None:
-    """The judge side and every worker dispatch keep the backstop they have today.
-
-    They are on oneharness's built-in default, not a value this repository states, and
-    the seam above deliberately did not move them. Pinning `source` as well as the
-    number is what makes that a fact rather than a coincidence: a `timeout` added to
-    one of those files, or a release that moves its own default, fails here.
-    """
-    resolved = _effective_config(oneharness_bin, _named_config(graph, member, field))
-    assert resolved["timeout"] == {"value": RELEASE_DEFAULT_TIMEOUT, "source": "default"}
-
-
-def test_the_orchestrator_side_can_never_block_on_an_approval_prompt(
+def test_bypass_sides_do_not_trip_the_approval_wait_safety_deadline(
     oneharness_bin: str,
 ) -> None:
-    """`timeout = 0` gives up oneharness's backstop against an unbounded approval wait.
+    """Prove worker and orchestrator bypass modes cannot prompt headlessly.
 
-    Nothing is traded away only while this side cannot be asked to approve anything,
-    and that is a property of the mode plus the harnesses the chain names — so it is
-    checked against both rather than assumed from `bypass` sounding safe.
+    oneharness 0.7 retains a separate 120-second approval-wait safety deadline for
+    prompt-capable headless modes. `bypass` must remain clean or the release's new
+    unbounded turn default would not actually reach these live paths.
     """
     orchestrator = _named_config(DAG_SCOPE_GRAPH, "orchestrator", "agent.oneharness_config")
+    worker = _named_config(NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config")
     assert _member_fields(DAG_SCOPE_GRAPH)["orchestrator"].get("mode") == "bypass"
+    assert _member_fields(NODE_SCOPE_GRAPH)["worker"].get("mode") == "bypass"
 
     catalogue = subprocess.run(
         [oneharness_bin, "list"], text=True, capture_output=True, timeout=e2e_timeout(30)
@@ -319,9 +302,12 @@ def test_the_orchestrator_side_can_never_block_on_an_approval_prompt(
         for harness in (listed["harnesses"] if isinstance(listed, dict) else listed)
     }
 
-    chain = _effective_config(oneharness_bin, orchestrator)["harnesses"]["value"]
-    families = {identity.split(":", 1)[0] for identity in chain}
-    assert families, f"{orchestrator} names no harnesses"
+    chains = [
+        _effective_config(oneharness_bin, config)["harnesses"]["value"]
+        for config in (orchestrator, worker)
+    ]
+    families = {identity.split(":", 1)[0] for chain in chains for identity in chain}
+    assert families, "worker and orchestrator configs name no harnesses"
     for family in sorted(families):
         assert headless.get(family, {}).get("bypass") == "clean", (
             f"{family} can block on an approval prompt in bypass mode, so removing the "

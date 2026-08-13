@@ -418,13 +418,13 @@ side](docs/onejudge-integration.md#choosing-a-model-per-side).
 
 Nor does it choose the **deadline**, and that half of the seam has no graph-native
 field at all: a member takes `oneharness_config`, `model`, and `stream`, so the
-config file is the only place a per-member `timeout` can live. Absent means 120
-seconds — oneharness's default, which every side here takes except one, and which
-the pre-adoption launcher used to override for all of them. `timeout = 0` means no
-deadline, and `oneharness.orchestrator.toml` is the only file that carries it,
-because one orchestrator turn runs a whole round. That is why the `check-in`
-pacemaker no longer shares that file: a `0` reaching a scheduled member would leave
-a wedged turn alive forever, which fails silently, so it reads
+config file is the only place a per-member `timeout` can live. Since oneharness
+0.7.0, absent means no deadline; the worker, judge, and llmlint configs intentionally
+take that default. `timeout = 0` also means no deadline and remains explicit in
+`oneharness.orchestrator.toml`, because one orchestrator turn runs a whole round.
+That is why the `check-in` pacemaker no longer shares that file: an unbounded
+deadline reaching a scheduled member would leave a wedged turn alive forever,
+which fails silently, so it reads
 `oneharness.check-in.toml` instead. Never point two members at one config to save a
 copy, and never set `ONEHARNESS_TIMEOUT` to fix a deadline — it is process-wide for
 the whole graph run and beats every file, so it moves every member at once. See
