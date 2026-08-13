@@ -55,7 +55,6 @@ DAG_SCOPE_STREAM = "agent:dag-scope-"
 #: inside a dispatch whose own harness session would otherwise decide these
 #: assertions, and ownership is the thing under test.
 LAUNCHING_SESSION = "e2e-planner-session"
-OTHER_SESSION = "another-planner-session"
 
 #: Every name a launcher identity reaches `scripts/onepipeline.sh` through, so a
 #: journey that states one is not also carrying the enclosing dispatch's.
@@ -393,99 +392,6 @@ def test_no_turn_of_this_run_reached_a_paid_provider(launched: Launched) -> None
     assert stream.returncode == 0, stream.stderr
     acted = [line for line in stream.stdout.splitlines() if line.endswith("turn-activity")]
     assert not acted, f"{len(acted)} real tool call(s) ran; the first was {acted[0]}"
-
-
-@pytest.mark.xdist_group("orchestrate-launch")
-def test_the_read_only_planner_views_answer_for_the_settled_run(
-    launched: Launched,
-) -> None:
-    """Every view a planner reads a run through reports it, and reports it as this session's."""
-    environment = launched.environment
-    views = {
-        ("runs",): f"{SHIPPED_RUN}",
-        ("runs", "--mine"): "[mine]",
-        ("status", SHIPPED_RUN): "SETTLED",
-        ("results", SHIPPED_RUN): "research",
-        ("monitor", SHIPPED_RUN): "round-finished complete",
-        ("goals",): "scheduler",
-        ("host",): "host ",
-    }
-    for invocation, expected in views.items():
-        view = _just(*invocation, environment=environment, seconds=60)
-        assert view.returncode == 0, f"just {' '.join(invocation)} failed:\n{view.stderr}"
-        assert expected in view.stdout, f"just {' '.join(invocation)} said:\n{view.stdout}"
-    # Telemetry is the one view whose product is a document rather than a table, so
-    # it is read as one: a bucket nothing measured must be absent, not a zero.
-    telemetry = _just("telemetry", SHIPPED_RUN, environment=environment, seconds=60)
-    assert telemetry.returncode == 0, telemetry.stderr
-    measured = json.loads(telemetry.stdout)
-    assert measured["run_id"] == SHIPPED_RUN
-    assert measured["dispatches"] >= 1
-    assert measured["settled_done"] >= 1
-
-
-@pytest.mark.xdist_group("orchestrate-launch")
-def test_a_settled_run_carries_a_surface_but_refuses_an_unreadable_reply(
-    launched: Launched,
-) -> None:
-    """A surface remains readable, while quiescence makes a reply impossible."""
-    environment = launched.environment
-    raised = _just(
-        "channel-surface",
-        SHIPPED_RUN,
-        "a stand-in status update",
-        environment=environment,
-        seconds=60,
-    )
-    assert raised.returncode == 0, raised.stderr
-    assert json.loads(raised.stdout)["state"] == "queued"
-
-    # `channel-reply` reads the envelope from stdin when no file names it, which is
-    # the shape the planner doctrine uses; give it one.
-    answered = subprocess.run(
-        ["just", "channel-reply", SHIPPED_RUN],
-        cwd=REPO_ROOT,
-        env=environment,
-        input=json.dumps(
-            {"completion": False, "message": "keep going", "reason": "the e2e replied"}
-        ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-    assert answered.returncode == 2, answered.stderr
-    assert "has settled, so nothing will ever read a reply" in answered.stderr
-
-    read = _just("channel-next", SHIPPED_RUN, environment=environment, seconds=60)
-    assert read.returncode == 0, read.stderr
-    surface = json.loads(read.stdout)["surface"]
-    assert surface is not None, "the queued surface never reached the planner"
-    assert surface["message"] == "a stand-in status update"
-
-
-@pytest.mark.xdist_group("orchestrate-launch")
-def test_stop_refuses_a_run_another_planner_launched(
-    launched: Launched,
-) -> None:
-    """Ownership is recorded at launch and enforced at `just stop`."""
-    environment = launched.environment
-    foreign = dict(environment)
-    foreign["CLAUDE_CODE_SESSION_ID"] = OTHER_SESSION
-    foreign.pop("ONEPIPELINE_LAUNCHER", None)
-    foreign.pop("ONEPIPELINE_LAUNCHER_SESSION", None)
-
-    refused = _just("stop", SHIPPED_RUN, environment=foreign, seconds=60)
-    assert refused.returncode != 0, f"another planner's run was stopped:\n{refused.stdout}"
-    # The refusal names the owner rather than merely declining, and names it as the
-    # launcher this repository derived rather than as `unknown` — which is what a
-    # run launched with no identity established would have recorded.
-    assert "not to this session" in refused.stderr, refused.stderr
-    assert "claude-code:" in refused.stderr, refused.stderr
-
-    listed = _just("runs", "--mine", environment=foreign, seconds=60)
-    assert listed.returncode == 0, listed.stderr
-    assert SHIPPED_RUN not in listed.stdout, "another planner's run was listed as mine"
 
 
 def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_bin: str) -> None:

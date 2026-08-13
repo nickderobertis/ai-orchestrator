@@ -101,6 +101,15 @@ def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> 
     assert forwarded in result.stderr
 
 
+@pytest.mark.reads_recipes
+def test_test_e2e_recipe_names_the_real_tier_without_recursing_into_itself() -> None:
+    """The e2e tier cannot launch itself from inside itself, but its entry point is exact."""
+    result = _run("just", "--dry-run", "test-e2e")
+
+    assert result.returncode == 0, result.stderr
+    assert "uv run pytest tests/e2e -n 4 --dist loadgroup" in result.stderr
+
+
 def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
     command = json.loads((ROOT / "orchestrator/project.json").read_text())["targets"]["lint"][
         "command"
