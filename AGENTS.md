@@ -388,6 +388,21 @@ deliberate trade: those tiers can now contend for that Claude quota, and that is
 accepted because a supervisory tier that can still run beats one isolated from the
 quota that is left. Do not reorder these to restore the old isolation.
 
+**Streaming and out-of-band turn control are independent, and a control failure is
+never a reason to stop streaming.** `--stream` decides *when* a turn's transcript
+arrives; `--control` opens a socket a separate process can interrupt the live turn
+over. Both are supported together on a multi-identity fallback chain as of oneharness
+0.7.2, which stopped the control validator counting *candidates* where it meant
+concurrent turns — a chain runs exactly one live turn, so every five-identity chain
+here was refused a socket it was entitled to. What remains is a real constraint: the
+chain's identities must share one turn-control mechanism, and these chains mix
+claude-code with codex, which do not. The lever for that is the chain's composition.
+Turning a member's `stream` off to dodge a control refusal trades away the per-turn
+visibility a planner supervises with and fixes nothing; that workaround was written
+against this repository and rejected, and no member carries a `stream` key today. See
+[Streaming and turn control are independent
+concerns](docs/onejudge-integration.md#streaming-and-turn-control-are-independent-concerns).
+
 Those files decide the defaults for every run on this host. Pairing the two sides
 differently for **one** run is a property of that run's agent graph: pass
 `--node-set members.worker.agent.oneharness_config=REF` and the corresponding
