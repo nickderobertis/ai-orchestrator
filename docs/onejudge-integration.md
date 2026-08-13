@@ -762,9 +762,13 @@ still supplies the guarantee that *dispatched, no completed turn* is not *no
 dispatch*; streaming only ever adds to it, and a node with no activity reads
 exactly as it did before.
 
-`tests/e2e/test_agent_stream_e2e.py` proves all of this against the real
-`oneharness` CLI over this repository's own chain, with a rejected candidate
-falling through on `auth`.
+What still proves each piece: the filter's own path guards in
+`tests/test_stream_filter.py`, real-CLI stream **selection** over this repository's
+own chain in `tests/e2e/test_oneharness_control_e2e.py`, and a rejected candidate
+falling through on `auth` in `tests/e2e/test_quota_fallthrough_e2e.py`. The
+end-to-end journey that drove a *live* streamed turn through the filter went with the
+suite cut, so the reader is a covered surface and the stream flowing through it is
+not.
 
 #### Streaming and turn control are independent concerns
 
@@ -803,6 +807,12 @@ refusal that had nothing to do with it. Nothing here asks for `--control` today,
 no member carries a `stream` key — each takes oneagentgraph's default of `true`. If
 a control path is wanted later, the lever is the chain's composition (one
 turn-control mechanism across its identities), never the stream flag.
+
+`tests/e2e/test_oneharness_control_e2e.py` holds all four claims against the real
+CLI — the refusal naming mechanisms rather than counting candidates, a multi-identity
+chain carrying control and streaming at once, streaming alone opening no channel, and
+no graph member declaring `stream`. Every case plans with `--print-command`, so the
+proof costs no provider turn.
 
 ### Dispatch inactivity watchdog
 
