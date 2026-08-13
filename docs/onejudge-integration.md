@@ -127,9 +127,9 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.6.16 is
-the adopted release: it is the first published one on which a per-turn deadline is
-*optional*, spelled as an explicit `timeout = 0`, which is the floor for
+`config/oneharness.version` release and rejects a stale binary. Version 0.7.0 is
+the adopted release: it makes a per-turn deadline optional by default while retaining
+explicit `timeout = 0` as the no-deadline spelling, which is the floor for
 [choosing a deadline per side](#choosing-a-deadline-per-side) and so for an
 orchestrator turn that runs a whole round. It succeeds 0.6.5, which carried
 [oneharness PR #1213](https://github.com/nickderobertis/oneharness/pull/1213),
@@ -370,7 +370,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.6.16, a config's per-harness `model` **beats** the variable, while the `--model`
+0.7.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -422,9 +422,8 @@ takes `oneharness_config`, `model`, and `stream`, and nothing else. So unlike th
 identity and the tier, a per-member `timeout` can only be expressed by giving that
 member its own config file.
 
-Absent means 120 seconds. That is oneharness's built-in default, and an absent key
-still resolves to it in the adopted release — deliberately upstream, so callers
-relying on it as a backstop keep it. `timeout = 0` (or `--timeout 0`) is the opt-out.
+Since oneharness 0.7.0, absent means no deadline. `timeout = 0` (or `--timeout 0`)
+also means no deadline, preserving the explicit spelling used by the orchestrator.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The per-side values
 below are read from each config by the real CLI in
@@ -435,9 +434,9 @@ of that check, not a second declaration of it. -->
 | --- | --- | --- |
 | Orchestrator agent | `oneharness.orchestrator.toml` | **none** (`timeout = 0`) |
 | `check-in` pacemaker | `oneharness.check-in.toml` | 120s, stated |
-| Judge / simulated user | `oneharness.judge.toml` | 120s, the release default |
-| Worker agent | `oneharness.toml` | 120s, the release default |
-| LLM lint | `oneharness.llmlint.toml` | 600s — llmlint puts `--timeout 600` on its own argv, and a flag beats config |
+| Judge / simulated user | `oneharness.judge.toml` | **none**, the release default |
+| Worker agent | `oneharness.toml` | **none**, the release default |
+| LLM lint | `oneharness.llmlint.toml` | **none**, the release default |
 
 The orchestrator is the exception because of what one of its turns *is*: a single
 tool call to `just run-plan` that dispatches every node of a round, runs their
@@ -471,21 +470,23 @@ $ oneharness config --config oneharness.orchestrator.toml | jq .timeout
   { "value": 0,   "source": "oneharness.orchestrator.toml" }
 $ oneharness config --config oneharness.check-in.toml | jq .timeout
   { "value": 120, "source": "oneharness.check-in.toml" }
+$ oneharness config --config oneharness.toml | jq .timeout
+  { "value": null, "source": null }
 ```
 
-`timeout = 0` also gives up the backstop oneharness keeps against a mode that can
-block on an approval prompt headlessly, and it warns about exactly that. Nothing is
-traded away on this side, and it was checked rather than assumed: the orchestrator
-member runs in `mode: bypass`, and `oneharness list` reports `bypass` as `headless:
-"clean"` for both codex and claude-code — every identity that chain names — so no
-turn on it is ever asked to approve anything. A side that could prompt must keep a
-finite deadline, or pass `--permit-prompts` deliberately.
+oneharness 0.7.0 separately retains a 120-second approval-wait safety deadline for
+prompt-capable headless modes unless a timeout is explicitly chosen. The committed
+paths do not trip that policy: workers and the orchestrator run in `bypass`, and
+`oneharness list` reports `bypass` as `headless: "clean"` for both codex and
+claude-code — every family their chains name — so no turn on them is asked to approve
+anything. A side that could prompt must keep a finite deadline, or pass
+`--permit-prompts` deliberately.
 
 #### What a spawned provider inherits, and what that is not
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.6.16, confirmed against the binary:
+candidate it ended up running — through oneharness 0.7.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
