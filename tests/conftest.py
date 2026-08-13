@@ -341,3 +341,26 @@ def oneharness_bin(adopted_oneharness_version: str) -> str:
             f"got {actual!r} from {found} — run 'just bootstrap'"
         )
     return str(found)
+
+
+@pytest.fixture(scope="session")
+def oneagentgraph_bin() -> str:
+    """Resolve the worktree-local oneagentgraph and require the exact adopted release.
+
+    That the pin, `pyproject.toml`, the lockfile, and this binary all agree is
+    `tests/test_published_tools.py`'s subject; this only refuses to hand a journey the
+    wrong binary, the same way `oneharness_bin` does.
+    """
+    adopted = (REPO_ROOT / "config" / "oneagentgraph.version").read_text(encoding="utf-8").strip()
+    found = REPO_ROOT / ".venv" / "bin" / "oneagentgraph"
+    if not found.is_file():
+        pytest.fail(f"worktree-local oneagentgraph missing at {found} — run 'just bootstrap'")
+    version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
+    reported = version.stdout.strip().removeprefix("oneagentgraph ")
+    if version.returncode != 0 or reported != adopted:
+        actual = version.stdout.strip() or version.stderr.strip() or "<no version output>"
+        pytest.fail(
+            f"wrong oneagentgraph on PATH: expected {adopted!r}, got {actual!r} from "
+            f"{found} — run 'just bootstrap'"
+        )
+    return str(found)
