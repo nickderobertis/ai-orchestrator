@@ -3,17 +3,9 @@
 # member, which oneagentgraph runs on a `{every: 1800, resettable: true}`
 # schedule. See docs/onejudge-integration.md.
 #
-# Why this file exists at all, rather than the one line of difference living in
-# `oneharness.orchestrator.toml`: this member and the orchestrator's agent side
-# shared that file, and the orchestrator's agent side now needs `timeout = 0`. A
-# `0` written into a shared file would have given the pacemaker no deadline
-# either, and a wedged check-in that never dies is a worse failure than the one
-# that fix is for — a scheduled member holding a slot with nothing to show for it,
-# silently, where a killed turn at least ends and is retried on the next tick.
-# `oneagentgraph`'s member config has no `timeout` field (`oneharness_config`,
-# `model`, and `stream` are the whole of it), and `ONEHARNESS_TIMEOUT` is
-# process-wide for the whole graph run, so a separate config is the only per-member
-# seam that exists today. Everything below is
+# This file exists only so the pacemaker keeps a finite deadline once the
+# orchestrator's agent side stopped having one — see
+# docs/onejudge-integration.md#choosing-a-deadline-per-side. Everything below is
 # `oneharness.orchestrator.toml`'s routing verbatim; only the `timeout` differs,
 # and tests/e2e/test_oneharness_timeout_e2e.py holds that to exactly one field.
 

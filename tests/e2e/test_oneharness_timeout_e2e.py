@@ -111,11 +111,13 @@ def _without_sources(node: Any) -> Any:
     The annotations name the file each value came from, so two byte-identical
     routings read as different everywhere until they are dropped.
     """
-    if isinstance(node, dict):
-        return {key: _without_sources(value) for key, value in node.items() if key != "source"}
-    if isinstance(node, list):
-        return [_without_sources(value) for value in node]
-    return node
+    match node:
+        case dict():
+            return {key: _without_sources(value) for key, value in node.items() if key != "source"}
+        case list():
+            return [_without_sources(value) for value in node]
+        case _:
+            return node
 
 
 def _assert_descendant_stopped(tick_file: Path) -> None:

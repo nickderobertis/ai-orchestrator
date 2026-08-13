@@ -127,10 +127,13 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.6.5 is
-the adopted release; it is the first published one to carry
+`config/oneharness.version` release and rejects a stale binary. Version 0.6.16 is
+the adopted release: it is the first published one on which a per-turn deadline is
+*optional*, spelled as an explicit `timeout = 0`, which is the floor for
+[choosing a deadline per side](#choosing-a-deadline-per-side) and so for an
+orchestrator turn that runs a whole round. It succeeds 0.6.5, which carried
 [oneharness PR #1213](https://github.com/nickderobertis/oneharness/pull/1213),
-which lifted the rejection that made `--stream` and `run_mode = "fallback"`
+lifting the rejection that made `--stream` and `run_mode = "fallback"`
 mutually exclusive — the floor for [streaming the agent
 side](#streaming-the-agent-side) without giving up the chain. It contains auth
 variants shipped in 0.5.6 and succeeds 0.3.24, the first release to carry the
@@ -482,7 +485,7 @@ finite deadline, or pass `--permit-prompts` deliberately.
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through 0.6.16, confirmed against the binary:
+candidate it ended up running — through oneharness 0.6.16, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex

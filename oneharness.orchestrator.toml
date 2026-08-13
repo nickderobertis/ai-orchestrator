@@ -13,29 +13,11 @@
 # harnesses that cannot run at all — see the note in oneharness.toml.
 run_mode = "fallback"
 
-# timeout: the per-turn deadline in seconds; `0` means none. This side has none,
-# deliberately, and it is the only role here that does.
-#
-# An orchestrator turn calls `just run-plan` as a SINGLE tool call, and that one
-# call dispatches every node of a round, runs each one's gate, and publishes,
-# against a round budget of 28800 seconds. oneharness's default deadline is 120,
-# and an absent key still means 120 in the adopted release — deliberately
-# upstream, so every caller relying on that backstop keeps it. Inheriting it here
-# killed three consecutive runs at 120 seconds each, reported only as
-# `member-died rule=provider-failure cause=timeout`. That reads as a provider
-# problem and is not one: a timeout deliberately does NOT fall through a
-# `fallback` chain, so no identity ordering rescues it, and from outside a killed
-# process is indistinguishable from a harness that vanished. The pre-adoption
-# Python launcher passed this value explicitly (86400); the migration to the
-# published stack dropped it and nothing on the launch path sets
-# `ONEHARNESS_TIMEOUT` any more, so the file is the whole of it.
-#
-# `--timeout 0` also removes the backstop oneharness keeps against a mode that can
-# block on an approval prompt headlessly. Nothing is traded away here: this member
-# runs in `mode: bypass` (graphs/dag-scope.yaml), and `oneharness list` reports
-# `bypass` as `headless: "clean"` for both codex and claude-code — every identity
-# this chain names — so no turn on this side is ever asked to approve anything.
-# tests/e2e/test_oneharness_timeout_e2e.py holds that pair together.
+# timeout: the per-turn deadline in seconds; `0` means none, and an absent key
+# means 120. This side is the only role here with none, because one of its turns
+# is a single `just run-plan` tool call that runs a whole round. That, what it
+# cost to inherit 120 instead, and why a `0` here is safe under `mode: bypass` are
+# in docs/onejudge-integration.md#choosing-a-deadline-per-side.
 timeout = 0
 
 # Record this side's runs to disk too; onejudge's pinned `--config` skips the

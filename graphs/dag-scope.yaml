@@ -48,14 +48,10 @@ members:
   # surface restarts its clock and a run that is already reporting does not also
   # get a pacemaker surface.
   #
-  # It reads its OWN harness config, not the orchestrator's, and the difference is
-  # one field: the orchestrator's agent side has `timeout = 0` because one of its
-  # turns runs a whole round, and this member must keep a finite deadline because a
-  # wedged pacemaker that never dies fails silently. `oneharness_config` is the only
-  # per-member seam there is — a member takes `oneharness_config`, `model`, and
-  # `stream`, and `ONEHARNESS_TIMEOUT` is process-wide for the whole graph run — so
-  # re-sharing one file is what would take that deadline away. Never point this
-  # member at ../oneharness.orchestrator.toml.
+  # Never point this member at ../oneharness.orchestrator.toml: it reads its own
+  # config so that it keeps a finite deadline, and re-sharing one file is what
+  # would silently take that away. See
+  # docs/onejudge-integration.md#choosing-a-deadline-per-side.
   check-in:
     kind: oneharness
     oneharness_config: ../oneharness.check-in.toml
