@@ -5,6 +5,21 @@ surface. “Keep” means the subject is a decision made by this checkout. Upstr
 paths name the evidence inspected in the sibling source checkout under
 `~/projects`; they are not substitutes for this checkout's integration journeys.
 
+## Measured before and after
+
+| Measure | Base `fd7eb5a` | This change |
+| --- | ---: | ---: |
+| Source-level `def test_` / `async def test_` occurrences | 325 | 324 |
+| Items from `pytest --collect-only -p no:xdist` | 507 | 507 |
+| Lines across `tests/**/*.py` | 11,953 | 11,889 |
+| `just check` wall-clock | 159.29 seconds | 167.13 seconds |
+
+The task's stated 301-test count was stale: prior adoption commits `538d6ee`,
+`a53b473`, and `85d7824` had already changed the suite before base `fd7eb5a`.
+Definitions and collected items are both reported because parametrization makes
+them different measures; the collected total stays level because three removed
+items were replaced by three recipe-coverage items.
+
 ## File disposition
 
 | Test file | Disposition | Evidence |
