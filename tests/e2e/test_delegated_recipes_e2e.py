@@ -106,6 +106,11 @@ DELEGATIONS = (
     Delegation("validate-personas", (), "uv run oneagentgraph persona validate personas"),
     Delegation("register-repo", ("/checkout",), "uv run onevcs register /checkout"),
     Delegation("repos", (), "uv run onevcs repos"),
+    Delegation(
+        "repo-policy",
+        ("/checkout",),
+        "uv run onevcs rules check /checkout",
+    ),
     # The published flag is spelled differently; the recipe keeps the spelling the
     # planner doctrine names and the wrapper absorbs the difference.
     Delegation("repos", ("--audit-gate-coverage",), "uv run onevcs repos --audit-gates"),
@@ -205,6 +210,22 @@ def test_a_delegated_recipe_reaches_its_published_verb(
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [delegation.published]
+
+
+@pytest.mark.reads_recipes
+def test_lint_llm_validate_reaches_the_validator(tmp_path: Path) -> None:
+    """The validation-only recipe reaches llmlint without entering a judging path."""
+    checkout, trace = _checkout(tmp_path)
+    llmlint = checkout / "bin" / "llmlint"
+    llmlint.write_text(
+        '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'llmlint %s\\n\' "$*" >>"$TRACE_FILE"\n'
+    )
+    llmlint.chmod(0o755)
+
+    result = _run(checkout, trace, "lint-llm-validate", "docs/guide.md")
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == ["llmlint validate docs/guide.md"]
 
 
 @pytest.mark.reads_recipes
