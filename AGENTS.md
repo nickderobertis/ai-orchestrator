@@ -369,11 +369,16 @@ exists to prevent. The primary Claude identity is last everywhere:
   (`claude-sonnet-5` for all three of its Claude variants) rather than by staying
   off those subscriptions.
 - **Orchestrator side** (drives a tracked graph) — `oneharness.orchestrator.toml`,
-  forced by `scripts/oneharness-orchestrator.sh`, which `just orchestrate` pins as
-  the launched process's oneharness binary. Deliberately the reverse of the worker
-  order: both codex identities carry the role first, so this long-lived
-  supervisory process does not queue ahead of the workers while Codex can still
-  run it.
+  named by `graphs/dag-scope.yaml`'s `orchestrator` member as its agent side.
+  Deliberately the reverse of the worker order: both codex identities carry the
+  role first, so this long-lived supervisory process does not queue ahead of the
+  workers while Codex can still run it. It is also the **one** side here with no
+  per-turn deadline (`timeout = 0`), because one of its turns runs a whole round.
+- **Pacemaker side** (the `check-in` planner update) — `oneharness.check-in.toml`,
+  the orchestrator's routing verbatim with a finite deadline. It is a separate file
+  for exactly one reason, and re-merging the two is a silent regression: see
+  [Choosing a deadline per
+  side](docs/onejudge-integration.md#choosing-a-deadline-per-side).
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
   `scripts/llmlint-oneharness.sh`; the same supervisory order. It is **no longer
   codex-only**.
@@ -410,6 +415,21 @@ so a model exported into the environment is inert against
 `oneharness.llmlint.toml`'s own pins; overriding which *identity* that tier judges
 on is what changes its model. See [Choosing a model per
 side](docs/onejudge-integration.md#choosing-a-model-per-side).
+
+Nor does it choose the **deadline**, and that half of the seam has no graph-native
+field at all: a member takes `oneharness_config`, `model`, and `stream`, so the
+config file is the only place a per-member `timeout` can live. Absent means 120
+seconds — oneharness's default, which every side here takes except one, and which
+the pre-adoption launcher used to override for all of them. `timeout = 0` means no
+deadline, and `oneharness.orchestrator.toml` is the only file that carries it,
+because one orchestrator turn runs a whole round. That is why the `check-in`
+pacemaker no longer shares that file: a `0` reaching a scheduled member would leave
+a wedged turn alive forever, which fails silently, so it reads
+`oneharness.check-in.toml` instead. Never point two members at one config to save a
+copy, and never set `ONEHARNESS_TIMEOUT` to fix a deadline — it is process-wide for
+the whole graph run and beats every file, so it moves every member at once. See
+[Choosing a deadline per
+side](docs/onejudge-integration.md#choosing-a-deadline-per-side).
 
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
 directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
@@ -605,8 +625,8 @@ by](docs/onejudge-integration.md#the-record-a-fallback-chain-is-judged-by).
 It is deliberately outside `just gate`. The pre-push hook runs it
 only when the pushed diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
-`oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
-no harness quota.
+`oneharness.judge.toml`, `oneharness.orchestrator.toml`, or
+`oneharness.check-in.toml`; ordinary pushes consume no harness quota.
 
 A dispatched change is not done until `just gate` is green, and its agent clears
 its own llmlint findings rather than leaving closeout to integration: iterate on

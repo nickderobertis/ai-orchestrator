@@ -1,0 +1,103 @@
+# The `check-in` pacemaker's harness config: WHICH harness + model writes the
+# durable planner-update surface. Named by `graphs/dag-scope.yaml`'s `check-in`
+# member, which oneagentgraph runs on a `{every: 1800, resettable: true}`
+# schedule. See docs/onejudge-integration.md.
+#
+# This file exists only so the pacemaker keeps a finite deadline once the
+# orchestrator's agent side stopped having one — see
+# docs/onejudge-integration.md#choosing-a-deadline-per-side. Everything below is
+# `oneharness.orchestrator.toml`'s routing verbatim; only the `timeout` differs,
+# and tests/e2e/test_oneharness_timeout_e2e.py holds that to exactly one field.
+
+# run_mode: how the selected harnesses are run. "fallback" tries them in priority
+# order and stops at the first that can actually run, falling through only
+# harnesses that cannot run at all — see the note in oneharness.toml.
+run_mode = "fallback"
+
+# timeout: the per-turn deadline in seconds. Stated rather than inherited, at the
+# release default this member has always resolved to, because a deadline nobody
+# wrote down is precisely what killed the orchestrator side. A pacemaker must stay
+# bounded: its whole job is to fire, report, and exit, its period is 1800 seconds,
+# and a turn that outlives its own period is wedged rather than working. A missed
+# update costs one tick; an unbounded one costs every tick after it.
+timeout = 120
+
+# Record this side's runs to disk too; a pinned `--config` skips the user-level
+# config.toml, so history must be enabled here.
+history = true
+
+# `role` names the SIDE of the conversation, not the persona: like the orchestrator
+# it drives, the pacemaker is an agent-side session. Keeping `role = "agent"` here
+# is what lets telemetry and `just history` treat it as one.
+history_labels = { role = "agent" }
+
+# The pacemaker carries the orchestrator's order, not the worker's: both Codex
+# identities first — deliberately the reverse of oneharness.toml's worker order —
+# then the workers' alternate Claude subscriptions in the same relative order the
+# worker uses, with the primary Claude identity last. This member runs beside the
+# supervisory process it reports on, so it queues where that process queues rather
+# than ahead of the workers it is reporting about.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+harnesses = [
+    "codex",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
+
+# [harness.<id>]: per-harness overrides. Model names differ per provider, so
+# each harness names its own.
+# Sol is the flagship tier of the GPT-5.6 family; name it explicitly so the tier
+# cannot drift under us.
+[harness.codex]
+model = "gpt-5.6-sol"
+
+# The second Codex identity. See scripts/codex-alt-home.sh for the indirection.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+unset_env = ["OPENAI_API_KEY"]
+
+[harness.claude-code]
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless on other harnesses.
+env = { IS_SANDBOX = "1" }
+
+# The Claude fallbacks are the same three identities every other role names, with
+# the same portable indirections and credential masking.
+[harness.claude-code.variant.alternate]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# The last resort: Claude's default config directory, with every higher-precedence
+# credential selector and any inherited alternate directory masked off.
+[harness.claude-code.variant.primary]
+model = "claude-opus-5"
+unset_env = [
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# Inspect the effective, fully layered config (and where each value came from)
+# with `oneharness config`.

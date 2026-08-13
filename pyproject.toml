@@ -5,7 +5,7 @@ description = "Local orchestration harness: drive many onejudge processes to com
 requires-python = ">=3.11"
 dependencies = [
     "oneagentgraph-cli==0.2.6",
-    "oneharness-cli==0.6.15",
+    "oneharness-cli==0.6.16",
     "onejudge==0.3.8",
     "onepipeline-api-cli==0.3.3",
     "onepipeline-cli==0.1.9",

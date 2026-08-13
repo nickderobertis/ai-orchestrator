@@ -47,8 +47,13 @@ members:
   # The durable planner-update pacemaker. Resettable, so every planner-visible
   # surface restarts its clock and a run that is already reporting does not also
   # get a pacemaker surface.
+  #
+  # Never point this member at ../oneharness.orchestrator.toml: it reads its own
+  # config so that it keeps a finite deadline, and re-sharing one file is what
+  # would silently take that away. See
+  # docs/onejudge-integration.md#choosing-a-deadline-per-side.
   check-in:
     kind: oneharness
-    oneharness_config: ../oneharness.orchestrator.toml
+    oneharness_config: ../oneharness.check-in.toml
     persona: ../personas/check-in.yaml
     schedule: {every: 1800, resettable: true}

@@ -131,6 +131,46 @@ def test_the_model_precedence_claim_names_the_adopted_oneharness(
     )
 
 
+#: Sentences that assert something about the *adopted* oneharness release itself —
+#: which one this repository is on, and what was measured against it — as
+#: file → the sentence each must spell. Same contract and same reason as the
+#: precedence claims above, but these could not go under the published-CLI gate:
+#: that gate requires every `oneharness <version>` in a file to be the adopted one,
+#: and this document deliberately names historical floors (0.6.5 for streaming a
+#: fallback chain, 0.3.24 for the process-tree timeout) that must NOT move with the
+#: pin. Naming the exact sentence is what separates a claim about today's release
+#: from a claim about the release something first appeared in.
+ADOPTED_ONEHARNESS_CLAIMS = {
+    "docs/onejudge-integration.md": (
+        "Version {version} is the adopted release",
+        "through oneharness {version}, confirmed against the binary",
+    ),
+}
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(("relative_path", "templates"), ADOPTED_ONEHARNESS_CLAIMS.items())
+def test_claims_about_the_adopted_release_name_the_adopted_release(
+    relative_path: str, templates: tuple[str, ...], adopted_oneharness_version: str
+) -> None:
+    """A version literal beside a per-release claim outlives the bump that invalidated it.
+
+    `Version 0.6.5 is the adopted release` survived two bumps in this document
+    precisely because nothing read it. Deriving each sentence from
+    `config/oneharness.version` turns the next bump into a failure here, which is the
+    prompt to re-measure the claim rather than to retype the number.
+    """
+    # Whitespace-normalized: these sentences wrap across lines, and a reflow is not
+    # a change to what they assert.
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+    for template in templates:
+        stated = template.format(version=adopted_oneharness_version)
+        assert stated in written, (
+            f"{relative_path} must state {stated!r}; re-measure the claim against the "
+            "adopted release and update it in the same change"
+        )
+
+
 @pytest.mark.reads_docs
 def test_telemetry_upgrade_boundary_matches_authoritative_versions(
     adopted_onejudge_version: str, adopted_oneharness_version: str

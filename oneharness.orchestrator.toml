@@ -1,13 +1,24 @@
 # Orchestrator side of the onejudge conversation: WHICH harness + model drives a
-# tracked graph. Forced by `scripts/oneharness-orchestrator.sh`, which
-# `orchestrator.dispatch.launch_orchestrator` pins as the launched process's
-# oneharness binary; discovery from the repo root would otherwise hand this role
-# the worker's `oneharness.toml`. See docs/onejudge-integration.md.
+# tracked graph. Named by `graphs/dag-scope.yaml`'s `orchestrator` member as its
+# agent side, and forced by `scripts/oneharness-orchestrator.sh` on the manual and
+# smoke path; discovery from the repo root would otherwise hand this role the
+# worker's `oneharness.toml`. See docs/onejudge-integration.md.
+#
+# This file drives ONE member's agent side. The `check-in` pacemaker used to share
+# it and now reads `oneharness.check-in.toml` — the same routing with a finite
+# deadline — because of the `timeout` below. Do not point another member here.
 
 # run_mode: how the selected harnesses are run. "fallback" tries them in priority
 # order and stops at the first that can actually run, falling through only
 # harnesses that cannot run at all — see the note in oneharness.toml.
 run_mode = "fallback"
+
+# timeout: the per-turn deadline in seconds; `0` means none, and an absent key
+# means 120. This side is the only role here with none, because one of its turns
+# is a single `just run-plan` tool call that runs a whole round. That, what it
+# cost to inherit 120 instead, and why a `0` here is safe under `mode: bypass` are
+# in docs/onejudge-integration.md#choosing-a-deadline-per-side.
+timeout = 0
 
 # Record this side's runs to disk too; onejudge's pinned `--config` skips the
 # user-level config.toml, so history must be enabled here.
