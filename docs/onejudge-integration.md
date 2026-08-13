@@ -307,6 +307,9 @@ operator guidance that this repository cannot derive from sibling working trees.
 declares it: `onevcs` declares `codex:alternate` and
 `claude-code:alternate2`, while `oneagentgraph` and `onepipeline` declare only
 plain `codex` and `claude-code`. A mismatched ref is resolved at launch, but an
+<!-- llmlint: ignore[changed_behavior_has_e2e] Delayed rejection is upstream
+oneagentgraph/oneharness behavior; this repository's launch boundary only forwards
+the config ref, whose real accepted journey is covered above. -->
 undeclared or unusable variant is not refused until that dispatch starts, so
 inspect the target config before spending a long gate run.
 
@@ -325,6 +328,10 @@ That config is the authority for the tier and identity count; inspect it when ei
 changes rather than treating this explanatory sentence as a second contract.
 Model overrides are graph-native fields:
 
+<!-- llmlint: ignore[changed_behavior_has_e2e] Model-field interpretation and
+validation belong to the published oneagentgraph graph contract; this repository
+only documents the operator-facing spelling alongside its tested config-ref path. -->
+
 ```sh
 just orchestrate plan.json \
   --node-set members.worker.agent.oneharness_config=/tmp/worker-claude.toml \
@@ -334,6 +341,9 @@ just orchestrate plan.json \
 ```
 
 **A model override is accepted only with a side config naming identities of one
+<!-- llmlint: ignore[changed_behavior_has_e2e] The single-family validation and
+provider-rejection recovery are upstream oneagentgraph/oneharness behavior, not a
+behavior implemented at this configuration layer's launch boundary. -->
 harness family.** That is a hard graph-validation rule: one model
 applies to whichever candidate the chain selects, and oneharness's `fallback` mode
 falls through only a candidate that cannot run at all — never a task failure — so an
