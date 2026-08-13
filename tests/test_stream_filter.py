@@ -8,9 +8,11 @@ that would write wherever it was pointed is not one to hand an unvalidated path,
 and neither refusal is reachable through the wrapper, which is exactly why they are
 covered here rather than in a journey.
 
-What the filter does with a *stream* is proven where it is production behavior:
-through the wrapper, in `tests/test_oneharness_agent_wrapper.py`, and against the
-real oneharness CLI in `tests/e2e/test_agent_stream_e2e.py`.
+What the filter does with a *stream* has no journey left: the wrapper and real-CLI
+tests that drove one were cut with the rest of the suite.
+`tests/e2e/test_oneharness_control_e2e.py` proves the real CLI still selects a
+streamed turn over this repository's chain; nothing drives a live stream through
+this filter.
 """
 
 from __future__ import annotations
