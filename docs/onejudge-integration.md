@@ -127,16 +127,26 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.7.2 is
-the adopted release: it stops `--control` counting **candidates** where it meant
-concurrent turns. The turn-control validator refused any selection holding more than
-one entry and never received the `fallback_mode` flag that would have told it a chain
-runs exactly one live turn, so every five-identity chain on this host was refused a
-control socket it was entitled to — see [streaming and turn control are independent
-concerns](#streaming-and-turn-control-are-independent-concerns). It succeeds 0.7.1, which added a deterministic per-selection harness
+`config/oneharness.version` release and rejects a stale binary. Version 0.8.0 is
+the adopted release: it binds a controlled turn's mechanism to the **candidate
+serving it** rather than to the chain as a whole. The validator had required one
+mechanism across every candidate, which a fallback chain can never satisfy once it
+mixes harness families, so the five-identity chains on this host were refused a
+control socket that only one candidate would ever hold — see [streaming and turn
+control are independent
+concerns](#streaming-and-turn-control-are-independent-concerns). It is a major bump
+because it drops the `OneharnessError::ControlMixedMechanisms` and
+`OneharnessError::ControlServerChain` variants from a non-`#[non_exhaustive]` enum,
+which is a break for a Rust consumer matching it exhaustively and nothing at all for
+a consumer of the CLI, which is what this repository is. No CLI behaviour narrowed:
+the release only accepts runs that were previously refused. It succeeds 0.7.2, which
+stopped `--control` counting **candidates** where it meant concurrent turns — the
+validator refused any selection holding more than one entry and never received the
+`fallback_mode` flag that would have told it a chain runs exactly one live turn.
+Behind that, 0.7.1 added a deterministic per-selection harness
 answer (`--bin ID=PATH`, and `ONEHARNESS_BIN_<ID>` beside it), a test-support surface
 for a consumer that drives several selections in one run — this document's own
-passthrough and precedence probes below use it. Behind those, 0.7.0
+passthrough and precedence probes below use it. Behind that, 0.7.0
 made a per-turn deadline optional by default while retaining explicit `timeout = 0`
 as the no-deadline spelling — the floor for
 [choosing a deadline per side](#choosing-a-deadline-per-side) and so for an
@@ -379,7 +389,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.7.2, a config's per-harness `model` **beats** the variable, while the `--model`
+0.8.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -495,7 +505,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.7.2, confirmed against the binary:
+candidate it ended up running — through oneharness 0.8.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -776,24 +786,27 @@ not.
 out-of-band socket so a separate `oneharness interrupt --session <NAME>` can abort
 the in-flight turn without killing the dispatch. They share nothing: one is an
 output format and its timing, the other is a second channel into a live turn. As of
-oneharness 0.7.2 a multi-identity `run_mode = "fallback"` chain supports **both at
-once** — 0.6.5 lifted the stream/fallback rejection, and 0.7.2 lifted the control
-one, whose validator had been counting *candidates* where it meant concurrent turns
-and so refused every chain longer than one entry.
+oneharness 0.8.0 a multi-identity `run_mode = "fallback"` chain supports **both at
+once**, whatever families it mixes — 0.6.5 lifted the stream/fallback rejection,
+0.7.2 lifted the control one whose validator had been counting *candidates* where it
+meant concurrent turns, and 0.8.0 lifted the last of it by binding the mechanism to
+the candidate that serves the turn.
 
-What 0.7.2 leaves is a real constraint rather than a spurious one, and it still bites
-this host. Every role's chain here mixes claude-code and codex, and the two declare
-different turn-control mechanisms (`oneharness list`'s per-harness `control` field:
-`claude-control-request` and `codex-app-server`), so `--control` over the committed
-five-identity chains is refused for that reason — measured against the adopted
-release:
+That last one is what removed the constraint this host actually had. Every role's
+chain here mixes claude-code and codex, and the two declare different turn-control
+mechanisms (`oneharness list`'s per-harness `control` field:
+`claude-control-request` and `codex-app-server`). Requiring one mechanism for the
+whole chain refused those chains outright; binding late asks only that the candidate
+holding the turn declare one, so each is planned with its own — measured against the
+adopted release:
 
 ```
 $ oneharness run --config oneharness.toml --session probe --control --stream \
     --print-command --prompt hi
-  oneharness: --control on a fallback chain needs one turn-control mechanism for
-  the whole chain … claude-code (claude-control-request) and codex
-  (codex-app-server) do not share one
+  planned: claude-code:alternate, claude-code:alternate2, codex, codex:alternate,
+           claude-code:primary
+  claude-code:alternate → claude -p --input-format stream-json …   # claude-control-request
+  codex                 → codex app-server                          # codex-app-server
 $ oneharness run --config <same chain, claude-code identities only> --session probe \
     --control --stream --print-command --prompt hi
   planned: claude-code:alternate, claude-code:alternate2, claude-code:primary
@@ -805,13 +818,13 @@ worker member's `stream: false` in `graphs/node-scope.yaml` and routed the provi
 through a shell wrapper, trading away the per-turn visibility [above](#streaming-the-agent-side) to dodge a
 refusal that had nothing to do with it. Nothing here asks for `--control` today, and
 no member carries a `stream` key — each takes oneagentgraph's default of `true`. If
-a control path is wanted later, the lever is the chain's composition (one
-turn-control mechanism across its identities), never the stream flag.
+a control path is wanted later, the committed chains no longer stand in its way and
+the stream flag was never the lever.
 
 `tests/e2e/test_oneharness_control_e2e.py` holds all four claims against the real
-CLI — the refusal naming mechanisms rather than counting candidates, a multi-identity
-chain carrying control and streaming at once, streaming alone opening no channel, and
-no graph member declaring `stream`. Every case plans with `--print-command`, so the
+CLI — the committed mixed-family chain taking control with each candidate on its own
+mechanism, a multi-identity chain carrying control and streaming at once, streaming
+alone opening no channel, and no graph member declaring `stream`. Every case plans with `--print-command`, so the
 proof costs no provider turn.
 
 ### Dispatch inactivity watchdog
