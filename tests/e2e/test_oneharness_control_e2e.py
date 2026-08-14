@@ -32,6 +32,9 @@ GRAPHS = (REPO_ROOT / "graphs" / "dag-scope.yaml", REPO_ROOT / "graphs" / "node-
 CONTROL_ARGV = ("--input-format", "stream-json")
 #: What a streamed turn puts there: normalized events on stdout as they occur.
 STREAM_ARGV = ("--output-format", "stream-json")
+#: codex's mechanism is a whole different process, not a flag on a one-shot turn:
+#: `codex-app-server` speaks its protocol over stdio, so the argv IS the server.
+CODEX_CONTROL_ARGV = ("codex", "app-server")
 #: The prompt every plan below is rendered for. A controlled turn moves it off argv.
 PROMPT = "hi"
 
@@ -127,33 +130,46 @@ def _single_family_chain(config: Path, destination: Path) -> str:
     return family or ""
 
 
-def test_the_committed_chain_is_refused_control_for_mixing_mechanisms(
+def test_the_committed_chain_takes_control_on_each_candidates_own_mechanism(
     oneharness_bin: str,
 ) -> None:
-    """The constraint that remains is about mechanisms, not about how many candidates.
+    """A controlled turn's mechanism binds to the candidate serving it, not to the chain.
 
     Through oneharness 0.7.1 the validator counted the selected spec list and refused
-    anything longer than one entry, so every chain here was refused a socket it was
-    entitled to. The refusal below is the *correct* one and must stay legible: these
-    chains genuinely mix claude-code and codex, which declare different mechanisms.
+    anything longer than one entry; through 0.7.2 it required one mechanism across
+    every candidate, which the chains here can never satisfy because they genuinely mix
+    claude-code (`claude-control-request`) with codex (`codex-app-server`). 0.8.0 binds
+    late instead, so the committed chain is planned rather than refused and each
+    candidate carries the mechanism its own family declares. Asserting per family is
+    what would catch a regression to one mechanism imposed on all of them.
     """
     planned = _plan(
         oneharness_bin, WORKER_CONFIG, "--session", "e2e-control", "--control", "--stream"
     )
 
-    assert planned.refusal is not None, (
-        f"the committed chain mixes control mechanisms and must be refused; it planned "
-        f"{[candidate.identity for candidate in planned.candidates]}"
+    assert planned.refusal is None, (
+        "the committed chain mixes control mechanisms, which no longer refuses it: "
+        f"{planned.refusal}"
     )
-    assert "one turn-control mechanism" in planned.refusal, planned.refusal
-    for mechanism in ("claude-control-request", "codex-app-server"):
-        assert mechanism in planned.refusal, (
-            f"the refusal must name the mechanisms that disagree; got {planned.refusal!r}"
+    families = {candidate.identity.split(":")[0] for candidate in planned.candidates}
+    assert families == {"claude-code", "codex"}, (
+        f"this test measures a chain that MIXES mechanisms; it planned {sorted(families)}, "
+        "so re-derive it rather than weakening the claim"
+    )
+    for candidate in planned.candidates:
+        if candidate.identity.startswith("claude-code"):
+            assert candidate.flag_value(CONTROL_ARGV[0]) == CONTROL_ARGV[1], (
+                f"{candidate.identity} declares claude-control-request and must be planned "
+                f"with the stdin channel that mechanism uses: {candidate.argv}"
+            )
+        else:
+            assert candidate.argv == CODEX_CONTROL_ARGV, (
+                f"{candidate.identity} declares codex-app-server and must be planned as "
+                f"that server rather than as a one-shot turn: {candidate.argv}"
+            )
+        assert PROMPT not in candidate.argv, (
+            f"a controlled turn delivers its prompt over the channel, not on argv: {candidate.argv}"
         )
-    assert "exactly one harness" not in planned.refusal, (
-        "oneharness is counting candidates again rather than mechanisms; a fallback chain "
-        f"runs one live turn, so this refusal is spurious: {planned.refusal!r}"
-    )
 
 
 def test_a_multi_identity_chain_takes_control_and_streaming_together(

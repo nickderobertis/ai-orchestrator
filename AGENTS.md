@@ -55,8 +55,14 @@ repo-recover`, which verifies and publishes through the registered workflow; do
 not bypass an incomplete provenance marker with a normal commit. The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
 after a merge lands; it must be clean with the selected root checked out before
-dispatch. Preserved stacked branches record their PR base so recovery targets the
-stack rather than the root. A plan is the one tracked hierarchical graph: its
+dispatch. So `no-changes` from a node whose task was to change code means **look
+for the work elsewhere** before it means there was none: check that checkout's
+branches and its `main` against `origin/main`, and the repo's open PRs. A worker
+dispatched without a worktree does the work in whatever checkout it can see, and
+the empty session branch the node watched is then a truthful report about the
+wrong directory — settle it only once you have looked. Preserved stacked branches
+record their PR base so recovery targets the stack rather than the root. A plan is
+the one tracked hierarchical graph: its
 top-level DAG may mix direct agents, lifecycle agents, and explicit
 human actions; a lifecycle node may itself run **several agent and human steps in
 sequence on one branch**. Its reconciler accepts planner-issued graph edits while
@@ -392,11 +398,12 @@ quota that is left. Do not reorder these to restore the old isolation.
 never a reason to stop streaming.** `--stream` decides *when* a turn's transcript
 arrives; `--control` opens a socket a separate process can interrupt the live turn
 over. Both are supported together on a multi-identity fallback chain as of oneharness
-0.7.2, which stopped the control validator counting *candidates* where it meant
-concurrent turns — a chain runs exactly one live turn, so every five-identity chain
-here was refused a socket it was entitled to. What remains is a real constraint: the
-chain's identities must share one turn-control mechanism, and these chains mix
-claude-code with codex, which do not. The lever for that is the chain's composition.
+0.8.0, whatever harness families it mixes: 0.7.2 stopped the control validator
+counting *candidates* where it meant concurrent turns, and 0.8.0 stopped it demanding
+one turn-control mechanism across the whole chain, binding the mechanism to the
+candidate that serves the turn instead. That was the constraint that bit here — every
+chain mixes claude-code with codex, which declare different mechanisms — so the
+committed chains are now planned with each candidate on its own.
 Turning a member's `stream` off to dodge a control refusal trades away the per-turn
 visibility a planner supervises with and fixes nothing; that workaround was written
 against this repository and rejected, and no member carries a `stream` key today. See
