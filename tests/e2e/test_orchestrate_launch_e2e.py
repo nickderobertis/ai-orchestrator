@@ -1581,6 +1581,84 @@ def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
         assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
 
 
+def test_the_channel_filter_relays_a_ruling_whole_including_fields_it_does_not_know(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """An additive field in the planner's ruling reaches onejudge rather than dying here.
+
+    The complement of the refusals above, and the reason the relay is deliberate:
+    onejudge — not this filter — decides what a ruling may carry, so a onepipeline
+    release that adds a field to its answer must not kill the monitor on its first turn,
+    and must not have that field quietly withheld from the onejudge that would act on
+    it. Both halves are asserted: the additive field arrives, and the three fields this
+    filter does check arrive unaltered beside it.
+
+    The request translation is held here too, because the same run proves it: what the
+    stand-in receives on stdin is the observer frame `channel serve` reads, carrying the
+    monitor's own last words, non-blocking so a watcher's question never stops the
+    frontier.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    channel = tmp_path / "stand-in-channel"
+    captured = tmp_path / "surface.json"
+    # llmlint: ignore[e2e_not_mocked] The input under test is an answer carrying a field
+    # no published `onepipeline` release emits yet, so the published `channel serve`
+    # cannot produce it; the filter, its argv, the frame, and the pipes are all real.
+    channel.write_text(
+        f"#!/usr/bin/env bash\ncat > {captured}\n"
+        'echo \'{"completion": false, "message": "keep watching", "reason": "mid-run",'
+        ' "surface_id": 7, "planner": {"session": "planner-1"}}\'\n',
+        encoding="utf-8",
+    )
+    channel.chmod(0o755)
+    environment[ONEPIPELINE_BIN] = str(channel)
+
+    relayed = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+
+    assert relayed.returncode == 0, relayed.stderr
+    ruling = json.loads(relayed.stdout)
+    assert ruling["surface_id"] == 7, f"an additive field was dropped: {ruling}"
+    assert ruling["planner"] == {"session": "planner-1"}, f"an additive field was dropped: {ruling}"
+    assert ruling["completion"] is False, ruling
+    assert ruling["message"] == "keep watching", ruling
+    assert ruling["reason"] == "mid-run", ruling
+
+    surface = json.loads(captured.read_text(encoding="utf-8"))
+    assert surface == {
+        "kind": "monitor",
+        "message": "node api has drifted from its acceptance criteria",
+        "blocking": False,
+    }, surface
+
+
+def test_the_channel_filter_reports_a_channel_that_cannot_be_executed(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A channel that passes for runnable and then fails to exec is still a diagnostic.
+
+    The check that resolves `ONEPIPELINE_BIN` to an executable cannot answer whether the
+    kernel will accept it, so this is the failure that survives it: a file with the bit
+    set whose interpreter is not there. `subprocess.run` raises at the spawn itself, and
+    the whole point of catching it is that the monitor's judge side reports a cause and a
+    remedy — a traceback on this path would reach onejudge as a provider that produced no
+    output, and say nothing about a broken checkout.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    channel = tmp_path / "channel-with-no-interpreter"
+    channel.write_text("#!/nonexistent/interpreter\necho unreachable\n", encoding="utf-8")
+    channel.chmod(0o755)
+    environment[ONEPIPELINE_BIN] = str(channel)
+
+    refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+
+    assert refused.returncode != 0, refused.stdout
+    assert "could not run" in refused.stderr, refused.stderr
+    assert "channel serve serve-e2e" in refused.stderr, refused.stderr
+    assert "just bootstrap" in refused.stderr, refused.stderr
+    assert "Traceback" not in refused.stderr, refused.stderr
+    assert "completion" not in refused.stdout, refused.stdout
+
+
 def test_the_channel_filter_reports_a_refusal_from_the_channel_itself(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
