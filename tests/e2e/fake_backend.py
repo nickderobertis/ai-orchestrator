@@ -100,8 +100,17 @@ RUN_TASK = re.compile(r"onepipeline run `([^`]+)`")
 #: persona into the session's system prompt and passes the task separately.
 DRIVE_ROLE = "Drive `onepipeline round run <run-id>`"
 
+#: Where a turn's harness config arrives, which is what says which member — and
+#: which side of it — this invocation serves.
+CONFIG_FLAG = "--config"
+
 #: Where onejudge puts the composed system prompt on the harness command line.
 SYSTEM_FLAG = "--system"
+
+#: Where the directory a turn is to be served in arrives. It is what `oneharness`
+#: hands the provider as its working directory, so it — and not this process's own
+#: `cwd`, which is the member's scratch — is where a dispatched agent starts.
+CWD_FLAG = "--cwd"
 
 #: The fragment onejudge's `done_when` evaluation prompt ends with. The supervisor
 #: turn and the evaluation turn reach the same config, and they want different
@@ -113,24 +122,17 @@ EVALUATION_MARKER = '{"value": true or false'
 #: failure to report, and a test that hangs on it says nothing.
 MAX_TRANSITIONS = 12
 
-#: Optional test-owned transcript sink for assertions about the effective prompt.
+#: Optional test-owned transcript sink for assertions about how a turn was pinned:
+#: its config, its directory, its prompt, and its composed system prompt.
 PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
 
 
-def _config(argv: list[str]) -> str | None:
-    """The `--config` this invocation was pinned with, if any."""
+def _flag(argv: list[str], name: str) -> str | None:
+    """The value this invocation passed for `name`, if it passed one at all."""
     for index, argument in enumerate(argv):
-        if argument == "--config" and index + 1 < len(argv):
+        if argument == name and index + 1 < len(argv):
             return argv[index + 1]
     return None
-
-
-def _system(argv: list[str]) -> str:
-    """This invocation's composed system prompt, which carries the member's persona."""
-    for index, argument in enumerate(argv):
-        if argument == SYSTEM_FLAG and index + 1 < len(argv):
-            return argv[index + 1]
-    return ""
 
 
 def _prompt(argv: list[str]) -> tuple[list[str], str]:
@@ -218,12 +220,20 @@ def main(argv: list[str]) -> int:
         print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
         return 2
     argv, prompt = _prompt(argv)
-    config = _config(argv)
-    system = _system(argv)
+    config = _flag(argv, CONFIG_FLAG)
+    system = _flag(argv, SYSTEM_FLAG) or ""
     if prompt_log := os.environ.get(PROMPT_LOG_ENV):
         with Path(prompt_log).open("a", encoding="utf-8") as recorded:
             recorded.write(
-                json.dumps({"config": config, "prompt": prompt, "system": system}) + "\n"
+                json.dumps(
+                    {
+                        "config": config,
+                        "cwd": _flag(argv, CWD_FLAG),
+                        "prompt": prompt,
+                        "system": system,
+                    }
+                )
+                + "\n"
             )
     if config and Path(config).name == JUDGE_CONFIG_NAME:
         if EVALUATION_MARKER in prompt:

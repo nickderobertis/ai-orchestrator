@@ -1064,6 +1064,24 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   alternate-subscription Claude model before the configured Codex fallback. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
   and oneharness rejects multi-model runs combined with a named session.
+- **A dispatched lifecycle member starts in its own worktree**, and the launch's
+  journal is where that is read. `onevcs` appends `session-opened` naming the
+  worktree it cut for the node's branch; `oneagentgraph` appends `member-started`
+  naming the directory it started that node's `worker` member in; against the
+  adopted onepipeline 0.3.1 the two are the same path, and the `--cwd` oneharness
+  is handed for that member's agent turns is that path again. Measured, not
+  inferred: a lifecycle dispatch of this repository ran `pwd` as its first action
+  and got
+  `/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/runs/s-cec0174198d8/worktree`,
+  the worktree its own `session-opened` names. That is worth stating because it was
+  twice reported fixed and never measured — once in a wheel this dispatch path never
+  called, once in a crate release that could not be adopted — which is why a task
+  template here still told every worker where to commit. It is also why the check is
+  now `tests/e2e/test_worker_start_directory_e2e.py` rather than a report: it
+  launches one lifecycle node for real and compares those two journal records and
+  the served `--cwd`. What the measurement does *not* cover is a node dispatched
+  with no worktree at all — a direct agent node has none to be placed in, and its
+  `member-started` records `.`, the directory the run was launched from.
 - **A session name is scoped to a working directory.** oneharness records
   `session name -> harness conversation token` in a store shared by every run
   (`~/.local/state/oneharness/sessions`), and the harness files that conversation

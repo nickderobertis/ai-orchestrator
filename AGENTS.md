@@ -60,7 +60,16 @@ for the work elsewhere** before it means there was none: check that checkout's
 branches and its `main` against `origin/main`, and the repo's open PRs. A worker
 dispatched without a worktree does the work in whatever checkout it can see, and
 the empty session branch the node watched is then a truthful report about the
-wrong directory — settle it only once you have looked. Preserved stacked branches
+wrong directory — settle it only once you have looked. But a worker dispatched
+**with** one starts there, and that is now measured rather than assumed: a
+lifecycle dispatch against onepipeline 0.3.1 reported `pwd` as
+`/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/runs/s-cec0174198d8/worktree`
+as its first action, which is the directory `onevcs` recorded cutting for that
+node's branch. So a task need not tell a lifecycle worker where to commit; that
+paragraph is redundant and a planner may drop it from its templates without
+re-deriving this. `tests/e2e/test_worker_start_directory_e2e.py` is what keeps it
+answered — it launches a lifecycle node for real and reads the directory out of
+the run's own journal. Preserved stacked branches
 record their PR base so recovery targets the stack rather than the root. A plan is
 the one tracked hierarchical graph: its
 top-level DAG may mix direct agents, lifecycle agents, and explicit
