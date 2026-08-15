@@ -1365,6 +1365,7 @@ def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
     reads empty on an operator's launch, and inside a dispatch that exports one for
     its own run it silently reports on the enclosing run instead of this one.
     """
+    # llmlint: ignore[tests_mirror_real_usage] A 30-minute schedule outlasts a journey.
     _, task = _dag_scope_document()
 
     assert "{task}" in task, (
@@ -1545,11 +1546,12 @@ def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
     environment = _environment(tmp_path, oneharness_bin)
     channel = tmp_path / "stand-in-channel"
     answers = tmp_path / "answer.txt"
-    # llmlint: ignore[e2e_not_mocked] The subject of this journey is what the filter
-    # does with an answer the published `channel serve` never gives, so the published
-    # one cannot produce the input under test; every other boundary here is real.
-    # The stand-in reads the surface and replies with whatever the case put in the
-    # file, so the answer travels as bytes rather than through a shell quoting it.
+    # The subject of this journey is what the filter does with an answer the published
+    # `channel serve` never gives, so the published one cannot produce the input under
+    # test; every other boundary here is real. The stand-in reads the surface and
+    # replies with whatever the case put in the file, so the answer travels as bytes
+    # rather than through a shell quoting it.
+    # llmlint: ignore[e2e_not_mocked] The published channel cannot make this input.
     channel.write_text(
         f"#!/usr/bin/env bash\ncat > /dev/null\ncat {answers}\n",
         encoding="utf-8",
@@ -1601,9 +1603,10 @@ def test_the_channel_filter_relays_a_ruling_whole_including_fields_it_does_not_k
     environment = _environment(tmp_path, oneharness_bin)
     channel = tmp_path / "stand-in-channel"
     captured = tmp_path / "surface.json"
-    # llmlint: ignore[e2e_not_mocked] The input under test is an answer carrying a field
-    # no published `onepipeline` release emits yet, so the published `channel serve`
-    # cannot produce it; the filter, its argv, the frame, and the pipes are all real.
+    # The input under test is an answer carrying a field no published `onepipeline`
+    # release emits yet, so the published `channel serve` cannot produce it; the
+    # filter, its argv, the frame, and the pipes are all real.
+    # llmlint: ignore[e2e_not_mocked] No published onepipeline emits the field tested.
     channel.write_text(
         f"#!/usr/bin/env bash\ncat > {captured}\n"
         'echo \'{"completion": false, "message": "keep watching", "reason": "mid-run",'
