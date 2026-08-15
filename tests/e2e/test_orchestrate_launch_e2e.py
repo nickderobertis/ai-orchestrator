@@ -423,6 +423,9 @@ def test_every_dag_scope_member_starts_with_the_graph(
 
 def _recorded_turns(prompt_log: Path) -> list[PromptRecord]:
     """Every turn of a launched run, as the stand-in model was given it."""
+    # The fake backend writes this JSONL itself, one object per turn with every field
+    # PromptRecord names; it is test-owned on both ends, so the cast states that schema
+    # rather than skipping a validation of somebody else's.
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     return [
         cast(PromptRecord, json.loads(line))
