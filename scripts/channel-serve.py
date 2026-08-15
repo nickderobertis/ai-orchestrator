@@ -212,6 +212,12 @@ def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:
             "a ruling is a JSON object carrying a boolean `completion`; check the "
             "onepipeline release against this file's header",
         )
+    # llmlint: ignore[boundary_inputs_validated] `message` and `reason` are checked for
+    # type but never for presence, deliberately: `scripts/planner-verdict.sh` renders an
+    # approve as `{"completion": true, "reason": "approved"}` with no `message` at all,
+    # so requiring either field would refuse this repository's own published verdict and
+    # kill the monitor on the first approval. `completion` is the ruling; the prose
+    # beside it is optional to onejudge, and that is the boundary this validates.
     for optional in ("message", "reason"):
         if optional in parsed and not isinstance(parsed[optional], str):
             return fail(

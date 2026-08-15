@@ -1495,8 +1495,6 @@ def test_the_channel_filter_reports_a_channel_it_cannot_run(
 
     assert refused.returncode != 0, refused.stdout
     assert "could not run" in refused.stderr, refused.stderr
-    # The remedy, not just the cause: a spawn failure is fixable and the operator is
-    # told how.
     assert "just bootstrap" in refused.stderr, refused.stderr
     assert "completion" not in refused.stdout, refused.stdout
 
@@ -1569,7 +1567,6 @@ def test_the_channel_filter_reports_a_refusal_from_the_channel_itself(
 
     assert refused.returncode != 0, refused.stdout
     assert "the planner channel refused the surface" in refused.stderr, refused.stderr
-    # The published refusal, relayed rather than paraphrased.
     assert "no such run" in refused.stderr, refused.stderr
     assert "completion" not in refused.stdout, refused.stdout
 
