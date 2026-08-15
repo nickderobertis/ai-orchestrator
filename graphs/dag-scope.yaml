@@ -1,13 +1,16 @@
-# The dag-scope agent graph `onepipeline start` launches for every run.
+# The dag-scope agent graph `just orchestrate` attaches to every run it launches.
 #
-# `onepipeline` reads this path — `graphs/dag-scope.yaml`, relative to the
-# directory the run is launched from — and hands it to `oneagentgraph run`.
-# Nothing scaffolds it: the published crate ships the *default path*, not the
-# file, because the file names the operator's own onejudge and oneharness
+# `onepipeline start --dag-graph <REF>` names it and hands it to `oneagentgraph
+# run`. The shipped default is `off`: since onepipeline 0.4.0 no agent is required
+# to run a plan at all, because the engine drives its own DAG continuously to
+# settlement. A graph named here **observes** that run and authors channel
+# surfaces; it never drives the engine. `just orchestrate` opts in by naming this
+# file, which is why an operator on this host always gets the watcher and a bare
+# `onepipeline start` elsewhere does not.
+#
+# Nothing scaffolds this file: the published crate ships the *flag*, not the
+# document, because the document names the operator's own onejudge and oneharness
 # configs. This repository is that operator, and this is its file.
-# `ONEPIPELINE_DAG_GRAPH` names a different one, which is how the e2e suite proves
-# the refusal a checkout without this file gets. That suite's real launch uses
-# this file, with a stand-in for the paid model behind it.
 #
 # Every ref below is relative to THIS file's directory, not the working
 # directory: `oneagentgraph` resolves a relative ref against the directory the
@@ -18,34 +21,39 @@
 version: 3
 name: dag-scope
 members:
-  # The orchestrator that drives the run: it calls `just run-plan` /
-  # `just next-round` (i.e. `onepipeline round run|next`) one round at a time
-  # under the run's ownership lock.
-  orchestrator:
+  # The run's active monitor. It drives nothing — there are no engine verbs left to
+  # drive — and its whole value is judgment: it reads the detailed activity stream,
+  # compares what the run is actually doing against the goal, each node's task
+  # prose, and the graph, and says something about the difference. Its two ways of
+  # saying it are a non-blocking planner surface and an attributed live edit inside
+  # the engine's monitor allowlist. `../personas/orchestrator.yaml` states that bar
+  # on both sides; the file keeps its name because it is this repository's
+  # supervisory-role persona and the catalog in ../personas/README.md indexes it
+  # under that name.
+  monitor:
     kind: onejudge
     base_config: ../config/onejudge.base.yaml
     persona: ../personas/orchestrator.yaml
     agent:
       oneharness_config: ../oneharness.orchestrator.toml
-    # A simulated-user judge, not the planner channel — deliberately, and not
-    # what the published crate's own example graph shows.
+    # A simulated-user judge, not the planner channel — deliberately, and not what
+    # the published crate's own example graph shows.
     #
     # `judge: {command: ["onepipeline", "channel", "serve", RUN]}` is what that
-    # example names, and it still cannot run against onejudge 0.3.10: a onejudge
-    # command provider is handed `{"op": ..., "messages": [...]}` on stdin, and
+    # example names, and it still cannot run here. A onejudge command provider is
+    # handed `{"op": "supervisor", "task": …, "messages": [...]}` on stdin, and
     # `channel serve` parses its stdin as its own boundary frame
-    # (`{kind, message, blocking?, node?}`, unknown fields refused). The
-    # orchestrator dies on its first supervisor turn with `the orchestrator
-    # emitted a bad frame: unknown field 'op'`. Re-measured at this adoption by
-    # piping a supervisor frame into `onepipeline channel serve`, which refused it
-    # in exactly those words. Reported upstream; when it is fixed this member's
-    # judge becomes the channel again and the planner supervises the conversation
-    # directly.
+    # (`{kind, message, blocking?, node?}`, unknown fields refused). Re-measured at
+    # this adoption from both ends: a real `oneagentgraph run` whose judge side was a
+    # frame-dumping command recorded the `"op": "supervisor"` envelope under onejudge
+    # 0.3.10 *and* under the unadopted 0.4.0, and piping that envelope into
+    # `onepipeline channel serve` refused it with `the observer emitted a bad frame:
+    # unknown field 'op'`. Reported upstream; when it is fixed this member's judge
+    # becomes the channel and the planner supervises the conversation directly.
     #
-    # Until then the planner still steers the run over the channel — surfaces
-    # with `just channel-next`, live graph edits and `complete` with
-    # `just channel-reply` — because those are queued and reconciled
-    # independently of the judge side.
+    # Until then the planner still steers the run over the channel — surfaces with
+    # `just channel-next`, live graph edits and `complete` with `just channel-reply`
+    # — because those are queued and reconciled independently of the judge side.
     judge:
       oneharness_config: ../oneharness.judge.toml
     mode: bypass
@@ -64,21 +72,21 @@ members:
   # name it by interpolating the composed task back in, because AT THIS DOCUMENT'S
   # VERSION there is no placeholder to do it with: `oneagentgraph` expands `{task}`
   # only from schema 4, so under the `version: 3` above the token is passed through
-  # literally and writing one would send a model the six characters. Measured at
-  # this adoption, not read: the same member run at 3, 4, and 5 was handed
-  # `prefix {task} suffix` at 3 and `prefix <composed task> suffix` at 4 and 5.
-  # Raising the version to get the placeholder is a real option, not a closed door
-  # — oneagentgraph 0.2.13 reads schema versions 1 through 5 — but it is a separate
+  # literally and writing one would send a model the six characters. Re-measured at
+  # this adoption, not read: the same member run at 3 and at 4 was handed
+  # `prefix {task} suffix` at 3 and `prefix COMPOSED TASK suffix` at 4. Raising the
+  # version to get the placeholder is a real option, not a closed door —
+  # oneagentgraph 0.2.14 reads schema versions 1 through 6 — but it is a separate
   # change, and this member does not need it: `$ONEPIPELINE_RUN_ID` already names
   # the run, and a member that inherited the run-level task would be back to being
-  # told the orchestrator's job.
+  # told the monitor's job.
   #
-  # The rounds belong to the `orchestrator` member alone, and the prohibition in that
-  # task is load-bearing. This member is single-sided, so it begins its turn before
-  # the two-party orchestrator begins one; a round it claimed would run *inside* this
-  # turn, and the finite deadline in ../oneharness.check-in.toml would kill the
-  # dispatched worker along with it. Scoping the task away from the round verbs is
-  # what makes that impossible; raising the deadline only moves when it happens.
+  # Its task scopes it to reporting and away from editing, and that scoping is
+  # load-bearing rather than tidy. This member is single-sided and finitely
+  # deadlined, so it takes one short turn and exits; a live edit issued from it
+  # would be attributed to a watcher that is no longer watching by the time the
+  # reconciler answers. Judgment about the running graph belongs to the `monitor`
+  # member above, which stays for the run.
   #
   # Never point this member at ../oneharness.orchestrator.toml: it reads its own
   # config so that it keeps a finite deadline, and re-sharing one file is what
@@ -93,7 +101,6 @@ members:
       $ONEPIPELINE_RUN_ID environment variable, for the planner supervising it.
       Read it with the read-only views, send one
       `onepipeline surface "$ONEPIPELINE_RUN_ID" --kind check-in --message <text>`,
-      and exit. Never run `onepipeline round run` or `onepipeline round next`: the
-      orchestrator member owns the run's rounds, and a round started from this turn
-      dies with it.
+      and exit. Never send `onepipeline reply`: live graph edits belong to the
+      monitor member, which watches the whole run, and to the planner.
     schedule: {every: 1800, resettable: true}

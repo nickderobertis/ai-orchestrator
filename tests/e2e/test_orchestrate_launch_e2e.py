@@ -9,10 +9,11 @@ every plan declaring a schema version the published crate rejects.
 
 So this journey launches one of the shipped examples for real, through the real
 recipe, and then asks the run the questions a planner asks it. Everything between
-the recipe and the model is real: `onepipeline`'s driver, its engine verbs, its
-channel, the `graphs/` agent-graph configs, `oneagentgraph`, and the onejudge
-conversation those compose. `tests/e2e/fake_backend.py` stands in for the paid
-model alone, at the `oneharness` seam where a dispatch reaches it.
+the recipe and the model is real: `onepipeline`'s driver, its continuous
+reconciler, its channel and read profiles, the `graphs/` agent-graph configs,
+`oneagentgraph`, and the onejudge conversation those compose.
+`tests/e2e/fake_backend.py` stands in for the paid model alone, at the `oneharness`
+seam where a dispatch reaches it.
 """
 
 from __future__ import annotations
@@ -63,18 +64,24 @@ PACEMAKER_INTERVAL_SECONDS = 1
 #: for either; which SIDE a turn is depends on the config's basename, not on having one.
 MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 
-#: The pacemaker member, whose turn must stay out of the run's rounds.
+#: The pacemaker member, whose turn reports and never edits.
 PACEMAKER_MEMBER = "check-in"
 
-#: The round verbs that change a run's state. The pacemaker's own `task` forbids them
-#: by name, and a round claimed from its turn is what killed every dispatched worker
-#: before that task existed.
-ROUND_VERBS = ("onepipeline round run", "onepipeline round next")
+#: The run's active monitor, and the member whose judgment this graph exists for.
+MONITOR_MEMBER = "monitor"
 
-#: The orchestrator's role, as `personas/orchestrator.yaml` states it. Since
-#: onepipeline 0.2.0 the composed task says only what the run is, so this is the only
-#: thing that says it is to be driven.
-DRIVE_ROLE = "Drive `onepipeline round run <run-id>`"
+#: The one mutation the pacemaker's own `task` forbids by name. Live edits belong to
+#: the monitor, which stays for the run; this member takes one finitely deadlined turn
+#: and exits, so an edit it issued would be answered after it stopped watching.
+FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
+
+#: The monitor's role, as `personas/orchestrator.yaml` states it. The composed task says
+#: only what the run is, so this is the only thing that says what the member is for.
+WATCH_ROLE = "Actively monitor one executing tracked graph"
+
+#: The read-time profile the monitor is told to watch through: the unfiltered one, which
+#: carries each dispatched worker's turns as well as the pipeline's own node events.
+DETAILED_PROFILE = "onepipeline monitor <run-id> --filter monitor"
 
 #: A launching session the journey states rather than inherits. The suite runs
 #: inside a dispatch whose own harness session would otherwise decide these
@@ -305,21 +312,23 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     assert launch.returncode == 0, f"the launch did not settle:\n{launch.stdout}\n{launch.stderr}"
     settlement = json.loads(launch.stdout.strip().splitlines()[-1])
     assert settlement == {"run_id": SHIPPED_RUN, "settlement": "complete"}
-    # The attached launch streams what `just monitor` streams — on standard error,
-    # keeping the settlement record on standard output the only thing a caller has
-    # to parse. That it dispatched the node the plan declares is what the live
-    # stream answers for.
-    assert "node-dispatched" in launch.stderr
-    # Whether the node then *settled* is read from the replayed stream instead. A
-    # node settling and its round finishing are written in the same millisecond,
-    # and an attached launch returns on the second — so the first has no obligation
-    # to have reached standard error yet, and under suite load it has been observed
-    # missing from a launch that settled `complete`. `just monitor` replays a
-    # settled run's whole stream, so what it reports is the run rather than a race.
-    # Without this the assertion is the one it is here to make: that "complete" is
-    # not describing an empty run.
-    stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    # The attached launch streams the run's merged events on standard error, keeping
+    # the settlement record on standard output the only thing a caller has to parse.
+    # What is asserted of that live stream is only that it *is* one: an attached
+    # launch returns the moment the run settles, so any individual event has no
+    # obligation to have reached standard error first, and `node-dispatched` has been
+    # observed missing from a launch that settled `complete`.
+    assert "run-started" in launch.stderr, launch.stderr
+
+    # What the run actually did is read from the replayed stream, which is the whole
+    # settled ledger rather than a race. Read through `--filter monitor` so the
+    # dispatched worker's own graph is visible too: without this the assertion is the
+    # one it is here to make, that "complete" is not describing an empty run.
+    stream = _just(
+        "monitor", SHIPPED_RUN, "--filter", "monitor", environment=launched.environment, seconds=60
+    )
     assert stream.returncode == 0, stream.stderr
+    assert "node-dispatched" in stream.stdout, stream.stdout
     assert "node-settled done" in stream.stdout, stream.stdout
 
 
@@ -327,11 +336,20 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
 def test_node_overrides_and_named_or_omitted_persona_paths_work(
     routed_persona_run: RoutedPersonaRun,
 ) -> None:
-    """The launch forwards each side config and only the persona a node names."""
+    """The launch forwards each side config and only the persona a node names.
+
+    Read through `--filter monitor`: the per-node `oneagentgraph` launches this asks
+    about are dispatched-agent events, which the default planner profile drops.
+    """
     launch = routed_persona_run.launch
     assert launch.returncode == 0, launch.stdout + launch.stderr
     stream = _just(
-        "monitor", "routed-persona-e2e", environment=routed_persona_run.environment, seconds=60
+        "monitor",
+        "routed-persona-e2e",
+        "--filter",
+        "monitor",
+        environment=routed_persona_run.environment,
+        seconds=60,
     )
     assert stream.returncode == 0, stream.stderr
     node_runs = re.findall(r"agent:(node-scope-\S+) graph-started", stream.stdout)
@@ -407,8 +425,15 @@ def test_every_dag_scope_member_starts_with_the_graph(
 
     How many to expect is the graph's own declaration rather than a number written
     here, so a member added to `graphs/dag-scope.yaml` has to start too.
+
+    Read through `--filter monitor`, because a member starting is an `oneagentgraph`
+    event and the planner profile this recipe defaults to carries only the pipeline's
+    own. The default view is held to that by
+    `test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable`.
     """
-    stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    stream = _just(
+        "monitor", SHIPPED_RUN, "--filter", "monitor", environment=launched.environment, seconds=60
+    )
     assert stream.returncode == 0, stream.stderr
     started = [
         line
@@ -445,25 +470,23 @@ def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_the_pacemaker_is_given_its_own_task_and_never_the_orchestrators(
+def test_the_pacemaker_is_given_its_own_task_and_never_the_monitors(
     launched: Launched,
 ) -> None:
-    """The pacemaker comes due mid-run and is told to report, not to drive.
+    """The pacemaker comes due mid-run and is told to report, not to edit.
 
-    This is the configuration whose absence made every dispatch die. `onepipeline`
-    composes ONE task for this graph and `oneagentgraph` hands it to every member that
-    does not claim one. When the composed task opened `Drive run <RUN> to settlement`,
-    this member took it literally: single-sided, it began its turn before the two-party
-    orchestrator began one, won the ownership lock, and the dispatched worker then ran
-    *inside* its turn — where `oneharness.check-in.toml`'s finite deadline killed the
-    worker with no record, because the process killed was the one that would have
-    written it.
+    `onepipeline` composes ONE task for this graph and `oneagentgraph` hands it to every
+    member that does not claim one, so a member without its own `task` is told whatever
+    the run-level task says. This one has to be told something narrower than that: it is
+    single-sided and finitely deadlined by `oneharness.check-in.toml`, so it takes one
+    short turn and exits, and a live edit issued from it would be answered by the
+    reconciler after the member that issued it had stopped watching.
 
-    The member's own `task` is the fix, and this is what holds it: the pacemaker's
-    effective prompt is the scoped one this repository wrote, the run-level task is not
-    in it, and neither is the orchestrator's role. Read from the prompts the run really
-    issued rather than from the graph document, because a `task` present in the file and
-    not reaching the model is exactly the failure being excluded.
+    The member's own `task` is what states that, and this is what holds it: the
+    pacemaker's effective prompt is the scoped one this repository wrote, the run-level
+    task is not in it, and neither is the monitor's role. Read from the prompts the run
+    really issued rather than from the graph document, because a `task` present in the
+    file and not reaching the model is exactly the failure being excluded.
     """
     turns = _recorded_turns(launched.prompt_log)
     pacemaker = _turns_of(turns, PACEMAKER_MEMBER)
@@ -482,53 +505,63 @@ def test_the_pacemaker_is_given_its_own_task_and_never_the_orchestrators(
         assert RUN_TASK.search(turn["prompt"]) is None, (
             f"the run-level composed task reached the pacemaker:\n{turn['prompt']}"
         )
-        assert DRIVE_ROLE not in turn["prompt"] + turn["system"], (
-            f"the orchestrator's role reached the pacemaker:\n{turn['prompt']}"
+        assert WATCH_ROLE not in turn["prompt"] + turn["system"], (
+            f"the monitor's role reached the pacemaker:\n{turn['prompt']}"
         )
-        # The round verbs reach this member only inside the sentence forbidding them,
-        # so it is told what it must not do by the same name it would otherwise have
+        # The edit verb reaches this member only inside the sentence forbidding it, so
+        # it is told what it must not do by the same name it would otherwise have
         # reached for. Compared on collapsed whitespace, because the task is prose in a
         # YAML block and wraps wherever it wraps.
-        forbidden = "Never run " + " or ".join(f"`{verb}`" for verb in ROUND_VERBS)
+        forbidden = f"Never send `{FORBIDDEN_OF_THE_PACEMAKER}`"
         assert forbidden in " ".join(turn["prompt"].split()), (
-            f"the pacemaker's task no longer forbids the round verbs by name:\n{turn['prompt']}"
+            f"the pacemaker's task no longer forbids the edit verb by name:\n{turn['prompt']}"
         )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_the_orchestrator_still_drives_the_run_from_its_persona(launched: Launched) -> None:
-    """Only the orchestrator is told to drive, and the telling comes from its persona.
+def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> None:
+    """The dag-scope agent is told to watch, from its persona, and nothing is told to drive.
 
-    onepipeline 0.2.0 stopped composing the drive instruction into the run's task —
-    the task now says what the run is, not who drives it — and the `orchestrator`
-    member carries no `task` of its own. So whether anything still drives is a question
-    about `personas/orchestrator.yaml` reaching that member's session, and it is
-    answered here from the launch rather than from the persona file: the composed task
-    it was given carries no drive instruction, its system prompt does, and the run
-    reached a complete settlement, which nothing but the round verbs can produce.
+    Since onepipeline 0.4.0 the engine drives its own DAG continuously and the observer
+    graph is optional (`--dag-graph`, shipped default `off`). So the question this
+    answers is no longer "does anything still drive" but "did the watcher arrive, and did
+    it arrive as a watcher": the composed task it was given says only what the run is,
+    its system prompt carries the monitoring role from `personas/orchestrator.yaml`, that
+    role names the detailed profile it is to read, and the run settled complete without
+    any member being told to drive it.
     """
     turns = _recorded_turns(launched.prompt_log)
-    # The orchestrator's agent side may take several turns of one session; every one of
-    # them is that member and no other turn of the run may be.
-    driving = [turn for turn in turns if DRIVE_ROLE in turn["system"]]
-    assert driving, "nothing in this run was told to drive it, yet it settled"
-    for turn in driving:
+    # The monitor's agent side may take several turns of one session; every one of them
+    # is that member and no other turn of the run may be.
+    watching = [turn for turn in turns if WATCH_ROLE in turn["system"]]
+    assert watching, "nothing in this run was told to watch it"
+    # And the member carrying it is the one the graph declares, read the same way the
+    # pacemaker's turns are: a renamed member with the persona still attached would
+    # otherwise satisfy every assertion below while the docs named something absent.
+    assert _turns_of(turns, MONITOR_MEMBER), (
+        f"no turn of this run belonged to a `{MONITOR_MEMBER}` member of "
+        f"{DAG_SCOPE_GRAPH}, so the watching role arrived under another name"
+    )
+    for turn in watching:
         # An agent side, by the one property that distinguishes the two: the judge side
-        # is the turn pinned to the judge config. This used to read `config is None`,
-        # which held only while onejudge left the agent side's config implicit; since
-        # onepipeline 0.3.1 an agent side carries `.../oneharness.toml` and that spelling
-        # would have failed a run doing exactly the right thing. What it excludes is
-        # unchanged — a judge side being told to drive the run it is supervising.
+        # is the turn pinned to the judge config. Since onepipeline 0.3.1 an agent side
+        # carries `.../oneharness.toml`, so the config's basename is what separates them.
         assert Path(turn["config"] or "").name != JUDGE_CONFIG_NAME, (
-            "only an agent side may be told to drive; this turn was pinned to the judge "
-            f"config at {turn['config']}"
+            "only an agent side carries the watching role; this turn was pinned to the "
+            f"judge config at {turn['config']}"
         )
         named = RUN_TASK.search(turn["prompt"])
-        assert named is not None, f"a driving turn named no run:\n{turn['prompt']}"
+        assert named is not None, f"a watching turn named no run:\n{turn['prompt']}"
         assert named.group(1) == SHIPPED_RUN
-        assert DRIVE_ROLE not in turn["prompt"], (
-            "the composed run task carries a drive instruction again, so every member "
-            f"taking one is told to drive:\n{turn['prompt']}"
+        assert WATCH_ROLE not in turn["prompt"], (
+            "the composed run task carries the monitoring role again, so every member "
+            f"taking one is told to monitor:\n{turn['prompt']}"
+        )
+        # The whole point of the role: it reads the unfiltered stream, not the planner's
+        # summary. A monitor told to watch through the default profile would see none of
+        # the worker activity it exists to judge.
+        assert DETAILED_PROFILE in " ".join(turn["system"].split()), (
+            f"the monitor is no longer told to read the detailed activity stream:\n{turn['system']}"
         )
 
 
@@ -625,8 +658,13 @@ def test_no_turn_of_this_run_reached_a_paid_provider(launched: Launched) -> None
     run means the mock did not cover every candidate of a fallback chain and a real
     agent was working — which voids every other assertion here, because they would
     then be about a different run than the one this journey claims to prove.
+
+    Read with `--all`, through no profile at all. A tool call is a dispatched agent's
+    `turn-activity`, which the default planner profile does not carry — so reading this
+    the planner's way would answer "no tool calls" for a run full of them, and this
+    assertion would hold for the wrong reason exactly when it matters.
     """
-    stream = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    stream = _just("monitor", SHIPPED_RUN, "--all", environment=launched.environment, seconds=60)
     assert stream.returncode == 0, stream.stderr
     acted = [line for line in stream.stdout.splitlines() if line.endswith("turn-activity")]
     assert not acted, f"{len(acted)} real tool call(s) ran; the first was {acted[0]}"
@@ -635,17 +673,29 @@ def test_no_turn_of_this_run_reached_a_paid_provider(launched: Launched) -> None
 def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_bin: str) -> None:
     """The launch path names the agent-graph config it could not read.
 
-    The failure this whole journey exists for: `onepipeline start` launches a
-    dag-scope agent graph by path, ships only the *path*, and a checkout without
-    that file refuses every plan it has. A refusal that names the file is the
+    The failure this whole journey exists for: `just orchestrate` attaches a dag-scope
+    agent graph by path, the published crate ships only the *flag*, and a checkout
+    without that file refuses every plan it has. A refusal that names the file is the
     difference between a maintainer writing it and a maintainer guessing.
+
+    Named through the recipe's own `--dag-graph` pass-through rather than an
+    environment variable, because that pass-through is now the only way to move the
+    observer: onepipeline 0.4.0 retired `ONEPIPELINE_DAG_GRAPH` when the flag gained a
+    shipped default of `off`.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     environment = _environment(tmp_path, oneharness_bin)
-    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
 
-    refused = _just("orchestrate", SHIPPED_PLAN, "--detach", environment=environment, seconds=120)
+    refused = _just(
+        "orchestrate",
+        SHIPPED_PLAN,
+        "--detach",
+        "--dag-graph",
+        str(tmp_path / "absent" / "dag-scope.yaml"),
+        environment=environment,
+        seconds=120,
+    )
     assert refused.returncode != 0
     reported = refused.stderr + refused.stdout
     assert "dag-scope.yaml" in reported, reported
@@ -693,12 +743,19 @@ def _refused_plan(
 ) -> subprocess.CompletedProcess[str]:
     """Offer one plan to the real launcher and hand back how it answered."""
     environment = _environment(tmp_path, oneharness_bin)
-    # The plan is loaded and validated before the agent graph is, so a refusal here is
-    # the plan's own and no paid work is reachable even if one were somehow accepted.
-    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
     written = tmp_path / "candidate.plan.json"
     written.write_text(json.dumps(plan), encoding="utf-8")
-    return _just("orchestrate", str(written), "--detach", environment=environment, seconds=120)
+    # The plan is loaded and validated before the agent graph is, so a refusal here is
+    # the plan's own and no paid work is reachable even if one were somehow accepted.
+    return _just(
+        "orchestrate",
+        str(written),
+        "--detach",
+        "--dag-graph",
+        str(tmp_path / "absent" / "dag-scope.yaml"),
+        environment=environment,
+        seconds=120,
+    )
 
 
 def test_a_plan_carrying_a_node_level_done_when_is_refused(
@@ -768,11 +825,236 @@ def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launch
     assert reply.returncode != 0, reply.stdout
     reported = reply.stderr + reply.stdout
     assert "heartbeat_interval" in reported, reported
-    for accepted in ("version", "completion", "message", "reason", "commands"):
+    for accepted in ("version", "author", "completion", "message", "reason", "commands"):
         assert accepted in reported, (
             f"the refusal must name {accepted!r} as an accepted field so a planner can "
             f"see what the envelope does take:\n{reported}"
         )
+
+
+#: A stream line's label for an event the pipeline itself wrote, and for one that came
+#: out of a dispatched `oneagentgraph` launch. Which of the two a read carries is the
+#: whole difference between the profiles below.
+PIPELINE_LINE = "graph:"
+AGENT_LINE = "agent:"
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
+    launched: Launched,
+) -> None:
+    """`just monitor` reads the planner profile, and `--filter`/`--all` reach past it.
+
+    The planner's default view narrows to what the pipeline itself decided — node
+    dispatch and settlement, surfaces, edits — and deliberately drops each dispatched
+    worker's turns. That default is `onepipeline`'s own, which is why the recipe names
+    no filter; what the recipe owes is that it does not get in the way of the two
+    published ways to widen it, and that is what fails here if it starts pinning one.
+
+    Read through `just monitor` rather than `just channel-next`, because rendering a
+    surface is not consuming it: a journey that consumed this run's queued pacemaker
+    update would take it from the assertions that follow it in this group.
+    """
+    default = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    assert default.returncode == 0, default.stderr
+    default_lines = default.stdout.splitlines()
+    assert any(PIPELINE_LINE in line for line in default_lines), default.stdout
+    assert not [line for line in default_lines if AGENT_LINE in line], (
+        "the default view carried dispatched-agent events, so it is no longer the "
+        f"planner profile:\n{default.stdout}"
+    )
+
+    detailed = _just(
+        "monitor", SHIPPED_RUN, "--filter", "monitor", environment=launched.environment, seconds=60
+    )
+    assert detailed.returncode == 0, detailed.stderr
+    assert [line for line in detailed.stdout.splitlines() if AGENT_LINE in line], (
+        f"`--filter monitor` did not widen the view past the planner profile:\n{detailed.stdout}"
+    )
+
+    unfiltered = _just(
+        "monitor", SHIPPED_RUN, "--all", environment=launched.environment, seconds=60
+    )
+    assert unfiltered.returncode == 0, unfiltered.stderr
+    assert [line for line in unfiltered.stdout.splitlines() if AGENT_LINE in line], (
+        f"`--all` did not read past the planner profile:\n{unfiltered.stdout}"
+    )
+
+    # The recovery path a planner meets by asking for both at once. The two are
+    # mutually exclusive at the CLI, and the recipe passing them through untouched is
+    # what lets the CLI say so instead of the wrapper guessing which one was meant.
+    both = _just(
+        "monitor",
+        SHIPPED_RUN,
+        "--filter",
+        "monitor",
+        "--all",
+        environment=launched.environment,
+        seconds=60,
+    )
+    assert both.returncode != 0, both.stdout
+    assert "--filter" in both.stderr and "--all" in both.stderr, both.stderr
+
+
+#: Every op the monitor may issue, and what an already-settled graph answers each with.
+#: The refusal is the graph's, not an authority verdict, which is the distinction under
+#: test: these five are refused for what the node is, and the four below for who asked.
+MONITOR_OPS_ON_A_SETTLED_GRAPH = (
+    ({"op": "context", "id": "research", "note": "n"}, "nothing will read the note"),
+    ({"op": "cancel", "id": "research"}, "not pending or running"),
+    (
+        {
+            "op": "retry",
+            "id": "research",
+            "node": {"id": "redo", "task": "x", "expects_no_diff": True},
+        },
+        "not running, failed, or cancelled",
+    ),
+    ({"op": "requeue", "id": "research"}, "not parked"),
+)
+
+#: Every op the monitor may not issue, whatever the graph looks like.
+OPS_THE_MONITOR_MAY_NOT_ISSUE = (
+    {"op": "drop", "id": "research", "dependents": "drop"},
+    {"op": "reparent", "id": "research", "deps": []},
+    {"op": "attest", "ref": "research"},
+    {"op": "complete", "reason": "verified"},
+)
+
+
+def _monitor_reply(
+    launched: Launched, envelope: dict[str, object]
+) -> subprocess.CompletedProcess[str]:
+    """Send one envelope through the recipe a monitor's edit actually goes out on."""
+    return subprocess.run(
+        ["just", "channel-reply", SHIPPED_RUN],
+        cwd=REPO_ROOT,
+        env=launched.environment,
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+@pytest.mark.parametrize("command", OPS_THE_MONITOR_MAY_NOT_ISSUE, ids=lambda row: str(row["op"]))
+def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
+    launched: Launched, command: dict[str, object]
+) -> None:
+    """`personas/orchestrator.yaml` states the allowlist; the engine is what enforces it.
+
+    A persona is a prompt, so a bound stated only there is a bound a model may cross.
+    These four are the ones whose crossing costs the planner a decision it never made —
+    removing work, rewiring dependencies, attesting a human action nobody took, and
+    declaring the run finished — so what is held here is that the published engine
+    refuses them for *who asked*, ahead of any question about the graph's state. Sent
+    through the real recipe, against the run this journey already launched.
+    """
+    refused = _monitor_reply(launched, {"version": 1, "author": "monitor", "commands": [command]})
+
+    assert refused.returncode != 0, refused.stdout
+    reported = refused.stderr + refused.stdout
+    assert f"'{command['op']}' is not an op the monitor may issue" in reported, reported
+    # Every refusal names the available action, which is the whole design: an op the
+    # monitor may not apply is one it is meant to escalate.
+    assert "Surface it to the planner" in reported, reported
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+@pytest.mark.parametrize(
+    ("command", "expected"), MONITOR_OPS_ON_A_SETTLED_GRAPH, ids=lambda row: str(row)[:24]
+)
+def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_author(
+    launched: Launched, command: dict[str, object], expected: str
+) -> None:
+    """The five allowed ops reach the graph, and are answered by what the graph is.
+
+    The other half of the allowlist, and the half a refusal-only test would leave
+    unproven: an in-allowlist op must not be refused for *who asked*. This run has
+    settled, so each of these four is refused for what the node now is — and the
+    refusal wording is the distinction, because an authority refusal and a state
+    refusal read alike to a monitor that only checks the exit status. `add` is the
+    fifth and is exercised separately below, since it is the one that still applies.
+    """
+    refused = _monitor_reply(launched, {"version": 1, "author": "monitor", "commands": [command]})
+
+    assert refused.returncode != 0, refused.stdout
+    reported = refused.stderr + refused.stdout
+    assert "is not an op the monitor may issue" not in reported, (
+        f"an in-allowlist op was refused for who asked rather than for the graph:\n{reported}"
+    )
+    assert expected in reported, reported
+
+
+def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """An in-allowlist edit lands on the graph, carrying the author that makes it visible.
+
+    This is the behaviour the persona's "apply the fix yourself" instruction rests on,
+    and the reason `"author":"monitor"` is required rather than decorative: the engine
+    records the author on the committed edit and queues a non-blocking planner surface
+    naming it, so a fix the monitor applied is reported as the monitor's without the
+    monitor also having to report it. A run of its own, because this one mutates the
+    graph it is sent to.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    environment = _environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "monitor-edit.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": "monitor-edit-e2e",
+                "tasks": [_node(id="only")],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launch = _just("orchestrate", str(plan), environment=environment)
+    try:
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+        applied = subprocess.run(
+            ["just", "channel-reply", "monitor-edit-e2e"],
+            cwd=REPO_ROOT,
+            env=environment,
+            input=json.dumps(
+                {
+                    "version": 1,
+                    "author": "monitor",
+                    "commands": [
+                        {
+                            "op": "add",
+                            "node": {
+                                "id": "monitor-added",
+                                "task": "Report.",
+                                "expects_no_diff": True,
+                            },
+                        }
+                    ],
+                }
+            ),
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert applied.returncode == 0, applied.stderr + applied.stdout
+
+        # The attribution is only worth what a planner can read, so it is read back the
+        # way a planner reads one: from the run's own stream, through the recipe.
+        stream = _just("monitor", "monitor-edit-e2e", "--all", environment=environment, seconds=60)
+        assert stream.returncode == 0, stream.stderr
+        assert "edit-committed" in stream.stdout, stream.stdout
+        assert "monitor-edit" in stream.stdout, (
+            "the engine queued no planner surface naming the monitor's edit, so a fix "
+            f"the monitor applied is invisible to the planner:\n{stream.stdout}"
+        )
+    finally:
+        _just("stop", "monitor-edit-e2e", environment=environment, seconds=60)
 
 
 def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
@@ -875,12 +1157,20 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
     plans = _plans_in_the_repository()
     assert plans, "no plan documents were found to check"
     environment = _environment(tmp_path, oneharness_bin)
-    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
+    absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
     plan = tmp_path / "candidate.plan.json"
 
     for origin, document in plans:
         plan.write_text(document, encoding="utf-8")
-        refused = _just("orchestrate", str(plan), "--detach", environment=environment, seconds=120)
+        refused = _just(
+            "orchestrate",
+            str(plan),
+            "--detach",
+            "--dag-graph",
+            absent_graph,
+            environment=environment,
+            seconds=120,
+        )
         reported = refused.stderr + refused.stdout
         reached_downstream_boundary = "dag-scope.yaml" in reported or "session holders" in reported
         assert reached_downstream_boundary, f"{origin} was not accepted as a plan:\n{reported}"
@@ -929,7 +1219,7 @@ def merge_policy_launch(
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("merge-policy")
     environment = _environment(tmp_path, oneharness_bin)
-    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
+    absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
     plan = json.loads((REPO_ROOT / LIFECYCLE_PLAN).read_text(encoding="utf-8"))
 
     def launch(policy: str) -> str:
@@ -937,7 +1227,13 @@ def merge_policy_launch(
         written = tmp_path / "candidate.plan.json"
         written.write_text(json.dumps(plan), encoding="utf-8")
         refused = _just(
-            "orchestrate", str(written), "--detach", environment=environment, seconds=120
+            "orchestrate",
+            str(written),
+            "--detach",
+            "--dag-graph",
+            absent_graph,
+            environment=environment,
+            seconds=120,
         )
         assert refused.returncode != 0, f"merge_policy {policy!r} reached a real launch"
         return refused.stderr + refused.stdout

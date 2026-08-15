@@ -125,12 +125,24 @@ upgrade:
 # published verb genuinely does something else than the recipe used to, the recipe
 # that lost it says so in its own comment rather than pretending inside the shell.
 
-# Launch the dedicated orchestrator with a host-visible live planner channel, then
-# stay attached: it streams what `just monitor` streams and returns when the run
-# settles — the graph completed, a blocking planner surface is waiting, or nothing
-# is driving the run (exit 3). `--detach` returns at the launch record instead,
-# for a long unattended run. Either way the run leads its own session, so Ctrl-C
-# detaches rather than stopping it.
+# Launch a run on this host's monitor graph and stay attached: the engine drives
+# the DAG continuously to settlement while the attached launch streams the run's
+# merged events, and returns when the run settles — the graph completed, a
+# blocking planner surface is waiting, or nothing is driving the run (exit 3).
+# `--detach` returns at the launch record instead, for a long unattended run.
+# Either way the run leads its own session, so Ctrl-C detaches rather than
+# stopping it.
+#
+# That attached stream is the whole merged view, not the `planner` profile `just
+# monitor` defaults to: the read-time profiles are options of the reading verbs, and
+# a launch takes none. Reattach with `just monitor <run-id>` for the narrower one.
+#
+# The `--dag-graph` this adds is the whole difference between this recipe and a
+# bare `onepipeline start`. The published default is `off` — no agent is required
+# to run a plan — and `graphs/dag-scope.yaml` is this host's opt-in: the active
+# monitor that watches the run and the pacemaker that reports it. An operator who
+# names their own `--dag-graph` (including `off`) keeps it, because the flag
+# refuses to be given twice and the caller's intent is the specific one.
 #
 # `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
 # splits adoption into its own verb, and this recipe keeps the one spelling the
@@ -141,27 +153,20 @@ upgrade:
 # forwards `--set` to the dag graph and `--node-set` to every dispatched node
 # graph; docs/onejudge-integration.md gives the exact config-ref overrides.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
-[doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
+[doc('Launch a plan on the monitor graph and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:
-    @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else ./scripts/onepipeline.sh start "$@"; fi
+    @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else observer=(--dag-graph graphs/dag-scope.yaml); for argument in "$@"; do if [[ "$argument" == --dag-graph || "$argument" == --dag-graph=* ]]; then observer=(); break; fi; done; ./scripts/onepipeline.sh start "$@" ${observer[@]+"${observer[@]}"}; fi
 
-# Execute the current round of a launched run: `just run-plan <run-id>`.
+# Read the next planner surface, with the events that led to it: `just channel-next
+# <run-id>`.
 #
-# This is the engine verb the orchestrator member drives, not the plan launcher it
-# used to be. A plan file is launched by `just orchestrate`, which starts the run
-# and the driver that calls this; a plan file passed here is not a run id and the
-# CLI says so.
-[doc('Execute the current round of a launched run: `just run-plan <run-id>`. A plan file is launched with `just orchestrate`.')]
-run-plan *args:
-    @./scripts/onepipeline.sh round run "$@"
-
-# Transition a run to its next round, folding the last round's results and the
-# planner edits accepted while it ran: `just next-round <run-id>`.
-# llmlint: ignore[tool_output_is_signal] the tracked result and continuation guidance are this command's product.
-next-round *args:
-    @./scripts/onepipeline.sh round next "$@"
-
-# Bounded host-side reads and replies for the live planner channel.
+# Reads through the `planner` profile, which is `onepipeline`'s own default and the
+# reason this recipe adds no flag: that profile is the pipeline's own events — node
+# and step completion and failure, decisions, planner surfaces, and the monitor and
+# check-in updates — and not each dispatched worker's turns. `--filter monitor`
+# widens it to the detailed activity stream the monitor member reads, `--filter
+# <spec>` takes a filter file or inline JSON, and `--all` reads the store through no
+# profile at all. The two are mutually exclusive; the CLI says so.
 # llmlint: ignore[tool_output_is_signal] channel-next returns a structured bounded status or a validated transport error for planner recovery.
 channel-next *args:
     @./scripts/onepipeline.sh next "$@"
@@ -198,7 +203,7 @@ channel-continue *args:
 # `nx` install, Nx's per-worktree native binary, pytest run directories, onejudge
 # scratch — and a leaked worker are nobody's to collect here. Not papered over with a
 # second sweeper beside this one: two cleaners racing one directory is worse. See
-# docs/orchestration.md, "Recorded rounds".
+# docs/orchestration.md, "The recorded run".
 sweep-scratch *args:
     @uv run oneagentgraph sweep "$@"
 
@@ -207,13 +212,13 @@ sweep-scratch *args:
 repo-recover *args:
     @uv run onevcs recover "$@"
 
-# The across-round derivation this recipe used to print is no longer a verb of its
-# own: `onepipeline round next` folds the last round's results and the accepted
-# planner edits into the next round itself, so the plan of record is derived where
-# it is executed rather than in a separate file-in/file-out step. `just next-round`
-# is that verb. This recipe stays only to say so.
+# The across-round derivation this recipe used to print has no successor verb,
+# because it has no successor step: the engine reconciles a live desired graph
+# continuously, so a change to the plan is a live edit applied to the running graph
+# rather than a document derived between rounds. `just channel-reply` is where an
+# edit goes. This recipe stays only to say so.
 replan *args:
-    @echo "replan: the next round is derived by the round transition itself — run 'just next-round <run-id>'; there is no standalone derive-and-print verb on the published surface" >&2; exit 2
+    @echo "replan: the graph is reconciled continuously, so there is no between-rounds derivation to print — send the change as a live edit with 'just channel-reply <run-id>' (see docs/orchestration.md, 'Live graph edits')" >&2; exit 2
 
 # Update, verify, fast-forward, and optionally push completed workstream branches:
 # `just integrate claude/a claude/b --push`.
@@ -292,6 +297,12 @@ history-show *args:
     @uv run oneagentgraph history show "$@"
 
 # Watch one tracked-graph run as one concise event stream: `just monitor <run-id>`.
+#
+# Same profiles as `just channel-next`, and the same default: the `planner` profile
+# the CLI already applies, which is the pipeline's own events rather than every
+# dispatched worker's turns. Widen it with `--filter monitor` (what the monitor
+# member reads), narrow it with `--filter <spec>`, or bypass profiles entirely with
+# `--all`.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
     @./scripts/onepipeline.sh monitor "$@"
@@ -387,7 +398,7 @@ setup-llmlint:
 # the agent/judge sessions of the work being linted (whose roles come from
 # oneharness.toml / oneharness.judge.toml). It is layered over — not substituted
 # for — the graph labels inherited when a dispatched agent runs its own gate, so a
-# finding stays attributable to the run/round/node that provoked it.
+# finding stays attributable to the run and node that provoked it.
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"

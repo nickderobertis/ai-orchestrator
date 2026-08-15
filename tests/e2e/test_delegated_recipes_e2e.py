@@ -73,14 +73,46 @@ class Delegation(NamedTuple):
 #: that starts naming a different verb, or dropping an argument on the way, fails
 #: here rather than in an operator's terminal.
 DELEGATIONS = (
-    Delegation("orchestrate", ("plan.json",), "uv run onepipeline start plan.json"),
+    # `--dag-graph` is the recipe's own addition, and the reason it exists: the
+    # published default is `off`, so a bare launch runs with no agent watching it.
     Delegation(
-        "orchestrate", ("plan.json", "--detach"), "uv run onepipeline start plan.json --detach"
+        "orchestrate",
+        ("plan.json",),
+        "uv run onepipeline start plan.json --dag-graph graphs/dag-scope.yaml",
+    ),
+    Delegation(
+        "orchestrate",
+        ("plan.json", "--detach"),
+        "uv run onepipeline start plan.json --detach --dag-graph graphs/dag-scope.yaml",
+    ),
+    # A caller who names the observer keeps it: the flag refuses to be given twice,
+    # so adding the default over an explicit one would break the launch outright.
+    Delegation(
+        "orchestrate",
+        ("plan.json", "--dag-graph", "off"),
+        "uv run onepipeline start plan.json --dag-graph off",
+    ),
+    Delegation(
+        "orchestrate",
+        ("plan.json", "--dag-graph=graphs/other.yaml"),
+        "uv run onepipeline start plan.json --dag-graph=graphs/other.yaml",
     ),
     Delegation("orchestrate", ("--adopt", "run-1"), "uv run onepipeline adopt run-1"),
-    Delegation("run-plan", ("run-1",), "uv run onepipeline round run run-1"),
-    Delegation("next-round", ("run-1",), "uv run onepipeline round next run-1"),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
+    # The read profile is the CLI's own default, so the recipes name no filter and
+    # pass one through untouched when the caller does.
+    Delegation(
+        "channel-next",
+        ("run-1", "--filter", "monitor"),
+        "uv run onepipeline next run-1 --filter monitor",
+    ),
+    Delegation("channel-next", ("run-1", "--all"), "uv run onepipeline next run-1 --all"),
+    Delegation(
+        "monitor",
+        ("run-1", "--filter", "monitor"),
+        "uv run onepipeline monitor run-1 --filter monitor",
+    ),
+    Delegation("monitor", ("run-1", "--all"), "uv run onepipeline monitor run-1 --all"),
     Delegation(
         "channel-reply", ("run-1", "reply.json"), "uv run onepipeline reply run-1 reply.json"
     ),
@@ -596,16 +628,17 @@ def test_the_new_persona_recipe_scaffolds_into_this_repositorys_persona_tree(
 def test_the_replan_recipe_says_where_its_derivation_went(tmp_path: Path) -> None:
     """`replan` has no successor verb, and the recipe says so rather than doing something else.
 
-    The across-round derivation is now part of the round transition itself, so the
-    recipe that used to print a next-round plan names the verb that performs it —
-    and reaches no CLI at all, because there is none to reach.
+    The engine reconciles a live desired graph continuously, so there is no
+    between-rounds step for a derivation to happen in: a change to the plan is a live
+    edit on the running graph. The recipe names the verb that sends one and reaches no
+    CLI at all, because there is none to reach.
     """
     checkout, trace = _checkout(tmp_path)
 
     result = _run(checkout, trace, "replan", "plan.json", "result.json")
 
     assert result.returncode == 2
-    assert "just next-round" in result.stderr
+    assert "just channel-reply" in result.stderr
     assert not trace.exists()
 
 
