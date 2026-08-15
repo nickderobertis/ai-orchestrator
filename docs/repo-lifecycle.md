@@ -725,8 +725,21 @@ split at those seams rather than at convenient ones:
   `scripts/**`, the root manifests, the fixtures, and the modules that define and
   collect those tests. They read no prose and no `orchestrator/` at all, and most
   commits here touch nothing else, so most commits replay them.
+- **`orchestrator:test-checkouts`** runs the tests marked
+  `@pytest.mark.reads_checkouts` and is **uncached**, because there is no key that
+  would be right. Its subject is the registered checkouts of the *other* repositories
+  this host routes — today, reconciling which of them run cargo-nextest against the
+  gate argv `config/onevcs.rules.yml` gives each one — and those live outside the
+  workspace, so no `nx.json` glob could name one and a memo would describe whatever
+  they looked like when it was recorded. It is seconds of work. A host holding none
+  of those checkouts reconciles nothing and says so.
 - **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
   whole workspace with `docs/**` and `**/*.md` removed.
+
+`tests/conftest.py` holds that last boundary from the other side: an *unmarked* test
+that opens a registered checkout fails there, naming the checkout and the marker,
+because such a read in a memoized tier is exactly the false green these keys exist
+to prevent.
 
 `workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
 it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
@@ -780,7 +793,8 @@ replays as a failure, and a tree the suite would fail can no longer replay a pas
 The suite waits on subprocesses rather than on compute — a serial run holds one
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
-`orchestrator:test-recipes`, and `just test-e2e` all run `-n 4 --dist loadgroup`.
+`orchestrator:test-recipes`, `orchestrator:test-checkouts`, and `just test-e2e` all
+run `-n 4 --dist loadgroup`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its

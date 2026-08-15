@@ -37,9 +37,9 @@ ROOT = Path(__file__).resolve().parents[2]
 #: rather than read from the `justfile` — this suite exists to catch one of them
 #: drifting. `coverage` is last in each: it waits on the measuring tier and enforces
 #: the floor on what that tier wrote.
-CHECK_TARGETS = "format-check,lint,typecheck,test,test-docs,test-recipes,coverage"
-TEST_TARGETS = "test,test-docs,test-recipes,coverage"
-UPGRADE_TARGETS = "build,lint,typecheck,test,test-docs,test-recipes,coverage"
+CHECK_TARGETS = "format-check,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage"
+TEST_TARGETS = "test,test-docs,test-recipes,test-checkouts,coverage"
+UPGRADE_TARGETS = "build,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage"
 
 
 def _run(

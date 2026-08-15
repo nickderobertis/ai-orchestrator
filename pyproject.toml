@@ -55,6 +55,7 @@ tmp_path_retention_count = 3
 markers = [
     "reads_docs: asserts on this repository's own prose, so it belongs to the whole-workspace test tier rather than the code-only one",
     "reads_recipes: drives this repository's own recipes and scripts and reads nothing else of it, so it belongs to the recipe-scoped test tier rather than the code-only one",
+    "reads_checkouts: reconciles this repository's configuration against the registered checkouts of other repositories, which live outside the workspace and so outside every cache key, and belongs to the uncached tier rather than any memoized one",
 ]
 
 [tool.coverage.run]

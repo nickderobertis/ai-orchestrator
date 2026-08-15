@@ -21,9 +21,14 @@ What keeps the narrowed keys honest is not this file — a static scan cannot se
 every read — but `tests/conftest.py`, which fails a test the moment it opens
 something its own tier's key does not carry.
 
-`coverage` is the one target here with nothing to keep honest, and deliberately:
-it reads what the measuring tier wrote and compares that total to the declared
-floor, so it is uncached and there is no memo to be wrong about.
+Two targets here are keyed on nothing, because no key could be right. `coverage`
+reads what the measuring tier wrote and compares that total to the declared floor,
+so it is uncached and there is no memo to be wrong about. `test-checkouts`
+reconciles this repository's configuration against the registered checkouts of the
+repositories it routes: those live outside the workspace, so no `nx.json` glob
+could name one, and a memoized verdict would describe whatever they looked like
+when it was recorded. `conftest.py` holds that boundary from the other side, failing
+an unmarked test that opens one.
 """
 
 from __future__ import annotations
@@ -33,8 +38,9 @@ import json
 import re
 import subprocess
 
-from conftest import READS_DOCS_MARKER, READS_RECIPES_MARKER
+from conftest import READS_CHECKOUTS_MARKER, READS_DOCS_MARKER, READS_RECIPES_MARKER
 from nx_inputs import (
+    CHECKOUT_SCOPED,
     CODE_SCOPED,
     CODE_WORKSPACE,
     COVERAGE_SCOPED,
@@ -171,7 +177,7 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     """
     manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     registered = re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE)
-    for marker in (READS_DOCS_MARKER, READS_RECIPES_MARKER):
+    for marker in (READS_DOCS_MARKER, READS_RECIPES_MARKER, READS_CHECKOUTS_MARKER):
         assert marker in registered, (
             f"pytest must register {marker!r} in [tool.pytest.ini_options] markers"
         )
@@ -188,11 +194,17 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
         for selector in re.findall(r"-m '([^']+)'", targets[target]["command"])
     ]
     assert len(code_selectors) == len(CODE_KEYED), code_selectors
-    excluded = f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER}"
+    excluded = (
+        f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER} and not {READS_CHECKOUTS_MARKER}"
+    )
     assert all(selector.startswith(excluded) for selector in code_selectors), code_selectors
 
     # And the selectors have to partition: a test is in exactly one tier.
-    for marker, target in ((READS_DOCS_MARKER, DOCS_SCOPED), (READS_RECIPES_MARKER, RECIPE_SCOPED)):
+    for marker, target in (
+        (READS_DOCS_MARKER, DOCS_SCOPED),
+        (READS_RECIPES_MARKER, RECIPE_SCOPED),
+        (READS_CHECKOUTS_MARKER, CHECKOUT_SCOPED),
+    ):
         assert f"-m {marker}" in targets[target]["command"]
         marked = re.search(r"-m '?(not )?(\w+)'?", targets[target]["command"])
         assert marked is not None and marked.group(1) is None
@@ -206,6 +218,7 @@ PARALLEL_SITES = (
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
+    ("orchestrator/project.json", CHECKOUT_SCOPED),
     ("justfile", "test-e2e"),
 )
 
@@ -228,7 +241,7 @@ def _worker_contracts(path: str, target: str) -> list[tuple[str, str]]:
 
 
 def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
-    """The worker count and distribution are one contract, written in three places.
+    """The worker count and distribution are one contract, written in five places.
 
     Nothing derives them from a shared value — pytest takes them as command-line
     flags and Nx targets are literal commands — so the reconciliation has to be a
@@ -261,12 +274,12 @@ def _collected(selector: str) -> set[str]:
     return {line.strip() for line in collected.stdout.splitlines() if "::" in line}
 
 
-def test_the_three_tiers_partition_the_suite_between_them() -> None:
-    """Three selectors, one suite: no test may be collected twice or not at all.
+def test_the_four_tiers_partition_the_suite_between_them() -> None:
+    """Four selectors, one suite: no test may be collected twice or not at all.
 
     The tiers exist because they are keyed on different trees, and a test lands in
     exactly one of them by marker. That is the shape that loses a test in silence —
-    a typo in any of the three expressions leaves tests no invocation collects, and
+    a typo in any of the four expressions leaves tests no invocation collects, and
     a suite that runs fewer tests reports the same green as one that runs them all.
     So the partition is derived from the real targets and checked against real
     collections rather than read off the JSON.
@@ -276,7 +289,7 @@ def test_the_three_tiers_partition_the_suite_between_them() -> None:
     ]
     selectors = [
         re.search(r"-m '?([^'\s]+(?: [^'-][^']*)?)'?", targets[target]["command"])
-        for target in (CODE_SCOPED, DOCS_SCOPED, RECIPE_SCOPED)
+        for target in (CODE_SCOPED, DOCS_SCOPED, RECIPE_SCOPED, CHECKOUT_SCOPED)
     ]
     assert all(selectors), f"a tier no longer selects on a marker: {selectors}"
     parts = [_collected(found.group(1)) for found in selectors if found is not None]

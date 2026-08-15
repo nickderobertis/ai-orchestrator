@@ -27,7 +27,7 @@
       ]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest -m 'not reads_docs and not reads_recipes' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
       "options": {
         "cwd": "."
       },
@@ -64,6 +64,12 @@
       "inputs": [
         "recipeWorkspace"
       ]
+    },
+    "test-checkouts": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_checkouts --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      }
     },
     "typecheck": {
       "command": "uv run mypy",

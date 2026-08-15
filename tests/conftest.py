@@ -41,6 +41,10 @@ READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
 READS_RECIPES_MARKER = "reads_recipes"
+#: The marker that moves a test out of every memoized tier and into the uncached one.
+#: Its subject is another repository's checkout, which lives outside this workspace
+#: and so outside every `nx.json` key.
+READS_CHECKOUTS_MARKER = "reads_checkouts"
 
 #: Every spelling of the gate-comparison identity `scripts/comparison-base.sh` and
 #: `.githooks/pre-push` read. Both are live: `onevcs` exports the `ONEVCS_*` pair on
@@ -253,6 +257,69 @@ def _recipe_reads_are_declared(
                     f"{request.node.name} reads {relative}, which the recipe test key "
                     f"does not cover; drop @pytest.mark.{READS_RECIPES_MARKER} so it runs "
                     "in a tier keyed on that path"
+                )
+        return opener(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded)
+    monkeypatch.setattr(io, "open", guarded)
+
+
+def _registered_checkout_roots() -> tuple[str, ...]:
+    """Every directory the tracked list says another repository is checked out in.
+
+    Read from the same file the registry recipe registers, so the guard below covers
+    whatever this host actually holds rather than a restatement. This checkout is
+    excluded: the list names `ai-orchestrator` too, and reading *this* tree is what
+    the keys already describe.
+    """
+    listed = (REPO_ROOT / "config" / "onevcs.checkouts").read_text(encoding="utf-8").splitlines()
+    roots = []
+    for line in listed:
+        entry = line.partition("#")[0].strip()
+        if not entry:
+            continue
+        resolved = str(Path(entry).expanduser())
+        if resolved != str(REPO_ROOT):
+            roots.append(f"{resolved}{os.sep}")
+    return tuple(sorted(set(roots)))
+
+
+#: Resolved once: the guard consults it on every open in the suite.
+CHECKOUT_ROOTS = _registered_checkout_roots()
+
+
+@pytest.fixture(autouse=True)
+def _checkout_reads_are_declared(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hold a test that reads another repository's checkout to the uncached tier.
+
+    Every memoized tier here is keyed on this workspace, and a registered checkout is
+    not in it — no `nx.json` glob could name one. So a test that reads one and is
+    memoized anyway records a verdict about a repository that goes on changing
+    afterwards, and replays it as though it still held. That is the same false green
+    the two guards above prevent, from the one direction they cannot see: the path is
+    outside the repository entirely, so `repository_relative` returns nothing for it.
+
+    The uncached tier is where such a test belongs, and the marker is what puts it
+    there — so an undeclared read fails here, naming the checkout and the marker.
+    """
+    if request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None:
+        return
+    opener = builtins.open
+
+    # `Any` for the reason the guards above use it: this stands in for `open`, whose
+    # return type is chosen by arguments it forwards untouched.
+    def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(file, str | os.PathLike):
+            named = os.fspath(file)
+            if isinstance(named, bytes):
+                named = named.decode("utf-8", "replace")
+            if named.startswith(CHECKOUT_ROOTS):
+                raise AssertionError(
+                    f"{request.node.name} reads {named}, a registered checkout of another "
+                    f"repository; no cache key covers it, so mark the test "
+                    f"@pytest.mark.{READS_CHECKOUTS_MARKER} to run it in the uncached tier"
                 )
         return opener(file, *args, **kwargs)
 

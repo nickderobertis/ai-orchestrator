@@ -50,6 +50,7 @@ from pathlib import Path
 
 import pytest
 from nx_inputs import (
+    CHECKOUT_SCOPED,
     CODE_SCOPED,
     COVERAGE_SCOPED,
 )
@@ -272,6 +273,29 @@ def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_the_tier_that_me
         assert data_file in resolved["options"]["command"], (
             f"{tier} writes {data_file} and the coverage tier never reads it: {resolved}"
         )
+
+
+def test_the_checkout_tier_re_runs_even_when_nothing_in_the_tree_moved(
+    checkout: Checkout,
+) -> None:
+    """The tier that reads other repositories' checkouts is never replayed.
+
+    Every other memoized tier here is sound because its key covers what it reads.
+    This one reads registered checkouts of *other* repositories, which live outside
+    the workspace entirely — no `nx.json` glob can name one — so there is no key that
+    would be right and it is declared uncached instead. Proven the way the property
+    matters: run it twice against a tree nothing touched, and it has to run twice.
+    A replay here would report on those repositories as they were when it was
+    recorded, which is exactly the drift it exists to catch.
+    """
+    resolved = checkout.resolved_target(CHECKOUT_SCOPED)
+    assert resolved.get("cache") is False, resolved
+
+    assert checkout.ran_the_command(f"orchestrator:{CHECKOUT_SCOPED}")
+    assert checkout.ran_the_command(f"orchestrator:{CHECKOUT_SCOPED}"), (
+        "an unchanged tree replayed the checkout-reconciliation tier, so its verdict "
+        "is a memo about repositories that have gone on changing since"
+    )
 
 
 def test_editing_a_recipe_input_re_runs_the_recipe_tier(checkout: Checkout) -> None:

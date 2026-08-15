@@ -38,7 +38,7 @@ GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
 #: The tracked checkout list the recipe registers by default.
 TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
 #: The tracked rules file the recipe installs, which decides every listed checkout's
-#: publication path.
+#: publication path and is the rule of every gate asserted here.
 TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 
 #: The base a gate template's `{base}` was substituted with before the adoption:
@@ -65,6 +65,73 @@ TRANSLATED_GATES = {
     ),
 }
 
+#: One repository as `onevcs` names it once its origin URL is normalized:
+#: `host/owner/name`. The rules file matches on its three parts, the registry files
+#: identities under it, and `onevcs rules check` takes it as its argument — so it is
+#: the vocabulary every set and helper below is keyed by, rather than bare text.
+RepoIdentity = str
+
+#: The environment `config/onevcs.rules.yml` prepends to the gate of every repository
+#: that tests with cargo-nextest, for the reason that file states.
+NEXTEST_WORKAROUND = ("env", "NEXTEST_STATUS_LEVEL=fail")
+
+#: Whether each identity's own test tooling runs cargo-nextest at all, and so whether
+#: its rule carries the capture workaround. This is the one place that fact is
+#: declared: the two sets below are derived from it, `config/onevcs.rules.yml` is held
+#: to it by `test_every_nextest_gate_carries_the_capture_workaround`, and it is
+#: reconciled against the authority — each repository's own recipes and Nx targets —
+#: by `test_the_declared_cargo_nextest_use_matches_each_checkout`.
+#:
+#: Deliberately the repository-level fact rather than "this repository's *gate*
+#: reaches nextest", which is the narrower thing and cannot honestly be established
+#: from here: the Nx workspaces run `nx run-many -t test`, whose per-crate target
+#: calls back into a `_crate-test` recipe, so the reachable set is not a closure any
+#: one tool can be asked for. Over-approximating is the safe direction and
+#: under-approximating is not. `NEXTEST_STATUS_LEVEL` is read by cargo-nextest alone,
+#: so carrying it into a gate that turns out to run none is inert; omitting it from
+#: one that does run nextest is the falsely rejected gate this all exists to prevent.
+RUNS_CARGO_NEXTEST: dict[RepoIdentity, bool] = {
+    "github.com/nickderobertis/ai-orchestrator": False,
+    "github.com/nickderobertis/crozier": True,
+    "github.com/nickderobertis/dero-skills": False,
+    "github.com/nickderobertis/llmlint": True,
+    "github.com/nickderobertis/nick-derobertis-site": False,
+    "github.com/nickderobertis/oneagentgraph": True,
+    "github.com/nickderobertis/oneharness": True,
+    "github.com/nickderobertis/oneharness-ui": False,
+    "github.com/nickderobertis/onejudge": True,
+    "github.com/nickderobertis/onepipeline": True,
+    "github.com/nickderobertis/onepipeline-ui": True,
+    "github.com/nickderobertis/onevcs": True,
+    "github.com/nickderobertis/screencomp": True,
+    "github.com/petsinc/org-apps": False,
+}
+
+#: Every identity whose gate must carry the workaround, and every identity whose
+#: rule must stay exactly what the migration carried across. Derived rather than
+#: restated, so the declaration above is the only place either can be edited.
+NEXTEST_GATES: frozenset[RepoIdentity] = frozenset(
+    key for key, runs in RUNS_CARGO_NEXTEST.items() if runs
+)
+NON_NEXTEST_GATES: frozenset[RepoIdentity] = frozenset(
+    key for key, runs in RUNS_CARGO_NEXTEST.items() if not runs
+)
+
+#: A command that actually runs cargo-nextest, in either spelling this host's
+#: repositories use it in: `cargo nextest run`, and `cargo llvm-cov nextest` for the
+#: ones that measure coverage over the same run. Deliberately not the bare word — a
+#: repository that installs the tool (`just _ensure-tool cargo-nextest`) or names it
+#: in a command allowlist, as `dero-skills` does while its `check` runs pytest, is
+#: not a repository whose tests print a status line per test.
+NEXTEST_INVOCATION = re.compile(r"\bcargo\s+(?:\S+\s+)?nextest\b|\bnextest\s+run\b")
+
+#: How every rule in the tracked file names the repository it matches. Reading them
+#: back out is what makes a rule added later for another cargo-nextest repository
+#: fail here, rather than at that repository's first publication.
+RULE_MATCH = re.compile(
+    r"- match: \{host: (?P<host>[^,]+), owner: (?P<owner>[^,]+), name: (?P<name>[^}]+)\}"
+)
+
 #: Fixture recipes expose the arguments and environment received through the real
 #: recipe runner and shell. They avoid running project checks unrelated to this
 #: registry migration while still proving that translated gates are executable.
@@ -82,6 +149,17 @@ gate:
     @echo "NX_BASE=$NX_BASE just gate"
 """
 
+#: The same idea for the nextest workaround: recipes that report the status level
+#: they were handed, so a gate carrying it is run rather than only read. Kept apart
+#: from the recipes above because `check` and `gate` are the names both need.
+NEXTEST_FIXTURE_JUSTFILE = """
+check:
+    @echo "check ${NEXTEST_STATUS_LEVEL:-unset}"
+
+gate:
+    @echo "gate ${NEXTEST_STATUS_LEVEL:-unset}"
+"""
+
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -93,7 +171,7 @@ class Identity(NamedTuple):
     #: The key the pre-adoption registry filed it under, which its checkouts name.
     url: str
     #: The identity `onevcs` normalizes this repository's origin URL to.
-    key: str
+    key: RepoIdentity
     origin: str
     #: `single-owner` or `team`.
     repo_type: RepoType
@@ -188,6 +266,136 @@ def onevcs(home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def ruled_identities() -> tuple[RepoIdentity, ...]:
+    """Every identity `config/onevcs.rules.yml` names, in the order it names them."""
+    text = TRACKED_RULES.read_text(encoding="utf-8")
+    named = tuple(
+        f"{rule['host']}/{rule['owner']}/{rule['name']}" for rule in RULE_MATCH.finditer(text)
+    )
+    assert len(named) == text.count("- match:"), (
+        "config/onevcs.rules.yml no longer writes every rule's match as a one-line flow "
+        f"mapping, so only {len(named)} of {text.count('- match:')} rules were read back"
+    )
+    return named
+
+
+def normalized_identity(origin: str) -> RepoIdentity:
+    """The identity `onevcs` files an origin URL under: `host/owner/name`.
+
+    Both spellings this host's checkouts carry are handled — `https://host/owner/name`
+    with or without `.git`, and git's scp-like `user@host:owner/name` — because which
+    one a clone has is an accident of how it was made.
+    """
+    without_scheme = re.sub(r"^[a-z][a-z0-9+.-]*://", "", origin.strip())
+    user, _, remainder = without_scheme.rpartition("@")
+    if user:
+        # scp-like: the host is separated from the path by a colon, not a slash.
+        remainder = remainder.replace(":", "/", 1)
+    return remainder.removesuffix(".git").removesuffix("/")
+
+
+class Invocations(NamedTuple):
+    """Where a repository runs cargo-nextest, and whether that could be read at all."""
+
+    #: False when `just` could not parse the repository's recipes, so `sites` is not
+    #: evidence of anything and the reconciliation must report rather than assert.
+    readable: bool
+    #: `recipe:line` per justfile command and `file:target` per Nx target command.
+    sites: tuple[str, ...]
+
+
+def cargo_nextest_invocations(root: Path) -> Invocations:
+    """Every command in `root`'s own test tooling that runs cargo-nextest.
+
+    Read through the tools that own the definitions rather than by scanning text.
+    `just --dump` is the recipe runner's own parse of its justfile, so what comes back
+    is the command lines a recipe would really run, with comments and documentation
+    already gone; Nx target commands are read out of parsed `project.json`. Both are
+    needed because these repositories reach nextest both ways: `llmlint` runs it
+    straight from its `test` recipe, while `onevcs` and the other Nx workspaces run
+    `nx run-many -t test`, whose per-crate target calls back into a `_crate-test`
+    recipe. Scanning every recipe rather than only the gate's dependency closure is
+    deliberate — that call back in through Nx leaves no edge `just` can show.
+
+    An empty `sites` means this repository runs no nextest, so its rule must not carry
+    the workaround. A non-empty one is the authority the declaration is checked
+    against, and is quoted back on failure so a drift is diagnosed from the command.
+    """
+    sites: list[str] = []
+    dumped = subprocess.run(
+        ["just", "--dump", "--dump-format", "json"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    if dumped.returncode != 0:
+        return Invocations(readable=False, sites=())
+    for name, recipe in sorted(json.loads(dumped.stdout)["recipes"].items()):
+        # A body is a list of lines, each a list of fragments: literal text, or an
+        # interpolation rendered as a placeholder since its value is not known here.
+        for number, line in enumerate(recipe["body"], 1):
+            command = "".join(part if isinstance(part, str) else " " for part in line)
+            if NEXTEST_INVOCATION.search(command):
+                sites.append(f"justfile:{name}:{number}")
+
+    for project_file in sorted(root.rglob("project.json")):
+        if "node_modules" in project_file.parts:
+            continue
+        try:
+            document = json.loads(project_file.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue
+        for target, definition in (document.get("targets") or {}).items():
+            command = definition.get("command")
+            commands = [command] if isinstance(command, str) else []
+            commands += [
+                str(entry) for entry in (definition.get("options") or {}).get("commands") or []
+            ]
+            if any(NEXTEST_INVOCATION.search(entry) for entry in commands):
+                sites.append(f"{project_file.relative_to(root)}:{target}")
+    return Invocations(readable=True, sites=tuple(sites))
+
+
+def checkouts_on_this_host() -> dict[RepoIdentity, Path]:
+    """Each classified identity this host actually holds a checkout of.
+
+    The tracked list names where a checkout of each identity lives under either of the
+    two layouts this host clones into, and git is asked which identity one really is
+    rather than the path being trusted to say. A host holding none of them resolves
+    nothing, which is what the reconciliation below reports rather than asserts on.
+    """
+    found: dict[RepoIdentity, Path] = {}
+    for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines():
+        entry = line.partition("#")[0].strip()
+        if not entry:
+            continue
+        path = Path(entry).expanduser()
+        if not (path / ".git").exists():
+            continue
+        origin = subprocess.run(
+            ["git", "-C", str(path), "remote", "get-url", "origin"],
+            text=True,
+            capture_output=True,
+        )
+        if origin.returncode != 0:
+            continue
+        identity = normalized_identity(origin.stdout)
+        if identity in RUNS_CARGO_NEXTEST:
+            found.setdefault(identity, path)
+    return found
+
+
+def expected_gate(identity: Identity) -> str:
+    """The command line an identity's gate must run.
+
+    That is what it ran before the adoption, prefixed with the nextest capture
+    workaround where the recipe it runs reaches cargo-nextest.
+    """
+    if identity.key in NEXTEST_GATES:
+        return f"{shlex.join(NEXTEST_WORKAROUND)} {identity.gate}"
+    return identity.gate
+
+
 def reported(output: str, key: str) -> str:
     """One field of `onevcs rules check`, without its `(from rule 1)` annotation."""
     for line in output.splitlines():
@@ -229,6 +437,30 @@ def applied(tmp_path_factory: pytest.TempPathFactory) -> Applied:
     result = apply_registry(manifest, home)
     assert result.returncode == 0, result.stdout + result.stderr
     return Applied(home=home, manifest=manifest, result=result)
+
+
+@pytest.fixture(scope="module")
+def ruled(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A registry holding a checkout of *every* identity the tracked rules name.
+
+    The `applied` fixture registers the pre-adoption checkouts, which is what the
+    migration assertions are about; an identity registered since — `llmlint` is the
+    first — has a rule there but no checkout, and `onevcs rules check` resolves a
+    repository through a registered checkout. Registering one per rule is what lets
+    the gate assertions below cover the whole file rather than only the rules that
+    predate the adoption.
+    """
+    root = tmp_path_factory.mktemp("ruled-registry")
+    paths = [
+        checkout(root / "checkouts" / key.rpartition("/")[2], f"https://{key}")
+        for key in ruled_identities()
+    ]
+    manifest = root / "checkouts.list"
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    home = root / "onevcs"
+    result = apply_registry(manifest, home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return home
 
 
 def test_every_pre_adoption_identity_and_checkout_is_registered(applied: Applied) -> None:
@@ -316,7 +548,7 @@ def test_each_gate_renders_the_same_command_or_runs_the_translated_template(
     gate = reported(onevcs(applied.home, "rules", "check", identity.key).stdout, "gate")
 
     if "{base}" not in identity.gate:
-        assert gate == f"command: {identity.gate}"
+        assert gate == f"command: {expected_gate(identity)}"
         return
 
     # A translated gate is proven by running it: the commands it reaches, and the
@@ -352,6 +584,97 @@ def test_each_gate_renders_the_same_command_or_runs_the_translated_template(
     for token in shlex.split(identity.gate):
         if token not in ("{base}", "&&", "env", "bash", "-c"):
             assert token.replace("{base}", "") in script
+
+
+@pytest.mark.reads_checkouts
+def test_the_declared_cargo_nextest_use_matches_each_checkout() -> None:
+    """The drift gate: the declaration above, against the recipes that own the fact.
+
+    `RUNS_CARGO_NEXTEST` restates something no file in this repository decides — whether
+    another repository tests with cargo-nextest — and a rule that lacked the workaround
+    after its repository adopted nextest would be found the way this host found the
+    defect: by having complete work reported as a rejected gate. So every identity this
+    host holds is reconciled here against the cargo-nextest invocations in its own
+    recipes and Nx targets, which is the same fact the declaration states rather than
+    the narrower gate-reachability one it deliberately does not claim.
+
+    This is why the tier is uncached. Its inputs are checkouts outside the workspace,
+    which no `nx.json` key covers, and a memoized green would be a verdict on whatever
+    those repositories looked like when it was recorded.
+    """
+    present = checkouts_on_this_host()
+    if not present:
+        pytest.skip(
+            "this host holds no checkout of any classified identity, so there is "
+            "nothing to reconcile the declaration against"
+        )
+
+    found = {
+        identity: cargo_nextest_invocations(path) for identity, path in sorted(present.items())
+    }
+    unreadable = sorted(identity for identity, result in found.items() if not result.readable)
+    assert not unreadable, (
+        "`just --dump` could not parse the recipes of these registered checkouts, so "
+        f"their classification could not be reconciled at all: {unreadable}"
+    )
+
+    drifted = {
+        identity: result.sites
+        for identity, result in found.items()
+        if bool(result.sites) != RUNS_CARGO_NEXTEST[identity]
+    }
+    assert not drifted, "\n".join(
+        f"{identity}: declared runs_cargo_nextest={RUNS_CARGO_NEXTEST[identity]}, but it "
+        + (f"runs cargo-nextest at {', '.join(sites[:4])}" if sites else "runs no cargo-nextest")
+        + f" ({present[identity]}) — correct RUNS_CARGO_NEXTEST and the rule's argv "
+        "in config/onevcs.rules.yml together"
+        for identity, sites in drifted.items()
+    )
+
+
+def test_every_rule_is_classified_by_whether_its_repository_runs_nextest() -> None:
+    """A rule nobody classified is a gate nobody checked for the capture defect.
+
+    The workaround below only holds for identities named in one of the two sets, so
+    a rule added for another cargo-nextest repository would otherwise publish with
+    no assertion on it at all — and find the defect the way this host did, by having
+    complete work reported as a rejected gate.
+    """
+    assert not NEXTEST_GATES & NON_NEXTEST_GATES
+    assert set(ruled_identities()) == NEXTEST_GATES | NON_NEXTEST_GATES
+
+
+@pytest.mark.parametrize("key", sorted(NEXTEST_GATES))
+def test_every_nextest_gate_carries_the_capture_workaround(
+    ruled: Path, tmp_path: Path, key: RepoIdentity
+) -> None:
+    """Asserted on the gate `onevcs` resolves, and then by running that argv.
+
+    A `command:` gate is executed with no shell, so `env` is a binary in argument
+    position rather than a prefix a shell would read — and a gate whose recipe never
+    saw the variable would carry the workaround while changing nothing.
+    """
+    gate = reported(onevcs(ruled, "rules", "check", key).stdout, "gate")
+    argv = shlex.split(gate.removeprefix("command: "))
+    assert tuple(argv[:2]) == NEXTEST_WORKAROUND, gate
+
+    (tmp_path / "justfile").write_text(NEXTEST_FIXTURE_JUSTFILE, encoding="utf-8")
+    run = subprocess.run(
+        argv,
+        cwd=tmp_path,
+        env={name: value for name, value in os.environ.items() if name != "NEXTEST_STATUS_LEVEL"},
+        text=True,
+        capture_output=True,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert run.stdout.split() == [argv[-1], "fail"], run.stdout
+
+
+@pytest.mark.parametrize("key", sorted(NON_NEXTEST_GATES))
+def test_a_gate_that_runs_no_nextest_is_left_alone(ruled: Path, key: RepoIdentity) -> None:
+    """The workaround is scoped to the gates that need it, so removing it is bounded."""
+    gate = reported(onevcs(ruled, "rules", "check", key).stdout, "gate")
+    assert NEXTEST_WORKAROUND[1] not in gate, gate
 
 
 def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:

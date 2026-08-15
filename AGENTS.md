@@ -766,10 +766,16 @@ they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the
 workspace minus `docs/**` and `**/*.md`.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
 scripts it builds its two worktrees from. A documentation edit stops charging for
-the whole suite. No split may go stale silently: an undeclared test that opens
+the whole suite. Where no key would be right the tier is **uncached** instead:
+`orchestrator:test-checkouts` reconciles this repository's routing against the
+registered checkouts of the repositories it routes — which of them run cargo-nextest,
+against the gate argv each rule gives — and those live outside the workspace, so a
+memo would describe whatever they looked like when it was recorded. No split may go
+stale silently: an undeclared test that opens
 this checkout's own documentation fails in `tests/conftest.py` and is told to carry
-`@pytest.mark.reads_docs`, and a `@pytest.mark.reads_recipes` test that opens
-anything outside its narrower key fails the same way. See
+`@pytest.mark.reads_docs`, a `@pytest.mark.reads_recipes` test that opens
+anything outside its narrower key fails the same way, and so does an unmarked test
+that opens a registered checkout of another repository. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
