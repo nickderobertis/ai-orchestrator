@@ -45,11 +45,12 @@ members:
     # `channel serve` parses its stdin as its own boundary frame
     # (`{kind, message, blocking?, node?}`, unknown fields refused). Re-measured at
     # this adoption from both ends: a real `oneagentgraph run` whose judge side was a
-    # frame-dumping command recorded the `"op": "supervisor"` envelope under onejudge
-    # 0.3.10 *and* under the unadopted 0.4.0, and piping that envelope into
-    # `onepipeline channel serve` refused it with `the observer emitted a bad frame:
-    # unknown field 'op'`. Reported upstream; when it is fixed this member's judge
-    # becomes the channel and the planner supervises the conversation directly.
+    # frame-dumping command recorded that same `"op": "supervisor"` envelope under
+    # the adopted onejudge 0.3.10 and under the unadopted 0.4.0 alike, and piping the
+    # envelope into `onepipeline channel serve` refused it with `the observer emitted
+    # a bad frame: unknown field 'op'`. So the newer release is not the fix either.
+    # Reported upstream; when it is fixed this member's judge becomes the channel and
+    # the planner supervises the conversation directly.
     #
     # Until then the planner still steers the run over the channel — surfaces with
     # `just channel-next`, live graph edits and `complete` with `just channel-reply`

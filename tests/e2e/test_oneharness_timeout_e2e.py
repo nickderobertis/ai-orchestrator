@@ -2,12 +2,12 @@
 
 Two things are proven here against the real CLI. The first is oneharness's own
 process-tree termination, which only a real harness process can show. The second is
-this repository's per-member deadline seam: the orchestrator's agent side runs a
-whole round inside one turn and must have NO deadline, while the `check-in`
-pacemaker beside it must keep one. Both are read from the effective configuration
-oneharness itself reports for the file `graphs/dag-scope.yaml` names, so a re-shared
-config or a dropped setting fails here rather than silently killing rounds at the
-pacemaker's deadline again.
+this repository's per-member deadline seam: the monitor's agent side watches for as
+long as the run lasts inside one turn and must have NO deadline, while the
+`check-in` pacemaker beside it must keep one. Both are read from the effective
+configuration oneharness itself reports for the file `graphs/dag-scope.yaml` names,
+so a re-shared config or a dropped setting fails here rather than silently killing
+a watch at the pacemaker's deadline again.
 """
 
 from __future__ import annotations
@@ -28,9 +28,13 @@ TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
 DAG_SCOPE_GRAPH = REPO_ROOT / "graphs" / "dag-scope.yaml"
 NODE_SCOPE_GRAPH = REPO_ROOT / "graphs" / "node-scope.yaml"
 
+#: The dag-scope member that watches the run. It drives nothing — the engine does
+#: that — so what it needs from its config is room to keep watching.
+MONITOR_MEMBER = "monitor"
+
 #: The pacemaker's per-turn deadline, asserted as the exact number
 #: `oneharness.check-in.toml` states. A real value rather than a range: the point of
-#: the seam is that this member has a *finite* deadline the orchestrator does not, and
+#: the seam is that this member has a *finite* deadline the monitor does not, and
 #: a bound that only had to be "some number" would pass just as well at the release
 #: default nobody chose. It is a wedged-turn backstop set clear of an honest survey,
 #: not a work budget — the file says why, and what it is not.
@@ -237,11 +241,11 @@ def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
     """Prove all five turn configs together from oneharness's effective values."""
-    orchestrator = _named_config(DAG_SCOPE_GRAPH, "orchestrator", "agent.oneharness_config")
+    monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
-    assert orchestrator != pacemaker, (
-        "the orchestrator's agent side and the check-in pacemaker share "
-        f"{orchestrator}; re-sharing one config is what gives a wedged pacemaker no "
+    assert monitor != pacemaker, (
+        "the monitor's agent side and the check-in pacemaker share "
+        f"{monitor}; re-sharing one config is what gives a wedged pacemaker no "
         "deadline, which fails silently — give each member its own oneharness config"
     )
 
@@ -249,7 +253,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "worker": _named_config(NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config"),
         "judge": _named_config(NODE_SCOPE_GRAPH, "worker", "judge.oneharness_config"),
         "llmlint": REPO_ROOT / "oneharness.llmlint.toml",
-        "orchestrator": orchestrator,
+        "monitor": monitor,
         "pacemaker": pacemaker,
     }
     effective = {
@@ -260,10 +264,10 @@ def test_every_side_resolves_its_intended_effective_deadline(
         assert effective[side]["timeout"] == {"value": None, "source": None}, (
             f"{side} must inherit oneharness 0.7's unbounded default"
         )
-    assert effective["orchestrator"]["timeout"] == {
+    assert effective["monitor"]["timeout"] == {
         "value": 0,
-        "source": str(orchestrator),
-    }, "the orchestrator's explicit timeout = 0 must continue to mean no deadline"
+        "source": str(monitor),
+    }, "the monitor's explicit timeout = 0 must continue to mean no deadline"
     assert effective["pacemaker"]["timeout"] == {
         "value": PACEMAKER_DEADLINE_SECONDS,
         "source": str(pacemaker),
@@ -277,9 +281,9 @@ def test_every_side_resolves_its_intended_effective_deadline(
     # or reporting differently from the process it reports on.
     differing = {
         field
-        for field in _without_sources(effective["orchestrator"])
+        for field in _without_sources(effective["monitor"])
         if field != "config_files"
-        and _without_sources(effective["orchestrator"])[field]
+        and _without_sources(effective["monitor"])[field]
         != _without_sources(effective["pacemaker"])[field]
     }
     assert differing == {"timeout"}, (
@@ -291,15 +295,15 @@ def test_every_side_resolves_its_intended_effective_deadline(
 def test_bypass_sides_do_not_trip_the_approval_wait_safety_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove worker and orchestrator bypass modes cannot prompt headlessly.
+    """Prove worker and monitor bypass modes cannot prompt headlessly.
 
     oneharness 0.7 retains a separate 120-second approval-wait safety deadline for
     prompt-capable headless modes. `bypass` must remain clean or the release's new
     unbounded turn default would not actually reach these live paths.
     """
-    orchestrator = _named_config(DAG_SCOPE_GRAPH, "orchestrator", "agent.oneharness_config")
+    monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     worker = _named_config(NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config")
-    assert _member_fields(DAG_SCOPE_GRAPH)["orchestrator"].get("mode") == "bypass"
+    assert _member_fields(DAG_SCOPE_GRAPH)[MONITOR_MEMBER].get("mode") == "bypass"
     assert _member_fields(NODE_SCOPE_GRAPH)["worker"].get("mode") == "bypass"
 
     catalogue = subprocess.run(
@@ -314,14 +318,14 @@ def test_bypass_sides_do_not_trip_the_approval_wait_safety_deadline(
 
     chains = [
         _effective_config(oneharness_bin, config)["harnesses"]["value"]
-        for config in (orchestrator, worker)
+        for config in (monitor, worker)
     ]
     families = {identity.split(":", 1)[0] for chain in chains for identity in chain}
-    assert families, "worker and orchestrator configs name no harnesses"
+    assert families, "worker and monitor configs name no harnesses"
     for family in sorted(families):
         assert headless.get(family, {}).get("bypass") == "clean", (
             f"{family} can block on an approval prompt in bypass mode, so removing the "
-            f"deadline in {orchestrator.name} would make that wait unbounded"
+            f"deadline in {monitor.name} would make that wait unbounded"
         )
 
 
