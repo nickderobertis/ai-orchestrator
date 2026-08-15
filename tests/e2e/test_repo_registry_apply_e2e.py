@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -36,6 +37,9 @@ from orchestrator.root import REPO_ROOT
 GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
 #: The tracked checkout list the recipe registers by default.
 TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
+#: The tracked rules file the recipe installs, which decides every listed checkout's
+#: publication path.
+TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 
 #: The base a gate template's `{base}` was substituted with before the adoption:
 #: the comparison remote and base, which `onevcs` now exports as environment.
@@ -580,6 +584,18 @@ def which_checkout(path: str) -> str:
     return Path(path).name.rpartition("__")[2]
 
 
+def ruled_repositories() -> set[str]:
+    """Every repository `config/onevcs.rules.yml` names outright.
+
+    Each rule's `match:` is a one-line flow mapping ending in the repository name, so
+    this reads the tracked file rather than depending on a YAML parser this package
+    does not ship. A `match:` spelled any other way is simply not found here, which
+    fails the caller below rather than passing it — the safe direction, since what
+    that assertion is protecting is that no checkout is registered without a rule.
+    """
+    return set(re.findall(r"name:\s*([\w.-]+)\s*}", TRACKED_RULES.read_text(encoding="utf-8")))
+
+
 def test_the_tracked_checkout_list_holds_every_pre_adoption_checkout() -> None:
     """The recipe's default input, against the registry it was built to reproduce.
 
@@ -588,9 +604,9 @@ def test_the_tracked_checkout_list_holds_every_pre_adoption_checkout() -> None:
     are tracked here and each host registers the ones it holds. So every
     pre-adoption checkout must still be listed under the spelling it was migrated
     from — dropping one silently unregisters a repository on the host that has it —
-    and everything listed beside them must be another spelling of a checkout the
-    migration covered, which is what keeps this file to repositories
-    `config/onevcs.rules.yml` states a publication path for. A checkout of anything
+    and everything listed beside them must be a checkout `config/onevcs.rules.yml`
+    states a publication path for: another spelling of one the migration covered, or
+    a repository registered since under a rule of its own. A checkout of anything
     else has only the reviewed default to fall through to, which `just repos-apply`
     refuses rather than registers.
 
@@ -604,9 +620,9 @@ def test_the_tracked_checkout_list_holds_every_pre_adoption_checkout() -> None:
         if (entry := line.partition("#")[0].strip())
     }
     migrated = {entry.path.replace(PRE_ADOPTION_HOME, "~", 1) for entry in CHECKOUTS}
+    covered = {which_checkout(entry.path) for entry in CHECKOUTS} | ruled_repositories()
 
     assert all(entry.startswith("~/") for entry in listed), listed
     assert migrated <= listed, migrated - listed
-    assert {which_checkout(entry) for entry in listed} == {
-        which_checkout(entry.path) for entry in CHECKOUTS
-    }
+    unruled = {entry for entry in listed if which_checkout(entry) not in covered}
+    assert not unruled, unruled

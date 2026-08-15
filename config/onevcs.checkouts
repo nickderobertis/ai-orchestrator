@@ -32,12 +32,15 @@
 ~/projects/ai-orchestrator-isolated
 ~/projects/ai-orchestrator-isolated-2
 
-# The published CLIs this repository configures.
+# The published CLIs this repository configures — the four engines the recipes
+# wrap, plus `llmlint`, whose judged tier this repository configures in
+# `llmlint.yml` and drives from `just lint-llm-diff`.
 # Each under whichever of the two layouts its host clones it into.
 ~/projects/oneagentgraph
 ~/projects/onepipeline
 ~/projects/onepipeline-ui
 ~/projects/onevcs
+~/.ai-orchestrator/repos/nickderobertis__llmlint
 ~/.ai-orchestrator/repos/nickderobertis__oneagentgraph
 ~/.ai-orchestrator/repos/nickderobertis__oneharness
 ~/.ai-orchestrator/repos/nickderobertis__oneharness-ui

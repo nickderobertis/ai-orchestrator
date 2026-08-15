@@ -75,6 +75,15 @@ rules:
         - -c
         - export NX_BASE="${ONEVCS_COMPARISON_REMOTE:-origin}/${ONEVCS_COMPARISON_BASE:-main}"; just bootstrap && just gate
 
+  # `just check` is llmlint's own full deterministic gate — format check, clippy
+  # with warnings denied, the test suite under its coverage floor, and docs. Its
+  # `lint-llm-diff` is deliberately outside that recipe there, being the
+  # non-deterministic judge tier, so naming `check` names everything that decides.
+  - match: {host: github.com, owner: nickderobertis, name: llmlint}
+    publication: change-auto
+    approvals: none
+    gate: {command: ["just", "check"]}
+
   - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
     publication: change-auto
     approvals: none
