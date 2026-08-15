@@ -142,6 +142,27 @@ class PromptRecord(TypedDict):
     system: str
 
 
+class Surface(TypedDict):
+    """The fields of a handed-out surface this suite reads. `onepipeline` owns the rest."""
+
+    kind: str
+    message: str
+
+
+class StreamedEvent(TypedDict):
+    """One journal envelope as `onepipeline next` returns it, narrowed to its origin."""
+
+    source: str
+
+
+class SurfaceRead(TypedDict):
+    """`onepipeline next`'s answer: the surface, if any, and the events its profile admits."""
+
+    status: str
+    surface: Surface | None
+    events: list[StreamedEvent]
+
+
 def _environment(
     tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION
 ) -> dict[str, str]:
@@ -1052,6 +1073,24 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
         assert "monitor-edit" in stream.stdout, (
             "the engine queued no planner surface naming the monitor's edit, so a fix "
             f"the monitor applied is invisible to the planner:\n{stream.stdout}"
+        )
+
+        # And consumed the way a planner consumes one. `just channel-next` hands out
+        # the surface with the events its profile admits, so this is also where the
+        # recipe's `planner` default is held live: consuming a surface mutates the
+        # queue, so it is done here on this journey's own run rather than on the
+        # shared one.
+        read = _just("channel-next", "monitor-edit-e2e", environment=environment, seconds=60)
+        assert read.returncode == 0, read.stderr
+        handed = cast(SurfaceRead, json.loads(read.stdout))
+        assert handed["surface"] is not None, (
+            f"the queued monitor-edit surface was not handed out:\n{read.stdout}"
+        )
+        assert handed["surface"]["kind"] == "monitor-edit", handed["surface"]
+        sources = {event["source"] for event in handed["events"]}
+        assert sources == {"pipeline"}, (
+            "`just channel-next` no longer reads through the planner profile; it "
+            f"carried events from {sorted(sources)}"
         )
     finally:
         _just("stop", "monitor-edit-e2e", environment=environment, seconds=60)
