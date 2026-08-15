@@ -54,7 +54,11 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import TypedDict
+from typing import NewType, TypedDict
+
+#: A onepipeline run id. Distinguished from the task prose and message text it is
+#: parsed out of, because the only thing that makes it a run id is where it was found.
+RunId = NewType("RunId", str)
 
 #: How the composed dag-scope task names its run, on its first line:
 #: ``onepipeline run `scheduler-research`.``. That opening is the published
@@ -159,14 +163,14 @@ def read_frame(raw: str) -> SupervisorFrame | int:
     return frame
 
 
-def named_run(frame: SupervisorFrame) -> str | None:
+def named_run(frame: SupervisorFrame) -> RunId | None:
     """The run this member is watching, as its composed task opens by naming it."""
     task = frame.get("task")
     named = RUN_IN_COMPOSED_TASK.search(task) if isinstance(task, str) else None
-    return named.group(1) if named is not None else None
+    return RunId(named.group(1)) if named is not None else None
 
 
-def surface_for(frame: SupervisorFrame, run: str) -> ObserverFrame | int:
+def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
     """Turn one supervisor frame into the surface the planner is asked to answer."""
     messages = frame.get("messages")
     if not isinstance(messages, list):
@@ -191,7 +195,7 @@ def surface_for(frame: SupervisorFrame, run: str) -> ObserverFrame | int:
     return ObserverFrame(kind=SURFACE_KIND, message=spoken[-1], blocking=False)
 
 
-def ruling_from(answer: str, run: str) -> SupervisorResponse | int:
+def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:
     """Check the channel's answer is a ruling onejudge can act on before relaying it."""
     try:
         parsed = json.loads(answer)
@@ -208,6 +212,17 @@ def ruling_from(answer: str, run: str) -> SupervisorResponse | int:
             "a ruling is a JSON object carrying a boolean `completion`; check the "
             "onepipeline release against this file's header",
         )
+    for optional in ("message", "reason"):
+        if optional in parsed and not isinstance(parsed[optional], str):
+            return fail(
+                f"the planner channel's `{optional}` for run {run} is not text: "
+                f"{parsed[optional]!r}",
+                f"`{optional}` is prose onejudge hands to the monitor; check the "
+                "onepipeline release against this file's header",
+            )
+    # Unknown fields are relayed rather than refused, deliberately: onejudge decides
+    # what it accepts, and refusing here would break this filter on an additive
+    # release that onejudge itself is happy with.
     return parsed
 
 

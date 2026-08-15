@@ -68,7 +68,7 @@ place based on its task performance:
 ```sh
 just new-persona <name> --persona-dir scratch/personas
 # Then launch a one-node plan whose node names that persona as a path relative to
-# graphs/ (see examples/single-node-direct.plan.json for the plan shape):
+# graphs/:
 just orchestrate scratch/draft.plan.json
 ```
 

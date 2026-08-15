@@ -1517,9 +1517,7 @@ merge is never mocked; only GitHub's decisioning and the paid model are.
 These journeys and the measurements below belong to the published `onepipeline`
 crate, which is where the lifecycle implementation and its suite now live; they are
 kept here because the judgment is the operator's to apply when reading a slow
-lifecycle run. The named journeys are that crate's, not this checkout's — see
-[`test-suite-disposition.md`](test-suite-disposition.md) for what this repository
-still owns.
+lifecycle run. Every journey named below is that crate's, not this checkout's.
 
 **Where the time is.** Not in git. Instrumenting every subprocess and every
 lifecycle phase of the slowest journeys puts essentially the whole of each one

@@ -1509,6 +1509,9 @@ def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
     environment = _environment(tmp_path, oneharness_bin)
     channel = tmp_path / "stand-in-channel"
     answers = tmp_path / "answer.txt"
+    # llmlint: ignore[e2e_not_mocked] The subject of this journey is what the filter
+    # does with an answer the published `channel serve` never gives, so the published
+    # one cannot produce the input under test; every other boundary here is real.
     # The stand-in reads the surface and replies with whatever the case put in the
     # file, so the answer travels as bytes rather than through a shell quoting it.
     channel.write_text(

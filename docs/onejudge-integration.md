@@ -98,9 +98,11 @@ This repository uses three onejudge provider arrangements:
   planner**: its agent side runs under `oneharness.orchestrator.toml`, and its
   judge side is a command provider reaching `onepipeline channel serve` through
   `scripts/channel-serve.py`. That filter exists because the two halves agree on
-  the response object and not on the request — see [Serving the channel as the
-  monitor's judge side](orchestration.md#serving-the-channel-as-the-monitors-judge-side)
-  for both shapes and the refusal a direct wiring gets.
+  the response object and not on the request.
+  <!-- llmlint: ignore[no_redundant_instruction_pointers] The two stdin shapes are one contract with one source, and `contracts_have_one_source_or_a_drift_gate` is why they are not restated here; this names where that source is rather than re-advertising the document. -->
+  [Serving the channel as the monitor's judge
+  side](orchestration.md#serving-the-channel-as-the-monitors-judge-side) holds both
+  shapes and the refusal a direct wiring gets.
 
 `onepipeline start --dag-graph` launches that graph beside the run it is driving.
 The wiring is specific to the observer graph; worker dispatch retains its ordinary
