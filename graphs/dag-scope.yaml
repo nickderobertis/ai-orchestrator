@@ -1,3 +1,4 @@
+# llmlint: ignore-file[changed_behavior_has_e2e] The `check-in` member's `task` is prose given to a paid model, and whether a model then refrains from a verb it was told not to send cannot be driven by a deterministic double. What is provable is driven: tests/e2e/test_orchestrate_launch_e2e.py launches a run whose pacemaker comes due mid-flight and asserts the prohibition reached the prompt it was actually given.
 # The dag-scope agent graph `just orchestrate` attaches to every run it launches.
 #
 # `onepipeline start --dag-graph <REF>` names it and hands it to `oneagentgraph
@@ -40,21 +41,16 @@ members:
     # the published crate's own example graph shows.
     #
     # `judge: {command: ["onepipeline", "channel", "serve", RUN]}` is what that
-    # example names, and it still cannot run here. A onejudge command provider is
-    # handed `{"op": "supervisor", "task": …, "messages": [...]}` on stdin, and
-    # `channel serve` parses its stdin as its own boundary frame
-    # (`{kind, message, blocking?, node?}`, unknown fields refused). Re-measured at
-    # this adoption from both ends: a real `oneagentgraph run` whose judge side was a
-    # frame-dumping command recorded that same `"op": "supervisor"` envelope under
-    # the adopted onejudge 0.3.10 and under the unadopted 0.4.0 alike, and piping the
-    # envelope into `onepipeline channel serve` refused it with `the observer emitted
-    # a bad frame: unknown field 'op'`. So the newer release is not the fix either.
-    # Reported upstream; when it is fixed this member's judge becomes the channel and
-    # the planner supervises the conversation directly.
+    # example names, and the two protocols do not meet: a onejudge command provider
+    # is handed `{"op": "supervisor", …}`, while `channel serve` parses its stdin as
+    # `{kind, message, blocking?, node?}` and refuses an unknown field. Re-measured
+    # from both ends at this adoption, under onejudge 0.3.10 and the unadopted 0.4.0
+    # alike, so the newer release is not the fix. Reported upstream; when it is
+    # fixed, this member's judge becomes the channel.
     #
-    # Until then the planner still steers the run over the channel — surfaces with
-    # `just channel-next`, live graph edits and `complete` with `just channel-reply`
-    # — because those are queued and reconciled independently of the judge side.
+    # The planner steers the run over the channel meanwhile — `just channel-next`,
+    # `just channel-reply` — which is queued and reconciled independently of the
+    # judge side.
     judge:
       oneharness_config: ../oneharness.judge.toml
     mode: bypass
@@ -67,26 +63,18 @@ members:
   # It claims its own `task`, and that is a rule rather than a nicety. `onepipeline`
   # composes ONE task for this graph and `oneagentgraph` hands it to every member
   # that does not claim one; a member's own `task` REPLACES that composed task as its
-  # whole prompt. So this member is told what it is for here, rather than inheriting
-  # whatever the run-level task happens to say — and it must therefore name the run
-  # itself, which it does through `$ONEPIPELINE_RUN_ID` in the environment. It cannot
-  # name it by interpolating the composed task back in, because AT THIS DOCUMENT'S
-  # VERSION there is no placeholder to do it with: `oneagentgraph` expands `{task}`
+  # whole prompt. So this member is told what it is for here rather than inheriting
+  # the run-level task, and it names the run itself through `$ONEPIPELINE_RUN_ID`.
+  # It cannot interpolate the composed task back in: `oneagentgraph` expands `{task}`
   # only from schema 4, so under the `version: 3` above the token is passed through
-  # literally and writing one would send a model the six characters. Re-measured at
-  # this adoption, not read: the same member run at 3 and at 4 was handed
-  # `prefix {task} suffix` at 3 and `prefix COMPOSED TASK suffix` at 4. Raising the
-  # version to get the placeholder is a real option, not a closed door —
-  # oneagentgraph 0.2.14 reads schema versions 1 through 6 — but it is a separate
-  # change, and this member does not need it: `$ONEPIPELINE_RUN_ID` already names
-  # the run, and a member that inherited the run-level task would be back to being
-  # told the monitor's job.
+  # literally — re-measured at this adoption by running one member at each version.
+  # Raising the version is a real option (oneagentgraph 0.2.14 reads 1 through 6) but
+  # a separate change this member does not need.
   #
-  # Its task scopes it to reporting and away from editing, and that scoping is
-  # load-bearing rather than tidy. This member is single-sided and finitely
-  # deadlined, so it takes one short turn and exits; a live edit issued from it
-  # would be attributed to a watcher that is no longer watching by the time the
-  # reconciler answers. Judgment about the running graph belongs to the `monitor`
+  # Its task scopes it to reporting and away from editing, which is load-bearing
+  # rather than tidy: this member is single-sided and finitely deadlined, so a live
+  # edit issued from it would be answered after the member that issued it had
+  # stopped watching. Judgment about the running graph belongs to the `monitor`
   # member above, which stays for the run.
   #
   # Never point this member at ../oneharness.orchestrator.toml: it reads its own

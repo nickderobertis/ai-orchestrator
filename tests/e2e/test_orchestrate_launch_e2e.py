@@ -26,7 +26,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import NamedTuple, Required, TypedDict, cast
 
 import pytest
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
@@ -79,9 +79,11 @@ FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
 #: only what the run is, so this is the only thing that says what the member is for.
 WATCH_ROLE = "Actively monitor one executing tracked graph"
 
-#: The read-time profile the monitor is told to watch through: the unfiltered one, which
-#: carries each dispatched worker's turns as well as the pipeline's own node events.
-DETAILED_PROFILE = "onepipeline monitor <run-id> --filter monitor"
+#: The read the monitor's persona tells it to make: the `monitor` profile, which carries
+#: each dispatched worker's turns as well as the pipeline's own node events. The whole
+#: command rather than the profile name, because naming `monitor` alone would also match
+#: the member, the recipe, and the verb.
+DETAILED_STREAM_COMMAND = "onepipeline monitor <run-id> --filter monitor"
 
 #: A launching session the journey states rather than inherits. The suite runs
 #: inside a dispatch whose own harness session would otherwise decide these
@@ -161,6 +163,53 @@ class SurfaceRead(TypedDict):
     status: str
     surface: Surface | None
     events: list[StreamedEvent]
+
+
+class EditCommand(TypedDict, total=False):
+    """One live-edit command, as `onepipeline`'s reply envelope carries it.
+
+    `op` is the only field every command has; the rest are the union of what the
+    published operations take, which is why they are `total=False`. Stating them
+    rather than passing a bare mapping is what makes a command aimed at a field no
+    op accepts a type error here instead of a refusal at the engine.
+    """
+
+    op: Required[str]
+    id: str
+    note: str
+    ref: str
+    reason: str
+    deps: list[str]
+    dependents: str
+    node: PlanNode
+
+
+class ReplyEnvelope(TypedDict, total=False):
+    """The reply envelope, which is closed to exactly these fields.
+
+    `onepipeline` refuses an unknown one whole — verdict and edits with it — so the
+    shape is worth stating rather than assembling ad hoc; `author` is what bounds
+    which `commands` are allowed at all.
+    """
+
+    version: int
+    author: str
+    completion: bool
+    message: str
+    reason: str
+    commands: list[EditCommand]
+
+
+class RefusedOnTheGraph(NamedTuple):
+    """An in-allowlist command, and the graph-state reason a settled run refuses it.
+
+    Named rather than positional because the two are different claims — what was
+    sent, and what makes the refusal the graph's rather than an authority verdict —
+    and the distinction is the whole point of the parametrization.
+    """
+
+    command: EditCommand
+    refusal: str
 
 
 def _environment(
@@ -581,7 +630,7 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         # The whole point of the role: it reads the unfiltered stream, not the planner's
         # summary. A monitor told to watch through the default profile would see none of
         # the worker activity it exists to judge.
-        assert DETAILED_PROFILE in " ".join(turn["system"].split()), (
+        assert DETAILED_STREAM_COMMAND in " ".join(turn["system"].split()), (
             f"the monitor is no longer told to read the detailed activity stream:\n{turn['system']}"
         )
 
@@ -919,11 +968,15 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
 
 #: Every op the monitor may issue, and what an already-settled graph answers each with.
 #: The refusal is the graph's, not an authority verdict, which is the distinction under
-#: test: these five are refused for what the node is, and the four below for who asked.
+#: test: these four are refused for what the node is, and the four below for who asked.
+#: `add` is the fifth allowed op and applies even here, so it is exercised on a run of
+#: its own rather than against this settled one.
 MONITOR_OPS_ON_A_SETTLED_GRAPH = (
-    ({"op": "context", "id": "research", "note": "n"}, "nothing will read the note"),
-    ({"op": "cancel", "id": "research"}, "not pending or running"),
-    (
+    RefusedOnTheGraph(
+        {"op": "context", "id": "research", "note": "n"}, "nothing will read the note"
+    ),
+    RefusedOnTheGraph({"op": "cancel", "id": "research"}, "not pending or running"),
+    RefusedOnTheGraph(
         {
             "op": "retry",
             "id": "research",
@@ -931,11 +984,11 @@ MONITOR_OPS_ON_A_SETTLED_GRAPH = (
         },
         "not running, failed, or cancelled",
     ),
-    ({"op": "requeue", "id": "research"}, "not parked"),
+    RefusedOnTheGraph({"op": "requeue", "id": "research"}, "not parked"),
 )
 
 #: Every op the monitor may not issue, whatever the graph looks like.
-OPS_THE_MONITOR_MAY_NOT_ISSUE = (
+OPS_THE_MONITOR_MAY_NOT_ISSUE: tuple[EditCommand, ...] = (
     {"op": "drop", "id": "research", "dependents": "drop"},
     {"op": "reparent", "id": "research", "deps": []},
     {"op": "attest", "ref": "research"},
@@ -943,9 +996,7 @@ OPS_THE_MONITOR_MAY_NOT_ISSUE = (
 )
 
 
-def _monitor_reply(
-    launched: Launched, envelope: dict[str, object]
-) -> subprocess.CompletedProcess[str]:
+def _monitor_reply(launched: Launched, envelope: ReplyEnvelope) -> subprocess.CompletedProcess[str]:
     """Send one envelope through the recipe a monitor's edit actually goes out on."""
     return subprocess.run(
         ["just", "channel-reply", SHIPPED_RUN],
@@ -962,7 +1013,7 @@ def _monitor_reply(
 @pytest.mark.xdist_group("orchestrate-launch")
 @pytest.mark.parametrize("command", OPS_THE_MONITOR_MAY_NOT_ISSUE, ids=lambda row: str(row["op"]))
 def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
-    launched: Launched, command: dict[str, object]
+    launched: Launched, command: EditCommand
 ) -> None:
     """`personas/orchestrator.yaml` states the allowlist; the engine is what enforces it.
 
@@ -985,10 +1036,10 @@ def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
 
 @pytest.mark.xdist_group("orchestrate-launch")
 @pytest.mark.parametrize(
-    ("command", "expected"), MONITOR_OPS_ON_A_SETTLED_GRAPH, ids=lambda row: str(row)[:24]
+    "refused_on_the_graph", MONITOR_OPS_ON_A_SETTLED_GRAPH, ids=lambda row: str(row.command["op"])
 )
 def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_author(
-    launched: Launched, command: dict[str, object], expected: str
+    launched: Launched, refused_on_the_graph: RefusedOnTheGraph
 ) -> None:
     """The five allowed ops reach the graph, and are answered by what the graph is.
 
@@ -999,14 +1050,17 @@ def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_autho
     refusal read alike to a monitor that only checks the exit status. `add` is the
     fifth and is exercised separately below, since it is the one that still applies.
     """
-    refused = _monitor_reply(launched, {"version": 1, "author": "monitor", "commands": [command]})
+    refused = _monitor_reply(
+        launched,
+        {"version": 1, "author": "monitor", "commands": [refused_on_the_graph.command]},
+    )
 
     assert refused.returncode != 0, refused.stdout
     reported = refused.stderr + refused.stdout
     assert "is not an op the monitor may issue" not in reported, (
         f"an in-allowlist op was refused for who asked rather than for the graph:\n{reported}"
     )
-    assert expected in reported, reported
+    assert refused_on_the_graph.refusal in reported, reported
 
 
 def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
