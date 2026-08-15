@@ -1468,6 +1468,70 @@ def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
         )
 
 
+#: The seam `scripts/channel-serve.py` resolves its `onepipeline` through, so a journey
+#: can drive what happens when that binary cannot run or answers nothing.
+ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
+
+
+def test_the_channel_filter_reports_a_channel_it_cannot_run(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A toolchain that cannot answer the planner is reported, not answered around.
+
+    The filter resolves the pinned `onepipeline` rather than looking one up, so the
+    failure a broken checkout produces is a spawn failure — and the monitor's whole
+    conversation depends on it. Held here because the alternative to reporting it is
+    the one thing this filter must never do: rule on the run itself.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    environment[ONEPIPELINE_BIN] = str(tmp_path / "no-such-onepipeline")
+
+    refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+
+    assert refused.returncode != 0, refused.stdout
+    assert "could not run" in refused.stderr, refused.stderr
+    # The remedy, not just the cause: a spawn failure is fixable and the operator is
+    # told how.
+    assert "just bootstrap" in refused.stderr, refused.stderr
+    assert "completion" not in refused.stdout, refused.stdout
+
+
+def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Whatever the channel says is checked to be a ruling before onejudge acts on it.
+
+    onejudge reads this stdout as the planner's verdict, so relaying an unchecked
+    response would let a changed release — or an empty one — settle or continue a run
+    nobody ruled on. Both shapes are driven against the real script through a stand-in
+    channel, which is the only way to produce an answer the published one never gives.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    channel = tmp_path / "stand-in-channel"
+    answers = tmp_path / "answer.txt"
+    # The stand-in reads the surface and replies with whatever the case put in the
+    # file, so the answer travels as bytes rather than through a shell quoting it.
+    channel.write_text(
+        f"#!/usr/bin/env bash\ncat > /dev/null\ncat {answers}\n",
+        encoding="utf-8",
+    )
+    channel.chmod(0o755)
+    environment[ONEPIPELINE_BIN] = str(channel)
+
+    for case, answer, expected in (
+        ("an empty answer", "", "closed without answering"),
+        ("an answer that is not JSON", "ok\n", "is not JSON"),
+        ("an answer that is not a ruling", '{"message": "sure"}\n', "not a supervisor ruling"),
+    ):
+        answers.write_text(answer, encoding="utf-8")
+
+        refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+
+        assert refused.returncode != 0, f"{case} was relayed: {refused.stdout}"
+        assert expected in refused.stderr, f"{case}: {refused.stderr}"
+        assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
+
+
 def test_the_channel_filter_reports_a_refusal_from_the_channel_itself(
     tmp_path: Path, oneharness_bin: str
 ) -> None:

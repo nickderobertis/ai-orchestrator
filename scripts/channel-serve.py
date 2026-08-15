@@ -9,10 +9,9 @@ one supervisor frame to a command's stdin and reads one response object back.
 
 The two halves already agree on the **response**. `channel serve` answers with
 exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
-onejudge's `supervisor` op expects, so nothing here touches it — it is passed
-through byte for byte. What the two do not agree on is the **request**, and this
-filter is that one reconciliation, as onejudge 0.3.10 writes it and `onepipeline`
-0.5.0 reads it:
+onejudge's `supervisor` op expects. What they do not agree on is the **request**,
+and this filter is that one reconciliation, as onejudge 0.3.10 writes it and
+`onepipeline` 0.5.0 reads it:
 
     onejudge  ->  {"op": "supervisor", "task", "persona", "done_when",
                    "worktree", "history_name", "messages": [...], "session"}
@@ -21,7 +20,7 @@ filter is that one reconciliation, as onejudge 0.3.10 writes it and `onepipeline
 Handing onejudge's frame over unchanged is refused by name — `the observer emitted
 a bad frame: unknown field 'op'` — and the member then dies with `provider produced
 no output`, which is how a graph that wired the two together directly loses its
-monitor on the first turn while the run carries on undriven by it.
+monitor on the first turn while the run carries on unwatched.
 
 Two values have to be recovered from that frame rather than read from the
 environment, and both are recovered from what the frame itself carries:
@@ -35,19 +34,27 @@ environment, and both are recovered from what the frame itself carries:
 
 The surface is raised **non-blocking**. Blocking it would hold the run at
 `awaiting-planner` on every monitor turn, which would end the attached launch's
-settle-and-return contract and stop the frontier to ask a question about
-watching rather than about work. A planner who never answers leaves the monitor
-waiting, which costs the run nothing: it is a watcher, and the engine drives the
-graph without it.
+settle-and-return contract and stop the frontier to ask a question about watching
+rather than about work. A planner who never answers leaves the monitor waiting,
+which costs the run nothing: it is a watcher, and the engine drives the graph
+without it.
+
+**Nothing here answers on the planner's behalf.** onejudge reads this process's
+stdout as the planner's ruling, so a fabricated `{"completion": ...}` would
+continue or settle a run nobody ruled on. Every path that cannot reach a real
+answer — including a channel response this cannot recognise — exits non-zero with
+what went wrong and what to do about it.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 #: How the composed dag-scope task names its run, on its first line:
 #: ``onepipeline run `scheduler-research`.``. That opening is the published
@@ -60,94 +67,200 @@ RUN_IN_COMPOSED_TASK = re.compile(r"onepipeline run `([^`]+)`")
 #: names what the surface *is* rather than borrowing the pacemaker's word for it.
 SURFACE_KIND = "monitor"
 
+#: Which `onepipeline` answers the planner. Named so the binary is a seam a journey
+#: can drive, exactly as `ONEAGENTGRAPH_ONEHARNESS_BIN` is for a dispatch; unset, the
+#: release this checkout pins is used.
+ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
-def fail(message: str) -> int:
-    """Report why no supervisor answer can be produced, the way onejudge reads it."""
-    print(f"channel-serve: {message}", file=sys.stderr)
+
+class SupervisorFrame(TypedDict, total=False):
+    """What onejudge writes to a judge-side command provider's stdin.
+
+    `total=False` because this is somebody else's wire format, read defensively:
+    every field is checked before use rather than assumed present, so a release that
+    changes the frame fails here by name instead of surfacing nonsense to a planner.
+    """
+
+    op: str
+    task: str
+    persona: str
+    done_when: str
+    worktree: str
+    history_name: str
+    messages: list[dict[str, str]]
+    session: str
+
+
+class ObserverFrame(TypedDict):
+    """What `onepipeline channel serve` reads: one surface to raise for the planner."""
+
+    kind: str
+    message: str
+    blocking: bool
+
+
+class SupervisorResponse(TypedDict, total=False):
+    """The ruling onejudge acts on, and the shape `channel serve` already answers in."""
+
+    completion: bool
+    message: str
+    reason: str
+
+
+def fail(problem: str, remedy: str) -> int:
+    """Report why no planner ruling could be produced, and what to do about it."""
+    print(f"channel-serve: {problem}; {remedy}", file=sys.stderr)
     return 2
 
 
 def onepipeline_binary() -> str:
-    """The `onepipeline` this checkout pins, or whatever a PATH lookup finds.
+    """The `onepipeline` this checkout pins, or the one `ONEPIPELINE_BIN` names.
 
-    Resolved from this file's own location rather than the caller's environment: a
-    judge command is spawned by `oneagentgraph` with the member's scratch as its
-    working directory, so a relative path or an inherited PATH would decide which
-    release answers the planner.
+    Resolved from this file's own location rather than from a bare name: a judge
+    command is spawned with the run's launch directory as its working directory and
+    whatever PATH the graph inherited, so a lookup would let the ambient environment
+    decide which release answers the planner.
     """
+    named = os.environ.get(ONEPIPELINE_BIN)
+    if named:
+        return named
     pinned = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "onepipeline"
     return str(pinned) if pinned.is_file() else "onepipeline"
 
 
-def main() -> int:
-    raw = sys.stdin.read()
+def read_frame(raw: str) -> SupervisorFrame | int:
+    """Parse and check onejudge's supervisor frame, or report why it cannot be served."""
     if not raw.strip():
-        return fail("onejudge sent no supervisor frame on stdin")
-    try:
-        frame = json.loads(raw)
-    except json.JSONDecodeError as error:
-        return fail(f"the supervisor frame onejudge sent is not JSON: {error}")
-    if not isinstance(frame, dict):
-        return fail(f"the supervisor frame must be a JSON object, got {type(frame).__name__}")
-
-    operation = frame.get("op")
-    if operation != "supervisor":
         return fail(
-            f"only the `supervisor` op reaches the planner channel, got {operation!r}; "
-            "an eval or assessment call has no planner question to ask"
+            "onejudge sent no supervisor frame on stdin",
+            "this filter is a onejudge judge-side command provider and is not meant to "
+            "be run by hand; wire it through `graphs/dag-scope.yaml`",
         )
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        return fail(
+            f"the supervisor frame onejudge sent is not JSON ({error})",
+            "check the onejudge release against the frame recorded in this file's "
+            "header, and re-measure it if the release moved",
+        )
+    if not isinstance(parsed, dict):
+        return fail(
+            f"the supervisor frame must be a JSON object, got {type(parsed).__name__}",
+            "check the onejudge release against the frame recorded in this file's header",
+        )
+    frame: SupervisorFrame = parsed
+    if frame.get("op") != "supervisor":
+        return fail(
+            f"only the `supervisor` op reaches the planner channel, got {frame.get('op')!r}",
+            "leave `evals` and `assessment` unset for this member, since neither has a "
+            "planner question to ask",
+        )
+    return frame
 
+
+def named_run(frame: SupervisorFrame) -> str | None:
+    """The run this member is watching, as its composed task opens by naming it."""
     task = frame.get("task")
     named = RUN_IN_COMPOSED_TASK.search(task) if isinstance(task, str) else None
-    if named is None:
-        return fail(
-            "the composed task does not name its run, so there is no channel to serve; "
-            "it must open `onepipeline run `<run-id>``"
-        )
-    run = named.group(1)
+    return named.group(1) if named is not None else None
 
+
+def surface_for(frame: SupervisorFrame, run: str) -> ObserverFrame | int:
+    """Turn one supervisor frame into the surface the planner is asked to answer."""
     messages = frame.get("messages")
     if not isinstance(messages, list):
-        return fail("the supervisor frame carries no `messages` conversation")
-    said = [
-        message.get("content")
+        return fail(
+            f"the supervisor frame for run {run} carries no `messages` conversation",
+            "check the onejudge release against the frame recorded in this file's header",
+        )
+    spoken = [
+        message["content"]
         for message in messages
-        if isinstance(message, dict) and message.get("role") == "assistant"
+        if isinstance(message, dict)
+        and message.get("role") == "assistant"
+        and isinstance(message.get("content"), str)
+        and message["content"].strip()
     ]
-    spoken = [content for content in said if isinstance(content, str) and content.strip()]
     if not spoken:
         return fail(
-            f"the monitor said nothing for run {run}, so there is nothing to ask the planner about"
+            f"the monitor said nothing for run {run}, so there is nothing to ask the planner about",
+            f"read its turns with `just monitor {run} --filter monitor` to see why the "
+            "turn produced no message",
         )
+    return ObserverFrame(kind=SURFACE_KIND, message=spoken[-1], blocking=False)
 
-    surface = json.dumps(
-        {"kind": SURFACE_KIND, "message": spoken[-1], "blocking": False},
-        ensure_ascii=False,
-    )
+
+def ruling_from(answer: str, run: str) -> SupervisorResponse | int:
+    """Check the channel's answer is a ruling onejudge can act on before relaying it."""
+    try:
+        parsed = json.loads(answer)
+    except json.JSONDecodeError as error:
+        return fail(
+            f"the planner channel answered run {run} with something that is not JSON ({error})",
+            "check the onepipeline release against the response recorded in this file's "
+            "header, and re-measure it if the release moved",
+        )
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("completion"), bool):
+        return fail(
+            f"the planner channel's answer for run {run} is not a supervisor ruling: "
+            f"{answer[:200]}",
+            "a ruling is a JSON object carrying a boolean `completion`; check the "
+            "onepipeline release against this file's header",
+        )
+    return parsed
+
+
+def main() -> int:
+    frame = read_frame(sys.stdin.read())
+    if isinstance(frame, int):
+        return frame
+    run = named_run(frame)
+    if run is None:
+        return fail(
+            "the composed task does not name its run, so there is no channel to serve",
+            "give this member no `task` of its own, or open one with `{task}`, so the "
+            "run-level task reaches it",
+        )
+    surface = surface_for(frame, run)
+    if isinstance(surface, int):
+        return surface
+
+    binary = onepipeline_binary()
     try:
         served = subprocess.run(
-            [onepipeline_binary(), "channel", "serve", run],
-            input=surface + "\n",
+            [binary, "channel", "serve", run],
+            input=json.dumps(surface, ensure_ascii=False) + "\n",
             text=True,
             capture_output=True,
             check=False,
         )
     except OSError as error:
-        return fail(f"could not run `onepipeline channel serve {run}`: {error}")
+        return fail(
+            f"could not run `{binary} channel serve {run}` ({error})",
+            "restore the pinned toolchain with `just bootstrap`, or point "
+            f"{ONEPIPELINE_BIN} at a usable onepipeline",
+        )
 
     if served.returncode != 0:
-        detail = served.stderr.strip() or f"exit {served.returncode}"
-        return fail(f"the planner channel refused the surface for run {run}: {detail}")
-
-    answer = served.stdout.strip()
-    if not answer:
         return fail(
-            f"the planner channel closed without answering the surface for run {run}; "
-            "the run may have settled while the monitor was waiting"
+            f"the planner channel refused the surface for run {run}: "
+            f"{served.stderr.strip() or f'exit {served.returncode}'}",
+            f"check the run id with `just runs`, and that it is still live with "
+            f"`just status {run}`",
         )
-    # Passed through unchanged: this is already onejudge's supervisor response object,
-    # and re-encoding it here would make this filter an author of verdicts.
-    print(answer)
+    if not served.stdout.strip():
+        return fail(
+            f"the planner channel closed without answering the surface for run {run}",
+            f"check with `just status {run}` whether the run settled while the monitor "
+            "was waiting, which leaves nothing to answer it",
+        )
+    ruling = ruling_from(served.stdout.strip(), run)
+    if isinstance(ruling, int):
+        return ruling
+    # Re-serialized from the ruling this validated rather than echoed through, so
+    # nothing reaches onejudge that was not checked to be a ruling.
+    print(json.dumps(ruling, ensure_ascii=False))
     return 0
 
 
