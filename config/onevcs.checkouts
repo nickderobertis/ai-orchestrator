@@ -13,21 +13,38 @@
 #
 # A path this host does not have is reported as skipped rather than failing the
 # run, so a second machine registers the checkouts it does have.
+#
+# That is what the duplicate-looking entries below are. The two hosts this
+# repository dispatches from lay the same checkouts out differently: one keeps its
+# own clones at the top of `$HOME` and the engine repositories under `~/projects`,
+# the other keeps everything under `~/projects` and lets the dispatcher clone the
+# engines into `~/.ai-orchestrator/repos/<owner>__<name>`. Both spellings of each
+# checkout are listed and each host registers the ones it has, so this stays one
+# tracked source of truth rather than a per-host fork of one.
 
 # This repository: the publication checkout, then the two safety clones every
 # self-dispatch executes in.
+# At the top of `$HOME` on one host, under `~/projects` on the other.
 ~/ai-orchestrator
 ~/ai-orchestrator-isolated
 ~/ai-orchestrator-isolated-2
+~/projects/ai-orchestrator
+~/projects/ai-orchestrator-isolated
+~/projects/ai-orchestrator-isolated-2
 
 # The published CLIs this repository configures.
+# Each under whichever of the two layouts its host clones it into.
 ~/projects/oneagentgraph
 ~/projects/onepipeline
 ~/projects/onepipeline-ui
 ~/projects/onevcs
+~/.ai-orchestrator/repos/nickderobertis__oneagentgraph
 ~/.ai-orchestrator/repos/nickderobertis__oneharness
 ~/.ai-orchestrator/repos/nickderobertis__oneharness-ui
 ~/.ai-orchestrator/repos/nickderobertis__onejudge
+~/.ai-orchestrator/repos/nickderobertis__onepipeline
+~/.ai-orchestrator/repos/nickderobertis__onepipeline-ui
+~/.ai-orchestrator/repos/nickderobertis__onevcs
 
 # Other repositories dispatched against from this host.
 ~/.ai-orchestrator/repos/nickderobertis__crozier

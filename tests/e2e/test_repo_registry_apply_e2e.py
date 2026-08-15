@@ -148,6 +148,11 @@ def _golden() -> tuple[tuple[Identity, ...], tuple[Checkout, ...]]:
 IDENTITIES, CHECKOUTS = _golden()
 #: Each identity, keyed the way its checkout records name it.
 BY_URL = {identity.url: identity for identity in IDENTITIES}
+#: The `$HOME` the pre-adoption registry's paths are absolute under, taken from the
+#: fixture itself. The registry was captured on one host and this suite runs on
+#: others, so substituting *this* host's home would render the fixture's paths as
+#: `~`-spellings no host has and make the tracked list unmatchable off that machine.
+PRE_ADOPTION_HOME = os.path.commonpath([entry.path for entry in CHECKOUTS])
 
 
 def checkout(directory: Path, origin: str) -> Path:
@@ -562,11 +567,46 @@ def test_a_repository_no_rule_names_fails_the_apply(tmp_path: Path) -> None:
     assert "unlisted" in result.stderr
 
 
+def which_checkout(path: str) -> str:
+    """Which checkout a path names, whichever host's layout spelled it.
+
+    The hosts this list serves lay the same checkouts out differently — one keeps
+    this repository's clones at the top of `$HOME` and the engine repositories under
+    `~/projects`, the other keeps everything under `~/projects` and lets the
+    dispatcher clone the engines into `~/.ai-orchestrator/repos/<owner>__<name>` —
+    so two spellings of one checkout agree on nothing but their last component, with
+    that owner prefix removed. `onevcs` reads the same component to derive an alias.
+    """
+    return Path(path).name.rpartition("__")[2]
+
+
 def test_the_tracked_checkout_list_holds_every_pre_adoption_checkout() -> None:
-    """The recipe's default input, against the registry it was built to reproduce."""
+    """The recipe's default input, against the registry it was built to reproduce.
+
+    Two claims, because the list is longer than that registry and has to be: a
+    checkout a host does not have is skipped by design, so both layouts' spellings
+    are tracked here and each host registers the ones it holds. So every
+    pre-adoption checkout must still be listed under the spelling it was migrated
+    from — dropping one silently unregisters a repository on the host that has it —
+    and everything listed beside them must be another spelling of a checkout the
+    migration covered, which is what keeps this file to repositories
+    `config/onevcs.rules.yml` states a publication path for. A checkout of anything
+    else has only the reviewed default to fall through to, which `just repos-apply`
+    refuses rather than registers.
+
+    Nothing here reads this host's own `$HOME`: the fixture's paths are absolute
+    under the home of the host the registry was captured on, and rendering them
+    against any other one produces spellings that could never match.
+    """
     listed = {
-        line.partition("#")[0].strip()
+        entry
         for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines()
+        if (entry := line.partition("#")[0].strip())
     }
-    expected = {entry.path.replace(str(Path.home()), "~", 1) for entry in CHECKOUTS}
-    assert listed - {""} == expected
+    migrated = {entry.path.replace(PRE_ADOPTION_HOME, "~", 1) for entry in CHECKOUTS}
+
+    assert all(entry.startswith("~/") for entry in listed), listed
+    assert migrated <= listed, migrated - listed
+    assert {which_checkout(entry) for entry in listed} == {
+        which_checkout(entry.path) for entry in CHECKOUTS
+    }

@@ -16,9 +16,11 @@ run store and starts no agents.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import time
@@ -46,6 +48,46 @@ def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
+
+
+def _serve(command: list[str], environment: dict[str, str] | None = None) -> subprocess.Popen[str]:
+    """Start one server, in a session of its own so the whole tree can be stopped.
+
+    A server started here is never the process this returns: `just` runs the recipe
+    in a shell, the wrapper script `exec`s the published CLI, and `uv run` starts the
+    server under itself. `just` also does not exit on `SIGTERM` — it keeps waiting on
+    the recipe — so signalling this process alone leaves the server bound to its port
+    and holding these pipes open, which is a teardown that hangs until its timeout
+    and a port that is still answering when the next journey binds one. A session of
+    its own makes the whole tree one process group, which `_stop` signals as a whole.
+    """
+    return subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+
+
+def _stop(*processes: subprocess.Popen[str]) -> None:
+    """Stop each server's process group, and reap what it started."""
+
+    def signalled(process: subprocess.Popen[str], number: int) -> None:
+        # A group already gone is one that exited on its own, and is reaped below.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, number)
+
+    for process in processes:
+        signalled(process, signal.SIGTERM)
+    for process in processes:
+        try:
+            process.communicate(timeout=e2e_timeout(30))
+        except subprocess.TimeoutExpired:
+            signalled(process, signal.SIGKILL)
+            process.communicate()
 
 
 @dataclass
@@ -100,24 +142,16 @@ def served(tmp_path: Path) -> Iterator[Served]:
     ui_port = _free_port()
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
-    api = subprocess.Popen(
-        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    api = _serve(
+        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)]
     )
-    recipe = subprocess.Popen(
+    recipe = _serve(
         ["just", "dag-ui"],
-        cwd=REPO_ROOT,
-        env={
+        {
             **os.environ,
             "DAG_UI_PORT": str(ui_port),
             "DAG_UI_API_URL": f"http://127.0.0.1:{api_port}",
         },
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
     )
     base = f"http://127.0.0.1:{ui_port}"
     try:
@@ -125,9 +159,7 @@ def served(tmp_path: Path) -> Iterator[Served]:
         _await_ready(f"{base}/", recipe, "the bundle server")
         yield Served(base=base, api=f"http://127.0.0.1:{api_port}")
     finally:
-        for process in (recipe, api):
-            process.terminate()
-            process.communicate(timeout=e2e_timeout(30))
+        _stop(recipe, api)
 
 
 def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
@@ -202,21 +234,16 @@ def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered() -> None:
     """
     ui_port = _free_port()
     api = f"http://127.0.0.1:{_free_port()}"
-    recipe = subprocess.Popen(
+    recipe = _serve(
         ["just", "dag-ui"],
-        cwd=REPO_ROOT,
-        env={**os.environ, "DAG_UI_PORT": str(ui_port), "DAG_UI_API_URL": api},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        {**os.environ, "DAG_UI_PORT": str(ui_port), "DAG_UI_API_URL": api},
     )
     base = f"http://127.0.0.1:{ui_port}"
     try:
         _await_ready(f"{base}/", recipe, "the bundle server")
         status, body, content_type = Served(base=base, api=api).get("/api/v2/runs")
     finally:
-        recipe.terminate()
-        recipe.communicate(timeout=e2e_timeout(30))
+        _stop(recipe)
 
     assert status == 502
     assert content_type == "application/json"
@@ -303,24 +330,17 @@ def test_the_address_file_is_what_an_unnamed_api_proxies_to(tmp_path: Path) -> N
         f"127.0.0.1:{api_port}\n", encoding="utf-8"
     )
 
-    api = subprocess.Popen(
-        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    api = _serve(
+        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)]
     )
     unnamed = {key: value for key, value in os.environ.items() if key != "DAG_UI_API_URL"}
-    recipe = subprocess.Popen(
+    recipe = _serve(
         ["bun", str(server / "dag-ui-server.js")],
-        env={
+        {
             **unnamed,
             "DAG_UI_DIST": str(REPO_ROOT / "node_modules/onepipeline-ui/dist"),
             "DAG_UI_PORT": str(ui_port),
         },
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
     )
     base = f"http://127.0.0.1:{ui_port}"
     try:
@@ -330,9 +350,7 @@ def test_the_address_file_is_what_an_unnamed_api_proxies_to(tmp_path: Path) -> N
             "/api/v2/runs"
         )
     finally:
-        for process in (recipe, api):
-            process.terminate()
-            process.communicate(timeout=e2e_timeout(30))
+        _stop(recipe, api)
 
     # The read API's own contract, which nothing but the read API produces — so the
     # proxy reached the address the file named rather than answering for it.

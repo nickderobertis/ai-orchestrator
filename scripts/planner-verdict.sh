@@ -19,7 +19,9 @@ usage() {
 
 verdict="${1:-}"
 run="${2:-}"
-[ -n "$verdict" ] && [ -n "$run" ] || usage
+if [ -z "$verdict" ] || [ -z "$run" ]; then
+    usage
+fi
 shift 2
 text="$*"
 
