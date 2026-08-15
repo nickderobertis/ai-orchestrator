@@ -253,13 +253,14 @@ def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:
                 f"`{optional}` is prose onejudge hands to the monitor; check the "
                 "onepipeline release against this file's header",
             )
-    # llmlint: ignore[boundary_inputs_validated] Fields beyond `completion`, `message`,
-    # and `reason` are relayed rather than refused or stripped, deliberately: onejudge —
-    # not this filter — decides what a ruling may carry, so refusing them here would kill
-    # the monitor on an additive onepipeline release that onejudge itself is happy with,
-    # and stripping them would quietly withhold from onejudge what the planner sent it.
-    # The three fields onejudge acts on are all checked above; nothing that reaches it
-    # unchecked can change the ruling, which is the boundary this validates.
+    # Fields beyond `completion`, `message`, and `reason` are relayed rather than refused
+    # or stripped, deliberately: onejudge — not this filter — decides what a ruling may
+    # carry, so refusing them here would kill the monitor on an additive onepipeline
+    # release that onejudge itself is happy with, and stripping them would quietly
+    # withhold from onejudge what the planner sent it. The three fields onejudge acts on
+    # are all checked above; nothing that reaches it unchecked can change the ruling,
+    # which is the boundary this validates.
+    # llmlint: ignore[boundary_inputs_validated] onejudge, not this filter, rules on extras.
     return parsed
 
 
