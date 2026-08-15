@@ -99,21 +99,30 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   side](onejudge-integration.md#choosing-a-deadline-per-side) before re-sharing
   one.
 
+  Its `judge.command` is the one ref in that file resolved against the directory the
+  run was **launched from** rather than against the file itself, because it is an
+  argv rather than a config ref — which is the other reason `just orchestrate` is run
+  from the repository root.
+
   Attaching it is **opt-in**: `--dag-graph <REF>` ships defaulting to `off`,
   because no agent is required to run a plan. `just orchestrate` names this file
   so every run on this host gets a watcher, and passes a caller's own
   `--dag-graph` — including `off` — through untouched. There is no environment
   variable for it; the flag is the only way to move it.
 
-  The document declares **schema 3**, because `check-in` carries its own `task`.
-  `onepipeline` composes one task for this graph — it states what the run *is*,
-  its id and its goal — and `oneagentgraph` hands that task to every member which
-  does not claim one. A member's own `task` **replaces** it as that member's whole
-  prompt; there is no placeholder that interpolates it back in, so such a member
-  has to name the run itself, which `check-in` does through `$ONEPIPELINE_RUN_ID`.
-  Give a scheduled member its own task whenever its job is not the run-level task,
-  and see [the pacemaker](#the-planner-update-pacemaker) for why this one's is
-  scoped away from live edits.
+  The document declares **schema 4**, for two fields. `check-in` carries its own
+  `task`, which needs 3; that task opens with `{task}`, which `oneagentgraph`
+  expands only from 4. `onepipeline` composes one task for this graph — it states
+  what the run *is*, its id and its goal — and hands it to every member which does
+  not claim one. A member's own `task` **replaces** it, so a member that claims one
+  must interpolate it back in to learn which run it is on. That is not optional
+  here: `onepipeline` exports **no** environment variable naming the run to an
+  observer member, so a task written against `$ONEPIPELINE_RUN_ID` reads empty on an
+  operator's launch — and, inside a dispatch that exports one for its *own* run,
+  silently reports on the enclosing run instead. Give a scheduled member its own
+  task whenever its job is not the run-level task, open it with `{task}`, and see
+  [the pacemaker](#the-planner-update-pacemaker) for why this one is scoped away
+  from live edits.
 - **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
   worker supervised by one simulated-user judge. A plan node overrides it with
   `agent_graph`, and `ONEPIPELINE_NODE_GRAPH` moves the default.
@@ -132,11 +141,13 @@ Two things about them are worth knowing before reading a surprising run:
   override. `onepipeline` appends that override after the launch's `--node-set`
   values, so the plan is authoritative. Nodes with no dispatch (human and
   `expects_no_diff` nodes) name no persona and still settle normally.
-- The monitor's judge side is a simulated-user harness rather than the planner
-  channel, so the planner steers a live run through `just channel-next` and `just
-  channel-reply` — surfaces and graph edits — rather than by answering the
-  monitor's conversation directly. The graph file says why, and re-measures it at
-  each adoption.
+- The monitor's judge side **is** the planner channel. Every monitor turn ends at a
+  supervisor boundary that `onepipeline channel serve` raises as a non-blocking
+  surface and blocks on, so a planner answering it with `just channel-reply` is not
+  only editing the graph — their `message` becomes the monitor's next instruction.
+  It is reached through `scripts/channel-serve.py`, because the two halves agree on
+  the response object and disagree on the request; see [Serving the channel as the
+  monitor's judge side](#serving-the-channel-as-the-monitors-judge-side).
 
 ## The planner channel
 
@@ -221,6 +232,46 @@ being asked in one call. `channel-reply` accepts a reply file or reads JSON from
 stdin when its file argument is omitted. Both sides may exit and reattach between
 messages: channel state is durable under `runs/<run-id>/channel/` as `queue.json`,
 `surfaces.jsonl`, and `replies.jsonl`.
+
+### Serving the channel as the monitor's judge side
+
+The monitor is a two-sided onejudge member, and its judge side is the live planner
+rather than a simulated user. That is what makes a reply *supervision*: the
+planner's `message` is handed back to the monitor as its next instruction.
+
+The wiring goes through `scripts/channel-serve.py`, and the reason is one
+mismatch. The **response** shapes already agree — `onepipeline channel serve`
+answers with exactly the `{completion, message, reason}` object onejudge's
+`supervisor` op expects, and the filter passes it through byte for byte. The
+**request** shapes do not:
+
+| | Shape |
+| --- | --- |
+| onejudge 0.3.10 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
+| `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
+
+Naming `onepipeline channel serve` directly as the member's `judge.command` is
+therefore refused on the first turn — `the observer emitted a bad frame: unknown
+field 'op'` — and onejudge kills the member with `provider produced no output`,
+leaving the run driven but unwatched. The filter recovers the two values the frame
+carries and the environment does not:
+
+- **the run id**, from the composed task's opening ``onepipeline run `<id>```,
+  because `onepipeline` exports no variable naming the run to an observer member;
+- **the surface message**, from the last thing the monitor said.
+
+It raises the surface **non-blocking**. A blocking one would hold the run at
+`awaiting-planner` on every monitor turn — ending the attached launch's
+settle-and-return contract, and stopping the frontier to ask about watching rather
+than about work. A planner who never answers simply leaves the monitor waiting,
+which costs the run nothing.
+
+The filter never answers on the planner's behalf. A frame it cannot serve, and a
+refusal from the channel itself, both exit non-zero with the reason on stderr
+rather than printing a `{"completion": ...}` onejudge would act on — a fabricated
+verdict there would continue or settle a run nobody ruled on.
+`tests/e2e/test_orchestrate_launch_e2e.py` drives the whole round trip on a real
+launch, and each refusal through the real script.
 
 ### Read profiles
 

@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -78,6 +79,11 @@ FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
 #: The monitor's role, as `personas/orchestrator.yaml` states it. The composed task says
 #: only what the run is, so this is the only thing that says what the member is for.
 WATCH_ROLE = "Actively monitor one executing tracked graph"
+
+#: The surface kind `scripts/channel-serve.py` raises a monitor's supervisor boundary
+#: under. `channel serve` takes a free-form kind here, unlike `onepipeline surface
+#: --kind`, so the surface says what it is rather than borrowing the pacemaker's word.
+SURFACE_KIND_OF_A_MONITOR = "monitor"
 
 #: The read the monitor's persona tells it to make: the `monitor` profile, which carries
 #: each dispatched worker's turns as well as the pipeline's own node events. The whole
@@ -540,55 +546,6 @@ def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
-def test_the_pacemaker_is_given_its_own_task_and_never_the_monitors(
-    launched: Launched,
-) -> None:
-    """The pacemaker comes due mid-run and is told to report, not to edit.
-
-    `onepipeline` composes ONE task for this graph and `oneagentgraph` hands it to every
-    member that does not claim one, so a member without its own `task` is told whatever
-    the run-level task says. This one has to be told something narrower than that: it is
-    single-sided and finitely deadlined by `oneharness.check-in.toml`, so it takes one
-    short turn and exits, and a live edit issued from it would be answered by the
-    reconciler after the member that issued it had stopped watching.
-
-    The member's own `task` is what states that, and this is what holds it: the
-    pacemaker's effective prompt is the scoped one this repository wrote, the run-level
-    task is not in it, and neither is the monitor's role. Read from the prompts the run
-    really issued rather than from the graph document, because a `task` present in the
-    file and not reaching the model is exactly the failure being excluded.
-    """
-    turns = _recorded_turns(launched.prompt_log)
-    pacemaker = _turns_of(turns, PACEMAKER_MEMBER)
-    assert pacemaker, (
-        f"the {PACEMAKER_MEMBER} member took no turn, so nothing here is proven; it is "
-        f"launched with --heartbeat-interval {PACEMAKER_INTERVAL_SECONDS} so that it comes "
-        f"due while the run is still going"
-    )
-
-    for turn in pacemaker:
-        assert turn["prompt"].startswith("Report current progress on the onepipeline run"), (
-            f"the pacemaker was not given its own task; it got:\n{turn['prompt']}"
-        )
-        # The composed task names the run in backticks and states its goal. Its absence
-        # is the whole point: this member's prompt is its own, not the run's.
-        assert RUN_TASK.search(turn["prompt"]) is None, (
-            f"the run-level composed task reached the pacemaker:\n{turn['prompt']}"
-        )
-        assert WATCH_ROLE not in turn["prompt"] + turn["system"], (
-            f"the monitor's role reached the pacemaker:\n{turn['prompt']}"
-        )
-        # The edit verb reaches this member only inside the sentence forbidding it, so
-        # it is told what it must not do by the same name it would otherwise have
-        # reached for. Compared on collapsed whitespace, because the task is prose in a
-        # YAML block and wraps wherever it wraps.
-        forbidden = f"Never send `{FORBIDDEN_OF_THE_PACEMAKER}`"
-        assert forbidden in " ".join(turn["prompt"].split()), (
-            f"the pacemaker's task no longer forbids the edit verb by name:\n{turn['prompt']}"
-        )
-
-
-@pytest.mark.xdist_group("orchestrate-launch")
 def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> None:
     """The dag-scope agent is told to watch, from its persona, and nothing is told to drive.
 
@@ -902,6 +859,11 @@ def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launch
         )
 
 
+#: How many reads it takes to drain a settled run's queue before giving up. A bound
+#: rather than a loop, because `channel-next` on a settled run answers immediately and
+#: an unbounded drain would spin on a queue that never empties.
+MOST_SURFACES_A_SETTLED_RUN_QUEUES = 8
+
 #: A stream line's label for an event the pipeline itself wrote, and for one that came
 #: out of a dispatched `oneagentgraph` launch. Which of the two a read carries is the
 #: whole difference between the profiles below.
@@ -1130,24 +1092,402 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
         )
 
         # And consumed the way a planner consumes one. `just channel-next` hands out
-        # the surface with the events its profile admits, so this is also where the
-        # recipe's `planner` default is held live: consuming a surface mutates the
-        # queue, so it is done here on this journey's own run rather than on the
-        # shared one.
-        read = _just("channel-next", "monitor-edit-e2e", environment=environment, seconds=60)
-        assert read.returncode == 0, read.stderr
-        handed = cast(SurfaceRead, json.loads(read.stdout))
-        assert handed["surface"] is not None, (
-            f"the queued monitor-edit surface was not handed out:\n{read.stdout}"
+        # each queued surface once, with the events its profile admits, so this is also
+        # where the recipe's `planner` default is held live: consuming a surface mutates
+        # the queue, so it is done on this journey's own run rather than the shared one.
+        #
+        # Drained rather than read once, because this run's monitor is raising its own
+        # supervisor surfaces alongside the engine's attribution and the order of the
+        # two is not this journey's claim.
+        seen: list[str] = []
+        sources: set[str] = set()
+        for _ in range(MOST_SURFACES_A_SETTLED_RUN_QUEUES):
+            read = _just("channel-next", "monitor-edit-e2e", environment=environment, seconds=60)
+            assert read.returncode == 0, read.stderr
+            handed = cast(SurfaceRead, json.loads(read.stdout))
+            sources |= {event["source"] for event in handed["events"]}
+            if handed["surface"] is None:
+                break
+            seen.append(handed["surface"]["kind"])
+            if handed["surface"]["kind"] == "monitor-edit":
+                break
+        assert "monitor-edit" in seen, (
+            f"no surface naming the monitor's edit was handed out; got {seen}"
         )
-        assert handed["surface"]["kind"] == "monitor-edit", handed["surface"]
-        sources = {event["source"] for event in handed["events"]}
-        assert sources == {"pipeline"}, (
+        assert sources and sources == {"pipeline"}, (
             "`just channel-next` no longer reads through the planner profile; it "
             f"carried events from {sorted(sources)}"
         )
     finally:
         _just("stop", "monitor-edit-e2e", environment=environment, seconds=60)
+
+
+#: The judge side `graphs/dag-scope.yaml` gives the monitor: the filter that makes the
+#: planner channel serviceable as a onejudge command provider.
+CHANNEL_SERVE = REPO_ROOT / "scripts" / "channel-serve.py"
+
+#: The supervisor frame onejudge writes to a judge-side command provider's stdin, as
+#: recorded off a real `oneagentgraph run` whose judge side was a frame-dumping
+#: command. `onepipeline channel serve` reads `{kind, message, blocking?, node?}` and
+#: refuses an unknown field, so this shape is exactly what the filter exists to
+#: translate — and the fixture below is the real thing rather than a paraphrase.
+SUPERVISOR_FRAME: dict[str, object] = {
+    "op": "supervisor",
+    "task": "onepipeline run `serve-e2e`.\n\nGoal: prove the channel is the judge side",
+    "persona": "Act as the live planner reviewing the run's monitor.",
+    "done_when": "the run has settled",
+    "worktree": str(REPO_ROOT),
+    "history_name": "dag-scope-1-monitor-skill",
+    "messages": [
+        {"role": "user", "content": "onepipeline run `serve-e2e`."},
+        {"role": "assistant", "content": "node api has drifted from its acceptance criteria"},
+    ],
+    "session": "dag-scope-1-monitor-user",
+}
+
+
+def _serve(frame: str, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Drive the real filter at the interface `oneagentgraph` spawns it through."""
+    return subprocess.run(
+        [str(CHANNEL_SERVE)],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=frame,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+class Supervised(NamedTuple):
+    """One launch whose monitor is actually being supervised, and its evidence.
+
+    The supervision is the fixture's whole job: a monitor whose judge side is the
+    planner takes one turn and then waits, so a run nobody answers stops producing
+    the very turns these journeys read. Answering it is also what a planner does.
+    """
+
+    #: What every later recipe has to be given to see the same run.
+    environment: dict[str, str]
+    #: Every effective prompt the run's turns were given, as the fake backend saw them.
+    prompt_log: Path
+    #: The instruction the supervising planner keeps sending, asserted verbatim below.
+    steer: str
+
+
+#: The run id `onepipeline` mints from the supervised plan's `name`.
+SUPERVISED_RUN = "planner-supervises-monitor"
+
+#: What the planner tells the monitor. Distinctive prose, because one journey asserts
+#: this exact text becomes the monitor's next instruction.
+PLANNER_STEER = "keep watching the gate and report what it is blocking"
+
+
+@pytest.fixture(scope="module")
+def planner_supervised(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[Supervised]:
+    """Launch a run and supervise its monitor for as long as the journeys need it.
+
+    A plan holding one human gate, so the graph has a decision to sit on and the run
+    stays unsettled while the monitor works. A background answerer plays the planner:
+    it reads each surface with the real `just channel-next` and answers it with the
+    real `just channel-reply`, which is what keeps the conversation — and therefore
+    the observer graph, and therefore its scheduled pacemaker — alive.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp_path = tmp_path_factory.mktemp("planner-supervises-monitor")
+    environment = _environment(tmp_path, oneharness_bin)
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    plan = tmp_path / "serve.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "goal": {"text": "prove the channel is the monitor's judge side"},
+                "name": SUPERVISED_RUN,
+                "tasks": [
+                    {
+                        "id": "gate",
+                        "kind": "human",
+                        "task": "## What\nApprove.\n\n## Why\nProbe.\n\n"
+                        "## Acceptance criteria\n- Approved.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    launched = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        ["just", "orchestrate", str(plan), "--heartbeat-interval", str(PACEMAKER_INTERVAL_SECONDS)],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    supervising = threading.Event()
+
+    def supervise() -> None:
+        while not supervising.is_set():
+            read = _just("channel-next", SUPERVISED_RUN, environment=environment, seconds=60)
+            if read.returncode != 0 or not read.stdout.strip():
+                time.sleep(0.1)
+                continue
+            handed = cast(SurfaceRead, json.loads(read.stdout))
+            if handed["surface"] is None:
+                time.sleep(0.1)
+                continue
+            subprocess.run(
+                ["just", "channel-reply", SUPERVISED_RUN],
+                cwd=REPO_ROOT,
+                env=environment,
+                input=json.dumps(
+                    {
+                        "completion": False,
+                        "message": PLANNER_STEER,
+                        "reason": "the run is not finished",
+                    }
+                ),
+                text=True,
+                capture_output=True,
+                timeout=e2e_timeout(60),
+                check=False,
+            )
+
+    planner = threading.Thread(target=supervise, daemon=True)
+    planner.start()
+    try:
+        yield Supervised(environment, prompt_log, PLANNER_STEER)
+    finally:
+        supervising.set()
+        planner.join(timeout=e2e_timeout(60))
+        launched.kill()
+        launched.wait(timeout=e2e_timeout(60))
+        _just("stop", SUPERVISED_RUN, environment=environment, seconds=60)
+
+
+def _turns_so_far(prompt_log: Path) -> list[PromptRecord]:
+    """Every turn recorded up to now, on a run that is still going.
+
+    Tolerates the log not existing yet, which is the ordinary state for the first
+    fraction of a second of a live launch and not a failure to report.
+    """
+    return _recorded_turns(prompt_log) if prompt_log.exists() else []
+
+
+def _monitor_turns(prompt_log: Path) -> list[str]:
+    """Every prompt the monitor's AGENT side was given, newest last."""
+    return [
+        turn["prompt"]
+        for turn in _turns_so_far(prompt_log)
+        if "/members/monitor/" in (turn["config"] or "")
+        and Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
+    ]
+
+
+def _await(found: Callable[[], bool], seconds: float, failure: Callable[[], str]) -> None:
+    """Wait for a live run to show something, or fail saying what it showed instead."""
+    limit = deadline(seconds)
+    while not found():
+        if time.monotonic() >= limit:
+            pytest.fail(failure())
+        time.sleep(0.1)
+
+
+@pytest.mark.xdist_group("planner-supervises-monitor")
+def test_a_planner_reply_reaches_the_monitor_in_its_own_conversation(
+    planner_supervised: Supervised,
+) -> None:
+    """The planner channel is the monitor's judge side, so a reply steers its next turn.
+
+    This is the whole point of wiring `onepipeline channel serve` behind that member:
+    a planner who answers a monitor surface is not only editing the graph, they are
+    answering the monitor, and what they say has to become the monitor's next
+    instruction. Nothing short of a real launch shows it — the reply travels onejudge's
+    supervisor boundary, out through `scripts/channel-serve.py` to the channel, back
+    through it, and into the next turn's prompt — so this reads the prompt the monitor
+    was actually given, from a run being supervised through the real recipes.
+
+    Pointed at `graphs/dag-scope.yaml` itself. Wire that member's judge back to a
+    simulated-user harness and this fails at the surface that never arrives.
+    """
+    _await(
+        lambda: any(
+            planner_supervised.steer in prompt
+            for prompt in _monitor_turns(planner_supervised.prompt_log)
+        ),
+        seconds=90,
+        failure=lambda: (
+            "the planner's reply never reached the monitor's conversation; its turns "
+            f"were given:\n{_monitor_turns(planner_supervised.prompt_log)}"
+        ),
+    )
+
+
+def _dag_scope_document() -> tuple[int, str]:
+    """The shipped graph's declared version and its `check-in` task, from the file.
+
+    Read with a reader written for these two fields rather than with a YAML library:
+    the workspace installs none, and `oneagentgraph validate` — which the deterministic
+    gate runs over this file — is what holds the document well-formed.
+    """
+    lines = (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8").splitlines()
+    declared = next(line for line in lines if line.startswith("version:"))
+    opened = next(index for index, line in enumerate(lines) if line.strip() == "task: |")
+    indent = len(lines[opened]) - len(lines[opened].lstrip())
+    body = []
+    for line in lines[opened + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        body.append(line.strip())
+    return int(declared.split(":", 1)[1]), " ".join(body)
+
+
+@pytest.mark.reads_docs
+def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
+    """The pacemaker's own task names its run through `{task}`, and forbids editing.
+
+    Its live turn is no longer observable in a short journey, and that is the design
+    working rather than a gap: the schedule is resettable, so every planner-visible
+    surface restarts its clock — and a monitor whose judge side is the planner raises
+    one on every turn. A pacemaker exists to speak when nobody else has, so a
+    supervised run is exactly the run where it should stay quiet. What still has to
+    hold is the content of the task it would be given, which is this file's to state.
+
+    `{task}` is the load-bearing part. `onepipeline` exports NO variable naming the
+    run to an observer member — measured by dumping a judge command's whole
+    environment on a real launch — so a task written against `$ONEPIPELINE_RUN_ID`
+    reads empty on an operator's launch, and inside a dispatch that exports one for
+    its own run it silently reports on the enclosing run instead of this one.
+    """
+    _, task = _dag_scope_document()
+
+    assert "{task}" in task, (
+        "the pacemaker no longer interpolates the composed task, so nothing tells it "
+        f"which run to report on: {task}"
+    )
+    assert "$ONEPIPELINE_RUN_ID" not in task, (
+        "the pacemaker names a run id variable `onepipeline` does not export to an "
+        f"observer member: {task}"
+    )
+    assert f"Never send `{FORBIDDEN_OF_THE_PACEMAKER}`" in task, (
+        f"the pacemaker's task no longer forbids the edit verb by name: {task}"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """`{task}` is a per-version behaviour, so the version the graph declares is checked.
+
+    `oneagentgraph` passes the token through literally below schema 4 — a member would
+    be handed the six characters instead of its run. Measured here against the real CLI
+    at the version `graphs/dag-scope.yaml` actually declares, so lowering that version
+    fails here rather than in a pacemaker update naming no run.
+    """
+    declared, _ = _dag_scope_document()
+    environment = _environment(tmp_path, oneharness_bin)
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    graph = tmp_path / "placeholder.yaml"
+    graph.write_text(
+        f"version: {declared}\n"
+        "name: placeholder\n"
+        "members:\n"
+        "  probe:\n"
+        "    kind: oneharness\n"
+        f"    oneharness_config: {REPO_ROOT / 'oneharness.check-in.toml'}\n"
+        "    task: |\n"
+        "      opened with {task}\n",
+        encoding="utf-8",
+    )
+    composed = "onepipeline run `placeholder-run`."
+
+    ran = subprocess.run(
+        ["oneagentgraph", "run", str(graph), "--task", composed, "--dir", str(tmp_path)],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    given = [turn["prompt"] for turn in _turns_so_far(prompt_log)]
+    assert given, f"the probe member took no turn:\n{ran.stdout}\n{ran.stderr}"
+    assert any(composed in prompt for prompt in given), (
+        f"schema {declared} did not expand `{{task}}`, so a member that claims its own "
+        f"task cannot learn its run; it was given:\n{given}"
+    )
+
+
+def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Malformed input is refused by name, never answered on the planner's behalf.
+
+    The filter sits between a model's conversation and a live planner, so the one
+    thing it must never do is invent a verdict when it cannot reach one. Each case
+    below is driven through the real script at the interface `oneagentgraph` spawns
+    it through, and each must fail with a diagnostic rather than print a supervisor
+    response: onejudge reads this stdout as the planner's answer, so a fabricated
+    `{"completion": ...}` here would settle or continue a run nobody ruled on.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+
+    refusals = {
+        "not JSON at all": ("this is not a frame", "not JSON"),
+        "not an object": ("[1, 2]", "must be a JSON object"),
+        "an eval call rather than a supervisor one": (
+            json.dumps({**SUPERVISOR_FRAME, "op": "eval"}),
+            "only the `supervisor` op",
+        ),
+        "a task that names no run": (
+            json.dumps({**SUPERVISOR_FRAME, "task": "no run named here"}),
+            "does not name its run",
+        ),
+        "a conversation the monitor has not spoken in": (
+            json.dumps({**SUPERVISOR_FRAME, "messages": [{"role": "user", "content": "hi"}]}),
+            "said nothing",
+        ),
+    }
+    for case, (frame, expected) in refusals.items():
+        refused = _serve(frame, environment)
+
+        assert refused.returncode != 0, f"{case} was accepted: {refused.stdout}"
+        assert expected in refused.stderr, f"{case}: {refused.stderr}"
+        assert "completion" not in refused.stdout, (
+            f"{case} produced a supervisor verdict onejudge would act on: {refused.stdout}"
+        )
+
+
+def test_the_channel_filter_reports_a_refusal_from_the_channel_itself(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A well-formed frame the *channel* rejects is reported, not smoothed over.
+
+    The complement of the case above: here the filter's own validation passes and
+    `onepipeline channel serve` is the one that refuses — an unknown run. The filter
+    has a real answer to relay and none arrives, so it must say which end refused and
+    exit non-zero rather than answer for the planner. Driven against a runs directory
+    that genuinely holds no such run, so the refusal is the published one.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+
+    refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+
+    assert refused.returncode != 0, refused.stdout
+    assert "the planner channel refused the surface" in refused.stderr, refused.stderr
+    # The published refusal, relayed rather than paraphrased.
+    assert "no such run" in refused.stderr, refused.stderr
+    assert "completion" not in refused.stdout, refused.stdout
 
 
 def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(

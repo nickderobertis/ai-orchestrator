@@ -269,11 +269,13 @@ ownership check the incident above is about, so each one is approved on its own.
 
 An agent-written, non-blocking per-workstream status also arrives when the durable
 planner-update pacemaker becomes due (30 minutes by default). That pacemaker is the
-`check-in` member of `graphs/dag-scope.yaml`, and it carries its own `task` — which
-is why that document declares schema 3. The task is what keeps the member reporting
-rather than editing: `onepipeline` composes one task for the graph and
-`oneagentgraph` gives it to every member that claims none, so a member whose job is
-not the run-level task must state its own. Never let this one reach `onepipeline
+`check-in` member of `graphs/dag-scope.yaml`, and it carries its own `task` that
+opens with `{task}` — which is why that document declares schema 4. The task is what
+keeps the member reporting rather than editing: `onepipeline` composes one task for
+the graph and `oneagentgraph` gives it to every member that claims none, so a member
+whose job is not the run-level task must state its own — and must interpolate the
+composed one back in, because nothing in the environment names the run to an
+observer member. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
 and to you. Every planner-visible surface resets that clock. The interval is set
 once, at launch, with `just orchestrate ... --heartbeat-interval SECONDS`, and
@@ -423,7 +425,9 @@ exists to prevent. The primary Claude identity is last everywhere:
   (`claude-sonnet-5` for all three of its Claude variants) rather than by staying
   off those subscriptions.
 - **Monitor side** (watches a tracked graph) — `oneharness.orchestrator.toml`,
-  named by `graphs/dag-scope.yaml`'s `monitor` member as its agent side.
+  named by `graphs/dag-scope.yaml`'s `monitor` member as its **agent** side. That
+  member's judge side is not a harness config at all: it is the live planner, over
+  `scripts/channel-serve.py`, so replying to a monitor surface steers its next turn.
   Deliberately the reverse of the worker order: both codex identities carry the
   role first, so this long-lived supervisory process does not queue ahead of the
   workers while Codex can still run it. It is also the **one** side here with no

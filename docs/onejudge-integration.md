@@ -94,13 +94,13 @@ This repository uses three onejudge provider arrangements:
   the two harness configs above.
 - `command` is the deterministic test path. A local JSON-lines process stands in
   for the paid harness boundary.
-- The monitor is an ordinary two-sided onejudge member: its agent side runs under
-  `oneharness.orchestrator.toml` and its judge side under `oneharness.judge.toml`,
-  like a worker but with different configs. It is **not** wired to the planner
-  channel, and `graphs/dag-scope.yaml` records the measurement that says why —
-  `onepipeline channel serve` parses its stdin as a `{kind, message, blocking?,
-  node?}` boundary frame, while a onejudge command provider is handed
-  `{"op": "supervisor", …}`, so the two do not compose at the adopted releases.
+- The monitor is a two-sided onejudge member whose judge side is the **live
+  planner**: its agent side runs under `oneharness.orchestrator.toml`, and its
+  judge side is a command provider reaching `onepipeline channel serve` through
+  `scripts/channel-serve.py`. That filter exists because the two halves agree on
+  the response object and not on the request — see [Serving the channel as the
+  monitor's judge side](orchestration.md#serving-the-channel-as-the-monitors-judge-side)
+  for both shapes and the refusal a direct wiring gets.
 
 `onepipeline start --dag-graph` launches that graph beside the run it is driving.
 The wiring is specific to the observer graph; worker dispatch retains its ordinary

@@ -17,9 +17,12 @@
 # directory: `oneagentgraph` resolves a relative ref against the directory the
 # document it appears in was read from.
 #
-# Schema 3, because the `check-in` member below carries its own `task`; that field
-# is what the version buys, and `oneagentgraph validate` refuses it under 1 or 2.
-version: 3
+# Schema 4, for the two fields the members below need. The `check-in` member
+# carries its own `task`, which requires 3; that task interpolates `{task}`, which
+# `oneagentgraph` expands only from 4 — under 3 the token reaches the model as its
+# six literal characters. Both re-measured at this adoption by running one member at
+# each version. oneagentgraph 0.2.14 reads 1 through 6.
+version: 4
 name: dag-scope
 members:
   # The run's active monitor. It drives nothing — there are no engine verbs left to
@@ -37,22 +40,29 @@ members:
     persona: ../personas/orchestrator.yaml
     agent:
       oneharness_config: ../oneharness.orchestrator.toml
-    # A simulated-user judge, not the planner channel — deliberately, and not what
-    # the published crate's own example graph shows.
+    # The planner channel IS this member's judge side, so the planner's replies
+    # reach the monitor in its own conversation rather than only as graph edits.
     #
-    # `judge: {command: ["onepipeline", "channel", "serve", RUN]}` is what that
-    # example names, and the two protocols do not meet: a onejudge command provider
-    # is handed `{"op": "supervisor", …}`, while `channel serve` parses its stdin as
-    # `{kind, message, blocking?, node?}` and refuses an unknown field. Re-measured
-    # from both ends at this adoption, under onejudge 0.3.10 and the unadopted 0.4.0
-    # alike, so the newer release is not the fix. Reported upstream; when it is
-    # fixed, this member's judge becomes the channel.
+    # `onepipeline channel serve RUN` is that server side, and it is reached through
+    # a filter rather than named directly. The two halves already agree on the
+    # response — `serve` answers with exactly the `{completion, message, reason}`
+    # object onejudge's `supervisor` op expects, and the filter passes it through
+    # untouched. They disagree on the request: onejudge 0.3.10 writes
+    # `{"op":"supervisor", …}` while `serve` reads `{kind, message, blocking?,
+    # node?}`, so naming `serve` directly here is refused with `the observer emitted
+    # a bad frame: unknown field 'op'` and the member dies on its first turn.
+    # `scripts/channel-serve.py` is that one reconciliation, measured from both ends
+    # on a real launch.
     #
-    # The planner steers the run over the channel meanwhile — `just channel-next`,
-    # `just channel-reply` — which is queued and reconciled independently of the
-    # judge side.
+    # That path is the one ref in this file NOT resolved against this file's
+    # directory: `command` is an argv, spawned with the directory the run was
+    # launched from as its working directory — measured by dumping a judge
+    # command's own `PWD` on a real launch. So it is written launch-relative, which
+    # is why `just orchestrate` is run from the repository root, exactly as
+    # `--dag-graph graphs/dag-scope.yaml` already is. A `../`-prefixed path here
+    # spawns nothing and kills the member with `could not run provider`.
     judge:
-      oneharness_config: ../oneharness.judge.toml
+      command: ["scripts/channel-serve.py"]
     mode: bypass
   # The durable planner-update pacemaker: a single-sided member that comes due on a
   # schedule, reports the run's progress from durable evidence, and exits. It is what
@@ -64,12 +74,16 @@ members:
   # composes ONE task for this graph and `oneagentgraph` hands it to every member
   # that does not claim one; a member's own `task` REPLACES that composed task as its
   # whole prompt. So this member is told what it is for here rather than inheriting
-  # the run-level task, and it names the run itself through `$ONEPIPELINE_RUN_ID`.
-  # It cannot interpolate the composed task back in: `oneagentgraph` expands `{task}`
-  # only from schema 4, so under the `version: 3` above the token is passed through
-  # literally — re-measured at this adoption by running one member at each version.
-  # Raising the version is a real option (oneagentgraph 0.2.14 reads 1 through 6) but
-  # a separate change this member does not need.
+  # the run-level task — and it opens by interpolating `{task}` back in, because that
+  # composed task is the ONLY thing that names the run to this member.
+  #
+  # It is not named any other way, and the obvious other way is wrong: `onepipeline`
+  # exports NO variable carrying the run id to an observer member. Measured by
+  # dumping this command's whole environment on a real launch — `ONEPIPELINE_RUNS_DIR`
+  # and the launcher identity are there, the run id is not. A task written against
+  # `$ONEPIPELINE_RUN_ID` therefore reads empty on an operator's launch, and worse
+  # than empty inside a dispatch that already exports one for its OWN run: it silently
+  # reports on the enclosing run instead of this one.
   #
   # Its task scopes it to reporting and away from editing, which is load-bearing
   # rather than tidy: this member is single-sided and finitely deadlined, so a live
@@ -86,10 +100,11 @@ members:
     oneharness_config: ../oneharness.check-in.toml
     persona: ../personas/check-in.yaml
     task: |
-      Report current progress on the onepipeline run named by the
-      $ONEPIPELINE_RUN_ID environment variable, for the planner supervising it.
-      Read it with the read-only views, send one
-      `onepipeline surface "$ONEPIPELINE_RUN_ID" --kind check-in --message <text>`,
-      and exit. Never send `onepipeline reply`: live graph edits belong to the
+      {task}
+
+      Report current progress on that run, for the planner supervising it. Read it
+      with the read-only views, send exactly one
+      `onepipeline surface <run-id> --kind check-in --message <text>` naming the run
+      above, and exit. Never send `onepipeline reply`: live graph edits belong to the
       monitor member, which watches the whole run, and to the planner.
     schedule: {every: 1800, resettable: true}
