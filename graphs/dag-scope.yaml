@@ -31,14 +31,16 @@ members:
     # what the published crate's own example graph shows.
     #
     # `judge: {command: ["onepipeline", "channel", "serve", RUN]}` is what that
-    # example names, and it cannot run against onejudge 0.3.8: a onejudge
+    # example names, and it still cannot run against onejudge 0.3.10: a onejudge
     # command provider is handed `{"op": ..., "messages": [...]}` on stdin, and
     # `channel serve` parses its stdin as its own boundary frame
     # (`{kind, message, blocking?, node?}`, unknown fields refused). The
     # orchestrator dies on its first supervisor turn with `the orchestrator
-    # emitted a bad frame: unknown field 'op'`. Reported upstream; when it is
-    # fixed this member's judge becomes the channel again and the planner
-    # supervises the conversation directly.
+    # emitted a bad frame: unknown field 'op'`. Re-measured at this adoption by
+    # piping a supervisor frame into `onepipeline channel serve`, which refused it
+    # in exactly those words. Reported upstream; when it is fixed this member's
+    # judge becomes the channel again and the planner supervises the conversation
+    # directly.
     #
     # Until then the planner still steers the run over the channel — surfaces
     # with `just channel-next`, live graph edits and `complete` with
@@ -58,9 +60,18 @@ members:
   # that does not claim one; a member's own `task` REPLACES that composed task as its
   # whole prompt. So this member is told what it is for here, rather than inheriting
   # whatever the run-level task happens to say — and it must therefore name the run
-  # itself, which it does through `$ONEPIPELINE_RUN_ID` in the environment. There is
-  # no placeholder to interpolate the composed task back in: `{task}` is passed
-  # through literally, so writing one would send a model the four characters.
+  # itself, which it does through `$ONEPIPELINE_RUN_ID` in the environment. It cannot
+  # name it by interpolating the composed task back in, because AT THIS DOCUMENT'S
+  # VERSION there is no placeholder to do it with: `oneagentgraph` expands `{task}`
+  # only from schema 4, so under the `version: 3` above the token is passed through
+  # literally and writing one would send a model the six characters. Measured at
+  # this adoption, not read: the same member run at 3, 4, and 5 was handed
+  # `prefix {task} suffix` at 3 and `prefix <composed task> suffix` at 4 and 5.
+  # Raising the version to get the placeholder is a real option, not a closed door
+  # — oneagentgraph 0.2.13 reads schema versions 1 through 5 — but it is a separate
+  # change, and this member does not need it: `$ONEPIPELINE_RUN_ID` already names
+  # the run, and a member that inherited the run-level task would be back to being
+  # told the orchestrator's job.
   #
   # The rounds belong to the `orchestrator` member alone, and the prohibition in that
   # task is load-bearing. This member is single-sided, so it begins its turn before

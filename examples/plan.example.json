@@ -1,39 +1,34 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "concurrency": 4,
   "tasks": [
     {
       "id": "design",
       "persona": "planner",
-      "task": "## What\nDesign a URL-shortener service and write the design to `docs/design.md`: the HTTP API (create + resolve), the storage schema, and the module boundaries the api and ui subtasks build against.\n\n## Why\nThe api and ui subtasks are meant to run in parallel, and without one written contract between them each would invent its own and the two would have to be reconciled afterwards.\n\n## Acceptance criteria\n- `docs/design.md` states the create and resolve request and response shapes with field names and types.\n- It states the storage schema and the module boundary each subtask builds against.\n- Every boundary it names is one a caller can code against without reading the implementation.",
-      "done_when": "all task acceptance criteria are met and the design is specific enough for the api and ui subtasks to proceed in parallel from it alone"
+      "task": "## What\nDesign a URL-shortener service and write the design to `docs/design.md`: the HTTP API (create + resolve), the storage schema, and the module boundaries the api and ui subtasks build against.\n\n## Why\nThe api and ui subtasks are meant to run in parallel, and without one written contract between them each would invent its own and the two would have to be reconciled afterwards.\n\n## Acceptance criteria\n- `docs/design.md` states the create and resolve request and response shapes with field names and types.\n- It states the storage schema and the module boundary each subtask builds against.\n- Every boundary it names is one a caller can code against without reading the implementation.\n- The api and ui subtasks can proceed in parallel from this document alone."
     },
     {
       "id": "api",
       "persona": "engineer",
       "task": "## What\nImplement the URL-shortener HTTP API per `docs/design.md`: the create and resolve endpoints, validation, and persistence. Cover the endpoints with tests that drive real requests.\n\n## Why\nThe service has no working create-or-resolve path yet, so nothing else in the product can be exercised end to end until this one exists.\n\n## Acceptance criteria\n- Create and resolve behave as `docs/design.md` specifies, proven by tests that drive real HTTP requests.\n- Invalid input is rejected rather than persisted, and a test proves it.\n- Persistence is covered by a test that reads back what a create wrote.",
-      "done_when": "create and resolve work through real HTTP requests, invalid input is rejected, persistence is covered, and the full gate passes",
       "deps": ["design"]
     },
     {
       "id": "ui",
       "persona": "engineer",
       "task": "## What\nBuild the URL-shortener web UI per `docs/design.md`: a form to create a short link and a view of the result. Match the existing component patterns and keep it accessible.\n\n## Why\nWithout a UI the service is reachable only by hand-written HTTP calls, which is not how the people it is for will use it.\n\n## Acceptance criteria\n- A user-facing test creates a short link by driving the rendered form the way a person would.\n- The form and result view carry the labels, roles, and keyboard paths the existing components use.\n- The components follow the existing design-system patterns rather than introducing new ones.",
-      "done_when": "a user-facing test creates a short link through the rendered accessible form and the full gate passes",
       "deps": ["design"]
     },
     {
       "id": "docs",
       "persona": "docs-writer",
       "task": "## What\nWrite the README for the URL shortener: what it is, how to run it, and the API surface.\n\n## Why\nA reader arriving at the repository has no account of what the service does or how to start it, so every one of them has to reconstruct it from the code.\n\n## Acceptance criteria\n- The README says what the service is, how to run it, and what its API surface is.\n- Every command in it was run against this checkout and behaves as written.\n- Every documented request and response matches the implemented endpoints.",
-      "done_when": "all task acceptance criteria are met and every documented command and endpoint was verified against the code",
       "deps": ["api", "ui"]
     },
     {
       "id": "review",
       "persona": "reviewer",
       "task": "## What\nReview the URL shortener end to end (api + ui + docs) for correctness, missing edge cases, and security, and report verified, severity-ranked findings.\n\n## Why\nThe api, ui, and docs subtasks each landed against their own slice, so nobody has yet read the three together for the gaps that only appear at their seams.\n\n## Acceptance criteria\n- Each finding names the file and line it is in and the concrete input or state that triggers it.\n- Each finding was verified against the code rather than inferred from a diff alone.\n- Findings are ranked most severe first, and the report says plainly when a dimension turned up nothing.",
-      "done_when": "all task acceptance criteria are met and every reported finding was confirmed against the code it names",
       "deps": ["api", "ui"]
     }
   ]

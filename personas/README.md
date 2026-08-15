@@ -25,11 +25,40 @@ The test suite requires these rows to match recursive persona discovery exactly.
 
 ## Adding a persona
 
-Prefer a detailed task with explicit per-node `done_when` acceptance criteria (and
-`max_turns` when needed) over a new persona. Add one only when a subtask needs a
-genuinely distinct general role or review bar. The simulated-user supervisor
-reviews every dispatch already; the dedicated `reviewer` is for multi-agent
-integration, not ordinary review of one change.
+Prefer a detailed task with an explicit `## Acceptance criteria` list — that list
+*is* the node's review bar — plus `max_turns` when needed, over a new persona. Add
+one only when a subtask needs a genuinely distinct general role or review bar. The
+simulated-user supervisor reviews every dispatch already; the dedicated `reviewer`
+is for multi-agent integration, not ordinary review of one change.
+
+### Which of these files a dispatch actually reads
+
+Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
+`orchestrator` and `check-in` members at `../personas/orchestrator.yaml` and
+`../personas/check-in.yaml`, and those are the personas those members get.
+
+A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
+name to `oneagentgraph` as the node-scope worker's persona override, where a
+built-in role of that name wins: `engineer`, `planner`, `reviewer`, `researcher`,
+`docs-writer`, `orchestrator`, and `check-in` all resolve to roles compiled into the
+tool, and this directory is not on the search path. Anything else is taken as a path
+relative to `graphs/`, which is why `crozier/crozier-corpus` fails a dispatch with
+`cannot read graphs/crozier/crozier-corpus`.
+
+Two consequences, both measured against onepipeline 0.3.1 by reading the effective
+`onejudge.yaml` a dispatch was launched with:
+
+- Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
+  with. The flat files whose names match a built-in are a catalog and a validation
+  target, not the dispatch input.
+- The `user.done_when` in `planner.yaml`, `reviewer.yaml`, and `researcher.yaml` does
+  not reach a dispatch; the built-in role's own bar does, and it replaces
+  `config/onejudge.base.yaml`'s rather than adding to it. So a node with one of those
+  three personas is reviewed without the shared "every acceptance criterion stated in
+  the task is met" clause. An `engineer` or `docs-writer` node, whose built-in role
+  declares no bar, gets the shared one.
+
+Closing that gap is an upstream change, not an edit here.
 
 Draft a new persona outside the tracked catalog first. Scaffold it under the
 gitignored `scratch/personas/`, dispatch against that directory, and refine it in

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
-from fake_backend import PROMPT_LOG_ENV, RUN_TASK
+from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -58,8 +58,9 @@ PACEMAKER_INTERVAL_SECONDS = 1
 
 #: The `graphs/dag-scope.yaml` member each recorded turn belongs to. `oneagentgraph`
 #: gives every member a scratch directory named after it and pins that member's
-#: harness config inside it, so the `--config` the backend records is the attribution.
-#: A turn with no `--config` is an agent side, which has no member directory to read.
+#: harness configs inside it, so the `--config` the backend records is the attribution.
+#: Since onepipeline 0.3.1 both sides of a member carry one, so this names the member
+#: for either; which SIDE a turn is depends on the config's basename, not on having one.
 MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 
 #: The pacemaker member, whose turn must stay out of the run's rounds.
@@ -70,7 +71,7 @@ PACEMAKER_MEMBER = "check-in"
 #: before that task existed.
 ROUND_VERBS = ("onepipeline round run", "onepipeline round next")
 
-#: The orchestrator's role, as `personas/orchestrator.yaml` states it. Under
+#: The orchestrator's role, as `personas/orchestrator.yaml` states it. Since
 #: onepipeline 0.2.0 the composed task says only what the run is, so this is the only
 #: thing that says it is to be driven.
 DRIVE_ROLE = "Drive `onepipeline round run <run-id>`"
@@ -224,7 +225,7 @@ def routed_persona_run(
     plan.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "name": "routed-persona-e2e",
                 "concurrency": 1,
                 "tasks": [
@@ -232,7 +233,6 @@ def routed_persona_run(
                         "id": "named",
                         "persona": "docs-writer",
                         "task": "Report without changing files.",
-                        "done_when": "the stand-in report is accepted",
                     },
                     {
                         "id": "default",
@@ -513,9 +513,15 @@ def test_the_orchestrator_still_drives_the_run_from_its_persona(launched: Launch
     driving = [turn for turn in turns if DRIVE_ROLE in turn["system"]]
     assert driving, "nothing in this run was told to drive it, yet it settled"
     for turn in driving:
-        assert turn["config"] is None, (
-            "only an agent side, pinned by its member's own oneharness.toml, may be told "
-            f"to drive; this turn was pinned to {turn['config']}"
+        # An agent side, by the one property that distinguishes the two: the judge side
+        # is the turn pinned to the judge config. This used to read `config is None`,
+        # which held only while onejudge left the agent side's config implicit; since
+        # onepipeline 0.3.1 an agent side carries `.../oneharness.toml` and that spelling
+        # would have failed a run doing exactly the right thing. What it excludes is
+        # unchanged — a judge side being told to drive the run it is supervising.
+        assert Path(turn["config"] or "").name != JUDGE_CONFIG_NAME, (
+            "only an agent side may be told to drive; this turn was pinned to the judge "
+            f"config at {turn['config']}"
         )
         named = RUN_TASK.search(turn["prompt"])
         assert named is not None, f"a driving turn named no run:\n{turn['prompt']}"
@@ -523,6 +529,91 @@ def test_the_orchestrator_still_drives_the_run_from_its_persona(launched: Launch
         assert DRIVE_ROLE not in turn["prompt"], (
             "the composed run task carries a drive instruction again, so every member "
             f"taking one is told to drive:\n{turn['prompt']}"
+        )
+
+
+def _shared_completion_bar() -> str:
+    """`user.done_when` from `config/onejudge.base.yaml`, folded as YAML folds it.
+
+    Read with a reader written for this one field rather than with a YAML library: the
+    workspace installs none, and adding a parser as a dependency to read four lines of
+    a file this repository writes is a worse trade than fifteen lines that state the
+    shape they accept. The field is a `>-` folded scalar, so its value is the
+    more-indented block that follows, with newlines folded to single spaces — which is
+    also how it reaches the judge, and what makes comparing against a prompt valid.
+    """
+    lines = (REPO_ROOT / "config" / "onejudge.base.yaml").read_text(encoding="utf-8").splitlines()
+    opened = next(
+        (index for index, line in enumerate(lines) if line.strip() == "done_when: >-"), None
+    )
+    assert opened is not None, (
+        "config/onejudge.base.yaml no longer opens `done_when` as a `>-` folded scalar, "
+        "so this reader cannot state what the shared bar is"
+    )
+    indent = len(lines[opened]) - len(lines[opened].lstrip())
+    folded = []
+    for line in lines[opened + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        folded.append(line.strip())
+    bar = " ".join(" ".join(folded).split())
+    assert bar, "config/onejudge.base.yaml states an empty shared completion bar"
+    return bar
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
+    launched: Launched,
+) -> None:
+    """The one review bar arrives verbatim, next to the criteria it is phrased against.
+
+    The adopted `onepipeline` refuses a plan carrying a node-level `done_when` — proven
+    by `test_a_plan_carrying_a_node_level_done_when_is_refused` — so a node's bar is now
+    its own `## Acceptance criteria` plus one shared clause in
+    `config/onejudge.base.yaml`. That clause does not restate any criterion; it says
+    "every acceptance criterion stated in the task is met" and relies wholly on onejudge
+    handing it over unchanged *and* showing the judge a transcript that opens with the
+    task. Both halves, in one place, or the bar resolves to nothing: a criterion that
+    points at a task the judge cannot see is a criterion no judge can apply, and it
+    would fail open, accepting whatever the worker last said.
+
+    Read from the prompt the judge was really given rather than from the config, because
+    a bar present in the file and not reaching the judge is the failure being excluded.
+    It is a real exclusion, not a tautology: point the shipped plan's node at a persona
+    whose built-in role declares its own bar — `planner`, `reviewer`, `researcher` —
+    and the criterion the judge is handed is that one instead, and this fails.
+    """
+    shared_bar = _shared_completion_bar()
+    # `cast` rather than a validating read: this is a plan file this repository ships and
+    # `test_every_plan_this_repository_ships_is_one_the_published_crate_accepts` already
+    # holds its shape against the launcher. A second schema check here would restate that
+    # gate, and the `split` below fails loudly anyway if the task is not the prose it is.
+    task = cast(
+        str,
+        json.loads((REPO_ROOT / SHIPPED_PLAN).read_text(encoding="utf-8"))["tasks"][0]["task"],
+    )
+    criteria = task.split("## Acceptance criteria", 1)[1].strip()
+    assert criteria, "the shipped plan's node states no acceptance criteria to be judged by"
+
+    # The criterion a judge was handed appears on no read-only view — `results`,
+    # `status`, `transcript`, and `goals` all omit it — so the effective prompt is the
+    # only place this is observable, and it is the thing under test. Everything
+    # producing that prompt is the real launch above.
+    # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the criterion.
+    supervising = [
+        turn
+        for turn in _turns_of(_recorded_turns(launched.prompt_log), "worker")
+        if "Completion criterion:" in turn["prompt"]
+    ]
+    assert supervising, "no dispatched worker was supervised in this run, so nothing here is proven"
+    for turn in supervising:
+        assert shared_bar in " ".join(turn["prompt"].split()), (
+            "the judge was given a completion criterion that is not the shared bar in "
+            f"config/onejudge.base.yaml:\n{turn['prompt']}"
+        )
+        assert criteria in turn["prompt"], (
+            "the judge was given the shared bar without the acceptance criteria it is "
+            f"phrased against, so it resolves to nothing:\n{turn['prompt']}"
         )
 
 
@@ -558,6 +649,186 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
     assert refused.returncode != 0
     reported = refused.stderr + refused.stdout
     assert "dag-scope.yaml" in reported, reported
+
+
+class PlanNode(TypedDict, total=False):
+    """One agent node of a candidate plan, in the published plan schema's own field names.
+
+    `total=False` because a node states only what its journey needs. `done_when` is here
+    although the adopted schema has no such field: writing one is what
+    `test_a_plan_carrying_a_node_level_done_when_is_refused` does, so the retired field
+    is part of this shape precisely so a test can offer it and be refused.
+    """
+
+    id: str
+    persona: str
+    task: str
+    max_turns: int
+    done_when: str
+
+
+class CandidatePlan(TypedDict, total=False):
+    """A plan offered to the real launcher, which is the only thing that judges it."""
+
+    schema_version: int
+    name: str
+    tasks: list[PlanNode]
+
+
+def _node(**fields: object) -> PlanNode:
+    """One agent node, shaped the way every plan this repository ships shapes one."""
+    node: PlanNode = {
+        "id": "only",
+        "persona": "engineer",
+        "task": "## What\nReport.\n\n## Why\nBecause.\n\n## Acceptance criteria\n- Reported.",
+    }
+    # The overrides are the journey's own literals, one key at a time so the declared
+    # shape above still describes what is written.
+    node.update(cast(PlanNode, fields))
+    return node
+
+
+def _refused_plan(
+    tmp_path: Path, oneharness_bin: str, plan: CandidatePlan
+) -> subprocess.CompletedProcess[str]:
+    """Offer one plan to the real launcher and hand back how it answered."""
+    environment = _environment(tmp_path, oneharness_bin)
+    # The plan is loaded and validated before the agent graph is, so a refusal here is
+    # the plan's own and no paid work is reachable even if one were somehow accepted.
+    environment["ONEPIPELINE_DAG_GRAPH"] = str(tmp_path / "absent" / "dag-scope.yaml")
+    written = tmp_path / "candidate.plan.json"
+    written.write_text(json.dumps(plan), encoding="utf-8")
+    return _just("orchestrate", str(written), "--detach", environment=environment, seconds=120)
+
+
+def test_a_plan_carrying_a_node_level_done_when_is_refused(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The bar cannot be written back into the plan, and saying so is the whole point.
+
+    This repository moved every node's review bar out of `done_when` and into the task's
+    `## Acceptance criteria` because the adopted `onepipeline` stopped accepting the
+    field. If it were instead *ignored*, the migration would be cosmetic and the next
+    planner to write one would get a node dispatched with a bar nobody applied. So what
+    is held here is the refusal, and that it names where the bar goes instead.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    refused = _refused_plan(
+        tmp_path,
+        oneharness_bin,
+        {"schema_version": 2, "tasks": [_node(done_when="all criteria are met")]},
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    reported = refused.stderr + refused.stdout
+    assert "done_when" in reported and "Acceptance criteria" in reported, reported
+
+
+def test_a_plan_declaring_the_retired_schema_version_is_refused(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Schema 1 is refused by number, so a plan written before this adoption fails loudly.
+
+    Every plan this repository shipped declared version 1, and the crate that reads them
+    now takes only 2. A plan file is the one artifact an operator keeps a copy of, so the
+    refusal has to name the version it wants rather than failing somewhere downstream.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    refused = _refused_plan(tmp_path, oneharness_bin, {"schema_version": 1, "tasks": [_node()]})
+
+    assert refused.returncode != 0, refused.stdout
+    reported = refused.stderr + refused.stdout
+    assert "schema_version" in reported and "2" in reported, reported
+
+
+def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launched) -> None:
+    """The pacemaker's interval is launch-only, and a reply that tries to retune it is lost.
+
+    AGENTS.md told planners for months to put `"heartbeat_interval"` in a normal
+    `channel-reply`. The envelope is closed to unknown fields, so such a reply is refused
+    entirely — taking the verdict and any graph edits in it with it, which is why this
+    costs a round boundary rather than being a harmless no-op. Held against the run this
+    journey already launched, through the same recipe a planner answers a surface with.
+    """
+    reply = subprocess.run(
+        ["just", "channel-reply", SHIPPED_RUN],
+        cwd=REPO_ROOT,
+        env=launched.environment,
+        input=json.dumps(
+            {"version": 1, "completion": False, "message": "go", "heartbeat_interval": 900}
+        ),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert reply.returncode != 0, reply.stdout
+    reported = reply.stderr + reply.stdout
+    assert "heartbeat_interval" in reported, reported
+    for accepted in ("version", "completion", "message", "reason", "commands"):
+        assert accepted in reported, (
+            f"the refusal must name {accepted!r} as an accepted field so a planner can "
+            f"see what the envelope does take:\n{reported}"
+        )
+
+
+def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """`max_turns` is forwarded now, where the retired schema version dropped it.
+
+    Under schema 1 the field was accepted and then ignored, so a planner who gave a hard
+    node more room silently got the base config's cap and a worker cut off mid-task. It
+    is not observable from the conversation — with a stand-in supervisor that accepts on
+    the first turn the cap is never reached — so this reads the effective onejudge config
+    the dispatch was actually launched with, which is where the budget either arrived or
+    did not.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    budget = 5
+    environment = _environment(tmp_path, oneharness_bin)
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    # `oneagentgraph` writes each member's effective config into its own scratch, and
+    # names that directory here rather than under the host's state, so this reads the
+    # run's own and never a concurrent dispatch's.
+    scratch = tmp_path / "graph-state"
+    environment["ONEAGENTGRAPH_STATE_DIR"] = str(scratch)
+    plan = tmp_path / "budget.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": "turn-budget-e2e",
+                "tasks": [_node(max_turns=budget)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launch = _just("orchestrate", str(plan), environment=environment)
+    try:
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+        # No planner-facing view reports a node's turn budget — `results`, `status`,
+        # `transcript`, and `goals` were each checked — and the conversation cannot show
+        # it either, since a cap that is never reached leaves no trace. The config the
+        # dispatch was launched with is where the budget arrived or did not, and the
+        # launch that wrote it is the real recipe.
+        # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the budget.
+        dispatched = sorted(scratch.glob("node-scope-*/members/worker/onejudge.yaml"))
+        assert dispatched, (
+            f"no dispatched worker config was written under {scratch}, so the budget "
+            f"cannot be read from the dispatch it was written for:\n{launch.stdout}"
+        )
+        for config in dispatched:
+            assert f"max_turns: {budget}" in config.read_text(encoding="utf-8"), (
+                f"{config} did not receive the node's turn budget of {budget}"
+            )
+    finally:
+        _just("stop", "turn-budget-e2e", environment=environment, seconds=60)
 
 
 def _plans_in_the_repository() -> list[tuple[str, str]]:

@@ -11,8 +11,7 @@
           "id": "e2e-real-api-path",
           "persona": "engineer",
           "max_turns": 40,
-          "task": "## What\nGive the ivr app a real-API e2e path.",
-          "done_when": "all task acceptance criteria are met"
+          "task": "## What\nGive the ivr app a real-API e2e path."
         },
         {
           "id": "sign-off",

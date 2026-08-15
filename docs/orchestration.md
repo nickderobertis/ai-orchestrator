@@ -15,13 +15,25 @@ run rather than a plan file. See
 
 ## The plan schema
 
-The tracked-plan contract is the published `onepipeline` plan schema, **version 1**
-(`"schema_version": 1`), and it is required: a plan that omits the version, or
+The tracked-plan contract is the published `onepipeline` plan schema, **version 2**
+(`"schema_version": 2`), and it is required: a plan that omits the version, or
 declares any other, is refused at launch. There is no compatibility ladder to read
 a version number against any more — the node shapes this repository grew through
 its own schema versions 1 to 7 were adopted whole as that crate's v1, so the
-shapes below are unchanged and only the number moved. Two of them changed spelling
-in the adoption, and a plan written before it fails at launch on either:
+shapes below are unchanged and only the number moved. Version 2 then made two
+changes, and a plan written before either fails at launch:
+
+- **`done_when` is no longer a plan field at all.** A node carrying one is refused
+  while the plan loads, at any declared version. A node's review bar is the
+  `## Acceptance criteria` of its own task, which the judge is handed verbatim; a
+  bar broader than one node lives once in `config/onejudge.base.yaml` under
+  `user.done_when`. See [Where a node's review bar lives](#where-a-nodes-review-bar-lives).
+- **`max_turns` is forwarded to the node's dispatch**, which version 1 never did:
+  under v1 the field was read and then dropped, so a plan that asked for more room
+  silently got the persona's or the base config's cap instead.
+
+Two field spellings also changed when the crate adopted this repository's shapes,
+and a plan written before that fails at launch on either:
 
 - `merge_policy` names the publication a change reaches its base branch by, and
   its values are now `local-direct`, `change-open`, `change-auto`, and
@@ -369,11 +381,23 @@ the last check-in attempt that settled (`last_attempt_at`); both are persisted, 
 new round or restarted process continues the same durable countdown rather than
 starting a fresh interval. That comparison is made against the *current* interval on
 every tick rather than baked into a stored deadline, which is what keeps the interval
-the only knob that changes cadence. To adjust it, add
-`"heartbeat_interval": SECONDS` to an otherwise normal `channel-reply`; use
-`"heartbeat_interval": false` to disable it. Values must be positive finite
-seconds. This pacemaker is independent of the reader-side `just monitor
---heartbeat` silence display described below.
+the only knob that changes cadence.
+
+That knob is **launch-only**. `--heartbeat-interval SECONDS` is an option of
+`onepipeline start` and of nothing else — `adopt` does not take it, and no channel
+verb does. The reply envelope is closed to unknown fields and accepts exactly
+`version`, `completion`, `message`, `reason`, and `commands`, so a reply carrying
+`"heartbeat_interval"` is refused whole:
+
+```
+onepipeline: refused: the reply is malformed: unknown field `heartbeat_interval`,
+expected one of `version`, `completion`, `message`, `reason`, `commands`
+```
+
+The verdict and graph edits in that reply are lost with it, so the cost of trying
+is a round boundary, not a no-op. Pick the interval at launch. This pacemaker is
+independent of the reader-side `just monitor --heartbeat` silence display described
+below.
 
 Recorded oneharness sessions preserve transport `role` and add semantic
 `agent_role`: `worker`, `judge`, `orchestrator`, `check-in`, or `pr-author`.
@@ -633,13 +657,41 @@ The planner writes every agent node and step `task` with this prose template:
 ```
 
 The task is visible to both the worker and judge, so its Acceptance criteria hold
-all detailed, change-specific requirements. `done_when` is judge-only: it must
-always require that all task acceptance criteria are met, and may add broader
-quality measures such as a green gate, held coverage, or no regressions. Do not
-hide specific acceptance criteria only in `done_when`. `Why` is the user-facing
+all detailed, change-specific requirements — and, since schema version 2, they are
+the *only* place a per-node requirement can live. `Why` is the user-facing
 impact and what drove the decision, not an orchestration handoff. If the request
 does not make that why clear, the planner must ask the user before dispatch rather
 than inventing it.
+
+### Where a node's review bar lives
+
+There are two, and only two, and neither is per-node prose the planner writes twice:
+
+1. **The node's own `## Acceptance criteria`.** This is what a planner tunes when a
+   dispatch needs a different bar. onejudge shows the judge the transcript, and the
+   transcript's first message *is* the task, criteria included.
+2. **`config/onejudge.base.yaml`'s `user.done_when`**, which every dispatch shares.
+   onejudge hands that string to the judge verbatim as its criterion, and it is
+   phrased against the task — "every acceptance criterion stated in the task is
+   met" — so criterion (1) is what it resolves to for each node.
+
+   With one exception a planner has to know: a node's `persona` is a name resolved
+   against roles built into the tool rather than against `personas/`, and a built-in
+   role that declares its own bar *replaces* this one rather than adding to it.
+   `planner`, `reviewer`, and `researcher` do; `engineer` and `docs-writer` do not.
+   So a node dispatched under one of those three is reviewed against the role bar
+   alone, and its `## Acceptance criteria` carry the whole weight. See
+   [Which of these files a dispatch actually reads](../personas/README.md#which-of-these-files-a-dispatch-actually-reads).
+
+Keep the shared bar to measures true of every dispatch alike. A clause naming a
+specific check tier is the failure mode: the bar this one replaced demanded that
+"every lint tier has passed" and refused complete work in repositories that run no
+such tier.
+
+Verify the mechanism rather than reasoning about it: a `command`-provider onejudge
+run shows the judge call carrying `task`, `done_when`, and `messages` as separate
+fields, and the `oneharness` provider composes them into one prompt reading
+`Original task:` … `Completion criterion:` … then the transcript.
 
 An unsatisfiable criterion does not fail fast. The simulated-user supervisor is
 working correctly when it refuses completion, so the worker is parked and
@@ -666,11 +718,11 @@ what a live `context` edit attaches and what [the round transition
 carries](#carried-planner-context).
 
 An agent node or lifecycle agent step may instead set `expects_no_diff: true`
-with `task` and no `persona` or `done_when`. This explicitly declares that the
+with `task` and no `persona` or `max_turns`. This explicitly declares that the
 task expects no repository change and no separate review evidence. It settles as
 `done` with the existing `no-changes` outcome without dispatching onejudge. The
 executor does not infer this from task prose. Combining the declaration with
-`persona` or `done_when` is rejected while loading the plan, before any provider
+`persona` or a turn budget is rejected while loading the plan, before any provider
 time is spent. Omitting `expects_no_diff` preserves normal dispatch behavior.
 
 A lifecycle `steps` list is its own DAG. Agent steps require `persona` and `task`.
@@ -695,10 +747,10 @@ project. It is also a highly capable coding agent, pair-programmed with and revi
 by a simulated-user supervisor that pushes back until the task is actually done.
 Bias toward fewer, larger coherent tasks that amortize setup. Split only for
 genuine parallelism, a real dependency, or a genuinely different role or review
-bar — not simply to give a capable agent a smaller slice. Put subtask-specific
-requirements in the structured `task` prose and use a terse per-node `done_when`
-that references all task acceptance criteria plus any broader bar. Use `max_turns`
-when a task needs more room, rather than proliferating
+bar — not simply to give a capable agent a smaller slice. Put every subtask-specific
+requirement in the structured `task` prose, under `## Acceptance criteria`: that
+list is the node's review bar, so it is the thing to tune when a dispatch needs a
+different one. Use `max_turns` when a task needs more room, rather than proliferating
 personas. Every dispatch already has the built-in supervisor/reviewer; reserve a
 dedicated `reviewer` step for complex DAGs where it reviews and integrates several
 agents' independently produced work. Dependencies should name only real inputs so
@@ -1452,8 +1504,9 @@ rewrites it. `next-round` therefore does not derive the next round from it: it f
 the round's own authoritative journal (the same strict
 reader an adopted run replays with) and derives from the graph the round
 actually ran. Every live edit the reconciler committed is in that graph — an `add`,
-a `drop`, a `reparent`, a `retry` replacement and its new id, an amended `task`,
-`done_when` or `max_turns`, a branch pin. Only edits the reconciler *rejected* are
+a `drop`, a `reparent`, a `retry` replacement and its new id, an amended `task` (the
+node's review bar travels inside it, in `## Acceptance criteria`) or `max_turns`, a
+branch pin. Only edits the reconciler *rejected* are
 absent, and their submitter was told so synchronously. A journal that cannot be
 folded strictly falls back to the launch record, which is the same state that makes
 an adopted run report rather than guess.

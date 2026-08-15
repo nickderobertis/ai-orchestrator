@@ -2,13 +2,17 @@
 # llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive every wrapper branch; only the paid oneharness child is replaced at the repository's designated external seam.
 # Force the orchestrator's agent config; target-project discovery must not override it.
 #
-# onejudge routes BOTH conversation sides through this one provider.bin: the agent
-# turn (whose args carry no --config) and the judge / simulated-user turn (whose
-# args already carry `--config <judge_config>` from onejudge). Injecting the agent
-# config unconditionally would hand `oneharness run` two --config flags, which it
-# rejects ("cannot be used multiple times"). So force the agent config only when the
-# caller has not already chosen one — that is exactly the agent side; the judge side
-# passes through untouched, keeping its own config.
+# onejudge routes BOTH conversation sides through this one provider.bin, so this wrapper
+# must decide which side each turn is. A config is named to select the side and its own
+# `history_labels` `role` must agree; a disagreement stops the turn rather than being
+# resolved by guessing, because a turn routed as the side it is not still runs and
+# answers. Never reintroduce a rule based on a config being ABSENT: that held only while
+# onejudge left the agent side's implicit, and onepipeline 0.3.1 names both.
+# See docs/onejudge-integration.md, "The judge side is the one named oneharness.judge.toml".
+#
+# A caller that names its own config keeps it, on either side: `oneharness run` rejects a
+# repeated `--config`, and a dispatched agent side's config is the one its graph pinned.
+# The agent config below is forced only when the caller named none.
 #
 # That same branch is where each side's harness SELECTION is resolved. oneharness's
 # own ONEHARNESS_HARNESSES is process-wide and beats config, so one value set by the
@@ -58,6 +62,14 @@ fi
 ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
+# The judge side is identified by this basename, and only by it. The name is restated
+# here rather than derived from anything — nothing at run time can tell the wrapper
+# which config onejudge hands the judge — so the copy is reconciled with the declaring
+# side, `config/onejudge.base.yaml`'s `judge_config:`, by
+# tests/test_dispatch_environment_contract.py. That test is what makes a rename fail
+# loudly instead of routing every turn as the agent side.
+judge_config="$repo_root/oneharness.judge.toml"
+judge_config_name=${judge_config##*/}
 # Both are `run` flags with no config key, so this wrapper is the only place the
 # agent side can adopt either, and neither may be repeated -- hence two arrays
 # rather than one string, each emptied where the caller already asked for it. The
@@ -118,6 +130,35 @@ if not isinstance(chain, list) or not all(
     sys.exit(f"oneharness-agent: {sys.argv[1]} declares a malformed harnesses chain: {chain!r}")
 for identity in chain:
     print(identity)
+' "$1"
+}
+
+# The `role` a config stamps on its own history entries, or nothing when it stamps
+# none. This is what a config says it IS, written by whoever wrote the file and
+# carried verbatim into a member's scratch — the agent-side configs here declare
+# `role = "agent"` and the judge's declares `role = "judge"`. Used to confirm that a
+# config named like the judge's really is the judge artifact, so the branch that
+# grants judge-side routing turns on the file's own declared identity and not only on
+# a basename a caller chose.
+config_role() {
+    local interpreter
+    interpreter=$(repo_interpreter)
+    "$interpreter" -c '
+import sys, tomllib
+
+try:
+    with open(sys.argv[1], "rb") as config:
+        labels = tomllib.load(config).get("history_labels")
+except (OSError, tomllib.TOMLDecodeError) as error:
+    sys.exit(f"oneharness-agent: cannot read {sys.argv[1]}: {error}")
+if not isinstance(labels, dict):
+    sys.exit(0)
+role = labels.get("role")
+if role is None:
+    sys.exit(0)
+if not isinstance(role, str):
+    sys.exit(f"oneharness-agent: {sys.argv[1]} declares a malformed history_labels role: {role!r}")
+print(role)
 ' "$1"
 }
 
@@ -308,6 +349,37 @@ if [[ $caller_config == true ]]; then
         echo "oneharness-agent: caller config is not a readable regular file: $caller_config_path; correct the path and retry" >&2
         exit 2
     fi
+fi
+# Which side this turn is. The name selects it and the config's own declared role must
+# be exactly the role of that side — no other value, and not an absent one. So there is
+# no config a caller can name that routes a side without saying it is that side.
+#
+# Every config that reaches here declares one: `oneharness.judge.toml` says `judge`, and
+# the agent, orchestrator, and check-in configs all say `agent`. (`oneharness.llmlint.toml`
+# says `llmlint` and never arrives here; it goes through scripts/llmlint-oneharness.sh.)
+#
+# A turn with no config is the agent side, and runs from the repository's own agent
+# config below rather than from anything a caller chose — held to the same declared
+# role there, once that file is known to be readable.
+caller_is_judge=false
+if [[ $caller_config == true ]]; then
+    if [[ ${caller_config_path##*/} == "$judge_config_name" ]]; then
+        caller_is_judge=true
+        required_role=judge
+    else
+        required_role=agent
+    fi
+    if ! caller_role=$(config_role "$caller_config_path"); then
+        echo "oneharness-agent: cannot read the role $caller_config_path declares; correct the file, then retry" >&2
+        exit 2
+    fi
+    if [[ $caller_role != "$required_role" ]]; then
+        echo "oneharness-agent: $caller_config_path would run as the ${required_role} side, being $([ "$caller_is_judge" = true ] && echo "named $judge_config_name" || echo "not named $judge_config_name"), but declares history_labels role '${caller_role:-none}' rather than '$required_role'; give this side its own config, or set that role, then retry" >&2
+        exit 2
+    fi
+fi
+
+if [[ $caller_is_judge == true ]]; then
     # This is the judge / simulated-user side, so only its own override applies —
     # and it applies over whatever ONEHARNESS_HARNESSES the parent exported, which
     # is what keeps a worker-side selection from reaching this conversation. It is
@@ -339,9 +411,36 @@ if [[ $caller_config == true ]]; then
     exec oneharness run "${side_model[@]}" "$@"
 fi
 
+# `agent_config` becomes whichever config this turn runs from, so the chain validation
+# and alternate substitution below judge that file rather than one it may not be using.
+# The caller's is already in "$@", where a second --config would be refused.
+agent_config_flag=(--config "$agent_config")
+if [[ $caller_config == true ]]; then
+    agent_config=$caller_config_path
+    agent_config_flag=()
+fi
+
 if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
     echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
+fi
+if [[ $caller_config == false ]]; then
+    # The implicit config is held to the same declared role as a caller's, so the
+    # invariant is total: no config runs a side of this conversation without saying it
+    # is that side. It is this repository's own tracked file rather than caller input,
+    # which is why it is checked here — after the readability message above, which is
+    # the more useful one when it is simply missing — and not in the caller block. The
+    # gap this closes is quiet: an `oneharness.toml` whose role stopped saying `agent`
+    # would still run every implicit turn, stamping the worker's sessions with another
+    # side's label, and nothing else reads that field early enough to notice.
+    if ! agent_role=$(config_role "$agent_config"); then
+        echo "oneharness-agent: cannot read the role $agent_config declares; correct the file, then retry" >&2
+        exit 2
+    fi
+    if [[ $agent_role != agent ]]; then
+        echo "oneharness-agent: $agent_config runs this turn's agent side but declares history_labels role '${agent_role:-none}' rather than 'agent'; set that role, then retry" >&2
+        exit 2
+    fi
 fi
 if [ -n "${ORCHESTRATOR_WORKER_HARNESSES-}" ]; then
     # This is the agent side, so only its own override applies — over an ambient
@@ -405,7 +504,7 @@ if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
     # have nowhere to publish and nobody to read it. `--events` carries the identical
     # transcript in the end-of-turn report, with one fewer moving part and without
     # replacing this `exec` with a filtered pipeline.
-    exec oneharness run --config "$agent_config" "${side_model[@]}" "${agent_events[@]}" "$@"
+    exec oneharness run "${agent_config_flag[@]}" "${side_model[@]}" "${agent_events[@]}" "$@"
 fi
 
 status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
@@ -447,7 +546,7 @@ agent_activity=$status_dir/agent.activity
 # so a `--prompt-file -` cannot eat the task this turn is about to be given.
 # See docs/onejudge-integration.md, "Streaming the agent side".
 stream_supported() {
-    oneharness run --config "$agent_config" "${side_model[@]}" --stream --print-command "$@" \
+    oneharness run "${agent_config_flag[@]}" "${side_model[@]}" --stream --print-command "$@" \
         >/dev/null 2>&1 </dev/null
 }
 
@@ -507,7 +606,7 @@ else
 fi
 capture_pid=$!
 # llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.
-oneharness run --config "$agent_config" "${side_model[@]}" "${agent_stream[@]}" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
+oneharness run "${agent_config_flag[@]}" "${side_model[@]}" "${agent_stream[@]}" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&

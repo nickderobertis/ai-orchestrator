@@ -20,16 +20,21 @@ at: a graph member's agent side is an oneharness config, because
 `oneagentgraph`'s graph schema has no command agent, so onejudge's own
 `command` provider never serves an agent turn.
 
-Which side an invocation is depends on how `oneagentgraph` pinned it, which is the
-same distinction `scripts/oneharness-agent.sh` reads:
+Which side an invocation is depends on how `oneagentgraph` pinned it, and it is read
+here by NAME, the same distinction `scripts/oneharness-agent.sh` reads:
 
 * `--config .../oneharness.judge.toml` — a two-party member's supervisor. It
   answers the two JSON shapes onejudge asks it for: the supervisor verdict, and
   the `done_when` evaluation.
-* any other `--config` — a single-sided `kind: oneharness` member (the check-in
-  pacemaker), which has its config named on its own command line.
-* no `--config` at all — the agent side, pinned by the `oneharness.toml`
-  `oneagentgraph` wrote into the member's scratch and discovered from there.
+* `--config .../oneharness.toml` with NO judge config beside it — a single-sided
+  `kind: oneharness` member (the check-in pacemaker). `oneagentgraph` writes both
+  configs into a two-party member's scratch and only the one into a single-sided
+  member's, so the sibling is what tells those two apart.
+* anything else — the agent side of a two-party member. Since onepipeline 0.3.1 that
+  arrives carrying `--config .../oneharness.toml`; before it, the config was implicit
+  and discovered from the member's scratch, so no `--config` appeared at all. Both
+  shapes land here, which is why neither the presence of a config nor its absence is
+  what this reads.
 
 The agent side is scripted by what it is asked to do. A turn whose task names a run
 *and* whose system prompt carries the orchestrator's drive role is the orchestrator,
@@ -85,7 +90,7 @@ JUDGE_CONFIG_NAME = "oneharness.judge.toml"
 #: task was handed that instruction whether or not driving was its job.
 RUN_TASK = re.compile(r"onepipeline run `([^`]+)`")
 
-#: The orchestrator's role, from `personas/orchestrator.yaml`. Under onepipeline 0.2.0
+#: The orchestrator's role, from `personas/orchestrator.yaml`. Since onepipeline 0.2.0
 #: this is the ONLY place a dag-scope turn is told to drive the run, so requiring it
 #: here is what makes the launch journey prove that the orchestrator still does: were
 #: it ever to stop reaching this member, nothing would call the round verbs and the
@@ -226,7 +231,7 @@ def main(argv: list[str]) -> int:
         return _answer(
             argv, json.dumps({"completion": True, "reason": "the stand-in accepts the work"})
         )
-    if config:
+    if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, "the stand-in pacemaker reported")
     naming = RUN_TASK.search(prompt)
     if naming and DRIVE_ROLE in system:

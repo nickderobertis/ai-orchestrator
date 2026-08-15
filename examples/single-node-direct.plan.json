@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "goal": {
     "text": "Understand how the scheduler picks the next runnable node"
   },
@@ -8,8 +8,7 @@
     {
       "id": "research",
       "persona": "engineer",
-      "task": "## What\nRead the scheduler and report how it selects the next runnable node, in `docs/scheduler-notes.md`.\n\n## Why\nThe next change to the scheduler needs one written account of the current selection rule, so its author does not rediscover it from the code under time pressure.\n\n## Acceptance criteria\n- The note names the selection rule and the code that implements it.\n- Every claim is traced to a file and symbol in this checkout.",
-      "done_when": "all task acceptance criteria are met and every claim in the note is traceable to the code it cites"
+      "task": "## What\nRead the scheduler and report how it selects the next runnable node, in `docs/scheduler-notes.md`.\n\n## Why\nThe next change to the scheduler needs one written account of the current selection rule, so its author does not rediscover it from the code under time pressure.\n\n## Acceptance criteria\n- The note names the selection rule and the code that implements it.\n- Every claim is traced to a file and symbol in this checkout."
     }
   ]
 }

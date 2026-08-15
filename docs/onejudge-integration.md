@@ -48,6 +48,44 @@ the two sides *different* identities without moving concurrent runs; that pair i
 specified under Harnesses below. `config/onejudge.base.yaml` carries only the loop's own
 concerns (persona defaults, session), never harness/model selection.
 
+### The judge side is the one named `oneharness.judge.toml`
+
+Both sides reach `scripts/oneharness-agent.sh` through one `provider.bin`, and the
+wrapper tells them apart **by name, confirmed by the config's own declared role**:
+the judge / simulated-user side is the turn whose `--config` is named the judge
+config's *and* declares `history_labels.role = "judge"`; a caller's config named
+anything else must declare `role = "agent"`; and a turn carrying no config at all is
+the agent side, running from this repository's own agent config. So there is no config
+a caller can name that routes a side without declaring it is that side — a mismatched,
+unrecognized, or absent role stops the turn rather than resolving to either one,
+because a turn routed as the side it is not still runs and still answers. Everything the agent branch alone does
+hangs off that test: forcing `oneharness.toml` when the caller named none, applying
+`ORCHESTRATOR_WORKER_HARNESSES` rather than the judge's, streaming, the events file.
+`tests/e2e/fake_backend.py` reads the same signal.
+
+The name has two independent sources that agree, which is what makes it a contract
+rather than a guess about a private layout. `config/onejudge.base.yaml` pins
+`provider.judge_config: oneharness.judge.toml`, and `oneagentgraph` normalizes each
+member's configs into its scratch under exactly those two basenames — give a graph
+`worker.toml` and `judge.toml` through `--set` and the member directory still holds
+`oneharness.toml` and `oneharness.judge.toml`. A two-party member gets both files; a
+single-sided one gets only the agent's, which is how `fake_backend.py` tells a
+pacemaker turn from a two-party agent turn.
+`tests/test_dispatch_environment_contract.py` reconciles the wrapper's name against
+the base config's, because a rename in one alone would route every turn as the agent
+side and answer rather than fail.
+
+**The rule used to be the absence of `--config`**, because onejudge left the agent
+side's config implicit and named only the judge's. That was never the property which
+distinguished the sides — only a proxy for it — and, measured against onepipeline
+0.3.1, the proxy stopped holding: a dispatched agent side now arrives carrying
+`--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
+read as a judge turn. `just smoke` and the manual probes below are what run through
+this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
+with the judge's routing and the config's own model instead of the agent side's.
+`tests/e2e/test_agent_wrapper_sides_e2e.py` is what holds the current rule; three of
+its journeys fail against the absence-based one.
+
 ## Provider wiring
 
 This repository uses three onejudge provider arrangements:
@@ -1082,7 +1120,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.3.8 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.8/docs/protocol.md)),
+([onejudge v0.3.10 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.10/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

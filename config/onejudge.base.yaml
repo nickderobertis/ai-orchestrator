@@ -72,11 +72,21 @@ user:
   persona: >-
     Verify the requested task against its acceptance criteria and require the
     repository's documented checks before accepting it.
+  # The ONE completion bar for every dispatch, so it may only state what is true of every
+  # dispatch alike; the rest belongs in each task's `## Acceptance criteria`, which is the
+  # node's own bar. Never name a specific check tier here — the clause this replaced
+  # demanded "every lint tier has passed" and refused complete work in repositories that
+  # run no such tier.
+  #
+  # Phrasing it against the task works because onejudge hands it to the judge verbatim
+  # beside a transcript whose first message is the task; verified against onejudge 0.3.10
+  # (`config/onejudge.version`, drift-gated by tests/test_onejudge_version.py). See
+  # docs/orchestration.md, "Where a node's review bar lives".
   done_when: >-
-    the subtask is fully implemented, deterministic checks pass, and one complete
-    closeout gate plus every lint tier has passed; when a repository documents an
-    authenticated subscription-based LLM lint skip path and that harness is genuinely
-    unavailable, take that skip path and finish rather than requiring OPENAI_API_KEY
+    every acceptance criterion stated in the task is met, each of them proven by running
+    the repository's own checks rather than by inspection, with that repository's own
+    complete verification green over the finished tree and the work committed with
+    nothing half-applied left behind
   max_turns: 12
 
 # Fallback for consumers that build this fragment directly. `dispatch` replaces

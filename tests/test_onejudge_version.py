@@ -18,6 +18,12 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # planner channel as a command provider. Dating that observation is what makes
     # it honest, and it is exactly the literal an upgrade has to re-measure.
     Path("graphs/dag-scope.yaml"): 1,
+    # The base config's `user.done_when` is the whole review bar for every dispatch,
+    # and it is written to be resolved by the judge against the task. That only works
+    # because onejudge hands the criterion over verbatim beside a transcript opening
+    # with the task — a per-release behaviour, so the comment names the release it was
+    # measured against and joins this gate rather than quietly outliving it.
+    Path("config/onejudge.base.yaml"): 1,
 }
 ONEJUDGE_VERSION_REFERENCE = re.compile(
     r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+|/onejudge/(?:blob/)?)"
@@ -54,7 +60,14 @@ def test_onejudge_version_references_match_single_source(
 #: release it was measured against, and `config/<tool>.version` is the one source
 #: of what that release is. Restating it uncovered is how a claim outlives the
 #: bump that invalidated it.
-PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {}
+PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
+    # The dag-scope graph names the release whose schema ceiling bounds the version
+    # it could be raised to for the `{task}` placeholder. Both halves of that
+    # sentence are per-release measurements — which versions the build reads, and
+    # from which one the token stops being literal — so the literal joins this gate
+    # rather than quietly outliving the bump that moves the ceiling.
+    "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1},
+}
 
 
 def _published_version_reference(tool: str) -> re.Pattern[str]:
@@ -165,6 +178,45 @@ def test_claims_about_the_adopted_release_name_the_adopted_release(
     written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
     for template in templates:
         stated = template.format(version=adopted_oneharness_version)
+        assert stated in written, (
+            f"{relative_path} must state {stated!r}; re-measure the claim against the "
+            "adopted release and update it in the same change"
+        )
+
+
+#: The same contract for onepipeline, whose per-release behaviour this repository
+#: measured rather than read: which release the agent side reaches with no `--config`,
+#: and therefore which one this host can dispatch under at all. It cannot go under the
+#: published-CLI gate either, and for a sharper reason than the oneharness claims: these
+#: documents deliberately name a release this repository does NOT adopt — the one whose
+#: change to that seam is why the pin is where it is — plus historical "since 0.2.0"
+#: statements. Naming the sentence gates the claim about today's release and leaves both
+#: of those alone.
+ADOPTED_ONEPIPELINE_CLAIMS = {
+    "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
+    "personas/README.md": ("measured against onepipeline {version}",),
+}
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(("relative_path", "templates"), ADOPTED_ONEPIPELINE_CLAIMS.items())
+def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
+    relative_path: str, templates: tuple[str, ...]
+) -> None:
+    """What a dispatch does is a per-release fact, so each claim names the release.
+
+    Both of these were measured by reading what a real launch produced — the effective
+    `onejudge.yaml` a dispatch was given, and the `--config` its agent side arrived with.
+    Neither survives a bump unexamined, and the second one is the reason the pin is not
+    simply the newest release, so a bump that silently kept the sentence would leave the
+    justification for the pin asserting something about a release nobody re-measured.
+    """
+    adopted = (REPO_ROOT / "config" / "onepipeline.version").read_text(encoding="utf-8").strip()
+    # Whitespace-normalized: these sentences wrap across lines, and a reflow is not
+    # a change to what they assert.
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+    for template in templates:
+        stated = template.format(version=adopted)
         assert stated in written, (
             f"{relative_path} must state {stated!r}; re-measure the claim against the "
             "adopted release and update it in the same change"

@@ -144,3 +144,43 @@ def test_the_fixture_drops_the_identity_a_dispatch_really_exports(exported: str)
     assert result.returncode == 0, (
         f"a suite inheriting {exported} did not drop it: {result.stdout}{result.stderr}"
     )
+
+
+#: How `config/onejudge.base.yaml` names the judge side's config, and how
+#: `scripts/oneharness-agent.sh` recognizes it. The base config is the declaring side:
+#: it is what onejudge reads to decide which config the judge turn is given.
+JUDGE_CONFIG_DECLARATION = re.compile(r"^\s*judge_config:\s*(\S+)", re.MULTILINE)
+JUDGE_CONFIG_RECOGNITION = re.compile(r'^judge_config="\$repo_root/(\S+)"', re.MULTILINE)
+
+
+def test_the_wrapper_recognizes_the_judge_config_the_base_config_names() -> None:
+    """The wrapper tells the two conversation sides apart by this name, so it must be the name.
+
+    Both sides of a run reach `scripts/oneharness-agent.sh` through one `provider.bin`,
+    and since onepipeline 0.3.1 named the agent side's config too, the judge config's
+    basename is the only thing that distinguishes them. A rename in
+    `config/onejudge.base.yaml` alone would therefore not fail loudly: every turn would
+    simply be read as the agent side, run with the worker's routing, and answer — which
+    is the quiet wrong-side failure the previous absence-based rule produced.
+
+    So the two are reconciled here rather than trusted to stay equal.
+    """
+    declared = JUDGE_CONFIG_DECLARATION.search(
+        (REPO_ROOT / "config" / "onejudge.base.yaml").read_text(encoding="utf-8")
+    )
+    assert declared is not None, (
+        "config/onejudge.base.yaml must name the judge side's config as `judge_config:`"
+    )
+    recognized = JUDGE_CONFIG_RECOGNITION.search(
+        (REPO_ROOT / AGENT_WRAPPER).read_text(encoding="utf-8")
+    )
+    assert recognized is not None, (
+        f"{AGENT_WRAPPER} must take the judge config's name from one assignment of the "
+        'form `judge_config="$repo_root/<name>"`, which is what it identifies the side by'
+    )
+
+    assert recognized.group(1) == declared.group(1), (
+        f"{AGENT_WRAPPER} recognizes the judge side by {recognized.group(1)!r} while "
+        f"config/onejudge.base.yaml hands the judge {declared.group(1)!r}; every turn "
+        "would be routed as the agent side"
+    )

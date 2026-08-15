@@ -117,10 +117,21 @@ dispatch onejudge.
    PR, a deploy, a scheduled job, a third party. When the natural proof is
    ephemeral or external, require contract-level proof instead and name the
    artifact that defines the contract.
-   The judge-only `done_when` must always require that all
-   task acceptance criteria are met and may add broader quality measures such as
-   a green gate, held coverage, or no regressions. Keep those specific criteria in
-   the task, not only in `done_when`; use `max_turns` when needed. Start from
+   **`## Acceptance criteria` IS the node's review bar** — there is no second place
+   to state one. A plan node carrying `done_when` is refused while the plan loads,
+   at any declared `schema_version`, so a bar written there does not weaken the
+   dispatch, it prevents it. What replaced it is one shared clause in
+   `config/onejudge.base.yaml` under `user.done_when`, phrased against the task
+   ("every acceptance criterion stated in the task is met") and handed to the judge
+   verbatim beside a transcript whose first message is that task. So the criteria
+   list is the thing a planner tunes, and tuning it is how a node gets a different
+   bar: every criterion the planner would once have hidden in `done_when` goes in
+   the list the worker also reads, where it can be acted on rather than only failed
+   against. Only a measure true of *every* dispatch alike belongs in the shared
+   clause, and never one naming a specific check tier — that is what refused
+   complete work in repositories that run no such tier. Use `max_turns` when a task
+   needs more room; at `schema_version: 2` it reaches the dispatch, which v1 never
+   did. Start from
    `examples/tracked-graph.example.json`. Reserve `kind: human` for an action only
    an external person or outside system can perform: merge a PR, publish or
    release, trigger CI, register or change infrastructure, or provide external
@@ -131,7 +142,8 @@ dispatch onejudge.
    transition is [the graph the round
    executed](docs/orchestration.md#the-plan-of-record-is-the-graph-the-round-executed),
    folded from the run's own journal rather than re-read from the launch file, so a
-   retry's replacement id, a branch pin, an amended `task`, `done_when`, or
+   retry's replacement id, a branch pin, an amended `task` — which is how a node's
+   review bar is amended, since the bar lives in its `## Acceptance criteria` — or
    `max_turns` all reach the next round. What it learns about a node that keeps
    running belongs in a `context` edit: that note is the one thing which carries
    exactly one round, so state worth keeping is state attached again. See [Carried
@@ -156,8 +168,14 @@ dispatch onejudge.
    matches the prompt's other clues resolves the reference; ask only when the
    search fails or leaves multiple strong candidates.
 2. **Pick or create personas.** Match each subtask to a general role and review
-   bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
-   encoding subtask details in a new persona.
+   bar in `personas/`. Prefer precise task prose — a specific `## Acceptance
+   criteria` list, which is the node's review bar — over encoding subtask details
+   in a new persona. A node's `persona` is a *name* resolved against roles built
+   into the tool, not against this repository's `personas/` directory, so a role
+   whose built-in bar replaces `config/onejudge.base.yaml`'s (`planner`,
+   `reviewer`, `researcher`) is reviewed without the shared acceptance-criteria
+   clause, and a repo-specific slash-qualified name cannot be dispatched at all.
+   See [Which of these files a dispatch actually reads](personas/README.md#which-of-these-files-a-dispatch-actually-reads).
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
    which stays attached and hands the run back when it settles (see below),
    then review each structured boundary and mid-run proposal surfaced by the
@@ -242,11 +260,15 @@ member whose job is not the run-level task must state its own. Never let this on
 reach `onepipeline round run` or `onepipeline round next`; the rounds are the
 `orchestrator` member's, and a round claimed from a scheduled turn dies at that
 member's deadline, taking the dispatched worker with it. Every planner-visible
-surface resets that clock. Set a launch interval
-with `just orchestrate ... --heartbeat-interval SECONDS`; include
-`"heartbeat_interval": SECONDS` in a normal `channel-reply` to adjust it live, or
-`"heartbeat_interval": false` to disable it. The orchestrator continues without
-waiting for a reply to these heartbeat surfaces.
+surface resets that clock. The interval is set once, at launch, with `just
+orchestrate ... --heartbeat-interval SECONDS`, and there is no way to change it
+afterwards: the reply envelope `just channel-reply` sends is closed to unknown
+fields and accepts exactly `version`, `completion`, `message`, `reason`, and
+`commands`, so a reply carrying `"heartbeat_interval"` is refused whole and its
+verdict and graph edits go with it. `--heartbeat-interval` is on `onepipeline
+start` alone — not on `adopt` either — so choose the interval when launching, and
+relaunch rather than expecting to retune a live run. The orchestrator continues
+without waiting for a reply to these heartbeat surfaces.
 
 Judge a dispatched branch against its own base (`merge-base` / `base..branch`),
 never a moving `origin/main`; concurrent advancement can make a healthy branch
