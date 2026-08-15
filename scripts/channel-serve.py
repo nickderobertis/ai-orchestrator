@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +66,17 @@ RunId = NewType("RunId", str)
 #: composed-task contract for this graph, and the only place an observer member is
 #: told which run it is watching.
 RUN_IN_COMPOSED_TASK = re.compile(r"onepipeline run `([^`]+)`")
+
+#: What a run id read out of that task may be, checked before it is used. It is read
+#: from somebody else's prose and then put to two uses that a free-form string does not
+#: survive: it becomes an argv word handed to `onepipeline channel serve`, and that verb
+#: resolves it as the `runs/<run-id>/` directory. Deliberately a superset of what
+#: `onepipeline` mints from a plan's name — `serve-e2e`, `planner-supervises-monitor` —
+#: rather than a second copy of that grammar, because this is the boundary check and not
+#: the grammar's other home: it refuses only what those two uses cannot survive. A
+#: leading `-` would be read as a flag rather than a run; a `/`, a `.` opening what could
+#: be `..`, or a NUL or other control character would name something other than the run.
+SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 
 #: The surface kind a monitor's supervisor boundary is raised under. `channel
 #: serve` takes a free-form kind here, unlike `onepipeline surface --kind`, so this
@@ -117,19 +129,34 @@ def fail(problem: str, remedy: str) -> int:
     return 2
 
 
-def onepipeline_binary() -> str:
+def onepipeline_binary(run: RunId) -> str | int:
     """The `onepipeline` this checkout pins, or the one `ONEPIPELINE_BIN` names.
 
     Resolved from this file's own location rather than from a bare name: a judge
     command is spawned with the run's launch directory as its working directory and
     whatever PATH the graph inherited, so a lookup would let the ambient environment
     decide which release answers the planner.
+
+    An overriding value is resolved to an executable before it is spawned, rather than
+    left to fail as it is executed. The seam exists so a journey can point this at a
+    stand-in channel, and the environment it is read from is the graph's rather than
+    this filter's — so an empty value, a path where nothing is installed, and a file
+    without the bit set are all named as the cause here, where what is wrong with them
+    can still be said.
     """
     named = os.environ.get(ONEPIPELINE_BIN)
-    if named:
-        return named
-    pinned = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "onepipeline"
-    return str(pinned) if pinned.is_file() else "onepipeline"
+    if named is None:
+        pinned = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "onepipeline"
+        return str(pinned) if pinned.is_file() else "onepipeline"
+    usable = shutil.which(named)
+    if usable is None:
+        return fail(
+            f"could not run `channel serve {run}`: {ONEPIPELINE_BIN} names {named!r}, "
+            "which is not an executable this filter can run",
+            "restore the pinned toolchain with `just bootstrap`, or point "
+            f"{ONEPIPELINE_BIN} at a usable onepipeline",
+        )
+    return usable
 
 
 def read_frame(raw: str) -> SupervisorFrame | int:
@@ -226,9 +253,13 @@ def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:
                 f"`{optional}` is prose onejudge hands to the monitor; check the "
                 "onepipeline release against this file's header",
             )
-    # Unknown fields are relayed rather than refused, deliberately: onejudge decides
-    # what it accepts, and refusing here would break this filter on an additive
-    # release that onejudge itself is happy with.
+    # llmlint: ignore[boundary_inputs_validated] Fields beyond `completion`, `message`,
+    # and `reason` are relayed rather than refused or stripped, deliberately: onejudge —
+    # not this filter — decides what a ruling may carry, so refusing them here would kill
+    # the monitor on an additive onepipeline release that onejudge itself is happy with,
+    # and stripping them would quietly withhold from onejudge what the planner sent it.
+    # The three fields onejudge acts on are all checked above; nothing that reaches it
+    # unchecked can change the ruling, which is the boundary this validates.
     return parsed
 
 
@@ -243,11 +274,20 @@ def main() -> int:
             "give this member no `task` of its own, or open one with `{task}`, so the "
             "run-level task reaches it",
         )
+    if SAFE_RUN_ID.match(run) is None:
+        return fail(
+            f"the composed task names {run!r}, which this filter will not pass to "
+            "`onepipeline channel serve` as a run",
+            "a run id is one word of letters, digits, `_`, `.`, and `-`; check the "
+            "run-level task's opening line against the runs `just runs` lists",
+        )
     surface = surface_for(frame, run)
     if isinstance(surface, int):
         return surface
 
-    binary = onepipeline_binary()
+    binary = onepipeline_binary(run)
+    if isinstance(binary, int):
+        return binary
     try:
         served = subprocess.run(
             [binary, "channel", "serve", run],
@@ -256,7 +296,11 @@ def main() -> int:
             capture_output=True,
             check=False,
         )
-    except OSError as error:
+    # `ValueError` beside `OSError` is what makes this boundary total: `subprocess.run`
+    # raises it, not `OSError`, for an argv word it cannot encode. The checks above are
+    # what stop one reaching here, and this is the guarantee that no path out of this
+    # filter is a traceback instead of a cause and a remedy.
+    except (OSError, ValueError) as error:
         return fail(
             f"could not run `{binary} channel serve {run}` ({error})",
             "restore the pinned toolchain with `just bootstrap`, or point "

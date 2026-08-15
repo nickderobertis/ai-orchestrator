@@ -1454,6 +1454,17 @@ def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
             json.dumps({**SUPERVISOR_FRAME, "task": "no run named here"}),
             "does not name its run",
         ),
+        # The run id is read out of somebody else's prose and then spent as an argv word
+        # and a `runs/<run-id>/` directory, so a task naming something those two uses do
+        # not survive is refused here rather than handed to a subprocess to interpret.
+        "a task naming a run argv would read as a flag": (
+            json.dumps({**SUPERVISOR_FRAME, "task": "onepipeline run `--all`."}),
+            "will not pass to",
+        ),
+        "a task naming a run that reaches outside the runs directory": (
+            json.dumps({**SUPERVISOR_FRAME, "task": "onepipeline run `../../etc/passwd`."}),
+            "will not pass to",
+        ),
         "a frame carrying no conversation": (
             json.dumps({**SUPERVISOR_FRAME, "messages": "node api has drifted"}),
             "carries no `messages` conversation",
@@ -1487,16 +1498,36 @@ def test_the_channel_filter_reports_a_channel_it_cannot_run(
     failure a broken checkout produces is a spawn failure — and the monitor's whole
     conversation depends on it. Held here because the alternative to reporting it is
     the one thing this filter must never do: rule on the run itself.
+
+    Every unusable override is reported the same way, including the ones that never
+    reach a spawn at all: the value is the graph's environment rather than this
+    filter's, so an empty or unencodable one has to be named as the cause here instead
+    of surfacing as a traceback from the subprocess boundary.
     """
     environment = _environment(tmp_path, oneharness_bin)
-    environment[ONEPIPELINE_BIN] = str(tmp_path / "no-such-onepipeline")
 
-    refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+    for case, override in (
+        ("a path where nothing is installed", str(tmp_path / "no-such-onepipeline")),
+        ("a file that is not executable", str(_unrunnable(tmp_path))),
+        ("an override set to nothing at all", ""),
+    ):
+        environment[ONEPIPELINE_BIN] = override
 
-    assert refused.returncode != 0, refused.stdout
-    assert "could not run" in refused.stderr, refused.stderr
-    assert "just bootstrap" in refused.stderr, refused.stderr
-    assert "completion" not in refused.stdout, refused.stdout
+        refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
+
+        assert refused.returncode != 0, f"{case} was run: {refused.stdout}"
+        assert "could not run" in refused.stderr, f"{case}: {refused.stderr}"
+        assert "just bootstrap" in refused.stderr, f"{case}: {refused.stderr}"
+        assert "Traceback" not in refused.stderr, f"{case}: {refused.stderr}"
+        assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
+
+
+def _unrunnable(tmp_path: Path) -> Path:
+    """A real `onepipeline`-shaped file that the filter still cannot run."""
+    present = tmp_path / "onepipeline-without-the-bit"
+    present.write_text("#!/usr/bin/env bash\necho '{\"completion\": true}'\n", encoding="utf-8")
+    present.chmod(0o644)
+    return present
 
 
 def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
