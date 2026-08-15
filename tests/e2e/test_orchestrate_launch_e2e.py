@@ -1443,6 +1443,7 @@ def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
     environment = _environment(tmp_path, oneharness_bin)
 
     refusals = {
+        "nothing on stdin at all": ("", "no supervisor frame on stdin"),
         "not JSON at all": ("this is not a frame", "not JSON"),
         "not an object": ("[1, 2]", "must be a JSON object"),
         "an eval call rather than a supervisor one": (
@@ -1452,6 +1453,10 @@ def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
         "a task that names no run": (
             json.dumps({**SUPERVISOR_FRAME, "task": "no run named here"}),
             "does not name its run",
+        ),
+        "a frame carrying no conversation": (
+            json.dumps({**SUPERVISOR_FRAME, "messages": "node api has drifted"}),
+            "carries no `messages` conversation",
         ),
         "a conversation the monitor has not spoken in": (
             json.dumps({**SUPERVISOR_FRAME, "messages": [{"role": "user", "content": "hi"}]}),
@@ -1503,8 +1508,10 @@ def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
 
     onejudge reads this stdout as the planner's verdict, so relaying an unchecked
     response would let a changed release — or an empty one — settle or continue a run
-    nobody ruled on. Both shapes are driven against the real script through a stand-in
-    channel, which is the only way to produce an answer the published one never gives.
+    nobody ruled on. The ruling's `completion` and the prose onejudge hands back to the
+    monitor are both checked, and every shape is driven against the real script through
+    a stand-in channel, which is the only way to produce an answer the published one
+    never gives.
     """
     environment = _environment(tmp_path, oneharness_bin)
     channel = tmp_path / "stand-in-channel"
@@ -1525,6 +1532,16 @@ def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
         ("an empty answer", "", "closed without answering"),
         ("an answer that is not JSON", "ok\n", "is not JSON"),
         ("an answer that is not a ruling", '{"message": "sure"}\n', "not a supervisor ruling"),
+        (
+            "a ruling whose message is not prose",
+            '{"completion": true, "message": 3}\n',
+            "`message` for run",
+        ),
+        (
+            "a ruling whose reason is not prose",
+            '{"completion": false, "reason": ["drift"]}\n',
+            "`reason` for run",
+        ),
     ):
         answers.write_text(answer, encoding="utf-8")
 
