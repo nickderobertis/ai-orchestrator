@@ -53,13 +53,13 @@ FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
 RUN_NAME = "worker-start-directory"
 
 #: The `graphs/node-scope.yaml` member a dispatched plan node runs as. The
-#: dag-scope members (`orchestrator`, `check-in`) are the launch's own and belong
+#: dag-scope members (`monitor`, `check-in`) are the launch's own and belong
 #: in the launch directory, which is what makes them the contrast below.
 WORKER_MEMBER = "worker"
 
-#: The dag-scope member that drives the run, and so is the one graph member whose
+#: The dag-scope member that watches the run, and so is the one graph member whose
 #: place really is the directory the planner launched from.
-ORCHESTRATOR_MEMBER = "orchestrator"
+MONITOR_MEMBER = "monitor"
 
 #: `oneagentgraph` gives every member a scratch directory named after it and pins
 #: that member's harness configs inside it, so the recorded `--config` is what says
@@ -303,21 +303,22 @@ def test_the_journal_records_the_worker_starting_in_the_worktree_its_session_cut
 
 
 @pytest.mark.xdist_group("worker-start-directory")
-def test_the_launch_directory_is_where_the_run_s_own_driver_belongs(launched: Launched) -> None:
-    """The same journal puts the dag-scope orchestrator in the launch directory.
+def test_the_launch_directory_is_where_the_runs_own_monitor_belongs(launched: Launched) -> None:
+    """The same journal puts the dag-scope monitor in the launch directory.
 
     Without this the assertion above is weaker than it reads: a journal that
     recorded one directory for everything would satisfy it whenever the launch
-    happened to be under a worktree. The orchestrator drives the run rather than
-    doing its work, so the directory it is started in is the one the planner
-    launched from — and that it differs from the worker's is the whole placement.
+    happened to be under a worktree. The monitor watches the run rather than doing
+    its work, so the directory it is started in is the one the planner launched from
+    — and that it differs from the worker's is the whole placement.
     """
-    driver = set(_started(launched.journal, ORCHESTRATOR_MEMBER))
-    assert driver == {str(REPO_ROOT)}, (
-        f"the run's driver was started in {sorted(driver)}, not in the launch directory {REPO_ROOT}"
+    watcher = set(_started(launched.journal, MONITOR_MEMBER))
+    assert watcher == {str(REPO_ROOT)}, (
+        f"the run's monitor was started in {sorted(watcher)}, not in the launch "
+        f"directory {REPO_ROOT}"
     )
-    assert not driver & set(_started(launched.journal, WORKER_MEMBER)), (
-        "the driver and the dispatched worker were started in the same directory"
+    assert not watcher & set(_started(launched.journal, WORKER_MEMBER)), (
+        "the monitor and the dispatched worker were started in the same directory"
     )
 
 

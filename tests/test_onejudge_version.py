@@ -18,6 +18,10 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # planner channel as a command provider. Dating that observation is what makes
     # it honest, and it is exactly the literal an upgrade has to re-measure.
     Path("graphs/dag-scope.yaml"): 1,
+    # The filter standing between onejudge's supervisor frame and the planner channel
+    # parses that frame's exact shape. Which shape a release writes is per-release, so
+    # a bump has to re-measure the parser rather than discover it in a dead monitor.
+    Path("scripts/channel-serve.py"): 1,
     # The base config's `user.done_when` is the whole review bar for every dispatch,
     # and it is written to be resolved by the judge against the task. That only works
     # because onejudge hands the criterion over verbatim beside a transcript opening
@@ -67,6 +71,7 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # from which one the token stops being literal — so the literal joins this gate
     # rather than quietly outliving the bump that moves the ceiling.
     "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1},
+    "onepipeline": {Path("scripts/channel-serve.py"): 1},
 }
 
 

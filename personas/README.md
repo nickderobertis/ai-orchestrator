@@ -13,7 +13,7 @@ role-specific parts live here.
 | --- | --- |
 | `engineer` | General implementation and realistic testing across server-side systems, UI, accessibility, and contract-aware libraries. |
 | `planner` | Decomposing work into an actionable, dependency-ordered plan (no implementation). |
-| `orchestrator` | Executing a tracked graph round by round under a live planner's supervision. |
+| `orchestrator` | Actively monitoring an executing tracked graph: judging observed activity against the plan, surfacing what it finds, and applying only unambiguous in-allowlist fixes. |
 | `check-in` | Synthesizing a read-only, durable-state-derived planner status update. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `researcher` | Answering questions with evidence cited from the actual source. |
@@ -45,8 +45,9 @@ tool, and this directory is not on the search path. Anything else is taken as a 
 relative to `graphs/`, which is why `crozier/crozier-corpus` fails a dispatch with
 `cannot read graphs/crozier/crozier-corpus`.
 
-Two consequences, both measured against onepipeline 0.3.1 by reading the effective
-`onejudge.yaml` a dispatch was launched with:
+Two consequences, both re-measured against onepipeline 0.5.0 by launching a plan
+whose two nodes name `engineer` and `reviewer` and reading the effective
+`onejudge.yaml` each dispatch was given:
 
 - Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
   with. The flat files whose names match a built-in are a catalog and a validation
@@ -66,9 +67,9 @@ place based on its task performance:
 
 ```sh
 just new-persona <name> --persona-dir scratch/personas
-# Then run a one-node plan naming that persona (see
-# examples/single-node-direct.plan.json):
-just run-plan scratch/draft.plan.json --persona-dir scratch/personas
+# Then launch a one-node plan whose node names that persona as a path relative to
+# graphs/:
+just orchestrate scratch/draft.plan.json
 ```
 
 Once proven, add it to this catalog through the orchestrator's isolated

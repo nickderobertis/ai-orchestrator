@@ -72,9 +72,9 @@ and the workstream answers it
 from `MAX_EMPTY_DEATH_RELAUNCHES`, waiting `RELAUNCH_BACKOFF_SECONDS` times the
 relaunch number first — the "only the launch is retried" shape
 `oneagentgraph smoke` already uses. Unlike the work path it does not require the
-branch to carry commits. Under a round the cancellation event is that wait, so a
-cancel does not have to outlast a backoff before the branch is preserved; a
-cancelled workstream is reported as the cancellation it was.
+branch to carry commits. A cancellation event interrupts that wait, so a cancel
+does not have to outlast a backoff before the branch is preserved; a cancelled
+workstream is reported as the cancellation it was.
 
 The predicate proves the worktree is unchanged, not that the harness never
 started, so a worker that reads and reasons before dying is relaunched too. That
@@ -132,7 +132,7 @@ a conservative default and reports the scratch path, available bytes, and
 `just sweep-scratch`.
 Set `ORCHESTRATOR_MIN_FREE_BYTES` to a non-negative byte count when a host needs a
 different threshold. This preflight is a terminal infrastructure failure in a
-tracked graph, so it does not consume another round.
+tracked graph, so nothing redispatches the node against the same full disk.
 
 The lifecycle acquires the host scratch shared lock before this preflight and
 holds it through dispatch, verification, and publication. Destructive cleanup of
@@ -410,8 +410,8 @@ For a remote-first workflow, required status checks are authoritative at PR merg
 time. A remote identity may also carry a pre-push hook, and then the branch push
 is gated too: a rejection there settles the node the same way, before any PR
 exists, rather than surfacing as a raw Git error.
-A node's `recorded_gate` runs nothing: it overrides which gate command the
-round *records* as the identity's complete bar, and cannot bypass or replace
+A node's `recorded_gate` runs nothing: it overrides which gate command the run
+*records* as the identity's complete bar, and cannot bypass or replace
 merge-path coverage. `verify_cmd` is its pre-merge-path spelling and remains
 accepted. The gate-skipping switch is gone — the `--skip-verify` flag was
 removed, and the `skip_verify` and `no_identity_gate` plan keys are accepted and
@@ -460,8 +460,8 @@ origin, and `just sync <branch>` names one rather than the registered base.
 Every merge-path invocation for one branch is written twice, and the second copy is
 the point:
 
-* into the node's own run artifacts (`round-NN/<node>/gate.log`), which is where the
-  node result and the `verification-finished` event's `log_path` point; and
+* into the node's own run artifacts, which is where the node result and the
+  `verification-finished` event's `log_path` point; and
 * into **`<worktree root>/gate-logs/<branch with `/` flattened to `-`>/`**, one file
   per invocation, `gate-0001.log` upward in the order they were claimed, reported as
   the same event's `preserved_log_path`.
@@ -486,9 +486,9 @@ counted nor pruned: it is the whole history of those attempts.
 
 ### Keeping a process that outlives its launcher
 
-Some processes here are *meant* to outlive the thing that started them: a round owner
-(`just run-plan`, `just next-round`), a publication driver (`just repo-recover`, `just
-integrate`), and above them the driver `just orchestrate` spawns. Reparenting to init
+Some processes here are *meant* to outlive the thing that started them: a dispatched
+worker, a publication driver (`just repo-recover`, `just integrate`), and above them
+the driver `just orchestrate` spawns. Reparenting to init
 puts every one of them outside the tree walk its launcher would be found by.
 
 This repository no longer arbitrates that. The sweep it used to arbitrate with is gone
@@ -564,7 +564,7 @@ orchestrator's own checkout, never the worktree being linted, so the fingerprint
 or nothing at all where `dispatch.py` and `watchdog.py` drop it and the config
 renders `"bin": null`. Run the pre-fix fingerprint under those three and it emits
 three different digests for byte-identical content. That is the visible symptom:
-one judged diff hashes to a key per dispatch, the judge re-rolls every round, and
+one judged diff hashes to a key per dispatch, the judge re-rolls on every run, and
 a branch collects opposite verdicts on the same code.
 
 Reading the caller's environment fails a second, quieter way. Nx scores a runtime
@@ -586,7 +586,7 @@ disagree — but it does mean a host that upgrades llmlint invalidates recorded
 verdicts, which is correct invalidation rather than a miss to investigate.
 
 A second residual sits one layer further out, and it is the other thing that can
-make "the failing rules differed this round" true. The remote plugins in
+make "the failing rules differed this time" true. The remote plugins in
 `llmlint.yml` are pinned with an `@<version>` suffix, and llmlint caches each one
 at `$XDG_CACHE_HOME/llmlint/plugins/<url-hash>/<version>.yml` and never
 revalidates it: under a fixed pin the rules a host judges by are whatever it
@@ -1048,46 +1048,40 @@ ancestor of the continued branch, so force-rewritten history cannot be blessed.
 
 ### Preserved committed work implies a recorded continuation
 
-A pause is not the only settlement that leaves commits on a branch, and the fold carries
-a preserved branch into the next round **only** when the recorded result names one
-(`orchestrator.replan`: `status in _PRESERVING_STATUSES and resume is not None`). So an
-ending that preserved work without recording `resume` silently discarded it: the next
-round compiled the node unpinned and dispatched it against a fresh branch beside
-finished work nothing would look at again. A merge-path gate rejection and a publication
-that refused its own commit subject — both after every step had settled `done` — cost
-one planner three hand-written branch pins in a single run.
+A pause is not the only settlement that leaves commits on a branch, and a preserved
+branch is continued **only** when the recorded result names a `resume`. So an ending
+that preserved work without recording one silently discarded it: the node was
+redispatched unpinned, against a fresh branch beside finished work nothing would look
+at again. A merge-path gate rejection and a publication that refused its own commit
+subject — both after every step had settled `done` — cost one planner three
+hand-written branch pins in a single run.
 
 Recording is therefore keyed on the **outcome domain**, not on the endings somebody
-remembered. `orchestrator.outcomes` states the *exceptions* and derives
-`PRESERVATION_ELIGIBLE_OUTCOMES` by subtraction, so an outcome added to `LifecycleOutcome`
-is eligible until somebody decides otherwise — the failure that costs work is the one
-nobody classified. Eligibility is a question, not a verdict: `error`, `timeout`, and
-`not-completed` can each settle before the agent commits anything, so the branch is what
-answers it. `orchestrator.lifecycle._record_preserved_resume` runs in the one
-`finally` every exit passes through and records a complete `Resume` for any eligible
+remembered: the engine states the *exceptions* and derives the eligible set by
+subtraction, so a newly added outcome is eligible until somebody decides otherwise —
+the failure that costs work is the one nobody classified. Eligibility is a question,
+not a verdict: `error`, `timeout`, and `not-completed` can each settle before the
+agent commits anything, so the branch is what answers it. A complete `Resume` is
+recorded on the one exit path every settlement passes through, for any eligible
 outcome whose branch carries commits, skipping the settlements that already recorded
 their own (the cooperative cancel, the human pause, the workstream that did not
-complete) because those know which steps still have to run.
-`tests/test_preserved_work_invariant.py` holds the invariant across the whole domain
-against real git; `tests/e2e/test_preserved_branch_fold_e2e.py` drives a rejected tree, a
-refused publication commit, and a lost publication race through the real fold into rounds
-that continue their branches; and the journeys in `tests/e2e/test_lifecycle_e2e.py` assert
-the same recording where a required check, an unreported one, or a closed pull request
-settles a workstream — and its absence where a settlement never reached a commit.
+complete) because those know which steps still have to run. The invariant is held
+across the whole outcome domain by the published crate's own tests against real
+git.
 
 A continuation is only worth what the checkout can produce, so every eligible outcome
 also hands its branch to the registered execution checkout before teardown — the run's
 own clone is disposable. That copy is fast-forward only, to protect a concurrent run
 holding the same branch name, and a refusal is reported in the settlement's detail for
-**every** eligible outcome rather than only for the merge-path rejection: the pin the
-next round would otherwise adopt names a branch nothing outside this run carries, and
-that line is the only warning it does.
+**every** eligible outcome rather than only for the merge-path rejection: the pin a
+continuation would otherwise adopt names a branch nothing outside this run carries,
+and that line is the only warning it does.
 
 Two things about that recording are decided by branch state rather than chosen:
 
 * **The mode.** `retry` is the mode whose validation *demands* unattested incomplete
-  provenance, and a whole branch carries none — claiming it produces a pin the next
-  round declines in favour of a fresh branch, which is the discarded work again. A
+  provenance, and a whole branch carries none — claiming it produces a pin the
+  dispatch declines in favour of a fresh branch, which is the discarded work again. A
   branch that carries a marker gets `retry`; a whole one gets `continue`. Marking a
   gate-rejected branch instead would be a lie about it, and `just recoverable` reads
   that marker to decide which command it offers an operator — so the branch would be
@@ -1099,66 +1093,59 @@ Two things about that recording are decided by branch state rather than chosen:
   other preserving outcome carries its done steps forward, because what failed there was
   publication rather than the work.
 
-## Adaptive replanning: adjust between rounds
+## Adapting a running graph
 
-The DAG is static within a `run-plan` invocation; the orchestrator adapts between
-rounds. Every round returns direct reports, lifecycle results, and ready human
-actions. The transition applies the **edits** the channel accepted while the round
-ran — `retry`, `split`, `add`, `drop`, and `attest`. Completed nodes landed on
-root are removed as satisfied. Completed-but-open dependencies become
-`stack_bases` anchors before their IDs are removed; a merge into a feature or
-synthetic base carries that landed base until the content reaches root. Those
-anchors also pass through a completed top-level human gate or other removed
-non-publication node, preserving same-repository ancestry across rounds. Waiting
-lifecycle nodes carry their resume checkpoint forward. The produced graph is
-validated, so bad edits and human references fail loudly.
+The DAG is never static and there is no interval between adaptations: the
+reconciler converges the live desired graph continuously, so an accepted edit —
+`retry`, `add`, `drop`, `reparent`, `cancel`, `requeue`, `context`, `attest` — is
+applied on its next pass. Completed nodes landed on root leave the frontier as
+satisfied. Completed-but-open dependencies become `stack_bases` anchors, and a
+merge into a feature or synthetic base carries that landed base until the content
+reaches root. Those anchors also survive a completed top-level human gate or other
+removed non-publication node, preserving same-repository ancestry. Waiting
+lifecycle nodes keep their resume checkpoint. Every edit is validated against the
+live graph before it is accepted, so bad edits and human references fail loudly and
+synchronously.
 
-Publication closeout is executed by the orchestrator process, not the planner.
-The orchestrator surfaces the resulting branch, PR, gate, and publication-checkout
-state over the live planner channel; the planner accepts completion only after
-reviewing that evidence.
+Publication closeout is executed by the engine, not the planner. The resulting
+branch, PR, gate, and publication-checkout state reach the planner over the live
+channel; the planner accepts completion only after reviewing that evidence.
 
-`run-plan` records every invocation by default:
+Every run is recorded, and the ledger is flat:
 
 ```
-runs/<run-id>/round-01/plan.json
-runs/<run-id>/round-01/status.json
-runs/<run-id>/round-01/result.json
+runs/<run-id>/plan.json      the plan as launched, preserved exactly
+runs/<run-id>/events.jsonl   the authoritative journal
+runs/<run-id>/result.json    the settlement, rewritten as it moves
 ```
 
-The plan mapping is preserved exactly and the result is the command's JSON
-payload. The round directory and `running` status are committed before dispatch;
-the result and `completed` status are atomic updates, and an owner that stops
-without recording a result leaves `abandoned` instead of `running`. A second
-process cannot claim the same explicit run/round. If a process died, inspect its
-recorded worktrees and then use `just orchestrate --adopt <run-id>`; recovery is
-explicit and never silently overwrites a result. `just runs` and `just status`
-report a round whose recorded owner no longer exists as `ABANDONED` rather than as
-in flight, so a lifecycle round that lost its executor is visibly waiting for that
-recovery rather than looking like work in progress. A fresh unique run id comes
-from the plan's top-level `name` or filename; `ONEPIPELINE_RUNS_DIR` moves the
-ledger. Every run is recorded — there is no unrecorded mode — which is what keeps
-a running dispatch inside the ledger and the views built on it.
+The plan mapping is preserved exactly and the result is the command's JSON payload.
+Journal appends and result writes are atomic, and a second process cannot drive the
+same run. If a driver died, inspect its recorded worktrees and then use `just
+orchestrate --adopt <run-id>`; recovery is explicit and never silently overwrites a
+result. `just runs` and `just status` report a run whose recorded driver no longer
+exists as `DRIVER DEAD` rather than as in flight, so a lifecycle node that lost its
+executor is visibly waiting for that recovery rather than looking like work in
+progress. A fresh unique run id comes from the plan's top-level `name` or filename;
+`ONEPIPELINE_RUNS_DIR` moves the ledger. There is no unrecorded mode, which is what
+keeps a running dispatch inside the ledger and the views built on it.
 
-After inspecting a round, send retry/split/add/drop decisions and human
-attestations over the live channel, then transition:
+Send decisions and human attestations over the live channel whenever the evidence
+arrives; nothing has to be waited for:
 
 ```
 just runs
 just channel-reply <run-id> <<'JSON'
 {"version":1,"commands":[{"op":"attest","ref":"<node-id>/<step-id>"}]}
 JSON
-just next-round <run-id>
 ```
 
-`next-round` writes `round-02/plan.json`, runs it, and records its result, folding
-in the edits the channel accepted while the last round ran. A human completion is
-accepted only when the recorded result names that exact ready action; unknown,
-blocked, agent, and already completed references are refused. Each accepted
-attestation is appended to `runs/<run-id>/humans.json` with its reference, waiting
-round, and UTC timestamp. There is no lower-level derivation command: `just
-replan` exits naming `just next-round`, which reads the run's ledger and derives
-from the graph the round executed.
+A human completion is accepted only when the graph records that exact ready
+action; unknown, blocked, agent, and already completed references are refused.
+Each accepted attestation is journalled as a `human-attested` operation, and the
+reconciler clears the decision it was blocking on the same pass. There is no
+derivation command to run afterwards: `just replan` exits saying so and names
+`just channel-reply`.
 
 The graph result state is `complete`, `waiting`, or `failed`; `ok` is true only
 for complete. Node states are `done`, `waiting`, `blocked`, `failed`, or `skipped`.
@@ -1249,8 +1236,8 @@ enables auto-merge, and local single-owner omission uses direct merge. For an
 older stacked preserved commit without the base trailer, pass the ledger's values
 explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
 fast-forwards the root publication checkout after a merge into a non-root base.
-A node that settles `not-completed` names its preserved branch in the round result,
-which is what this command takes.
+A node that settles `not-completed` names its preserved branch in the recorded
+result, which is what this command takes.
 
 Local recovery performs its base sync, recovery attestation, gated branch push,
 and gated direct merge inside one FIFO turn. A content conflict dequeues the turn,
@@ -1265,13 +1252,13 @@ A later graph retry carries that checkpoint forward and resumes the same branch;
 automatic retry behavior is unchanged. An attempt that produced no commit has no
 checkpoint and retries from a fresh worktree as before.
 
-Ordinary later rounds treat an unresolved lifecycle node the same way as a retry
+A later dispatch treats an unresolved lifecycle node the same way as a retry
 replacement: if its prior attempt recorded a committed retry checkpoint, the
-unchanged node resumes that branch automatically. That covers a node the round
-**cancelled** as well as one that failed — a cooperative stop (a spent round
-budget, a live retry, a settled sibling) commits its partial work and leaves the
-same incomplete-step marker, so it is a checkpoint rather than a discarded
-attempt, and it spends the same bounded budget. To deliberately discard a
+unchanged node resumes that branch automatically. That covers a node that was
+**cancelled** as well as one that failed — a cooperative stop (a live retry, a
+settled sibling, a planner `cancel`) commits its partial work and leaves the same
+incomplete-step marker, so it is a checkpoint rather than a discarded attempt, and
+it spends the same bounded budget. To deliberately discard a
 preserved attempt and start fresh, set `branch` to a *different* valid branch name
 in the retry edit. The opt-out belongs on `branch` because it is already the plan's
 authoritative branch-routing field; a separate reset flag could conflict with it
@@ -1282,10 +1269,10 @@ precedence covers preserved attempts only. A waiting workstream is
 not choosing a branch, so an explicit `branch` never discards its pause resume
 and the human steps it already recorded as completed.
 
-**A `resume` the planner names is authoritative.** A `retry` that states one —
-through `just channel-reply` or a `next-round` edits file — is answering "continue
-*this* work", so the edit records it as the branch pin it already implies and
-nothing derived from the round's result overrules it. A pinned branch the lifecycle
+**A `resume` the planner names is authoritative.** A `retry` that states one,
+through `just channel-reply`, is answering "continue *this* work", so the edit
+records it as the branch pin it already implies and nothing derived from the node's
+own result overrules it. A pinned branch the lifecycle
 cannot adopt fails the dispatch as `resume-failed`, naming the pin and the reason;
 substituting a fresh branch for a pin the planner named is the defect that rule
 exists to prevent, because the edit is reported as applied and the work is then
@@ -1304,7 +1291,7 @@ of, since it never cuts a worktree. It now settles `resume-failed` with
 back to a fresh branch on this path: an unanswered question is not evidence that
 the preserved work is unusable. A continuation the harness carried forward on its own
 may still fall back to a fresh branch when the preserved work is no longer
-adoptable, and it says so where the round is read: `branch-discovered` carries
+adoptable, and it says so where the run is read: `branch-discovered` carries
 `resume_declined` and the settled node's `detail` carries the same reason, beside
 the `retry_lineage` that records the abandoned branch and checkpoint.
 
@@ -1482,7 +1469,7 @@ The ledger is machine-local, not a global liveness source. On the launching
 machine use `just runs`, `just status`, and `just history` /
 `just history-show <id>`. The recorded branch and worktree are the recovery source
 of truth. For an interrupted
-round, inspect its worktrees and remote branch, then attach a fresh driver with
+run, inspect its worktrees and remote branch, then attach a fresh driver with
 `just orchestrate --adopt <run-id>`. Recovery may reclaim a `running` record, so
 use it only after proving its owner is gone; never remove or reset an active
 worktree.
@@ -1541,6 +1528,11 @@ merge is never mocked; only GitHub's decisioning and the paid model are.
 
 ### What a lifecycle journey costs, and which part of it is a choice
 
+These journeys and the measurements below belong to the published `onepipeline`
+crate, which is where the lifecycle implementation and its suite now live; they are
+kept here because the judgment is the operator's to apply when reading a slow
+lifecycle run. Every journey named below is that crate's, not this checkout's.
+
 **Where the time is.** Not in git. Instrumenting every subprocess and every
 lifecycle phase of the slowest journeys puts essentially the whole of each one
 inside `run_repo_task` → `dispatch` → the real `onejudge` subprocess: in
@@ -1574,17 +1566,17 @@ a per-dispatch saving, so it applies to every journey in the suite. It is also a
 a quiet host and is progressively masked when this host is already oversubscribed
 by concurrent dispatches.
 
-**What is left is the round, and the round is the unit under test.** A journey
-that proves four branch-selection behaviors across four rounds pays for four
-rounds; one that asserts twelve distinct PR-body outcomes pays for twelve
-publication journeys. Of the six slowest journeys in the lifecycle e2e:
+**What is left is the dispatch, and the dispatch is the unit under test.** A journey
+that proves four branch-selection behaviors pays for the four dispatches they need;
+one that asserts twelve distinct PR-body outcomes pays for twelve publication
+journeys. Of the six slowest journeys in the lifecycle e2e:
 
 | Journey | Why it costs what it does |
 | --- | --- |
 | `..._drafts_pr_bodies_and_preserves_fallbacks` | 35 dispatches, every one of them a first-turn completion at the 0.4s floor, for twelve asserted PR-body and title outcomes. Cost *is* coverage. |
-| `test_ordinary_next_round_resumes_committed_lifecycle_branch` | Four rounds for four branch-selection behaviors — first attempt, ordinary resume, explicit fresh branch, explicit pin — each needing a node that commits and then fails. |
-| `test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever` | Its subject *is* `MAX_AUTOMATIC_ROUND_RESUMES`. Every round it drives is the bound being exercised. |
-| `test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget` | Needs the same exhausted budget as a precondition, and the ledger it asserts against is written by real rounds. Cheaper only by fabricating the state the `retry` is supposed to act on. |
+| `test_ordinary_next_round_resumes_committed_lifecycle_branch` | Four attempts for four branch-selection behaviors — first attempt, ordinary resume, explicit fresh branch, explicit pin — each needing a node that commits and then fails. |
+| `test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever` | Its subject *is* the automatic-resume bound. Every dispatch it drives is that bound being exercised. |
+| `test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget` | Needs the same exhausted budget as a precondition, and the ledger it asserts against is written by real dispatches. Cheaper only by fabricating the state the `retry` is supposed to act on. |
 | `test_lifecycle_failure_survives_simultaneous_deferred_teardown` | Exactly one not-completed dispatch. That is the floor for its outcome. |
 | `test_repo_plan_ledger_and_guided_next_round` | Three dispatches, plus about a third of its time in real `just telemetry` and `just runs` invocations — the CLI boundary it exists to prove. |
 
@@ -1599,7 +1591,7 @@ processes. At `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` that is 147 provider processes
 and about twelve seconds for a single dispatch whose only job is to reach *a* cap.
 Naming a small explicit cap at those call sites — `EXHAUSTED_STEP_MAX_TURNS` in
 the lifecycle e2e — keeps the exhaustion, the three segments, the preserved
-branch, and the round-level budget exactly as they were, for 15 processes instead
+branch, and the node-level budget exactly as they were, for 15 processes instead
 of 147. The default's own height stays pinned by
 `test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
 `tests/test_lifecycle_unit.py`, which spends no processes at all. A journey about

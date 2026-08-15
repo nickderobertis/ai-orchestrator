@@ -15,10 +15,10 @@ monitor` and `just status` resolve it — an exact run directory, or a plan name
 that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; `--all` only governs the unscoped index.
 
-A round still in flight has written no `result.json`, so its nodes are described
-by the run journal: a node reads `running` only until the journal records it
-settling, and a node recorded as `node-failed` reads `failed` here while the round
-is still going.
+A run's `result.json` is rewritten as it moves, so its nodes are described by the
+run journal: a node reads `running` only until the journal records it settling, and
+a node recorded as `node-failed` reads `failed` here while the rest of the graph is
+still going.
 
 The breakdown prints a run row and an indented row for every node. A typical
 enriched row and timeline look like this:
@@ -161,19 +161,20 @@ no time.
 
 ## Seeing the supervisory tier
 
-The launched orchestrator and its per-round check-in dispatches are agents like any
-other, and they are visible the same way — with one addition and one fallback.
+The `monitor` member and the scheduled `check-in` dispatches beside it are agents
+like any other, and they are visible the same way — with one addition and one
+fallback.
 
 They were invisible for longer than the workers, and the reason is worth keeping:
-oneharness *was* recording them. This host's history store holds 157 `orchestrator`
+oneharness *was* recording them. This host's history store holds 157 supervisory
 and 728 `check-in` run records, correctly role-labelled, out of 12,387 runs. Nothing
 served them. So the run-scope span below is the fix; the capture is a fallback for
 the narrower case where the write itself was refused.
 
 1. **`just status <run-id>` and `just runs`** carry one driver line per unfinished
    launch: whether the recorded pid is still there, which part of its loop the run's
-   own state places it in (`starting`, `driving-round`, `executing-run-plan`,
-   `reviewing-results`, `surfacing`), and how long since anything of it was last observed doing something. A
+   own state places it in, and how long since anything of it was last observed
+   doing something. A
    driver this host has *proved* is gone reads `DRIVER DEAD (pid N is gone) — …;
    nothing is driving this run`. That is deliberately distinct from `PARKED`, which
    is a launch that still holds its pid while nothing progresses, and from a node
@@ -230,7 +231,7 @@ names neither.
    silently short one member.
 2. Read the rolled-up failure lines beneath each run. Repeated deaths on one
    cause collapse to one line — `3 nodes failed on judge-side codex
-   quota mid conversation, resets Aug 8` — so a whole round's worth of the same
+   quota mid conversation, resets Aug 8` — so a whole frontier's worth of the same
    refusal reads as the single fact it is.
 3. `just results <run-id>` and the read API's `failure` record carry the same
    attribution per node, plus a bounded `raw_tail` of what the harness actually

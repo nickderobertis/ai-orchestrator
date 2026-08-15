@@ -32,11 +32,11 @@ lives in an oneharness config, not in onejudge:
 | **Agent** | does the work | `oneharness.toml` (discovered from the repo root) |
 | **Judge / simulated user** | supervises + scores | `oneharness.judge.toml` (via the base config's `provider.judge_config`) |
 
-A third role sits above both: the **orchestrator** process `just orchestrate`
-launches drives a tracked graph rather than doing the work, so it has its own
-config, `oneharness.orchestrator.toml` — named by `graphs/dag-scope.yaml`'s
-`orchestrator` member, and forced by `scripts/oneharness-orchestrator.sh` on the
-manual and smoke path. The `check-in` pacemaker scheduled beside it in that same
+A third role sits beside both: the **monitor** `just orchestrate` attaches watches
+a tracked graph rather than doing the work or driving it, so it has its own config,
+`oneharness.orchestrator.toml` — named by `graphs/dag-scope.yaml`'s `monitor`
+member, and forced by `scripts/oneharness-orchestrator.sh` on the manual and smoke
+path. The `check-in` pacemaker scheduled beside it in that same
 graph has a fourth, `oneharness.check-in.toml`, which is that routing verbatim and
 differs in one field only; [Choosing a deadline per
 side](#choosing-a-deadline-per-side) is why, and re-merging the two is a silent
@@ -78,7 +78,7 @@ side and answer rather than fail.
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
 distinguished the sides — only a proxy for it — and, measured against onepipeline
-0.3.1, the proxy stopped holding: a dispatched agent side now arrives carrying
+0.5.0, the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
 this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
@@ -94,20 +94,19 @@ This repository uses three onejudge provider arrangements:
   the two harness configs above.
 - `command` is the deterministic test path. A local JSON-lines process stands in
   for the paid harness boundary.
-- The live orchestrator uses a `split` provider: its `skill` side is either the
-  configured oneharness provider — with its `bin` pinned to
-  `scripts/oneharness-orchestrator.sh`, since a launch has no `--project-dir` to
-  pin it through — or a command provider, while its `judge` side is
-  a command invoking `orchestrator.channel.relay_supervisor`. The relay forwards
-  supervisor requests over the run's FIFOs to the live planner and returns the
-  planner's completion or continuation reply to onejudge. Final boolean/score
-  judge calls mirror the persisted planner verdict; the launch removes standalone
-  model evals and assessment because the live planner is completion authority.
+- The monitor is a two-sided onejudge member whose judge side is the **live
+  planner**: its agent side runs under `oneharness.orchestrator.toml`, and its
+  judge side is a command provider reaching `onepipeline channel serve` through
+  `scripts/channel-serve.py`. That filter exists because the two halves agree on
+  the response object and not on the request.
+  <!-- llmlint: ignore[no_redundant_instruction_pointers] The two stdin shapes are one contract with one source, and `contracts_have_one_source_or_a_drift_gate` is why they are not restated here; this names where that source is rather than re-advertising the document. -->
+  [Serving the channel as the monitor's judge
+  side](orchestration.md#serving-the-channel-as-the-monitors-judge-side) holds both
+  shapes and the refusal a direct wiring gets.
 
-`onepipeline start` creates this split config and launches the orchestrator's own
-detached `onejudge run`. This wiring is specific to the
-orchestrator persona; worker dispatch retains its ordinary oneharness or command
-provider and simulated-user loop.
+`onepipeline start --dag-graph` launches that graph beside the run it is driving.
+The wiring is specific to the observer graph; worker dispatch retains its ordinary
+oneharness or command provider and simulated-user loop.
 
 ## How a persona becomes a run
 
@@ -187,8 +186,8 @@ for a consumer that drives several selections in one run — this document's own
 passthrough and precedence probes below use it. Behind that, 0.7.0
 made a per-turn deadline optional by default while retaining explicit `timeout = 0`
 as the no-deadline spelling — the floor for
-[choosing a deadline per side](#choosing-a-deadline-per-side) and so for an
-orchestrator turn that runs a whole round. That release in turn succeeds 0.6.5, which carried
+[choosing a deadline per side](#choosing-a-deadline-per-side) and so for a monitor
+turn that watches a whole run. That release in turn succeeds 0.6.5, which carried
 [oneharness PR #1213](https://github.com/nickderobertis/oneharness/pull/1213),
 lifting the rejection that made `--stream` and `run_mode = "fallback"`
 mutually exclusive — the floor for [streaming the agent
@@ -495,10 +494,11 @@ of that check, not a second declaration of it. -->
 | Worker agent | `oneharness.toml` | **none**, the release default |
 | LLM lint | `oneharness.llmlint.toml` | **none**, the release default |
 
-The orchestrator is the exception because of what one of its turns *is*: a single
-tool call to `just run-plan` that dispatches every node of a round, runs their
-gates, and publishes, against a round budget of 28800 seconds. Under the 120-second
-default three consecutive runs died, each reported only as `member-died
+The monitor is the exception because of what one of its turns *is*: a watch that
+lasts as long as the run does — reading the detailed stream, judging it, and
+surfacing what it finds — where a deadline would end the watching rather than bound
+it. Under the 120-second default three consecutive runs died, each reported only as
+`member-died
 rule=provider-failure cause=timeout` — which reads as a provider problem and is not
 one. Two things make that diagnosis expensive, and both are worth knowing before
 reading a timeout as an outage: a timeout deliberately does **not** fall through a
@@ -739,7 +739,7 @@ would escape both.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
-`--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
+`--oneharness-mode bypass` and the allowlister gate.
 The same constraint applies inside a worker's gate: llmlint normally requests a
 read-only oneharness judge, which makes codex create a bubblewrap network
 namespace and can fail at loopback setup with `RTM_NEWADDR`. llmlint still has no
@@ -927,15 +927,15 @@ checkout's `.git` directory reset its inactivity clock. Configure that
 bounded interval with `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT` in seconds (positive
 integer or decimal); it defaults to `600` seconds. This differs from
 `ONEHARNESS_TIMEOUT`, which limits one model turn regardless of intervening
-process activity. `run-plan --round-budget SECONDS` adds an outer round liveness
-budget (default `14400`); exceeding it cooperatively cancels workers and sends a
-blocking proposal over the planner channel.
+process activity. Above both, the engine watches every in-flight dispatch for the
+life of the run and raises a non-blocking `quiet-worker` proposal for one that has
+recorded nothing past `ONEPIPELINE_STALL_AFTER_SECONDS` (default `2400`).
 
 ### Dispatch scratch ownership
 
 Each dispatch works in an `orchestrator-watchdog-*` scratch directory, and the
-unattended sweep (`just sweep-scratch`, session setup, every recorded round
-transition) may delete it concurrently. The pid recorded in `<dir>/pid` cannot
+unattended sweep (`just sweep-scratch`, session setup) may delete it
+concurrently. The pid recorded in `<dir>/pid` cannot
 decide that: it is the *worker's*, and the wrapper `execvpe`s onejudge in place,
 so it dies the moment the worker exits — while the dispatcher is still reaping
 the reparented process tree and parsing the report out of the same directory. A
@@ -1093,7 +1093,7 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   within one run share the worktree, and therefore one conversation; a later run
   pinned, resumed, or recovered onto the same branch gets its own. Give any new
   caller that dispatches into a per-run directory the same treatment.
-- **Use the tracked graph for coordinated work.** `just run-plan` accepts direct
+- **Use the tracked graph for coordinated work.** `just orchestrate` accepts direct
   agents, repository lifecycle agents, and explicit human nodes in one recorded
   DAG. A lifecycle `steps` list may mix agent steps with `kind: human` steps on a
   resumable branch. Human nodes never call onejudge; after a person performs the

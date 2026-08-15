@@ -7,8 +7,8 @@ a simulated user that pushes back until the subtask is actually done. Independen
 subtasks run in parallel; dependents wait only for what they need.
 
 The engines are published and installed, not built here:
-[onepipeline](https://github.com/nickderobertis/onepipeline) owns the plan, its
-rounds, and the planner channel;
+[onepipeline](https://github.com/nickderobertis/onepipeline) owns the plan, the
+continuous reconciler that drives it, and the planner channel;
 [oneagentgraph](https://github.com/nickderobertis/oneagentgraph) owns the
 dispatches; [onevcs](https://github.com/nickderobertis/onevcs) owns repository
 identity and publication; and

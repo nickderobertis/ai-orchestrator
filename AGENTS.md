@@ -16,14 +16,16 @@ repository configures; this file holds the judgment.
 
 A local **orchestration harness**: you (the planner) take one large task, split it
 into a dependency graph of smaller tasks, and review its execution. `just
-orchestrate` delegates scheduling, dispatch, round transitions, and publication
-closeout to an orchestrator onejudge process using
-[`personas/orchestrator.yaml`](personas/orchestrator.yaml). Its supervisor is the
-live planner over the channel described in
-[`docs/orchestration.md`](docs/orchestration.md#the-plannerorchestrator-channel).
-Worker onejudge processes still run under simulated-user supervisors. The
-deliverable is this setup itself — config, personas, scripts, docs — not a shipped
-binary.
+orchestrate` hands scheduling, dispatch, reconciliation, and publication closeout
+to the engine, which drives the DAG **continuously to settlement** — there is no
+verb that advances a run and nothing to advance between. It also attaches
+`graphs/dag-scope.yaml`: an **active monitor** using
+[`personas/orchestrator.yaml`](personas/orchestrator.yaml), which drives nothing
+and instead watches the detailed activity stream, compares it against the goal and
+each node's task, and raises what it finds over the channel described in
+[`docs/orchestration.md`](docs/orchestration.md#the-planner-channel). Worker
+onejudge processes still run under simulated-user supervisors. The deliverable is
+this setup itself — config, personas, scripts, docs — not a shipped binary.
 
 Beyond dispatching at a directory, the harness manages a change's **full
 life cycle** against any repo (GitHub or a local path): resolve its normalized
@@ -74,10 +76,10 @@ record their PR base so recovery targets the stack rather than the root. A plan 
 the one tracked hierarchical graph: its
 top-level DAG may mix direct agents, lifecycle agents, and explicit
 human actions; a lifecycle node may itself run **several agent and human steps in
-sequence on one branch**. Its reconciler accepts planner-issued graph edits while
-a round is running; rounds are checkpoints, not adaptation barriers. Review
-surfaced proposals and use the [live-edit
-protocol](docs/orchestration.md#live-graph-edits) to change the desired frontier.
+sequence on one branch**. Its reconciler accepts graph edits at any moment, because
+there is no moment at which the graph stops being live. Review surfaced proposals
+and use the [live-edit protocol](docs/orchestration.md#live-graph-edits) to change
+the desired frontier.
 
 ## What "agent" means here
 
@@ -146,17 +148,16 @@ dispatch onejudge.
    release, trigger CI, register or change infrastructure, or provide external
    sign-off. It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
-   over the live channel and issues `add` / `retry` / `drop` / `split` edits.
-   A live edit the reconciler accepts is carried forward: the plan of record for a
-   transition is [the graph the round
-   executed](docs/orchestration.md#the-plan-of-record-is-the-graph-the-round-executed),
-   folded from the run's own journal rather than re-read from the launch file, so a
+   over the live channel and issues `add` / `retry` / `drop` / `reparent` edits.
+   An accepted edit needs no carrying forward: [the graph of record is the live
+   graph](docs/orchestration.md#the-graph-of-record-is-the-live-graph), projected
+   from the run's own journal rather than re-read from the launch file, so a
    retry's replacement id, a branch pin, an amended `task` — which is how a node's
    review bar is amended, since the bar lives in its `## Acceptance criteria` — or
-   `max_turns` all reach the next round. What it learns about a node that keeps
-   running belongs in a `context` edit: that note is the one thing which carries
-   exactly one round, so state worth keeping is state attached again. See [Carried
-   planner context](docs/orchestration.md#carried-planner-context). A
+   `max_turns` are simply what is executing. What it learns about a node that keeps
+   running belongs in a `context` edit: that note lasts exactly one dispatch, so
+   state worth keeping is state attached again. See [Carried planner
+   context](docs/orchestration.md#carried-planner-context). A
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
@@ -198,13 +199,14 @@ dispatch onejudge.
    waiting on it; that liveness verdict is unrelated to a node the planner *parked*
    with `cancel`, which is a deliberate idle. A run whose *driver* is dead but whose
    ledger is intact is not lost and must not be relaunched under a new id: `just
-   orchestrate --adopt <run-id>` attaches a fresh orchestrator to it, keeping the run
-   id, journal, ledger, and anchors, and refuses another session's run, one something
-   is still driving, and one with no relaunch record — see [Adopting a run whose
-   driver died](docs/orchestration.md#adopting-a-run-whose-driver-died). Mid-round,
-   the round itself surfaces a **non-blocking** update for a dispatch that has
-   recorded nothing past its stall threshold; that is evidence to act on, not a
-   verdict, so decide between `cancel`, `retry`, and letting it run.
+   orchestrate --adopt <run-id>` attaches a fresh driver to it, keeping the run
+   id, journal, ledger, and anchors, and refuses another session's run and one
+   something is still driving — see [Adopting a run whose driver
+   died](docs/orchestration.md#adopting-a-run-whose-driver-died). While the run
+   works, the engine surfaces a **non-blocking** update for a dispatch that has
+   recorded nothing past its stall threshold, and the monitor surfaces what it sees
+   drifting from the plan; both are evidence to act on rather than verdicts, so
+   decide between `cancel`, `retry`, `context`, and letting it run.
    `channel-reply` refuses an edit it
    cannot apply, with the reason, and every edit it accepts reaches the graph; a
    non-zero reply is a rejection to correct, never a command to resend.
@@ -220,12 +222,18 @@ dispatch onejudge.
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
 `just status` views. `channel-reply` carries both legacy verdicts and [versioned
-live edits](docs/orchestration.md#live-graph-edits). The planner never runs
-`run-plan` or `next-round` itself: those commands belong to the orchestrator
-process, and two writers would race the ledger lock.
+live edits](docs/orchestration.md#live-graph-edits). There is no verb that advances
+a run, so there is nothing left for a planner to drive: the engine reconciles
+continuously and two writers would race the ledger lock anyway.
+
+`just channel-next` and `just monitor` read through the `planner`
+[profile](docs/orchestration.md#read-profiles) — the pipeline's own decisions and
+settlements, not every worker's turns. That narrowing is the point: the detail is
+the monitor's to read, through `--filter monitor`, and the same flag is here when
+you want it. `--all` bypasses profiles entirely.
 
 `orchestrate` **stays attached by default**: it prints the launch record, streams
-exactly what `just monitor` streams, and returns when the run **settles** — the
+the run's merged events, and returns when the run **settles** — the
 graph completed, a blocking planner surface is waiting on you, or nothing is
 driving the run any more (exit 3, and the state to intervene in). Ctrl-C detaches
 without stopping the run. Pass `--detach` when a run should go unattended — several
@@ -251,33 +259,33 @@ process list from `ps` and signal it: that pattern knows nothing about whose wor
 matched, and it has already interrupted another planner mid-supervision here.
 `just stop <run-id>` is the supported way to stop a run; it refuses another
 planner's run and an unattributable one, naming the owner, and `--force` reports
-that owner before overriding. A stopped run is left reclaimable exactly as an
-interrupted round is: `just orchestrate --adopt <run-id>` attaches a fresh driver
+that owner before overriding. `just orchestrate --adopt <run-id>` attaches a fresh driver
 to its intact ledger. `complete` is a completion
 verdict on the channel and deliberately does **not** stop scheduling; use `just
-stop` when a run must actually end. `stop` is deliberately **not** in
+stop` when a run must actually end. A stopped run is left reclaimable exactly as a
+run whose driver died is. `stop` is deliberately **not** in
 `.claude/settings.json`'s allowlist: it ends live work, and `--force` overrides the
 ownership check the incident above is about, so each one is approved on its own.
 
-The orchestrator also surfaces an agent-written, non-blocking per-workstream
-status when its durable planner-update pacemaker becomes due (30 minutes by
-default). That pacemaker is the `check-in` member of `graphs/dag-scope.yaml`, and it
-carries its own `task` — which is why that document declares schema 3. The task is
-what keeps the member reporting rather than driving: `onepipeline` composes one task
-for the graph and `oneagentgraph` gives it to every member that claims none, so a
-member whose job is not the run-level task must state its own. Never let this one
-reach `onepipeline round run` or `onepipeline round next`; the rounds are the
-`orchestrator` member's, and a round claimed from a scheduled turn dies at that
-member's deadline, taking the dispatched worker with it. Every planner-visible
-surface resets that clock. The interval is set once, at launch, with `just
-orchestrate ... --heartbeat-interval SECONDS`, and there is no way to change it
-afterwards: the reply envelope `just channel-reply` sends is closed to unknown
-fields and accepts exactly `version`, `completion`, `message`, `reason`, and
-`commands`, so a reply carrying `"heartbeat_interval"` is refused whole and its
-verdict and graph edits go with it. `--heartbeat-interval` is on `onepipeline
-start` alone — not on `adopt` either — so choose the interval when launching, and
-relaunch rather than expecting to retune a live run. The orchestrator continues
-without waiting for a reply to these heartbeat surfaces.
+An agent-written, non-blocking per-workstream status also arrives when the durable
+planner-update pacemaker becomes due (30 minutes by default). That pacemaker is the
+`check-in` member of `graphs/dag-scope.yaml`, and it carries its own `task` that
+opens with `{task}` — which is why that document declares schema 4. The task is what
+keeps the member reporting rather than editing: `onepipeline` composes one task for
+the graph and `oneagentgraph` gives it to every member that claims none, so a member
+whose job is not the run-level task must state its own — and must interpolate the
+composed one back in, because nothing in the environment names the run to an
+observer member. Never let this one reach `onepipeline
+reply`; live edits belong to the `monitor` member, which stays for the whole run,
+and to you. Every planner-visible surface resets that clock. The interval is set
+once, at launch, with `just orchestrate ... --heartbeat-interval SECONDS`, and
+there is no way to change it afterwards: the reply envelope `just channel-reply`
+sends is closed to unknown fields and accepts exactly `version`, `author`,
+`completion`, `message`, `reason`, and `commands`, so a reply carrying
+`"heartbeat_interval"` is refused whole and its verdict and graph edits go with it.
+`--heartbeat-interval` is on `onepipeline start` alone — not on `adopt` either — so
+choose the interval when launching, and relaunch rather than expecting to retune a
+live run. The run continues without waiting for a reply to these surfaces.
 
 Judge a dispatched branch against its own base (`merge-base` / `base..branch`),
 never a moving `origin/main`; concurrent advancement can make a healthy branch
@@ -292,10 +300,13 @@ Subject to that, minimize both. Apply the fixed dispatch-cost judgment in [the
 granularity rule](#the-granularity-rule-the-core-judgment) both when splitting
 work and when deciding whether a dispatch adds value at all.
 
-The planner owns decomposition, persona choice, review decisions, and user
-liaison. The orchestrator owns scheduling, round-ledger writes, human-action
-attestation, integration of finished work, and publication closeout. Neither role
-authors target-project content; dispatch implementation and research to workers.
+The planner owns decomposition, persona choice, review decisions, human-action
+attestation, and user liaison. The engine owns scheduling, ledger writes,
+integration of finished work, and publication closeout. The monitor owns noticing —
+and, where a fix is unambiguous and inside its
+[allowlist](docs/orchestration.md#who-issued-an-edit-and-what-that-bounds), applying
+it. None of these roles authors target-project content; dispatch implementation and
+research to workers.
 
 Reading a target repo to decompose work, select a persona, and write a precise task
 is direct planning work. It stops once the task can be written; investigation
@@ -413,14 +424,17 @@ exists to prevent. The primary Claude identity is last everywhere:
   Claude subscriptions. It keeps its cheaper-supervisor intent through `model`
   (`claude-sonnet-5` for all three of its Claude variants) rather than by staying
   off those subscriptions.
-- **Orchestrator side** (drives a tracked graph) — `oneharness.orchestrator.toml`,
-  named by `graphs/dag-scope.yaml`'s `orchestrator` member as its agent side.
+- **Monitor side** (watches a tracked graph) — `oneharness.orchestrator.toml`,
+  named by `graphs/dag-scope.yaml`'s `monitor` member as its **agent** side. That
+  member's judge side is not a harness config at all: it is the live planner, over
+  `scripts/channel-serve.py`, so replying to a monitor surface steers its next turn.
   Deliberately the reverse of the worker order: both codex identities carry the
   role first, so this long-lived supervisory process does not queue ahead of the
   workers while Codex can still run it. It is also the **one** side here with no
-  per-turn deadline (`timeout = 0`), because one of its turns runs a whole round.
+  per-turn deadline (`timeout = 0`), because it watches for as long as the run
+  lasts and a deadline would end the watching.
 - **Pacemaker side** (the `check-in` planner update) — `oneharness.check-in.toml`,
-  the orchestrator's routing verbatim with a finite deadline. It is a separate file
+  the monitor's routing verbatim with a finite deadline. It is a separate file
   for exactly one reason, and re-merging the two is a silent regression: see
   [Choosing a deadline per
   side](docs/onejudge-integration.md#choosing-a-deadline-per-side).
@@ -482,7 +496,7 @@ field at all: a member takes `oneharness_config`, `model`, and `stream`, so the
 config file is the only place a per-member `timeout` can live. Since oneharness
 0.7.0, absent means no deadline; the worker, judge, and llmlint configs intentionally
 take that default. `timeout = 0` also means no deadline and remains explicit in
-`oneharness.orchestrator.toml`, because one orchestrator turn runs a whole round.
+`oneharness.orchestrator.toml`, because the monitor watches for the life of the run.
 That is why the `check-in` pacemaker no longer shares that file: an unbounded
 deadline reaching a scheduled member would leave a wedged turn alive forever,
 which fails silently, so it reads
@@ -553,12 +567,11 @@ exported `ORCHESTRATOR_PRESERVED_LOGS` claim list, and a nested run that finds i
 path already claimed by a live enclosing one writes `.logs/<label>.<pid>.log`
 instead and names that path in its own failure. This matters here because the
 suite runs `just lint-llm-diff` against this checkout from inside `just check`.
-`just run-plan` and `just next-round` are the engine verbs the orchestrator member
-drives, each naming a run rather than a plan file. The planner launches multi-node
-work with `just orchestrate <plan.json>` and supervises its surfaced boundaries and
-proposals over the [live
-channel](docs/orchestration.md#the-plannerorchestrator-channel); it invokes neither
-engine verb directly. There is no single-dispatch command: one
+There are no engine verbs left to invoke: `onepipeline start` drives the DAG to
+settlement on its own, so `just orchestrate <plan.json>` is the whole launch and
+the planner supervises the surfaces and proposals it raises over the [live
+channel](docs/orchestration.md#the-planner-channel). There is no single-dispatch
+command: one
 subtask is a one-node plan (`examples/single-node-direct.plan.json`,
 `examples/single-node-lifecycle.plan.json`), so no running work falls outside the
 run ledger and the views built on it.
@@ -607,7 +620,8 @@ branch, with the fetch included when the publication checkout does not have the
 branch. Reach for it instead of diffing clones by hand. Every one of these views is
 read-only and safe beside live work.
 Human completion is never inferred and enters the graph only as an explicit live
-`attest` command (or compatibility `next-round` attestation). Keep operational
+`attest` command, or the equivalent `onepipeline attest RUN REFERENCE`. Keep
+operational
 syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
@@ -654,9 +668,9 @@ the families it could not, so a sweep that reclaimed nothing never hides an unsw
 one.
 
 The processes that are *meant* to outlive their launcher — the driver `just
-orchestrate` starts, and the rounds and publications it forks — are the engines'
-own to keep alive and to reap; never work around a kill here with `nohup`/`setsid`
-by hand.
+orchestrate` starts, and the dispatches and publications it forks — are the
+engines' own to keep alive and to reap; never work around a kill here with
+`nohup`/`setsid` by hand.
 Dead lifecycle runs form a separate bounded recovery history: retain the newest
 **3** run roots with unpublished work. A retry or `repo-recover` adopts the exact
 worktree only after claiming its free occupancy lease and rejecting a live
@@ -721,7 +735,7 @@ judges with — rather than the caller's, so the key always describes the judge
 configuration the run would actually use. `LLMLINT_ONEHARNESS_BIN` is why: `llmlint
 config` renders it as `oneharness.bin`, and a dispatch inherits the orchestrator's
 checkout path, the session's own, or nothing at all, so one judged diff hashed to a
-different key per dispatch and the judge re-rolled every round. Reading the caller
+different key per dispatch and the judge re-rolled on every run. Reading the caller
 fails a quieter way too — because Nx scores a runtime input that exits non-zero as
 *no contribution* rather than as an error, a fingerprint the caller's environment
 can break does not fail the tier, it drops the judge configuration out of the key
