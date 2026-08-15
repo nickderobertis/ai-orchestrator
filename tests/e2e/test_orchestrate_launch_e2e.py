@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
-from fake_backend import PROMPT_LOG_ENV
+from fake_backend import PROMPT_LOG_ENV, RUN_TASK
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -50,6 +50,30 @@ SHIPPED_RUN = "scheduler-research"
 #: is a prefix and the node-scope graph's members do not answer to it.
 DAG_SCOPE_GRAPH = "graphs/dag-scope.yaml"
 DAG_SCOPE_STREAM = "agent:dag-scope-"
+
+#: How often the launch tells the pacemaker to come due. Short enough that it comes
+#: due while this run is still going, which is the only state in which what it does
+#: with a turn can be observed at all.
+PACEMAKER_INTERVAL_SECONDS = 1
+
+#: The `graphs/dag-scope.yaml` member each recorded turn belongs to. `oneagentgraph`
+#: gives every member a scratch directory named after it and pins that member's
+#: harness config inside it, so the `--config` the backend records is the attribution.
+#: A turn with no `--config` is an agent side, which has no member directory to read.
+MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
+
+#: The pacemaker member, whose turn must stay out of the run's rounds.
+PACEMAKER_MEMBER = "check-in"
+
+#: The round verbs that change a run's state. The pacemaker's own `task` forbids them
+#: by name, and a round claimed from its turn is what killed every dispatched worker
+#: before that task existed.
+ROUND_VERBS = ("onepipeline round run", "onepipeline round next")
+
+#: The orchestrator's role, as `personas/orchestrator.yaml` states it. Under
+#: onepipeline 0.2.0 the composed task says only what the run is, so this is the only
+#: thing that says it is to be driven.
+DRIVE_ROLE = "Drive `onepipeline round run <run-id>`"
 
 #: A launching session the journey states rather than inherits. The suite runs
 #: inside a dispatch whose own harness session would otherwise decide these
@@ -80,6 +104,10 @@ class Launched(NamedTuple):
     environment: dict[str, str]
     #: The attached `just orchestrate` that settled it.
     launch: subprocess.CompletedProcess[str]
+    #: Every effective prompt the run's turns were given, as the fake backend saw
+    #: them. Which member each one is is decided by its `--config`, exactly as the
+    #: backend decides it.
+    prompt_log: Path
 
 
 class RoutedPersonaRun(NamedTuple):
@@ -101,7 +129,9 @@ class GraphHistory(TypedDict):
 
 
 class PromptRecord(TypedDict):
+    config: str | None
     prompt: str
+    system: str
 
 
 def _environment(
@@ -145,7 +175,19 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("orchestrate-launch")
     environment = _environment(tmp_path, oneharness_bin)
-    launch = _just("orchestrate", SHIPPED_PLAN, environment=environment)
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    # The pacemaker's shipped period is half an hour and this run settles in seconds,
+    # so at the default it would never come due and every claim about what it does
+    # with its turn would be vacuous. `--heartbeat-interval` is the published way to
+    # say when it comes due, so the journey says it rather than editing the graph.
+    launch = _just(
+        "orchestrate",
+        SHIPPED_PLAN,
+        "--heartbeat-interval",
+        str(PACEMAKER_INTERVAL_SECONDS),
+        environment=environment,
+    )
     # The newer graph/pipeline pair can have its already-running orchestrator begin
     # one final reconciliation round just after the attached launcher observes the
     # first complete boundary. Hand tests a quiescent run, as this fixture promises.
@@ -158,7 +200,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
             pytest.fail(f"the launched run did not quiesce:\n{status.stdout}\n{status.stderr}")
         time.sleep(0.05)
     try:
-        yield Launched(environment, launch)
+        yield Launched(environment, launch, prompt_log)
     finally:
         # A journey that failed mid-run leaves a driver behind; the supported way to
         # end one is the recipe, and it is the owner here.
@@ -377,6 +419,108 @@ def test_every_dag_scope_member_starts_with_the_graph(
         f"{dag_scope_members} dag-scope member(s) are declared but monitor reported "
         f"{len(started)} started:\n{stream.stdout}"
     )
+
+
+def _recorded_turns(prompt_log: Path) -> list[PromptRecord]:
+    """Every turn of a launched run, as the stand-in model was given it."""
+    # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
+    return [
+        cast(PromptRecord, json.loads(line))
+        for line in prompt_log.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
+    """The turns `oneagentgraph` pinned to one named dag-scope member."""
+    found = []
+    for turn in turns:
+        config = turn["config"]
+        named = MEMBER_OF_CONFIG.search(config) if config else None
+        if named is not None and named.group(1) == member:
+            found.append(turn)
+    return found
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_pacemaker_is_given_its_own_task_and_never_the_orchestrators(
+    launched: Launched,
+) -> None:
+    """The pacemaker comes due mid-run and is told to report, not to drive.
+
+    This is the configuration whose absence made every dispatch die. `onepipeline`
+    composes ONE task for this graph and `oneagentgraph` hands it to every member that
+    does not claim one. When the composed task opened `Drive run <RUN> to settlement`,
+    this member took it literally: single-sided, it began its turn before the two-party
+    orchestrator began one, won the ownership lock, and the dispatched worker then ran
+    *inside* its turn — where `oneharness.check-in.toml`'s finite deadline killed the
+    worker with no record, because the process killed was the one that would have
+    written it.
+
+    The member's own `task` is the fix, and this is what holds it: the pacemaker's
+    effective prompt is the scoped one this repository wrote, the run-level task is not
+    in it, and neither is the orchestrator's role. Read from the prompts the run really
+    issued rather than from the graph document, because a `task` present in the file and
+    not reaching the model is exactly the failure being excluded.
+    """
+    turns = _recorded_turns(launched.prompt_log)
+    pacemaker = _turns_of(turns, PACEMAKER_MEMBER)
+    assert pacemaker, (
+        f"the {PACEMAKER_MEMBER} member took no turn, so nothing here is proven; it is "
+        f"launched with --heartbeat-interval {PACEMAKER_INTERVAL_SECONDS} so that it comes "
+        f"due while the run is still going"
+    )
+
+    for turn in pacemaker:
+        assert turn["prompt"].startswith("Report current progress on the onepipeline run"), (
+            f"the pacemaker was not given its own task; it got:\n{turn['prompt']}"
+        )
+        # The composed task names the run in backticks and states its goal. Its absence
+        # is the whole point: this member's prompt is its own, not the run's.
+        assert RUN_TASK.search(turn["prompt"]) is None, (
+            f"the run-level composed task reached the pacemaker:\n{turn['prompt']}"
+        )
+        assert DRIVE_ROLE not in turn["prompt"] + turn["system"], (
+            f"the orchestrator's role reached the pacemaker:\n{turn['prompt']}"
+        )
+        # The round verbs reach this member only inside the sentence forbidding them,
+        # so it is told what it must not do by the same name it would otherwise have
+        # reached for. Compared on collapsed whitespace, because the task is prose in a
+        # YAML block and wraps wherever it wraps.
+        forbidden = "Never run " + " or ".join(f"`{verb}`" for verb in ROUND_VERBS)
+        assert forbidden in " ".join(turn["prompt"].split()), (
+            f"the pacemaker's task no longer forbids the round verbs by name:\n{turn['prompt']}"
+        )
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_orchestrator_still_drives_the_run_from_its_persona(launched: Launched) -> None:
+    """Only the orchestrator is told to drive, and the telling comes from its persona.
+
+    onepipeline 0.2.0 stopped composing the drive instruction into the run's task —
+    the task now says what the run is, not who drives it — and the `orchestrator`
+    member carries no `task` of its own. So whether anything still drives is a question
+    about `personas/orchestrator.yaml` reaching that member's session, and it is
+    answered here from the launch rather than from the persona file: the composed task
+    it was given carries no drive instruction, its system prompt does, and the run
+    reached a complete settlement, which nothing but the round verbs can produce.
+    """
+    turns = _recorded_turns(launched.prompt_log)
+    # The orchestrator's agent side may take several turns of one session; every one of
+    # them is that member and no other turn of the run may be.
+    driving = [turn for turn in turns if DRIVE_ROLE in turn["system"]]
+    assert driving, "nothing in this run was told to drive it, yet it settled"
+    for turn in driving:
+        assert turn["config"] is None, (
+            "only an agent side, pinned by its member's own oneharness.toml, may be told "
+            f"to drive; this turn was pinned to {turn['config']}"
+        )
+        named = RUN_TASK.search(turn["prompt"])
+        assert named is not None, f"a driving turn named no run:\n{turn['prompt']}"
+        assert named.group(1) == SHIPPED_RUN
+        assert DRIVE_ROLE not in turn["prompt"], (
+            "the composed run task carries a drive instruction again, so every member "
+            f"taking one is told to drive:\n{turn['prompt']}"
+        )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")

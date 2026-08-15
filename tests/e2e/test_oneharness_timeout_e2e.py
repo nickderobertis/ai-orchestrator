@@ -6,8 +6,8 @@ this repository's per-member deadline seam: the orchestrator's agent side runs a
 whole round inside one turn and must have NO deadline, while the `check-in`
 pacemaker beside it must keep one. Both are read from the effective configuration
 oneharness itself reports for the file `graphs/dag-scope.yaml` names, so a re-shared
-config or a dropped setting fails here rather than silently killing rounds at 120
-seconds again.
+config or a dropped setting fails here rather than silently killing rounds at the
+pacemaker's deadline again.
 """
 
 from __future__ import annotations
@@ -27,6 +27,14 @@ from orchestrator.root import REPO_ROOT
 TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
 DAG_SCOPE_GRAPH = REPO_ROOT / "graphs" / "dag-scope.yaml"
 NODE_SCOPE_GRAPH = REPO_ROOT / "graphs" / "node-scope.yaml"
+
+#: The pacemaker's per-turn deadline, asserted as the exact number
+#: `oneharness.check-in.toml` states. A real value rather than a range: the point of
+#: the seam is that this member has a *finite* deadline the orchestrator does not, and
+#: a bound that only had to be "some number" would pass just as well at the release
+#: default nobody chose. It is a wedged-turn backstop set clear of an honest survey,
+#: not a work budget — the file says why, and what it is not.
+PACEMAKER_DEADLINE_SECONDS = 240
 
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
@@ -257,9 +265,12 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "source": str(orchestrator),
     }, "the orchestrator's explicit timeout = 0 must continue to mean no deadline"
     assert effective["pacemaker"]["timeout"] == {
-        "value": 120,
+        "value": PACEMAKER_DEADLINE_SECONDS,
         "source": str(pacemaker),
-    }, "the check-in pacemaker must retain its explicit finite 120-second deadline"
+    }, (
+        f"the check-in pacemaker must retain its explicit finite "
+        f"{PACEMAKER_DEADLINE_SECONDS}-second deadline"
+    )
 
     # The split duplicated a routing, so hold the copy to one intended difference.
     # Anything else that drifts here is a pacemaker quietly authenticating, billing,

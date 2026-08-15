@@ -87,6 +87,17 @@ graphs/dag-scope.yaml`. Check one with `just validate-personas`' sibling,
   deadline per
   side](onejudge-integration.md#choosing-a-deadline-per-side) before re-sharing
   one.
+
+  The document declares **schema 3**, because `check-in` carries its own `task`.
+  `onepipeline` composes one task for this graph — since 0.2.0 it states what the
+  run *is*, its id and its goal, rather than who drives it — and `oneagentgraph`
+  hands that task to every member which does not claim one. A member's own `task`
+  **replaces** it as that member's whole prompt; there is no placeholder that
+  interpolates it back in, so such a member has to name the run itself, which
+  `check-in` does through `$ONEPIPELINE_RUN_ID`. Give a scheduled member its own
+  task whenever its job is not the run-level task, and see [the
+  pacemaker](#the-planner-update-pacemaker) for why this one's is scoped away from
+  the round verbs.
 - **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
   worker supervised by one simulated-user judge. A plan node overrides it with
   `agent_graph`.
@@ -264,6 +275,19 @@ there to reach. `just channel-surface` is the operator's spelling of the same
 verb. The command queues the non-blocking
 surface without waiting for a planner reply; the reconciler neither authors nor
 relays its content.
+
+**The pacemaker's rounds prohibition is structural, not advisory.** The member
+carries its own `task` in `graphs/dag-scope.yaml`, and that task both scopes it to
+reporting and forbids `onepipeline round run` and `onepipeline round next` by name.
+Rounds belong to the `orchestrator` member alone. This member is single-sided, so it
+begins its turn before the two-party orchestrator begins one; a round it claimed
+would run *inside* that turn, and the finite deadline in `oneharness.check-in.toml`
+would kill the dispatched worker along with it — silently, because the process killed
+is the one that would have recorded it. Its own task is what makes that impossible
+whatever the run-level task happens to say; raising the deadline only moves when it
+happens. `tests/e2e/test_orchestrate_launch_e2e.py` launches a run whose pacemaker
+comes due mid-flight and reads the prompt each member was actually given, so a task
+that is present in the file but not reaching the model fails there.
 
 Sending and delivery are recorded as two different facts. Queuing the update
 appends `planner-surface-queued` to `events.jsonl` — carrying the surface kind and

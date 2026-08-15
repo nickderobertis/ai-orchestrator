@@ -31,12 +31,15 @@ same distinction `scripts/oneharness-agent.sh` reads:
 * no `--config` at all — the agent side, pinned by the `oneharness.toml`
   `oneagentgraph` wrote into the member's scratch and discovered from there.
 
-The agent side is scripted by what it is asked to do. The orchestrator's task
-names the run it must drive, so this drives it for real — `onepipeline round run`
-and `onepipeline round next` until the run reports itself complete — which is
-exactly what the paid orchestrator would do and what makes a launched plan settle.
-Any other agent turn is a dispatched worker, which reports without changing
-anything.
+The agent side is scripted by what it is asked to do. A turn whose task names a run
+*and* whose system prompt carries the orchestrator's drive role is the orchestrator,
+so this drives it for real — `onepipeline round run` and `onepipeline round next`
+until the run reports itself complete — which is exactly what the paid orchestrator
+would do and what makes a launched plan settle. Both halves are checked because since
+onepipeline 0.2.0 they come from different places: the run id from the composed task,
+which now says only what the run is, and the instruction to drive from
+`personas/orchestrator.yaml` alone, which onejudge composes into `--system`. Any other
+agent turn is a dispatched worker, which reports without changing anything.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend
@@ -76,8 +79,24 @@ MOCK_STDOUT_ENV = "MOCK_STDOUT"
 #: the command line at all.
 JUDGE_CONFIG_NAME = "oneharness.judge.toml"
 
-#: The task `onepipeline` gives the orchestrator member, which names the run.
-DRIVE_TASK = re.compile(r"Drive run (\S+) to settlement")
+#: The task `onepipeline` composes for the dag-scope graph. Since onepipeline 0.2.0 it
+#: says what the run *is* — its id and its goal — and no longer what to do with it;
+#: before that it opened `Drive run <RUN> to settlement`, and every member that took a
+#: task was handed that instruction whether or not driving was its job.
+RUN_TASK = re.compile(r"onepipeline run `([^`]+)`")
+
+#: The orchestrator's role, from `personas/orchestrator.yaml`. Under onepipeline 0.2.0
+#: this is the ONLY place a dag-scope turn is told to drive the run, so requiring it
+#: here is what makes the launch journey prove that the orchestrator still does: were
+#: it ever to stop reaching this member, nothing would call the round verbs and the
+#: launched run would not settle.
+#:
+#: It arrives in `--system`, not in the prompt: onejudge composes a member's agent
+#: persona into the session's system prompt and passes the task separately.
+DRIVE_ROLE = "Drive `onepipeline round run <run-id>`"
+
+#: Where onejudge puts the composed system prompt on the harness command line.
+SYSTEM_FLAG = "--system"
 
 #: The fragment onejudge's `done_when` evaluation prompt ends with. The supervisor
 #: turn and the evaluation turn reach the same config, and they want different
@@ -99,6 +118,14 @@ def _config(argv: list[str]) -> str | None:
         if argument == "--config" and index + 1 < len(argv):
             return argv[index + 1]
     return None
+
+
+def _system(argv: list[str]) -> str:
+    """This invocation's composed system prompt, which carries the member's persona."""
+    for index, argument in enumerate(argv):
+        if argument == SYSTEM_FLAG and index + 1 < len(argv):
+            return argv[index + 1]
+    return ""
 
 
 def _prompt(argv: list[str]) -> tuple[list[str], str]:
@@ -187,9 +214,12 @@ def main(argv: list[str]) -> int:
         return 2
     argv, prompt = _prompt(argv)
     config = _config(argv)
+    system = _system(argv)
     if prompt_log := os.environ.get(PROMPT_LOG_ENV):
         with Path(prompt_log).open("a", encoding="utf-8") as recorded:
-            recorded.write(json.dumps({"config": config, "prompt": prompt}) + "\n")
+            recorded.write(
+                json.dumps({"config": config, "prompt": prompt, "system": system}) + "\n"
+            )
     if config and Path(config).name == JUDGE_CONFIG_NAME:
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))
@@ -198,9 +228,9 @@ def main(argv: list[str]) -> int:
         )
     if config:
         return _answer(argv, "the stand-in pacemaker reported")
-    driving = DRIVE_TASK.search(prompt)
-    if driving:
-        return _answer(argv, _drive(driving.group(1)))
+    naming = RUN_TASK.search(prompt)
+    if naming and DRIVE_ROLE in system:
+        return _answer(argv, _drive(naming.group(1)))
     return _answer(argv, "the stand-in worker reported without changing anything")
 
 

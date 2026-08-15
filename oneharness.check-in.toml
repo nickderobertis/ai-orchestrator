@@ -14,13 +14,23 @@
 # harnesses that cannot run at all — see the note in oneharness.toml.
 run_mode = "fallback"
 
-# timeout: the per-turn deadline in seconds. Stated rather than inherited, at the
-# release default this member has always resolved to, because a deadline nobody
-# wrote down is precisely what killed the orchestrator side. A pacemaker must stay
-# bounded: its whole job is to fire, report, and exit, its period is 1800 seconds,
-# and a turn that outlives its own period is wedged rather than working. A missed
-# update costs one tick; an unbounded one costs every tick after it.
-timeout = 120
+# timeout: the per-turn deadline in seconds. Stated rather than inherited, because a
+# deadline nobody wrote down is precisely what killed the orchestrator side. A
+# pacemaker must stay bounded: its whole job is to fire, report, and exit, its period
+# is 1800 seconds, and a turn that outlives its own period is wedged rather than
+# working. A missed update costs one tick; an unbounded one costs every tick after it.
+#
+# Raised from the 120 this member resolved to for its first releases. This bound is a
+# backstop against a wedged turn, not a budget for the work: reading every active
+# workstream's durable evidence across several runs is a real amount of reading, and a
+# pacemaker cut off mid-survey reports nothing at all, so the number is set well clear
+# of the honest case and still far inside the period.
+#
+# It is NOT what keeps a dispatched worker alive. A round must never run inside this
+# member's turn in the first place — which is what the member's own `task` in
+# graphs/dag-scope.yaml secures. When a round did run here, this deadline killed the
+# worker with it, and raising the number would only have moved when that happened.
+timeout = 240
 
 # Record this side's runs to disk too; a pinned `--config` skips the user-level
 # config.toml, so history must be enabled here.

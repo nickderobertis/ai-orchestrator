@@ -234,7 +234,15 @@ ownership check the incident above is about, so each one is approved on its own.
 
 The orchestrator also surfaces an agent-written, non-blocking per-workstream
 status when its durable planner-update pacemaker becomes due (30 minutes by
-default). Every planner-visible surface resets that clock. Set a launch interval
+default). That pacemaker is the `check-in` member of `graphs/dag-scope.yaml`, and it
+carries its own `task` — which is why that document declares schema 3. The task is
+what keeps the member reporting rather than driving: `onepipeline` composes one task
+for the graph and `oneagentgraph` gives it to every member that claims none, so a
+member whose job is not the run-level task must state its own. Never let this one
+reach `onepipeline round run` or `onepipeline round next`; the rounds are the
+`orchestrator` member's, and a round claimed from a scheduled turn dies at that
+member's deadline, taking the dispatched worker with it. Every planner-visible
+surface resets that clock. Set a launch interval
 with `just orchestrate ... --heartbeat-interval SECONDS`; include
 `"heartbeat_interval": SECONDS` in a normal `channel-reply` to adjust it live, or
 `"heartbeat_interval": false` to disable it. The orchestrator continues without
