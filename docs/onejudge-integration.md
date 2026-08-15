@@ -452,7 +452,7 @@ of that check, not a second declaration of it. -->
 | Side | Config | Deadline |
 | --- | --- | --- |
 | Orchestrator agent | `oneharness.orchestrator.toml` | **none** (`timeout = 0`) |
-| `check-in` pacemaker | `oneharness.check-in.toml` | 120s, stated |
+| `check-in` pacemaker | `oneharness.check-in.toml` | 240s, stated |
 | Judge / simulated user | `oneharness.judge.toml` | **none**, the release default |
 | Worker agent | `oneharness.toml` | **none**, the release default |
 | LLM lint | `oneharness.llmlint.toml` | **none**, the release default |
@@ -488,7 +488,7 @@ from the CLI rather than the file —
 $ oneharness config --config oneharness.orchestrator.toml | jq .timeout
   { "value": 0,   "source": "oneharness.orchestrator.toml" }
 $ oneharness config --config oneharness.check-in.toml | jq .timeout
-  { "value": 120, "source": "oneharness.check-in.toml" }
+  { "value": 240, "source": "oneharness.check-in.toml" }
 $ oneharness config --config oneharness.toml | jq .timeout
   { "value": null, "source": null }
 ```
