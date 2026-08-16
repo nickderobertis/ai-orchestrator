@@ -2171,6 +2171,11 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[tuple[dict[
         _just("stop", run, environment=environment, seconds=60)
 
 
+# One run name serves all three parametrizations, and the fixture stops it by that name
+# on the way out, so two of them on separate workers would stop each other's run. The
+# constraint is the scheduling, never a longer deadline: the loop below is only waiting
+# for a rendezvous its own run holds open.
+@pytest.mark.xdist_group("verdict-recipes")
 @pytest.mark.parametrize(("recipe", "arguments"), VERDICT_RECIPES, ids=lambda row: str(row))
 def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
     supervised_gate: tuple[dict[str, str], str], recipe: str, arguments: tuple[str, ...]
