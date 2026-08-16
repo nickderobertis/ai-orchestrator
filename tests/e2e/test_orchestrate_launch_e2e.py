@@ -40,6 +40,13 @@ from orchestrator.root import REPO_ROOT
 #: The stand-in for the paid model, named to `oneagentgraph` as its harness.
 FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
 
+#: The stand-in for the paid provider itself, named to `oneharness` as codex's binary.
+#: What covers a member `oneagentgraph` no longer spawns a CLI for; see `_environment`.
+FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
+#: Where that stand-in records the prompt each launch was given, in the same one-field
+#: shape `PROMPT_LOG_ENV` uses, so both logs are read back the same way.
+FAKE_CODEX_PROMPT_LOG_ENV = "FAKE_CODEX_PROMPT_LOG"
+
 #: The shipped example this journey launches. A plan written for this repository's
 #: own operators, so a schema or field the published crate stopped accepting fails
 #: here rather than the first time a planner types it.
@@ -234,6 +241,18 @@ def _environment(
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
+    # The other half of the same seam, and not redundant with it. Since oneagentgraph
+    # 0.2.18 a single-sided `kind: oneharness` member — the `check-in` pacemaker — runs
+    # its turn through the oneharness *library* on a thread of the graph process, so no
+    # `oneharness` CLI is spawned for it and the substitution above never sees it. What
+    # is still a process is the provider, and `ONEHARNESS_BIN_CODEX` is oneharness's own
+    # per-harness binary override: every one of this repository's configs names `codex`
+    # first, so pinning that identity's binary is what keeps a suite run off a paid
+    # subscription. It is deliberately weaker than `--mock-harness`, which the two-party
+    # path above still uses — measured against oneharness 0.10.1, a mocked harness keeps
+    # its mock binary and ignores this variable — so the two seams do not collide.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     # Keeps this run's graph scratch, its history, and its sibling state out of the
     # host's, so a journey never reads or reclaims a live dispatch's.
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
@@ -1411,11 +1430,15 @@ def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
     be handed the six characters instead of its run. Measured here against the real CLI
     at the version `graphs/dag-scope.yaml` actually declares, so lowering that version
     fails here rather than in a pacemaker update naming no run.
+
+    The probe is the pacemaker's own shape — single-sided, on the pacemaker's config —
+    so its prompt is read at the provider rather than at the CLI: since oneagentgraph
+    0.2.18 that member kind spawns no `oneharness` process to observe.
     """
     declared, _ = _dag_scope_document()
     environment = _environment(tmp_path, oneharness_bin)
     prompt_log = tmp_path / "prompts.jsonl"
-    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    environment[FAKE_CODEX_PROMPT_LOG_ENV] = str(prompt_log)
     graph = tmp_path / "placeholder.yaml"
     graph.write_text(
         f"version: {declared}\n"

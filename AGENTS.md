@@ -190,12 +190,14 @@ dispatch onejudge.
 2. **Pick or create personas.** Match each subtask to a general role and review
    bar in `personas/`. Prefer precise task prose — a specific `## Acceptance
    criteria` list, which is the node's review bar — over encoding subtask details
-   in a new persona. A node's `persona` is a *name* resolved against roles built
-   into the tool, not against this repository's `personas/` directory, so a role
-   whose built-in bar replaces `config/onejudge.base.yaml`'s (`planner`,
-   `reviewer`, `researcher`) is reviewed without the shared acceptance-criteria
-   clause, and a repo-specific slash-qualified name cannot be dispatched at all.
-   See [Which of these files a dispatch actually reads](personas/README.md#which-of-these-files-a-dispatch-actually-reads).
+   in a new persona. A node's bare `persona` is a *name* resolved against roles built
+   into the tool, not against this repository's `personas/` directory — but a role
+   with its own built-in bar (`planner`, `reviewer`, `researcher`) now gets it
+   **beside** `config/onejudge.base.yaml`'s acceptance-criteria clause rather than
+   instead of it, and a repo-specific persona in `personas/` dispatches when named as
+   a *path* relative to `graphs/` (`../personas/crozier/crozier-corpus.yaml`) rather
+   than by its bare catalog name. Both re-measured on the adopted stack; see
+   [Which of these files a dispatch actually reads](personas/README.md#which-of-these-files-a-dispatch-actually-reads).
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
    which stays attached and hands the run back when it settles (see below),
    then review each structured boundary and mid-run proposal surfaced by the
@@ -466,7 +468,12 @@ counting *candidates* where it meant concurrent turns, and 0.8.0 stopped it dema
 one turn-control mechanism across the whole chain, binding the mechanism to the
 candidate that serves the turn instead. That was the constraint that bit here — every
 chain mixes claude-code with codex, which declare different mechanisms — so the
-committed chains are now planned with each candidate on its own.
+committed chains are now planned with each candidate on its own. The other constraint
+was the socket **address**, capped at 108 bytes on Linux; oneharness 0.10.0 bounds it
+at construction, and a real launch on the adopted stack settles a dispatched worker
+whose report names a bound control session with `control_unavailable` null. So turn
+control is live on every dispatch here rather than held in reserve — at an address
+measured 107 bytes long, which is the whole budget.
 Turning a member's `stream` off to dodge a control refusal trades away the per-turn
 visibility a planner supervises with and fixes nothing; that workaround was written
 against this repository and rejected, and no member carries a `stream` key today. See
@@ -480,8 +487,15 @@ differently for **one** run is a property of that run's agent graph: pass
 each referenced config declares the intended identity. Use `--set` instead of
 `--node-set` to override a dag-scope member. Do not edit a config concurrent runs
 also read.
-The adopted graph invokes oneharness directly; `scripts/oneharness-agent.sh` is
-still the smoke/manual boundary but its `ORCHESTRATOR_WORKER_HARNESSES` /
+The adopted graph invokes oneharness directly, and since oneagentgraph 0.2.18 that
+is literal rather than loose: a single-sided `kind: oneharness` member — this host's
+`check-in` pacemaker — runs its turn through `oneharness_core` on a thread of the
+graph process, so **no `oneharness` CLI is spawned for it** and
+`ONEAGENTGRAPH_ONEHARNESS_BIN` does not reach it. Every `member-started` on the
+adopted stack reports `runner: library`. What is still a process is the provider the
+turn selects. `scripts/oneharness-agent.sh` is
+still the smoke/manual boundary — the one path that deliberately spawns the CLI — but
+its `ORCHESTRATOR_WORKER_HARNESSES` /
 `ORCHESTRATOR_JUDGE_HARNESSES` compatibility variables are not on this launch
 path. oneharness's `ONEHARNESS_HARNESSES` is process-wide and cannot express a
 per-side choice. See

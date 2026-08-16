@@ -40,6 +40,21 @@ PUBLISHED_FILE = "shipped.txt"
 #: The base every identity here publishes onto.
 BASE = "main"
 
+#: One pipe buffer on Linux, which is the size a gate had to exceed on stderr to wedge
+#: the reader this host used to work around. Both streams are driven past it below.
+PIPE_BUFFER = 64 * 1024
+#: Lines per stream, and their width. 8000 x ~48 bytes is ~375 KiB each way — several
+#: buffers, so the ordering of the reads matters rather than being incidental.
+LOUD_LINES = 8000
+#: A gate that is loud on both pipes and then succeeds. Written without quotes of any
+#: kind because `_publication` renders the argv through `repr` and swaps `'` for `"`.
+LOUD_GATE = (
+    f"n=0; while [ $n -lt {LOUD_LINES} ]; do "
+    "echo loud-gate-stdout-line-payload-padding-0123456789; "
+    "echo loud-gate-stderr-line-payload-padding-0123456789 >&2; "
+    "n=$((n+1)); done"
+)
+
 
 class Publication(NamedTuple):
     """One throwaway repository, its scratch registry, and the origin behind it."""
@@ -234,6 +249,46 @@ def test_publishing_an_already_published_branch_changes_nothing_and_says_so(
     assert "nothing to publish" in again.stdout, again.stdout
     assert _git("rev-parse", BASE, cwd=publication.origin).strip() == landed, (
         "a second publication moved the base again"
+    )
+
+
+def test_publish_branch_lands_a_branch_whose_gate_is_loud_on_both_pipes(tmp_path: Path) -> None:
+    """The gate this host stopped silencing: far past one pipe buffer, on both streams.
+
+    `config/onevcs.rules.yml` used to prepend `env NEXTEST_STATUS_LEVEL=fail` to nine
+    gates, because an `onevcs` before 0.2.10 read a gate child's stdout to EOF before
+    it read stderr at all: a gate that filled the 64 KiB stderr buffer wedged there
+    forever and was reported as a *rejected* gate, twice failing complete work here.
+    Retiring that wrapper is a claim about this stack rather than about cargo-nextest,
+    so it is proven the way the defect appeared — by publishing behind a gate that is
+    genuinely loud on both pipes, with nothing suppressing it.
+
+    `LOUD_LINES` is asserted rather than assumed: the argv is run directly first, so a
+    payload that quietly stopped exceeding the buffer would fail here instead of
+    turning this into a journey that proves nothing.
+    """
+    gate = ["bash", "-c", LOUD_GATE]
+    direct = subprocess.run(
+        gate, text=True, capture_output=True, timeout=e2e_timeout(120), check=False
+    )
+    assert direct.returncode == 0, direct.stderr[-2000:]
+    assert len(direct.stderr.encode()) > PIPE_BUFFER, len(direct.stderr.encode())
+    assert len(direct.stdout.encode()) > PIPE_BUFFER, len(direct.stdout.encode())
+
+    publication = _publication(tmp_path, gate=gate)
+    _finished_branch(publication.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(publication.checkout),
+        environment=publication.environment,
+    )
+
+    assert published.returncode == 0, published.stderr[-2000:] + published.stdout[-2000:]
+    assert PUBLISHED_FILE in _git("ls-tree", "--name-only", BASE, cwd=publication.origin), (
+        f"the loud gate's branch never reached the origin's {BASE}:\n{published.stdout}"
     )
 
 

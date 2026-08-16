@@ -21,7 +21,7 @@
 # carries its own `task`, which requires 3; that task interpolates `{task}`, which
 # `oneagentgraph` expands only from 4 — under 3 the token reaches the model as its
 # six literal characters. Both re-measured at this adoption by running one member at
-# each version. oneagentgraph 0.2.14 reads 1 through 6.
+# each version. oneagentgraph 0.2.18 reads 1 through 6.
 version: 4
 name: dag-scope
 members:
@@ -47,7 +47,7 @@ members:
     # a filter rather than named directly. The two halves already agree on the
     # response — `serve` answers with exactly the `{completion, message, reason}`
     # object onejudge's `supervisor` op expects, and the filter passes it through
-    # untouched. They disagree on the request: onejudge 0.3.10 writes
+    # untouched. They disagree on the request: onejudge 0.4.0 writes
     # `{"op":"supervisor", …}` while `serve` reads `{kind, message, blocking?,
     # node?}`, so naming `serve` directly here is refused with `the observer emitted
     # a bad frame: unknown field 'op'` and the member dies on its first turn.

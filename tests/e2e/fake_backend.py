@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """A deterministic stand-in for the paid model, at the seam a dispatch reaches it.
 
-`ONEAGENTGRAPH_ONEHARNESS_BIN` points at this file, so every harness turn of a
-launched run — the monitor that watches it, its supervisor, each dispatched worker,
-each worker's supervisor, and the check-in pacemaker — arrives
-here as one `oneharness run` invocation. Everything above it stays real: the real
+`ONEAGENTGRAPH_ONEHARNESS_BIN` points at this file, so every harness turn a launched
+run reaches by *spawning a CLI* — the monitor that watches it, its supervisor, each
+dispatched worker, and each worker's supervisor — arrives
+here as one `oneharness run` invocation. Since `oneagentgraph` 0.2.18 that is no
+longer every turn: a single-sided `kind: oneharness` member, which is the `check-in`
+pacemaker, runs through the oneharness *library* on a thread of the graph process and
+never spawns a CLI for this variable to redirect. `tests/e2e/fake_codex.py` pinned at
+`ONEHARNESS_BIN_CODEX` is what covers that member — the provider is still a process —
+and the branch below that used to classify a pacemaker turn is kept only because a
+single-sided member on an older engine would still land here.
+Everything above it stays real: the real
 `just` recipe, the real `onepipeline` driver and engine verbs, the real
 `oneagentgraph` graph configs in `graphs/`, and the real onejudge conversation
 those two compose.

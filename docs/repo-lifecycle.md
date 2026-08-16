@@ -966,8 +966,13 @@ prerequisite:
 The default PR title is derived from the most significant Conventional Commit
 subject on the branch, with a non-releasing `chore:` fallback when none is usable
 — see [A subject names the change, whole](#a-subject-names-the-change-whole). An
-explicit `title` must itself be a Conventional Commit subject of at most 72
-characters.
+explicit `title` must itself be a Conventional Commit subject of at most **120**
+characters — `onevcs::provenance::SUBJECT_LIMIT`, raised from 72 in onevcs 0.2.8 —
+and nothing counts it by hand: since onepipeline 0.6.1 the plan **loader** holds
+every node title to it, so a title one character over is refused before any node is
+dispatched. Measured against the adopted pair: 120 loads, and 121 is refused with
+`invalid: node 't': the title is 121 characters, over the 120-character limit onevcs
+holds a publication subject to`.
 
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command; a plan that explicitly combines
