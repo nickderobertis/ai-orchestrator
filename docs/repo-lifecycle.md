@@ -387,6 +387,47 @@ it with:
 just repos --audit-gate-coverage
 ```
 
+### The audit answers what verifies an identity, not what can refuse it
+
+That published answer is about the *presence* of a verifier, and reading it as
+coverage is what hid this host's own defect. Two things it does not say:
+
+- **A `pre-push` hook is not necessarily a gate.** Four identities registered here
+  report coverage by a hook that is a screencomp visual-regression guard — it
+  re-captures screenshots and never runs the identity gate at all.
+- **No local verifier is the merge path for a remote-publishing identity.** A pull
+  request merges when GitHub's required checks pass, so a gate that runs less than
+  they do verifies a branch that cannot merge. `nick-derobertis-site` reported
+  coverage, a dispatched branch passed its gate, published as PR #77, and the
+  required `llmlint` check the gate never ran refused it.
+
+So `just repos --audit-gate-coverage` here is `onevcs repos --audit-gates` with each
+`merge-path coverage:` line rewritten from what verifies the identity into what can
+still refuse it, out of the required checks tracked in
+`config/merge-path-checks.json`:
+
+```
+github.com/nickderobertis/nick-derobertis-site	remote	team	just gate
+  nickderobertis__nick-derobertis-site	/home/…/nickderobertis__nick-derobertis-site
+    merge-path coverage: pre-push hook at /home/… — not the whole merge path
+      1 required check on master that this host's gate does not run, which can refuse the merge:
+        classify-gate — captures screenshots in CI's pinned container and classifies …
+```
+
+That file records every required check against the command the identity's gate in
+`config/onevcs.rules.yml` runs for it, and an identity it does not classify is
+reported as unknown rather than covered. Keeping the two in step is the point of
+adding a check to a gate rather than to the declaration:
+`test_every_declared_gate_command_is_in_the_rule_gate` fails when a gate stops naming
+a tier the merge path requires — and
+`test_each_gate_runs_its_repositorys_whole_bar_against_the_comparison_base` runs every
+gate for real against a fixture command surface, so which tiers it reaches, in what
+order, and against which comparison base are observed rather than read — and
+`test_the_declared_required_checks_match_each_repositorys_branch_protection` asks
+GitHub what is really required, so a check added or newly required upstream is found
+here rather than by a blocked change request. Both live in
+`tests/e2e/test_repo_registry_apply_e2e.py`.
+
 Lifecycle dispatch and `just repo-recover` repeat this audit and refuse before
 starting any work when coverage is missing or unknown, because neither runs the
 gate itself any more. They inspect the **execution** checkout rather than an

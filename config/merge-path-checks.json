@@ -1,0 +1,291 @@
+{
+  "_": [
+    "What each routed repository's merge path requires, and which of those checks this",
+    "host's identity gate reproduces.",
+    "",
+    "`config/onevcs.rules.yml` names the gate `onevcs` runs before it publishes. That",
+    "gate is not the merge path: for every remote-publishing identity here the merge is",
+    "decided by GitHub's required status checks, and a gate that runs less than they do",
+    "verifies a branch that cannot merge. That is not hypothetical \u2014 a lifecycle branch",
+    "on `nick-derobertis-site` passed its gate, published as PR #77, and was refused by",
+    "the required `llmlint` check the gate never ran.",
+    "",
+    "So each identity's required checks are recorded here against the command this",
+    "host's gate runs for them. A check under `gate_runs` names a command the resolved",
+    "gate must contain; a check under `not_run` names why nothing here runs it, and is",
+    "reported by `just repos --audit-gate-coverage` as able to refuse the merge anyway.",
+    "Nothing is claimed by omission: a required check in neither map is a declaration",
+    "error, and the audit treats an identity it does not know at all as uncovered.",
+    "",
+    "Two tests keep this honest. `test_every_declared_gate_command_is_in_the_rule_gate`",
+    "runs offline against the gate `onevcs` resolves, so a rule edited back to a bare",
+    "`check` fails the suite rather than a pull request.",
+    "`test_the_declared_required_checks_match_each_repositorys_branch_protection` asks",
+    "GitHub what is really required, so a check added, renamed, or made required after",
+    "this file was written is found here rather than by a blocked change request.",
+    "",
+    "Add an identity together with its rule: `just repos-apply` refuses a checkout no",
+    "rule names, and the suite refuses a rule this file does not classify."
+  ],
+  "version": 1,
+  "reasons": {
+    "other-os": "runs on an operating system this host does not have, so no gate here can stand in for it",
+    "pull-request": "judges the pull request itself (its title, or its commits), which does not exist until the branch is pushed",
+    "published-artifact": "installs, packages, or publishes a release artifact rather than judging the working tree",
+    "visual-baseline": "captures screenshots in CI's pinned container and classifies them against a hosted baseline this host cannot reproduce",
+    "paid-turn": "spends a real agent turn against a paid provider, which a gate on every dispatch would bill for repeatedly",
+    "network-advisory": "resolves a network-fetched advisory database whose contents change independently of the branch, so a verdict here is not a property of the change",
+    "ci-selection": "a CI job that only selects which lanes run and carries no verdict about the tree",
+    "judged-remotely": "this host's identity gate does not run it; it is judged remotely and can refuse the merge"
+  },
+  "identities": {
+    "github.com/nickderobertis/ai-orchestrator": {
+      "branch": "main",
+      "note": "The one local-direct identity: it opens no pull request, so no required check exists to overturn its pre-push gate.",
+      "gate_runs": {},
+      "not_run": {}
+    },
+    "github.com/nickderobertis/crozier": {
+      "branch": "main",
+      "gate_runs": {
+        "gate": [
+          "just check"
+        ],
+        "llmlint": [
+          "just lint-llm-diff"
+        ]
+      },
+      "not_run": {
+        "commitlint": "pull-request"
+      }
+    },
+    "github.com/nickderobertis/dero-skills": {
+      "branch": "main",
+      "gate_runs": {
+        "check": [
+          "just check"
+        ],
+        "llmlint": [
+          "just lint-llm-diff"
+        ]
+      },
+      "not_run": {
+        "commitlint": "pull-request"
+      }
+    },
+    "github.com/nickderobertis/llmlint": {
+      "branch": "main",
+      "note": "Runs an llmlint job on every pull request but has never required it, so this gate deliberately does not.",
+      "gate_runs": {
+        "gate": [
+          "just check",
+          "just check-version-bump"
+        ]
+      },
+      "not_run": {
+        "deny": "network-advisory",
+        "pr-title": "pull-request",
+        "cross (macos-latest)": "other-os",
+        "cross (windows-latest)": "other-os",
+        "install (ubuntu-latest)": "published-artifact",
+        "install (macos-latest)": "published-artifact",
+        "install (windows-latest)": "published-artifact",
+        "visual-docs / report (x86_64)": "visual-baseline"
+      }
+    },
+    "github.com/nickderobertis/nick-derobertis-site": {
+      "branch": "master",
+      "gate_runs": {
+        "check": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just lint-llm-diff"
+        ]
+      },
+      "not_run": {
+        "classify-gate": "visual-baseline"
+      }
+    },
+    "github.com/nickderobertis/oneagentgraph": {
+      "branch": "main",
+      "gate_runs": {
+        "gate": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just gate"
+        ]
+      },
+      "not_run": {
+        "pr-title": "pull-request",
+        "msrv": "judged-remotely",
+        "deny": "network-advisory",
+        "wheel": "published-artifact",
+        "changes": "ci-selection",
+        "cross (macos-latest)": "other-os",
+        "cross (windows-latest)": "other-os",
+        "install (ubuntu-latest)": "published-artifact",
+        "install (macos-latest)": "published-artifact",
+        "install (windows-latest)": "published-artifact"
+      }
+    },
+    "github.com/nickderobertis/oneharness": {
+      "branch": "main",
+      "note": "Its `gate` recipe already carries `deps-check` and the judged tier, so one command answers three required checks.",
+      "gate_runs": {
+        "check (ubuntu-latest)": [
+          "just gate"
+        ],
+        "deny": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just gate"
+        ]
+      },
+      "not_run": {
+        "pr-title": "pull-request",
+        "check (macos-latest)": "other-os",
+        "check (windows-latest)": "other-os"
+      }
+    },
+    "github.com/nickderobertis/oneharness-ui": {
+      "branch": "main",
+      "gate_runs": {
+        "check (ubuntu-24.04)": [
+          "just gate"
+        ],
+        "supply-chain": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just lint-llm-diff"
+        ]
+      },
+      "not_run": {
+        "commitlint": "pull-request",
+        "check (macos-15)": "other-os",
+        "check (windows-2025)": "other-os",
+        "desktop-e2e (ubuntu-24.04)": "judged-remotely",
+        "desktop-e2e (windows-2025)": "other-os",
+        "macos-native-smoke": "other-os",
+        "install (ubuntu-22.04-arm)": "other-os"
+      }
+    },
+    "github.com/nickderobertis/onejudge": {
+      "branch": "main",
+      "gate_runs": {
+        "check": [
+          "just check"
+        ],
+        "llmlint": [
+          "just lint-llm-diff"
+        ]
+      },
+      "not_run": {
+        "commitlint": "pull-request",
+        "msrv": "judged-remotely",
+        "package": "published-artifact",
+        "test-os (macos-latest)": "other-os",
+        "test-os (windows-latest)": "other-os"
+      }
+    },
+    "github.com/nickderobertis/onepipeline": {
+      "branch": "main",
+      "gate_runs": {
+        "gate": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just gate"
+        ]
+      },
+      "not_run": {
+        "pr-title": "pull-request",
+        "msrv": "judged-remotely",
+        "deny": "network-advisory",
+        "wheel": "published-artifact",
+        "smoke": "paid-turn",
+        "cross (macos-latest)": "other-os",
+        "cross (windows-latest)": "other-os",
+        "install (ubuntu-latest)": "published-artifact",
+        "install (macos-latest)": "published-artifact",
+        "install (windows-latest)": "published-artifact",
+        "install-documented (ubuntu-latest)": "published-artifact",
+        "install-documented (macos-latest)": "published-artifact",
+        "install-documented (windows-latest)": "published-artifact"
+      }
+    },
+    "github.com/nickderobertis/onepipeline-ui": {
+      "branch": "main",
+      "gate_runs": {
+        "gate": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just gate"
+        ]
+      },
+      "not_run": {
+        "pr-title": "pull-request",
+        "msrv": "judged-remotely",
+        "deny": "network-advisory",
+        "cross (macos-latest)": "other-os",
+        "cross (windows-latest)": "other-os",
+        "install (ubuntu-latest)": "published-artifact",
+        "install (macos-latest)": "published-artifact",
+        "install (windows-latest)": "published-artifact"
+      }
+    },
+    "github.com/nickderobertis/onevcs": {
+      "branch": "main",
+      "gate_runs": {
+        "gate": [
+          "just gate"
+        ],
+        "llmlint": [
+          "just gate"
+        ]
+      },
+      "not_run": {
+        "pr-title": "pull-request",
+        "msrv": "judged-remotely",
+        "deny": "network-advisory",
+        "cross (macos-latest)": "other-os",
+        "cross (windows-latest)": "other-os",
+        "install (ubuntu-latest)": "published-artifact",
+        "install (macos-latest)": "published-artifact",
+        "install (windows-latest)": "published-artifact"
+      }
+    },
+    "github.com/nickderobertis/screencomp": {
+      "branch": "main",
+      "note": "Runs an llmlint job on every pull request but has never required it, so this gate deliberately does not.",
+      "gate_runs": {
+        "check (ubuntu-latest)": [
+          "just gate"
+        ]
+      },
+      "not_run": {
+        "check (macos-latest)": "other-os",
+        "check (windows-latest)": "other-os",
+        "workflows": "judged-remotely",
+        "action": "judged-remotely",
+        "action-download": "published-artifact"
+      }
+    },
+    "github.com/petsinc/org-apps": {
+      "branch": "main",
+      "gate_runs": {
+        "gate": [
+          "just check"
+        ]
+      },
+      "not_run": {
+        "pr-title": "pull-request",
+        "preview": "judged-remotely"
+      }
+    }
+  }
+}

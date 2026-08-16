@@ -259,9 +259,13 @@ approvals: none (from rule 1)
 gate: command: just gate (from rule 1)
 ```
 
-Change the routing by editing the rule and re-running `just repos-apply`. Confirm
-each identity's merge path actually runs a gate with `just repos
---audit-gate-coverage`.
+Change the routing by editing the rule and re-running `just repos-apply`. A rule's
+gate must run every tier its repository's merge path requires — most of these
+repositories keep the judged llmlint tier outside `check` and require it as a
+separate status check — so record what each merge path requires in
+`config/merge-path-checks.json` at the same time, and confirm what is left over with
+`just repos --audit-gate-coverage`, which names the required checks no gate here runs
+and so can still refuse a merge the gate passed.
 
 ### Register with the checkout path, never the alias
 

@@ -308,11 +308,12 @@ register-repo *args:
     @uv run onevcs register "$@"
 
 # List repository identities and checkout aliases.
-# `just repos --audit-gate-coverage` also reports which identities have merge-path
-# verification and which do not.
+# `just repos --audit-gate-coverage` also reports, per identity, which required
+# checks on its merge path this host's gate does not run — each of which can refuse
+# a merge the gate already passed.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:
-    @uv run onevcs repos "${@/--audit-gate-coverage/--audit-gates}"
+    @./scripts/repos.sh "$@"
 
 # Report the policy one repository publishes under, and the rule that decided it:
 # `just repo-policy <identity|alias|origin|path>`.

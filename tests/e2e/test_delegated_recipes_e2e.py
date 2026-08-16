@@ -44,6 +44,10 @@ WRAPPER_SCRIPTS = (
     "onepipeline.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
+    # `just repos` goes through this one, which absorbs the flag spelling and — when
+    # an audit is asked for — pipes the answer through the filter it names.
+    "repos.sh",
+    "merge-path-audit.py",
 )
 
 
@@ -216,6 +220,8 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     # The one source the wrappers read the read API's address from; a checkout
     # without it is not one these recipes can run in.
     shutil.copy2(ROOT / "config/read-api.address", checkout / "config/read-api.address")
+    # `just repos --audit-gate-coverage` reads this to say what its answer leaves out.
+    shutil.copy2(ROOT / "config/merge-path-checks.json", checkout / "config/merge-path-checks.json")
     for name in WRAPPER_SCRIPTS:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)

@@ -190,9 +190,18 @@ dispatch onejudge.
    publication policy, approvals, and gate that follow, so a routing change is an
    edit to `config/onevcs.rules.yml` plus `just repos-apply` rather than a command
    that writes a policy. Change it there rather
-   than reaching for an accidental run-only override. Run
-   `just repos --audit-gate-coverage` before relying on hooks or required PR checks
-   as merge-path verification; keep missing and unknown coverage visible. Treat
+   than reaching for an accidental run-only override. A rule's `gate` must run every
+   tier its repository's merge path requires, and naming that repository's `check`
+   usually does not: most of these repositories keep the judged llmlint tier
+   deliberately outside `check` and require it as a separate status check, so a gate
+   that skips it verifies a branch that cannot merge — which is what let a
+   `nick-derobertis-site` branch pass, publish as PR #77, and sit blocked. Each merge
+   path's required checks are tracked in `config/merge-path-checks.json` against the
+   command the gate runs for them, so a new identity gets a rule *and* an entry there.
+   Run `just repos --audit-gate-coverage` before relying on hooks or required PR
+   checks as merge-path verification: it names, per identity, the required checks no
+   gate here runs, each of which can still refuse a merge the gate passed. Keep
+   missing and unknown coverage visible. Treat
    an unfamiliar project-sounding name as a lookup, not a question: search local
    paths such as `~/projects`, then `just repos`, then the current GitHub account
    with `gh search repos <name>` and `gh repo list <owner>`. A hit whose description

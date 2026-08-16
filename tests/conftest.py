@@ -42,8 +42,8 @@ DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
 READS_RECIPES_MARKER = "reads_recipes"
 #: The marker that moves a test out of every memoized tier and into the uncached one.
-#: Its subject is another repository's checkout, which lives outside this workspace
-#: and so outside every `nx.json` key.
+#: Its subject is another repository — its checkout, or the merge path it publishes
+#: through — which lives outside this workspace and so outside every `nx.json` key.
 READS_CHECKOUTS_MARKER = "reads_checkouts"
 
 #: Every spelling of the gate-comparison identity `scripts/comparison-base.sh` and
