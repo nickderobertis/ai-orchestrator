@@ -60,6 +60,12 @@ LONE_SURROGATE = "\\ud83d"
 #: pre-adoption directory invisible, so it is also what the refusals must name.
 LAUNCH_RECORD = "launch.json"
 
+#: How the listing reports a root that holds run directories it could not read, as
+#: distinct from `no runs recorded` for one that holds nothing at all. The distinction
+#: is the recovery: an operator pointed at a directory they can see runs in needs to be
+#: told those runs were skipped and why, not that there are none.
+UNREADABLE_ROOT = "could be read"
+
 
 @pytest.fixture
 def legacy_root(tmp_path: Path) -> Path:
@@ -136,11 +142,22 @@ def test_a_pre_adoption_runs_root_lists_no_runs_rather_than_failing(legacy_root:
     This is the first thing an operator does after the upgrade, and the answer has to be
     an answer: the recipe succeeds and reports that it found nothing, rather than exiting
     on the first directory that is not shaped the way the adopted reader expects.
+
+    The adopted release says more than that it found nothing: it distinguishes a root
+    holding directories it could not read from an empty one, and names each skipped run
+    and the record it lacks. That is the difference between an operator seeing a bare
+    "no runs recorded" for a directory that visibly holds three runs — and reasonably
+    concluding the listing is broken — and being told which file would make each one
+    readable. So the enumeration is asserted, not just the success.
     """
     listed = _just("runs", runs_root=legacy_root)
 
     assert listed.returncode == 0, listed.stderr
-    assert "no runs recorded" in listed.stdout, listed.stdout
+    assert UNREADABLE_ROOT in listed.stdout, listed.stdout
+    for run in LEGACY_RUN_IDS:
+        assert run in listed.stdout, f"{run} was skipped without being named:\n{listed.stdout}"
+    # Named as skipped, with the reason — not listed as a run the reader accepted.
+    assert listed.stdout.count(f"no {LAUNCH_RECORD}") == len(LEGACY_RUN_IDS), listed.stdout
 
 
 def test_the_listing_does_find_a_run_whose_launch_record_is_present(
@@ -182,10 +199,12 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
 
     try:
         assert listed.returncode == 0, listed.stderr
-        assert "no runs recorded" not in listed.stdout, (
-            "the listing reported nothing even for a run the adopted writer produced, so "
-            f"the empty legacy listing says nothing about the legacy records:\n{listed.stdout}"
-        )
+        for nothing_found in ("no runs recorded", UNREADABLE_ROOT):
+            assert nothing_found not in listed.stdout, (
+                "the listing reported nothing even for a run the adopted writer produced, "
+                f"so the empty legacy listing says nothing about the legacy records:"
+                f"\n{listed.stdout}"
+            )
         for run in recorded:
             assert run.name in listed.stdout, listed.stdout
     finally:

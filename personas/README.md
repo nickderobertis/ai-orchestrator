@@ -45,7 +45,7 @@ tool, and this directory is not on the search path. Anything else is taken as a 
 relative to `graphs/`, which is why `crozier/crozier-corpus` fails a dispatch with
 `cannot read graphs/crozier/crozier-corpus`.
 
-Two consequences, both re-measured against onepipeline 0.5.0 by launching a plan
+Two consequences, both re-measured against onepipeline 0.6.1 by launching a plan
 whose two nodes name `engineer` and `reviewer` and reading the effective
 `onejudge.yaml` each dispatch was given:
 
