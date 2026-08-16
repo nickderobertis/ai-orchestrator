@@ -1,3 +1,11 @@
+# THIS FILE IS NOT WHAT AN `engineer` NODE IS DISPATCHED WITH. A plan node's bare
+# `persona: engineer` is a *name*, and it resolves to a role built into the tool rather
+# than to anything in this directory — measured by launching one-node plans and reading
+# the prompt each side was given, and recorded in `personas/README.md`, "Which of these
+# files a dispatch actually reads". So this is a catalog entry and a validation target
+# (`just validate-personas`), and editing it changes no dispatch on its own; the
+# guidance below reaches engineer dispatches through the shared preamble in
+# `config/onejudge.base.yaml`, which is prepended to every dispatched worker's role.
 # llmlint: ignore-file[changed_behavior_has_e2e] The deterministic e2e drives the real
 # onejudge supervisor/report boundary and proves release after one turn; only the paid
 # model's interpretation of natural-language persona rules is replaced by the repository's
@@ -47,6 +55,12 @@ agent:
     the schema version and update the checked-in golden in the SAME change. New
     optional fields must round-trip and be omitted when empty so old consumers are
     unaffected.
+
+    Not every dispatch of this role produces a diff: some deliver a document, a
+    report, or an answer. What verifying and committing then mean is stated once, in
+    the shared preamble in `config/onejudge.base.yaml`, and that statement is the
+    source — follow it as written rather than restating it here, so the two cannot
+    drift into disagreeing about the same dispatch.
 
 user:
   persona: |

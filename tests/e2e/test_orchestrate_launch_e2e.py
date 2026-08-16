@@ -32,6 +32,7 @@ from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 import pytest
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
 from published_surface import surface_of
+from shared_dispatch_bar import shared_agent_preamble, shared_completion_bar
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -641,35 +642,6 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         )
 
 
-def _shared_completion_bar() -> str:
-    """`user.done_when` from `config/onejudge.base.yaml`, folded as YAML folds it.
-
-    Read with a reader written for this one field rather than with a YAML library: the
-    workspace installs none, and adding a parser as a dependency to read four lines of
-    a file this repository writes is a worse trade than fifteen lines that state the
-    shape they accept. The field is a `>-` folded scalar, so its value is the
-    more-indented block that follows, with newlines folded to single spaces — which is
-    also how it reaches the judge, and what makes comparing against a prompt valid.
-    """
-    lines = (REPO_ROOT / "config" / "onejudge.base.yaml").read_text(encoding="utf-8").splitlines()
-    opened = next(
-        (index for index, line in enumerate(lines) if line.strip() == "done_when: >-"), None
-    )
-    assert opened is not None, (
-        "config/onejudge.base.yaml no longer opens `done_when` as a `>-` folded scalar, "
-        "so this reader cannot state what the shared bar is"
-    )
-    indent = len(lines[opened]) - len(lines[opened].lstrip())
-    folded = []
-    for line in lines[opened + 1 :]:
-        if line.strip() and len(line) - len(line.lstrip()) <= indent:
-            break
-        folded.append(line.strip())
-    bar = " ".join(" ".join(folded).split())
-    assert bar, "config/onejudge.base.yaml states an empty shared completion bar"
-    return bar
-
-
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
     launched: Launched,
@@ -692,7 +664,7 @@ def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
     whose built-in role declares its own bar — `planner`, `reviewer`, `researcher` —
     and the criterion the judge is handed is that one instead, and this fails.
     """
-    shared_bar = _shared_completion_bar()
+    shared_bar = shared_completion_bar()
     # `cast` rather than a validating read: this is a plan file this repository ships and
     # `test_every_plan_this_repository_ships_is_one_the_published_crate_accepts` already
     # holds its shape against the launcher. A second schema check here would restate that
@@ -723,6 +695,45 @@ def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
         assert criteria in turn["prompt"], (
             "the judge was given the shared bar without the acceptance criteria it is "
             f"phrased against, so it resolves to nothing:\n{turn['prompt']}"
+        )
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_shared_preamble_reaches_a_dispatched_worker_itself(launched: Launched) -> None:
+    """The standing bar every worker on this host reads arrives verbatim, on the agent side.
+
+    Separate from the judge-side journey above, and deliberately not folded into it: the
+    two clauses of `config/onejudge.base.yaml` reach the model by different paths — the
+    preamble as the worker's system prompt, the completion criterion inside the
+    supervisor's own turn — so one assertion would leave whichever path it did not take
+    unproven. That is not hypothetical here: the judge side's `system` is empty in this
+    run, and a preamble asserted against it would fail while the worker read it fine.
+
+    Verbatim, because the preamble is the whole standing instruction — what verifying,
+    committing, and scope mean for a dispatch, including one whose deliverable is a
+    document rather than a diff. A paraphrase reaching the worker is a different
+    instruction, and reading the effective prompt is the only place that is observable.
+
+    The worker's role is appended after it rather than replacing it, which is why this
+    is a containment check and not an equality one: for the shipped plan's `engineer`
+    node that role is the one built into the tool, not `personas/engineer.yaml`.
+    """
+    preamble = shared_agent_preamble()
+    # The system prompt a dispatch was given appears on no read-only view either, for
+    # the same reason the completion criterion does not.
+    # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the system prompt.
+    working = [
+        turn
+        for turn in _turns_of(_recorded_turns(launched.prompt_log), "worker")
+        # The agent side, by the one property that separates the two: the judge side is
+        # the turn pinned to the judge config.
+        if Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
+    ]
+    assert working, "no dispatched worker took an agent-side turn in this run"
+    for turn in working:
+        assert preamble in turn["system"], (
+            "a dispatched worker was given a system prompt that does not carry the shared "
+            f"preamble in config/onejudge.base.yaml verbatim:\n{turn['system']}"
         )
 
 

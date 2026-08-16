@@ -37,12 +37,17 @@ agent:
     can surface it.
 
     Standing bar for every subtask:
-    - Verify before you claim done. Run the project's own checks/tests; do not
-      report success on inspection alone.
+    - Verify before you claim done. Run the checks your acceptance criteria name,
+      and every other check of the project's that bears on what you produced; do
+      not report success on inspection alone.
     - Use the project's deterministic check tier for implementation checkpoints
       and before each commit. Once those checks are green and you believe the
       subtask is done, run the project's complete verification exactly once at
-      closeout and clear any findings it reports. When one check inside that
+      closeout and clear any findings it reports. If you changed nothing tracked
+      in the repository — your deliverable is a document, a report, or an answer —
+      there is no finished tree for that verification to run over and you are
+      complete without it; decide that from what the repository shows, never
+      because running it is slow or inconvenient. When one check inside that
       verification fails, iterate against that check alone, at the narrowest
       scope it supports — never a full verification pass per fix, and never an
       expensive tier the failing check is not part of. Rerun the deterministic
@@ -62,7 +67,10 @@ agent:
     Commit as you go: the moment a logical change works and its tests pass,
     commit it as its own conventional commit (`git add -A && git commit`). Never
     rely on the harness to commit for you or leave finished work uncommitted — it
-    can be lost if the run ends early. Keep the tree clean at the end.
+    can be lost if the run ends early. That covers every tracked file you touched,
+    whatever your deliverable is; when you touched none, `git status` reporting
+    nothing to commit is a correct and complete outcome, not a problem to solve by
+    writing a file nobody asked for. Keep the tree clean at the end.
 
 # The simulated supervisor's shared defaults. A persona overrides the generic
 # `persona` and may override the other fields.
@@ -78,15 +86,27 @@ user:
   # demanded "every lint tier has passed" and refused complete work in repositories that
   # run no such tier.
   #
+  # The gate-and-commit half is now guarded on the dispatch having left a tracked change,
+  # for the same failure class: a dispatch whose deliverable is a document authors no
+  # tracked change and runs no gate, so an unguarded demand handed its judge a criterion
+  # it could never meet. The guard is deliberately written against the repository's own
+  # state rather than the worker's account of it, because "I changed nothing" is the one
+  # way this could become an escape hatch — a dispatch that DID change something is held
+  # to exactly what it was held to before. `tests/e2e/test_orchestrate_launch_e2e.py`
+  # holds that the clause reaches a real judge; `tests/test_shared_dispatch_bar.py`
+  # holds that its guarded obligations are still stated in full.
+  #
   # Phrasing it against the task works because onejudge hands it to the judge verbatim
   # beside a transcript whose first message is the task; verified against onejudge 0.4.0
   # (`config/onejudge.version`, drift-gated by tests/test_onejudge_version.py). See
   # docs/orchestration.md, "Where a node's review bar lives".
   done_when: >-
     every acceptance criterion stated in the task is met, each of them proven by running
-    the repository's own checks rather than by inspection, with that repository's own
-    complete verification green over the finished tree and the work committed with
-    nothing half-applied left behind
+    every check that bears on it rather than by inspection; and, wherever this dispatch
+    left a tracked change — read from the repository itself, never from a claim to have
+    changed nothing — that repository's own complete verification is green over the
+    finished tree, with every one of those changes committed and nothing half-applied
+    left behind
   max_turns: 12
 
 # Fallback for consumers that build this fragment directly. `dispatch` replaces
