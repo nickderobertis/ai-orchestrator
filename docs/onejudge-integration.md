@@ -123,10 +123,8 @@ effective config object     →  onejudge_sdk.OneJudge.run   →  validated RunR
 
 Repo-specific personas are catalogued under a slash-qualified name such as
 `crozier/crozier-corpus`; general cross-repo roles retain top-level names. That is
-the catalog's spelling, not a plan node's: a node names a built-in role or a path
-relative to `graphs/`, and
-[which of these files a dispatch actually reads](../personas/README.md#which-of-these-files-a-dispatch-actually-reads)
-is where that resolution is measured.
+the catalog's spelling and not a plan node's — a node names a built-in role or a
+path relative to `graphs/`, never that name.
 
 `dispatch` passes the effective config object and task to
 `onejudge_sdk.OneJudge.run`. The SDK owns the temporary config, stdin task
