@@ -349,8 +349,9 @@ just register-repo /path/to/ai-orchestrator-isolated
 Neither line names a workflow or a type, because `onevcs register` takes neither:
 its only option is `--origin`, for a checkout whose own remote is not the one to
 resolve the identity from. What each identity publishes under comes from the rules
-file instead; `docs/host-setup.md` covers
-[why `just repos` does not report the routing](host-setup.md#just-repos-does-not-report-the-routing-just-repo-policy-does).
+file instead, so the `workflow` and `repo_type` columns `just repos` prints are
+that registration-time derivation from the origin rather than the routing a
+publication follows.
 
 When `register-repo` receives a GitHub repository spec such as `owner/name` and
 finds no existing checkout, it clones directly into the managed default
