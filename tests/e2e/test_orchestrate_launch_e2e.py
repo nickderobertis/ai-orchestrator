@@ -27,10 +27,11 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple, Required, TypedDict, cast
+from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
 import pytest
-from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
+from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
+from published_surface import surface_of
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -728,6 +729,11 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
     assert "dag-scope.yaml" in reported, reported
 
 
+#: The node kinds the published plan schema closes over. A node that names none is an
+#: agent node, which is why every plan here writes `kind` only to ask for the other one.
+NodeKind = Literal["human"]
+
+
 class PlanNode(TypedDict, total=False):
     """One agent node of a candidate plan, in the published plan schema's own field names.
 
@@ -738,16 +744,25 @@ class PlanNode(TypedDict, total=False):
     """
 
     id: str
+    kind: NodeKind
     persona: str
     task: str
     max_turns: int
+    expects_no_diff: bool
     done_when: str
+
+
+class Goal(TypedDict):
+    """What a plan states it is for, in the one field the published schema gives it."""
+
+    text: str
 
 
 class CandidatePlan(TypedDict, total=False):
     """A plan offered to the real launcher, which is the only thing that judges it."""
 
     schema_version: int
+    goal: Goal
     name: str
     tasks: list[PlanNode]
 
@@ -1935,3 +1950,294 @@ def test_the_retired_merge_policy_spellings_are_refused_by_name(
         assert f"unknown variant `{spelling}`" in merge_policy_launch(spelling), (
             f"the launcher does not refuse `{spelling}` by name"
         )
+
+
+#: How long the stand-in holds a worker turn open so a journey can act while the run
+#: is unmistakably live. Long enough to dispatch an edit and read the run back inside
+#: it, short enough that the journey is not the slowest thing in the suite.
+WORKER_HELD_SECONDS = 20
+
+#: The verb the engine used to be advanced by. It is gone, and its absence is half of
+#: what "settles on its own" means: the other half is a run that settled anyway.
+RETIRED_ADVANCING_VERB = "round"
+
+#: The budget that used to bound how many times a run could be advanced.
+RETIRED_ADVANCING_FLAG = "--round-budget"
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_a_launch_settles_with_no_verb_left_that_could_have_advanced_it(
+    launched: Launched,
+) -> None:
+    """The run reached a complete settlement, and nothing exists that could have driven it.
+
+    Two halves, and neither is worth much alone. That a launch returns `complete` was
+    already true when a round verb drove the graph forward between planner boundaries,
+    so on its own it does not say the engine is roundless. That the published surface
+    has no advancing verb does not say a run still settles. Together they are the
+    claim: `just orchestrate` was the only command run against this run, the graph
+    completed, and there is no verb that could have been the thing that advanced it.
+
+    The surface is read from the pinned binary rather than asserted from memory, so a
+    release that reintroduced an advancing verb fails here instead of quietly making
+    this journey's premise false.
+    """
+    surface = surface_of("onepipeline")
+    assert (RETIRED_ADVANCING_VERB,) not in surface.paths, (
+        f"`onepipeline {RETIRED_ADVANCING_VERB}` is back, so a run is no longer driven "
+        "to settlement by the engine alone"
+    )
+    assert RETIRED_ADVANCING_FLAG not in surface.flags[("start",)], (
+        f"`onepipeline start` accepts {RETIRED_ADVANCING_FLAG} again, so a run is bounded "
+        "by rounds rather than driven to settlement"
+    )
+
+    settlement = json.loads(launched.launch.stdout.strip().splitlines()[-1])
+    assert settlement == {"run_id": SHIPPED_RUN, "settlement": "complete"}
+
+    # And the graph really finished, rather than the launch merely returning: every
+    # node this run has reports an outcome, read the way a planner reads one.
+    outcomes = _just("results", SHIPPED_RUN, environment=launched.environment, seconds=60)
+    assert outcomes.returncode == 0, outcomes.stderr
+    assert "research" in outcomes.stdout, outcomes.stdout
+
+
+#: A run's own name on the ledger. Every planner-facing verb takes one, and a plan's
+#: `name` is where it comes from, so the two are the same string for a reason.
+RunId = NewType("RunId", str)
+
+
+class LiveRun(NamedTuple):
+    """A run with a dispatched worker still in flight, and the launch driving it."""
+
+    environment: dict[str, str]
+    run: RunId
+    #: The attached launch. Held so the driver stays alive; killed on teardown.
+    launch: subprocess.Popen[str]
+
+
+@pytest.fixture
+def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """Launch a run whose only node is held open, and hand it over while it runs.
+
+    `--dag-graph off` deliberately: this run has no monitor and no pacemaker, so
+    nothing raises a planner surface and there is no boundary of any kind for an edit
+    to be waiting on. That is the point — an edit accepted here was accepted mid-run
+    or not at all.
+
+    Attached rather than detached, because a detached launch's driver exits as soon as
+    the graph has nothing to schedule, and a run with no driver executes nothing an
+    edit adds.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    run = RunId("live-edit-e2e")
+    environment = _environment(tmp_path, oneharness_bin)
+    environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
+    plan = tmp_path / "live.plan.json"
+    live: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
+    plan.write_text(json.dumps(live), encoding="utf-8")
+    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        ["just", "orchestrate", str(plan), "--dag-graph", "off"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        yield LiveRun(environment, run, launch)
+    finally:
+        launch.kill()
+        launch.wait(timeout=e2e_timeout(60))
+        _just("stop", run, environment=environment, seconds=60)
+
+
+def _dispatched(live: LiveRun) -> str:
+    """Wait until the run has a worker in flight, and report the stream that proves it."""
+    limit = deadline(120)
+    while True:
+        stream = _just("monitor", live.run, "--all", environment=live.environment, seconds=60)
+        if stream.returncode == 0 and "node-dispatched" in stream.stdout:
+            return stream.stdout
+        if time.monotonic() >= limit:
+            pytest.fail(f"no worker was ever dispatched:\n{stream.stdout}\n{stream.stderr}")
+        time.sleep(0.2)
+
+
+def test_a_graph_edit_is_accepted_while_a_node_is_still_running(live_run: LiveRun) -> None:
+    """The reconciler takes an edit at any moment, not at a boundary it hands out.
+
+    Under the round model a change to the plan waited for a boundary: the run reached
+    the end of a round, surfaced to the planner, and the planner's answer was where an
+    edit could be applied. The engine reconciles a live desired graph continuously now,
+    and this is what that means concretely — the edit below is sent while a dispatched
+    worker is mid-turn, to a run with no observer graph attached, so no surface has
+    been raised and none has been consumed. There is no boundary here to have waited
+    for.
+
+    What is asserted is not only that the reply was accepted but that the graph it was
+    applied to went on to *execute* the added node. An edit recorded and never
+    scheduled would satisfy an exit status and nothing else.
+    """
+    _dispatched(live_run)
+    # Nothing has been handed out to be answered: this run has no observer, so the
+    # edit cannot be riding on a surface even accidentally.
+    pending = _just("channel-next", live_run.run, environment=live_run.environment, seconds=60)
+    assert pending.returncode == 0, pending.stderr
+    # `cast` rather than a validating read: `SurfaceRead` states the three fields this
+    # suite consumes from `onepipeline next`'s own schema, and the subscript below
+    # fails loudly if the answer is not that shape.
+    assert cast(SurfaceRead, json.loads(pending.stdout))["surface"] is None, (
+        f"this run raised a planner surface, so the edit below could be answering one "
+        f"rather than reaching the reconciler mid-run:\n{pending.stdout}"
+    )
+
+    # No persona: `expects_no_diff` settles without a dispatch, and the launcher
+    # refuses a node that declares both — so this is written out rather than built
+    # from `_node`, whose default is an agent node.
+    settles_without_dispatch: PlanNode = {
+        "id": "added-mid-run",
+        "task": "Report.",
+        "expects_no_diff": True,
+    }
+    add: EditCommand = {"op": "add", "node": settles_without_dispatch}
+    added: ReplyEnvelope = {"version": 1, "commands": [add]}
+    applied = subprocess.run(
+        ["just", "channel-reply", live_run.run],
+        cwd=REPO_ROOT,
+        env=live_run.environment,
+        input=json.dumps(added),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert applied.returncode == 0, applied.stderr + applied.stdout
+
+    # The run was still going when that landed, which is the whole claim: the held
+    # worker had not answered yet, so the graph had not reached anything a boundary
+    # could have been.
+    running = _just("status", live_run.run, environment=live_run.environment, seconds=60)
+    assert running.returncode == 0, running.stderr
+    assert "SETTLED" not in running.stdout.splitlines()[0], (
+        f"the run had already settled, so this proves nothing about a live edit:\n{running.stdout}"
+    )
+
+    settling = deadline(180)
+    while True:
+        stream = _just(
+            "monitor", live_run.run, "--all", environment=live_run.environment, seconds=60
+        )
+        if stream.returncode == 0 and "added-mid-run" in stream.stdout:
+            break
+        if time.monotonic() >= settling:
+            pytest.fail(
+                "the node added mid-run never reached the executing graph:\n"
+                f"{stream.stdout}\n{stream.stderr}"
+            )
+        time.sleep(0.5)
+    assert "edit-committed" in stream.stdout, stream.stdout
+
+
+class VerdictRecipe(NamedTuple):
+    """One verdict recipe and the arguments an operator types after it."""
+
+    recipe: str
+    arguments: tuple[str, ...]
+
+
+#: Every verdict recipe, and the envelope each renders. The three are the planner's
+#: whole legacy vocabulary on the channel, and each is sent here through the recipe an
+#: operator types rather than as JSON a test wrote.
+VERDICT_RECIPES = (
+    VerdictRecipe("channel-continue", ("keep going",)),
+    VerdictRecipe("channel-reject", ("the gate never ran",)),
+    VerdictRecipe("channel-approve", ()),
+)
+
+
+class SupervisedGate(NamedTuple):
+    """A run whose channel has a reader, and the environment that reaches it."""
+
+    environment: dict[str, str]
+    run: RunId
+
+
+@pytest.fixture
+def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedGate]:
+    """A monitored run whose planner channel has somebody waiting on the other end."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    run = RunId("verdict-recipes-e2e")
+    environment = _environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "verdict.plan.json"
+    # A human action is nobody's to dispatch, so it names no persona.
+    gate: PlanNode = {
+        "id": "gate",
+        "kind": "human",
+        "task": "## What\nApprove.\n\n## Why\nProbe.\n\n## Acceptance criteria\n- Approved.",
+    }
+    supervised: CandidatePlan = {
+        "schema_version": 2,
+        "goal": {"text": "prove the verdict recipes reach the live channel"},
+        "name": run,
+        "tasks": [gate],
+    }
+    plan.write_text(json.dumps(supervised), encoding="utf-8")
+    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        ["just", "orchestrate", str(plan), "--heartbeat-interval", str(PACEMAKER_INTERVAL_SECONDS)],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        yield SupervisedGate(environment, run)
+    finally:
+        launch.kill()
+        launch.wait(timeout=e2e_timeout(60))
+        _just("stop", run, environment=environment, seconds=60)
+
+
+# One run name serves all three parametrizations, and the fixture stops it by that name
+# on the way out, so two of them on separate workers would stop each other's run. The
+# constraint is the scheduling, never a longer deadline: the loop below is only waiting
+# for a rendezvous its own run holds open.
+@pytest.mark.xdist_group("verdict-recipes")
+@pytest.mark.parametrize(("recipe", "arguments"), VERDICT_RECIPES, ids=lambda row: str(row))
+def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
+    supervised_gate: SupervisedGate, recipe: str, arguments: tuple[str, ...]
+) -> None:
+    """Each verdict recipe renders an envelope the real channel takes and delivers.
+
+    `tests/e2e/test_delegated_recipes_e2e.py` proves what these three write, against a
+    traced `uv`; it cannot prove that `onepipeline reply` accepts it, and an envelope
+    the CLI refuses would pass there and fail an operator. So each one is sent here to
+    a real run whose channel has a reader waiting, through the recipe as typed.
+
+    Retried against successive surfaces rather than sent once. A verdict is refused
+    outright when nothing is waiting to read it — the engine says so by name — so the
+    thing under test is only observable while a rendezvous is open, and which surface
+    that is, is not this journey's claim.
+    """
+    environment, run = supervised_gate
+    limit = deadline(180)
+    delivered = None
+    while delivered is None:
+        if time.monotonic() >= limit:
+            pytest.fail(f"`just {recipe}` was never accepted by the channel of run {run}")
+        handed = _just("channel-next", run, environment=environment, seconds=60)
+        if handed.returncode != 0 or not handed.stdout.strip():
+            time.sleep(0.1)
+            continue
+        # `cast` for the same reason as above: the published verb owns this schema,
+        # and `SurfaceRead` states only the part this suite reads back from it.
+        if cast(SurfaceRead, json.loads(handed.stdout))["surface"] is None:
+            time.sleep(0.1)
+            continue
+        answered = _just(recipe, run, *arguments, environment=environment, seconds=60)
+        if answered.returncode == 0:
+            delivered = answered.stdout
+    assert '"state":"delivered"' in "".join(delivered.split()), delivered

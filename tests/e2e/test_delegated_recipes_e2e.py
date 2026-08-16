@@ -151,6 +151,31 @@ DELEGATIONS = (
         ("claude/work", "--repo", "/checkout"),
         "uv run onevcs recover claude/work --repo /checkout",
     ),
+    # The third landing verb, and the one that closes the gap the other two left: a
+    # complete branch no session holds had neither an incomplete marker for `recover`
+    # nor a local merge train for `integrate`, so landing one meant raw `git`/`gh`.
+    Delegation(
+        "publish-branch",
+        ("claude/work", "--repo", "/checkout"),
+        "uv run onevcs publish-branch claude/work --repo /checkout",
+    ),
+    # Both optional flags reach the verb. That they arrive as the *words* they were
+    # typed as is a separate claim this trace cannot make — it joins argv with spaces —
+    # so `test_the_publish_branch_recipe_forwards_a_title_as_one_word` makes it.
+    Delegation(
+        "publish-branch",
+        (
+            "claude/work",
+            "--repo",
+            "/checkout",
+            "--title",
+            "Add the thing",
+            "--policy",
+            "change-open",
+        ),
+        "uv run onevcs publish-branch claude/work --repo /checkout "
+        "--title Add the thing --policy change-open",
+    ),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
     Delegation(
         "integrate",
@@ -242,6 +267,53 @@ def test_a_delegated_recipe_reaches_its_published_verb(
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [delegation.published]
+
+
+#: Records argv one word per line rather than as one joined string. The shared trace
+#: above joins with spaces, which cannot tell `--title "Add the thing"` from three
+#: separate words — and that is exactly the difference a quoting bug in a wrapper makes.
+ARGV_RECORDING_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" >>"$TRACE_FILE"
+"""
+
+
+@pytest.mark.reads_recipes
+def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) -> None:
+    """A change request's title is prose, so it reaches the verb as one argument.
+
+    `--title` is the one argument here that will routinely carry spaces, and a recipe
+    that let the shell re-split it would not fail — `onevcs` would take the first word
+    as the title and then refuse `the` as an unexpected argument, or, worse, accept a
+    truncated title. The shared delegation trace joins argv back into one string and so
+    cannot see the difference; this one records a word per line.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(ARGV_RECORDING_UV)
+    title = "Add the thing"
+
+    result = _run(
+        checkout,
+        trace,
+        "publish-branch",
+        "claude/work",
+        "--repo",
+        "/checkout",
+        "--title",
+        title,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "run",
+        "onevcs",
+        "publish-branch",
+        "claude/work",
+        "--repo",
+        "/checkout",
+        "--title",
+        title,
+    ]
 
 
 @pytest.mark.reads_recipes

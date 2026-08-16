@@ -52,9 +52,19 @@ changing stored local workflow. Team identities cannot use local workflow or
 direct integration. Those four names — `local-direct`, `change-open`,
 `change-auto`, `change-direct` — are the published `merge_policy` vocabulary; the
 older `direct` / `none` / `auto` spellings are refused by name at launch.
-Recover incomplete preserved branches with `just
-repo-recover`, which verifies and publishes through the registered workflow; do
-not bypass an incomplete provenance marker with a normal commit. The selected
+**Every branch state has a `onevcs` verb, so none of them is a reason to reach for
+raw `git` or `gh`.** Three land a branch, and which one is decided by what the
+branch *is*: `just publish-branch` verifies and publishes a **complete unpublished
+branch no session holds**, under the policy its identity's rules resolve; `just
+repo-recover` is for a branch carrying **unattested incomplete provenance**, and is
+the only verb that knows how to attest that marker — do not bypass one with a
+normal commit; `just integrate` is the **local merge train**, merging named
+finished branches into their base and opening no change request. `just recoverable`
+names which of the three a given branch needs. Improvising past a missing verb is
+what puts a change on a base branch without its gate, which is the failure this
+routing exists to prevent; the table is
+[in the lifecycle doc](docs/repo-lifecycle.md#which-verb-lands-which-branch-state).
+The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
 after a merge lands; it must be clean with the selected root checked out before
 dispatch. So `no-changes` from a node whose task was to change code means **look
@@ -615,8 +625,9 @@ tier](docs/telemetry.md#seeing-the-supervisory-tier).
 **`just recoverable`** is the other half of that: every preserved-but-unpublished
 branch across the registered identities, where it lives, why its workstream stopped,
 whether it carries an incomplete-step marker, and the exact command that lands it —
-`just repo-recover` for incomplete provenance, `just integrate` for a complete
-branch, with the fetch included when the publication checkout does not have the
+`just repo-recover` for incomplete provenance, `just publish-branch` for a complete
+branch under its identity's policy, `just integrate` for the local merge train,
+with the fetch included when the publication checkout does not have the
 branch. Reach for it instead of diffing clones by hand. Every one of these views is
 read-only and safe beside live work.
 Human completion is never inferred and enters the graph only as an explicit live

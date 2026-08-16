@@ -78,7 +78,7 @@ side and answer rather than fail.
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
 distinguished the sides — only a proxy for it — and, measured against onepipeline
-0.5.0, the proxy stopped holding: a dispatched agent side now arrives carrying
+0.6.1, the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
 this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
@@ -1109,11 +1109,13 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   the turn cap at the moment it finished, not that its work failed or vanished.
   Agents commit incrementally, and the lifecycle preserves those commits on the
   branch. Check its commit delta before deciding whether to recover or redispatch.
-  `just repo-recover <branch> --repo <checkout>` verifies and publishes the
-  preserved branch through its registered workflow.
+  `just repo-recover <branch> --repo <checkout>` verifies and publishes a branch
+  whose provenance is incomplete; `just publish-branch <branch> --repo <checkout>`
+  is the one for a branch that is simply finished and unpublished.
 - **Choose publication from identity type and workflow.** Omitted type is inferred
-  from authenticated GitHub login versus normalized origin owner; pass
-  `--repo-type` when that cannot resolve. Team defaults to a ready-for-review open
+  from authenticated GitHub login versus normalized origin owner; declare the
+  node's `repo_type` when that cannot resolve — it is a plan field, and no `onevcs`
+  verb takes a type option. Team defaults to a ready-for-review open
   PR; single-owner preserves local direct or remote auto publication. Multiple
   aliases share one identity, and one rule in the rules file resolves the policy
   for all of them: edit that rule to change type or workflow, and confirm the

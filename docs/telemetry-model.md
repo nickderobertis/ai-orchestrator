@@ -240,7 +240,7 @@ human-readable view. The breakdown shows one run row followed by node rows with
 wall duration, milliseconds and percentages for the five categories—worker,
 judge, llmlint, tool, and idle—unattributed duration, worker/judge/llmlint input
 and output tokens, cache tokens, total
-`cost_usd`, and telemetry quality. `just telemetry --breakdown --all` includes
+`cost_usd`, and telemetry quality. `just telemetry --breakdown` includes
 settled runs exactly as the JSON view does. Unknown usage renders `?`, not `0`.
 
 ## Graceful degradation
