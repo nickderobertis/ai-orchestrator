@@ -247,7 +247,7 @@ answers with exactly the `{completion, message, reason}` object onejudge's
 
 | | Shape |
 | --- | --- |
-| onejudge 0.3.10 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
+| onejudge 0.4.0 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
 | `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
 
 Naming `onepipeline channel serve` directly as the member's `judge.command` is

@@ -19,6 +19,13 @@ tell one outcome from another deterministically:
   while every other party stays real.
 * ``FAKE_CODEX_OMIT_USAGE`` — the launch succeeds and returns a turn carrying no
   token accounting, which is a broken recorded contract rather than weather.
+* ``FAKE_CODEX_PROMPT_LOG`` names a file this appends one JSON record to per
+  launch, carrying the prompt the provider was actually given. It is how a journey
+  reads the prompt of a turn nothing else can observe: since oneagentgraph 0.2.18 a
+  single-sided ``kind: oneharness`` member's turn is an in-process
+  ``oneharness_core`` call rather than a spawned CLI, so
+  ``ONEAGENTGRAPH_ONEHARNESS_BIN`` — and with it ``tests/e2e/fake_backend.py`` — is
+  not on that member's path at all. The provider binary is, and this is it.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -54,6 +61,20 @@ def record_launch() -> int | None:
     return len(path.read_text(encoding="utf-8").splitlines())
 
 
+def record_prompt(argv: list[str]) -> None:
+    """Append the prompt this launch was given, when a journey asked for it.
+
+    codex takes its prompt as the last positional word of `exec --json <prompt>`,
+    which is the argv oneharness builds and `tests/e2e/test_orchestrate_launch_e2e.py`
+    reads back; nothing is inferred from flags this stand-in does not implement.
+    """
+    log = os.environ.get("FAKE_CODEX_PROMPT_LOG")
+    if log is None or not argv:
+        return
+    with Path(log).open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"prompt": argv[-1]}) + "\n")
+
+
 def turn() -> tuple[dict[str, object], ...]:
     """The stream this launch emits, with token accounting withheld on request."""
     if os.environ.get("FAKE_CODEX_OMIT_USAGE") != "1":
@@ -62,6 +83,7 @@ def turn() -> tuple[dict[str, object], ...]:
 
 
 def main() -> int:
+    record_prompt(sys.argv[1:])
     launches = record_launch()
     unavailable = int(os.environ.get("FAKE_CODEX_UNAVAILABLE_ATTEMPTS") or "0")
     if launches is not None and launches <= unavailable:
