@@ -42,24 +42,29 @@ name to `oneagentgraph` as the node-scope worker's persona override, where a
 built-in role of that name wins: `engineer`, `planner`, `reviewer`, `researcher`,
 `docs-writer`, `orchestrator`, and `check-in` all resolve to roles compiled into the
 tool, and this directory is not on the search path. Anything else is taken as a path
-relative to `graphs/`, which is why `crozier/crozier-corpus` fails a dispatch with
+relative to `graphs/`, which is why the bare catalog name
+`crozier/crozier-corpus` still fails a dispatch with
 `cannot read graphs/crozier/crozier-corpus`.
 
-Two consequences, both re-measured against onepipeline 0.6.1 by launching a plan
-whose two nodes name `engineer` and `reviewer` and reading the effective
-`onejudge.yaml` each dispatch was given:
+Three consequences, all re-measured against onepipeline 0.6.3 by launching one-node
+plans and reading the prompt each side of the dispatch was actually given:
 
 - Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
   with. The flat files whose names match a built-in are a catalog and a validation
-  target, not the dispatch input.
-- The `user.done_when` in `planner.yaml`, `reviewer.yaml`, and `researcher.yaml` does
-  not reach a dispatch; the built-in role's own bar does, and it replaces
-  `config/onejudge.base.yaml`'s rather than adding to it. So a node with one of those
-  three personas is reviewed without the shared "every acceptance criterion stated in
-  the task is met" clause. An `engineer` or `docs-writer` node, whose built-in role
-  declares no bar, gets the shared one.
-
-Closing that gap is an upstream change, not an edit here.
+  target, not the dispatch input. Measured by marking this file's `user.persona` and
+  launching an `engineer` node: the marker reached no prompt in the run.
+- **A repo-specific persona in this directory does dispatch — as a path.** Naming
+  `../personas/crozier/crozier-corpus.yaml` on a node settles the dispatch with that
+  file's `agent.instructions` as the worker's role and its `user.persona` as the
+  supervisor's bar, both verbatim. Only the catalog *name* is unresolvable; the file
+  is not inert. `oneagentgraph` 0.2.14 is the release that closed this, and the engine
+  reaches it through onepipeline 0.6.3, which is the first release to link it.
+- **A built-in role's own bar no longer replaces the shared one — it is added to it.**
+  A `planner` node's completion criterion arrives as `Both of these must hold:` with
+  `config/onejudge.base.yaml`'s "every acceptance criterion stated in the task is met"
+  clause as (1) and the built-in role's own bar as (2). An `engineer` or `docs-writer`
+  node, whose built-in role declares no bar, still gets the shared one alone. Same
+  release, same reason.
 
 Draft a new persona outside the tracked catalog first. Scaffold it under the
 gitignored `scratch/personas/`, dispatch against that directory, and refine it in
@@ -76,7 +81,9 @@ Once proven, add it to this catalog through the orchestrator's isolated
 self-dispatch lifecycle; do not edit the canonical checkout directly. General,
 cross-repo roles use a flat name (`engineer`); repo-specific roles use a
 slash-qualified name (`crozier/crozier-corpus`), stored as
-`personas/crozier/crozier-corpus.yaml`. `just new-persona <name>` creates either
+`personas/crozier/crozier-corpus.yaml` — and dispatched by that *path* relative to
+`graphs/` (`../personas/crozier/crozier-corpus.yaml`), never by the catalog name,
+per the resolution measured above. `just new-persona <name>` creates either
 layout, and `just validate-personas` checks the tracked catalog recursively.
 
 ## The delta contract

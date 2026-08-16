@@ -78,7 +78,7 @@ side and answer rather than fail.
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
 distinguished the sides — only a proxy for it — and, measured against onepipeline
-0.6.1, the proxy stopped holding: a dispatched agent side now arrives carrying
+0.6.3, the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
 this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
@@ -121,8 +121,12 @@ task "<the subtask>"         (passed to the SDK, never merged into a file)
 effective config object     →  onejudge_sdk.OneJudge.run   →  validated RunResult
 ```
 
-Repo-specific personas are addressed by their slash-qualified catalog name, such
-as `crozier/crozier-corpus`; general cross-repo roles retain top-level names.
+Repo-specific personas are catalogued under a slash-qualified name such as
+`crozier/crozier-corpus`; general cross-repo roles retain top-level names. That is
+the catalog's spelling, not a plan node's: a node names a built-in role or a path
+relative to `graphs/`, and
+[which of these files a dispatch actually reads](../personas/README.md#which-of-these-files-a-dispatch-actually-reads)
+is where that resolution is measured.
 
 `dispatch` passes the effective config object and task to
 `onejudge_sdk.OneJudge.run`. The SDK owns the temporary config, stdin task
@@ -164,19 +168,31 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.8.0 is
-the adopted release: it binds a controlled turn's mechanism to the **candidate
-serving it** rather than to the chain as a whole. The validator had required one
-mechanism across every candidate, which a fallback chain can never satisfy once it
-mixes harness families, so the five-identity chains on this host were refused a
-control socket that only one candidate would ever hold — see [streaming and turn
-control are independent
-concerns](#streaming-and-turn-control-are-independent-concerns). It is a major bump
-because it drops the `OneharnessError::ControlMixedMechanisms` and
-`OneharnessError::ControlServerChain` variants from a non-`#[non_exhaustive]` enum,
-which is a break for a Rust consumer matching it exhaustively and nothing at all for
-a consumer of the CLI, which is what this repository is. No CLI behaviour narrowed:
-the release only accepts runs that were previously refused. It succeeds 0.7.2, which
+`config/oneharness.version` release and rejects a stale binary. Version 0.10.1 is
+the adopted release: it puts a pre-spawn/post-spawn hook pair on `RunControls`, so a
+library **embedder** owns the harness child a run starts rather than losing it to the
+process tree. That is not an abstract capability here — it is the compile floor
+`oneagentgraph` 0.2.18 names for converting a single-sided member's turn from a
+spawned `oneharness` CLI into `oneharness_core::io::run::run_supervised`, which is
+why this repository's own paid-model substitution had to grow a second seam (see
+[Testing against a harness without a paid model](#testing-against-a-harness-without-a-paid-model)).
+It succeeds 0.10.0, which **bounds a control socket's address at construction**:
+`sockaddr_un.sun_path` is 108 bytes on Linux and 104 on the BSD lineage, `bind`
+past it fails with `ENAMETOOLONG`, and a session name one byte too long had turned
+every controlled dispatch on a host into an unreachable run. That release is why a
+dispatched worker here now reports a control address rather than a reason it could
+not have one — measured on a real launch, below. Behind it, 0.9.0 refuses a
+contradictory option pair (`{all: true, harnesses: ["codex"]}`) instead of dropping
+one half and running the other, so a turn nobody asked for cannot be billed and
+reported as a success. Each of those three is a major bump for a Rust consumer
+matching `oneharness-core`'s types exhaustively and nothing at all for a consumer of
+the CLI, which is what this repository is. Behind them, 0.8.0 binds a controlled
+turn's mechanism to the **candidate serving it** rather than to the chain as a whole.
+The validator had required one mechanism across every candidate, which a fallback
+chain can never satisfy once it mixes harness families, so the five-identity chains on
+this host were refused a control socket that only one candidate would ever hold — see
+[streaming and turn control are independent
+concerns](#streaming-and-turn-control-are-independent-concerns). It in turn succeeds 0.7.2, which
 stopped `--control` counting **candidates** where it meant concurrent turns — the
 validator refused any selection holding more than one entry and never received the
 `fallback_mode` flag that would have told it a chain runs exactly one live turn.
@@ -426,7 +442,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.8.0, a config's per-harness `model` **beats** the variable, while the `--model`
+0.10.1, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -543,7 +559,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.8.0, confirmed against the binary:
+candidate it ended up running — through oneharness 0.10.1, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -854,10 +870,30 @@ $ oneharness run --config <same chain, claude-code identities only> --session pr
 of exactly that shape was written against this repository and rejected: it set the
 worker member's `stream: false` in `graphs/node-scope.yaml` and routed the provider
 through a shell wrapper, trading away the per-turn visibility [above](#streaming-the-agent-side) to dodge a
-refusal that had nothing to do with it. Nothing here asks for `--control` today, and
-no member carries a `stream` key — each takes oneagentgraph's default of `true`. If
-a control path is wanted later, the committed chains no longer stand in its way and
-the stream flag was never the lever.
+refusal that had nothing to do with it. No member carries a `stream` key — each takes
+oneagentgraph's default of `true` — and the stream flag was never the lever.
+
+**A dispatch here does ask for `--control`, and on the adopted stack it binds.**
+`oneagentgraph` opens a two-party member's *agent* turn controllable and addresses it
+as `<member session>-skill`, so this is not a capability held in reserve; it is on
+every dispatched worker. What used to make it unreachable was the address rather than
+the chain: a unix socket address is capped at 108 bytes on Linux, and a session name
+past that made `bind` fail with `ENAMETOOLONG` — which oneharness 0.10.0 fixed by
+bounding the address at construction. Measured on a real single-node launch of the
+adopted stack, the worker's onejudge report carries
+
+```json
+"control": {
+  "session": "node-scope-1786887436992-494181-worker-skill",
+  "session_dir": "/home/nick.guest/.local/state/oneharness/sessions",
+  "cwd": "."
+}
+```
+
+with `control_unavailable` null — a 107-byte address, which with its terminating NUL
+is exactly the 108 the platform allows. So the margin is nil rather than comfortable:
+a longer member session name is the thing that would take turn control away again,
+and it would report `control_unavailable` rather than fail loudly.
 
 `tests/e2e/test_oneharness_control_e2e.py` holds all four claims against the real
 CLI — the committed mixed-family chain taking control with each candidate on its own
@@ -1140,7 +1176,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.3.10 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.10/docs/protocol.md)),
+([onejudge v0.4.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.4.0/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
@@ -1150,3 +1186,18 @@ seam (`tests/e2e/mock_oneharness.py`, `tests/e2e/fake_codex.py`). That is the on
 sanctioned mock of a genuinely external service; the wrapper, the CLI, the chain,
 and the recorded history all run for real, and the fixtures reject any CLI whose
 version is not the adopted `config/oneharness.version` value.
+
+**That substitution needs two seams now, and knowing which covers what is the whole
+point.** A launch journey pins `ONEAGENTGRAPH_ONEHARNESS_BIN` at
+`tests/e2e/fake_backend.py`, which delegates to the real CLI under `--mock-harness`.
+It covers every turn `oneagentgraph` reaches by spawning a CLI — which, since
+`oneagentgraph` 0.2.18, is no longer all of them: a single-sided `kind: oneharness`
+member (this repository's `check-in` pacemaker) runs its turn through the oneharness
+*library* on a thread of the graph process, so that variable never reaches it, and the
+member would otherwise have gone straight to a paid subscription. What is still a
+process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
+at `tests/e2e/fake_codex.py` — every config in this repository names `codex` first, so
+pinning that identity's binary is what keeps a suite run off a subscription. The two
+do not collide: measured against oneharness 0.10.1, a harness selected with
+`--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
+two-party path is unaffected by the second pin.
