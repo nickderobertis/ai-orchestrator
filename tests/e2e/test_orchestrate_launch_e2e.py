@@ -27,7 +27,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple, Required, TypedDict, cast
+from typing import Literal, NamedTuple, Required, TypedDict, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
@@ -729,6 +729,11 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
     assert "dag-scope.yaml" in reported, reported
 
 
+#: The node kinds the published plan schema closes over. A node that names none is an
+#: agent node, which is why every plan here writes `kind` only to ask for the other one.
+NodeKind = Literal["human"]
+
+
 class PlanNode(TypedDict, total=False):
     """One agent node of a candidate plan, in the published plan schema's own field names.
 
@@ -739,7 +744,7 @@ class PlanNode(TypedDict, total=False):
     """
 
     id: str
-    kind: str
+    kind: NodeKind
     persona: str
     task: str
     max_turns: int
@@ -747,11 +752,17 @@ class PlanNode(TypedDict, total=False):
     done_when: str
 
 
+class Goal(TypedDict):
+    """What a plan states it is for, in the one field the published schema gives it."""
+
+    text: str
+
+
 class CandidatePlan(TypedDict, total=False):
     """A plan offered to the real launcher, which is the only thing that judges it."""
 
     schema_version: int
-    goal: dict[str, str]
+    goal: Goal
     name: str
     tasks: list[PlanNode]
 
@@ -2124,13 +2135,20 @@ def test_a_graph_edit_is_accepted_while_a_node_is_still_running(live_run: LiveRu
     assert "edit-committed" in stream.stdout, stream.stdout
 
 
+class VerdictRecipe(NamedTuple):
+    """One verdict recipe and the arguments an operator types after it."""
+
+    recipe: str
+    arguments: tuple[str, ...]
+
+
 #: Every verdict recipe, and the envelope each renders. The three are the planner's
 #: whole legacy vocabulary on the channel, and each is sent here through the recipe an
 #: operator types rather than as JSON a test wrote.
 VERDICT_RECIPES = (
-    ("channel-continue", ("keep going",)),
-    ("channel-reject", ("the gate never ran",)),
-    ("channel-approve", ()),
+    VerdictRecipe("channel-continue", ("keep going",)),
+    VerdictRecipe("channel-reject", ("the gate never ran",)),
+    VerdictRecipe("channel-approve", ()),
 )
 
 
