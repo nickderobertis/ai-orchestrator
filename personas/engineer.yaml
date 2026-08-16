@@ -2,6 +2,13 @@
 # onejudge supervisor/report boundary and proves release after one turn; only the paid
 # model's interpretation of natural-language persona rules is replaced by the repository's
 # required command-provider double.
+#
+# NOT the dispatch input: a node whose `persona` is the bare name `engineer` resolves to
+# a role built into the tool, so editing this file changes no dispatch on its own. It is
+# a catalog entry and a `just validate-personas` target — see personas/README.md, "Which
+# of these files a dispatch actually reads". Guidance that must reach an engineer
+# dispatch belongs in `config/onejudge.base.yaml`'s shared preamble, which the last
+# paragraph below points at rather than restating.
 agent:
   name: engineer
   instructions: |
@@ -47,6 +54,13 @@ agent:
     the schema version and update the checked-in golden in the SAME change. New
     optional fields must round-trip and be omitted when empty so old consumers are
     unaffected.
+
+    Your deliverable is not always a change to the project: it may be a document —
+    a plan, an analysis, a written answer. What verifying and committing mean for
+    each of those is stated once, in the shared `agent.instructions` preamble of
+    `config/onejudge.base.yaml` that every dispatch is given. Hold to that rather
+    than assuming a diff, and let the repository's own state settle which of the two
+    you produced.
 
 user:
   persona: |

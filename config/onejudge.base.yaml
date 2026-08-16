@@ -39,18 +39,24 @@ agent:
     Standing bar for every subtask:
     - Verify before you claim done. Run the project's own checks/tests; do not
       report success on inspection alone.
-    - Use the project's deterministic check tier for implementation checkpoints
-      and before each commit. Once those checks are green and you believe the
-      subtask is done, run the project's complete verification exactly once at
-      closeout and clear any findings it reports. When one check inside that
-      verification fails, iterate against that check alone, at the narrowest
-      scope it supports — never a full verification pass per fix, and never an
-      expensive tier the failing check is not part of. Rerun the deterministic
-      checks only when a fix touched code rather than prose, comments, or a
-      suppression directive. Once the failing check is clean, run the complete
-      verification once more to confirm. Work is not done until that run is
-      green, and bypassing the project's pre-commit or pre-push verification is
-      not an acceptable response to a slow or failing check.
+    - Which checks those are is decided by what your work actually produced, and
+      the repository's own state decides that rather than what you would prefer to
+      run. If the work leaves any tracked change: use the project's deterministic
+      check tier for implementation checkpoints and before each commit; once those
+      checks are green and you believe the subtask is done, run the project's complete
+      verification exactly once at closeout and clear any findings it reports. When
+      one check inside that verification fails, iterate against that check alone, at
+      the narrowest scope it supports — never a full verification pass per fix, and
+      never an expensive tier the failing check is not part of. Rerun the
+      deterministic checks only when a fix touched code rather than prose, comments,
+      or a suppression directive. Once the failing check is clean, run the complete
+      verification once more to confirm. Work is not done until that run is green,
+      and bypassing the project's pre-commit or pre-push verification is not an
+      acceptable response to a slow or failing check. If instead your deliverable is
+      a document — a plan, an analysis, a written answer — and the work leaves no
+      tracked change, those two tiers have nothing to run over: verify the document
+      by running whatever checks its own acceptance criteria name, and report what
+      each one answered.
     - Keep the change tightly scoped to the subtask. Match the surrounding code's
       conventions.
     - When you add behavior, add a realistic test that exercises it the way a user
@@ -62,7 +68,11 @@ agent:
     Commit as you go: the moment a logical change works and its tests pass,
     commit it as its own conventional commit (`git add -A && git commit`). Never
     rely on the harness to commit for you or leave finished work uncommitted — it
-    can be lost if the run ends early. Keep the tree clean at the end.
+    can be lost if the run ends early. Every tracked change you made is committed
+    before you finish; where the work made none, `there is nothing to commit` is a
+    correct and complete outcome to report, and neither manufacturing a change to
+    have one nor leaving one behind to avoid saying so is. Keep the tree clean at
+    the end.
 
 # The simulated supervisor's shared defaults. A persona overrides the generic
 # `persona` and may override the other fields.
@@ -78,15 +88,24 @@ user:
   # demanded "every lint tier has passed" and refused complete work in repositories that
   # run no such tier.
   #
+  # The verification-and-commit half is CONDITIONAL for the same class of reason: a
+  # dispatch whose deliverable is a DOCUMENT changes nothing tracked and runs no gate, so
+  # an unconditional demand handed its judge a criterion it could never meet. The
+  # condition is deliberately not the agent's own claim — "I changed nothing" would
+  # otherwise walk a dispatch that DID change code past both demands.
+  #
   # Phrasing it against the task works because onejudge hands it to the judge verbatim
   # beside a transcript whose first message is the task; verified against onejudge 0.4.0
   # (`config/onejudge.version`, drift-gated by tests/test_onejudge_version.py). See
   # docs/orchestration.md, "Where a node's review bar lives".
   done_when: >-
-    every acceptance criterion stated in the task is met, each of them proven by running
-    the repository's own checks rather than by inspection, with that repository's own
-    complete verification green over the finished tree and the work committed with
-    nothing half-applied left behind
+    every acceptance criterion stated in the task is met, each of them established by
+    evidence rather than by assertion — by running whatever checks bear on it, wherever
+    any do — and, if the work changed anything tracked, that repository's own complete
+    verification is green over the finished tree with every one of those changes
+    committed and nothing half-applied left behind; whether it changed anything is read
+    from the repository's own state rather than taken on the agent's word, so a dispatch
+    reporting no change has still to show there is none
   max_turns: 12
 
 # Fallback for consumers that build this fragment directly. `dispatch` replaces

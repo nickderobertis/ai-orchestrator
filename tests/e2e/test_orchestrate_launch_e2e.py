@@ -612,33 +612,46 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         )
 
 
-def _shared_completion_bar() -> str:
-    """`user.done_when` from `config/onejudge.base.yaml`, folded as YAML folds it.
+BASE_CONFIG = REPO_ROOT / "config" / "onejudge.base.yaml"
 
-    Read with a reader written for this one field rather than with a YAML library: the
-    workspace installs none, and adding a parser as a dependency to read four lines of
-    a file this repository writes is a worse trade than fifteen lines that state the
-    shape they accept. The field is a `>-` folded scalar, so its value is the
-    more-indented block that follows, with newlines folded to single spaces — which is
-    also how it reaches the judge, and what makes comparing against a prompt valid.
+BLOCK_SCALAR_INDICATORS = ("|", ">")
+
+
+def _shared_scalar(key: str) -> str:
+    """One scalar of `config/onejudge.base.yaml`, normalized to a single spaced line.
+
+    Hand-written because the workspace installs no YAML library. Any style is accepted
+    — `>` or `|` with any chomping indicator, or an inline value — so restyling a field
+    never breaks a journey. Callers normalize the prompt they compare against the same
+    way, which is what makes the comparison exact under either block style.
     """
-    lines = (REPO_ROOT / "config" / "onejudge.base.yaml").read_text(encoding="utf-8").splitlines()
+    lines = BASE_CONFIG.read_text(encoding="utf-8").splitlines()
     opened = next(
-        (index for index, line in enumerate(lines) if line.strip() == "done_when: >-"), None
+        (index for index, line in enumerate(lines) if line.strip().startswith(f"{key}:")), None
     )
-    assert opened is not None, (
-        "config/onejudge.base.yaml no longer opens `done_when` as a `>-` folded scalar, "
-        "so this reader cannot state what the shared bar is"
-    )
+    assert opened is not None, f"config/onejudge.base.yaml states no `{key}` for this reader"
+    inline = lines[opened].strip()[len(key) + 1 :].strip()
+    if inline and not inline.startswith(BLOCK_SCALAR_INDICATORS):
+        return " ".join(inline.strip("'\"").split())
     indent = len(lines[opened]) - len(lines[opened].lstrip())
-    folded = []
+    block = []
     for line in lines[opened + 1 :]:
         if line.strip() and len(line) - len(line.lstrip()) <= indent:
             break
-        folded.append(line.strip())
-    bar = " ".join(" ".join(folded).split())
-    assert bar, "config/onejudge.base.yaml states an empty shared completion bar"
-    return bar
+        block.append(line.strip())
+    value = " ".join(" ".join(block).split())
+    assert value, f"config/onejudge.base.yaml states an empty `{key}`"
+    return value
+
+
+def _shared_completion_bar() -> str:
+    """`user.done_when` — the judge's half of the one bar every dispatch shares."""
+    return _shared_scalar("done_when")
+
+
+def _shared_agent_preamble() -> str:
+    """`agent.instructions` — the worker's half of it, opening its system prompt."""
+    return _shared_scalar("instructions")
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
@@ -695,6 +708,149 @@ def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
             "the judge was given the shared bar without the acceptance criteria it is "
             f"phrased against, so it resolves to nothing:\n{turn['prompt']}"
         )
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_shared_preamble_reaches_a_dispatched_workers_agent_side(
+    launched: Launched,
+) -> None:
+    """The other shared clause arrives verbatim, on the other side of the conversation.
+
+    The bar is stated twice for two readers, and the two reach the model by different
+    paths: `user.done_when` is a field of the supervisor frame, while this is
+    concatenated ahead of the persona's role into the agent's system prompt. So the
+    judge-side journey above proves nothing about this one. Reading the effective
+    prompt rather than the config is what excludes the real failure — a preamble
+    present in the file and dropped on the way to the agent.
+    """
+    preamble = _shared_agent_preamble()
+    # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the system prompt.
+    working = [
+        turn
+        for turn in _turns_of(_recorded_turns(launched.prompt_log), "worker")
+        if Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
+    ]
+    assert working, "no dispatched worker took an agent turn in this run, so nothing here is proven"
+    for turn in working:
+        assert preamble in " ".join(turn["system"].split()), (
+            "a dispatched worker's system prompt is not the shared preamble in "
+            f"config/onejudge.base.yaml:\n{turn['system']}"
+        )
+
+
+class SharedClause(NamedTuple):
+    """One shared clause, with the phrases that keep its conditional a real bar.
+
+    `demands` is what a dispatch that DID change something stays held to; `guards` is
+    what puts the condition beyond that dispatch's own say-so.
+    """
+
+    what: str
+    read: Callable[[], str]
+    demands: tuple[str, ...]
+    guards: tuple[str, ...]
+
+
+#: Its demands are the two the previous unconditional clause made, so a rewrite that
+#: drops either has lowered the bar rather than conditioned it.
+JUDGE_CLAUSE = SharedClause(
+    what="`user.done_when`, the judge's completion criterion",
+    read=_shared_completion_bar,
+    demands=(
+        "complete verification is green over the finished tree",
+        "nothing half-applied left behind",
+    ),
+    guards=("taken on the agent's word", "show there is none"),
+)
+
+WORKER_CLAUSE = SharedClause(
+    what="`agent.instructions`, the worker's shared preamble",
+    read=_shared_agent_preamble,
+    demands=(
+        "run the project's complete verification exactly once at closeout",
+        "Work is not done until that run is green",
+        "leave finished work uncommitted",
+    ),
+    guards=("the repository's own state decides that", "manufacturing a change"),
+)
+
+SHARED_CLAUSES = (JUDGE_CLAUSE, WORKER_CLAUSE)
+
+
+def _unmet(clause: SharedClause, wording: str) -> list[str]:
+    """Every phrase `clause` requires that `wording` does not carry."""
+    normalized = " ".join(wording.split())
+    return [phrase for phrase in (*clause.demands, *clause.guards) if phrase not in normalized]
+
+
+@pytest.mark.parametrize("clause", SHARED_CLAUSES, ids=lambda clause: clause.what)
+def test_a_shared_clause_states_every_demand_and_guard_a_bare_conditional_drops(
+    clause: SharedClause,
+) -> None:
+    """Making the bar true of a document dispatch must not make it optional for a diff.
+
+    The wording this excludes is the bare conditional — "green over any change it made",
+    "commit any change you made", "run the verification if you changed anything" — with
+    nothing saying who decides whether anything changed. Under it a dispatch that DID
+    change code satisfies both halves by reporting that it did not, which is a weaker
+    bar than the unconditional clause this replaced rather than a truer one. So the
+    demands must survive verbatim AND the clause must put the condition beyond the
+    agent's say-so; `test_a_weakened_shared_clause_fails_that_guard` offers each such
+    weakening and shows this phrase set rejects it.
+    """
+    missing = _unmet(clause, clause.read())
+    assert not missing, (
+        f"{clause.what} in config/onejudge.base.yaml no longer states {missing}; a dispatch "
+        "that changed code could now satisfy it by reporting that it changed nothing"
+    )
+
+
+#: Without these the guard above would be a tautology — a list of phrases read out of
+#: the file it checks.
+WEAKENED_CLAUSES = (
+    (
+        JUDGE_CLAUSE,
+        "the condition left to whatever the agent reports",
+        "every acceptance criterion stated in the task is met, with that repository's own "
+        "complete verification green over any change it made and any such change committed",
+    ),
+    (
+        JUDGE_CLAUSE,
+        "conditioned, and the half-applied demand dropped with it",
+        "every acceptance criterion stated in the task is met, and if the agent changed "
+        "anything the repository's complete verification is green over the finished tree",
+    ),
+    (
+        WORKER_CLAUSE,
+        "the closeout verification made optional on the agent's own reading",
+        "Run the project's complete verification at closeout if you changed anything, and "
+        "commit any change you made; if you made none there is nothing to commit.",
+    ),
+    (
+        WORKER_CLAUSE,
+        "conditioned, and the iterate-until-green demand dropped with it",
+        "Where your work leaves a tracked change, run the project's complete verification "
+        "exactly once at closeout, and never leave finished work uncommitted.",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("clause", "weakened"),
+    [(clause, weakened) for clause, _, weakened in WEAKENED_CLAUSES],
+    ids=[f"{clause.what}: {label}" for clause, label, _ in WEAKENED_CLAUSES],
+)
+def test_a_weakened_shared_clause_fails_that_guard(clause: SharedClause, weakened: str) -> None:
+    """The guard discriminates: every realistic weakening of either clause fails it.
+
+    Each wording here is one a maintainer could plausibly reach for while making the bar
+    true of a document dispatch, and each is satisfiable by a dispatch that changed code
+    and said it did not.
+    """
+    assert _unmet(clause, weakened), (
+        f"this weakening of {clause.what} passes the guard, so the guard does not exclude "
+        f"the escape hatch it claims to:\n{weakened}"
+    )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
