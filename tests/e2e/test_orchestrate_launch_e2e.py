@@ -27,7 +27,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Literal, NamedTuple, Required, TypedDict, cast
+from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
@@ -2002,11 +2002,16 @@ def test_a_launch_settles_with_no_verb_left_that_could_have_advanced_it(
     assert "research" in outcomes.stdout, outcomes.stdout
 
 
+#: A run's own name on the ledger. Every planner-facing verb takes one, and a plan's
+#: `name` is where it comes from, so the two are the same string for a reason.
+RunId = NewType("RunId", str)
+
+
 class LiveRun(NamedTuple):
     """A run with a dispatched worker still in flight, and the launch driving it."""
 
     environment: dict[str, str]
-    run: str
+    run: RunId
     #: The attached launch. Held so the driver stays alive; killed on teardown.
     launch: subprocess.Popen[str]
 
@@ -2026,7 +2031,7 @@ def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    run = "live-edit-e2e"
+    run = RunId("live-edit-e2e")
     environment = _environment(tmp_path, oneharness_bin)
     environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
     plan = tmp_path / "live.plan.json"
@@ -2152,12 +2157,19 @@ VERDICT_RECIPES = (
 )
 
 
+class SupervisedGate(NamedTuple):
+    """A run whose channel has a reader, and the environment that reaches it."""
+
+    environment: dict[str, str]
+    run: RunId
+
+
 @pytest.fixture
-def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[tuple[dict[str, str], str]]:
+def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedGate]:
     """A monitored run whose planner channel has somebody waiting on the other end."""
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    run = "verdict-recipes-e2e"
+    run = RunId("verdict-recipes-e2e")
     environment = _environment(tmp_path, oneharness_bin)
     plan = tmp_path / "verdict.plan.json"
     # A human action is nobody's to dispatch, so it names no persona.
@@ -2182,7 +2194,7 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[tuple[dict[
         stderr=subprocess.PIPE,
     )
     try:
-        yield environment, run
+        yield SupervisedGate(environment, run)
     finally:
         launch.kill()
         launch.wait(timeout=e2e_timeout(60))
@@ -2196,7 +2208,7 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[tuple[dict[
 @pytest.mark.xdist_group("verdict-recipes")
 @pytest.mark.parametrize(("recipe", "arguments"), VERDICT_RECIPES, ids=lambda row: str(row))
 def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
-    supervised_gate: tuple[dict[str, str], str], recipe: str, arguments: tuple[str, ...]
+    supervised_gate: SupervisedGate, recipe: str, arguments: tuple[str, ...]
 ) -> None:
     """Each verdict recipe renders an envelope the real channel takes and delivers.
 
