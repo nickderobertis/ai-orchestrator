@@ -44,7 +44,8 @@ continuously to settlement now — there is no verb that advances a run, and
 `personas/orchestrator.yaml` says in as many words that nothing there starts,
 advances, or ends one. So the branch that drove is gone rather than kept as a
 no-op: left in place it would have gone on claiming that a launch needs a
-driver, and its verbs stopped existing at onepipeline 0.6.1 anyway.
+driver, and the round verbs it called are not in the adopted CLI's surface at all —
+`tests/e2e/test_orchestrate_launch_e2e.py` reads that surface and holds it.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend
@@ -112,14 +113,18 @@ EVALUATION_MARKER = '{"value": true or false'
 #: its config, its directory, its prompt, and its composed system prompt.
 PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
 
-#: Optionally hold a worker's agent turn open for this many seconds before answering.
+#: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
 #: A journey about a run that is *live* needs one, and a stand-in that answers at
 #: process speed leaves no window to observe: the node is dispatched and settled
 #: between two reads. This is the only way to make "while a node is running" a state
 #: a test can be in rather than a race it can lose. It delays the answer and nothing
 #: else — the same turn, through the same real CLI, with the same scripted reply.
-WORKER_DELAY_ENV = "FAKE_BACKEND_WORKER_DELAY_SECONDS"
+#:
+#: Named for the side rather than for the member, because that is what it does: a
+#: dispatched worker and a dag-scope monitor reach the same branch below, so a
+#: journey wanting only the worker delayed launches with no observer graph.
+AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 
 
 def _flag(argv: list[str], name: str) -> str | None:
@@ -215,7 +220,7 @@ def main(argv: list[str]) -> int:
         )
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, "the stand-in pacemaker reported")
-    if held := os.environ.get(WORKER_DELAY_ENV):
+    if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
     return _answer(argv, "the stand-in worker reported without changing anything")
 

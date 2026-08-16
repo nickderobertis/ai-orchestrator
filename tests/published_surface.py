@@ -106,18 +106,20 @@ def _sections(help_text: str) -> tuple[frozenset[str], frozenset[str]]:
             continue
         if not line.strip():
             continue
-        if section == "Commands":
-            entry = COMMAND_ENTRY.match(line)
-            if entry is not None and entry.group("name") != HELP_COMMAND:
-                commands.add(entry.group("name"))
-        elif section == "Options":
-            entry = OPTION_ENTRY.match(line)
-            if entry is None:
-                continue
-            # The spec is everything before the first run of two spaces; past that is
-            # the description, and a description routinely names other flags in prose.
-            spec = re.split(r" {2,}", entry.group("spec"), maxsplit=1)[0]
-            flags.update(LONG_FLAG.findall(spec))
+        match section:
+            case "Commands":
+                entry = COMMAND_ENTRY.match(line)
+                if entry is not None and entry.group("name") != HELP_COMMAND:
+                    commands.add(entry.group("name"))
+            case "Options":
+                entry = OPTION_ENTRY.match(line)
+                if entry is None:
+                    continue
+                # The spec is everything before the first run of two spaces; past
+                # that is the description, and a description routinely names other
+                # flags in prose.
+                spec = re.split(r" {2,}", entry.group("spec"), maxsplit=1)[0]
+                flags.update(LONG_FLAG.findall(spec))
     return frozenset(commands), frozenset(flags)
 
 

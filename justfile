@@ -207,8 +207,6 @@ channel-continue *args:
 sweep-scratch *args:
     @uv run oneagentgraph sweep "$@"
 
-# --- landing a branch ------------------------------------------------------
-#
 # Three verbs, one per branch state, and between them they cover every state a
 # branch here can be in — so no branch state is a reason to reach for raw `git` or
 # `gh`. Pick by what the branch *is*, not by what is convenient:
@@ -236,6 +234,7 @@ sweep-scratch *args:
 #
 # `--policy` may narrow the rules-resolved policy but never widen it past requiring
 # approvals; the CLI enforces that rather than this wrapper.
+# llmlint: ignore[tool_output_is_signal] what this verified and where it published the branch — the gate verdict, the merge path taken, and the change request's URL — is the product an operator runs it for, exactly as for the `integrate` train below.
 publish-branch *args:
     @uv run onevcs publish-branch "$@"
 

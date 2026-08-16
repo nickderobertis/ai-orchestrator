@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import NamedTuple, Required, TypedDict, cast
 
 import pytest
-from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK, WORKER_DELAY_ENV
+from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
 from published_surface import surface_of
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -739,9 +739,11 @@ class PlanNode(TypedDict, total=False):
     """
 
     id: str
+    kind: str
     persona: str
     task: str
     max_turns: int
+    expects_no_diff: bool
     done_when: str
 
 
@@ -749,6 +751,7 @@ class CandidatePlan(TypedDict, total=False):
     """A plan offered to the real launcher, which is the only thing that judges it."""
 
     schema_version: int
+    goal: dict[str, str]
     name: str
     tasks: list[PlanNode]
 
@@ -2014,14 +2017,10 @@ def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
         pytest.skip("just is not installed")
     run = "live-edit-e2e"
     environment = _environment(tmp_path, oneharness_bin)
-    environment[WORKER_DELAY_ENV] = str(WORKER_HELD_SECONDS)
+    environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
     plan = tmp_path / "live.plan.json"
-    plan.write_text(
-        json.dumps(
-            {"schema_version": 2, "name": run, "tasks": [_node(id="held")]},
-        ),
-        encoding="utf-8",
-    )
+    live: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
+    plan.write_text(json.dumps(live), encoding="utf-8")
     launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
         ["just", "orchestrate", str(plan), "--dag-graph", "off"],
         cwd=REPO_ROOT,
@@ -2070,30 +2069,29 @@ def test_a_graph_edit_is_accepted_while_a_node_is_still_running(live_run: LiveRu
     # edit cannot be riding on a surface even accidentally.
     pending = _just("channel-next", live_run.run, environment=live_run.environment, seconds=60)
     assert pending.returncode == 0, pending.stderr
+    # `cast` rather than a validating read: `SurfaceRead` states the three fields this
+    # suite consumes from `onepipeline next`'s own schema, and the subscript below
+    # fails loudly if the answer is not that shape.
     assert cast(SurfaceRead, json.loads(pending.stdout))["surface"] is None, (
         f"this run raised a planner surface, so the edit below could be answering one "
         f"rather than reaching the reconciler mid-run:\n{pending.stdout}"
     )
 
+    # No persona: `expects_no_diff` settles without a dispatch, and the launcher
+    # refuses a node that declares both — so this is written out rather than built
+    # from `_node`, whose default is an agent node.
+    settles_without_dispatch: PlanNode = {
+        "id": "added-mid-run",
+        "task": "Report.",
+        "expects_no_diff": True,
+    }
+    add: EditCommand = {"op": "add", "node": settles_without_dispatch}
+    added: ReplyEnvelope = {"version": 1, "commands": [add]}
     applied = subprocess.run(
         ["just", "channel-reply", live_run.run],
         cwd=REPO_ROOT,
         env=live_run.environment,
-        input=json.dumps(
-            {
-                "version": 1,
-                "commands": [
-                    {
-                        "op": "add",
-                        "node": {
-                            "id": "added-mid-run",
-                            "task": "Report.",
-                            "expects_no_diff": True,
-                        },
-                    }
-                ],
-            }
-        ),
+        input=json.dumps(added),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
@@ -2144,24 +2142,19 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[tuple[dict[
     run = "verdict-recipes-e2e"
     environment = _environment(tmp_path, oneharness_bin)
     plan = tmp_path / "verdict.plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "goal": {"text": "prove the verdict recipes reach the live channel"},
-                "name": run,
-                "tasks": [
-                    {
-                        "id": "gate",
-                        "kind": "human",
-                        "task": "## What\nApprove.\n\n## Why\nProbe.\n\n"
-                        "## Acceptance criteria\n- Approved.",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    # A human action is nobody's to dispatch, so it names no persona.
+    gate: PlanNode = {
+        "id": "gate",
+        "kind": "human",
+        "task": "## What\nApprove.\n\n## Why\nProbe.\n\n## Acceptance criteria\n- Approved.",
+    }
+    supervised: CandidatePlan = {
+        "schema_version": 2,
+        "goal": {"text": "prove the verdict recipes reach the live channel"},
+        "name": run,
+        "tasks": [gate],
+    }
+    plan.write_text(json.dumps(supervised), encoding="utf-8")
     launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
         ["just", "orchestrate", str(plan), "--heartbeat-interval", str(PACEMAKER_INTERVAL_SECONDS)],
         cwd=REPO_ROOT,
@@ -2204,6 +2197,8 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
         if handed.returncode != 0 or not handed.stdout.strip():
             time.sleep(0.1)
             continue
+        # `cast` for the same reason as above: the published verb owns this schema,
+        # and `SurfaceRead` states only the part this suite reads back from it.
         if cast(SurfaceRead, json.loads(handed.stdout))["surface"] is None:
             time.sleep(0.1)
             continue
