@@ -207,8 +207,45 @@ channel-continue *args:
 sweep-scratch *args:
     @uv run oneagentgraph sweep "$@"
 
-# Verify and publish a lifecycle-preserved branch through its registered workflow.
-# `just repo-recover <branch> --repo <canonical-checkout>`.
+# --- landing a branch ------------------------------------------------------
+#
+# Three verbs, one per branch state, and between them they cover every state a
+# branch here can be in — so no branch state is a reason to reach for raw `git` or
+# `gh`. Pick by what the branch *is*, not by what is convenient:
+#
+#   `just publish-branch` — a complete branch no session holds, whose work is
+#       finished and whose provenance is clean. Verifies it and publishes it under
+#       the policy its identity's rules resolve.
+#   `just repo-recover`   — a preserved branch carrying an unattested incomplete-step
+#       marker. It is the one that knows how to attest that marker, which is why an
+#       incomplete branch must never be finished off with an ordinary commit.
+#   `just integrate`      — the local merge train: named finished branches merged
+#       into their base in order, optionally pushed.
+#
+# `just recoverable` is what tells you which state a branch is in, and prints the
+# command that lands it.
+
+# Verify and publish a complete unpublished branch that no session holds, under the
+# policy its identity's rules resolve.
+# `just publish-branch <branch> --repo <checkout> [--title <T>] [--policy <P>]`.
+#
+# The state between the two verbs below: `onevcs recover` is for a branch whose
+# provenance is incomplete, and `integrate` is a local merge train that opens no
+# change request. A branch that is simply *done* and unpublished had neither of
+# those, which is what left an agent reaching for `gh pr create` by hand.
+#
+# `--policy` may narrow the rules-resolved policy but never widen it past requiring
+# approvals; the CLI enforces that rather than this wrapper.
+publish-branch *args:
+    @uv run onevcs publish-branch "$@"
+
+# Verify and publish a lifecycle-preserved branch through its registered workflow,
+# attesting the incomplete-step marker it carries.
+# `just repo-recover <branch> --repo <canonical-checkout> [--title <T>]`.
+#
+# This is the incomplete-provenance verb. A branch with nothing left incomplete is
+# `just publish-branch`'s; `onevcs recover` takes no `--policy`, because the policy a
+# recovered branch publishes under is the one its rules already resolved.
 repo-recover *args:
     @uv run onevcs recover "$@"
 
