@@ -321,13 +321,14 @@ publication selection:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "tasks": [
     {
       "id": "self",
       "repo": "/path/to/ai-orchestrator",
       "execution_checkout": "/path/to/ai-orchestrator-isolated",
       "persona": "engineer",
+      "title": "fix(gitops): …",
       "task": "## What\n…\n\n## Why\n…\n\n## Acceptance criteria\n- …"
     }
   ]
@@ -916,7 +917,16 @@ returns `sync-conflict` and retains the branch for manual recovery.
   on required checks and ignores optional ones — so a non-blocking check never
   triggers or holds a merge. Policies: `change-auto` (native auto-merge; falls
   back to merging directly if the repo disallows it), `change-direct` (poll and
-  merge ourselves on green required checks), `change-open` (open the PR and stop). Required-vs-optional comes from
+  merge ourselves on green required checks), `change-open` (open the PR and stop).
+
+  **Under `change-auto` a node settles when its change request is published with
+  auto-merge armed, not when the merge completes.** GitHub lands it later, on its
+  own clock, and nothing reports back into a run that has already settled the node.
+  So `just status` keeps counting that node as *settled without landing* for the
+  life of the run — after the PR merged, after the release went out, forever. Read
+  that counter as "handed to GitHub", not as unfinished work: check the PR or
+  `origin/main` before going looking for a branch that is already on it.
+  Required-vs-optional comes from
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
   Before opening a PR, closeout queries all PR states for the same head and base.
   It adopts an existing open PR. It also treats a merged PR as authoritative
@@ -998,19 +1008,39 @@ against the complete stack, but the PR diff against its stack base is child-only
 
 ### Diff-derived PR descriptions
 
-After the final branch-vs-base gate passes and before a remote PR is created, the
-lifecycle performs one additional plain onejudge dispatch with the `pr-author`
-persona. That agent reads the completed diff and writes a terse body following
-`.github/pull_request_template.md` (required `What` and `Why`, optional
-`Additional info`) to a temporary path outside the worktree. The
-lifecycle reads and removes that artifact, then appends stack metadata as usual.
-This costs exactly one extra dispatch per published PR, including workstream and
-draft-checkpoint PRs. An explicit body skips drafting; an explicit title does not.
-A failed, incomplete, or empty drafting result is retried once, then falls back
-to the legacy deterministic body, so description generation never prevents
-publication. Both failed attempts retain their underlying dispatch or harness
-detail in the node journal's drafting-fallback event and in the lifecycle
-follow-up surfaced to the planner.
+<!-- llmlint: ignore[changed_behavior_has_e2e] Every behaviour this section describes past the graph run belongs to `onepipeline` and `onevcs` — when drafting is invoked, what the plan's own `body` bypasses, and what a publication does when a draft cannot start — and each is proven in its repository. This suite doubles the published CLIs at the recipe boundary precisely because driving one for real would open a pull request on a real repository. What this repository owns is the graph and its response contract, and `tests/e2e/test_orchestrate_launch_e2e.py` drives that for real: the launch record's `pr_author_graph`, a drafting turn answering `{body}`, and a non-conforming answer being re-prompted. -->
+
+A change request's body is drafted by an **agent graph the launch names**, exactly
+as its observer is: `onepipeline start --pr-author-graph <REF>`. Naming none is the
+shipped default, and a launch that names none opens its change requests with the
+body its plan states, or with none. `just orchestrate` names
+[`graphs/pr-author.yaml`](../graphs/pr-author.yaml), so every remote publication
+from this host is drafted and a bare `onepipeline start` elsewhere is not. A node
+that states its own `body` (a plan schema 3 field) publishes with that.
+
+What runs is one turn of that graph, after the final branch-vs-base gate passes and
+before the change request is opened. `onepipeline` composes the task — "Read this
+branch's diff and write the change request's body, following the repository's own
+template", followed by the task the branch delivered — runs the graph in the
+branch's worktree, and reads the drafted body out of `results[].structured.body` of
+the retained member report. Stack metadata is appended as usual. It costs one turn
+per published change request, including workstream and draft-checkpoint ones.
+
+That `structured` is the contract, and this repository's graph is built around it:
+`oneharness.pr-author.toml` names `config/pr-author-body.schema.json` as its
+`schema_file`, so a turn answers with `{"body": "…"}` or is re-prompted with the
+validation error, up to `schema_max_retries`. It is also why that config sets
+`stream = false` — oneharness validates a structured answer against the complete
+response, so a streaming member and a `schema_file` cannot both hold, and
+`oneagentgraph` refuses a member that declares both.
+
+**Drafting never blocks publication, and it has no second attempt.** A drafting
+dispatch that cannot start, and a publication with no worktree to draft in, each
+warn on the node — `onepipeline: node '<id>': … so it publishes with no body` — and
+publish with no body at all. There is no deterministic body it falls back to, no
+retry of the graph run, and no separate journal event to look for: the warning on
+the node is the whole record, and a body-less change request on a run whose launch
+named a drafting graph is what a failed draft looks like.
 
 Run these nodes with `just orchestrate`, the one way to dispatch; it still accepts
 old lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,

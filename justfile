@@ -137,25 +137,37 @@ upgrade:
 # monitor` defaults to: the read-time profiles are options of the reading verbs, and
 # a launch takes none. Reattach with `just monitor <run-id>` for the narrower one.
 #
-# The `--dag-graph` this adds is the whole difference between this recipe and a
-# bare `onepipeline start`. The published default is `off` — no agent is required
-# to run a plan — and `graphs/dag-scope.yaml` is this host's opt-in: the active
-# monitor that watches the run and the pacemaker that reports it. An operator who
-# names their own `--dag-graph` (including `off`) keeps it, because the flag
-# refuses to be given twice and the caller's intent is the specific one.
+# The two graph flags this adds are the whole difference between this recipe and a
+# bare `onepipeline start`. Both ship defaulted to nothing, because the published
+# crate ships the flags and not the documents — the documents name this operator's
+# own oneharness configs and personas — so naming them is what makes an operator on
+# this host get them and a bare `onepipeline start` elsewhere not:
+#
+#   * `--dag-graph graphs/dag-scope.yaml` — no agent is required to run a plan at
+#     all, and this is the opt-in: the active monitor that watches the run and the
+#     pacemaker that reports it.
+#   * `--pr-author-graph graphs/pr-author.yaml` — a launch naming none opens its
+#     change requests with the body its plan states, or with none, which is how
+#     every pull request this harness opened came to carry `Published by onevcs.`
+#     as its Why.
+#
+# An operator who names either one themselves keeps it, per flag and including
+# `--dag-graph off`: the flags refuse to be given twice, and the caller's intent is
+# the specific one.
 #
 # `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
 # splits adoption into its own verb, and this recipe keeps the one spelling the
 # planner doctrine names. `--adopt` has to lead, because everything after it is the
-# adopt verb's own.
+# adopt verb's own. It takes neither graph flag — adoption attaches a fresh driver
+# to an intact ledger, which already records the graphs its launch chose.
 #
 # Per-side routing is a property of the launched graphs. `onepipeline start`
 # forwards `--set` to the dag graph and `--node-set` to every dispatched node
 # graph; docs/onejudge-integration.md gives the exact config-ref overrides.
-[doc('Launch a plan on the monitor graph and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
+[doc('Launch a plan on the monitor and drafting graphs and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:
     # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
-    @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else observer=(--dag-graph graphs/dag-scope.yaml); for argument in "$@"; do if [[ "$argument" == --dag-graph || "$argument" == --dag-graph=* ]]; then observer=(); break; fi; done; ./scripts/onepipeline.sh start "$@" ${observer[@]+"${observer[@]}"}; fi
+    @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else defaults=(); for pair in "--dag-graph graphs/dag-scope.yaml" "--pr-author-graph graphs/pr-author.yaml"; do read -r flag ref <<<"$pair"; named=; for argument in "$@"; do if [[ "$argument" == "$flag" || "$argument" == "$flag"=* ]]; then named=1; break; fi; done; [[ -n "$named" ]] || defaults+=("$flag" "$ref"); done; ./scripts/onepipeline.sh start "$@" ${defaults[@]+"${defaults[@]}"}; fi
 
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.

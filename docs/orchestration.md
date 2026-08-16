@@ -15,13 +15,18 @@ on its own, with no verb to advance it and nothing to advance between. See
 
 ## The plan schema
 
-The tracked-plan contract is the published `onepipeline` plan schema, **version 2**
-(`"schema_version": 2`), and it is required: a plan that omits the version, or
-declares any other, is refused at launch. There is no compatibility ladder to read
-a version number against any more — the node shapes this repository grew through
-its own schema versions 1 to 7 were adopted whole as that crate's v1, so the
-shapes below are unchanged and only the number moved. Version 2 then made two
-changes, and a plan written before either fails at launch:
+The tracked-plan contract is the published `onepipeline` plan schema, and declaring
+a `schema_version` is required: a plan that omits it, or declares a number this
+build does not read, is refused at launch naming the ones it does. **Write version
+3** — what every plan here declares, and the one the fields below describe. The
+adopted `onepipeline` 0.7.0 also still reads 2 and 1, so an older plan file an
+operator kept a copy of launches rather than failing; that is a courtesy to old
+copies, not a version to write. There is no compatibility ladder to read a version
+number against any more — the node shapes this repository grew through its own
+schema versions 1 to 7 were adopted whole as that crate's v1, so the shapes below
+are unchanged and only the number moved.
+
+Version 2 made two changes, and a plan written before either fails at launch:
 
 - **`done_when` is no longer a plan field at all.** A node carrying one is refused
   while the plan loads, at any declared version. A node's review bar is the
@@ -31,6 +36,19 @@ changes, and a plan written before either fails at launch:
 - **`max_turns` is forwarded to the node's dispatch**, which version 1 never did:
   under v1 the field was read and then dropped, so a plan that asked for more room
   silently got the persona's or the base config's cap instead.
+
+Version 3 then made the change requests a run publishes the plan's to state, and
+both halves of it are why every lifecycle node in `examples/` carries a title:
+
+- **`title` is required on every lifecycle node.** A node with a `repo` and no
+  `title` is refused with "a lifecycle node states the title its change request
+  opens under". Write a Conventional Commit subject: it is the published subject,
+  and a squash-merged publication leaves exactly one commit carrying it.
+- **`body` is a new optional node field**, the body the change request opens with.
+  A node that states one publishes with it; a node that does not gets the body
+  [the drafting graph](#the-agent-graphs-a-run-launches) writes, or none when the
+  launch names no drafting graph. Stating `body` under a lower version is refused
+  by name — "`body` is a schema 3 field and this plan declares schema_version 2".
 
 Two field spellings also changed when the crate adopted this repository's shapes,
 and a plan written before that fails at launch on either:
@@ -80,8 +98,8 @@ is false the moment its process exits.
 
 ## The agent graphs a run launches
 
-Two files in `graphs/` decide what a run's agents actually are, and both are this
-repository's to write. `onepipeline` ships the **flag and the path**, not the
+Three files in `graphs/` decide what a run's agents actually are, and all three are
+this repository's to write. `onepipeline` ships the **flag and the path**, not the
 files: they name the operator's own onejudge base config, oneharness configs, and
 personas, so a crate that shipped them would be naming files it cannot know.
 Nothing scaffolds them either — `oneagentgraph` has no `init` — and a launch
@@ -126,8 +144,36 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
 - **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
   worker supervised by one simulated-user judge. A plan node overrides it with
   `agent_graph`, and `ONEPIPELINE_NODE_GRAPH` moves the default.
+- **`graphs/pr-author.yaml`** is the **drafting** graph: one single-sided
+  `kind: oneharness` member that reads a verified branch's diff and answers with
+  the body its change request opens under. Like the observer it is opt-in —
+  `--pr-author-graph <REF>` ships naming nothing, and a launch that names nothing
+  opens its change requests with the body its plan states, or with none — and `just
+  orchestrate` names this file so every remote publication from this host is
+  drafted. Unlike `--dag-graph` it takes no `off`: leave the flag off instead.
 
-Both paths are resolved **relative to the directory the run is launched from**,
+  Its member is a `schema_file` member, and that decides two things nothing else
+  here does. `../oneharness.pr-author.toml` names
+  `config/pr-author-body.schema.json`, resolved against **that config's** directory,
+  so a turn answers with `{"body": "…"}` or is re-prompted with the validation
+  error; and that same config sets `stream = false`, because oneharness validates a
+  structured answer against the complete response and `oneagentgraph` refuses a
+  member declaring both. It is also a third copy of the supervisory routing rather
+  than a pointer at the monitor's or the pacemaker's, for the same
+  [per-deadline](onejudge-integration.md#choosing-a-deadline-per-side) reason: a
+  drafter is a bounded job that sits between a passed gate and a publication, so it
+  keeps a finite `timeout` where the monitor keeps none.
+
+  It declares **schema 4** for the same reason `dag-scope` does: the member carries
+  its own `task`, which needs 3, and that task opens with `{task}`, which expands
+  only from 4. `onepipeline` composes the drafting task — "Read this branch's diff
+  and write the change request's body…", followed by the task the branch delivered —
+  and a member's own `task` replaces it, so the interpolation is what keeps the
+  drafter looking at a diff it was actually shown. `../personas/pr-author.yaml` is
+  named for the member's **label** alone: a single-sided member has no onejudge base
+  config to layer a persona delta over, which is why the role prose lives in `task`.
+
+All three paths are resolved **relative to the directory the run is launched from**,
 which is why `just orchestrate` is run from the repository root; every ref *inside*
 a graph is resolved relative to that graph file instead.
 `tests/e2e/test_orchestrate_launch_e2e.py` proves the refusal a missing observer

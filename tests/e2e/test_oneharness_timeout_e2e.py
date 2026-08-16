@@ -40,6 +40,18 @@ MONITOR_MEMBER = "monitor"
 #: not a work budget — the file says why, and what it is not.
 PACEMAKER_DEADLINE_SECONDS = 240
 
+#: The drafting graph and its one member, whose config is the third copy of the
+#: supervisory routing. It is separate for the same reason the pacemaker's is: a
+#: drafter sits between a passed gate and a publication, so an unbounded turn would
+#: hold a verified branch unpublished for the life of the run.
+PR_AUTHOR_GRAPH = REPO_ROOT / "graphs" / "pr-author.yaml"
+PR_AUTHOR_MEMBER = "pr-author"
+
+#: The drafter's per-turn deadline, as `oneharness.pr-author.toml` states it. Exact
+#: for the same reason the pacemaker's is: what matters is that it is *finite* and
+#: chosen, not that it is some number.
+DRAFTER_DEADLINE_SECONDS = 300
+
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
     """Map each graph member to its own scalar settings, nested side keys dotted.
@@ -240,13 +252,15 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all five turn configs together from oneharness's effective values."""
+    """Prove all six turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
-    assert monitor != pacemaker, (
-        "the monitor's agent side and the check-in pacemaker share "
-        f"{monitor}; re-sharing one config is what gives a wedged pacemaker no "
-        "deadline, which fails silently — give each member its own oneharness config"
+    drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
+    assert len({monitor, pacemaker, drafter}) == 3, (
+        f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), and the "
+        f"pr-author drafter ({drafter}) must each name their own oneharness config; "
+        "re-sharing one is what gives a scheduled member no deadline, which fails "
+        "silently"
     )
 
     configs = {
@@ -255,6 +269,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "llmlint": REPO_ROOT / "oneharness.llmlint.toml",
         "monitor": monitor,
         "pacemaker": pacemaker,
+        "drafter": drafter,
     }
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
@@ -274,6 +289,27 @@ def test_every_side_resolves_its_intended_effective_deadline(
     }, (
         f"the check-in pacemaker must retain its explicit finite "
         f"{PACEMAKER_DEADLINE_SECONDS}-second deadline"
+    )
+    assert effective["drafter"]["timeout"] == {
+        "value": DRAFTER_DEADLINE_SECONDS,
+        "source": str(drafter),
+    }, (
+        f"the pr-author drafter must retain its explicit finite "
+        f"{DRAFTER_DEADLINE_SECONDS}-second deadline: it runs between a passed gate "
+        "and a publication, so an unbounded turn holds a verified branch unpublished"
+    )
+    # The drafter is the one side here that answers under a response schema, and
+    # oneharness validates a structured answer against the complete response — so a
+    # `schema_file` member that also streams is refused outright. Holding both
+    # together is what keeps a later "turn streaming back on for visibility" edit
+    # from breaking the graph rather than only changing it.
+    assert effective["drafter"]["stream"]["value"] is False, (
+        "oneharness.pr-author.toml must keep `stream = false`: a schema run does not "
+        "stream, and oneagentgraph refuses a member declaring both"
+    )
+    assert effective["drafter"]["schema_file"]["value"], (
+        "oneharness.pr-author.toml must name the schema a drafted body is validated "
+        "against; without it a turn's answer reaches publication unchecked"
     )
 
     # The split duplicated a routing, so hold the copy to one intended difference.

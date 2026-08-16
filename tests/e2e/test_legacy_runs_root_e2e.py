@@ -153,9 +153,11 @@ def test_a_pre_adoption_runs_root_lists_no_runs_rather_than_failing(legacy_root:
     listed = _just("runs", runs_root=legacy_root)
 
     assert listed.returncode == 0, listed.stderr
-    assert UNREADABLE_ROOT in listed.stdout, listed.stdout
+    assert f"no run under {legacy_root} {UNREADABLE_ROOT}" in listed.stdout, listed.stdout
     for run in LEGACY_RUN_IDS:
-        assert run in listed.stdout, f"{run} was skipped without being named:\n{listed.stdout}"
+        assert f"{legacy_root / run}: no {LAUNCH_RECORD}" in listed.stdout, (
+            f"the listing passed over {run} without saying why:\n{listed.stdout}"
+        )
     # Named as skipped, with the reason — not listed as a run the reader accepted.
     assert listed.stdout.count(f"no {LAUNCH_RECORD}") == len(LEGACY_RUN_IDS), listed.stdout
 

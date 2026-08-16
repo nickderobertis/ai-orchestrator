@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "goal": {
     "text": "Give the service a health endpoint operators can poll"
   },

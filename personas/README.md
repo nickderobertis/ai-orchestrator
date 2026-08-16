@@ -18,7 +18,7 @@ role-specific parts live here.
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `researcher` | Answering questions with evidence cited from the actual source. |
 | `reviewer` | Reviewing and integrating several agents' independently produced work in a complex DAG. |
-| `pr-author` | Drafting a terse, diff-derived PR body for a completed lifecycle change. |
+| `pr-author` | Names the role that drafts a terse, diff-derived PR body for a completed lifecycle change. This file is `graphs/pr-author.yaml`'s member **label** and nothing else: a single-sided member layers no persona, so the drafting prose it is actually given lives in that member's own `task`. Never dispatched as a plan node's persona either, which `onepipeline` refuses by name. |
 | `crozier/crozier-corpus` | Crozier-specific corpus research and curation. |
 
 The test suite requires these rows to match recursive persona discovery exactly.
@@ -39,32 +39,54 @@ Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
 
 A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
 name to `oneagentgraph` as the node-scope worker's persona override, where a
-built-in role of that name wins: `engineer`, `planner`, `reviewer`, `researcher`,
-`docs-writer`, `orchestrator`, and `check-in` all resolve to roles compiled into the
-tool, and this directory is not on the search path. Anything else is taken as a path
-relative to `graphs/`, which is why the bare catalog name
-`crozier/crozier-corpus` still fails a dispatch with
-`cannot read graphs/crozier/crozier-corpus`.
+built-in role of that name wins. `oneagentgraph` 0.2.18 ships exactly five:
+`docs-writer`, `engineer`, `planner`, `researcher`, and `reviewer`. This directory
+is not on the search path, so **any other name is taken as a path relative to
+`graphs/`** — which is why `crozier/crozier-corpus` fails a dispatch with `cannot
+read graphs/crozier/crozier-corpus`, and equally why `orchestrator` and `check-in`
+do. Those two are not built in and never were; `graphs/dag-scope.yaml` names them
+`../personas/orchestrator.yaml` and `../personas/check-in.yaml` for that reason, and
+naming either as a plan node's `persona` fails the same way `crozier/…` does.
+`pr-author` is refused earlier still and by name: `onepipeline` dispatches change
+request drafting under it, so a plan node's own worker may not run as it.
 
-Three consequences, all re-measured against onepipeline 0.6.3 by launching one-node
-plans and reading the prompt each side of the dispatch was actually given:
+That the shipped set is those five and no more is measured two ways, both against
+oneagentgraph 0.2.18 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs each:
+
+- A graph carrying its own `personas` catalog is refused when one of its files
+  collides with a shipped name (`persona "engineer" names both …/engineer.yaml in
+  this graph's catalog and one this crate ships`). Only those five collide;
+  `orchestrator`, `check-in`, and `pr-author` are accepted alongside the catalog
+  exactly as an invented name is, because nothing ships under them.
+- A plan node naming `persona: orchestrator` settles `failed
+  (infrastructure-failure)` with `oneagentgraph: invalid config: cannot read
+  <launch-dir>/graphs/orchestrator` — the path-resolution failure, reached because
+  no built-in claimed the name first. It costs no agent turn: the dispatch dies in
+  config validation, before a harness is launched.
+
+Three consequences, the first two re-measured against onepipeline 0.7.0 and
+oneagentgraph 0.2.18 by launching a plan whose two nodes name `engineer` and
+`reviewer` and reading the completion criterion each dispatch's supervisor was
+handed:
 
 - Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
   with. The flat files whose names match a built-in are a catalog and a validation
-  target, not the dispatch input. Measured by marking this file's `user.persona` and
-  launching an `engineer` node: the marker reached no prompt in the run.
+  target, not the dispatch input.
+- A built-in role's own `user.done_when` is enforced **alongside**
+  `config/onejudge.base.yaml`'s, not instead of it. The `reviewer` node's supervisor
+  was given "Both of these must hold: 1. every acceptance criterion stated in the
+  task is met… 2. the review reports verified, severity-ranked findings each tied to
+  specific code". So every dispatch gets the shared acceptance-criteria clause,
+  whichever of the five it names — a role replaces the base's bar only by declaring
+  `user.done_when_replaces_base`, and none of the shipped five does. The
+  `user.done_when` in this directory's `planner.yaml`, `researcher.yaml`, and
+  `reviewer.yaml` still does not reach a dispatch; the built-in's does.
 - **A repo-specific persona in this directory does dispatch — as a path.** Naming
   `../personas/crozier/crozier-corpus.yaml` on a node settles the dispatch with that
   file's `agent.instructions` as the worker's role and its `user.persona` as the
   supervisor's bar, both verbatim. Only the catalog *name* is unresolvable; the file
-  is not inert. `oneagentgraph` 0.2.14 is the release that closed this, and the engine
-  reaches it through onepipeline 0.6.3, which is the first release to link it.
-- **A built-in role's own bar no longer replaces the shared one — it is added to it.**
-  A `planner` node's completion criterion arrives as `Both of these must hold:` with
-  `config/onejudge.base.yaml`'s "every acceptance criterion stated in the task is met"
-  clause as (1) and the built-in role's own bar as (2). An `engineer` or `docs-writer`
-  node, whose built-in role declares no bar, still gets the shared one alone. Same
-  release, same reason.
+  is not inert. `oneagentgraph` 0.2.14 is the release that closed this, and the
+  engine has reached it since onepipeline 0.6.3, the first release to link it.
 
 Draft a new persona outside the tracked catalog first. Scaffold it under the
 gitignored `scratch/personas/`, dispatch against that directory, and refine it in
@@ -92,7 +114,10 @@ layout, and `just validate-personas` checks the tracked catalog recursively.
 under `personas/` (underscore-prefixed files and directories are skipped):
 
 - **Required:** `agent.instructions` (string), `user.persona` (string).
-- **Optional:** `agent.name`, `user.done_when`, `user.max_turns` (int), `evals`.
+- **Optional:** `agent.name`, `user.done_when` (a *second* bar, enforced alongside
+  the base's), `user.done_when_replaces_base` (true when this role's bar must stand
+  in for the base's instead; needs a `user.done_when` to stand in with),
+  `user.max_turns` (int), `evals`.
 - No other top-level keys — `task` comes from `--task`, and `provider` / `session`
   / the shared agent preamble come from the base config.
 

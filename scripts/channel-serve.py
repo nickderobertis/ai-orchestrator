@@ -11,7 +11,7 @@ The two halves already agree on the **response**. `channel serve` answers with
 exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
 onejudge's `supervisor` op expects. What they do not agree on is the **request**,
 and this filter is that one reconciliation, as onejudge 0.4.0 writes it and
-`onepipeline` 0.6.3 reads it:
+`onepipeline` 0.7.0 reads it:
 
     onejudge  ->  {"op": "supervisor", "task", "persona", "done_when",
                    "worktree", "history_name", "messages": [...], "session"}

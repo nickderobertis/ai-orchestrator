@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The change request body a pr-author turn answers with",
+  "description": "The structured answer `oneharness.pr-author.toml` validates every drafting turn against, and the whole contract between this repository's drafter and `onepipeline`, which reads the drafted body out of `results[].structured.body` of the retained member report. One required field, and nothing beside it: a drafter that answered with a `title`, a `summary`, or its own commentary would have that extra silently ignored downstream, so the schema refuses it here — where oneharness re-prompts, up to `schema_max_retries` — rather than downstream where nothing is watching.",
+  "type": "object",
+  "properties": {
+    "body": {
+      "type": "string",
+      "description": "The change request body, in whatever shape the drafting task asked for — that task is the one place the shape is stated, so it is not restated here. Markdown, not JSON-escaped prose: `onevcs` opens the change request with exactly these characters."
+    }
+  },
+  "required": ["body"],
+  "additionalProperties": false
+}

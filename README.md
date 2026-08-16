@@ -55,7 +55,7 @@ just repo-recover ai-orchestrator/engineer/abc123 --repo /path/to/checkout
 | `config/onejudge.base.yaml` | The one base config: settings common to every subtask. |
 | `config/*.version` | The exact adopted release of every tool session setup installs from PyPI: onejudge, oneharness, oneagentgraph, onevcs, onepipeline, and onepipeline-ui. |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
-| `graphs/` | The two agent graphs a run launches — `dag-scope.yaml` for the orchestrator and its pacemaker (one config each, differing only in the per-turn deadline), `node-scope.yaml` for every dispatched node. `onepipeline` ships these *paths*, not the files, because they name the configs and personas above. See [the tracked graph model](docs/orchestration.md#the-agent-graphs-a-run-launches). |
+| `graphs/` | The three agent graphs a run launches — `dag-scope.yaml` for the monitor and its pacemaker (one config each, differing only in the per-turn deadline), `node-scope.yaml` for every dispatched node, and `pr-author.yaml` for the body each remote change request opens under. `onepipeline` ships these *paths*, not the files, because they name the configs and personas above. |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `oneharness.orchestrator.toml` / `oneharness.check-in.toml` | The two dag-scope members' sides. Same routing; only the per-turn deadline differs, and [that is deliberate](docs/onejudge-integration.md#choosing-a-deadline-per-side). |
 | `justfile` | The command surface: one thin wrapper per published verb, plus this repository's own quality tier. |

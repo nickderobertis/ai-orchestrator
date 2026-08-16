@@ -150,13 +150,24 @@ dispatch onejudge.
    the list the worker also reads, where it can be acted on rather than only failed
    against. Only a measure true of *every* dispatch alike belongs in the shared
    clause, and never one naming a specific check tier — that is what refused
-   complete work in repositories that run no such tier. Use `max_turns` when a task
+   complete work in repositories that run no such tier.
+   The judge reads that list as the *whole* bar, so **keep process instructions out
+   of it**. Guidance about how to work — gate cadence, tool choice, iteration
+   discipline, where to commit — belongs in `## Additional info` or in the `## What`
+   prose, phrased as guidance. A judge cannot tell a preference from a bar: a node
+   whose tree was committed, clean, and green was failed outright because its
+   criteria asked for the complete gate to run exactly once at closeout and the
+   worker ran it five times. State the outcome the node owes, never the procedure
+   for reaching it. Use `max_turns` when a task
    needs more room; at `schema_version: 2` it reaches the dispatch, which v1 never
    did. Start from
    `examples/tracked-graph.example.json`. Reserve `kind: human` for an action only
-   an external person or outside system can perform: merge a PR, publish or
-   release, trigger CI, register or change infrastructure, or provide external
-   sign-off. It never represents the planner's own review, acceptance,
+   an external person or outside system can perform: merge a PR, trigger CI,
+   register or change infrastructure, provide external sign-off, or perform a
+   release **a person actually performs**. Releases on this host are automated, so
+   waiting on one is a read the planner does itself rather than a node — a node
+   parked on an automated release is the modeling error this paragraph warns about.
+   It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
    over the live channel and issues `add` / `retry` / `drop` / `reparent` edits.
    An accepted edit needs no carrying forward: [the graph of record is the live
@@ -191,12 +202,17 @@ dispatch onejudge.
    bar in `personas/`. Prefer precise task prose — a specific `## Acceptance
    criteria` list, which is the node's review bar — over encoding subtask details
    in a new persona. A node's bare `persona` is a *name* resolved against roles built
-   into the tool, not against this repository's `personas/` directory — but a role
-   with its own built-in bar (`planner`, `reviewer`, `researcher`) now gets it
-   **beside** `config/onejudge.base.yaml`'s acceptance-criteria clause rather than
-   instead of it, and a repo-specific persona in `personas/` dispatches when named as
-   a *path* relative to `graphs/` (`../personas/crozier/crozier-corpus.yaml`) rather
-   than by its bare catalog name. Both re-measured on the adopted stack; see
+   into the tool, not against this repository's `personas/` directory, and
+   `oneagentgraph` builds in exactly five: `docs-writer`, `engineer`, `planner`,
+   `researcher`, and `reviewer`. Every one of them is reviewed under
+   `config/onejudge.base.yaml`'s shared acceptance-criteria clause *and* its own
+   built-in bar, both — a role replaces the shared bar only by declaring
+   `user.done_when_replaces_base`, and none of the five does. Any other name is read
+   as a path relative to `graphs/`, so a repo-specific persona cannot be dispatched by
+   its bare catalog name — it dispatches when named as a *path*
+   (`../personas/crozier/crozier-corpus.yaml`) — and neither `orchestrator` nor
+   `check-in` is built in at all, which is why the dag-scope graph names both by path.
+   All re-measured on the adopted stack; see
    [Which of these files a dispatch actually reads](personas/README.md#which-of-these-files-a-dispatch-actually-reads).
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
    which stays attached and hands the run back when it settles (see below),
@@ -450,6 +466,14 @@ exists to prevent. The primary Claude identity is last everywhere:
   for exactly one reason, and re-merging the two is a silent regression: see
   [Choosing a deadline per
   side](docs/onejudge-integration.md#choosing-a-deadline-per-side).
+- **Drafting side** (the `pr-author` body a change request opens under) —
+  `oneharness.pr-author.toml`, named by `graphs/pr-author.yaml`'s one member as its
+  **agent** side; it has no judge side, because the review is a JSON Schema. The same
+  supervisory order and a third copy of it, for the same per-deadline reason the
+  pacemaker's is a copy: a drafter sits between a passed gate and a publication, so it
+  keeps a finite `timeout`. It is also the one side here with `stream = false`, which
+  is forced rather than chosen — oneharness validates a structured answer against the
+  complete response, so `stream = true` and `schema_file` cannot both hold.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
   `scripts/llmlint-oneharness.sh`; the same supervisory order. It is **no longer
   codex-only**.
@@ -610,9 +634,10 @@ that did not identify itself matches no run and `--mine` lists nothing.
 
 What a run's agents *are* is [`graphs/`](docs/orchestration.md#the-agent-graphs-a-run-launches),
 and it is this repository's content rather than the engines': `onepipeline` ships
-the paths `graphs/dag-scope.yaml` and `graphs/node-scope.yaml`, not the files,
-because they name this operator's own onejudge base config, oneharness configs,
-and personas. A checkout without them refuses every plan it has. Both paths
+the paths `graphs/dag-scope.yaml`, `graphs/node-scope.yaml`, and
+`graphs/pr-author.yaml`, not the files, because they name this operator's own
+onejudge base config, oneharness configs, and personas. A checkout without them
+refuses every plan it has. All three paths
 resolve against the directory a run is launched from, which is why `just
 orchestrate` is run from the repository root.
 
@@ -818,10 +843,18 @@ that opens a registered checkout of another repository. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
-Every remote lifecycle PR without explicit title/body metadata gets one
-post-verification `pr-author` dispatch. It drafts the template-shaped body from
-the actual diff through a temporary out-of-worktree file; drafting failure falls
-back to the deterministic body and must never block publication.
+A remote lifecycle change request's body is drafted by an agent graph the launch
+names, the way its observer is: `just orchestrate` adds `--pr-author-graph
+graphs/pr-author.yaml` beside `--dag-graph graphs/dag-scope.yaml`, and both ship
+defaulted to nothing because the crate ships the flags and not the documents. One
+post-verification turn reads the branch's diff and answers with the
+template-shaped body, validated against `config/pr-author-body.schema.json` — the
+`{body}` contract `onepipeline` reads out of `results[].structured.body`. A node
+that states its own `body` publishes with that. Drafting never blocks publication
+and never retries: a draft that cannot run warns on the node and the change
+request opens with **no body**, which is also what a launch naming no drafting
+graph does. See [Diff-derived PR
+descriptions](docs/repo-lifecycle.md#diff-derived-pr-descriptions).
 
 ## Dogfooding rule
 

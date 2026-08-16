@@ -40,12 +40,11 @@ from orchestrator.root import REPO_ROOT
 #: The stand-in for the paid model, named to `oneagentgraph` as its harness.
 FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
 
-#: The stand-in for the paid provider itself, named to `oneharness` as codex's binary.
-#: What covers a member `oneagentgraph` no longer spawns a CLI for; see `_environment`.
+#: The stand-in one layer lower: the paid provider binary itself, named to
+#: `oneharness` as codex's. A single-sided `kind: oneharness` member runs oneharness
+#: in process, so it spawns no oneharness binary for `FAKE_BACKEND` to be — this is
+#: what covers those members instead; see `_environment`.
 FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
-#: Where that stand-in records the prompt each launch was given, in the same one-field
-#: shape `PROMPT_LOG_ENV` uses, so both logs are read back the same way.
-FAKE_CODEX_PROMPT_LOG_ENV = "FAKE_CODEX_PROMPT_LOG"
 
 #: The shipped example this journey launches. A plan written for this repository's
 #: own operators, so a schema or field the published crate stopped accepting fails
@@ -55,11 +54,37 @@ SHIPPED_PLAN = "examples/single-node-direct.plan.json"
 #: The run id `onepipeline` mints from that plan's `name`.
 SHIPPED_RUN = "scheduler-research"
 
+#: The one shipped lifecycle plan, and the plan schema version this repository
+#: writes — read from that file rather than restated, so the two cannot disagree and
+#: a bump has one place to happen. The adopted crate still reads older versions
+#: beneath this one; that is a courtesy to plan files an operator kept, not a
+#: version to write.
+SHIPPED_LIFECYCLE_PLAN = REPO_ROOT / "examples/single-node-lifecycle.plan.json"
+PLAN_SCHEMA_VERSION: int = json.loads(SHIPPED_LIFECYCLE_PLAN.read_text("utf-8"))["schema_version"]
+
+#: A Conventional Commit subject: `type(optional scope)optional !: summary`.
+CONVENTIONAL_COMMIT_SUBJECT = re.compile(r"^[a-z]+(\([^()]+\))?!?: \S.*$")
+
 #: The dag-scope agent graph every run launches, and how `just monitor` labels the
 #: envelope stream it produces. `oneagentgraph` suffixes the run's own id, so this
 #: is a prefix and the node-scope graph's members do not answer to it.
 DAG_SCOPE_GRAPH = "graphs/dag-scope.yaml"
 DAG_SCOPE_STREAM = "agent:dag-scope-"
+
+#: The drafting agent graph every run launches, and the response contract its one
+#: member answers under. Only reached on a remote lifecycle publication, which this
+#: suite does not perform — so what is provable here is that the launch opted into it
+#: and that the adopted reader accepts the document.
+PR_AUTHOR_GRAPH = "graphs/pr-author.yaml"
+PR_AUTHOR_BODY_SCHEMA = "config/pr-author-body.schema.json"
+
+#: A composed drafting task, stated by this journey rather than copied from
+#: `onepipeline`. What the member owes is version-independent — its own `task`
+#: replaces whatever it is handed, so it must interpolate that back in — and any
+#: distinctive text proves it. Quoting the crate's real prompt here would add a
+#: second copy of somebody else's contract that nothing reconciles, and would fail
+#: on a reword that changed nothing about this graph.
+DRAFTING_TASK = "Draft the body for `probe-branch`, which added a health endpoint."
 
 #: How often the launch tells the pacemaker to come due. Short enough that it comes
 #: due while this run is still going, which is the only state in which what it does
@@ -242,15 +267,19 @@ def _environment(
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     # The other half of the same seam, and not redundant with it. Since oneagentgraph
-    # 0.2.18 a single-sided `kind: oneharness` member — the `check-in` pacemaker — runs
-    # its turn through the oneharness *library* on a thread of the graph process, so no
-    # `oneharness` CLI is spawned for it and the substitution above never sees it. What
-    # is still a process is the provider, and `ONEHARNESS_BIN_CODEX` is oneharness's own
-    # per-harness binary override: every one of this repository's configs names `codex`
-    # first, so pinning that identity's binary is what keeps a suite run off a paid
-    # subscription. It is deliberately weaker than `--mock-harness`, which the two-party
-    # path above still uses — measured against oneharness 0.10.1, a mocked harness keeps
-    # its mock binary and ignores this variable — so the two seams do not collide.
+    # 0.2.18 a single-sided `kind: oneharness` member — the `check-in` pacemaker, and
+    # `graphs/pr-author.yaml`'s drafter — runs its turn through the oneharness *library*
+    # on a thread of the graph process, so no `oneharness` CLI is spawned for it and the
+    # substitution above never sees it. A two-party `kind: onejudge` member still spawns
+    # one, which is why the fake backend continues to serve every worker, judge, and
+    # monitor turn. Left alone, those single-sided members would reach the real paid
+    # provider on every launch this suite makes. What is still a process is the
+    # provider, and `ONEHARNESS_BIN_CODEX` is oneharness's own per-harness binary
+    # override: every one of this repository's configs names `codex` first, so pinning
+    # that identity's binary is what keeps a suite run off a paid subscription. It is
+    # deliberately weaker than `--mock-harness`, which the two-party path above still
+    # uses — measured against oneharness 0.10.1, a mocked harness keeps its mock binary
+    # and ignores this variable — so the two seams do not collide.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     # Keeps this run's graph scratch, its history, and its sibling state out of the
@@ -748,6 +777,190 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
     assert "dag-scope.yaml" in reported, reported
 
 
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_recipe_opts_the_launch_into_this_hosts_drafting_graph(
+    launched: Launched,
+) -> None:
+    """A real launch records `graphs/pr-author.yaml` as the graph that drafts its bodies.
+
+    `--pr-author-graph` ships naming nothing, so a launch that does not name one opens
+    its change requests with the body its plan states, or with none — which is how
+    every pull request this harness opened came to carry `Published by onevcs.` as its
+    Why. `just orchestrate` naming this file is the whole fix, and a flag that stopped
+    reaching `onepipeline start` would fail nowhere: the run still settles, and only
+    the next published PR is silently body-less.
+
+    So this reads the run's own launch record rather than the command line. The record
+    is what the driver kept, resolved to an absolute path by the crate that accepted
+    the flag, which is proof the flag arrived and was understood — not proof that a
+    recipe rendered it. `tests/e2e/test_delegated_recipes_e2e.py` holds the rendering.
+    """
+    launch_record = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "launch.json"
+    assert launch_record.is_file(), f"the launched run wrote no launch record at {launch_record}"
+    recorded = json.loads(launch_record.read_text(encoding="utf-8"))
+
+    assert recorded.get("pr_author_graph") == str(REPO_ROOT / PR_AUTHOR_GRAPH), (
+        f"the launch recorded {recorded.get('pr_author_graph')!r} as its drafting graph; "
+        f"`just orchestrate` must name {PR_AUTHOR_GRAPH} so this host's change requests "
+        "are drafted rather than opened with no body"
+    )
+
+
+class DraftingResult(TypedDict):
+    """The fields of one member's oneharness result this journey reads.
+
+    `oneharness` owns the rest of the record; these four are the drafting contract —
+    what the model answered, whether it satisfied the schema, and how many attempts
+    that took.
+    """
+
+    structured: dict[str, str] | None
+    schema_valid: bool | None
+    schema_attempts: int | None
+    schema_error: str | None
+
+
+class DraftingReport(TypedDict):
+    """The member report a drafting run writes, narrowed to what is read here."""
+
+    prompt: str
+    results: list[DraftingResult]
+
+
+def _drafted(
+    tmp_path: Path, oneharness_bin: str, answers: list[str]
+) -> tuple[subprocess.CompletedProcess[str], DraftingReport]:
+    """Run the real drafting graph on a scripted provider, and hand back its report.
+
+    The task is this journey's own composed one; the member's `task` interpolates
+    `{task}`, so a graph that stopped doing that shows up here as a drafter that was
+    never told what branch it is on.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps(answers)
+    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
+    ran = subprocess.run(
+        [
+            "oneagentgraph",
+            "run",
+            PR_AUTHOR_GRAPH,
+            "--task",
+            DRAFTING_TASK,
+            "--dir",
+            str(tmp_path),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    settled = [
+        json.loads(line)
+        for line in ran.stdout.splitlines()
+        if line.startswith("{") and json.loads(line)["kind"] == "member-settled"
+    ]
+    assert settled, f"the drafter never settled:\n{ran.stdout}\n{ran.stderr}"
+    # oneharness owns this record's schema; DraftingReport states the fields read here
+    # rather than re-validating somebody else's document.
+    report = cast(
+        DraftingReport,
+        json.loads(Path(settled[0]["payload"]["report_path"]).read_text(encoding="utf-8")),
+    )
+    return ran, report
+
+
+def test_the_drafting_graph_answers_with_the_body_contract(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A drafting turn produces the `{body}` object `onepipeline` publishes from.
+
+    A remote lifecycle publication is what reaches this graph on a real run, and this
+    suite performs none — that would open a pull request on a real repository. What it
+    can drive is everything below that: the real `oneagentgraph`, the real graph
+    document, the real `oneharness.pr-author.toml`, and the real schema, with only the
+    paid provider scripted. That covers the part this repository actually owns, because
+    the handoff to `onevcs` is one field — `results[].structured.body` — and a graph
+    that produced anything else would publish a body-less change request in silence.
+    """
+    body = "## What\nAdded the endpoint.\n\n## Why\nOperators had nothing to poll.\n"
+    ran, report = _drafted(tmp_path, oneharness_bin, [json.dumps({"body": body})])
+
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert DRAFTING_TASK in report["prompt"], (
+        "the member's own task replaced the composed drafting task without "
+        f"interpolating it back in, so the drafter was shown no branch:\n{report['prompt']}"
+    )
+    answered = report["results"][-1]
+    assert answered["schema_valid"] is True, answered
+    assert answered["structured"] == {"body": body}, (
+        f"the drafter answered {answered['structured']!r}; `onepipeline` publishes "
+        "`results[].structured.body` and nothing else"
+    )
+
+
+def test_a_drafting_answer_that_does_not_validate_is_re_prompted(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The schema is the drafter's review, so a bad answer is refused and asked again.
+
+    This is the whole reason the member has no judge side: `schema_max_retries` is what
+    stands in for a supervisor. If a non-conforming answer were accepted instead, the
+    first field name a model invented would reach `onevcs` as no body at all — the
+    silent failure a single-sided member has nothing else to catch.
+    """
+    body = "## What\nSecond time.\n\n## Why\nThe first answer was not the contract.\n"
+    ran, report = _drafted(
+        tmp_path,
+        oneharness_bin,
+        # A plain prose answer, then one that is not the closed object, then the body.
+        ["a body, but not as JSON", json.dumps({"summary": body}), json.dumps({"body": body})],
+    )
+
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    answered = report["results"][-1]
+    assert answered["schema_valid"] is True, answered
+    assert answered["structured"] == {"body": body}
+    assert answered["schema_attempts"] > 1, (
+        f"the drafter settled in {answered['schema_attempts']} attempt(s), so the "
+        "refused answers above were not re-prompted and the schema is not the review"
+    )
+
+
+def test_the_drafting_graph_is_one_the_adopted_reader_accepts() -> None:
+    """`graphs/pr-author.yaml` validates, and the body schema is the closed contract.
+
+    `oneagentgraph validate` is the same reader the launch uses, and it is what refuses
+    the one combination this member cannot have: a `schema_file` member that also
+    streams, because oneharness validates a structured answer against the complete
+    response. The journeys above drive the member; this holds the document itself, so a
+    graph edit that makes it unreadable fails before anything is launched.
+    """
+    validated = subprocess.run(
+        ["oneagentgraph", "validate", PR_AUTHOR_GRAPH],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert validated.returncode == 0, (
+        f"{PR_AUTHOR_GRAPH} did not validate:\n{validated.stdout}\n{validated.stderr}"
+    )
+
+    schema = json.loads((REPO_ROOT / PR_AUTHOR_BODY_SCHEMA).read_text(encoding="utf-8"))
+    assert schema["required"] == ["body"], (
+        f"{PR_AUTHOR_BODY_SCHEMA} must require `body`: that is the field `onepipeline` "
+        "reads the drafted body out of, at `results[].structured.body`"
+    )
+    assert schema["properties"]["body"]["type"] == "string"
+    assert schema["additionalProperties"] is False, (
+        f"{PR_AUTHOR_BODY_SCHEMA} must close the object: an extra field a drafter "
+        "answered with would be silently dropped downstream instead of re-prompted"
+    )
+
+
 #: The node kinds the published plan schema closes over. A node that names none is an
 #: agent node, which is why every plan here writes `kind` only to ask for the other one.
 NodeKind = Literal["human"]
@@ -843,22 +1056,62 @@ def test_a_plan_carrying_a_node_level_done_when_is_refused(
     assert "done_when" in reported and "Acceptance criteria" in reported, reported
 
 
-def test_a_plan_declaring_the_retired_schema_version_is_refused(
+def test_a_plan_declaring_an_unread_schema_version_is_refused_by_number(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """Schema 1 is refused by number, so a plan written before this adoption fails loudly.
+    """A version this build does not read is refused naming the ones it does.
 
-    Every plan this repository shipped declared version 1, and the crate that reads them
-    now takes only 2. A plan file is the one artifact an operator keeps a copy of, so the
-    refusal has to name the version it wants rather than failing somewhere downstream.
+    A plan file is the one artifact an operator keeps a copy of, so a version number
+    the launcher cannot read has to fail at the plan and say what to write instead,
+    rather than somewhere downstream. The number here is one past the newest the
+    adopted crate reads, because that is the direction a plan drifts: this repository
+    writes the newest, and the crate keeps reading the older ones beneath it.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    refused = _refused_plan(tmp_path, oneharness_bin, {"schema_version": 1, "tasks": [_node()]})
+    unread = PLAN_SCHEMA_VERSION + 1
+    refused = _refused_plan(
+        tmp_path, oneharness_bin, {"schema_version": unread, "tasks": [_node()]}
+    )
 
     assert refused.returncode != 0, refused.stdout
     reported = refused.stderr + refused.stdout
-    assert "schema_version" in reported and "2" in reported, reported
+    assert "schema_version" in reported and str(unread) in reported, reported
+    assert str(PLAN_SCHEMA_VERSION) in reported, (
+        f"the refusal must name {PLAN_SCHEMA_VERSION} as a version it reads, so an "
+        f"operator holding an unreadable plan learns what to write:\n{reported}"
+    )
+
+
+@pytest.mark.reads_docs
+def test_every_lifecycle_node_this_repository_ships_states_a_title() -> None:
+    """Schema 3 requires a lifecycle node's title, and it is the published subject.
+
+    `test_every_plan_this_repository_ships_is_one_the_published_crate_accepts` already
+    proves the launcher accepts each of these documents, which at schema 3 means each
+    lifecycle node has *a* title. What that cannot see is the shape: the title is the
+    change request's subject and a squash-merged publication leaves exactly one commit
+    carrying it, so a title that is not a Conventional Commit subject lands on a base
+    branch and stays there.
+    """
+    lifecycle = [
+        (origin, node)
+        for origin, document in _plans_in_the_repository()
+        for node in json.loads(document)["tasks"]
+        if "repo" in node
+    ]
+    assert lifecycle, "no lifecycle nodes were found to check"
+
+    for origin, node in lifecycle:
+        title = node.get("title")
+        assert isinstance(title, str) and title.strip(), (
+            f"{origin}: lifecycle node {node['id']!r} states no title; plan schema "
+            f"{PLAN_SCHEMA_VERSION} requires one and it is the published subject"
+        )
+        assert CONVENTIONAL_COMMIT_SUBJECT.match(title), (
+            f"{origin}: lifecycle node {node['id']!r} has title {title!r}, which is not "
+            "a Conventional Commit subject (`type(scope)!: summary`)"
+        )
 
 
 def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launched) -> None:
@@ -1432,13 +1685,16 @@ def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
     fails here rather than in a pacemaker update naming no run.
 
     The probe is the pacemaker's own shape — single-sided, on the pacemaker's config —
-    so its prompt is read at the provider rather than at the CLI: since oneagentgraph
-    0.2.18 that member kind spawns no `oneharness` process to observe.
+    and since oneagentgraph 0.2.18 that means oneharness runs **in process**: no
+    oneharness binary is spawned, so `ONEAGENTGRAPH_ONEHARNESS_BIN` never sees this
+    turn and there is no fake-backend prompt log to read. What is read instead is the
+    member's own report, which is where a library run records the prompt it composed —
+    a better witness than a log, since it is the producing library's own record, and
+    the same one the drafting journeys above read. `_environment` keeps the turn off
+    the paid provider at the layer that still covers it.
     """
     declared, _ = _dag_scope_document()
     environment = _environment(tmp_path, oneharness_bin)
-    prompt_log = tmp_path / "prompts.jsonl"
-    environment[FAKE_CODEX_PROMPT_LOG_ENV] = str(prompt_log)
     graph = tmp_path / "placeholder.yaml"
     graph.write_text(
         f"version: {declared}\n"
@@ -1464,11 +1720,17 @@ def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
     )
 
     assert ran.returncode == 0, ran.stdout + ran.stderr
-    given = [turn["prompt"] for turn in _turns_so_far(prompt_log)]
-    assert given, f"the probe member took no turn:\n{ran.stdout}\n{ran.stderr}"
-    assert any(composed in prompt for prompt in given), (
+    settled = [
+        json.loads(line)
+        for line in ran.stdout.splitlines()
+        if line.startswith("{") and json.loads(line)["kind"] == "member-settled"
+    ]
+    assert settled, f"the probe member never settled:\n{ran.stdout}\n{ran.stderr}"
+    report = json.loads(Path(settled[0]["payload"]["report_path"]).read_text(encoding="utf-8"))
+
+    assert composed in report["prompt"], (
         f"schema {declared} did not expand `{{task}}`, so a member that claims its own "
-        f"task cannot learn its run; it was given:\n{given}"
+        f"task cannot learn its run; it was given:\n{report['prompt']}"
     )
 
 

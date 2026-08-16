@@ -7,7 +7,7 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Three environment variables steer it, and each exists because a journey has to
+Five environment variables steer it, and each exists because a journey has to
 tell one outcome from another deterministically:
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
@@ -19,13 +19,20 @@ tell one outcome from another deterministically:
   while every other party stays real.
 * ``FAKE_CODEX_OMIT_USAGE`` — the launch succeeds and returns a turn carrying no
   token accounting, which is a broken recorded contract rather than weather.
+* ``FAKE_CODEX_ANSWERS`` — a JSON array of the answers to give, one per launch,
+  the last repeating once they run out. It exists for a **structured** run: when
+  oneharness carries a schema it validates this text against it and re-prompts on
+  failure, so telling one launch from the next by its answer is the only way a
+  journey can watch that retry happen. Absent, every launch answers ``smoke-ok``.
 * ``FAKE_CODEX_PROMPT_LOG`` names a file this appends one JSON record to per
   launch, carrying the prompt the provider was actually given. It is how a journey
   reads the prompt of a turn nothing else can observe: since oneagentgraph 0.2.18 a
   single-sided ``kind: oneharness`` member's turn is an in-process
   ``oneharness_core`` call rather than a spawned CLI, so
   ``ONEAGENTGRAPH_ONEHARNESS_BIN`` — and with it ``tests/e2e/fake_backend.py`` — is
-  not on that member's path at all. The provider binary is, and this is it.
+  not on that member's path at all. The provider binary is, and this is it. Both
+  single-sided members here take that path: the ``check-in`` pacemaker and
+  ``graphs/pr-author.yaml``'s drafter.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -36,18 +43,75 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict
 
-#: One complete codex-shaped turn. Token accounting is not decoration here: a
-#: record persisted without it carries no evidence the turn was ever billed.
-TURN: tuple[dict[str, object], ...] = (
-    {"type": "turn.started"},
-    {"type": "thread.started", "thread_id": "fake-codex-thread"},
-    {"type": "item.completed", "item": {"type": "agent_message", "text": "smoke-ok"}},
-    {
-        "type": "turn.completed",
-        "usage": {"input_tokens": 4, "cached_input_tokens": 0, "output_tokens": 1},
-    },
-)
+
+class AgentMessage(TypedDict):
+    """The one item this provider completes: the turn's answer text."""
+
+    type: Literal["agent_message"]
+    text: str
+
+
+class Usage(TypedDict):
+    """A turn's token accounting, which is the evidence it was billed."""
+
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+
+
+class TurnEvent(TypedDict):
+    """One line of the codex event stream, as this provider emits it.
+
+    One shape rather than a union per `type`, because the four events this file
+    emits differ only by which optional field they carry, and a reader here reads
+    `type` first either way. `FAKE_CODEX_OMIT_USAGE` drops `usage` from the whole
+    stream, which is why it is optional at all.
+    """
+
+    type: Literal["turn.started", "thread.started", "item.completed", "turn.completed"]
+    thread_id: NotRequired[str]
+    item: NotRequired[AgentMessage]
+    usage: NotRequired[Usage]
+
+
+#: What a launch answers when no journey scripted one.
+DEFAULT_ANSWER = "smoke-ok"
+
+
+def answer(launches: int | None) -> str:
+    """The text this launch returns, from the scripted answers if a journey set any.
+
+    `launches` is 1-based and None when nothing is counting them, which is the same
+    case as an unscripted run: there is exactly one answer to give.
+    """
+    scripted = os.environ.get("FAKE_CODEX_ANSWERS")
+    if not scripted:
+        return DEFAULT_ANSWER
+    answers = json.loads(scripted)
+    if not answers:
+        return DEFAULT_ANSWER
+    # Past the end the last answer repeats, so a journey scripts only the launches
+    # whose answers differ and lets the settled one stand for every later attempt.
+    return str(answers[min((launches or 1) - 1, len(answers) - 1)])
+
+
+def turn_events(text: str, *, billed: bool) -> tuple[TurnEvent, ...]:
+    """One complete codex-shaped turn carrying that answer.
+
+    Token accounting is not decoration here: a record persisted without it carries
+    no evidence the turn was ever billed, which is what `billed=False` produces.
+    """
+    completed = TurnEvent(type="turn.completed")
+    if billed:
+        completed["usage"] = Usage(input_tokens=4, cached_input_tokens=0, output_tokens=1)
+    return (
+        TurnEvent(type="turn.started"),
+        TurnEvent(type="thread.started", thread_id="fake-codex-thread"),
+        TurnEvent(type="item.completed", item=AgentMessage(type="agent_message", text=text)),
+        completed,
+    )
 
 
 def record_launch() -> int | None:
@@ -75,11 +139,9 @@ def record_prompt(argv: list[str]) -> None:
         stream.write(json.dumps({"prompt": argv[-1]}) + "\n")
 
 
-def turn() -> tuple[dict[str, object], ...]:
+def turn(launches: int | None) -> tuple[TurnEvent, ...]:
     """The stream this launch emits, with token accounting withheld on request."""
-    if os.environ.get("FAKE_CODEX_OMIT_USAGE") != "1":
-        return TURN
-    return tuple({key: value for key, value in event.items() if key != "usage"} for event in TURN)
+    return turn_events(answer(launches), billed=os.environ.get("FAKE_CODEX_OMIT_USAGE") != "1")
 
 
 def main() -> int:
@@ -89,7 +151,7 @@ def main() -> int:
     if launches is not None and launches <= unavailable:
         print("fake_codex: the provider started and then failed", file=sys.stderr)
         return 1
-    for event in turn():
+    for event in turn(launches):
         print(json.dumps(event), flush=True)
     return 0
 

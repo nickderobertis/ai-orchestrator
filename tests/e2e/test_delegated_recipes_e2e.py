@@ -73,30 +73,49 @@ class Delegation(NamedTuple):
 #: that starts naming a different verb, or dropping an argument on the way, fails
 #: here rather than in an operator's terminal.
 DELEGATIONS = (
-    # `--dag-graph` is the recipe's own addition, and the reason it exists: the
-    # published default is `off`, so a bare launch runs with no agent watching it.
+    # The two graph flags are the recipe's own addition, and the reason it exists:
+    # both ship defaulted to nothing, so a bare launch runs with no agent watching it
+    # and opens its change requests with no drafted body.
     Delegation(
         "orchestrate",
         ("plan.json",),
-        "uv run onepipeline start plan.json --dag-graph graphs/dag-scope.yaml",
+        "uv run onepipeline start plan.json --dag-graph graphs/dag-scope.yaml"
+        " --pr-author-graph graphs/pr-author.yaml",
     ),
     Delegation(
         "orchestrate",
         ("plan.json", "--detach"),
-        "uv run onepipeline start plan.json --detach --dag-graph graphs/dag-scope.yaml",
+        "uv run onepipeline start plan.json --detach --dag-graph graphs/dag-scope.yaml"
+        " --pr-author-graph graphs/pr-author.yaml",
     ),
-    # A caller who names the observer keeps it: the flag refuses to be given twice,
-    # so adding the default over an explicit one would break the launch outright.
+    # A caller who names one keeps it: the flags refuse to be given twice, so adding
+    # a default over an explicit one would break the launch outright. Per flag, so
+    # naming one leaves the other's default in place.
     Delegation(
         "orchestrate",
         ("plan.json", "--dag-graph", "off"),
-        "uv run onepipeline start plan.json --dag-graph off",
+        "uv run onepipeline start plan.json --dag-graph off"
+        " --pr-author-graph graphs/pr-author.yaml",
     ),
     Delegation(
         "orchestrate",
         ("plan.json", "--dag-graph=graphs/other.yaml"),
-        "uv run onepipeline start plan.json --dag-graph=graphs/other.yaml",
+        "uv run onepipeline start plan.json --dag-graph=graphs/other.yaml"
+        " --pr-author-graph graphs/pr-author.yaml",
     ),
+    Delegation(
+        "orchestrate",
+        ("plan.json", "--pr-author-graph", "graphs/other.yaml"),
+        "uv run onepipeline start plan.json --pr-author-graph graphs/other.yaml"
+        " --dag-graph graphs/dag-scope.yaml",
+    ),
+    Delegation(
+        "orchestrate",
+        ("plan.json", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
+        "uv run onepipeline start plan.json --pr-author-graph=graphs/other.yaml --dag-graph=off",
+    ),
+    # Adoption attaches a fresh driver to an intact ledger, which already records the
+    # graphs its launch chose, so neither default is added to it.
     Delegation("orchestrate", ("--adopt", "run-1"), "uv run onepipeline adopt run-1"),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and

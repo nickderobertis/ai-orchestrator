@@ -3,18 +3,24 @@
 
 `ONEAGENTGRAPH_ONEHARNESS_BIN` points at this file, so every harness turn a launched
 run reaches by *spawning a CLI* — the monitor that watches it, its supervisor, each
-dispatched worker, and each worker's supervisor — arrives
-here as one `oneharness run` invocation. Since `oneagentgraph` 0.2.18 that is no
-longer every turn: a single-sided `kind: oneharness` member, which is the `check-in`
-pacemaker, runs through the oneharness *library* on a thread of the graph process and
-never spawns a CLI for this variable to redirect. `tests/e2e/fake_codex.py` pinned at
-`ONEHARNESS_BIN_CODEX` is what covers that member — the provider is still a process —
-and the branch below that used to classify a pacemaker turn is kept only because a
-single-sided member on an older engine would still land here.
-Everything above it stays real: the real
+dispatched worker, and each worker's supervisor — arrives here as one `oneharness
+run` invocation. Everything above it stays real: the real
 `just` recipe, the real `onepipeline` driver and engine verbs, the real
 `oneagentgraph` graph configs in `graphs/`, and the real onejudge conversation
 those two compose.
+
+**A single-sided `kind: oneharness` member does not reach here, and since
+oneagentgraph 0.2.18 it cannot.** That member runs oneharness *in process* —
+`member-started` reports `runner: library` — so no oneharness binary is spawned for
+this file to be, and the variable above cannot redirect it. Two members here are that
+shape: the `check-in` pacemaker and `graphs/pr-author.yaml`'s change-request drafter.
+Nothing here is wrong about them; they simply never arrive, and a journey that
+assumed otherwise would spend real provider quota rather than fail. The seam that
+still covers those members is one layer lower, at the provider binary:
+`ONEHARNESS_BIN_CODEX` pointed at `fake_codex.py`, which
+`tests/e2e/test_orchestrate_launch_e2e.py` sets for exactly this reason. The
+classification below keeps its single-sided branch because a graph run through an
+*older* pinned oneagentgraph still lands one here.
 
 It stands in for the paid model and **only** the paid model: each invocation is
 delegated to the real `oneharness` CLI with `--mock-harness`, so the real

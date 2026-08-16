@@ -78,7 +78,7 @@ side and answer rather than fail.
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
 distinguished the sides — only a proxy for it — and, measured against onepipeline
-0.6.3, the proxy stopped holding: a dispatched agent side now arrives carrying
+0.7.0, the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
 this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
