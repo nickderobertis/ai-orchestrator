@@ -2,8 +2,8 @@
 """A deterministic stand-in for the paid model, at the seam a dispatch reaches it.
 
 `ONEAGENTGRAPH_ONEHARNESS_BIN` points at this file, so every harness turn of a
-launched run — the orchestrator that drives the rounds, its supervisor, each
-dispatched worker, each worker's supervisor, and the check-in pacemaker — arrives
+launched run — the monitor that watches it, its supervisor, each dispatched worker,
+each worker's supervisor, and the check-in pacemaker — arrives
 here as one `oneharness run` invocation. Everything above it stays real: the real
 `just` recipe, the real `onepipeline` driver and engine verbs, the real
 `oneagentgraph` graph configs in `graphs/`, and the real onejudge conversation
@@ -36,15 +36,15 @@ here by NAME, the same distinction `scripts/oneharness-agent.sh` reads:
   shapes land here, which is why neither the presence of a config nor its absence is
   what this reads.
 
-The agent side is scripted by what it is asked to do. A turn whose task names a run
-*and* whose system prompt carries the orchestrator's drive role is the orchestrator,
-so this drives it for real — `onepipeline round run` and `onepipeline round next`
-until the run reports itself complete — which is exactly what the paid orchestrator
-would do and what makes a launched plan settle. Both halves are checked because since
-onepipeline 0.2.0 they come from different places: the run id from the composed task,
-which now says only what the run is, and the instruction to drive from
-`personas/orchestrator.yaml` alone, which onejudge composes into `--system`. Any other
-agent turn is a dispatched worker, which reports without changing anything.
+Every agent turn here reports without changing anything, and that is the whole
+script. It used to be conditional: a turn whose system prompt carried the
+orchestrator's drive role was answered by really running the round verbs, because a
+launched plan only settled if something drove it. The engine drives its own DAG
+continuously to settlement now — there is no verb that advances a run, and
+`personas/orchestrator.yaml` says in as many words that nothing there starts,
+advances, or ends one. So the branch that drove is gone rather than kept as a
+no-op: left in place it would have gone on claiming that a launch needs a
+driver, and its verbs stopped existing at onepipeline 0.6.1 anyway.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend
@@ -59,6 +59,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 #: The real CLI every invocation is delegated to. Named rather than discovered:
@@ -90,16 +91,6 @@ JUDGE_CONFIG_NAME = "oneharness.judge.toml"
 #: task was handed that instruction whether or not driving was its job.
 RUN_TASK = re.compile(r"onepipeline run `([^`]+)`")
 
-#: The orchestrator's role, from `personas/orchestrator.yaml`. Since onepipeline 0.2.0
-#: this is the ONLY place a dag-scope turn is told to drive the run, so requiring it
-#: here is what makes the launch journey prove that the orchestrator still does: were
-#: it ever to stop reaching this member, nothing would call the round verbs and the
-#: launched run would not settle.
-#:
-#: It arrives in `--system`, not in the prompt: onejudge composes a member's agent
-#: persona into the session's system prompt and passes the task separately.
-DRIVE_ROLE = "Drive `onepipeline round run <run-id>`"
-
 #: Where a turn's harness config arrives, which is what says which member — and
 #: which side of it — this invocation serves.
 CONFIG_FLAG = "--config"
@@ -117,14 +108,18 @@ CWD_FLAG = "--cwd"
 #: JSON, so the prompt is what tells them apart.
 EVALUATION_MARKER = '{"value": true or false'
 
-#: How many round transitions the scripted orchestrator will drive before giving
-#: up. A bound rather than a loop: a run that never reports itself complete is a
-#: failure to report, and a test that hangs on it says nothing.
-MAX_TRANSITIONS = 12
-
 #: Optional test-owned transcript sink for assertions about how a turn was pinned:
 #: its config, its directory, its prompt, and its composed system prompt.
 PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
+
+#: Optionally hold a worker's agent turn open for this many seconds before answering.
+#:
+#: A journey about a run that is *live* needs one, and a stand-in that answers at
+#: process speed leaves no window to observe: the node is dispatched and settled
+#: between two reads. This is the only way to make "while a node is running" a state
+#: a test can be in rather than a race it can lose. It delays the answer and nothing
+#: else — the same turn, through the same real CLI, with the same scripted reply.
+WORKER_DELAY_ENV = "FAKE_BACKEND_WORKER_DELAY_SECONDS"
 
 
 def _flag(argv: list[str], name: str) -> str | None:
@@ -191,29 +186,6 @@ def _answer(argv: list[str], text: str) -> int:
     return completed.returncode
 
 
-def _drive(run: str) -> str:
-    """Drive a launched run to settlement the way the paid orchestrator would."""
-    reported = []
-    for _ in range(MAX_TRANSITIONS):
-        executed = subprocess.run(
-            ["onepipeline", "round", "run", run], capture_output=True, text=True, check=False
-        )
-        reported.append(f"round run: exit {executed.returncode} {executed.stdout.strip()}")
-        transitioned = subprocess.run(
-            ["onepipeline", "round", "next", run], capture_output=True, text=True, check=False
-        )
-        reported.append(f"round next: exit {transitioned.returncode} {transitioned.stdout.strip()}")
-        if transitioned.returncode != 0:
-            break
-        try:
-            state = json.loads(transitioned.stdout).get("state")
-        except json.JSONDecodeError:
-            break
-        if state != "continuing":
-            break
-    return " | ".join(reported)
-
-
 def main(argv: list[str]) -> int:
     """Answer one harness turn."""
     if not argv or argv[0] != "run":
@@ -243,9 +215,8 @@ def main(argv: list[str]) -> int:
         )
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, "the stand-in pacemaker reported")
-    naming = RUN_TASK.search(prompt)
-    if naming and DRIVE_ROLE in system:
-        return _answer(argv, _drive(naming.group(1)))
+    if held := os.environ.get(WORKER_DELAY_ENV):
+        time.sleep(float(held))
     return _answer(argv, "the stand-in worker reported without changing anything")
 
 
