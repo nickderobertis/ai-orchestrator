@@ -3,17 +3,20 @@
 Use the telemetry view to answer “where did the time go?” for active runs:
 
 ```sh
-just telemetry --breakdown
-just telemetry --breakdown --all   # include settled runs
-just telemetry --all               # schema-versioned JSON for analysis
+just telemetry                     # every run
+just telemetry --breakdown         # every run, wall clock broken into buckets
 just telemetry RUN_ID              # one named run, settled or not
-just telemetry --breakdown --all --since 2026-07-01T00:00:00Z --until 2026-08-01T00:00:00Z
+just telemetry RUN_ID --breakdown  # that run, broken down
 ```
+
+`onepipeline telemetry` takes exactly one option, `--breakdown`, and one optional
+run argument; there is no scoping, filtering, or windowing flag to reach for. A
+window is cut from the output rather than asked for.
 
 `RUN_ID` is the identifier `launch.json` advertises, resolved exactly as `just
 monitor` and `just status` resolve it — an exact run directory, or a plan name
 that names one active launch. Naming a run is the request, so it is reported
-whether or not it has settled; `--all` only governs the unscoped index.
+whether or not it has settled; omitting it covers every run.
 
 A run's `result.json` is rewritten as it moves, so its nodes are described by the
 run journal: a node reads `running` only until the journal records it settling, and
@@ -78,9 +81,10 @@ observed `period_start`/`latest_session_start`, and the `by_repository` and
 `oneharness_retry_sessions` is the broader guardrail: it counts all llmlint
 oneharness sessions in the cohort that are not initial evaluations. Compare it
 alongside `wrong_file_corrections` so a prompt or template change that moves
-rework away from the known correction signature remains visible. Use `--since`
-(inclusive) and `--until` (exclusive) with UTC ISO-8601 timestamps to create
-repeatable before/after cohorts.
+rework away from the known correction signature remains visible. The cohort is
+whatever the store holds — `onepipeline telemetry` takes no window — so a
+repeatable before/after comparison is made by recording the reported
+`period_start` and `latest_session_start` on each side and comparing those.
 
 ## Full timing versus fallback
 
@@ -120,7 +124,7 @@ no time.
 
 ## Finding an optimization target
 
-1. Run `just telemetry --breakdown --all` and start with the largest wall-time
+1. Run `just telemetry --breakdown` and start with the largest wall-time
    run and node. Check `node_work_ms` in JSON when nodes overlapped.
 2. Compare model latency with tool time. High `AGENT` suggests prompt/context or
    turn-count work; high `TOOL` suggests inspecting `tool_commands` and the
@@ -136,7 +140,7 @@ no time.
 
 ## Diagnosing a slow or stalled run
 
-1. Run `just telemetry --breakdown --all` and locate the largest run and node.
+1. Run `just telemetry --breakdown` and locate the largest run and node.
 2. A large `LOCK` bucket means another process held a shared registry, journal,
    checkout, or worktree resource. Inspect `lock-wait` journal events for the
    recorded lock identity and whether acquisition timed out.

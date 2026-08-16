@@ -197,8 +197,11 @@ into one group the kernel keeps valid across all of that reparenting.
 `onevcs` resolves two independent decisions through
 its persistent registry: the **publication checkout**
 selected by the repository argument and the **execution checkout** used to create
-the task worktree. Normally they are the same. `--execution-checkout` deliberately
-separates them for a safety clone. The lifecycle reports the exact execution path,
+the task worktree. Normally they are the same. `onevcs session open <repo>
+--execution-checkout <alias>` deliberately separates them for a safety clone — that
+flag is on `session open` and nowhere else, so a lifecycle node names its safety
+clone through the plan's `execution_checkout` rather than by passing a flag to a
+recovery or publication verb. The lifecycle reports the exact execution path,
 publication path, normalized identity, effective repository type, workflow,
 merge policy, PR base, and synthetic stack base in human output, JSON, and the
 recorded run ledger.
@@ -212,14 +215,15 @@ the migration detects a gate from a registered checkout or stores `<no-op>`:
 `local` is affirmative single-owner evidence; `remote` is inferred by comparing
 the normalized GitHub origin owner case-insensitively with `gh api user --jq
 .login`. Missing authentication or a non-GitHub origin fails before dispatch
-unless the run supplies `--repo-type`. Conflicting legacy
+unless the node declares `repo_type`. Conflicting legacy
 entries fail with every alias/path/workflow and the rule to correct; no
 workflow is selected implicitly.
 
-Type is not a command option on any of these verbs any more: `just register-repo`
-resolves it from the rules file the identity matches, and `just run-plan` names a
-run rather than carrying repository options. A plan node's `repo_type` still beats
-the stored or inferred type for that node. Change the resolved type by editing the
+Type is not a command option on any of these verbs any more, and there is no verb
+left that takes one: `just register-repo` forwards only `--origin`, and every other
+`onevcs` verb resolves the type from the rules file the identity matches. A plan
+node's `repo_type` — a field of the plan document, not a flag — still beats the
+stored or inferred type for that node. Change the resolved type by editing the
 rule that matches the repository in the rules file — `onevcs rules check` reports
 which rule a repository matches and the policy that follows; a team repository's
 workflow is `remote`.
@@ -338,9 +342,15 @@ real work is intact at its last commit *before* the `init`-commit corruption.
 Register another clone without repeating workflow; it inherits from its origin:
 
 ```sh
-just register-repo /path/to/ai-orchestrator --workflow local --repo-type single-owner
+just register-repo /path/to/ai-orchestrator
 just register-repo /path/to/ai-orchestrator-isolated
 ```
+
+Neither line names a workflow or a type, because `onevcs register` takes neither:
+its only option is `--origin`, for a checkout whose own remote is not the one to
+resolve the identity from. What each identity publishes under comes from the rules
+file instead; `docs/host-setup.md` covers
+[why `just repos` does not report the routing](host-setup.md#just-repos-does-not-report-the-routing-just-repo-policy-does).
 
 When `register-repo` receives a GitHub repository spec such as `owner/name` and
 finds no existing checkout, it clones directly into the managed default
@@ -620,7 +630,9 @@ direction where the two paths no longer share an answer.
 Keeping the key equal across the two runs is what makes this hold, and the
 comparison base is the part that used to drift. A worker left to discover its own
 base resolves the remote HEAD, while the publishing push judges the workstream's
-`pr_base` — the parent branch for a stacked node, not the repository default. Two
+recorded PR base — the parent branch for a stacked node, not the repository
+default, and a trailer on the branch rather than any field of a plan or flag of a
+verb. Two
 different base commits are two different diffs and therefore two independent
 judge rolls, the second one invisible to the only party who could act on it. So
 `onevcs`'s comparison environment is the one source of that identity, and the
@@ -1158,6 +1170,35 @@ and what is running under it. Named, it covers one run; omitted, it covers every
 one. There is no count argument and no finished-session window — a run whose work
 has settled is read with `just results` and `just telemetry`.
 
+## Which verb lands which branch state
+
+Every branch this harness can leave behind has a `onevcs` verb that lands it. That
+is the whole point of routing version control through `onevcs`: an agent that finds
+its documented path missing improvises with raw `git` or `gh`, and improvised
+publication is how a change reaches a base branch without its gate. So the table is
+exhaustive by construction — **no branch state here requires raw `git` or `gh`.**
+
+| The branch is… | Verb | What it does |
+| --- | --- | --- |
+| held by a live session, work finished | `onevcs publish` (the lifecycle's own closeout) | Verifies the session's work and publishes it under its policy |
+| complete, unpublished, no session holds it | [`just publish-branch <branch> --repo <checkout>`](#complete-branch-after-publication-failure) | Verifies it and publishes it under the policy the rules resolve |
+| carrying unattested incomplete provenance | [`just repo-recover <branch> --repo <checkout>`](#what-the-base-branch-carries-for-a-recovered-incomplete-step) | Attests the incomplete-step marker, verifies, and publishes |
+| complete, and the identity publishes `local-direct` | [`just integrate <branch> --push`](#integrating-completed-workstreams) | Merge train: merges into the base locally, then pushes |
+
+`just recoverable` is how you find out which row a branch is on: it lists every
+preserved unpublished branch, why its workstream stopped, whether it carries an
+incomplete-step marker, and the exact command that lands it. Reach for it before
+diffing clones by hand.
+
+The distinction that matters most is the middle two. `repo-recover` is the only
+verb that knows how to attest an incomplete-step marker, so a branch carrying one
+must never be finished off with an ordinary commit — see [what the base branch
+carries for a recovered incomplete
+step](#what-the-base-branch-carries-for-a-recovered-incomplete-step). And
+`publish-branch` is not `integrate`: `integrate` merges into the base locally and
+opens no change request, while `publish-branch` publishes under whatever policy the
+identity's rule resolves, which for a team identity means opening the PR.
+
 ## Integrating completed workstreams
 
 For a repository whose identity resolves to `workflow: local`, `just integrate`
@@ -1230,11 +1271,13 @@ infers a recorded stack/PR base from new preserved commits, fetches and merges
 current `origin/<pr-base>`, writes an attestation, and pushes the feature branch
 through the same pre-push/required-check merge path. It still refuses a `<no-op>`
 identity gate: an identity that cannot name its complete bar has nothing to hand a
-resolver worker or a reader of the recovery attestation. Recovery uses the same type defaults and accepts run-only `--repo-type`;
-team omission leaves its ready-for-review PR open, remote single-owner omission
-enables auto-merge, and local single-owner omission uses direct merge. For an
-older stacked preserved commit without the base trailer, pass the ledger's values
-explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
+resolver worker or a reader of the recovery attestation. Recovery uses the type the
+rules file resolves and takes no option that overrides it: a team identity leaves
+its ready-for-review PR open, a remote single-owner identity enables auto-merge, and
+a local single-owner identity uses direct merge. `just repo-recover` forwards only
+`--repo` and `--title`, so there is no base or type to pass — an older stacked
+preserved commit without the base trailer is recovered by restoring that trailer on
+the branch, not by naming the base on the command line. Recovery never
 fast-forwards the root publication checkout after a merge into a non-root base.
 A node that settles `not-completed` names its preserved branch in the recorded
 result, which is what this command takes.
@@ -1281,7 +1324,7 @@ re-derived somewhere else.
 **A precondition the harness cannot even check is a resume failure too.** Adopting
 the preserved branch, resolving the checkpoint, reading the provenance over
 `origin/<pr-base>`, and querying a recorded draft are all git or GitHub calls that
-can fail outright rather than answer — a stacked `pr_base` a prerequisite's merge
+can fail outright rather than answer — a stacked PR base a prerequisite's merge
 deleted from origin is the common one. Each raised straight past the resume
 reporting into the handler that wraps publication, so the node settled as
 `merge-path failure: publication of <branch>` — a phase the run stops well short
@@ -1401,16 +1444,24 @@ prose; a marker missing its trailer is still recognized by that text.
 
 ### Complete branch after publication failure
 
-`repo-recover` applies only to a branch with lifecycle-preserved incomplete
-provenance. It correctly rejects a complete branch, and hands over to the verb
-that does publish one rather than only refusing:
+`repo-recover` applies only to a branch with unattested incomplete provenance. It
+correctly rejects a complete branch, and hands over to a verb that does publish one
+rather than only refusing:
 
 ```text
-repo-recover: branch '<branch>' carries no lifecycle-preserved incomplete
-provenance: it has commits ahead of origin/<base>, and all of them are complete.
-'repo-recover' publishes interrupted work; publish a completed branch with
-'just integrate <branch> --repo <checkout>' or through its lifecycle/PR path
+onevcs: invalid input: branch "<branch>" carries no unattested incomplete
+provenance: it has commits ahead of <base>, and all of them are complete.
+`recover` publishes interrupted work; publish a completed branch with
+`onevcs integrate <branch>`
 ```
+
+The refusal names the **local merge train**, which is the right answer for an
+identity that publishes `local-direct`. For an identity that publishes through a
+change request, `just publish-branch <branch> --repo <checkout>` is the one to
+reach for instead: it verifies the branch and publishes it under whatever policy
+the rules resolve, where `integrate` only merges into the base locally. Neither is
+raw `git`, which is the point — see [which verb lands which branch
+state](#which-verb-lands-which-branch-state).
 
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
 it skips a candidate for incomplete provenance. A recovery whose push a pre-push
@@ -1434,17 +1485,22 @@ git remote set-head <remote> -a
 ```
 
 Repair the environment fault, inspect the finished branch's base-relative diff,
-and run its complete gate with the comparison remote and base explicit. Then
-integrate the existing commits directly through the registered workflow; for a
-local workflow, `just integrate <branch> --base <base> --remote <remote> --push`
-re-verifies, fast-forwards, and pushes them. The push still runs the complete gate.
+and run its complete gate with the comparison remote and base explicit. Then land
+the existing commits through the registered workflow: `just publish-branch <branch>
+--repo <checkout>` verifies and publishes under the policy the rules resolve, and
+for a `local-direct` identity `just integrate <branch> --push` re-verifies,
+fast-forwards, and pushes them. The push still runs the complete gate. Neither verb
+takes a base or a remote — the comparison identity travels in the environment
+(`ONEVCS_COMPARISON_REMOTE` / `ONEVCS_COMPARISON_BASE`), which is what the pre-push
+hook reads.
 Do not invent incomplete provenance to use `repo-recover`, and do not redispatch
 an agent to re-author identical content: it adds startup cost without improving
 the result.
 
 ## Operating across workers and machines
 
-- **Several agents in one process:** the run-plan scheduler owns concurrency.
+- **Several agents in one process:** the engine's continuous reconciler owns
+  concurrency.
   Per-repo in-process locks serialize short canonical-checkout operations; agent
   dispatches in separate worktrees remain concurrent.
 - **Several processes on one machine:** each run works in its own clone, so the
