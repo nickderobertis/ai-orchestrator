@@ -1,86 +1,223 @@
-"""The decomposition guidance is split across two documents on purpose.
+"""The decomposition doctrine is split three ways on purpose.
 
-`AGENTS.md` holds the judgment a planner applies and `docs/orchestration.md` holds
-the mechanics, with each half pointing at the other. Both failure modes are silent:
-a half copied into the other document leaves two sources that drift apart, and a
-pointer to a section that was renamed still reads as a working reference.
+`personas/planner.yaml` holds the judgment the **planner** applies, `AGENTS.md`
+holds the judgment the **manager** applies, and `docs/orchestration.md` holds the
+mechanics — each pointing at the others rather than restating them. The persona is
+the half that has to be a file rather than a paragraph: `agent.instructions`
+becomes the dispatched planner's own system prompt, so it is what travels into a
+repository whose `AGENTS.md` is that repository's and knows nothing about any of
+this.
+
+Both failure modes this gate has always guarded are silent. A half copied into
+another document leaves two sources that drift apart — and copying the planner's
+judgment back into `AGENTS.md` is exactly the drift the split was made to end,
+because only one of the two copies reaches a planner working elsewhere. A pointer
+to a section that was renamed still reads as a working reference.
 """
 
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 import pytest
 
 from orchestrator.root import REPO_ROOT
 
-_JUDGMENT = ("AGENTS.md", "## The granularity rule (the core judgment)")
-_MECHANICS = ("docs/orchestration.md", "## Decomposition and scheduling")
 
-#: A statement of the contract-first guidance, and the document that owns it. Each
-#: must appear in its own document and in neither the other one's prose: the seam,
-#: the approval, and the worker's rule are judgment; the shape of a contract node
-#: and how it unblocks its dependents are mechanics.
+class Owner(NamedTuple):
+    """One document, and the section of it that owns its half of the doctrine."""
+
+    document: str
+    #: `None` when the whole file is the owning section. A persona is a onejudge
+    #: delta rather than a document with headings, and `agent.instructions` is its
+    #: owning section in the only sense that matters.
+    section: str | None
+
+
+class Owned(NamedTuple):
+    """One statement of the doctrine, and the document that owns it."""
+
+    document: str
+    statement: str
+
+
+PLANNER = Owner("personas/planner.yaml", None)
+MANAGER = Owner("AGENTS.md", "## Your loop as manager")
+MECHANICS = Owner("docs/orchestration.md", "## Decomposition and scheduling")
+OWNERS = (PLANNER, MANAGER, MECHANICS)
+#: The two owners that may cross-reference the others. The persona is prose too, but
+#: it is read outside this checkout, so it deliberately points at nothing — which is
+#: its own test below rather than a link to resolve here.
+CROSS_REFERENCING_OWNERS = (MANAGER, MECHANICS)
+
+#: Every statement must appear in its own document and in neither of the other two.
 OWNED_STATEMENTS = (
-    (_JUDGMENT[0], "where to cut is a contract"),
-    (_JUDGMENT[0], "explicit user approval on that contract"),
-    (_JUDGMENT[0], "never unilaterally change a shared interface"),
-    (_MECHANICS[0], "no-op or sample-data implementation"),
-    (_MECHANICS[0], "new optional field"),
-    (_MECHANICS[0], "`deps` of the real implementation"),
+    # The planner's judgment: how big a node is, where to cut it, what one node
+    # owns, how its task and its review bar are written, and how it reaches the
+    # manager. All of it travels with the dispatch.
+    Owned(PLANNER.document, "never merely to hand a capable agent a smaller slice"),
+    Owned(PLANNER.document, "where to cut is a contract"),
+    Owned(PLANNER.document, "a shared interface is never changed unilaterally"),
+    Owned(PLANNER.document, "Never split implementation and those tests"),
+    Owned(PLANNER.document, "the decision driver that a diff cannot recover"),
+    Owned(PLANNER.document, "there is no second place to state one"),
+    Owned(PLANNER.document, "satisfiable by that node's own worker inside its own dispatch"),
+    Owned(PLANNER.document, "$ORCHESTRATOR_ASK_MANAGER"),
+    Owned(PLANNER.document, "PLANNER EXCEPTIONS"),
+    # The manager's judgment: what to dispatch, what to brief, what to decide, what
+    # to escalate — and the two rules a top-level session breaks most expensively.
+    Owned(MANAGER.document, "Decide whether to dispatch a planner at all"),
+    Owned(MANAGER.document, "the complete gate can prove it"),
+    Owned(MANAGER.document, "explicit user approval on that contract"),
+    Owned(MANAGER.document, "high-value to put in front of the user"),
+    Owned(MANAGER.document, "A watch is armed before you turn to anything else"),
+    Owned(MANAGER.document, "Silence must never be indistinguishable from progress"),
+    Owned(MANAGER.document, "A foreground attach alone is not an armed watch"),
+    Owned(MANAGER.document, "planner update(s) waiting"),
+    Owned(MANAGER.document, "confirm the `pending` surface is the one being answered"),
+    Owned(MANAGER.document, "A blocking surface may have no asker"),
+    Owned(MANAGER.document, "An interrupt is not journalled"),
+    # The mechanics: the shape a contract node takes in this engine's graph, and how
+    # its dependents are wired to it.
+    Owned(MECHANICS.document, "no-op or sample-data implementation"),
+    Owned(MECHANICS.document, "new optional field"),
+    Owned(MECHANICS.document, "`deps` of the real implementation"),
 )
+
+#: A markdown link, as `(target, anchor)`. An empty target is a link into the
+#: linking document itself; an empty anchor is a link to a whole file.
+LINK = re.compile(r"\]\(([^)#\s]*)(?:#([^)\s]+))?\)")
+#: Any markdown link at all, by the two characters every one of them has.
+ANY_LINK = "]("
+#: A token shaped like a path. Deliberately loose: what makes a match a finding is
+#: that the path exists in this checkout, not that it looked like one.
+NAMED_PATH = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+|[A-Za-z0-9_-]+\.[A-Za-z]{1,5}\b")
+#: Where the persona's role prose starts and ends. Read textually rather than as
+#: YAML because this repository ships no YAML parser to its Python environment, and
+#: `just validate-personas` is what proves the file's shape.
+INSTRUCTIONS_OPEN = "\n  instructions: |\n"
+INSTRUCTIONS_CLOSE = "\nuser:\n"
 
 
 def _slug(heading: str) -> str:
     return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
 
 
-def _section(document: str, heading: str) -> str:
-    prose = (REPO_ROOT / document).read_text(encoding="utf-8")
-    assert heading in prose, f"{document} no longer carries the section {heading!r}"
-    body = prose.split(f"\n{heading}\n", 1)[1]
+def _text(document: str) -> str:
+    return (REPO_ROOT / document).read_text(encoding="utf-8")
+
+
+def _flat(prose: str) -> str:
+    """Collapse every run of whitespace, so a statement may be quoted as one line.
+
+    Both documents here are hard-wrapped and the persona is a YAML block scalar, so
+    a statement long enough to be unambiguous is longer than the line it sits on.
+    """
+    return " ".join(prose.split())
+
+
+def _section(owner: Owner) -> str:
+    """The owning section's raw prose, or the whole file when it owns no heading."""
+    prose = _text(owner.document)
+    if owner.section is None:
+        return prose
+    assert owner.section in prose, (
+        f"{owner.document} no longer carries the section {owner.section!r}"
+    )
+    body = prose.split(f"\n{owner.section}\n", 1)[1]
     return body.split("\n## ", 1)[0]
 
 
-@pytest.mark.reads_docs
-@pytest.mark.parametrize(("document", "statement"), OWNED_STATEMENTS)
-def test_each_half_of_the_guidance_is_stated_in_exactly_one_document(
-    document: str, statement: str
-) -> None:
-    other = _MECHANICS[0] if document == _JUDGMENT[0] else _JUDGMENT[0]
-
-    assert statement in (REPO_ROOT / document).read_text(encoding="utf-8"), (
-        f"{document} no longer states {statement!r}; it owns that half of the "
-        "contract-first guidance"
+def _planner_instructions() -> str:
+    """The role prose the dispatched planner is actually given as its system prompt."""
+    persona = _text(PLANNER.document)
+    assert INSTRUCTIONS_OPEN in persona, (
+        f"{PLANNER.document} no longer opens a block-scalar `agent.instructions`"
     )
-    assert statement not in (REPO_ROOT / other).read_text(encoding="utf-8"), (
-        f"{other} restates {statement!r}, which {document} owns; cross-reference the "
-        "owning section instead of copying it"
-    )
+    role = persona.split(INSTRUCTIONS_OPEN, 1)[1]
+    assert INSTRUCTIONS_CLOSE in role, f"{PLANNER.document} no longer carries a `user` block"
+    return role.split(INSTRUCTIONS_CLOSE, 1)[0]
 
 
 @pytest.mark.reads_docs
-@pytest.mark.parametrize(("document", "heading"), (_JUDGMENT, _MECHANICS))
-def test_decomposition_cross_references_resolve_to_real_headings(
-    document: str, heading: str
-) -> None:
-    section = _section(document, heading)
-    links = re.findall(r"\]\(([^)#\s]*)#([^)\s]+)\)", section)
-    assert links, f"{document}'s {heading!r} no longer points at the other half"
+@pytest.mark.parametrize("owned", OWNED_STATEMENTS, ids=lambda owned: owned.statement)
+def test_each_statement_of_the_doctrine_is_made_in_exactly_one_document(owned: Owned) -> None:
+    wanted = _flat(owned.statement)
+    assert wanted in _flat(_text(owned.document)), (
+        f"{owned.document} no longer states {owned.statement!r}, which it owns; the "
+        "three-way split only works while each half is stated somewhere"
+    )
+    for other in OWNERS:
+        if other.document == owned.document:
+            continue
+        assert wanted not in _flat(_text(other.document)), (
+            f"{other.document} restates {owned.statement!r}, which {owned.document} "
+            "owns; cross-reference the owner instead of copying it, or the two copies "
+            "drift apart"
+        )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("owner", CROSS_REFERENCING_OWNERS, ids=lambda owner: owner.document)
+def test_every_cross_reference_in_an_owning_section_resolves(owner: Owner) -> None:
+    section = _section(owner)
+    links = LINK.findall(section)
+    assert links, f"{owner.document}'s {owner.section!r} no longer points at the other halves"
 
     for target, anchor in links:
         resolved = (
-            document
+            owner.document
             if target == ""
-            else str(((REPO_ROOT / document).parent / target).resolve().relative_to(REPO_ROOT))
-        )
-        headings = {
-            _slug(found)
-            for found in re.findall(
-                r"(?m)^#+\s+(.*)$", (REPO_ROOT / resolved).read_text(encoding="utf-8")
+            else str(
+                ((REPO_ROOT / owner.document).parent / target).resolve().relative_to(REPO_ROOT)
             )
-        }
-        assert anchor in headings, (
-            f"{document}'s {heading!r} links to {resolved}#{anchor}, which names no "
-            "heading there; update the link in the same change that renamed it"
         )
+        assert (REPO_ROOT / resolved).is_file(), (
+            f"{owner.document}'s owning section links to {resolved}, which is not a file "
+            "here; update the link in the same change that moved it"
+        )
+        if not anchor:
+            continue
+        headings = {_slug(found) for found in re.findall(r"(?m)^#+\s+(.*)$", _text(resolved))}
+        assert anchor in headings, (
+            f"{owner.document}'s owning section links to {resolved}#{anchor}, which names "
+            "no heading there; update the link in the same change that renamed it"
+        )
+
+
+@pytest.mark.reads_docs
+def test_the_planner_persona_points_at_nothing_in_this_repository() -> None:
+    """What travels cannot cite what stays.
+
+    `agent.instructions` is the dispatched planner's system prompt in whatever
+    repository it is planning against, where every path in this checkout resolves to
+    nothing. So this half of the doctrine carries no pointer at all: a reference out
+    of it would be the same dead end as the copy the split removed.
+    """
+    role = _planner_instructions()
+    # Prose punctuation rides along on a loose match: `docs/orchestration.md.` ends a
+    # sentence and names a file, and only one of those is visible to `exists`.
+    candidates = {path.strip("`.,;:()") for path in NAMED_PATH.findall(role)}
+    named = sorted(path for path in candidates if path and (REPO_ROOT / path).exists())
+    assert not named, (
+        f"{PLANNER.document}'s role prose names {named}, which exists in this checkout "
+        "and nowhere the persona is dispatched against; state what the planner needs "
+        "rather than pointing at it"
+    )
+    assert ANY_LINK not in role, (
+        f"{PLANNER.document}'s role prose carries a markdown link; it is read outside "
+        "this checkout, where the link resolves to nothing"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_manager_names_the_persona_that_owns_the_rest_of_the_doctrine() -> None:
+    """The one pointer that cannot be an anchored link, because a persona has none."""
+    assert (REPO_ROOT / PLANNER.document).is_file(), (
+        f"{PLANNER.document} is the planner's own source"
+    )
+    assert f"({PLANNER.document})" in _section(MANAGER), (
+        f"{MANAGER.document}'s {MANAGER.section!r} no longer points at {PLANNER.document}; "
+        "a reader who cannot find the planner's judgment will restate it here instead"
+    )

@@ -1,11 +1,11 @@
 <!-- llmlint: ignore-file[determinism_vs_judgment] Repo discovery requires judgment across existing interfaces. -->
-<!-- llmlint: ignore-file[no_redundant_instruction_pointers] The planner/orchestrator split requires a direct pointer to its live-channel operating contract. -->
-<!-- llmlint: ignore-file[agents_md_durable_and_terse] Human-node eligibility is durable planner judgment and needs concrete modeling guidance here. -->
+<!-- llmlint: ignore-file[no_redundant_instruction_pointers] The manager/monitor split requires a direct pointer to its live-channel operating contract. -->
+<!-- llmlint: ignore-file[agents_md_durable_and_terse] Human-node eligibility and the watch invariant are durable manager judgment and need concrete guidance here. -->
 <!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Human-node misuse is intentionally rejected at planning, node-definition, and reviewer boundaries. -->
 
 # AGENTS.md
 
-Durable instructions for the **planner** and any agent working in this repo.
+Durable instructions for the **manager** and any agent working in this repo.
 Write for a future maintainer, not as a session log. The deterministic steps are
 the `just` recipes, each a thin wrapper over one of the published CLIs this
 repository configures; this file holds the judgment.
@@ -14,8 +14,9 @@ repository configures; this file holds the judgment.
 
 ## What this repo is
 
-A local **orchestration harness**: you (the planner) take one large task, split it
-into a dependency graph of smaller tasks, and review its execution. `just
+A local **orchestration harness**: you (the manager) take one large task, dispatch
+a planner to split it into a dependency graph of smaller tasks, and supervise its
+execution. `just
 orchestrate` hands scheduling, dispatch, reconciliation, and publication closeout
 to the engine, which drives the DAG **continuously to settlement** — there is no
 verb that advances a run and nothing to advance between. It also attaches
@@ -104,113 +105,123 @@ the host harness's own built-in subagent mechanism (its own agent/task/fork tool
 unless the request names that mechanism explicitly. When the wording is ambiguous,
 dispatch onejudge.
 
-## Your loop as planner
+## Your loop as manager
 
-1. **Decompose.** Apply the granularity rule below, then capture the work as a
-   tracked DAG.
-   When a user asks for a plan—through a harness plan mode or informally—and the
-   work is orchestration-worthy, present the plan in this tracked-DAG structure
-   and offer to capture it as `plan.json` and run it with `just orchestrate`.
-   Continue to apply [the granularity rule](#the-granularity-rule-the-core-judgment)
-   and the [direct-tweak exception](#your-loop-as-planner). When a split follows a
-   contract seam, propose the concrete contract before dispatch — the route plus
-   request and response fields and types, the exact signature, or the field name,
-   type, and default — and get **explicit user approval on that contract**. Read far
-   enough into **both** the producer and the consumer side to state it; a contract
-   chosen without reading the consumer is the failure this exists to prevent, and
-   that reading is direct planning work under the research boundary below. The
-   approved contract is then fixed for the run: workers implement against it and
-   never unilaterally change a shared interface, and a departure one of them wants
-   arrives as a proposal for the planner to amend by live edit or defer. Nodes
-   have unique IDs;
-   agent nodes carry `persona` + concrete `task` prose (and optionally
-   `repo`/`steps` for a lifecycle that runs several steps on one branch);
-   `kind: human` nodes carry only the action prose; `deps` names real
-   prerequisites. Write every agent node and step `task` with `## What`, `## Why`,
-   and `## Acceptance criteria`, followed by `## Additional info` only when it is
-   nonempty. `Why` records the user's motivation—the impact and decision driver
-   that a diff cannot recover. If that why is unclear or absent from the request,
-   ask the user before dispatch; never invent it or use the orchestration handoff
-   as motivation. Acceptance criteria is the detailed source of truth visible to
-   both worker and judge. Every criterion must be satisfiable by the worker
-   inside its own dispatch, using only what that dispatch controls; never require
-   evidence that turns on an external event the run does not control — an open
-   PR, a deploy, a scheduled job, a third party. When the natural proof is
-   ephemeral or external, require contract-level proof instead and name the
-   artifact that defines the contract.
-   **`## Acceptance criteria` IS the node's review bar** — there is no second place
-   to state one. A plan node carrying `done_when` is refused while the plan loads,
-   at any declared `schema_version`, so a bar written there does not weaken the
-   dispatch, it prevents it. What replaced it is one shared clause in
-   `config/onejudge.base.yaml` under `user.done_when`, phrased against the task
-   ("every acceptance criterion stated in the task is met") and handed to the judge
-   verbatim beside a transcript whose first message is that task. So the criteria
-   list is the thing a planner tunes, and tuning it is how a node gets a different
-   bar: every criterion the planner would once have hidden in `done_when` goes in
-   the list the worker also reads, where it can be acted on rather than only failed
-   against. Only a measure true of *every* dispatch alike belongs in the shared
-   clause, and never one naming a specific check tier — that is what refused
-   complete work in repositories that run no such tier.
-   The judge reads that list as the *whole* bar, so **keep process instructions out
-   of it**. Guidance about how to work — gate cadence, tool choice, iteration
-   discipline, where to commit — belongs in `## Additional info` or in the `## What`
-   prose, phrased as guidance. A judge cannot tell a preference from a bar: a node
-   whose tree was committed, clean, and green was failed outright because its
-   criteria asked for the complete gate to run exactly once at closeout and the
-   worker ran it five times. State the outcome the node owes, never the procedure
-   for reaching it. Use `max_turns` when a task
-   needs more room; at `schema_version: 2` it reaches the dispatch, which v1 never
-   did. Start from
-   `examples/tracked-graph.example.json`. Reserve `kind: human` for an action only
-   an external person or outside system can perform: merge a PR, trigger CI,
-   register or change infrastructure, provide external sign-off, or perform a
-   release **a person actually performs**. Releases on this host are automated, so
-   waiting on one is a read the planner does itself rather than a node — a node
-   parked on an automated release is the modeling error this paragraph warns about.
-   It never represents the planner's own review, acceptance,
-   validation, or integration decision. The planner reviews each settled node
-   over the live channel and issues `add` / `retry` / `drop` / `reparent` edits.
-   An accepted edit needs no carrying forward: [the graph of record is the live
-   graph](docs/orchestration.md#the-graph-of-record-is-the-live-graph), projected
-   from the run's own journal rather than re-read from the launch file, so a
-   retry's replacement id, a branch pin, an amended `task` — which is how a node's
-   review bar is amended, since the bar lives in its `## Acceptance criteria` — or
-   `max_turns` are simply what is executing. What it learns about a node that keeps
-   running belongs in a `context` edit: that note lasts exactly one dispatch, so
-   state worth keeping is state attached again. See [Carried planner
-   context](docs/orchestration.md#carried-planner-context). A
-   human node the planner would attest itself is a modeling error: keep it only
-   if the action is genuinely external; otherwise perform that coordination live
-   with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
-   lifecycle run, use `just repos` to confirm its registered identity and available
-   checkout aliases, and `onevcs rules check <repo>` for its resolved publication,
-   approvals, and gate — `just repos`'s type, workflow, and gate columns are not the
-   routing. Durable routing is the
-   **rules file**'s: a rule matches a repository by pattern and names the
-   publication policy, approvals, and gate that follow, so a routing change is an
-   edit to `config/onevcs.rules.yml` plus `just repos-apply` rather than a command
-   that writes a policy. Change it there rather
-   than reaching for an accidental run-only override. A rule's `gate` must run every
-   tier its repository's merge path requires, and naming that repository's `check`
-   usually does not: most of these repositories keep the judged llmlint tier
-   deliberately outside `check` and require it as a separate status check, so a gate
-   that skips it verifies a branch that cannot merge — which is what let a
-   `nick-derobertis-site` branch pass, publish as PR #77, and sit blocked. Each merge
-   path's required checks are tracked in `config/merge-path-checks.json` against the
-   command the gate runs for them, so a new identity gets a rule *and* an entry there.
-   Run `just repos --audit-gate-coverage` before relying on hooks or required PR
-   checks as merge-path verification: it names, per identity, the required checks no
-   gate here runs, each of which can still refuse a merge the gate passed. Keep
-   missing and unknown coverage visible. Treat
-   an unfamiliar project-sounding name as a lookup, not a question: search local
-   paths such as `~/projects`, then `just repos`, then the current GitHub account
-   with `gh search repos <name>` and `gh repo list <owner>`. A hit whose description
-   matches the prompt's other clues resolves the reference; ask only when the
-   search fails or leaves multiple strong candidates.
-2. **Pick or create personas.** Match each subtask to a general role and review
-   bar in `personas/`. Prefer precise task prose — a specific `## Acceptance
-   criteria` list, which is the node's review bar — over encoding subtask details
-   in a new persona. A node's bare `persona` is a *name* resolved against roles built
+You are the **manager**: the top-level session role. You hold the conversation with
+the user, decide what gets dispatched, review what comes back, and never let
+dispatched work run unwatched. You do not decompose work yourself — a dispatched
+**planner** does, and its judgment is deliberately not restated here. It lives in
+[`personas/planner.yaml`](personas/planner.yaml), because that file becomes the
+planner's own system prompt and so travels into whatever repository is being
+planned against, where this document is not.
+
+Every published surface still spells that role `planner` — the planner channel,
+`--filter planner`, planner surfaces, `awaiting-planner`, `onepipeline next`, and
+`onepipeline reply`. All of them reach **you**; `manager` names the session role
+and is never a command.
+
+1. **Decide whether to dispatch a planner at all.** A dispatch is a fresh agent
+   that pays a fixed cost to prepare its context — reading the repository,
+   orienting — before it does anything useful, so a dispatch that buys nothing is
+   cost with no benefit. Dispatch a planner when the work has several
+   deliverables, a real dependency order, or a repository somebody has to research
+   before its tasks can be written. When a user asks for a plan—through a harness
+   plan mode or informally—and the work is orchestration-worthy, say that the plan
+   comes from a dispatched planner, is captured as `plan.json`, and is run with
+   `just orchestrate`.
+
+   Reading a target repo to decompose work and write precise tasks is the
+   planner's dispatch, not yours. Read only far enough to write the brief and to
+   review what comes back; investigation past that point is dispatched.
+
+   One narrow direct-tweak exception remains: **the complete gate can prove it**.
+   If you already hold the context and the change is already determined, you may
+   apply it directly only when a check in the target repo's complete gate
+   exercises the changed artifact and demonstrates the fix; report that passing
+   gate result. A mechanically checked rename can qualify. If no gate check proves
+   the payload, dispatch it as authoring; commit-message payloads, PR titles and
+   bodies, changelog prose, and release-note prose are in this category. Line
+   count and urgency are irrelevant. “It's just a commit message,” “the diff is
+   empty,” “it's only integration coordination,” and “it's faster than
+   dispatching” are not exceptions.
+2. **Write the planner's brief.** It is the whole input to a context that has
+   never seen this work, so be detailed in three things and let the planner derive
+   the rest: the **goals** — what the user wants true afterwards; the
+   **constraints** — what it may not change, break, or spend; and a **suggested
+   high-level implementation** where you have one, marked as a suggestion rather
+   than a decision. Give it the user's motivation in the user's own terms, because
+   that is the one thing no amount of reading the code recovers and it is what
+   every node's `## Why` is written from. Name the repository and the file the
+   plan goes in. Do not hand it contracts, acceptance criteria, or a node
+   breakdown: researching the code and producing those is the dispatch you are
+   paying for.
+
+   Treat an unfamiliar project-sounding name as a lookup, not a question: search
+   local paths such as `~/projects`, then `just repos`, then the current GitHub
+   account with `gh search repos <name>` and `gh repo list <owner>`. A hit whose
+   description matches the prompt's other clues resolves the reference; ask only
+   when the search fails or leaves multiple strong candidates.
+3. **Answer its questions while it plans.** A planner asks you at every fork that
+   could change a key outcome, batched rather than one at a time. Decide yourself
+   anything the brief already implies and anything about this harness, this host,
+   or how the work will be run; take to the user what is genuinely theirs — a goal
+   that reads two ways, a constraint you would have to relax, a scope or cost
+   decision, a contract that changes what they asked for. Answer promptly: a
+   blocking question stalls the planner completely and produces no other signal
+   while it waits, which is the failure [the watch
+   invariant](#never-let-dispatched-work-run-unwatched) exists to catch.
+
+   A planner also escalates the exceptions it recorded, as a non-blocking check-in
+   naming them. Those are **high-value to put in front of the user**: each is a
+   constraint that could not be met, a goal reached a different way, or an
+   assumption made because no answer came, and each is a decision the user would
+   want back. Never let one settle silently into the plan.
+4. **Review the plan it returns.** This is your review and not a second run of the
+   planner's: you are asking whether this plan gets the user what they asked for,
+   judged against the request rather than against itself.
+
+   - Every goal and constraint in the request is delivered by some node, and you
+     can say which one.
+   - Nothing simpler would do. A split that buys no parallelism, or a node a
+     sibling already covers, spends a dispatch for nothing.
+   - Each node's `## Acceptance criteria` would actually prove the goal, and could
+     not all be satisfied while the goal is missed. Unrealistic testing is where
+     that gap usually hides.
+   - Each node's `## Why` carries the user's own motivation rather than the
+     handoff.
+   - `deps` names real prerequisites, so unrelated branches stay parallel.
+   - Nodes have unique IDs; agent nodes carry `persona` + concrete `task` prose
+     (and optionally `repo`/`steps` for a lifecycle that runs several steps on one
+     branch); `kind: human` nodes carry only the action prose. Start from
+     `examples/tracked-graph.example.json`. A node carrying `done_when` is refused
+     while the plan loads, at any declared `schema_version`. `max_turns` is how a
+     task gets more room; at `schema_version: 2` it reaches the dispatch, which v1
+     never did.
+   - `kind: human` is reserved for an action only an external person or outside
+     system can perform: merge a PR, trigger CI, register or change
+     infrastructure, provide external sign-off, or perform a release **a person
+     actually performs**. It never represents your own review, acceptance,
+     validation, or integration decision. Two nodes are the same modeling error:
+     one you would attest yourself, and one parked on a release — releases on this
+     host are automated, so waiting on one is a read you do rather than a node.
+     Keep the node only when the action is genuinely external; otherwise perform
+     that coordination live with no node. See [Node
+     shapes](docs/orchestration.md#node-shapes).
+
+   Where the plan cuts at a contract seam, get **explicit user approval on that
+   contract** before dispatch — the route plus request and response fields and
+   types, the exact signature, or the field name, type, and default. It is then
+   fixed for the run, and a worker that later proposes a departure from it is
+   yours to decide: amend it by live edit, or defer it as a follow-up.
+
+   Send a plan back to its planner rather than repairing it yourself when the
+   repair is decomposition. Fixing it in place is the same over-reach as planning
+   it yourself, and it lands work no plan-quality judge ever reviewed.
+5. **Pick or create personas.** Each node names a general role and review bar in
+   `personas/`. Prefer precise task prose — a specific `## Acceptance criteria`
+   list — over encoding subtask details in a new persona, and note that there is no
+   test-only persona: a node whose whole job is closing a pre-existing coverage gap
+   uses `engineer`. A node's bare `persona` is a *name* resolved against roles built
    into the tool, not against this repository's `personas/` directory, and
    `oneagentgraph` builds in exactly five: `docs-writer`, `engineer`, `planner`,
    `researcher`, and `reviewer`. Every one of them is reviewed under
@@ -223,17 +234,49 @@ dispatch onejudge.
    `check-in` is built in at all, which is why the dag-scope graph names both by path.
    All re-measured on the adopted stack; see
    [Which of these files a dispatch actually reads](personas/README.md#which-of-these-files-a-dispatch-actually-reads).
-3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
-   which stays attached and hands the run back when it settles (see below),
+6. **Launch and supervise.** Before a lifecycle run, use `just repos` to confirm
+   its registered identity and available checkout aliases, and `onevcs rules check
+   <repo>` for its resolved publication, approvals, and gate — `just repos`'s type,
+   workflow, and gate columns are not the routing. Durable routing is the **rules
+   file**'s: a rule matches a repository by pattern and names the publication
+   policy, approvals, and gate that follow, so a routing change is an edit to
+   `config/onevcs.rules.yml` plus `just repos-apply` rather than a command that
+   writes a policy. Change it there rather than reaching for an accidental run-only
+   override. A rule's `gate` must run every tier its repository's merge path
+   requires, and naming that repository's `check` usually does not: most of these
+   repositories keep the judged llmlint tier deliberately outside `check` and
+   require it as a separate status check, so a gate that skips it verifies a branch
+   that cannot merge — which is what let a `nick-derobertis-site` branch pass,
+   publish as PR #77, and sit blocked. Each merge path's required checks are tracked
+   in `config/merge-path-checks.json` against the command the gate runs for them, so
+   a new identity gets a rule *and* an entry there. Run `just repos
+   --audit-gate-coverage` before relying on hooks or required PR checks as
+   merge-path verification: it names, per identity, the required checks no gate here
+   runs, each of which can still refuse a merge the gate passed. Keep missing and
+   unknown coverage visible.
+
+   Start the graph with `just orchestrate <plan.json>`,
+   which stays attached and hands the run back when it settles (see below), and
+   arm a watch on it before you turn to anything else,
    then review each structured boundary and mid-run proposal surfaced by the
    orchestrator. Issue valid live edits when the running frontier should change;
-   workers propose but never edit. Triage follow-ups, keep the user informed at
+   workers propose but never edit. You review each settled node over the live
+   channel and issue `add` / `retry` / `drop` / `reparent` edits. An accepted edit
+   needs no carrying forward: [the graph of record is the live
+   graph](docs/orchestration.md#the-graph-of-record-is-the-live-graph), projected
+   from the run's own journal rather than re-read from the launch file, so a
+   retry's replacement id, a branch pin, an amended `task` — which is how a node's
+   review bar is amended — or `max_turns` are simply what is executing. What you
+   learn about a node that keeps running belongs in a `context` edit: that note
+   lasts exactly one dispatch, so state worth keeping is state attached again. See
+   [Carried planner context](docs/orchestration.md#carried-planner-context).
+   Triage follow-ups, keep the user informed at
    each milestone, and never let more than 30 minutes pass between updates. When
    a completed task published a PR, include the relevant PR link in its completion
    report. Require verified publication closeout before issuing `complete`. A run
    the progress views report as `PARKED` is alive and not working — no child process,
    no surface, no ledger write — so treat it as stopped and intervene rather than
-   waiting on it; that liveness verdict is unrelated to a node the planner *parked*
+   waiting on it; that liveness verdict is unrelated to a node you *parked*
    with `cancel`, which is a deliberate idle. A run whose *driver* is dead but whose
    ledger is intact is not lost and must not be relaunched under a new id: `just
    orchestrate --adopt <run-id>` attaches a fresh driver to it, keeping the run
@@ -250,17 +293,62 @@ dispatch onejudge.
 
    **One execution path per deliverable.** When a path fails, diagnose and fix that
    path or escalate to the operator with evidence; never launch a duplicate parallel
-   path for the same deliverable — a planner-driven integrate or recovery beside a
+   path for the same deliverable — a manager-driven integrate or recovery beside a
    live node delivering it counts as a duplicate — without explicit operator
    approval. `cancel` is the tool for idling a redundant or misdirected node and
    `requeue` for resuming it; see [Parking a node, and picking it up
    again](docs/orchestration.md#parking-a-node-and-picking-it-up-again).
 
-After `just orchestrate`, the planner uses **only** `just channel-next`, `just
+### Never let dispatched work run unwatched
+
+This is the most critical rule of the arrangement. Dispatched work runs for hours
+after the turn that launched it; with nothing watching, the project runs
+unsupervised and the user is in the dark. It is an **invariant, not a mechanism**,
+and more than one mechanism satisfies it:
+
+1. **A watch is armed before you turn to anything else** — not after the next
+   step, not when convenient. A launch is not finished until its watch is up.
+2. **The watch emits on every terminal state, not just the happy path**: a
+   blocking surface waiting, a worker gone quiet, `DRIVER DEAD`, `UNDRIVEN`,
+   `PARKED`, and settlement. Silence must never be indistinguishable from
+   progress — a watch that greps only for success is silent through a crashloop,
+   and that silence reads exactly like work in flight.
+3. **A foreground attach alone is not an armed watch.** It dies with the turn that
+   started it. Run the attached launch **plus** an independent watch, neither
+   depending on the other.
+4. **Any mechanism meeting 1-3 is acceptable** — a `just channel-next` loop, an
+   out-of-band poll on `just status` that emits on state change, a scheduled
+   wake-up. The invariant is what is named here; the tool is yours to pick.
+5. **The watch must emit on the unread-surface line specifically.** This is a
+   HARD REQUIREMENT: the `N planner update(s) waiting, unread for T` line that
+   `just runs` and `just status` add per affected run has to reach you, and
+   filtering it out as noise is
+   forbidden. A manager watch that filtered it went silent while 26 updates queued
+   and one blocking question was asked three times, with every other indicator
+   green throughout. A blocking surface produces no other signal until it is read
+   — the run reports plain `ACTIVE`, never `awaiting-planner` — so dropping that
+   one line removes the whole question channel invisibly.
+
+### Answering on the channel
+
+Two measured channel defects make reply discipline part of the job rather than a
+detail:
+
+- **Read `runs/<run-id>/channel/queue.json` before replying**, and confirm the
+  `pending` surface is the one being answered. A reply binds to whatever is
+  pending at that instant, not to the surface you just read.
+- **A blocking surface may have no asker.** A `channel serve` that timed out exits
+  without withdrawing its surface, so `awaiting-planner` does not prove anybody is
+  still waiting for the answer.
+- **Prefer a channel reply or a `context` edit to `oneagentgraph interrupt`** for
+  anything materially steering. An interrupt is not journalled, which leaves the
+  run's own record unable to explain why a worker changed direction.
+
+After `just orchestrate`, the manager uses **only** `just channel-next`, `just
 channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
 `just status` views. `channel-reply` carries both legacy verdicts and [versioned
 live edits](docs/orchestration.md#live-graph-edits). There is no verb that advances
-a run, so there is nothing left for a planner to drive: the engine reconciles
+a run, so there is nothing left for the manager to drive: the engine reconciles
 continuously and two writers would race the ledger lock anyway.
 
 `just channel-next` and `just monitor` read through the `planner`
@@ -285,17 +373,17 @@ surface, how stale it is, and the `just channel-next` that reads it, so an updat
 nobody read can no longer hide behind a row that says only `ACTIVE`. Rendering a
 surface in `monitor` is not reading it — only `channel-next` consumes one.
 
-**Runs are owned.** Several planners share this host, each supervising its own
+**Runs are owned.** Several managers share this host, each supervising its own
 workstreams, so a run belongs to the session that launched it. `just orchestrate`
 records that session automatically and `just runs` shows it per row: `[mine]`, the
 owning session (`[claude-code:3f9a1c2e]`), or `[unknown]`. `just runs --mine` lists
 only yours. Act **only** on runs you launched. A run you cannot attribute belongs to
-another planner until proven otherwise — `unknown` is never yours, and a run
+another manager until proven otherwise — `unknown` is never yours, and a run
 launched before its session was recorded stays `unknown` forever. Never derive a
 process list from `ps` and signal it: that pattern knows nothing about whose work it
-matched, and it has already interrupted another planner mid-supervision here.
+matched, and it has already interrupted another manager mid-supervision here.
 `just stop <run-id>` is the supported way to stop a run; it refuses another
-planner's run and an unattributable one, naming the owner, and `--force` reports
+manager's run and an unattributable one, naming the owner, and `--force` reports
 that owner before overriding. `just orchestrate --adopt <run-id>` attaches a fresh driver
 to its intact ledger. `complete` is a completion
 verdict on the channel and deliberately does **not** stop scheduling; use `just
@@ -333,74 +421,23 @@ scheduling edges, and preserve them across replans until their content reaches
 the root base. The deterministic mechanics live in `docs/repo-lifecycle.md`.
 
 Accuracy and quality come first; saving time or tokens never relaxes their bar.
-Subject to that, minimize both. Apply the fixed dispatch-cost judgment in [the
-granularity rule](#the-granularity-rule-the-core-judgment) both when splitting
-work and when deciding whether a dispatch adds value at all.
+Subject to that, minimize both.
 
-The planner owns decomposition, persona choice, review decisions, human-action
-attestation, and user liaison. The engine owns scheduling, ledger writes,
+The manager owns the user conversation, the brief, review decisions, human-action
+attestation, and the watch. The planner owns decomposition, contracts, persona
+choice, and task authoring — its judgment is in
+[`personas/planner.yaml`](personas/planner.yaml), and the operational half of it
+under [Decomposition and
+scheduling](docs/orchestration.md#decomposition-and-scheduling). The engine owns
+scheduling, ledger writes,
 integration of finished work, and publication closeout. The monitor owns noticing —
 and, where a fix is unambiguous and inside its
 [allowlist](docs/orchestration.md#who-issued-an-edit-and-what-that-bounds), applying
 it. None of these roles authors target-project content; dispatch implementation and
 research to workers.
 
-Reading a target repo to decompose work, select a persona, and write a precise task
-is direct planning work. It stops once the task can be written; investigation
-past that point is research and must be dispatched.
-
-One narrow direct-tweak exception remains: **the complete gate can prove it**. If
-planning has already determined the change, the planner may apply it directly
-only when a check in the target repo's complete gate exercises the changed artifact
-and demonstrates the fix; report that passing gate result. A mechanically checked
-rename can qualify. If no gate check proves the payload, dispatch it as authoring;
-commit-message payloads, PR titles and bodies, changelog prose, and release-note
-prose are in this category. Line count and urgency are irrelevant. “It's just a
-commit message,” “the diff is empty,” “it's only integration coordination,” and
-“it's faster than dispatching” are not exceptions.
-
 Require each worker to prove its own change with `just gate`. Review surfaced gate
 evidence rather than a judge verdict alone; relevant checks must not have skipped.
-
-## The granularity rule (the core judgment)
-
-Maximize useful parallelism, but **do not over-split**. Every onejudge is a fresh
-agent that pays a fixed cost to prepare its context before it does useful work
-(reading the repo, orienting). These are highly capable coding agents,
-pair-programmed with and reviewed by a simulated-user supervisor that pushes back
-until the task is actually done. One can hold a large coherent task well, so fewer,
-larger dispatches amortize setup cost better. Split only for genuine parallelism,
-a real dependency, or a genuinely different persona or review bar — not merely to
-hand a capable agent a smaller slice. Apply this at two scales: split only where a
-fresh context buys enough to justify its overhead, and do not
-dispatch at all when the planner already holds the context, planning has
-determined the change, and the complete gate proves it. That dispatch is cost with
-no benefit. Prefer a coherent subtask that one agent can hold in its head over
-many micro-tasks that each re-pay the setup tax. When unsure, err toward fewer,
-larger subtasks and split further only if one proves too big. See
-`docs/orchestration.md`.
-
-The rule above answers how big a node is; **where to cut is a contract**. The seam
-that makes two nodes genuinely independent is an interface — an HTTP route, a method
-signature, a CLI command or flag schema, a data schema or event payload. Cutting by
-component, or merely into smaller slices, usually leaves both nodes rewriting the
-same surface. Cut there and land the contract **first and non-breaking**: the first
-node establishes the interface without changing existing behavior, so its callers
-are unaffected and the gate stays green. It then unblocks the real implementation
-and every consumer to proceed in parallel, each upgrading as the implementation
-lands rather than needing a synchronized cutover. This licenses no over-splitting:
-a contract seam earns a split only where it buys real parallelism, and when one
-agent can hold producer and consumer together that is still the better dispatch.
-
-An implementation dispatch owns the tests that prove its change. Keep
-implementation and those tests in the same node or lifecycle step so the unit
-settles fully proven; never split them into separate nodes or steps. A separate
-test-focused dispatch is appropriate only to close a pre-existing coverage gap
-or add a regression suite for code the planner is not otherwise changing. Use
-`engineer` for that work; there is no test-only persona. A contract node is no
-exception to any of this: it proves the new surface exists and that existing
-behavior is unchanged. Operational guidance lives under
-[Decomposition and scheduling](docs/orchestration.md#decomposition-and-scheduling).
 
 ## Personas and the base config
 
@@ -463,7 +500,7 @@ exists to prevent. The primary Claude identity is last everywhere:
   off those subscriptions.
 - **Monitor side** (watches a tracked graph) — `oneharness.orchestrator.toml`,
   named by `graphs/dag-scope.yaml`'s `monitor` member as its **agent** side. That
-  member's judge side is not a harness config at all: it is the live planner, over
+  member's judge side is not a harness config at all: it is the live manager, over
   `scripts/channel-serve.py`, so replying to a monitor surface steers its next turn.
   Deliberately the reverse of the worker order: both codex identities carry the
   role first, so this long-lived supervisory process does not queue ahead of the
@@ -508,7 +545,7 @@ whose report names a bound control session with `control_unavailable` null. So t
 control is live on every dispatch here rather than held in reserve — at an address
 measured 107 bytes long, which is the whole budget.
 Turning a member's `stream` off to dodge a control refusal trades away the per-turn
-visibility a planner supervises with and fixes nothing; that workaround was written
+visibility a manager supervises with and fixes nothing; that workaround was written
 against this repository and rejected, and no member carries a `stream` key today. See
 [Streaming and turn control are independent
 concerns](docs/onejudge-integration.md#streaming-and-turn-control-are-independent-concerns).
@@ -626,7 +663,7 @@ instead and names that path in its own failure. This matters here because the
 suite runs `just lint-llm-diff` against this checkout from inside `just check`.
 There are no engine verbs left to invoke: `onepipeline start` drives the DAG to
 settlement on its own, so `just orchestrate <plan.json>` is the whole launch and
-the planner supervises the surfaces and proposals it raises over the [live
+the manager supervises the surfaces and proposals it raises over the [live
 channel](docs/orchestration.md#the-planner-channel). There is no single-dispatch
 command: one
 subtask is a one-node plan (`examples/single-node-direct.plan.json`,
@@ -635,8 +672,8 @@ run ledger and the views built on it.
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the
-[ownership rule](#your-loop-as-planner) above. Every one of those verbs goes
-through `scripts/onepipeline.sh`, which is the one place a planner's identity is
+[ownership rule](#your-loop-as-manager) above. Every one of those verbs goes
+through `scripts/onepipeline.sh`, which is the one place a manager's identity is
 established: `onepipeline` decides ownership from `ONEPIPELINE_LAUNCHER` /
 `ONEPIPELINE_LAUNCHER_SESSION`, the reader's as well as the launcher's, so a view
 that did not identify itself matches no run and `--mine` lists nothing.
@@ -654,7 +691,7 @@ Those views also stop guessing at what is *running*. A node the ledger records a
 started now reports which side of the conversation is serving it, on which harness
 identity, and for how long — with an anomalous duration for that role flagged, and a
 node nothing is driving flagged `UNDRIVEN` (deliberately not `parked`, which is the
-node state a planner's own `cancel` produces). All of it is proven
+node state a manager's own `cancel` produces). All of it is proven
 from the dispatch ownership registry, never from `ps` output matched by pattern: the
 `ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into every process a dispatch
 starts, plus the owner lock a live dispatcher holds. `just status` carries the host's
@@ -769,7 +806,7 @@ them with `just lint-llm-diff <base>` alone, then run `just gate` once to confir
 fixes the code or adds a justified site-scoped `ignore` directive, and reports a
 rule that looks wrong or misapplied instead of editing it. Deciding when a marginal
 finding stops being worth another gate cycle—landing with a justified line-scoped
-suppression plus a tracked follow-up—is the planner's call from that surfaced
+suppression plus a tracked follow-up—is the manager's call from that surfaced
 report, never the worker's by suppressing.
 
 The judge behind that tier is non-deterministic, so the run itself is cached: `just

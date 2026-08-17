@@ -886,8 +886,8 @@ unrelated branches remain parallel.
 Do not split implementation from the tests that prove it into separate nodes or
 steps: the implementing agent writes those tests in the same dispatch, and the
 unit settles fully proven. The narrow test-focused exception and persona choice
-are defined in [the granularity rule](../AGENTS.md#the-granularity-rule-the-core-judgment),
-as is the judgment about when an interface seam is worth a split at all.
+are defined in [the planner persona](../personas/planner.yaml), as is the
+judgment about when an interface seam is worth a split at all.
 
 A split that follows an interface seam models that interface as its own node whose
 deliverable is the surface itself: the new route, method, or CLI command backed by

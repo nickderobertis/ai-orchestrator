@@ -12,7 +12,7 @@ role-specific parts live here.
 | Persona | Use it for |
 | --- | --- |
 | `engineer` | General implementation and realistic testing across server-side systems, UI, accessibility, and contract-aware libraries. |
-| `planner` | Decomposing work into an actionable, dependency-ordered plan (no implementation). |
+| `planner` | Decomposing work into a dependency-ordered plan cut at contract seams, asking the manager at every fork and recording its exceptions, under a judge that holds the plan to the original goals (no implementation). |
 | `orchestrator` | Actively monitoring an executing tracked graph: judging observed activity against the plan, surfacing what it finds, and applying only unambiguous in-allowlist fixes. |
 | `check-in` | Synthesizing a read-only, durable-state-derived planner status update. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
