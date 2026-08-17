@@ -19,7 +19,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.7.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.7.1 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -584,8 +584,8 @@ The accepted commands are:
 | `drop` | `id`; `dependents`: `"drop"` or `"detach"` | Remove the node and recursively drop its dependents, or detach its direct dependents. |
 | `reparent` | `id`; `deps`: list of dependency references | Replace an unstarted node's dependencies. |
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
-| `cancel` | `id` | Park a pending or running node: cancel its dispatch cooperatively and hold it out of the frontier until a `requeue`. |
-| `requeue` | `id`; optional `amend`: partial node overrides | Return a parked node to the desired frontier, optionally amending it (for example `max_turns`, or a `resume` pin onto the preserved branch). |
+| `cancel` | `id` | Park a pending or running node: [interrupt its live turn, kill the dispatch if it has not exited by the grace period](#what-a-cancellation-does-to-a-live-dispatch), and hold the node out of the frontier until a `requeue`. |
+| `requeue` | `id`; optional `amend`: partial node overrides | Return a parked node to the desired frontier, optionally amending it (for example `max_turns`, or a `resume` pin onto the preserved branch). Refused while that node's dispatch is still in flight. |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
 | `context` | `id`; `note` | Attach one planner note to the node's next dispatch, without cancelling or restarting anything. |
@@ -704,19 +704,52 @@ neither a `branch` pin nor a `resume` to start the work fresh. This is why an
 accepted `retry` cannot quietly re-derive the work somewhere else: the reconciler
 either honours the continuation the planner named or the dispatch says why not.
 
-Dropping or retrying a running node sets its cooperative cancellation signal. A
+Dropping or retrying a running node raises its cancellation signal, and that
+signal [reaches the agent](#what-a-cancellation-does-to-a-live-dispatch). A
 direct dispatch stops; a lifecycle dispatch preserves commits already made on
 its branch with incomplete provenance before it settles `cancelled` (publication
 already in its commit phase may finish). Verify and publish preserved lifecycle
 work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstreams).
 
+#### What a cancellation does to a live dispatch
+
+Raising the signal used to be the whole of it, and no agent process read it: a
+`cancel`, a `drop`, and a `retry` all left the dispatch running until it stopped
+itself, which is how one node reached 78 commits through two supervisor freezes.
+Every edit that raises the signal now acts on the dispatch, in two steps, and the
+planner sees a **non-blocking** surface for each:
+
+* `dispatch-interrupted` — every turn the dispatch has named was asked, over
+  `oneagentgraph`'s own turn-control lever, to start nothing new, commit what it
+  has, and end. The surface names each turn and what the delivery answered: the
+  running turn took the redirection, there was no turn to redirect, or the lever
+  itself failed. None of those three is a failure, and none of them stops the
+  clock. Expect the dispatch to settle shortly afterwards, with its work
+  committed. A dispatch that has not yet named a turn has nothing to interrupt,
+  and the surface says so.
+* `dispatch-killed` — the grace period expired with the dispatch still running,
+  so it was torn down and its process tree reaped. Whatever its turn had not
+  committed is gone. Expect this only after the deadline, and read it as the
+  reason a branch is short of what the transcript shows.
+
+Either way the settled node carries how it stopped in its own `detail`, so a
+reader who arrives after the surfaces have scrolled past can still tell the two
+apart.
+
+The grace period is configurable for a whole run by exporting
+`ONEPIPELINE_CANCEL_GRACE_SECONDS` before `just orchestrate`; the default is the
+engine's to state, and `onepipeline`'s own surfaces name the number of seconds
+they are counting. An unusable value falls back to that default rather than
+turning every cancel into an immediate kill.
+
 ### Parking a node, and picking it up again
 
 `drop` removes a node and refuses to remove the last unresolved publication anchor;
 `retry` demands an immediate successor. Neither says *stop for now*. `cancel` does:
-it raises the same cooperative cancellation signal, preserving the branch exactly as
-a drop does and leaving the publication anchor in the graph, and settles the node
-`parked` instead of `cancelled`.
+it raises the same cancellation signal — [interrupting the live turn and killing the
+dispatch that outlives the grace period](#what-a-cancellation-does-to-a-live-dispatch)
+— preserving the branch exactly as a drop does and leaving the publication anchor in
+the graph, and settles the node `parked` instead of `cancelled`.
 
 Parked is a held state, not a failed one. The run settles without the node, its
 dependents settle `blocked` rather than `skipped`, and the run's own state is
@@ -726,7 +759,17 @@ redispatches it** — and a parked lifecycle node keeps its preserved checkpoint
 a later `requeue` adopts that branch rather than cutting a fresh one. `just
 results` reports the node as `parked` and names the preserved branch.
 
-`requeue` puts it back on the desired frontier, and the next reconciler pass
+Parking the node is not the same as stopping its dispatch, and a `requeue` sent
+before that dispatch settles is **refused** — naming the graph run still carrying
+it and how long it has been running. So a cancel is followed by *waiting for the
+node to settle*, not by an immediate requeue: until then the dispatch still holds
+the node's workspace, and a requeue accepted there would return the node to a
+frontier where it waits silently on the occupancy lease its own predecessor holds.
+`just status` names that wait — a `ready` node reports either the session holding
+its repository's workspace or that it is queued for nothing but a slot, and says so
+separately again when this host could not ask.
+
+`requeue` then puts it back on the desired frontier, and the next reconciler pass
 dispatches it through normal adoption:
 
 ```json
@@ -931,11 +974,18 @@ Each node settles once, and the run's result records that settlement:
 - `blocked`: execution is transitively gated by a waiting human, or by a parked
   dependency. `blocked_by` contains the ready top-level or `NODE_ID/STEP_ID` human
   references.
-- `parked`: a `cancel` idled the node. Its dispatch was cancelled cooperatively
-  and its branch preserved, its publication anchor stays in the graph, and nothing
-  dispatches it again until a `requeue`. See [Parking a node, and picking it up
+- `parked`: a `cancel` idled the node. Its live turn was interrupted — and its
+  dispatch killed if it outlived the grace period — its branch preserved, its
+  publication anchor stays in the graph, and nothing dispatches it again until a
+  `requeue`, which is refused until that dispatch has settled. The settlement's
+  `detail` says which of the two ended it. See [Parking a node, and picking it up
   again](#parking-a-node-and-picking-it-up-again).
 - `failed`: an executed agent or lifecycle failed.
+- `failed` with outcome `task-failed-change-open`: the dispatch failed its own
+  verdict having already opened a change request from the session it worked in —
+  `onevcs publish` in its own final turn, which the engine's publication step never
+  ran. The settlement carries the URL. Read the change before re-running the work:
+  a node that failed is not a node that changed nothing.
 - `failed` with outcome `infrastructure-failure`: a recognized provider or
   harness failure, ENOSPC, OOM kill, or failed scratch-capacity preflight
   prevented dispatch from running. This one is **terminal**: the reconciler

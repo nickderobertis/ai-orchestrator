@@ -1266,6 +1266,27 @@ preserved unpublished branch, why its workstream stopped, whether it carries an
 incomplete-step marker, and the exact command that lands it. Reach for it before
 diffing clones by hand.
 
+Every row of that table reads the branch from the identity's **publication
+checkout**, never from wherever a session happens to be working. So a branch that
+exists only in a session worktree or a per-run clone is on no row yet: each verb
+refuses it as being *in none of the checkouts* of its identity, and an agent
+refused there is one step from `git push`. `just import-branch <branch> --repo
+<checkout>` is what puts it on a row — it makes the branch reachable from the
+identity's registered checkouts, taking `--from <source>` to name the worktree or
+clone that has it (omitted, everywhere this identity keeps work is searched) and
+`--as <name>` when the original name is spent. Import first, then land it with the
+row's own verb.
+
+`just work-status <ref>` answers the question the landing verbs raise afterwards:
+what became of one piece of work, given a change request's URL, a session token, a
+branch name, or a commit — read in that order, and refused by name, listing all
+four, when the reference names nothing this host knows. It is the **only** re-read
+there is. A run records a node's landing as its own settlement observed it and
+nothing looks again, so `just results` and `just status` say *as of settlement* and
+mean it; a change that merged an hour later still reads there as not landed. Ask
+this verb instead of inferring the answer from a run, and read `--json` when
+something other than a person is going to act on it.
+
 The distinction that matters most is the middle two. `repo-recover` is the only
 verb that knows how to attest an incomplete-step marker, so a branch carrying one
 must never be finished off with an ordinary commit — see [what the base branch
@@ -1377,7 +1398,11 @@ unchanged node resumes that branch automatically. That covers a node that was
 **cancelled** as well as one that failed — a cooperative stop (a live retry, a
 settled sibling, a planner `cancel`) commits its partial work and leaves the same
 incomplete-step marker, so it is a checkpoint rather than a discarded attempt, and
-it spends the same bounded budget. To deliberately discard a
+it spends the same bounded budget. A dispatch that outlived the [cancellation grace
+period](orchestration.md#what-a-cancellation-does-to-a-live-dispatch) is the
+exception: it was killed rather than asked to stop, so its checkpoint carries only
+what it had already committed and not what its turn was mid-way through. To
+deliberately discard a
 preserved attempt and start fresh, set `branch` to a *different* valid branch name
 in the retry edit. The opt-out belongs on `branch` because it is already the plan's
 authoritative branch-routing field; a separate reset flag could conflict with it

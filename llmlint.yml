@@ -71,12 +71,21 @@ rules:
   # host failures such as broken mktemp/git/mkdir belongs to their explicit guards,
   # not e2e. Recursively invoking bootstrap, format, upgrade, or the full check
   # from its own pytest process would mutate the active environment and cannot end.
+  #
+  # `config/*.version` is the adopted release of a published CLI, and bumping one
+  # exposes that CLI's behavior rather than adding any this repository implements.
+  # Each engine is proven in its own repository — its own gate and its own e2e
+  # suite — so an e2e demanded here could only be a second, weaker copy of a proof
+  # that already ran upstream. What *is* this repository's to prove at that
+  # boundary is recipe delegation and the journeys built on it, which
+  # `e2e_not_mocked` judges against real `just`, `onevcs`, and git.
   - name: changed_behavior_has_e2e
     override: true
     files:
       exclude:
         - "justfile"
         - "**/project.json"
+        - "config/*.version"
         - "scripts/check-dag-state-contract.py"
         - "scripts/check-nx-cache.sh"
         - "scripts/check-oneharness-ui-contract.sh"

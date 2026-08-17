@@ -200,6 +200,28 @@ DELEGATIONS = (
         "--title Add the thing --policy change-open",
     ),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
+    # The two reads that close the gap the landing verbs left. `status` is the only
+    # way to ask what became of a piece of work — a run's own row dates its answer to
+    # the settlement — and `import` is the only way to make work a landing verb cannot
+    # see reachable. The recipe names differ from the published verbs because `just
+    # status` is already `onepipeline status` and a bare `just import` says nothing
+    # about what is imported; both forward their arguments untouched.
+    Delegation(
+        "work-status",
+        ("https://github.com/o/r/pull/1",),
+        "uv run onevcs status https://github.com/o/r/pull/1",
+    ),
+    Delegation("work-status", ("claude/work", "--json"), "uv run onevcs status claude/work --json"),
+    Delegation(
+        "import-branch",
+        ("claude/work", "--repo", "/checkout"),
+        "uv run onevcs import claude/work --repo /checkout",
+    ),
+    Delegation(
+        "import-branch",
+        ("claude/work", "--repo", "/checkout", "--from", "/run/clone", "--as", "claude/work-2"),
+        "uv run onevcs import claude/work --repo /checkout --from /run/clone --as claude/work-2",
+    ),
     Delegation(
         "integrate",
         ("claude/a", "claude/b", "--push"),

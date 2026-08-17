@@ -200,6 +200,10 @@ def test_claims_about_the_adopted_release_name_the_adopted_release(
 ADOPTED_ONEPIPELINE_CLAIMS = {
     "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
     "personas/README.md": ("measured against onepipeline {version}",),
+    # The reconciliation filter's header states the request shape each side of the
+    # channel writes, which is the pair of releases it was measured against. A bump
+    # that moved either side would leave this file reconciling a frame nobody sends.
+    "scripts/channel-serve.py": ("`onepipeline` {version} reads it",),
 }
 
 

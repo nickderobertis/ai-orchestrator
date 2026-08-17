@@ -399,6 +399,27 @@ host *args:
 recoverable *args:
     @uv run onevcs recoverable "$@"
 
+# Report everything onevcs knows about one piece of work:
+# `just work-status <change-url|session-token|branch|commit> [--json]`.
+#
+# This is the one verb that answers "what became of it", and it is the answer a
+# settled node's own row cannot give: a run records a node's landing as its
+# settlement observed it and nothing re-reads it, so a change that merged an hour
+# later still reads as not landed there. Ask this instead of inferring from a run.
+# llmlint: ignore[tool_output_is_signal] the requested report on one piece of work is this viewing command's product.
+work-status *args:
+    @uv run onevcs status "$@"
+
+# Make a branch reachable from an identity's registered checkouts:
+# `just import-branch <branch> --repo <checkout> [--from <source>] [--as <name>]`.
+#
+# The landing verbs read a branch from the publication checkout, never from
+# wherever a session happens to be working, so work that only exists in a session
+# worktree or a run clone is invisible to them until it is imported. Omitting
+# `--from` searches everywhere this identity keeps work.
+import-branch *args:
+    @uv run onevcs import "$@"
+
 # Fast-forward a publication checkout to its origin: `just sync [BRANCH]`.
 sync *args:
     @uv run onevcs sync "$@"

@@ -53,15 +53,30 @@ changing stored local workflow. Team identities cannot use local workflow or
 direct integration. Those four names — `local-direct`, `change-open`,
 `change-auto`, `change-direct` — are the published `merge_policy` vocabulary; the
 older `direct` / `none` / `auto` spellings are refused by name at launch.
-**Every branch state has a `onevcs` verb, so none of them is a reason to reach for
-raw `git` or `gh`.** Three land a branch, and which one is decided by what the
-branch *is*: `just publish-branch` verifies and publishes a **complete unpublished
-branch no session holds**, under the policy its identity's rules resolve; `just
-repo-recover` is for a branch carrying **unattested incomplete provenance**, and is
-the only verb that knows how to attest that marker — do not bypass one with a
-normal commit; `just integrate` is the **local merge train**, merging named
-finished branches into their base and opening no change request. `just recoverable`
-names which of the three a given branch needs. Improvising past a missing verb is
+**No operation that changes what a remote or a base branch sees may bypass
+`onevcs`.** Pushing, merging into a base, and opening a change request go through
+`publish` / `publish-branch` / `recover` / `integrate`. Local commits, merges into
+your own working branch, and every read are the agent's own git to do. The line is
+drawn there rather than at "never use `git`" because local authoring *is* git: a
+rule forbidding that is one every agent has to break, and a rule everyone breaks
+routes nothing. Every branch state has a verb, so none of them is a reason to reach
+for raw `git push` or `gh`. Three land a branch, and which one is decided by what
+the branch *is*: `just publish-branch` verifies and publishes a **complete
+unpublished branch no session holds**, under the policy its identity's rules
+resolve; `just repo-recover` is for a branch carrying **unattested incomplete
+provenance**, and is the only verb that knows how to attest that marker — do not
+bypass one with a normal commit; `just integrate` is the **local merge train**,
+merging named finished branches into their base and opening no change request.
+`just recoverable` names which of the three a given branch needs. Two more verbs
+answer the questions those three raise. `just work-status <ref>` — a change
+request's URL, a session token, a branch name, or a commit — reports everything
+`onevcs` knows about one piece of work, and is how a planner or a worker asks what
+became of it instead of inferring it from a run. `just import-branch <branch>
+--repo <checkout>` makes a branch reachable from an identity's registered
+checkouts, which is what the landing verbs need: they read the branch from the
+**publication checkout**, never from wherever a session happens to be working, so a
+branch finished in a session worktree or a run clone is refused as being in none of
+the identity's checkouts until it is imported. Improvising past a missing verb is
 what puts a change on a base branch without its gate, which is the failure this
 routing exists to prevent; the table is
 [in the lifecycle doc](docs/repo-lifecycle.md#which-verb-lands-which-branch-state).
@@ -70,7 +85,16 @@ publication checkout is **never worked in directly and only ever fast-forwarded*
 after a merge lands; it must be clean with the selected root checked out before
 dispatch. So `no-changes` from a node whose task was to change code means **look
 for the work elsewhere** before it means there was none: check that checkout's
-branches and its `main` against `origin/main`, and the repo's open PRs. A worker
+branches and its `main` against `origin/main`, and the repo's open PRs. **Read
+every settled state that way, not only that one outcome.** A node that settles
+`failed` may still have published a change: a dispatch that ran `onevcs publish` in
+its own final turn settles `task-failed-change-open` carrying the URL, and
+re-running that work would duplicate a change already waiting to be read. And a
+node's **landing is dated to the moment it settled** — nothing in the run re-reads
+it, so `just results` and `just status` render a change that merged an hour later
+as not landed *as of that settlement*. The re-read is `just work-status
+<change-url|session|branch|commit>`, and it is the only thing that answers where a
+piece of work is now. A worker
 dispatched without a worktree does the work in whatever checkout it can see, and
 the empty session branch the node watched is then a truthful report about the
 wrong directory — settle it only once you have looked. But a worker dispatched
@@ -82,7 +106,21 @@ node's branch. So a task need not tell a lifecycle worker where to commit; that
 paragraph is redundant and a planner may drop it from its templates without
 re-deriving this. `tests/e2e/test_worker_start_directory_e2e.py` is what keeps it
 answered — it launches a lifecycle node for real and reads the directory out of
-the run's own journal. Preserved stacked branches
+the run's own journal. **That worktree belongs to the dispatch, not to the node or
+the branch**: every dispatch cuts its own, so a retry, a requeue, or a resumed pin
+runs in a *different* directory from the one before it. The live directory is
+whatever the dispatch's own record names — the `session-opened` the run's journal
+carries for it, or the `worktree:` line `just work-status` renders for that
+session — never a path remembered from an earlier dispatch, which is how a
+supervisor came to read a stale tree and report no progress while the dispatch was
+committing. onevcs 0.4.2 and later can return a pinned branch to the worktree its
+branch already has, but **that reuse does not reach a plan node here**: onepipeline
+links onevcs as a Rust library, and 0.7.1's `Cargo.toml` declares `onevcs =
+"0.4.1"`, so a retry pinned to a preserved branch still fails with `branch ...
+already carries N commit(s) that main does not` until onepipeline adopts 0.4.2 or
+later. That is not academic — it stranded three nodes across two runs on
+2026-08-16, each needing an out-of-band `just publish-branch` to recover. Preserved
+stacked branches
 record their PR base so recovery targets the stack rather than the root. A plan is
 the one tracked hierarchical graph: its
 top-level DAG may mix direct agents, lifecycle agents, and explicit

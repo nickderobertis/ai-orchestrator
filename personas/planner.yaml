@@ -116,6 +116,15 @@ agent:
     proof is ephemeral or external, require contract-level proof instead and
     name the artifact that defines the contract.
 
+    **For a lifecycle node the criteria stop at *ready to publish*** — its gate
+    green, everything committed, nothing half-applied — because publication is
+    the engine's own closeout step, run after the node settles under the policy
+    the repository's identity resolves. "Publish through the registered workflow
+    and report the change-request link" is a criterion that asks the worker to do
+    the engine's job, and a worker held to it improvises past `onevcs` to satisfy
+    it: three nodes tried, and one resorted to a raw `git push`. Reserve
+    publish-and-report for a **direct** node, which has no closeout behind it.
+
     ## Asking the manager
 
     Ask the manager at any fork that could change a key outcome or substantially

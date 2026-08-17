@@ -2537,3 +2537,186 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
         if answered.returncode == 0:
             delivered = answered.stdout
     assert '"state":"delivered"' in "".join(delivered.split()), delivered
+
+
+#: How long the cancelled dispatch below has to stop itself before the engine reaps it.
+#: The shipped grace is sized for a real turn to commit what it has, and so is far too
+#: long to wait out here — this run says its own instead, which is the published way to
+#: say it and the only one: `ONEPIPELINE_CANCEL_GRACE_SECONDS`. The default's value is
+#: the engine's to state; naming it here would be a second copy nothing keeps in step.
+CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
+CANCEL_GRACE_SECONDS = 5
+
+#: How long the worker below is held for. Comfortably past the grace above, because the
+#: stand-in answers on a timer and takes no redirection: it is the dispatch that does
+#: *not* stop when asked, which is exactly the arm the deadline exists for.
+CANCELLED_WORKER_HELD_SECONDS = 90
+
+#: How long the worker in the graceful journey is held for: inside the grace period, so
+#: the dispatch is gone before the deadline the escalation journey waits out.
+STOPPING_WORKER_HELD_SECONDS = 2
+
+#: The two surfaces a cancellation raises, in the order it raises them.
+INTERRUPTED = "dispatch-interrupted"
+KILLED = "dispatch-killed"
+
+
+def _cancellable(
+    tmp_path: Path, oneharness_bin: str, run: RunId, held_seconds: int
+) -> Iterator[LiveRun]:
+    """A run whose only node is held open, under a grace period short enough to wait out."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    environment = _environment(tmp_path, oneharness_bin)
+    environment[AGENT_DELAY_ENV] = str(held_seconds)
+    environment[CANCEL_GRACE_ENV] = str(CANCEL_GRACE_SECONDS)
+    plan = tmp_path / f"{run}.plan.json"
+    cancellable: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
+    plan.write_text(json.dumps(cancellable), encoding="utf-8")
+    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        ["just", "orchestrate", str(plan), "--dag-graph", "off"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        yield LiveRun(environment, run, launch)
+    finally:
+        launch.kill()
+        launch.wait(timeout=e2e_timeout(60))
+        _just("stop", run, environment=environment, seconds=60)
+
+
+@pytest.fixture
+def cancellable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """A run whose only node is held far past a short cancellation grace period."""
+    yield from _cancellable(
+        tmp_path, oneharness_bin, RunId("cancel-escalation-e2e"), CANCELLED_WORKER_HELD_SECONDS
+    )
+
+
+@pytest.fixture
+def stopping_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """A run whose only node ends well inside a short cancellation grace period."""
+    yield from _cancellable(
+        tmp_path, oneharness_bin, RunId("cancel-graceful-e2e"), STOPPING_WORKER_HELD_SECONDS
+    )
+
+
+def _replied(live: LiveRun, command: EditCommand) -> subprocess.CompletedProcess[str]:
+    """Send one live edit through the recipe an operator types."""
+    envelope: ReplyEnvelope = {"version": 1, "commands": [command]}
+    return subprocess.run(
+        ["just", "channel-reply", live.run],
+        cwd=REPO_ROOT,
+        env=live.environment,
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+def _awaited(live: LiveRun, phrase: str, *, seconds: float) -> str:
+    """Wait for one phrase to appear on the run's own stream, and hand back the stream."""
+    limit = deadline(seconds)
+    while True:
+        stream = _just("monitor", live.run, "--all", environment=live.environment, seconds=60)
+        if stream.returncode == 0 and phrase in stream.stdout:
+            return stream.stdout
+        if time.monotonic() >= limit:
+            pytest.fail(f"{phrase!r} never reached the stream of {live.run}:\n{stream.stdout}")
+        time.sleep(0.2)
+
+
+# One run name per fixture, and each fixture stops its run by that name on the way out,
+# so two of these on separate workers would stop each other's run. The constraint is the
+# scheduling, never a longer deadline.
+@pytest.mark.xdist_group("cancellation")
+def test_a_cancel_reaches_the_dispatch_and_kills_what_outlives_the_grace_period(
+    cancellable_run: LiveRun,
+) -> None:
+    """A planner `cancel` stops the dispatch, in two steps a supervisor can tell apart.
+
+    This is the journey the prose is written from, and the incident behind it is the
+    reason it exists: `cancel` used to raise a signal no agent process read, so a
+    supervisor who cancelled a runaway watched it go on committing — 78 commits through
+    two freezes — while every view said the node was parked. The claim is therefore not
+    that the edit is accepted, which the live-edit journey above already holds, but that
+    something happens to the process afterwards.
+
+    Both steps, because the follow-up differs: a turn that took the redirection ended on
+    its own terms and committed what it had, and one the deadline reaped stopped
+    wherever it was. The stand-in worker answers on a timer and takes no redirection, so
+    it is the dispatch that does not stop when asked — which is what makes the second
+    step observable here at all.
+    """
+    _dispatched(cancellable_run)
+    cancelled = _replied(cancellable_run, {"op": "cancel", "id": "held"})
+    assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
+
+    _awaited(cancellable_run, INTERRUPTED, seconds=120)
+    # And then the deadline, which is the half a supervisor has to know about: the
+    # dispatch did not exit when it was asked, so it was torn down.
+    _awaited(cancellable_run, KILLED, seconds=CANCEL_GRACE_SECONDS + 120)
+
+
+@pytest.mark.xdist_group("cancellation")
+def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
+    cancellable_run: LiveRun,
+) -> None:
+    """Parked is not stopped, so the requeue that follows a cancel too fast is refused.
+
+    The failure this prevents is silent rather than loud: a `cancel` parks the node
+    immediately while its dispatch runs on holding the workspace, so a requeue accepted
+    there returns the node to a frontier where it waits on an occupancy lease its own
+    predecessor holds, with nothing said about why. A supervisor spent forty minutes
+    looking for a wedge that was not there. So the refusal is the behaviour, and it has
+    to name what is being waited for rather than only saying no.
+    """
+    _dispatched(cancellable_run)
+    cancelled = _replied(cancellable_run, {"op": "cancel", "id": "held"})
+    assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
+
+    refused = _replied(cancellable_run, {"op": "requeue", "id": "held"})
+    reported = refused.stderr + refused.stdout
+    assert refused.returncode != 0, reported
+    assert "still has a dispatch in flight" in reported, reported
+    # Named, not merely refused: a supervisor told only "it is still running" has
+    # nothing to look at while it waits.
+    assert "running for" in reported, reported
+
+
+@pytest.mark.xdist_group("cancellation")
+def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
+    stopping_run: LiveRun,
+) -> None:
+    """The other arm of a cancel, and the one a planner should usually see.
+
+    The escalation journey holds a dispatch that will not stop; this holds the ordinary
+    case, and the two together are what make the pair of surfaces worth telling apart at
+    all. What is asserted is the *absence* of the kill: a supervisor reading
+    `dispatch-killed` is being told that whatever the turn had not committed is gone, so
+    an engine that raised it for every cancel would send them looking for lost work after
+    a dispatch that lost none.
+
+    The node is left to settle before the assertion rather than sampled the moment the
+    interrupt lands, because "was not killed" is only true once there is no longer
+    anything to kill.
+    """
+    _dispatched(stopping_run)
+    cancelled = _replied(stopping_run, {"op": "cancel", "id": "held"})
+    assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
+
+    _awaited(stopping_run, INTERRUPTED, seconds=120)
+    # Past the deadline the escalation journey waits out, so a kill this run was going
+    # to raise has had every chance to arrive.
+    time.sleep(CANCEL_GRACE_SECONDS * 3)
+    stream = _just("monitor", stopping_run.run, "--all", environment=stopping_run.environment)
+    assert stream.returncode == 0, stream.stderr
+    assert KILLED not in stream.stdout, (
+        f"a dispatch that ended inside the grace period was reported killed:\n{stream.stdout}"
+    )

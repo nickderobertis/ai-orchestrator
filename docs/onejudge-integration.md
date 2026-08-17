@@ -78,13 +78,16 @@ side and answer rather than fail.
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
 distinguished the sides — only a proxy for it — and, measured against onepipeline
-0.7.0, the proxy stopped holding: a dispatched agent side now arrives carrying
+0.7.1, the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
 this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
 with the judge's routing and the config's own model instead of the agent side's.
 `tests/e2e/test_agent_wrapper_sides_e2e.py` is what holds the current rule; three of
-its journeys fail against the absence-based one.
+its journeys fail against the absence-based one. The measurement itself was taken
+against an earlier release and carried forward to each patch that leaves
+`src/agentgraph.rs` — where the crate writes the config a dispatched side arrives
+with — byte-identical to the release it was measured on.
 
 ## Provider wiring
 

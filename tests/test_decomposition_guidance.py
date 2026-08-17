@@ -63,6 +63,7 @@ OWNED_STATEMENTS = (
     Owned(PLANNER.document, "the decision driver that a diff cannot recover"),
     Owned(PLANNER.document, "there is no second place to state one"),
     Owned(PLANNER.document, "satisfiable by that node's own worker inside its own dispatch"),
+    Owned(PLANNER.document, "the criteria stop at *ready to publish*"),
     Owned(PLANNER.document, "$ORCHESTRATOR_ASK_MANAGER"),
     Owned(PLANNER.document, "PLANNER EXCEPTIONS"),
     # The manager's judgment: what to dispatch, what to brief, what to decide, what
