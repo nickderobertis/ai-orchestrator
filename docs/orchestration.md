@@ -13,6 +13,28 @@ on its own, with no verb to advance it and nothing to advance between. See
 `examples/single-node-direct.plan.json` and
 `examples/single-node-lifecycle.plan.json`.
 
+## The manager and the planner
+
+The top-level session agent is the **manager**: it holds the user conversation,
+launches runs, reviews what settles, and answers surfaces. The **planner** is not
+that session. It is a dispatched onejudge worker like every other node — supervised
+by its own simulated-user judge, costing turns, settling on the ledger — whose
+deliverable is a plan file, and `just plan <brief.md>` is the one-node launch that
+dispatches it. What each of the two decides is stated where that role reads it: the
+manager's in [AGENTS.md](../AGENTS.md#your-loop-as-manager), the planner's in
+[`personas/planner.yaml`](../personas/planner.yaml), which is that dispatch's own
+system prompt and so travels into whatever repository it plans against.
+
+The published CLIs do not know that split and nothing here renames them to it.
+Everywhere `onepipeline` and the recipes over it say *planner* — [the planner
+channel](#the-planner-channel) and its surfaces, the `planner` [read
+profile](#read-profiles), the [`awaiting-planner`](#when-an-attach-returns) state,
+`onepipeline next`, `onepipeline reply` — the reader they name is the manager, and
+every "planner" below is to be read that way. The dispatched planner reaches that
+channel from the other end, as [an agent with a
+question](#a-dispatched-agent-asks-its-manager): a surface *on* it rather than a
+seat at it.
+
 ## The plan schema
 
 The tracked-plan contract is the published `onepipeline` plan schema, and declaring
@@ -231,9 +253,11 @@ surface once, along with the events it was raised against:
 
 Which events accompany it is the [read profile](#read-profiles)'s decision, and the
 default is `planner`. Settled workers may also surface while the run continues. A
-worker's surface is advice only: workers never receive a reply, and only the
-planner and the monitor can issue edits. The planner replies with one of these
-legacy verdict shapes:
+worker's `surface` is advice only: it is raised and never replied to, and only the
+planner and the monitor can issue edits. A worker that needs an answer before it can
+continue does not raise one — it blocks on the channel instead, as [an agent with a
+question](#a-dispatched-agent-asks-its-manager). The planner replies with one of
+these legacy verdict shapes:
 
 ```json
 {"completion":false,"message":"retry X with the fixture requirement","reason":"the graph is not complete"}
@@ -318,6 +342,45 @@ rather than printing a `{"completion": ...}` onejudge would act on — a fabrica
 verdict there would continue or settle a run nobody ruled on.
 `tests/e2e/test_orchestrate_launch_e2e.py` drives the whole round trip on a real
 launch, and each refusal through the real script.
+
+### A dispatched agent asks its manager
+
+The same `channel serve` verb is the other end of the channel: how a worker that
+has reached a decision fork stops and asks rather than guessing. `just plan` exports
+the path of `scripts/ask-manager.sh` into the launch environment as
+`ORCHESTRATOR_ASK_MANAGER`, and that wrapper is the one supported way to ask. It
+takes the question as an argument, as `--file <path>`, or on stdin, blocks, and
+prints the manager's answer on stdout. Only that recipe exports the variable, so a
+worker dispatched by any other launch has no path to name and asks the channel
+itself — which is why the fallback is stated in the persona rather than here.
+*When* a fork is worth blocking on is the dispatched role's judgment rather than
+this page's; both are in [`personas/planner.yaml`](../personas/planner.yaml).
+
+The frame it writes is the shape the table above gives `channel serve`: kind
+`planner-question`, and **`"blocking": true`**, which is what holds the run at
+`awaiting-planner` until an answer arrives. It is one compact line, because a
+pretty-printed frame is refused as a parse error at line 1 column 1, a message
+naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
+ask on: every dispatch is started with its own, an observer member has none, and an
+unset one is refused rather than guessed at. `ORCHESTRATOR_ASK_MANAGER_NODE`
+optionally attaches the surface to a node, and a node the run does not have is a
+fatal refusal rather than a retry.
+
+The manager answers it as an ordinary blocking surface — `just channel-next RUN`
+hands it over, `just channel-reply RUN` answers — with one requirement the surface
+states in its own text: **the reply's `message` must repeat the correlation token
+verbatim.** A reply here is [claimed by whichever reader reaches it
+next](#a-planner-writes-a-reply-once), so a ruling that does not echo the token is
+somebody else's answer arriving at this call, and the question is asked again rather
+than answered by it. Nothing else is handed back either: a reply that is not a
+ruling — a ruling carries a boolean `completion`, and a live graph edit routed here
+does not — and the ruling `channel serve` synthesizes at exit 0 for its own timeout
+are both refused, with the reason on stderr and nothing on stdout. The window that
+timeout measures is the wrapper's own, fifty minutes rather than `serve`'s ~30
+seconds, and `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it.
+
+`scripts/ask-manager.sh` states each of those checks against what measured it, and
+`tests/e2e/test_ask_manager_e2e.py` drives every one against a real run's channel.
 
 ### Read profiles
 
@@ -845,12 +908,14 @@ There are two, and only two, and neither is per-node prose the planner writes tw
    phrased against the task — "every acceptance criterion stated in the task is
    met" — so criterion (1) is what it resolves to for each node.
 
-   With one exception a planner has to know: a node's `persona` is a name resolved
-   against roles built into the tool rather than against `personas/`, and a built-in
-   role that declares its own bar *replaces* this one rather than adding to it.
-   `planner`, `reviewer`, and `researcher` do; `engineer` and `docs-writer` do not.
-   So a node dispatched under one of those three is reviewed against the role bar
-   alone, and its `## Acceptance criteria` carry the whole weight. See
+   One thing a planner has to know about how it arrives: a node's `persona` is a
+   name resolved against roles built into the tool rather than against `personas/`,
+   and a built-in role that declares a bar of its own is enforced **alongside** this
+   one rather than in place of it — the judge is handed `Both of these must hold:`,
+   this clause first and the role's second. `planner`, `reviewer`, and `researcher`
+   declare one; `engineer` and `docs-writer` do not. A role displaces this clause
+   only by declaring `user.done_when_replaces_base`, which none of the five does, so
+   every node keeps criterion (1) whichever role it names. See
    [Which of these files a dispatch actually reads](../personas/README.md#which-of-these-files-a-dispatch-actually-reads).
 
 Keep the shared bar to measures true of every dispatch alike. A clause naming a

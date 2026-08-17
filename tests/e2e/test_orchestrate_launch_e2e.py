@@ -660,9 +660,15 @@ def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
 
     Read from the prompt the judge was really given rather than from the config, because
     a bar present in the file and not reaching the judge is the failure being excluded.
-    It is a real exclusion, not a tautology: point the shipped plan's node at a persona
-    whose built-in role declares its own bar — `planner`, `reviewer`, `researcher` —
-    and the criterion the judge is handed is that one instead, and this fails.
+    It is a real exclusion, not a tautology: the criterion a judge is handed is composed
+    at dispatch, and a persona declaring `user.done_when_replaces_base` drops this clause
+    out of that composition, leaving its own bar in place of it — which this reads as the
+    shared bar never arriving. Pointing the node at a built-in role that declares a bar of
+    its own — `planner`, `reviewer`, `researcher` — is *not* how that is reached and would
+    still pass here: none of the five shipped roles declares that field, so the two bars
+    are enforced together, as `Both of these must hold:` with this one stated first. See
+    `personas/README.md`, "Which of these files a dispatch actually reads", for that
+    measurement.
     """
     shared_bar = shared_completion_bar()
     # `cast` rather than a validating read: this is a plan file this repository ships and
