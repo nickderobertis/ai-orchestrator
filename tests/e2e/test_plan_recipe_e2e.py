@@ -447,6 +447,43 @@ def test_a_planner_that_cannot_be_launched_is_refused_with_a_cause_and_a_remedy(
     )
 
 
+def test_a_brief_that_exists_but_cannot_be_read_is_refused_like_an_absent_one(
+    tmp_path: Path,
+) -> None:
+    """The guard tests readability, not just presence, so a mode-0 brief fails here too.
+
+    The parametrization above covers the missing brief, which a presence test alone
+    catches. Only this case reaches the readability condition; without it, a guard that
+    dropped that condition would refuse the brief for a section it could not read.
+
+    A mode of `000` does not by itself make a file unreadable: `root`, and anything
+    else holding `CAP_DAC_READ_SEARCH` or sitting on a filesystem that ignores modes,
+    satisfies the `[ -r ]` the guard runs, and there is no portable mode that refuses
+    them. So the setup is measured rather than assumed — the scenario is proven with
+    the same `access(2)` the guard consults before anything is asserted about it, and
+    the one case where it cannot be built is skipped by name rather than passing as a
+    readability test that read a readable brief.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "unreadable.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    brief.chmod(0o000)
+    if os.access(brief, os.R_OK):
+        brief.chmod(0o644)
+        pytest.skip("this user reads a mode-0 file, so an unreadable brief cannot be set up")
+
+    refused = _just("plan", str(brief), environment=_environment(tmp_path))
+
+    try:
+        assert refused.returncode != 0, f"an unreadable brief launched:\n{refused.stdout}"
+        reported = refused.stderr + refused.stdout
+        assert f"the brief '{brief}' is not a readable file" in reported, reported
+        assert "check the path, or write the brief there first" in reported, reported
+    finally:
+        brief.chmod(0o644)
+
+
 def test_a_brief_filename_is_sanitized_into_the_run_id_the_engine_would_mint(
     tmp_path: Path,
 ) -> None:

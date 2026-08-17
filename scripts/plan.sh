@@ -115,8 +115,10 @@ case "$brief" in
             "name the brief file first, then any flags after it"
         ;;
 esac
-[ -f "$brief" ] && [ -r "$brief" ] || fail "the brief '$brief' is not a readable file" \
-    "check the path, or write the brief there first"
+if ! [ -f "$brief" ] || ! [ -r "$brief" ]; then
+    fail "the brief '$brief' is not a readable file" \
+        "check the path, or write the brief there first"
+fi
 [ -s "$brief" ] || fail "the brief '$brief' is empty, so the planner would be dispatched with no task" \
     "write what to plan, why it matters, and what the plan has to satisfy, then retry"
 for section in "${REQUIRED_SECTIONS[@]}"; do
