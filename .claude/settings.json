@@ -40,6 +40,8 @@
       "Bash(just host:*)",
       "Bash(just channel-next:*)",
       "Bash(just channel-reply:*)",
+      "Bash(just plan:*)",
+      "Bash(./scripts/ask-manager.sh)",
       "Bash(just history:*)",
       "Bash(just history-show:*)",
       "Bash(just new-persona:*)",

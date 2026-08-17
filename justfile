@@ -169,6 +169,16 @@ orchestrate *args:
     # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
     @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else defaults=(); for pair in "--dag-graph graphs/dag-scope.yaml" "--pr-author-graph graphs/pr-author.yaml"; do read -r flag ref <<<"$pair"; named=; for argument in "$@"; do if [[ "$argument" == "$flag" || "$argument" == "$flag"=* ]]; then named=1; break; fi; done; [[ -n "$named" ]] || defaults+=("$flag" "$ref"); done; ./scripts/onepipeline.sh start "$@" ${defaults[@]+"${defaults[@]}"}; fi
 
+# Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
+# [--max-turns N] [<onepipeline start flags>]`. Those two flags are the recipe's own;
+# everything else reaches `onepipeline start` untouched.
+#
+# It writes the one-node plan rather than asking a manager to remember its shape;
+# `scripts/plan.sh` states what has to be right about that shape and why.
+[doc('Launch a planner on a manager-written brief as a one-node plan, with the ask-manager seam exported.')]
+plan *args:
+    @./scripts/plan.sh "$@"
+
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.
 #

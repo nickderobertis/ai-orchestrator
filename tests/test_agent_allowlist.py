@@ -22,6 +22,19 @@ REQUIRED = (
     "Bash(just results:*)",
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",
+    # The two halves of the manager/planner split: the manager launches a planner on a
+    # brief, and the planner it dispatches asks back over the same run's channel.
+    #
+    # Each granted at the narrowest form that still works, which is not the same form
+    # for the two: a claude-code rule matches by prefix, and `just plan` cannot be
+    # invoked without naming a brief, so a bare grant would prompt on every real use.
+    # The wrapper can — it reads the question from stdin with no arguments at all — so
+    # its grant carries no wildcard, and `--file` and a question typed as text are
+    # approved one at a time. What bounds the recipe instead is the recipe: it refuses
+    # every input it does not understand before starting anything, and reaches exactly
+    # one published verb.
+    "Bash(just plan:*)",
+    "Bash(./scripts/ask-manager.sh)",
     "Bash(git -C * status*)",
     "Bash(git -C * log*)",
     "Bash(git -C * diff*)",

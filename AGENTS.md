@@ -707,6 +707,23 @@ command: one
 subtask is a one-node plan (`examples/single-node-direct.plan.json`,
 `examples/single-node-lifecycle.plan.json`), so no running work falls outside the
 run ledger and the views built on it.
+`just plan <brief.md>` is that same launch for one shape of node: it writes the
+one-node plan a manager-written brief becomes
+(`examples/planner-brief.example.md` → `examples/single-node-planner.plan.json`)
+and launches it. The brief is the dispatched task verbatim, so it is written in
+the `## What` / `## Why` / `## Acceptance criteria` template and refused when it is
+not. Two things about that plan are the reason the recipe writes it rather than a
+manager: the persona is the **path** `../personas/planner.yaml`, because the bare
+name resolves to a role built into the tool and this repository's file is never
+read; and the launch exports `ORCHESTRATOR_ASK_MANAGER`, the path of
+`scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking
+question to its manager over the run's own channel instead of guessing at a
+decision fork. That wrapper is the only supported way to ask: `onepipeline channel
+serve` answers its own timeouts at exit 0 with a ruling that reads like a decision,
+and a reply is claimed by whichever reader reaches it next, so a question asked any
+other way can be answered by a fabricated verdict or by a live graph edit meant for
+the engine. A question is answered with `just channel-next` and `just
+channel-reply`, which the launch prints.
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the

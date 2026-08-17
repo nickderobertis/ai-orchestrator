@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "goal": {
+    "text": "Plan the work the manager briefed in examples/planner-brief.example.md"
+  },
+  "name": "planner-brief-example",
+  "tasks": [
+    {
+      "id": "plan",
+      "persona": "../personas/planner.yaml",
+      "task": "# Give the read API a paginated node listing\n\n## What\n\nDesign the decomposition for adding a paginated node listing to the read API: the\nroute and its request and response fields, the browser view that consumes it, and\nthe order the pieces have to land in. Answer with one node per subtask, each naming\nits id, its persona, its dependencies, and its task.\n\n## Why\n\nAn operator supervising a long run cannot see past the first screen of nodes, so\nthey read the run's journal by hand to answer \"what is still outstanding\" — which is\nthe question the view exists to answer. Nobody has decided whether the cursor is an\nopaque token or a node id, and that choice decides whether the view can deep-link.\n\n## Acceptance criteria\n\n- The plan names every subtask, its persona, its dependencies, and the contract\n  between it and the subtasks that consume it.\n- The route's request and response fields and their types are stated, including\n  what the cursor is and what an exhausted page answers.\n- The split follows that contract: the node establishing the route lands first and\n  non-breaking, so its consumers are unaffected and the gate stays green.\n- Every choice the brief left open is either decided in the plan, with the reason,\n  or asked of the manager before the plan is finished.\n\n## Additional info\n\nThe read API is `onepipeline-api` and the view is the `onepipeline-ui` bundle;\nneither is built in this repository, so a subtask against either is a lifecycle node\ncarrying that repository's `repo`.\n"
+    }
+  ]
+}

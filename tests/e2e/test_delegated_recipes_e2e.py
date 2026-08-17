@@ -42,6 +42,10 @@ WRAPPER_SCRIPTS = (
     # Every `onepipeline` recipe goes through this one, which is where the planner's
     # identity and a launch's harness environment are established.
     "onepipeline.sh",
+    # `just plan` writes its one-node plan through this one, and refuses to launch at
+    # all unless the wrapper beside it is there for the planner to ask questions with.
+    "plan.sh",
+    "ask-manager.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
     # `just repos` goes through this one, which absorbs the flag spelling and — when
@@ -49,6 +53,12 @@ WRAPPER_SCRIPTS = (
     "repos.sh",
     "merge-path-audit.py",
 )
+
+
+#: The brief `just plan` is given below, written into each throwaway checkout by
+#: `_checkout`. Its filename is what the recipe derives an unnamed run from, so it is
+#: the other half of the published line the first `plan` row asserts.
+BRIEF = "briefs/cursor-shape.md"
 
 
 class Delegation(NamedTuple):
@@ -121,6 +131,31 @@ DELEGATIONS = (
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs its launch chose, so neither default is added to it.
     Delegation("orchestrate", ("--adopt", "run-1"), "uv run onepipeline adopt run-1"),
+    # `just plan` writes the plan it launches, so the argument its published line
+    # carries is a path this recipe generated rather than one the caller typed. Both
+    # of its own flags are absorbed here — `--name` decides that path and `--max-turns`
+    # goes into the node — and everything else reaches `onepipeline start` untouched.
+    Delegation(
+        "plan",
+        (BRIEF,),
+        "uv run onepipeline start scratch/plans/cursor-shape.plan.json"
+        " --dag-graph graphs/dag-scope.yaml",
+    ),
+    Delegation(
+        "plan",
+        (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
+        "uv run onepipeline start scratch/plans/listing-api.plan.json"
+        " --dag-graph graphs/dag-scope.yaml --detach",
+    ),
+    # The joined spelling of both, which is a separate parsing path: `--name=` decides
+    # the plan path this line names, and `--max-turns=` is absorbed rather than
+    # forwarded — which is exactly what its absence from this line asserts.
+    Delegation(
+        "plan",
+        (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
+        "uv run onepipeline start scratch/plans/listing-api.plan.json"
+        " --dag-graph graphs/dag-scope.yaml --detach",
+    ),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and
     # pass one through untouched when the caller does.
@@ -248,6 +283,15 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)
         copied.chmod(0o755)
+    # The brief `just plan` reads. Written rather than copied from `examples/`: these
+    # journeys are memoized on `recipeWorkspace`, which no document under `examples/`
+    # is in, so reading one here would replay a verdict recorded before it changed.
+    brief = checkout / BRIEF
+    brief.parent.mkdir()
+    brief.write_text(
+        "## What\nDecide the cursor's shape.\n\n## Why\nThe view cannot deep-link "
+        "without it.\n\n## Acceptance criteria\n- The shape is stated.\n"
+    )
     trace = checkout / "trace"
     uv = checkout / "bin/uv"
     # Records the whole command line, and the reply envelope when one is piped in:

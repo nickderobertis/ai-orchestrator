@@ -123,8 +123,21 @@ CWD_FLAG = "--cwd"
 EVALUATION_MARKER = '{"value": true or false'
 
 #: Optional test-owned transcript sink for assertions about how a turn was pinned:
-#: its config, its directory, its prompt, and its composed system prompt.
+#: its config, its directory, its prompt, its composed system prompt, and whichever
+#: of its environment variables the journey asked for.
 PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
+
+#: Which environment variables the record above carries, comma-separated.
+#:
+#: Opt-in and named rather than the whole environment, because the whole environment
+#: is this host's — credentials, config directory indirections, the enclosing
+#: dispatch's own identity — and a journey's evidence file is not the place for it.
+#: What a turn was *given* is otherwise unobservable from outside: a variable reaches
+#: a dispatch by inheritance through `onepipeline`, `oneagentgraph`, and `oneharness`,
+#: and none of them reports what it passed on. A name that is unset is recorded absent,
+#: which is the whole point for `ONEPIPELINE_RUN_ID`: a dispatched worker carries its
+#: run's id and an observer member carries none.
+ENVIRONMENT_KEYS_ENV = "FAKE_BACKEND_ENVIRONMENT_KEYS"
 
 #: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
@@ -213,6 +226,7 @@ def main(argv: list[str]) -> int:
     config = _flag(argv, CONFIG_FLAG)
     system = _flag(argv, SYSTEM_FLAG) or ""
     if prompt_log := os.environ.get(PROMPT_LOG_ENV):
+        named = [key for key in os.environ.get(ENVIRONMENT_KEYS_ENV, "").split(",") if key]
         with Path(prompt_log).open("a", encoding="utf-8") as recorded:
             recorded.write(
                 json.dumps(
@@ -221,6 +235,7 @@ def main(argv: list[str]) -> int:
                         "cwd": _flag(argv, CWD_FLAG),
                         "prompt": prompt,
                         "system": system,
+                        "environment": {key: os.environ.get(key) for key in named},
                     }
                 )
                 + "\n"
