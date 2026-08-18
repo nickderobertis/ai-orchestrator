@@ -70,7 +70,10 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # sentence are per-release measurements — which versions the build reads, and
     # from which one the token stops being literal — so the literal joins this gate
     # rather than quietly outliving the bump that moves the ceiling.
-    "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1},
+    # Both agent-graph documents state the same per-release measurement — which
+    # schema versions the build reads, and from which one `{task}` stops being
+    # literal — so each carries a literal this gate holds to the pin.
+    "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1, Path("graphs/pr-author.yaml"): 1},
     # Two: the frame shape this filter parses, and the run-id export it deliberately
     # does not read. Both are per-release measurements of the same crate.
     # Four in the operating manual: which plan schema versions the reconciler reads,
@@ -216,8 +219,8 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
     "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
     "personas/README.md": (
         "measured against onepipeline {version}",
-        # Which oneagentgraph a dispatch reads a persona with, which is the whole of
-        # why the persona shape here is not the newest published one.
+        # Which oneagentgraph a dispatch reads a persona with, which is what decides
+        # the shape every file in that directory has to be written in.
         "at onepipeline v{version}, confirmed from that tag's",
     ),
     # What a run names to the agent graph watching it — `ONEPIPELINE_RUN_ID`, set to
@@ -252,15 +255,23 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # The re-measurement of that lock, which is what makes the CLI-versus-linked
         # distinction concrete rather than a warning.
         "at v{version} and its lock still resolves 0.4.2",
-        # What a bodyless change request now says about itself.
-        "since onepipeline {version} they no longer look it",
+        # What a bodyless change request now says about itself. Phrased against the
+        # adopted release rather than the one it arrived in, for the reason the
+        # repo-lifecycle entry below records.
+        "on the adopted onepipeline {version} they no longer look it",
         # That the read-only views now disclose a journal they cannot read whole.
-        "since onepipeline {version} a run whose journal does not hold every",
+        "on the adopted onepipeline {version} a run whose journal does not hold",
     ),
     # The drafting endings, which did not exist below this release: the paragraph
     # states the release the kind arrived in, so a bump has to re-read whether the
     # vocabulary beside it still holds.
-    "docs/repo-lifecycle.md": ("**It is not silent either, since onepipeline {version}.**",),
+    # The drafting endings. The sentence names the ADOPTED release rather than the
+    # one the kind arrived in (0.7.5): the two stopped being the same release at
+    # 0.8.0, and a gate on "since" would have forced the prose to claim an arrival
+    # that never happened.
+    "docs/repo-lifecycle.md": (
+        "**It is not silent either, on the adopted onepipeline {version}.**",
+    ),
     # Two independent per-release claims share this file. Its header states the
     # request shape each side of the channel writes, so a bump that moved either side
     # would leave it reconciling a frame nobody sends; the second is the run-id export
@@ -315,11 +326,13 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
 #: repository does **not** adopt, and those literals must not move with the pin.
 #:
 #: * **oneagentgraph** decides which *persona shape* this repository may be written
-#:   in, and the claim gated here is a refusal — 0.2.18 rejects the 0.3.0 spelling
-#:   outright. `personas/README.md` names 0.3.0 beside it, as the release it is
-#:   explaining that this repository does not adopt. Bumping the pin fails here,
-#:   which is the prompt to re-take the three probes that note describes and to move
-#:   the pin, every file in `personas/`, and `config/onejudge.base.yaml` at once.
+#:   in, and the claim gated here is a refusal — the pinned release rejects the other
+#:   spelling outright, in whichever direction the pin currently points.
+#:   `personas/README.md` names the superseded 0.2.18 beside it as history. A bump
+#:   fails here, which is the prompt to re-take that refusal against the new binary
+#:   and to move the pin, every file in `personas/`, and `config/onejudge.base.yaml`
+#:   at once — never one without the others, because a CLI certifying a shape the
+#:   linked reader refuses produces no member at all.
 #: * **onevcs** needs its own entry because the two onevcs versions in play are
 #:   deliberately different things: `config/onevcs.version` installs the **CLI** the
 #:   manager verbs run, while a dispatched session publishes through the onevcs
@@ -330,7 +343,7 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
 ADOPTED_SIBLING_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
     "oneagentgraph": {
         "personas/README.md": (
-            "The pinned oneagentgraph {version} refuses the new shape outright",
+            "The pinned oneagentgraph {version} refuses the previous shape outright",
         ),
     },
     "onevcs": {

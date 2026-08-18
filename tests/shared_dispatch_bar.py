@@ -1,6 +1,6 @@
 """Readers for the shared clauses every dispatch on this host is given.
 
-`config/onejudge.base.yaml` states them once: `agent.instructions` is the preamble the
+`config/onejudge.base.yaml` states them once: `system_prompt` is the preamble the
 worker reads before it does anything, and `user.persona` and `user.done_when` are the
 review contract and the completion criterion its judge is handed. They reach the model
 by different paths — one as a system prompt, the other two inside the supervisor's own
@@ -89,15 +89,15 @@ def shared_judge_persona() -> str:
 
 
 def shared_agent_preamble() -> str:
-    """`agent.instructions`, as a dispatched worker is given it.
+    """`system_prompt`, as a dispatched worker is given it.
 
     A literal scalar, because this one is paragraphs: it reaches the worker's system
     prompt with its line structure intact and a persona's role appended after it, so
     the value is returned verbatim rather than folded.
     """
-    header, block = _block_scalar("instructions")
+    header, block = _block_scalar("system_prompt")
     assert header in LITERAL_HEADERS, (
-        f"{BASE_CONFIG} opens `agent.instructions` as {header!r}, a folding scalar; the "
+        f"{BASE_CONFIG} opens `system_prompt` as {header!r}, a folding scalar; the "
         "shared preamble is paragraphs and reaches a worker with its line structure "
         "intact, so this reader states the literal style it expects"
     )

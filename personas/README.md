@@ -1,11 +1,11 @@
 # Personas
 
-A **persona** is a small onejudge *delta* over `config/onejudge.base.yaml` that
-defines one kind of agent: its role (`agent.instructions`) and how the
-simulated supervisor reviews it (`user.persona`). At dispatch time,
-`orchestrator.config` merges base ⊕ persona ⊕ the CLI `--task` into one effective
-onejudge config and runs it. Common settings live once in the base; only the
-role-specific parts live here.
+A **persona** is a small onejudge *config fragment* layered over
+`config/onejudge.base.yaml` that defines one kind of agent: its role
+(`system_prompt`) and how the simulated supervisor reviews it (`user.persona`). At
+dispatch time, `oneagentgraph` merges base ⊕ persona ⊕ the CLI `--task` into one
+effective onejudge config and runs it. Common settings live once in the base; only
+the role-specific parts live here.
 
 ## Catalog
 
@@ -39,7 +39,7 @@ Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
 
 A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
 name to `oneagentgraph` as the node-scope worker's persona override, where a
-built-in role of that name wins. `oneagentgraph` 0.2.18 ships exactly five:
+built-in role of that name wins. `oneagentgraph` 0.3.0 ships exactly five:
 `docs-writer`, `engineer`, `planner`, `researcher`, and `reviewer`. This directory
 is not on the search path, so **any other name is taken as a path relative to
 `graphs/`** — which is why `crozier/crozier-corpus` fails a dispatch with `cannot
@@ -51,7 +51,7 @@ naming either as a plan node's `persona` fails the same way `crozier/…` does.
 request drafting under it, so a plan node's own worker may not run as it.
 
 That the shipped set is those five and no more is measured two ways, both against
-oneagentgraph 0.2.18 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs each:
+oneagentgraph 0.3.0 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs each:
 
 - A graph carrying its own `personas` catalog is refused when one of its files
   collides with a shipped name (`persona "engineer" names both …/engineer.yaml in
@@ -64,21 +64,17 @@ oneagentgraph 0.2.18 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs ea
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.7.5 and
-oneagentgraph 0.2.18 by launching a plan whose two nodes name `engineer` and
+Three consequences, the first two re-measured against onepipeline 0.8.0 and
+oneagentgraph 0.3.0 by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
-handed. The launch was against 0.7.0; every bump since has carried it forward on
-the narrower evidence that `src/agentgraph.rs` and `src/graph.rs` — the whole of
-what composes a member and resolves its persona — cannot have moved the answer.
-Through 0.7.1 both were byte-identical with the launched crate. 0.7.2 left
-`src/graph.rs` byte-identical and added to `src/agentgraph.rs` exactly one thing: a
-`process()` accessor returning the backend's pid, whose one caller registers
-dispatch ownership so a teardown can aim at the right process. No composition or
-persona-resolution path reads it. 0.7.3 through 0.7.5 leave **both files
-byte-identical with 0.7.2**; the whole of what those three releases touched is the
-ledger and the journal, the report retention path, the drafting ending, and the
-views that read them. So there is still no path by which the answer could have
-moved:
+handed. Do **not** argue one of them forward from a source file that stayed
+byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
+and the crate has carried neither path since before 0.2.18 — so that argument was
+reading nothing. What holds these between launches is this repository's own suite,
+which re-takes both measurements on every gate run:
+`tests/e2e/test_shipped_persona_catalog_e2e.py` resolves the shipped set from the
+pinned binary, and `tests/e2e/test_orchestrate_launch_e2e.py` reads the composed
+completion criterion out of a real dispatch.
 
 - Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
   with. The flat files whose names match a built-in are a catalog and a validation
@@ -94,7 +90,7 @@ moved:
   `reviewer.yaml` still does not reach a dispatch; the built-in's does.
 - **A repo-specific persona in this directory does dispatch — as a path.** Naming
   `../personas/crozier/crozier-corpus.yaml` on a node settles the dispatch with that
-  file's `agent.instructions` as the worker's role and its `user.persona` as the
+  file's `system_prompt` as the worker's role and its `user.persona` as the
   supervisor's bar, both verbatim. Only the catalog *name* is unresolvable; the file
   is not inert. `oneagentgraph` 0.2.14 is the release that closed this, and the
   engine has reached it since onepipeline 0.6.3, the first release to link it.
@@ -122,47 +118,59 @@ layout, and `just validate-personas` checks the tracked catalog recursively.
 ## The delta contract
 
 `just validate-personas` enforces the shape of every YAML persona recursively
-under `personas/` (underscore-prefixed files and directories are skipped):
+under `personas/` (underscore-prefixed files and directories are skipped). Since
+oneagentgraph 0.3.0 a persona **is** a onejudge config fragment, validated against
+onejudge's own config schema rather than against a second copy of it — so what a
+persona may say is what onejudge accepts, minus the four fields the member's own
+launch decides:
 
-- **Required:** `agent.instructions` (string), `user.persona` (string).
-- **Optional:** `agent.name`, `user.done_when` (a *second* bar, enforced alongside
-  the base's), `user.done_when_replaces_base` (true when this role's bar must stand
-  in for the base's instead; needs a `user.done_when` to stand in with),
-  `user.max_turns` (int), `evals`.
-- No other top-level keys — `task` comes from `--task`, and `provider` / `session`
-  / the shared agent preamble come from the base config.
+- **Refused:** `provider` (the member's `agent:` and `judge:` decide it), `session`
+  (the run names it), `task` (it comes from `--task` or the member's own `task:`),
+  and `skill` (a relative path resolves against the base config, so name it there).
+- **Optional, and onejudge's:** `system_prompt` (the role, appended after the
+  base's shared preamble), `user.persona`, `user.done_when` (a *second* bar,
+  enforced alongside the base's), `user.max_turns`, `evals`, `assessment`.
+- **Optional, and oneagentgraph's own two keys, consumed by the merge:** `name`
+  (the `persona` label on this member's events; absent, the ref's file name is
+  used) and `user.done_when_replaces_base` (true when this role's bar must stand in
+  for the base's instead; needs a `user.done_when` to stand in with).
+- **Nothing is required.** onejudge asks for nothing but a task and a task never
+  comes from a persona, so a file carrying only a `system_prompt` is complete. The
+  files here all carry both halves anyway, because a dispatched role wants a review
+  bar as well as a role.
 
-See `docs/onejudge-integration.md` for how a persona becomes an effective onejudge
-config and how the two conversation sides are wired.
+The same rule holds for `config/onejudge.base.yaml`: it is a onejudge config, so
+its shared preamble is the top-level `system_prompt` too.
 
-### Why that shape stays, even though a newer one is published
+`oneagentgraph`'s own `docs/persona-format.md` at the pinned release is the
+authoritative spec for all of it.
 
-`oneagentgraph` 0.3.0 replaces it: a persona becomes a onejudge config fragment, so
-`agent.instructions` moves to a top-level `system_prompt`, `agent.name` to a
-top-level `name`, and everything under `user:` stays. That release's own
-`docs/persona-format.md` says the previous spelling "no longer loads, anywhere" —
-no alias, no flag, no deprecation period — and states the same rule for a base
-config, so `config/onejudge.base.yaml` would move in the same change.
+### Which oneagentgraph reads these files
 
-**Adopting it here is blocked, and not by taste.** `just validate-personas` runs
-the oneagentgraph *CLI*, but what reads a persona at dispatch is the oneagentgraph
-`onepipeline` **links** — 0.2.18 at onepipeline v0.7.5, confirmed from that tag's
-`Cargo.lock`. Bumping the CLI alone would certify a shape the dispatching reader
-cannot load, and `graphs/dag-scope.yaml` names `../personas/orchestrator.yaml` and
-`../personas/check-in.yaml` **by path**, so the monitor and the pacemaker would
-stop being produced on every orchestrated run.
+Two different ones, and they have to agree. `just validate-personas` runs the
+oneagentgraph **CLI** that `config/oneagentgraph.version` pins; what reads a
+persona at **dispatch** is the oneagentgraph `onepipeline` links, which is
+`0.3.0` at onepipeline v0.8.0, confirmed from that tag's `Cargo.lock` rather than
+from its `Cargo.toml` requirement — a caret requirement permits a version the lock
+has not resolved, so the requirement is not evidence of what a dispatch reads.
 
-The pinned oneagentgraph 0.2.18 refuses the new shape outright rather than
-degrading quietly — its `Persona` carries `deny_unknown_fields` at every level —
-and that was measured on the installed stack, with a 0.2.18-shaped control beside
-each probe: `persona validate` and `oneagentgraph validate` both exit 2 on
-``unknown field `name`, expected one of `agent`, `user`, `evals` ``, and a real
-`oneagentgraph run` of a one-member graph naming such a file by path dies at config
-validation before `graph-started` while the control reaches `graph-settled` with
-exit 0.
+That agreement is why the shape here moved in one change rather than two. The
+previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
+today's shape exactly as hard as the reverse: there is no alias, no flag, and no
+deprecation period in either direction. The pinned oneagentgraph 0.3.0 refuses the
+previous shape outright, naming the field to write instead:
 
-**What unblocks it: an `onepipeline` release whose `Cargo.lock` resolves
-`oneagentgraph 0.3.0`.** Read the lock, not the `Cargo.toml` requirement: a caret
-requirement permits a version the lock has not resolved, so a `Cargo.toml` naming
-0.3.0 is not evidence that a dispatch reads it. Then the pin, every file here, and
-`config/onejudge.base.yaml` move together in one change.
+```
+$ oneagentgraph persona validate <a file with an `agent:` block>
+invalid config: …: `agent` is not a persona key: a persona is a onejudge config
+fragment, and onejudge has no `agent` field. To migrate this file, write
+`agent.instructions` as the top-level `system_prompt`, …
+```
+
+So a split pin — the CLI on one shape and the linked reader on the other — would
+certify files that produce no member at all, and `graphs/dag-scope.yaml` names
+`../personas/orchestrator.yaml` and `../personas/check-in.yaml` **by path**, so the
+monitor and the pacemaker are what a split would silently cost.
+`tests/e2e/test_path_dispatched_personas_e2e.py` is what keeps that from being an
+argument: it runs each path-named persona through a real `oneagentgraph run` and
+fails if either stops loading.

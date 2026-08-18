@@ -28,11 +28,23 @@ settle just as green while leaving the stranded commit exactly where it was.
 
 Everything between the recipe and the model is real: the real `just orchestrate` and
 `just repos-apply` recipes, the real `scripts/onepipeline.sh`, the real `onepipeline`
-driver and its linked `onevcs`, the real registry and its worktrees, and the real
-`oneagentgraph` graphs in `graphs/`. `tests/e2e/fake_backend.py` stands in for the paid
-model alone. The stranded state is built with the released `onevcs` command line, the
+driver and its linked `onevcs`, the real registry and its worktrees, and — on the
+adopted leg — the real `oneagentgraph` graphs in `graphs/`.
+`tests/e2e/fake_backend.py` stands in for the paid model alone.
+
+The stranded state is built with the released `onevcs` command line, the
 same way the sibling's own suite builds it, so these journeys start from state that
 tool really writes rather than a shape this file believes it writes.
+
+The prior leg attaches **no** observer or drafting graph, and that is forced rather
+than chosen: those documents name `personas/` by path, and since oneagentgraph 0.3.0
+a persona is a onejudge config fragment that the 0.2.x release linked below it
+refuses outright. Given them, the prior binary never reaches a dispatch and settles
+no node at all, which is a finding about a persona shape rather than about a
+stranded branch. Their absence cannot move this verdict either way: an observer
+graph watches and a drafting graph writes a change request's body, and neither is
+consulted where `onepipeline` asks `onevcs` to open a session on a branch that is
+ahead of its base — which is the one thing both legs are read for.
 
 The identity is a scratch one — a bare origin and two clones of it, registered against a
 scratch `ONEVCS_HOME` — because a test may not register or publish from this host's own
@@ -93,16 +105,6 @@ LAUNCHER_ENVIRONMENT = (
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
-)
-
-#: The graphs `just orchestrate` attaches to every launch. The prior release is driven
-#: directly, so the flags the recipe would have added are stated here to keep the two
-#: legs one variable apart.
-LAUNCH_GRAPHS = (
-    "--dag-graph",
-    "graphs/dag-scope.yaml",
-    "--pr-author-graph",
-    "graphs/pr-author.yaml",
 )
 
 #: The scratch identity's policy: merged in the local checkout, verified by a gate that
@@ -461,9 +463,12 @@ def prior(
     """The same stranded retry, on the release below the fix.
 
     Driven at the binary rather than through `just orchestrate`, which execs the
-    `onepipeline` this checkout pins and so cannot be pointed at another release. The
-    flags the recipe would have added are passed here, so the two legs differ in the
-    binary and nothing else.
+    `onepipeline` this checkout pins and so cannot be pointed at another release. It is
+    given neither of the graphs `just orchestrate` attaches, because this checkout's
+    are written in a persona shape that release refuses; the module header states why
+    that cannot move the verdict.
+    Everything else — the plan, the stranded state, the registry, the identity — is the
+    adopted leg's.
     """
     world = _world(tmp_path_factory, "session-reuse-prior")
     name = "session-reuse-prior"
@@ -472,7 +477,7 @@ def prior(
         settled=_settled(
             world,
             name,
-            [prior_binary, "start", str(_plan(world, name)), *LAUNCH_GRAPHS],
+            [prior_binary, "start", str(_plan(world, name))],
             oneharness_bin,
         ),
     )

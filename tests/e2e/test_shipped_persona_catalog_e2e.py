@@ -53,9 +53,12 @@ CATALOG_SCHEMA_VERSION = 6
 #: that name, so a name it accepts beside the catalog is a name it does not ship.
 COLLIDES = "and one this crate ships"
 
-#: The persona delta a catalog entry needs to be valid at all — required keys only,
-#: because what is under test is the name, not the content.
-PROBE_PERSONA = "agent:\n  instructions: |\n    probe\nuser:\n  persona: |\n    probe\n"
+#: The persona a catalog entry needs to be valid at all, in the 0.3.0 shape — a role
+#: and a review bar, because what is under test is the name, not the content. Written
+#: as `system_prompt` rather than the retired `agent:` block: that block is refused
+#: outright, so a probe still carrying it would fail every journey here for the one
+#: reason none of them is about.
+PROBE_PERSONA = "system_prompt: |\n  probe\nuser:\n  persona: |\n    probe\n"
 
 
 def _catalog_graph(root: Path, name: str) -> Path:

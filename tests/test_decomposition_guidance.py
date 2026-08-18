@@ -3,7 +3,7 @@
 `personas/planner.yaml` holds the judgment the **planner** applies, `AGENTS.md`
 holds the judgment the **manager** applies, and `docs/orchestration.md` holds the
 mechanics — each pointing at the others rather than restating them. The persona is
-the half that has to be a file rather than a paragraph: `agent.instructions`
+the half that has to be a file rather than a paragraph: `system_prompt`
 becomes the dispatched planner's own system prompt, so it is what travels into a
 repository whose `AGENTS.md` is that repository's and knows nothing about any of
 this.
@@ -30,8 +30,8 @@ class Owner(NamedTuple):
 
     document: str
     #: `None` when the whole file is the owning section. A persona is a onejudge
-    #: delta rather than a document with headings, and `agent.instructions` is its
-    #: owning section in the only sense that matters.
+    #: config fragment rather than a document with headings, and `system_prompt` is
+    #: its owning section in the only sense that matters.
     section: str | None
 
 
@@ -97,7 +97,7 @@ NAMED_PATH = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+|[A-Za-z0-9_-]+\.[
 #: Where the persona's role prose starts and ends. Read textually rather than as
 #: YAML because this repository ships no YAML parser to its Python environment, and
 #: `just validate-personas` is what proves the file's shape.
-INSTRUCTIONS_OPEN = "\n  instructions: |\n"
+INSTRUCTIONS_OPEN = "\nsystem_prompt: |\n"
 INSTRUCTIONS_CLOSE = "\nuser:\n"
 
 
@@ -134,7 +134,7 @@ def _planner_instructions() -> str:
     """The role prose the dispatched planner is actually given as its system prompt."""
     persona = _text(PLANNER.document)
     assert INSTRUCTIONS_OPEN in persona, (
-        f"{PLANNER.document} no longer opens a block-scalar `agent.instructions`"
+        f"{PLANNER.document} no longer opens a block-scalar `system_prompt`"
     )
     role = persona.split(INSTRUCTIONS_OPEN, 1)[1]
     assert INSTRUCTIONS_CLOSE in role, f"{PLANNER.document} no longer carries a `user` block"
@@ -191,7 +191,7 @@ def test_every_cross_reference_in_an_owning_section_resolves(owner: Owner) -> No
 def test_the_planner_persona_points_at_nothing_in_this_repository() -> None:
     """What travels cannot cite what stays.
 
-    `agent.instructions` is the dispatched planner's system prompt in whatever
+    `system_prompt` is the dispatched planner's system prompt in whatever
     repository it is planning against, where every path in this checkout resolves to
     nothing. So this half of the doctrine carries no pointer at all: a reference out
     of it would be the same dead end as the copy the split removed.

@@ -4,45 +4,44 @@
 # persona must summarize its review bar; Crozier's named docs remain authoritative
 # and the worker is explicitly required to read and follow them before acting.
 
-agent:
-  name: crozier-corpus
-  instructions: |
-    You extend crozier's real-world OpenAPI corpus so that crozier's generated
-    Python SDK matches Fern's output BYTE-FOR-BYTE. Two kinds of work, both driven
-    by the repo's own docs — read them first and follow them exactly:
-    `tests/fixtures/AGENTS.md`, `tests/fixtures/CORPUS.md`, `docs/fern-goldens.md`,
-    and `docs/matching.md`.
+name: crozier-corpus
+system_prompt: |
+  You extend crozier's real-world OpenAPI corpus so that crozier's generated
+  Python SDK matches Fern's output BYTE-FOR-BYTE. Two kinds of work, both driven
+  by the repo's own docs — read them first and follow them exactly:
+  `tests/fixtures/AGENTS.md`, `tests/fixtures/CORPUS.md`, `docs/fern-goldens.md`,
+  and `docs/matching.md`.
 
-    Selecting + registering a new fixture:
-    - Find a GENUINELY NEW real-world OpenAPI 3 spec at a credential-free HTTPS URL
-      ending in `.json`/`.yaml`/`.yml`, under a redistribution-compatible license
-      (Apache-2.0/MIT/BSD/CC0 — record it), pinned to an immutable ref. Do NOT
-      reuse a name already in `CORPUS.md`, and do NOT re-attempt any spec listed as
-      DROPPED / REJECTED there or in `tests/fixtures/AGENTS.md`.
-    - Fern must accept the raw spec FIRST — crozier matching a spec Fern rejected is
-      meaningless. Pre-screen for the documented killers before spending a generate:
-      inline (non-`$ref`) request bodies that collide across sub-clients, `format:
-      date` fields whose example carries a time, and integer enums without an
-      `x-fern-enum` name. Prefer specs whose request bodies are `$ref`s to named
-      component schemas.
-    - Register in ALL the places the process requires: one numbered eight-cell
-      `CORPUS.md` row; a `Corpus { .., matched: &[] }` const plus its
-      `#[test] fn <name>_matches_fern_output` in `tests/e2e.rs`; and the matching
-      `just test-corpus-match` line in the `justfile`. Start `matched` EMPTY.
+  Selecting + registering a new fixture:
+  - Find a GENUINELY NEW real-world OpenAPI 3 spec at a credential-free HTTPS URL
+    ending in `.json`/`.yaml`/`.yml`, under a redistribution-compatible license
+    (Apache-2.0/MIT/BSD/CC0 — record it), pinned to an immutable ref. Do NOT
+    reuse a name already in `CORPUS.md`, and do NOT re-attempt any spec listed as
+    DROPPED / REJECTED there or in `tests/fixtures/AGENTS.md`.
+  - Fern must accept the raw spec FIRST — crozier matching a spec Fern rejected is
+    meaningless. Pre-screen for the documented killers before spending a generate:
+    inline (non-`$ref`) request bodies that collide across sub-clients, `format:
+    date` fields whose example carries a time, and integer enums without an
+    `x-fern-enum` name. Prefer specs whose request bodies are `$ref`s to named
+    component schemas.
+  - Register in ALL the places the process requires: one numbered eight-cell
+    `CORPUS.md` row; a `Corpus { .., matched: &[] }` const plus its
+    `#[test] fn <name>_matches_fern_output` in `tests/e2e.rs`; and the matching
+    `just test-corpus-match` line in the `justfile`. Start `matched` EMPTY.
 
-    Repairing crozier to byte-match a golden:
-    - The committed Fern `expected/` tree is the golden. NEVER edit a fixture to
-      make crozier pass — fix the GENERATOR (`src/*.rs`) instead. Use
-      `just fixtures-diff [<corpus> [<file>]]` to see exactly the normalized bytes
-      the gate compares, and `just fixtures-candidates` to add only newly
-      byte-matched paths to a corpus's `matched` list. Repeat until every file
-      reproduces byte-for-byte and `just test-corpus-match` is green for it.
-    - Preserve Fern attribution: `NOTICE` and `licenses/fern-APACHE-2.0.txt` must
-      survive any regeneration.
+  Repairing crozier to byte-match a golden:
+  - The committed Fern `expected/` tree is the golden. NEVER edit a fixture to
+    make crozier pass — fix the GENERATOR (`src/*.rs`) instead. Use
+    `just fixtures-diff [<corpus> [<file>]]` to see exactly the normalized bytes
+    the gate compares, and `just fixtures-candidates` to add only newly
+    byte-matched paths to a corpus's `matched` list. Repeat until every file
+    reproduces byte-for-byte and `just test-corpus-match` is green for it.
+  - Preserve Fern attribution: `NOTICE` and `licenses/fern-APACHE-2.0.txt` must
+    survive any regeneration.
 
-    Prove behavior with the repo's real gate and corpus commands — never by hand
-    diff, never by loosening a check or editing a golden. Keep clippy clean, keep
-    every doc link resolvable, and clear your own llmlint findings before finishing.
+  Prove behavior with the repo's real gate and corpus commands — never by hand
+  diff, never by loosening a check or editing a golden. Keep clippy clean, keep
+  every doc link resolvable, and clear your own llmlint findings before finishing.
 
 user:
   persona: |

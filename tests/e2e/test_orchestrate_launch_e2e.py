@@ -18,7 +18,6 @@ seam where a dispatch reaches it.
 
 from __future__ import annotations
 
-import functools
 import json
 import os
 import re
@@ -26,13 +25,13 @@ import shutil
 import subprocess
 import threading
 import time
-import tomllib
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
+from harness_indirections import established_indirections, harness_routing
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
 from published_surface import surface_of
@@ -274,115 +273,8 @@ class RefusedOnTheGraph(NamedTuple):
     refusal: str
 
 
-class IndirectionSource(NamedTuple):
-    """One helper and the function it defines, which are not interchangeable.
-
-    Sourcing a helper sets nothing — a caller must invoke its function — so the two
-    travel together, named rather than positional.
-    """
-
-    #: The helper's repository-relative path, sourced for its definitions.
-    helper: str
-    #: The function that derives, validates, and exports what the helper is for.
-    function: str
-
-
-class Indirection(NamedTuple):
-    """One established indirection, as the helper that owns it resolved it."""
-
-    name: str
-    value: str
-
-
-#: Each alternate-identity indirection's ONE source: the helpers every wrapper that
-#: reaches `oneharness` sources. Deriving the paths here instead would be the second
-#: copy those files exist to prevent.
-INDIRECTION_SOURCES = (
-    IndirectionSource("scripts/codex-alt-home.sh", "ensure_codex_alt_home"),
-    IndirectionSource("scripts/claude-alt-config-dir.sh", "resolve_claude_alt_config_dir"),
-)
-
-#: The configs whose members run oneharness in-library, so their variants resolve from
-#: this process's environment rather than a spawned CLI's.
-SINGLE_SIDED_CONFIGS = (
-    REPO_ROOT / "oneharness.check-in.toml",
-    REPO_ROOT / "oneharness.pr-author.toml",
-)
-
-
-def _harness_routing(config: Path) -> dict:
-    """One oneharness config, as the CLI that reads it lays it out."""
-    return tomllib.loads(config.read_text(encoding="utf-8"))
-
-
-def _configured_indirections() -> tuple[str, ...]:
-    """Every variable a variant's `env_from` reads out of the parent process.
-
-    Derived rather than listed: `oneharness` refuses to start a variant whose
-    indirection is unset, so a config that names a new one has to reach this module or
-    the journeys below would fail on it with the environment out of sight again.
-    """
-    named = {
-        variable
-        for config in SINGLE_SIDED_CONFIGS
-        for harness in _harness_routing(config).get("harness", {}).values()
-        for variant in harness.get("variant", {}).values()
-        for variable in variant.get("env_from", {}).values()
-    }
-    return tuple(sorted(named))
-
-
-INDIRECTIONS = _configured_indirections()
-
 #: Who the helpers attribute their diagnostics to when one of them refuses.
 INDIRECTION_CALLER = "tests/e2e/test_orchestrate_launch_e2e.py"
-
-
-@functools.cache
-def _established_indirections() -> tuple[Indirection, ...]:
-    """Establish the alternate-identity indirections through their own one source.
-
-    A provisioned planner session and a dispatched worker both carry these already,
-    from `scripts/session-setup.sh`; nothing on the `just gate` path does. Inheriting
-    them made this module pass for the hosts that had run the session hook and fail
-    everywhere else — a bare shell, a fresh terminal, a CI job — with an `assert 1 == 0`
-    on a graph-schema claim rather than a word about the environment.
-
-    Cached because the answer is the host's and every journey in this module asks for it.
-    """
-    script = "\n".join(
-        [
-            *(
-                f'. "{REPO_ROOT / source.helper}"\n{source.function} "{INDIRECTION_CALLER}"'
-                for source in INDIRECTION_SOURCES
-            ),
-            *(f'printf "%s=%s\\n" {name} "${{{name}-}}"' for name in INDIRECTIONS),
-        ]
-    )
-    resolved = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(30),
-        check=False,
-    )
-    established = {
-        name: value
-        for name, _, value in (line.partition("=") for line in resolved.stdout.splitlines())
-        if value
-    }
-    unestablished = [name for name in INDIRECTIONS if name not in established]
-    if unestablished:
-        # Named, because the whole point is that a missing indirection stops reading as
-        # somebody else's broken assertion. The helper's own diagnostic says which
-        # override or `HOME` to fix.
-        pytest.fail(
-            f"{INDIRECTION_CALLER} could not establish {', '.join(unestablished)} from "
-            f"{', '.join(source.helper for source in INDIRECTION_SOURCES)}; `oneharness` "
-            f"refuses to start a variant whose indirection is unset:\n{resolved.stderr}"
-        )
-    return tuple(Indirection(name, established[name]) for name in INDIRECTIONS)
 
 
 def _environment(
@@ -426,7 +318,7 @@ def _environment(
     # And the identities that seam cannot reach; see `no_paid_provider`.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
-    environment.update(_established_indirections())
+    environment.update(established_indirections(INDIRECTION_CALLER))
     # Keeps this run's graph scratch, its history, and its sibling state out of the
     # host's, so a journey never reads or reclaims a live dispatch's.
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
@@ -2078,7 +1970,7 @@ def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
 #: added to the config has to be covered here rather than escaping the guard silently.
 UNINTENDED_CLAUDE_IDENTITIES = tuple(
     identity
-    for identity in _harness_routing(REPO_ROOT / "oneharness.check-in.toml")["harnesses"]
+    for identity in harness_routing(REPO_ROOT / "oneharness.check-in.toml")["harnesses"]
     if identity.startswith("claude-code")
 )
 

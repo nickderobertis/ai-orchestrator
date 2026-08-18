@@ -21,7 +21,7 @@
 #
 # Schema 4, for the one field the member below needs. Its own `task` requires 3;
 # that task interpolates `{task}`, which `oneagentgraph` expands only from 4 — under
-# 3 the token reaches the model as its six literal characters. oneagentgraph 0.2.18
+# 3 the token reaches the model as its six literal characters. oneagentgraph 0.3.0
 # reads 1 through 6.
 version: 4
 name: pr-author
@@ -34,7 +34,7 @@ members:
   #
   # `../personas/pr-author.yaml` is named here for the LABEL alone. A single-sided
   # `kind: oneharness` member has no onejudge base config to layer a persona delta
-  # over, so neither that file's `agent.instructions` nor its `user.persona` reaches
+  # over, so neither that file's `system_prompt` nor its `user.persona` reaches
   # this turn — the prose below is the only thing the model is given, and the persona
   # file is the catalog entry that names the role and nothing more. Exactly the
   # arrangement `graphs/dag-scope.yaml`'s `check-in` member documents.

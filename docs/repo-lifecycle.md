@@ -1081,8 +1081,8 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, since onepipeline 0.7.5.** Where a drafting dispatch was
-*configured and attempted* and produced no body, the run records a
+**It is not silent either, on the adopted onepipeline 0.8.0.** Where a drafting
+dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
 where that failed too, because the publication is what settled the node — so `just
