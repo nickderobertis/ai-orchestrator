@@ -1078,10 +1078,29 @@ response, so a streaming member and a `schema_file` cannot both hold, and
 **Drafting never blocks publication, and it has no second attempt.** A drafting
 dispatch that cannot start, and a publication with no worktree to draft in, each
 warn on the node — `onepipeline: node '<id>': … so it publishes with no body` — and
-publish with no body at all. There is no deterministic body it falls back to, no
-retry of the graph run, and no separate journal event to look for: the warning on
-the node is the whole record, and a body-less change request on a run whose launch
-named a drafting graph is what a failed draft looks like.
+publish with no body at all. There is no deterministic body it falls back to and no
+retry of the graph run.
+
+**It is not silent either, since onepipeline 0.7.5.** Where a drafting dispatch was
+*configured and attempted* and produced no body, the run records a
+`body-not-drafted` event against the node carrying `ending` and `detail`, and the
+same `detail` lands on the node's own settlement — after the publication's reason
+where that failed too, because the publication is what settled the node — so `just
+results` shows it without a reader opening the store. Three endings, kept apart
+because they take three different fixes:
+
+| `ending` | what happened | the fix it points at |
+| --- | --- | --- |
+| `dispatch-failed` | the drafting graph could not be run, or ran without succeeding (a failed turn and a cancelled one both land here) | the graph, its harness config, or its quota |
+| `schema-refused` | it succeeded and the schema it was validated against rejected every answer it made | `config/pr-author-body.schema.json`, or the prompt that answers it |
+| `no-body` | it succeeded and there was no body in what it answered with | the drafting persona's prose |
+
+Nothing is emitted for the two endings that are **not** failures: a launch that
+named no pr-author graph, and a node that carried its own `body`. Neither spends a
+dispatch, and an event for either would report the shipped default as a fault. Below
+0.7.5 there was no kind for any of this and the warning on the node was the whole
+record, which is why a bodyless change request could not say whether the drafter ran
+and failed or was never wired at all.
 
 Run these nodes with `just orchestrate`, the one way to dispatch; it still accepts
 old lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,

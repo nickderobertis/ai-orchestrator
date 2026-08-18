@@ -116,7 +116,7 @@ supervisor came to read a stale tree and report no progress while the dispatch w
 committing. onevcs 0.4.2 and later take up the session a stopped run left on a
 pinned branch instead of cutting a second one on the same name, which is what lets
 a retry reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.7.2**, and what moved to carry it was the
+plan node is the adopted onepipeline 0.7.5**, and what moved to carry it was the
 *lockfile*: onepipeline links onevcs as a Rust library, and its `Cargo.toml`
 declares `onevcs = "0.4.1"` byte-identically in v0.7.1 and v0.7.2 — a caret
 requirement, so it permitted 0.4.2 all along and was never the constraint. Only
@@ -125,9 +125,18 @@ published half an hour before v0.7.1 was tagged, so that release shipped an
 unrefreshed lock against a fix its own requirement already accepted. **Widening
 that declaration is therefore a lever connected to nothing** — the resolution is
 the whole of the fix, and a reader who edits the requirement instead observes no
-change and wrongly concludes the bug is open. Below that resolution a retry pinned
-to a preserved branch fails with `branch ... already carries N commit(s) that main
-does not`, which was not academic — it stranded four nodes across three runs, three
+change and wrongly concludes the bug is open. That declaration is still
+`onevcs = "0.4.1"` at v0.7.5 and its lock still resolves 0.4.2, which is the same
+thing said a second way: **for anything onepipeline links, the adopted CLI version
+is not the version in force.** `config/onevcs.version` pins the onevcs *CLI* the
+manager verbs run — `publish-branch`, `recoverable`, `work-status`, `integrate` —
+and moving it moves nothing a dispatch does, because a dispatched session publishes
+through the copy onepipeline's own lock resolved. Read a fix's release note against
+that lock before predicting what a bump here will change; misreading it once
+produced a wrong diagnosis of this very bug and a wrong prediction of which
+adoption would fix it. Below that resolution a retry pinned to a preserved branch
+fails with `branch ... already carries N commit(s) that main does not`, which was
+not academic — it stranded four nodes across three runs, three
 on 2026-08-16 and one on 2026-08-18, each needing an out-of-band `just
 publish-branch` to recover. So never regress the lock floor, and adopt a fix like
 this **between** runs: a live driver keeps the binary it launched with, so no retry
@@ -473,7 +482,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.7.2 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.7.5 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -811,7 +820,12 @@ A driver this host has proved is gone reads `DRIVER DEAD … nothing is driving 
 run` — distinct from `PARKED`, which is a launch that still holds its pid. The same
 tier is served as run-scope timeline spans, from a bounded local capture when the
 harness refused to write its history; see [Seeing the supervisory
-tier](docs/telemetry.md#seeing-the-supervisory-tier).
+tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
+cannot fully answer: since onepipeline 0.7.5 a run whose journal does not hold every
+record whole prints `journal: … — this run's record of itself is incomplete`, which
+is the one line that makes the rest unprovable, so read it before acting on a node
+those views show as never settled. It used to be said only on the driver's stderr,
+which a detached run writes to a log nobody opens.
 **`just recoverable`** is the other half of that: every preserved-but-unpublished
 branch, where it lives, why its workstream stopped,
 whether it carries an incomplete-step marker, and the exact command that lands it —
@@ -1011,7 +1025,13 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. See [Diff-derived PR
+graph does. Those two are not the same thing to read, and since onepipeline 0.7.5
+they no longer look it: a drafting dispatch that was configured, attempted, and
+produced nothing records `body-not-drafted` against the node with which of
+`dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries
+that ending — while a launch that named no graph, and a node that carried its own
+`body`, emit nothing, because neither spends a dispatch and neither is a fault. See
+[Diff-derived PR
 descriptions](docs/repo-lifecycle.md#diff-derived-pr-descriptions).
 
 ## Dogfooding rule
@@ -1147,11 +1167,25 @@ limit, carrying a type this repository releases from (`feat`, `fix`, `perf`, or 
 type marked breaking with `!`). A `docs:` or `chore(deps):` change to tracked source
 merges green and then never cuts a release, which is what cost two changes in one
 plan and was caught both times only by a person reading the title. The hook reads the
-subject and nothing else — no index, no diff, no branch — because `onevcs` runs a
-repository's `commit-msg` hook against the subject it is about to publish, where
-none of that exists, and one policy must mean the same thing to both callers. Git's
-own generated subjects, autosquash markers, and the `(incomplete step)` marker and
-its attestation are exempt: no publication carries them.
+subject and nothing else — no index, no diff, no branch — because the adopted
+**onevcs 0.6.1** puts the composed subject a publication is about to land under to
+that repository's own `commit-msg` hook, where none of that exists, and one policy
+must mean the same thing to both callers. **What that release changed is *when* the
+question is asked, not whether the hook runs**, and the difference is the whole
+value: the disposable clone a publication works in is given the lender's
+`core.hooksPath` (or its tracked `.githooks/`) when it is cut, so git has always run
+this repository's hook on the squash commit a publication writes — from the far side
+of a gate run and a merge, reported as `invalid input: git commit -m <subject>
+failed`. 0.6.1 asks first, before anything is written, and refuses with the branch,
+the subject, what the hook said, and `publish with an explicit title that satisfies
+it`. `tests/e2e/test_publish_branch_e2e.py` holds both halves and was proven red
+against 0.5.0 on that wording. Two things it is therefore *not*: `just integrate`
+composes the train's subject through `provenance::publication_subject` rather than
+the publication path, so it never asks; and a lifecycle dispatch publishes through
+the onevcs onepipeline links (0.4.2), where the question reaches an operator only as
+git's own refusal of the commit. Git's own generated subjects, autosquash
+markers, and the `(incomplete step)` marker and its attestation are exempt: no
+publication carries them.
 
 Squash-merge is what a recovered incomplete step publishes too, so **every** path
 that advances the base — lifecycle publication, `repo-recover`, and the `integrate`

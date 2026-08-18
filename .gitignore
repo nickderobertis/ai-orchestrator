@@ -25,7 +25,19 @@ dist/
 
 # Orchestrator run artifacts (reports written with -o land wherever the caller
 # points; keep any local scratch out of the tree)
-/scratch/
+#
+# `/scratch/*` and not `/scratch/`, because git will not re-include a file whose
+# parent directory is excluded: the directory has to stay walkable for the one
+# exception below to be reachable. Everything else directly in it is still ignored,
+# and an ignored subdirectory's contents stay unreachable for re-inclusion — which is
+# what keeps this an exception for one file rather than a hole for the whole tree.
+/scratch/*
+# The evidence behind a decision this branch delivers — that oneagentgraph 0.3.0 is
+# not adopted — so it is tracked. Tracked was not enough: under `/scratch/` it sat
+# outside both the llmlint diff tier, which honors this file, and the `wholeWorkspace`
+# Nx key, so nothing judged it and editing it invalidated nothing. Naming it here is
+# what puts it inside both.
+!/scratch/issue-24-followups.md
 /runs/
 
 # Screenshot galleries (`just dag-ui-screens`). One directory per invocation, so two

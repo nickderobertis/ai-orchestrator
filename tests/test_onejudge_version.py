@@ -80,6 +80,16 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
 }
 
 
+def _adopted(tool: str) -> str:
+    """The release `config/<tool>.version` declares, for a claim gated by sentence.
+
+    The count-based gate above resolves this itself from the tool name it is
+    parametrized with. The sentence-based gates below each name one tool, so they
+    share this rather than each restating the path.
+    """
+    return (REPO_ROOT / "config" / f"{tool}.version").read_text(encoding="utf-8").strip()
+
+
 def _published_version_reference(tool: str) -> re.Pattern[str]:
     return re.compile(
         rf"\b{re.escape(tool)}(?:-cli)?(?:'s)?(?: version)?[\s`*(=]+v?(?P<version>\d+\.\d+\.\d+)"
@@ -204,7 +214,12 @@ def test_claims_about_the_adopted_release_name_the_adopted_release(
 #: of those alone.
 ADOPTED_ONEPIPELINE_CLAIMS = {
     "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
-    "personas/README.md": ("measured against onepipeline {version}",),
+    "personas/README.md": (
+        "measured against onepipeline {version}",
+        # Which oneagentgraph a dispatch reads a persona with, which is the whole of
+        # why the persona shape here is not the newest published one.
+        "at onepipeline v{version}, confirmed from that tag's",
+    ),
     # What a run names to the agent graph watching it — `ONEPIPELINE_RUN_ID`, set to
     # the run id — restated in five places because the claim is load-bearing in five
     # different arguments: why the pacemaker interpolates `{task}`, why the observer
@@ -229,7 +244,23 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # The channel-serve section, on what its filter reads and what it leaves.
         "measured against onepipeline {version} in the judge command's own environment",
     ),
-    "AGENTS.md": ("measured against onepipeline {version} on a real launch",),
+    "AGENTS.md": (
+        "measured against onepipeline {version} on a real launch",
+        # Why the pin is where it is: the fix a plan node gets is the one this
+        # release's *lockfile* resolved, not the one its `Cargo.toml` permits.
+        "is the adopted onepipeline {version}",
+        # The re-measurement of that lock, which is what makes the CLI-versus-linked
+        # distinction concrete rather than a warning.
+        "at v{version} and its lock still resolves 0.4.2",
+        # What a bodyless change request now says about itself.
+        "since onepipeline {version} they no longer look it",
+        # That the read-only views now disclose a journal they cannot read whole.
+        "since onepipeline {version} a run whose journal does not hold every",
+    ),
+    # The drafting endings, which did not exist below this release: the paragraph
+    # states the release the kind arrived in, so a bump has to re-read whether the
+    # vocabulary beside it still holds.
+    "docs/repo-lifecycle.md": ("**It is not silent either, since onepipeline {version}.**",),
     # Two independent per-release claims share this file. Its header states the
     # request shape each side of the channel writes, so a bump that moved either side
     # would leave it reconciling a frame nobody sends; the second is the run-id export
@@ -260,7 +291,7 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
     document, leaving a second site that states the claim ungated; and a duplicate
     left behind by an edit would go unnoticed the same way.
     """
-    adopted = (REPO_ROOT / "config" / "onepipeline.version").read_text(encoding="utf-8").strip()
+    adopted = _adopted("onepipeline")
     # Whitespace-normalized: these sentences wrap across lines, and a reflow is not
     # a change to what they assert.
     written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
@@ -270,6 +301,81 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
             f"{relative_path} states {stated!r} {written.count(stated)} times, not once; "
             "re-measure the claim against the adopted release and update that one site "
             "in the same change"
+        )
+
+
+#: Per-release claims about the two *sibling* CLIs, as tool → file → the sentence
+#: each must spell. Same contract and same reason as the onepipeline claims above,
+#: and they share one test because they are one shape of claim: a behaviour this
+#: repository measured against a pinned sibling, restated in prose that would
+#: otherwise survive the bump that invalidated it.
+#:
+#: Neither can go under the published-CLI count gate, and both for the reason the
+#: oneharness claims cannot: each of these files deliberately names a release this
+#: repository does **not** adopt, and those literals must not move with the pin.
+#:
+#: * **oneagentgraph** decides which *persona shape* this repository may be written
+#:   in, and the claim gated here is a refusal — 0.2.18 rejects the 0.3.0 spelling
+#:   outright. `personas/README.md` names 0.3.0 beside it, as the release it is
+#:   explaining that this repository does not adopt. Bumping the pin fails here,
+#:   which is the prompt to re-take the three probes that note describes and to move
+#:   the pin, every file in `personas/`, and `config/onejudge.base.yaml` at once.
+#: * **onevcs** needs its own entry because the two onevcs versions in play are
+#:   deliberately different things: `config/onevcs.version` installs the **CLI** the
+#:   manager verbs run, while a dispatched session publishes through the onevcs
+#:   `onepipeline` links — 0.4.2 at the adopted engine release. A claim about one is
+#:   never a claim about the other, and mistaking the CLI pin for the version in
+#:   force has already produced a wrong diagnosis here. `AGENTS.md` names the 0.4.2
+#:   retry floor and the 0.5.0 that carried no `commit-msg` code at all.
+ADOPTED_SIBLING_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
+    "oneagentgraph": {
+        "personas/README.md": (
+            "The pinned oneagentgraph {version} refuses the new shape outright",
+        ),
+    },
+    "onevcs": {
+        "AGENTS.md": ("the adopted **onevcs {version}** puts the composed subject",),
+    },
+}
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(
+    ("tool", "relative_path", "templates"),
+    [
+        (tool, path, templates)
+        for tool, files in ADOPTED_SIBLING_CLAIMS.items()
+        for path, templates in files.items()
+    ],
+)
+def test_claims_about_an_adopted_sibling_name_the_adopted_release(
+    tool: str, relative_path: str, templates: tuple[str, ...]
+) -> None:
+    """Each was measured against the pinned sibling rather than read off a changelog.
+
+    The oneagentgraph one by probing the installed binary three ways — `persona
+    validate`, `oneagentgraph validate`, and a real `oneagentgraph run` of a
+    one-member graph naming a 0.3.0-shaped persona by path — each with a
+    0.2.18-shaped control beside it. The onevcs one by publishing for real on both
+    releases in `tests/e2e/test_publish_branch_e2e.py`, which is what turned a claim
+    that read as "the hook is new" into the narrower one `AGENTS.md` now makes: 0.5.0
+    met the hook too, through git's own refusal of the publication commit, and what
+    0.6.1 added is asking before anything is written and saying what to do about it.
+
+    Each sentence is required **exactly once**, for the reason the onepipeline gate
+    above states: a claim satisfied anywhere in its file leaves a second site ungated,
+    and a duplicate left behind by an edit goes unnoticed the same way.
+    """
+    adopted = _adopted(tool)
+    # Whitespace-normalized: these sentences wrap across lines, and a reflow is not a
+    # change to what they assert.
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+    for template in templates:
+        stated = template.format(version=adopted)
+        assert written.count(stated) == 1, (
+            f"{relative_path} states {stated!r} {written.count(stated)} times, not once; "
+            f"re-measure the claim against the adopted {tool} release and update that one "
+            "site in the same change"
         )
 
 

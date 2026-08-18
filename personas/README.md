@@ -64,18 +64,21 @@ oneagentgraph 0.2.18 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs ea
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.7.2 and
+Three consequences, the first two re-measured against onepipeline 0.7.5 and
 oneagentgraph 0.2.18 by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. The launch was against 0.7.0; every bump since has carried it forward on
 the narrower evidence that `src/agentgraph.rs` and `src/graph.rs` — the whole of
 what composes a member and resolves its persona — cannot have moved the answer.
-Through 0.7.1 both were byte-identical with the launched crate. 0.7.2 leaves
-`src/graph.rs` byte-identical and adds to `src/agentgraph.rs` exactly one thing: a
+Through 0.7.1 both were byte-identical with the launched crate. 0.7.2 left
+`src/graph.rs` byte-identical and added to `src/agentgraph.rs` exactly one thing: a
 `process()` accessor returning the backend's pid, whose one caller registers
 dispatch ownership so a teardown can aim at the right process. No composition or
-persona-resolution path reads it, so there is still no path by which the answer
-could have moved:
+persona-resolution path reads it. 0.7.3 through 0.7.5 leave **both files
+byte-identical with 0.7.2**; the whole of what those three releases touched is the
+ledger and the journal, the report retention path, the drafting ending, and the
+views that read them. So there is still no path by which the answer could have
+moved:
 
 - Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
   with. The flat files whose names match a built-in are a catalog and a validation
@@ -131,3 +134,35 @@ under `personas/` (underscore-prefixed files and directories are skipped):
 
 See `docs/onejudge-integration.md` for how a persona becomes an effective onejudge
 config and how the two conversation sides are wired.
+
+### Why that shape stays, even though a newer one is published
+
+`oneagentgraph` 0.3.0 replaces it: a persona becomes a onejudge config fragment, so
+`agent.instructions` moves to a top-level `system_prompt`, `agent.name` to a
+top-level `name`, and everything under `user:` stays. That release's own
+`docs/persona-format.md` says the previous spelling "no longer loads, anywhere" —
+no alias, no flag, no deprecation period — and states the same rule for a base
+config, so `config/onejudge.base.yaml` would move in the same change.
+
+**Adopting it here is blocked, and not by taste.** `just validate-personas` runs
+the oneagentgraph *CLI*, but what reads a persona at dispatch is the oneagentgraph
+`onepipeline` **links** — 0.2.18 at onepipeline v0.7.5, confirmed from that tag's
+`Cargo.lock`. Bumping the CLI alone would certify a shape the dispatching reader
+cannot load, and `graphs/dag-scope.yaml` names `../personas/orchestrator.yaml` and
+`../personas/check-in.yaml` **by path**, so the monitor and the pacemaker would
+stop being produced on every orchestrated run.
+
+The pinned oneagentgraph 0.2.18 refuses the new shape outright rather than
+degrading quietly — its `Persona` carries `deny_unknown_fields` at every level —
+and that was measured on the installed stack, with a 0.2.18-shaped control beside
+each probe: `persona validate` and `oneagentgraph validate` both exit 2 on
+``unknown field `name`, expected one of `agent`, `user`, `evals` ``, and a real
+`oneagentgraph run` of a one-member graph naming such a file by path dies at config
+validation before `graph-started` while the control reaches `graph-settled` with
+exit 0.
+
+**What unblocks it: an `onepipeline` release whose `Cargo.lock` resolves
+`oneagentgraph 0.3.0`.** Read the lock, not the `Cargo.toml` requirement: a caret
+requirement permits a version the lock has not resolved, so a `Cargo.toml` naming
+0.3.0 is not evidence that a dispatch reads it. Then the pin, every file here, and
+`config/onejudge.base.yaml` move together in one change.

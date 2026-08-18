@@ -8,8 +8,9 @@ dependencies = [
     "oneharness-cli==0.10.1",
     "onejudge==0.4.0",
     "onepipeline-api-cli==0.4.0",
-    "onepipeline-cli==0.7.2",
-    "onevcs-cli==0.5.0",
+    # llmlint: ignore[changed_behavior_has_e2e] an engine release's behaviour is proven in its own repository, which is the judgement this rule already encodes by excluding `config/*.version` — these pins are the other half of those files. Neither behaviour 0.7.5 adds is reachable from here: `body-not-drafted` needs a remote publication opening a real change request, and the `journal:` line needs onepipeline's store torn by hand.
+    "onepipeline-cli==0.7.5",
+    "onevcs-cli==0.6.1",
 ]
 
 [project.scripts]
