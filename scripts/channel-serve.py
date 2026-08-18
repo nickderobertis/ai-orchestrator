@@ -22,13 +22,17 @@ a bad frame: unknown field 'op'` — and the member then dies with `provider pro
 no output`, which is how a graph that wired the two together directly loses its
 monitor on the first turn while the run carries on unwatched.
 
-Two values have to be recovered from that frame rather than read from the
-environment, and both are recovered from what the frame itself carries:
+Two values have to be recovered before a surface can be raised, and both are read
+out of what the frame itself carries:
 
-* **The run id.** `onepipeline` exports no variable naming it to an observer
-  member — measured by dumping the judge command's whole environment on a real
-  launch — but the task it composes for the graph opens by naming the run, so the
-  id is read from there.
+* **The run id.** The task `onepipeline` composes for the graph opens by naming
+  the run, so the id is read from there. The environment names it too —
+  `ONEPIPELINE_RUN_ID` is set to the run id on both sides of an observer member,
+  measured against onepipeline 0.7.1 by dumping this command's whole environment on
+  a real launch — but that is a per-release export while the composed task is the
+  contract this filter already validates, so the task stays the source. The export
+  is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where
+  this file stands and re-takes the measurement rather than trusting this paragraph.
 * **What to surface.** The last assistant message of the conversation is what the
   monitor just said, which is the thing the planner is being asked to answer.
 
@@ -64,7 +68,7 @@ RunId = NewType("RunId", str)
 #: How the composed dag-scope task names its run, on its first line:
 #: ``onepipeline run `scheduler-research`.``. That opening is the published
 #: composed-task contract for this graph, and the only place an observer member is
-#: told which run it is watching.
+#: told which run it is watching in a way that does not depend on the release.
 RUN_IN_COMPOSED_TASK = re.compile(r"onepipeline run `([^`]+)`")
 
 #: What a run id read out of that task may be, checked before it is used. It is read

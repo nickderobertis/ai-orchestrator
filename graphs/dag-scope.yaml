@@ -74,16 +74,19 @@ members:
   # composes ONE task for this graph and `oneagentgraph` hands it to every member
   # that does not claim one; a member's own `task` REPLACES that composed task as its
   # whole prompt. So this member is told what it is for here rather than inheriting
-  # the run-level task — and it opens by interpolating `{task}` back in, because that
-  # composed task is the ONLY thing that names the run to this member.
+  # the run-level task — and it opens by interpolating `{task}` back in, because a
+  # member that replaced the composed task is otherwise told nothing about the run.
   #
-  # It is not named any other way, and the obvious other way is wrong: `onepipeline`
-  # exports NO variable carrying the run id to an observer member. Measured by
-  # dumping this command's whole environment on a real launch — `ONEPIPELINE_RUNS_DIR`
-  # and the launcher identity are there, the run id is not. A task written against
-  # `$ONEPIPELINE_RUN_ID` therefore reads empty on an operator's launch, and worse
-  # than empty inside a dispatch that already exports one for its OWN run: it silently
-  # reports on the enclosing run instead of this one.
+  # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
+  # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
+  # launcher identity —
+  # measured against onepipeline 0.7.1 on both of that member's sides, by dumping
+  # each one's whole environment on a real launch. `{task}` is still what this member
+  # is written against: it is this graph's own contract rather than a per-release
+  # export, and it carries the run's goal as well as its id.
+  # `tests/e2e/test_orchestrate_launch_e2e.py` re-takes that measurement on the judge
+  # side of a real observer member every gate run, so a release that moved the export
+  # fails there rather than here.
   #
   # Its task scopes it to reporting and away from editing, which is load-bearing
   # rather than tidy: this member is single-sided and finitely deadlined, so a live

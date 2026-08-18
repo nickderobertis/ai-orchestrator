@@ -34,6 +34,7 @@ from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 import pytest
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
 from no_paid_provider import REFUSAL, VERSION
+from observer_environment import ENVIRONMENT_PATH_ENV
 from published_surface import surface_of
 from shared_dispatch_bar import shared_agent_preamble, shared_completion_bar
 from waits import deadline
@@ -109,6 +110,15 @@ MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 
 #: The pacemaker member, whose turn reports and never edits.
 PACEMAKER_MEMBER = "check-in"
+
+#: The probe that stands exactly where `scripts/channel-serve.py` stands — as an
+#: observer member's `judge.command` — and writes out the environment it was started
+#: with, so the export below is measured rather than asserted from prose.
+OBSERVER_PROBE = Path(__file__).resolve().parent / "observer_environment.py"
+
+#: The variable `onepipeline` names an observer member's run with, taken from the
+#: measurement below rather than from any document that restates it.
+RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 
 #: The run's active monitor, and the member whose judgment this graph exists for.
 MONITOR_MEMBER = "monitor"
@@ -1719,14 +1729,19 @@ def _turns_so_far(prompt_log: Path) -> list[PromptRecord]:
     return _recorded_turns(prompt_log) if prompt_log.exists() else []
 
 
-def _monitor_turns(prompt_log: Path) -> list[str]:
-    """Every prompt the monitor's AGENT side was given, newest last."""
+def _monitor_agent_turns(prompt_log: Path) -> list[PromptRecord]:
+    """Every turn the monitor's AGENT side was given, newest last."""
     return [
-        turn["prompt"]
+        turn
         for turn in _turns_so_far(prompt_log)
         if "/members/monitor/" in (turn["config"] or "")
         and Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
     ]
+
+
+def _monitor_turns(prompt_log: Path) -> list[str]:
+    """Every prompt the monitor's AGENT side was given, newest last."""
+    return [turn["prompt"] for turn in _monitor_agent_turns(prompt_log)]
 
 
 def _await(found: Callable[[], bool], seconds: float, failure: Callable[[], str]) -> None:
@@ -1736,6 +1751,55 @@ def _await(found: Callable[[], bool], seconds: float, failure: Callable[[], str]
         if time.monotonic() >= limit:
             pytest.fail(failure())
         time.sleep(0.1)
+
+
+#: What `personas/orchestrator.yaml` demands before a finding may be called a rule
+#: violation, and where one it cannot ground goes instead. Read out of the SYSTEM prompt
+#: the monitor was actually given rather than out of the persona file, which is the
+#: point: a persona is an agent's role, so it arrives as the turn's system prompt after
+#: travelling the base config, `oneagentgraph`, and `oneharness`, and none of those
+#: reports what it passed on.
+GROUNDING_DEMANDED = "Quote the file and the line it"
+GROUNDING_FALLBACK = "observation"
+
+
+@pytest.mark.xdist_group("planner-supervises-monitor")
+def test_the_monitor_is_told_to_ground_a_violation_before_it_alleges_one(
+    planner_supervised: Supervised,
+) -> None:
+    """The grounding rule reaches a real monitor turn, not just the persona file.
+
+    A monitor that infers the rule an agent is judged against reports a protective act
+    as a breach, which costs a planner more than silence would. So it must quote the
+    file and line a rule comes from before calling anything a violation, and report
+    what it cannot ground as an observation instead.
+
+    That rule is prose handed to a model — nothing enforces it — so the one thing that
+    would silently un-enforce it is the prose not arriving. `graphs/dag-scope.yaml`
+    names the persona, but naming is not delivery: it travels the base config,
+    `oneagentgraph`, and `oneharness` to reach a turn as that turn's system prompt, and
+    none of them reports what it passed on. This reads the system prompt the monitor
+    was given on a supervised launch.
+
+    `tests/test_observer_grounding.py` holds the sides that state the rule and the
+    section that explains it. This holds the one thing that file cannot: that a
+    watching member is actually given it.
+    """
+
+    def told() -> list[str]:
+        return [turn["system"] for turn in _monitor_agent_turns(planner_supervised.prompt_log)]
+
+    _await(
+        lambda: any(
+            GROUNDING_DEMANDED in system and GROUNDING_FALLBACK in system for system in told()
+        ),
+        seconds=90,
+        failure=lambda: (
+            "the monitor was never told to ground a rule violation in a quoted file and "
+            "line, so a rule it inferred reaches the planner as a breach; its turns were "
+            f"given:\n{told()}"
+        ),
+    )
 
 
 @pytest.mark.xdist_group("planner-supervises-monitor")
@@ -1798,11 +1862,13 @@ def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
     supervised run is exactly the run where it should stay quiet. What still has to
     hold is the content of the task it would be given, which is this file's to state.
 
-    `{task}` is the load-bearing part. `onepipeline` exports NO variable naming the
-    run to an observer member — measured by dumping a judge command's whole
-    environment on a real launch — so a task written against `$ONEPIPELINE_RUN_ID`
-    reads empty on an operator's launch, and inside a dispatch that exports one for
-    its own run it silently reports on the enclosing run instead of this one.
+    `{task}` is the load-bearing part, and it is what this graph is written against
+    rather than the only thing available: `onepipeline` does export
+    `ONEPIPELINE_RUN_ID` to an observer member, which the journey below measures. The
+    composed task is preferred because it is this graph's own contract rather than a
+    per-release export, and because it carries the run's goal as well as its id — so
+    a pacemaker reaching for the variable instead is a member written against
+    something no document here promises.
     """
     # llmlint: ignore[tests_mirror_real_usage] A 30-minute schedule outlasts a journey.
     _, task = _dag_scope_document()
@@ -1812,11 +1878,124 @@ def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
         f"which run to report on: {task}"
     )
     assert "$ONEPIPELINE_RUN_ID" not in task, (
-        "the pacemaker names a run id variable `onepipeline` does not export to an "
-        f"observer member: {task}"
+        "the pacemaker reads its run from a per-release export rather than from the "
+        f"composed task this graph is written against: {task}"
     )
     assert f"Never send `{FORBIDDEN_OF_THE_PACEMAKER}`" in task, (
         f"the pacemaker's task no longer forbids the edit verb by name: {task}"
+    )
+
+
+#: The run id `onepipeline` mints from the probing plan's `name`, and what the export
+#: measured below has to be equal to.
+OBSERVED_RUN = "observer-environment-e2e"
+
+
+@pytest.fixture(scope="module")
+def observed_environment(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> dict[str, str]:
+    """The environment a real launch starts its observer member's judge side in.
+
+    An observer graph is attached by path and nothing else about it is this
+    repository's to choose, so the graph here is `graphs/dag-scope.yaml`'s monitor
+    member with one substitution: the probe takes `scripts/channel-serve.py`'s place
+    as `judge.command`. Everything the environment could come from is left real — the
+    `just` recipe, `onepipeline`'s driver, and the `oneagentgraph` run it starts the
+    observer with.
+
+    Written out rather than copied from the shipped document because every ref in
+    that file is resolved against its own directory, so a copy anywhere else resolves
+    none of them.
+
+    Two nodes rather than one, so the run has work left while the monitor completes
+    the exchange this measurement reads. A journey that raced settlement would report
+    a missing export as a missing variable.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp_path = tmp_path_factory.mktemp("observer-environment")
+    environment = _environment(tmp_path, oneharness_bin)
+    recorded = tmp_path / "observer-environment.json"
+    environment[ENVIRONMENT_PATH_ENV] = str(recorded)
+    graph = tmp_path / "observer.yaml"
+    graph.write_text(
+        "version: 4\n"
+        "name: observer-environment\n"
+        "members:\n"
+        "  monitor:\n"
+        "    kind: onejudge\n"
+        f"    base_config: {REPO_ROOT / 'config/onejudge.base.yaml'}\n"
+        f"    persona: {REPO_ROOT / 'personas/orchestrator.yaml'}\n"
+        "    agent:\n"
+        f"      oneharness_config: {REPO_ROOT / 'oneharness.orchestrator.toml'}\n"
+        "    judge:\n"
+        f'      command: ["{OBSERVER_PROBE}"]\n'
+        "    mode: bypass\n",
+        encoding="utf-8",
+    )
+    plan = tmp_path / "observer.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "goal": {"text": "measure what a run names to the graph watching it"},
+                "name": OBSERVED_RUN,
+                "concurrency": 1,
+                "tasks": [
+                    {
+                        "id": "watched",
+                        "task": "Report without changing files.",
+                        "expects_no_diff": True,
+                    },
+                    {
+                        "id": "watched-again",
+                        "task": "Report without changing files.",
+                        "expects_no_diff": True,
+                        "deps": ["watched"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    launch = _just("orchestrate", str(plan), "--dag-graph", str(graph), environment=environment)
+    try:
+        assert launch.returncode == 0, f"{launch.stdout}\n{launch.stderr}"
+        assert recorded.is_file(), (
+            "the observer member's judge side never ran, so this launch measured "
+            f"nothing:\n{launch.stdout}\n{launch.stderr}"
+        )
+        # `onepipeline`'s own environment, as it handed it to the graph it attached.
+        return cast(dict[str, str], json.loads(recorded.read_text(encoding="utf-8")))
+    finally:
+        _just("stop", OBSERVED_RUN, environment=environment, seconds=60)
+
+
+@pytest.mark.xdist_group("observer-environment")
+def test_a_launch_names_its_run_to_the_graph_watching_it(
+    observed_environment: dict[str, str],
+) -> None:
+    """`onepipeline` exports `ONEPIPELINE_RUN_ID` to an observer member, set to the run.
+
+    The gate on a per-release fact this repository states in four places. Nothing
+    about the export is this repository's to decide, so a release that moved it would
+    otherwise leave every one of those paragraphs reading true.
+
+    A failure here is a re-measurement, not a repair. If the variable is gone or
+    renamed, `graphs/dag-scope.yaml`, `docs/orchestration.md`, `AGENTS.md`, and
+    `scripts/channel-serve.py` each say what was measured and against which release,
+    and all of them move in the same change as this one.
+
+    Nothing reads the variable: `scripts/channel-serve.py` and the `check-in`
+    pacemaker take their run from the composed task, which is this graph's own
+    contract. The export is documented, so it is measured.
+    """
+    assert observed_environment.get(RUN_ID_ENV) == OBSERVED_RUN, (
+        f"the observer member was started with {RUN_ID_ENV}="
+        f"{observed_environment.get(RUN_ID_ENV)!r}, not {OBSERVED_RUN!r}; re-measure "
+        "the export and correct every document that states it, in this change"
     )
 
 

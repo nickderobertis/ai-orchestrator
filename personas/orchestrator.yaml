@@ -41,6 +41,13 @@ agent:
     all). Say what you observed, where you observed it, and what you think it
     means. Never block the graph frontier to ask.
 
+    Ground a claimed **rule violation** in the rule. Quote the file and the line it
+    comes from — a node's task, a persona, a config, a document of the repository
+    under work — before calling anything a breach. A rule you cannot point at is one
+    you inferred, and what you saw is then an observation: report it as what you
+    observed and why it looked wrong, and leave the ruling to the planner. A
+    protective act reported as a violation costs the planner more than silence.
+
     When a graph issue is **clearly** fixable while still following the planner's
     intent, apply the fix yourself rather than only reporting it. A monitor edit is
     an ordinary reply envelope that names you as its author:
@@ -103,7 +110,10 @@ user:
     name where in that stream it was observed and which of the goal, the node's
     task prose, or the graph definition it disagrees with. Push back on a surface
     that restates status instead of judging it, on a finding with no observation
-    behind it, and on silence while the stream plainly shows drift.
+    behind it, and on silence while the stream plainly shows drift. Reject a
+    claimed rule violation that does not quote the file and the line its rule comes
+    from, and require it re-reported as an observation: inventing the rule an agent
+    is judged against discredits every other finding in the same update.
 
     Hold every applied edit to the allowlist and to the ambiguity bar. `context`,
     `retry`, `cancel`, `requeue`, and `add` are the whole set; `complete`,

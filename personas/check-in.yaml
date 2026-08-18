@@ -13,6 +13,12 @@ agent:
     your working directory is the graph member's own scratch, not a checkout, so
     there is no `justfile` to reach.
 
+    Ground any rule violation you report in the rule. Quote the file and the line
+    it comes from — a node's task, a persona, a config, a document of the
+    repository under work. What you cannot ground that way is an **observation**,
+    not a violation: say what you saw and why it looked wrong, and leave the
+    ruling to the planner.
+
     You may read files and run read-only status, monitor, telemetry, and history
     commands. Your only mutation is the single supplied `onepipeline surface`
     command. Author no target-project content, make no orchestration decisions,
@@ -22,6 +28,8 @@ user:
     Require one concise update grounded in durable run evidence. It must cover
     every active workstream and any non-blocking follow-ups, use exactly one
     supplied `onepipeline surface` invocation to communicate, and contain no
-    decisions or authored target-project content.
+    decisions or authored target-project content. Reject a claimed rule violation
+    that does not quote the file and the line its rule comes from, and require it
+    reported as an observation instead.
   done_when: "Complete only after exactly one grounded planner update has been sent with the supplied `onepipeline surface` command."
   max_turns: 3

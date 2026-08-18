@@ -56,9 +56,10 @@
 # what would silently return this to the 30-second default.
 #
 # Environment:
-#   ONEPIPELINE_RUN_ID                        (required) the run to ask. A dispatch
-#       exports one for its own run; an observer member does not, so an unset value
-#       is refused rather than guessed at.
+#   ONEPIPELINE_RUN_ID                        (required) the run to ask. `onepipeline`
+#       exports one to a dispatch and to an observer member alike, both holding the
+#       run they are under, so an unset value means neither and is refused rather than
+#       guessed at.
 #   ONEPIPELINE_BIN                           (optional) which onepipeline answers.
 #   ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS  (optional) the reply window.
 #   ORCHESTRATOR_ASK_MANAGER_NODE             (optional) the node the question is

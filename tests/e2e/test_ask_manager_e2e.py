@@ -926,11 +926,10 @@ def test_an_observer_member_cannot_tell_its_run_from_an_enclosing_one_by_that_va
 ) -> None:
     """The observer graph carries the same variable, so it is no proof of a dispatch.
 
-    Worth pinning because the obvious reading of the fact above is the wrong one.
-    `graphs/dag-scope.yaml` records that `onepipeline` exports no variable naming the
-    run to an observer member; against the adopted release that is no longer so — the
+    Worth pinning because the obvious reading of the fact above is the wrong one. The
     driver exports `ONEPIPELINE_RUN_ID` and the observer graph inherits it, measured
-    here on a real launch.
+    here on a real launch and again on the judge side of an observer member by
+    `tests/e2e/test_orchestrate_launch_e2e.py`.
 
     What that costs is precision, not correctness: reading the variable tells a process
     which run it is *under*, never whether it is the dispatch of a node. So a wrapper

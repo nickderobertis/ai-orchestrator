@@ -71,7 +71,9 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # from which one the token stops being literal — so the literal joins this gate
     # rather than quietly outliving the bump that moves the ceiling.
     "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1},
-    "onepipeline": {Path("scripts/channel-serve.py"): 1},
+    # Two: the frame shape this filter parses, and the run-id export it deliberately
+    # does not read. Both are per-release measurements of the same crate.
+    "onepipeline": {Path("scripts/channel-serve.py"): 2},
 }
 
 
@@ -200,10 +202,39 @@ def test_claims_about_the_adopted_release_name_the_adopted_release(
 ADOPTED_ONEPIPELINE_CLAIMS = {
     "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
     "personas/README.md": ("measured against onepipeline {version}",),
-    # The reconciliation filter's header states the request shape each side of the
-    # channel writes, which is the pair of releases it was measured against. A bump
-    # that moved either side would leave this file reconciling a frame nobody sends.
-    "scripts/channel-serve.py": ("`onepipeline` {version} reads it",),
+    # What a run names to the agent graph watching it — `ONEPIPELINE_RUN_ID`, set to
+    # the run id — restated in five places because the claim is load-bearing in five
+    # different arguments: why the pacemaker interpolates `{task}`, why the observer
+    # graph is written the way it is, why the planner channel's filter parses a run id
+    # out of prose, what an operator should write a member against, and what that
+    # filter's own header promises.
+    # `tests/e2e/test_orchestrate_launch_e2e.py` re-takes that measurement on a real
+    # launch, and this gate holds each restatement to the release it was taken
+    # against, so a bump fails at both halves at once.
+    #
+    # Each site gets its OWN sentence rather than sharing one phrase, because
+    # `docs/orchestration.md` carries two of them in sections a reader reaches
+    # independently and one shared phrase would gate only whichever came first. A
+    # template here names the site it gates.
+    "graphs/dag-scope.yaml": (
+        "measured against onepipeline {version} on both of that member's sides",
+    ),
+    "docs/orchestration.md": (
+        # The agent-graphs section, on why a member interpolates `{task}`.
+        "measured against onepipeline {version} by dumping both sides of a monitor "
+        "member's whole environment",
+        # The channel-serve section, on what its filter reads and what it leaves.
+        "measured against onepipeline {version} in the judge command's own environment",
+    ),
+    "AGENTS.md": ("measured against onepipeline {version} on a real launch",),
+    # Two independent per-release claims share this file. Its header states the
+    # request shape each side of the channel writes, so a bump that moved either side
+    # would leave it reconciling a frame nobody sends; the second is the run-id export
+    # above, which it names and declines to read.
+    "scripts/channel-serve.py": (
+        "`onepipeline` {version} reads it",
+        "measured against onepipeline {version} by dumping this command's whole environment",
+    ),
 }
 
 
@@ -214,11 +245,17 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
 ) -> None:
     """What a dispatch does is a per-release fact, so each claim names the release.
 
-    Both of these were measured by reading what a real launch produced — the effective
-    `onejudge.yaml` a dispatch was given, and the `--config` its agent side arrived with.
-    Neither survives a bump unexamined, and the second one is the reason the pin is not
-    simply the newest release, so a bump that silently kept the sentence would leave the
-    justification for the pin asserting something about a release nobody re-measured.
+    These were measured by reading what a real launch produced — the effective
+    `onejudge.yaml` a dispatch was given, the `--config` its agent side arrived with,
+    and the environment its observer graph was started in. None survives a bump
+    unexamined, and the `--config` one is the reason the pin is not simply the newest
+    release, so a bump that silently kept the sentence would leave the justification
+    for the pin asserting something about a release nobody re-measured.
+
+    Each sentence is required **exactly once**. A restatement that only had to appear
+    somewhere in its file would be satisfied by a sibling paragraph in the same
+    document, leaving a second site that states the claim ungated; and a duplicate
+    left behind by an edit would go unnoticed the same way.
     """
     adopted = (REPO_ROOT / "config" / "onepipeline.version").read_text(encoding="utf-8").strip()
     # Whitespace-normalized: these sentences wrap across lines, and a reflow is not
@@ -226,9 +263,10 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
     written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
     for template in templates:
         stated = template.format(version=adopted)
-        assert stated in written, (
-            f"{relative_path} must state {stated!r}; re-measure the claim against the "
-            "adopted release and update it in the same change"
+        assert written.count(stated) == 1, (
+            f"{relative_path} states {stated!r} {written.count(stated)} times, not once; "
+            "re-measure the claim against the adopted release and update that one site "
+            "in the same change"
         )
 
 

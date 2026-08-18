@@ -155,13 +155,16 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   expands only from 4. `onepipeline` composes one task for this graph — it states
   what the run *is*, its id and its goal — and hands it to every member which does
   not claim one. A member's own `task` **replaces** it, so a member that claims one
-  must interpolate it back in to learn which run it is on. That is not optional
-  here: `onepipeline` exports **no** environment variable naming the run to an
-  observer member, so a task written against `$ONEPIPELINE_RUN_ID` reads empty on an
-  operator's launch — and, inside a dispatch that exports one for its *own* run,
-  silently reports on the enclosing run instead. Give a scheduled member its own
-  task whenever its job is not the run-level task, open it with `{task}`, and see
-  [the pacemaker](#the-planner-update-pacemaker) for why this one is scoped away
+  must interpolate it back in to learn which run it is on. `onepipeline` does also
+  export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
+  against onepipeline 0.7.1 by dumping both sides of a monitor member's whole
+  environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
+  that measurement on the judge side of a real observer member every gate run, so a
+  release that moved the export fails there rather than here. Write the member
+  against `{task}` anyway: it is this graph's own contract rather than a per-release
+  export, and it carries the run's goal as well as its id. Give a scheduled member
+  its own task whenever its job is not the run-level task, open it with `{task}`, and
+  see [the pacemaker](#the-planner-update-pacemaker) for why this one is scoped away
   from live edits.
 - **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
   worker supervised by one simulated-user judge. A plan node overrides it with
@@ -323,11 +326,15 @@ answers with exactly the `{completion, message, reason}` object onejudge's
 Naming `onepipeline channel serve` directly as the member's `judge.command` is
 therefore refused on the first turn — `the observer emitted a bad frame: unknown
 field 'op'` — and onejudge kills the member with `provider produced no output`,
-leaving the run driven but unwatched. The filter recovers the two values the frame
-carries and the environment does not:
+leaving the run driven but unwatched. The filter recovers the two values a surface
+needs, both out of the frame itself:
 
-- **the run id**, from the composed task's opening ``onepipeline run `<id>```,
-  because `onepipeline` exports no variable naming the run to an observer member;
+- **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
+  environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
+  measured against onepipeline 0.7.1 in the judge command's own environment on a real
+  launch, and re-taken on every gate run by
+  `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
+  validates instead, because that is a contract rather than a per-release export;
 - **the surface message**, from the last thing the monitor said.
 
 It raises the surface **non-blocking**. A blocking one would hold the run at
@@ -628,6 +635,27 @@ an isolated execution checkout, but the runs directory it uses must resolve to t
 same host-visible path for the detached process and the planner. The ledger and its
 sibling `channel/` directory cannot live only inside a disposable worktree or
 container-private filesystem.
+
+### A finding names the rule it is grounded in
+
+Both observer surfaces raise findings — the
+[monitor](#the-agent-graphs-a-run-launches) on every turn, the
+[pacemaker](#the-planner-update-pacemaker) when its schedule comes due — and a report
+that calls something a **rule violation** has to quote the file and the line the rule
+comes from: a node's task, a persona, a config, or a document of the repository under
+work. What cannot be pointed at that way is an **observation**: what was seen and why
+it looked wrong, with the ruling left to the planner.
+
+The distinction is not tidiness. An observer that infers the rule an agent is judged
+against reports a protective act as a breach, which costs a planner more than silence
+would and discredits every other finding in the same update. So each observer's own
+supervisor rejects an ungrounded violation and requires it re-reported as an
+observation, rather than leaving the planner to sort the two apart.
+
+Stated to the model on both sides of each member, in
+[`personas/orchestrator.yaml`](../personas/orchestrator.yaml) and
+[`personas/check-in.yaml`](../personas/check-in.yaml), and held to this section by
+`tests/test_observer_grounding.py`.
 
 ### Live graph edits
 

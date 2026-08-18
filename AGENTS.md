@@ -437,8 +437,11 @@ opens with `{task}` — which is why that document declares schema 4. The task i
 keeps the member reporting rather than editing: `onepipeline` composes one task for
 the graph and `oneagentgraph` gives it to every member that claims none, so a member
 whose job is not the run-level task must state its own — and must interpolate the
-composed one back in, because nothing in the environment names the run to an
-observer member. Never let this one reach `onepipeline
+composed one back in, because that composed task is this graph's own way of naming
+the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
+onepipeline 0.7.1 on a real launch and gated in `tests/e2e/` — but that is a
+per-release export rather than a contract, so members here are written against
+`{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
 and to you. Every planner-visible surface resets that clock. The interval is set
 once, at launch, with `just orchestrate ... --heartbeat-interval SECONDS`, and
@@ -471,7 +474,10 @@ scheduling, ledger writes,
 integration of finished work, and publication closeout. The monitor owns noticing —
 and, where a fix is unambiguous and inside its
 [allowlist](docs/orchestration.md#who-issued-an-edit-and-what-that-bounds), applying
-it. None of these roles authors target-project content; dispatch implementation and
+it. A finding it or the pacemaker calls a **rule violation** quotes the file and line
+that rule comes from; what neither can ground that way is an **observation**, and its
+own supervisor sends it back until it is one. See [A finding names the rule it is
+grounded in](docs/orchestration.md#a-finding-names-the-rule-it-is-grounded-in). None of these roles authors target-project content; dispatch implementation and
 research to workers.
 
 Require each worker to prove its own change with `just gate`. Review surfaced gate
