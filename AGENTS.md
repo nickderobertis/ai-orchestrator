@@ -113,13 +113,25 @@ whatever the dispatch's own record names — the `session-opened` the run's jour
 carries for it, or the `worktree:` line `just work-status` renders for that
 session — never a path remembered from an earlier dispatch, which is how a
 supervisor came to read a stale tree and report no progress while the dispatch was
-committing. onevcs 0.4.2 and later can return a pinned branch to the worktree its
-branch already has, but **that reuse does not reach a plan node here**: onepipeline
-links onevcs as a Rust library, and 0.7.1's `Cargo.toml` declares `onevcs =
-"0.4.1"`, so a retry pinned to a preserved branch still fails with `branch ...
-already carries N commit(s) that main does not` until onepipeline adopts 0.4.2 or
-later. That is not academic — it stranded three nodes across two runs on
-2026-08-16, each needing an out-of-band `just publish-branch` to recover. Preserved
+committing. onevcs 0.4.2 and later take up the session a stopped run left on a
+pinned branch instead of cutting a second one on the same name, which is what lets
+a retry reach the work its predecessor stranded. **What carries that fix into a
+plan node is the adopted onepipeline 0.7.2**, and what moved to carry it was the
+*lockfile*: onepipeline links onevcs as a Rust library, and its `Cargo.toml`
+declares `onevcs = "0.4.1"` byte-identically in v0.7.1 and v0.7.2 — a caret
+requirement, so it permitted 0.4.2 all along and was never the constraint. Only
+`Cargo.lock` moved, resolving 0.4.1 in v0.7.1 and 0.4.2 in v0.7.2; onevcs 0.4.2
+published half an hour before v0.7.1 was tagged, so that release shipped an
+unrefreshed lock against a fix its own requirement already accepted. **Widening
+that declaration is therefore a lever connected to nothing** — the resolution is
+the whole of the fix, and a reader who edits the requirement instead observes no
+change and wrongly concludes the bug is open. Below that resolution a retry pinned
+to a preserved branch fails with `branch ... already carries N commit(s) that main
+does not`, which was not academic — it stranded four nodes across three runs, three
+on 2026-08-16 and one on 2026-08-18, each needing an out-of-band `just
+publish-branch` to recover. So never regress the lock floor, and adopt a fix like
+this **between** runs: a live driver keeps the binary it launched with, so no retry
+inside a running run can pick one up. Preserved
 stacked branches
 record their PR base so recovery targets the stack rather than the root. A plan is
 the one tracked hierarchical graph: its
@@ -461,7 +473,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.7.1 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.7.2 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -801,12 +813,19 @@ tier is served as run-scope timeline spans, from a bounded local capture when th
 harness refused to write its history; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier).
 **`just recoverable`** is the other half of that: every preserved-but-unpublished
-branch across the registered identities, where it lives, why its workstream stopped,
+branch, where it lives, why its workstream stopped,
 whether it carries an incomplete-step marker, and the exact command that lands it —
 `just repo-recover` for incomplete provenance, `just publish-branch` for a complete
 branch under its identity's policy, `just integrate` for the local merge train,
 with the fetch included when the publication checkout does not have the
-branch. Reach for it instead of diffing clones by hand. Every one of these views is
+branch. Reach for it instead of diffing clones by hand. **Which branches "every"
+covers is decided by where you run it**, and it is not always every identity: run
+inside a registered checkout it answers for that checkout's identity **alone**, and
+run anywhere else it answers across every registered identity. Run from this
+repository root — a registered checkout — it lists ai-orchestrator branches and no
+onepipeline ones. So an empty or short result is never "nothing to recover"
+anywhere; read the first line, which names the scope it just answered at, and ask
+again from outside any registered checkout for the cross-identity view. Every one of these views is
 read-only and safe beside live work.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command, or the equivalent `onepipeline attest RUN REFERENCE`. Keep

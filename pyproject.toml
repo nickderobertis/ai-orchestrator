@@ -8,7 +8,7 @@ dependencies = [
     "oneharness-cli==0.10.1",
     "onejudge==0.4.0",
     "onepipeline-api-cli==0.4.0",
-    "onepipeline-cli==0.7.1",
+    "onepipeline-cli==0.7.2",
     "onevcs-cli==0.5.0",
 ]
 

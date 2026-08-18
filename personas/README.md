@@ -64,13 +64,18 @@ oneagentgraph 0.2.18 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs ea
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.7.1 and
+Three consequences, the first two re-measured against onepipeline 0.7.2 and
 oneagentgraph 0.2.18 by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
-handed. The launch was against 0.7.0; the bump to 0.7.1 carried it forward on the
-narrower evidence that `src/agentgraph.rs` and `src/graph.rs` — the whole of what
-composes a member and resolves its persona — are byte-identical between the two
-published crates, so there is no path by which the answer could have moved:
+handed. The launch was against 0.7.0; every bump since has carried it forward on
+the narrower evidence that `src/agentgraph.rs` and `src/graph.rs` — the whole of
+what composes a member and resolves its persona — cannot have moved the answer.
+Through 0.7.1 both were byte-identical with the launched crate. 0.7.2 leaves
+`src/graph.rs` byte-identical and adds to `src/agentgraph.rs` exactly one thing: a
+`process()` accessor returning the backend's pid, whose one caller registers
+dispatch ownership so a teardown can aim at the right process. No composition or
+persona-resolution path reads it, so there is still no path by which the answer
+could have moved:
 
 - Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
   with. The flat files whose names match a built-in are a catalog and a validation
