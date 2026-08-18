@@ -77,17 +77,20 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline
-0.7.5, the proxy stopped holding: a dispatched agent side now arrives carrying
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.8.0,
+the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
 this wrapper, and they would have kept working *quietly wrong* — the turn still runs,
 with the judge's routing and the config's own model instead of the agent side's.
 `tests/e2e/test_agent_wrapper_sides_e2e.py` is what holds the current rule; three of
 its journeys fail against the absence-based one. The measurement itself was taken
-against an earlier release and carried forward to each patch that leaves
-`src/agentgraph.rs` — where the crate writes the config a dispatched side arrives
-with — byte-identical to the release it was measured on.
+against an earlier release and is re-taken on every gate run rather than argued
+forward from a diff: that suite reads the `--config` a real dispatched agent side
+arrived with, so a release that stopped naming one fails there. Do not carry it
+forward on file-level evidence instead — the accounts that did named
+`src/agentgraph.rs`, a path the linked `oneagentgraph` has not carried since before
+0.2.18.
 
 ## Provider wiring
 
@@ -158,11 +161,13 @@ can fall back only to the primary Claude subscription, and both add an
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
-The committed base and adapter follow the adopted onejudge schema: persona-authored
-`agent.instructions` is internal ai-orchestrator vocabulary and is translated to
-onejudge's `system_prompt`; no obsolete onejudge `agent` block reaches the CLI.
-The real-CLI e2e suite checks these schema and CLI surfaces before it drives the
-same SDK-to-CLI path used in production dispatch.
+The committed base and every persona follow the adopted onejudge schema directly:
+since `oneagentgraph` 0.3.0 a persona **is** a onejudge config fragment, so a role is
+written as the top-level `system_prompt` onejudge itself names and there is no
+translating vocabulary in between. An `agent:` block in either document is refused
+outright, naming the field to write instead. The real-CLI e2e suite checks these
+schema and CLI surfaces before it drives the same SDK-to-CLI path used in production
+dispatch.
 
 **Getting the adopted oneharness on this box.** The prebuilt oneharness
 release binary needs a newer glibc than the host provides, and the crates.io build

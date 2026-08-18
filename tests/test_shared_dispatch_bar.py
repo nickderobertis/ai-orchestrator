@@ -1,7 +1,7 @@
 """The clauses every dispatch shares say what is true of every dispatch, and stop there.
 
 `config/onejudge.base.yaml` is where this host tells a dispatch what "done" means:
-`agent.instructions` is the preamble its worker reads, and `user.persona` and
+`system_prompt` is the preamble its worker reads, and `user.persona` and
 `user.done_when` are the review contract and the completion criterion its judge is
 handed. What those two say is said of a plan, a report, and a diff alike — so a demand
 that is not true of all three fails the dispatches it is false of, whatever they were
@@ -184,7 +184,7 @@ def _preamble_sentence_allowing(condition: str) -> str:
     ]
     allowing = [sentence for sentence in sentences if condition in sentence]
     assert len(allowing) == 1, (
-        f"{BASE_CONFIG}'s `agent.instructions` states {len(allowing)} sentence(s) hanging on "
+        f"{BASE_CONFIG}'s `system_prompt` states {len(allowing)} sentence(s) hanging on "
         f"{condition!r}; exactly one is what makes an allowance for a dispatch that changed "
         "nothing separable from what every dispatch is told"
     )
@@ -218,7 +218,7 @@ def test_the_preamble_still_holds_a_dispatch_that_changed_something_to_the_whole
     binding = _preamble_binding_on_a_dispatch_that_changed_something()
     for demand in DEMANDS_OF_A_DISPATCH_THAT_CHANGED_SOMETHING:
         assert demand in binding, (
-            f"{BASE_CONFIG}'s `agent.instructions` no longer demands {demand!r} of a dispatch "
+            f"{BASE_CONFIG}'s `system_prompt` no longer demands {demand!r} of a dispatch "
             f"that changed something; it survives only inside an allowance for one that did "
             f"not, or is gone:\n{binding}"
         )
@@ -235,15 +235,15 @@ def test_the_preamble_tells_a_dispatch_with_no_tracked_change_something_true() -
     """
     closeout = _preamble_sentence_allowing(NO_TRACKED_CHANGE_ALLOWANCES[0])
     assert "complete without it" in closeout, (
-        f"{BASE_CONFIG}'s `agent.instructions` names the no-tracked-change condition at "
+        f"{BASE_CONFIG}'s `system_prompt` names the no-tracked-change condition at "
         f"closeout without saying such a dispatch is complete:\n{closeout}"
     )
     assert "never because running it is slow or inconvenient" in closeout, (
-        f"{BASE_CONFIG}'s `agent.instructions` lets closeout be skipped without saying what "
+        f"{BASE_CONFIG}'s `system_prompt` lets closeout be skipped without saying what "
         f"may not decide it, so any dispatch can reach the allowance:\n{closeout}"
     )
     committing = _preamble_sentence_allowing(NO_TRACKED_CHANGE_ALLOWANCES[1])
     assert "correct and complete outcome" in committing, (
-        f"{BASE_CONFIG}'s `agent.instructions` no longer tells a dispatch that touched no "
+        f"{BASE_CONFIG}'s `system_prompt` no longer tells a dispatch that touched no "
         f"tracked file that having nothing to commit is a correct outcome:\n{committing}"
     )

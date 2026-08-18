@@ -1,92 +1,82 @@
 # Follow-ups from adopting onepipeline 0.7.5 / onevcs 0.6.1
 
-## oneagentgraph stays at 0.2.18. The persona rewrite is blocked, and here is the proof.
+## RESOLVED: oneagentgraph is on 0.3.0, and the persona rewrite has landed.
 
-**Decision: `config/oneagentgraph.version` was NOT moved to 0.3.0, and no file in
-`personas/` was rewritten.** Doing both together would have broken the monitor and
-the check-in pacemaker on every orchestrated run.
+**Resolved 2026-08-18, by adopting onepipeline 0.8.0.** This section is kept as the
+history of a block, not as a standing one. What it named as the unblocking condition
+— *an `onepipeline` release whose `Cargo.lock` resolves `oneagentgraph 0.3.0`* — is
+exactly what v0.8.0 is, so the three moves it said had to land together did:
+`config/onepipeline.version` to 0.8.0, `config/oneagentgraph.version` (and
+`pyproject.toml`) to 0.3.0, and every file in `personas/` plus
+`config/onejudge.base.yaml` rewritten into the new shape.
 
-### What 0.3.0 changes
+`onepipeline` v0.8.0 declares `oneagentgraph = "0.3.0"` and its lock resolves 0.3.0,
+so this one moved the *requirement* as well as the resolution — unlike the onevcs
+lesson beside it in `AGENTS.md`, where only the lock ever moved. Read the lock
+either way; it is the resolution that decides what a dispatch reads.
+
+### What the block was
 
 oneagentgraph #54 (`feat!: make a persona a onejudge config fragment`, released in
-v0.3.0) replaces the persona schema. `docs/persona-format.md` at that tag is the
-spec, and its own "The previous spelling is refused" section says the old shape
-"no longer loads, anywhere — not through `oneagentgraph persona validate`, and not
-when a member resolves a persona as a graph runs. There is no alias, no flag, no
-environment variable, and no deprecation period."
+v0.3.0) replaced the persona schema, and `docs/persona-format.md` at that tag says
+the previous spelling "no longer loads, anywhere — not through `oneagentgraph
+persona validate`, and not when a member resolves a persona as a graph runs. There
+is no alias, no flag, no environment variable, and no deprecation period."
 
-| previous (what `personas/` is written in) | 0.3.0 |
+| previous | 0.3.0 |
 | --- | --- |
 | `agent.instructions` | `system_prompt` (top level) |
 | `agent.name` | `name` (top level) |
 | `user.persona` / `user.done_when` / `user.done_when_replaces_base` / `user.max_turns` | unchanged |
 | `evals` | unchanged |
 
-The same rule is stated for a **base config**, so `config/onejudge.base.yaml`'s
-`agent:` block would have had to move in the same change.
+The same rule holds for a **base config**, which is why `config/onejudge.base.yaml`
+moved in the same change.
 
-### Which reader actually sees these files
+The hazard was a **split**: `just validate-personas` runs the oneagentgraph *CLI*,
+while what reads a persona at dispatch is the oneagentgraph `onepipeline` **links**.
+Bump one alone and validation certifies a shape the dispatching reader refuses —
+loudly, at config validation, which means `graphs/dag-scope.yaml`'s monitor and
+pacemaker would have produced no member at all on every run while `validate-personas`
+went on saying `OK`.
 
-- Most of `personas/` is a catalog and a validation target. A plan node's bare
-  `persona: engineer` resolves to a role built into the crate, not to this
-  directory (`personas/README.md`).
-- **`graphs/dag-scope.yaml` names `../personas/orchestrator.yaml` and
-  `../personas/check-in.yaml` by path, and a path-named persona *is* read** — on
-  every orchestrated run, as the monitor and the heartbeat pacemaker.
-- `just validate-personas` runs the oneagentgraph **CLI**, so `config/oneagentgraph.version`
-  decides which shape validation certifies.
-- What reads a persona **at dispatch** is the oneagentgraph `onepipeline` links,
-  and that is **0.2.18 even at onepipeline v0.7.5** — confirmed from `Cargo.lock`
-  at each of v0.7.2, v0.7.3, v0.7.4, and v0.7.5, all resolving `oneagentgraph
-  0.2.18`.
+### What was re-measured at the adoption
 
-So the hazard was a split: bump the CLI, rewrite the personas, and
-`validate-personas` certifies a shape the linked 0.2.18 reader does not accept.
+All against the installed stack (`oneagentgraph 0.3.0`, `onepipeline 0.8.0`), with
+the retired spelling as the control beside each:
 
-### The measurement
+1. `oneagentgraph persona validate personas` → `personas: OK`, exit 0. A file
+   carrying an `agent:` block → exit 2, `` `agent` is not a persona key: a persona
+   is a onejudge config fragment … There is no alias and no deprecation period ``.
+2. `oneagentgraph validate` on all three of `graphs/` → `N member(s) OK`, exit 0.
+3. A real `oneagentgraph run` of each member `graphs/dag-scope.yaml` names by path,
+   in that document's own shape, reaching `graph-settled` with `exit_code: 0` and a
+   `member-started` carrying the persona's own label. The retired spelling dies
+   before any `graph-started`, exactly as it did in the other direction under 0.2.18.
+4. The graph schema range and the `{task}` boundary the dag-scope document states:
+   0.3.0 still reads versions 1 through 6, and still expands `{task}` from 4.
 
-0.2.18's `Persona` (`src/persona.rs`) carries `#[serde(deny_unknown_fields)]` at
-every level, so the failure mode is a hard refusal rather than silent degradation.
-Confirmed three ways against the **installed** stack (`oneagentgraph 0.2.18`,
-`onepipeline 0.7.5`), with a 0.2.18-shaped control run beside each:
+Probe 3 is not a one-off any more — `tests/e2e/test_path_dispatched_personas_e2e.py`
+takes it on every gate run, which is what stops the next persona-format break from
+being caught by validation that cannot see it.
 
-1. `oneagentgraph persona validate <0.3.0-shaped file>` →
-   exit 2, ``invalid config: unknown field `name`, expected one of `agent`, `user`, `evals` ``.
-   The 0.2.18-shaped control → `OK`, exit 0.
-2. `oneagentgraph validate <one-member graph naming that persona by path>` →
-   exit 2, ``member "worker": invalid config: … unknown field `name` ``.
-   The control graph → `1 member(s) OK`, exit 0.
-3. **A real launch.** `oneagentgraph run <that graph> --task probe`, with
-   `ONEAGENTGRAPH_ONEHARNESS_BIN` pointed at `tests/e2e/fake_backend.py`, exits 2
-   on the same refusal **before any `graph-started` event**. The identical run
-   against the 0.2.18-shaped control reaches `graph-settled` with
-   `{"exit_code":0,"members":{"worker":"settled"}}` and labels the member
-   `persona: probe`.
+### Why the other 0.7.5 measurements were carried forward rather than re-taken
 
-The refusal is loud, which is the good case — but it happens at config validation,
-so under a split pin the monitor and the pacemaker would produce no member at all
-on every run.
+The drift gates in `tests/test_onejudge_version.py` make every sentence naming the
+adopted onepipeline release move with the pin, which is a prompt to re-measure and
+not a licence to retype the number. Here the whole of `git diff v0.7.5..v0.8.0` is
+the three persona documents onepipeline itself ships, `Cargo.toml`/`Cargo.lock`, and
+its own tests — no engine, driver, channel, ledger, or environment path is touched —
+so every claim those sentences carry is a claim about code that did not move. Two of
+them are re-taken on every gate run anyway, by
+`tests/e2e/test_orchestrate_launch_e2e.py`: the `ONEPIPELINE_RUN_ID` export an
+observer member is given, and the `--config` a dispatched agent side arrives with.
 
-### The exact condition that unblocks this
-
-**An `onepipeline` release whose `Cargo.lock` resolves `oneagentgraph 0.3.0`.**
-Check it, do not infer it — `Cargo.toml`'s requirement is not the constraint, the
-lock resolution is (`AGENTS.md` carries the same lesson about `onevcs = "0.4.1"`
-permitting 0.4.2 through v0.7.5):
-
-```sh
-git -C ~/.ai-orchestrator/repos/nickderobertis__onepipeline fetch --tags
-git -C ~/.ai-orchestrator/repos/nickderobertis__onepipeline show <tag>:Cargo.lock \
-  | grep -A2 '^name = "oneagentgraph"'
-```
-
-When that reads `0.3.0`, the three moves land in **one** change: bump
-`config/oneagentgraph.version` (and `pyproject.toml`) with the onepipeline pin,
-rewrite every file in `personas/` and `config/onejudge.base.yaml` per the table
-above, and re-run the three probes to confirm the new shape is what the linked
-reader accepts. Not before, and never one without the others.
-
-Measured 2026-08-18 against onepipeline 0.7.5, onevcs 0.6.1, oneagentgraph 0.2.18.
+Three sentences changed wording rather than only their number, in `AGENTS.md` and
+`docs/repo-lifecycle.md`. Each said "since onepipeline <adopted>" about a behaviour
+that arrived in 0.7.5, and the adopted release and the arrival release stopped being
+the same one at 0.8.0; they now say "on the adopted onepipeline 0.8.0", which is what
+the gate is actually asking them to keep true.
 
 ---
 

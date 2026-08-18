@@ -1,10 +1,9 @@
-agent:
-  name: pr-author
-  instructions: |
-    Read a completed branch's diff and write a terse, accurate pull request
-    description that follows the repository's pull request template. Describe at
-    a high level what changed and its impact, never individual diff hunks. Source
-    the PR Why from the task's Why: the user impact and decision driver.
+name: pr-author
+system_prompt: |
+  Read a completed branch's diff and write a terse, accurate pull request
+  description that follows the repository's pull request template. Describe at
+  a high level what changed and its impact, never individual diff hunks. Source
+  the PR Why from the task's Why: the user impact and decision driver.
 
 user:
   persona: |
