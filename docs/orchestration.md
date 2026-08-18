@@ -80,7 +80,9 @@ and a plan written before that fails at launch on either:
   `change-direct` — the old `direct` / `none` / `auto` vocabulary is refused by
   name.
 - `context` is **one** planner note, a string, rather than a list of them. It is
-  what a live `context` edit attaches, and it carries exactly one dispatch. See
+  what a live `context` edit attaches. Where it is delivered to the node's *next*
+  dispatch it carries exactly that one; where the edit's `deliver` mode puts it into
+  a running turn instead, the turn has read it and nothing is owed forward. See
   [Carried planner context](#carried-planner-context).
 
 The schema adds two optional per-node fields this repository's own never had:
@@ -1720,16 +1722,44 @@ A `context` edit is where that knowledge goes. The note is set as the node's
 the task the node dispatches. Because the reconciler installs the edited graph
 immediately, it is already visible to a dispatch of that node which has not started
 yet — including a `retry` replacement submitted in the same envelope, which the
-compiled operation records as `delivery: immediate`. A dispatch already running
-does not re-read its prompt, so a note aimed at one is `deferred` and reaches the
-node's next dispatch instead.
+compiled operation records as `delivery: immediate`.
 
-**A note lasts one dispatch.** It is consumed when it is delivered, not carried
-until something removes it, which is the whole reason the field is one string
+**A note also reaches a dispatch that is already running.** That is the whole point
+of the edit when a run is going wrong, and it is easy to miss because the mechanism
+is a third field rather than a different op. `context` takes `deliver` beside `id`
+and `note`, and omitting it means `auto`:
+
+| `deliver` | where the note goes | recorded `delivery` |
+| --- | --- | --- |
+| `auto` (the default) | the node's running turn where it has a controllable one, its next dispatch where it does not | `live` or `deferred` |
+| `live` | the running turn, or the edit is **refused** naming why it could not be | `live` |
+| `next` | the next dispatch, and only there | `deferred` |
+
+Live delivery is `oneagentgraph interrupt` against **the dispatch's own control
+socket**, so it reaches a node only once something of that dispatch has reported a
+member; before then there is no turn to address and `auto` falls through to the next
+dispatch. All of this is read from onepipeline 0.7.1 and measured on a live run: a
+note sent to a worker three hours into its dispatch recorded `"delivery":"live"`, and
+the worker changed what it was doing in its next turn. A delivery that was *attempted
+and broke* is neither ending and is refused under every mode, `auto` included — being
+told `deferred` when the truth is that the lever failed is being told something untrue.
+
+So `live` is the mode for a correction that cannot wait, and its refusal is the
+feature: a planner who needs the worker to change course now is told plainly when that
+did not happen, rather than discovering later that the note sat waiting for a dispatch
+that never came.
+
+**A deferred note lasts one dispatch.** It is consumed when it is delivered, not
+carried until something removes it, which is the whole reason the field is one string
 rather than a list. A note reports state observed while one attempt was running, so
 it is stale the moment the next attempt moves; a note that still matters is one the
 planner or the monitor attaches again against what the run now shows. That is what
 stops a node accumulating instructions nobody re-read.
+
+**A note delivered `live` is not re-owed to the next dispatch.** The running turn has
+already read it, so carrying it forward would repeat a correction the worker has acted
+on — which is why `delivery` is recorded on `edit-committed` rather than inferred, and
+why replay can tell the two cases apart.
 
 Two more things do not carry, for the same reason they never did. Context follows a
 **node id**, so a `retry` replacement — a new id — starts with none, and a note

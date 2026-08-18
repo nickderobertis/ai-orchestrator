@@ -316,8 +316,13 @@ and is never a command.
    from the run's own journal rather than re-read from the launch file, so a
    retry's replacement id, a branch pin, an amended `task` — which is how a node's
    review bar is amended — or `max_turns` are simply what is executing. What you
-   learn about a node that keeps running belongs in a `context` edit: that note
-   lasts exactly one dispatch, so state worth keeping is state attached again. See
+   learn about a node that keeps running belongs in a `context` edit, and that edit
+   reaches the dispatch **already running** — its `deliver` mode is `auto` unless you
+   say otherwise, which interrupts the live turn where there is one and falls through
+   to the next dispatch where there is not. Use `deliver: live` when the correction
+   cannot wait: it is refused, naming why, rather than deferred in silence. A note the
+   running turn read is spent; a note that merely rode a dispatch lasts exactly that
+   one, so state worth keeping is state attached again. See
    [Carried planner context](docs/orchestration.md#carried-planner-context).
    Triage follow-ups, keep the user informed at
    each milestone, and never let more than 30 minutes pass between updates. When
@@ -389,9 +394,15 @@ detail:
 - **A blocking surface may have no asker.** A `channel serve` that timed out exits
   without withdrawing its surface, so `awaiting-planner` does not prove anybody is
   still waiting for the answer.
-- **Prefer a channel reply or a `context` edit to `oneagentgraph interrupt`** for
-  anything materially steering. An interrupt is not journalled, which leaves the
-  run's own record unable to explain why a worker changed direction.
+- **Steer a running dispatch with a `context` edit, never with `oneagentgraph
+  interrupt` by hand.** These are not alternatives: a `context` edit *is* an
+  interrupt against that dispatch's control socket, wrapped so the lever's own events
+  reach the run's journal stamped with the node. An interrupt is not journalled, which
+  leaves the run's own record unable to explain why a worker changed direction — so
+  prefer the edit because it records what the raw verb does not, and reach for
+  `deliver: live` when the correction cannot wait, since its refusal tells you the note
+  did not land instead of leaving you to assume it did. See
+  [Carried planner context](docs/orchestration.md#carried-planner-context).
 
 After `just orchestrate`, the manager uses **only** `just channel-next`, `just
 channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /

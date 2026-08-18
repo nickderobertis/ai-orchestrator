@@ -73,7 +73,10 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1},
     # Two: the frame shape this filter parses, and the run-id export it deliberately
     # does not read. Both are per-release measurements of the same crate.
-    "onepipeline": {Path("scripts/channel-serve.py"): 2},
+    # Four in the operating manual: which plan schema versions the reconciler reads,
+    # what a monitor member's environment carries, what a judge command's does, and
+    # where a `context` note is delivered.
+    "onepipeline": {Path("scripts/channel-serve.py"): 2, Path("docs/orchestration.md"): 4},
 }
 
 
