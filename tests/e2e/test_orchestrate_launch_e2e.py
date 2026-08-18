@@ -36,7 +36,11 @@ from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
 from published_surface import surface_of
-from shared_dispatch_bar import shared_agent_preamble, shared_completion_bar
+from shared_dispatch_bar import (
+    shared_agent_preamble,
+    shared_completion_bar,
+    shared_judge_persona,
+)
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -673,7 +677,15 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
         cast(PromptRecord, json.loads(line))["prompt"]
         for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert any("Verify the requested task against its acceptance criteria" in p for p in prompts)
+    # Read from the file rather than quoted here: the default review contract is
+    # `config/onejudge.base.yaml`'s to state, and a copy of it in this journey is a
+    # second source to disagree with it. `tests/test_shared_dispatch_bar.py` holds
+    # what that contract may say; this holds that it is what arrives.
+    persona = shared_judge_persona()
+    assert any(persona in " ".join(prompt.split()) for prompt in prompts), (
+        "a graph invocation with no persona override was supervised against something "
+        f"other than the generic review contract in config/onejudge.base.yaml:\n{persona}"
+    )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")

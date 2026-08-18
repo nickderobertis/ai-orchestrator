@@ -1,14 +1,15 @@
-"""Readers for the two shared clauses every dispatch on this host is given.
+"""Readers for the shared clauses every dispatch on this host is given.
 
-`config/onejudge.base.yaml` states both once: `agent.instructions` is the preamble the
-worker reads before it does anything, and `user.done_when` is the completion criterion
-its judge is handed. They reach the model by different paths — one as a system prompt,
-one inside the supervisor's own turn — which is why the journeys proving each one
-arrives are separate. What they share is this file, so the readers of it live here once:
-a copy per journey would be somewhere for two tests to disagree about what it says.
+`config/onejudge.base.yaml` states them once: `agent.instructions` is the preamble the
+worker reads before it does anything, and `user.persona` and `user.done_when` are the
+review contract and the completion criterion its judge is handed. They reach the model
+by different paths — one as a system prompt, the other two inside the supervisor's own
+turn — which is why the journeys proving each one arrives are separate. What they share
+is this file, so the readers of it live here once: a copy per journey would be somewhere
+for two tests to disagree about what it says.
 
 Read with readers written for these fields rather than with a YAML library: the
-workspace installs none, and adding a parser as a dependency to read two blocks of a
+workspace installs none, and adding a parser as a dependency to read three blocks of a
 file this repository writes is a worse trade than the few lines below, which state the
 shape they accept and fail loudly when the file leaves it.
 """
@@ -72,6 +73,19 @@ def shared_completion_bar() -> str:
     bar = " ".join(" ".join(block).split())
     assert bar, f"{BASE_CONFIG} states an empty shared completion bar"
     return bar
+
+
+def shared_judge_persona() -> str:
+    """`user.persona`, as the judge is given it.
+
+    The default review contract, which a persona delta in `personas/` replaces. Folded
+    for the same reason the completion bar is: it reaches the judge as one line either
+    way, so the field's style is free to move without moving what it says.
+    """
+    _, block = _block_scalar("persona")
+    persona = " ".join(" ".join(block).split())
+    assert persona, f"{BASE_CONFIG} states an empty judge persona default"
+    return persona
 
 
 def shared_agent_preamble() -> str:

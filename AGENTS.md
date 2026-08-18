@@ -225,6 +225,17 @@ and is never a command.
    - Each node's `## Acceptance criteria` would actually prove the goal, and could
      not all be satisfied while the goal is missed. Unrealistic testing is where
      that gap usually hides.
+   - Each node's `## Acceptance criteria` carries its own verification demand,
+     including the complete gate where the node changes code. Nothing else asks
+     for one: the completion clause every dispatch shares states only that the
+     task's criteria are met and the change is committed whole, so a gate no
+     node's list names is a gate no judge looks for.
+   - Every criterion is satisfiable by the worker inside its own dispatch, from
+     what that dispatch controls. One resting on a merged change request, a
+     deploy, or a third party describes state that arrives after the worker is
+     gone, and finished work is failed against it. How that list is written is
+     [the planner's](personas/planner.yaml); whether it would prove this node is
+     yours.
    - Each node's `## Why` carries the user's own motivation rather than the
      handoff.
    - `deps` names real prerequisites, so unrelated branches stay parallel.

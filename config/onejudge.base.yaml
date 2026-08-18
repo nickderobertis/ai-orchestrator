@@ -78,35 +78,42 @@ user:
   # A plan persona replaces this with its role-specific review contract. The
   # complete generic default keeps a graph invocation with no persona valid.
   persona: >-
-    Verify the requested task against its acceptance criteria and require the
-    repository's documented checks before accepting it.
+    Verify the requested task against the acceptance criteria it states, and accept it
+    only when every one of them is met.
   # The ONE completion bar for every dispatch, so it may only state what is true of every
   # dispatch alike; the rest belongs in each task's `## Acceptance criteria`, which is the
   # node's own bar. Never name a specific check tier here — the clause this replaced
   # demanded "every lint tier has passed" and refused complete work in repositories that
   # run no such tier.
   #
-  # The gate-and-commit half is now guarded on the dispatch having left a tracked change,
-  # for the same failure class: a dispatch whose deliverable is a document authors no
-  # tracked change and runs no gate, so an unguarded demand handed its judge a criterion
-  # it could never meet. The guard is deliberately written against the repository's own
-  # state rather than the worker's account of it, because "I changed nothing" is the one
-  # way this could become an escape hatch — a dispatch that DID change something is held
-  # to exactly what it was held to before. `tests/e2e/test_orchestrate_launch_e2e.py`
-  # holds that the clause reaches a real judge; `tests/test_shared_dispatch_bar.py`
-  # holds that its guarded obligations are still stated in full.
+  # It states no proof method, and nothing that only arrives after the dispatch ends,
+  # because both failed finished gate-green work. Demanding each criterion be proven by
+  # running every check that bears on it "rather than by inspection" failed a documentation
+  # node whose honest proof was an argument from the repository's own contents; demanding a
+  # complete verification green over the finished tree failed a node whose local gate was
+  # green on a committed head while its push was still running and its change request's
+  # checks had not concluded — state no dispatch can reach from inside itself. A node that
+  # owes a gate says so in its own `## Acceptance criteria`, the only place that knows what
+  # proving THAT node means; AGENTS.md gives its author that obligation.
+  #
+  # The commit tail is deliberate, and is not a reduction left half-done for a later reader
+  # to finish. It passes the test this clause has to pass — it is true of every dispatch
+  # alike, including one whose deliverable is a document — and it is the only demand left
+  # here with no other enforcement: `onevcs` refuses to publish an empty diff, so a wholly
+  # uncommitted change is already caught, while a *partially* committed one is caught by
+  # nothing else at all. Dropping it would move a real obligation onto planners who may not
+  # write it, which is a different failure from the one this reduction fixed.
+  #
+  # `tests/e2e/test_orchestrate_launch_e2e.py` holds that this clause reaches a real judge;
+  # `tests/test_shared_dispatch_bar.py` holds what it says and what it may not say again.
   #
   # Phrasing it against the task works because onejudge hands it to the judge verbatim
   # beside a transcript whose first message is the task; verified against onejudge 0.4.0
   # (`config/onejudge.version`, drift-gated by tests/test_onejudge_version.py). See
   # docs/orchestration.md, "Where a node's review bar lives".
   done_when: >-
-    every acceptance criterion stated in the task is met, each of them proven by running
-    every check that bears on it rather than by inspection; and, wherever this dispatch
-    left a tracked change — read from the repository itself, never from a claim to have
-    changed nothing — that repository's own complete verification is green over the
-    finished tree, with every one of those changes committed and nothing half-applied
-    left behind
+    every acceptance criterion stated in the task is met, with every change this dispatch
+    made committed and nothing half-applied left behind
   max_turns: 12
 
 # Fallback for consumers that build this fragment directly. `dispatch` replaces

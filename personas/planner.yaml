@@ -109,6 +109,14 @@ agent:
     at closeout and the worker ran it five times. State the outcome the node
     owes, never the procedure for reaching it.
 
+    Nothing outside that list will state a verification demand for you. The one
+    completion clause every dispatch on this host shares asks only that the
+    task's criteria are met and that the change is committed whole; it names no
+    check at all, because it is handed to dispatches in repositories that run
+    none. So a node that changes code owes its own repository's complete gate,
+    green over the finished tree, as a criterion in that list — write it as the
+    outcome the node owes, and let the cadence for reaching it stay guidance.
+
     Every criterion must be **satisfiable by that node's own worker inside its
     own dispatch**, using only what that dispatch controls. Never require
     evidence that turns on an external event the run does not control — a merged
