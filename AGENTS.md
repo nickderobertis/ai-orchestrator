@@ -1081,6 +1081,21 @@ already pushes to origin, and `just sync` fast-forwards a publication checkout t
 what is on it. The pre-push
 gate guards every push. Never force-push or rewrite history on the registered base.
 
+`core.hooksPath` activates the whole directory, so that same `just bootstrap` step
+also activates **`.githooks/commit-msg`**, which holds the *subject*. This
+repository's product is its tracked source — config, personas, scripts, docs — so
+every commit changes the deliverable, and the hook takes that to its conclusion: a
+subject must be a Conventional Commit within onevcs's 120-character publication
+limit, carrying a type this repository releases from (`feat`, `fix`, `perf`, or any
+type marked breaking with `!`). A `docs:` or `chore(deps):` change to tracked source
+merges green and then never cuts a release, which is what cost two changes in one
+plan and was caught both times only by a person reading the title. The hook reads the
+subject and nothing else — no index, no diff, no branch — because `onevcs` runs a
+repository's `commit-msg` hook against the subject it is about to publish, where
+none of that exists, and one policy must mean the same thing to both callers. Git's
+own generated subjects, autosquash markers, and the `(incomplete step)` marker and
+its attestation are exempt: no publication carries them.
+
 Squash-merge is what a recovered incomplete step publishes too, so **every** path
 that advances the base — lifecycle publication, `repo-recover`, and the `integrate`
 train — leaves **one** commit on it: the `(incomplete step)` marker and its

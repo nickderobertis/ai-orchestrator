@@ -17,7 +17,8 @@ pass](#5-the-trust-marking-pass-order-matters) apply.
 1. `scripts/session-setup.sh` (below),
 2. `scripts/workspace-install.sh --force` — the locked Bun install, reapplied,
 3. `scripts/nx.sh run-many -t bootstrap` — each project's own setup,
-4. `git config core.hooksPath .githooks` — activates the pre-push `just gate`,
+4. `git config core.hooksPath .githooks` — activates the pre-push `just gate` and
+   the `commit-msg` subject policy, since the setting names the whole directory,
 5. `git config receive.denyCurrentBranch updateInstead` — lets a local-mode
    lifecycle push land in this non-bare checkout.
 

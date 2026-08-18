@@ -18,6 +18,7 @@ seam where a dispatch reaches it.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -25,12 +26,14 @@ import shutil
 import subprocess
 import threading
 import time
+import tomllib
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_TASK
+from no_paid_provider import REFUSAL, VERSION
 from published_surface import surface_of
 from shared_dispatch_bar import shared_agent_preamble, shared_completion_bar
 from waits import deadline
@@ -46,6 +49,11 @@ FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
 #: in process, so it spawns no oneharness binary for `FAKE_BACKEND` to be — this is
 #: what covers those members instead; see `_environment`.
 FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
+
+#: The directory `_environment` puts ahead of everything on `PATH`, holding a `claude`
+#: that refuses the turn. It covers the identity a journey never means to select, which
+#: `ONEHARNESS_BIN_*` cannot: that seam keys on a harness id and reaches no variant.
+PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
 
 #: The shipped example this journey launches. A plan written for this repository's
 #: own operators, so a schema or field the published crate stopped accepting fails
@@ -252,10 +260,138 @@ class RefusedOnTheGraph(NamedTuple):
     refusal: str
 
 
+class IndirectionSource(NamedTuple):
+    """One helper and the function it defines, which are not interchangeable.
+
+    Sourcing a helper sets nothing — a caller must invoke its function — so the two
+    travel together, named rather than positional.
+    """
+
+    #: The helper's repository-relative path, sourced for its definitions.
+    helper: str
+    #: The function that derives, validates, and exports what the helper is for.
+    function: str
+
+
+class Indirection(NamedTuple):
+    """One established indirection, as the helper that owns it resolved it."""
+
+    name: str
+    value: str
+
+
+#: Each alternate-identity indirection's ONE source: the helpers every wrapper that
+#: reaches `oneharness` sources. Deriving the paths here instead would be the second
+#: copy those files exist to prevent.
+INDIRECTION_SOURCES = (
+    IndirectionSource("scripts/codex-alt-home.sh", "ensure_codex_alt_home"),
+    IndirectionSource("scripts/claude-alt-config-dir.sh", "resolve_claude_alt_config_dir"),
+)
+
+#: The configs whose members run oneharness in-library, so their variants resolve from
+#: this process's environment rather than a spawned CLI's.
+SINGLE_SIDED_CONFIGS = (
+    REPO_ROOT / "oneharness.check-in.toml",
+    REPO_ROOT / "oneharness.pr-author.toml",
+)
+
+
+def _harness_routing(config: Path) -> dict:
+    """One oneharness config, as the CLI that reads it lays it out."""
+    return tomllib.loads(config.read_text(encoding="utf-8"))
+
+
+def _configured_indirections() -> tuple[str, ...]:
+    """Every variable a variant's `env_from` reads out of the parent process.
+
+    Derived rather than listed: `oneharness` refuses to start a variant whose
+    indirection is unset, so a config that names a new one has to reach this module or
+    the journeys below would fail on it with the environment out of sight again.
+    """
+    named = {
+        variable
+        for config in SINGLE_SIDED_CONFIGS
+        for harness in _harness_routing(config).get("harness", {}).values()
+        for variant in harness.get("variant", {}).values()
+        for variable in variant.get("env_from", {}).values()
+    }
+    return tuple(sorted(named))
+
+
+INDIRECTIONS = _configured_indirections()
+
+#: Who the helpers attribute their diagnostics to when one of them refuses.
+INDIRECTION_CALLER = "tests/e2e/test_orchestrate_launch_e2e.py"
+
+
+@functools.cache
+def _established_indirections() -> tuple[Indirection, ...]:
+    """Establish the alternate-identity indirections through their own one source.
+
+    A provisioned planner session and a dispatched worker both carry these already,
+    from `scripts/session-setup.sh`; nothing on the `just gate` path does. Inheriting
+    them made this module pass for the hosts that had run the session hook and fail
+    everywhere else — a bare shell, a fresh terminal, a CI job — with an `assert 1 == 0`
+    on a graph-schema claim rather than a word about the environment.
+
+    Cached because the answer is the host's and every journey in this module asks for it.
+    """
+    script = "\n".join(
+        [
+            *(
+                f'. "{REPO_ROOT / source.helper}"\n{source.function} "{INDIRECTION_CALLER}"'
+                for source in INDIRECTION_SOURCES
+            ),
+            *(f'printf "%s=%s\\n" {name} "${{{name}-}}"' for name in INDIRECTIONS),
+        ]
+    )
+    resolved = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+    established = {
+        name: value
+        for name, _, value in (line.partition("=") for line in resolved.stdout.splitlines())
+        if value
+    }
+    unestablished = [name for name in INDIRECTIONS if name not in established]
+    if unestablished:
+        # Named, because the whole point is that a missing indirection stops reading as
+        # somebody else's broken assertion. The helper's own diagnostic says which
+        # override or `HOME` to fix.
+        pytest.fail(
+            f"{INDIRECTION_CALLER} could not establish {', '.join(unestablished)} from "
+            f"{', '.join(source.helper for source in INDIRECTION_SOURCES)}; `oneharness` "
+            f"refuses to start a variant whose indirection is unset:\n{resolved.stderr}"
+        )
+    return tuple(Indirection(name, established[name]) for name in INDIRECTIONS)
+
+
 def _environment(
     tmp_path: Path, oneharness_bin: str, *, session: str = LAUNCHING_SESSION
 ) -> dict[str, str]:
-    """The environment one launched run and its planner views share."""
+    """The environment one launched run and its planner views share.
+
+    Three journeys here reach a **real** `oneharness`, and they are the three whose
+    member is single-sided `kind: oneharness`: the `graphs/pr-author.yaml` drafter both
+    `_drafted` journeys run, and the `oneharness.check-in.toml` probe
+    `test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder` builds.
+    Since oneagentgraph 0.2.18 such a member runs its turn through the oneharness
+    *library* on a thread of the graph process, so `ONEAGENTGRAPH_ONEHARNESS_BIN` never
+    intercepts it and the real oneharness resolves each variant's indirection from this
+    environment. Every other member here is two-party `kind: onejudge`, whose spawned
+    CLI the fake backend replaces before any variant resolves — which is why the control
+    case at `test_node_graph_uses_the_generic_base_when_no_persona_is_overridden` stayed
+    green while those three failed on a missing indirection.
+
+    So establishing the indirections makes those three pass by letting a real oneharness
+    run, which is the opposite of doubling it. Do not read the fake backend as covering
+    every path; the two seams below are what cover this one.
+    """
     environment = dict(os.environ)
     for name in LAUNCHER_ENVIRONMENT:
         environment.pop(name, None)
@@ -267,22 +403,16 @@ def _environment(
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
-    # The other half of the same seam, and not redundant with it. Since oneagentgraph
-    # 0.2.18 a single-sided `kind: oneharness` member — the `check-in` pacemaker, and
-    # `graphs/pr-author.yaml`'s drafter — runs its turn through the oneharness *library*
-    # on a thread of the graph process, so no `oneharness` CLI is spawned for it and the
-    # substitution above never sees it. A two-party `kind: onejudge` member still spawns
-    # one, which is why the fake backend continues to serve every worker, judge, and
-    # monitor turn. Left alone, those single-sided members would reach the real paid
-    # provider on every launch this suite makes. What is still a process is the
-    # provider, and `ONEHARNESS_BIN_CODEX` is oneharness's own per-harness binary
-    # override: every one of this repository's configs names `codex` first, so pinning
-    # that identity's binary is what keeps a suite run off a paid subscription. It is
-    # deliberately weaker than `--mock-harness`, which the two-party path above still
+    # The provider the library path still spawns, for the identity every config here
+    # names first. Deliberately weaker than the `--mock-harness` the two-party path
     # uses — measured against oneharness 0.10.1, a mocked harness keeps its mock binary
     # and ignores this variable — so the two seams do not collide.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # And the identities that seam cannot reach; see `no_paid_provider`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment.update(_established_indirections())
     # Keeps this run's graph scratch, its history, and its sibling state out of the
     # host's, so a journey never reads or reclaims a live dispatch's.
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
@@ -1748,6 +1878,107 @@ def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
     assert composed in report["prompt"], (
         f"schema {declared} did not expand `{{task}}`, so a member that claims its own "
         f"task cannot learn its run; it was given:\n{report['prompt']}"
+    )
+
+
+#: Every Claude identity the pacemaker's chain names, read from that chain: these are
+#: the candidates `ONEHARNESS_BIN_CLAUDE_CODE` would leave resolving to the real
+#: `claude` — the seam keys on a harness id and reaches no variant — so an identity
+#: added to the config has to be covered here rather than escaping the guard silently.
+UNINTENDED_CLAUDE_IDENTITIES = tuple(
+    identity
+    for identity in _harness_routing(REPO_ROOT / "oneharness.check-in.toml")["harnesses"]
+    if identity.startswith("claude-code")
+)
+
+
+@pytest.mark.parametrize("identity", UNINTENDED_CLAUDE_IDENTITIES)
+def test_a_turn_routed_to_a_paid_claude_identity_fails_naming_the_provider_it_reached(
+    tmp_path: Path, oneharness_bin: str, identity: str
+) -> None:
+    """Reaching an unintended provider is a loud refusal, not a quiet charge.
+
+    A real chain can select a real identity, and on a provisioned host a billed turn
+    reads exactly like a free one from a journey's assertions. Each identity is driven
+    on its own because `fallback` stops at the first candidate that runs, so one launch
+    would prove only the first of the three.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    environment["ONEHARNESS_HARNESSES"] = identity
+
+    assert shutil.which("claude", path=environment["PATH"]) == str(
+        PAID_PROVIDER_GUARD / "claude"
+    ), "a launch environment here resolves `claude` to something other than the guard"
+
+    ran = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / "oneharness.check-in.toml"),
+            "--prompt",
+            "a turn no journey here means to spend",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert ran.returncode != 0, f"{identity} answered the turn:\n{ran.stdout}"
+    # oneharness owns this report's schema; only the three fields the claim rests on
+    # are read out of it.
+    attempted = json.loads(ran.stdout)["results"][-1]
+    assert attempted["harness_id"] == identity, attempted
+    assert attempted["available"] is True, (
+        f"{identity} was skipped rather than routed to, so this proves nothing about "
+        f"what a journey reaching it would spend: {attempted}"
+    )
+    assert REFUSAL in attempted["stderr"], (
+        f"{identity} resolved to something other than the guard, so a journey that "
+        f"reached it would have spent a paid subscription: {attempted}"
+    )
+
+
+def test_the_paid_provider_guard_answers_an_abbreviated_version_probe() -> None:
+    """`-v` is answered as a probe, not refused as a turn.
+
+    `oneharness` decides a candidate is installed by probing the binary it resolved,
+    and a `claude` that fails that probe is classified as not installed and skipped —
+    which leaves the journey above passing while proving nothing about routing. The
+    guard accepts the abbreviated spelling for exactly that reason, and nothing else
+    reaches that branch, so it is driven here through the `claude` that `PATH`
+    resolves to: that symlink is the whole seam this stand-in reaches a run through.
+    """
+    resolved = shutil.which("claude", path=str(PAID_PROVIDER_GUARD))
+    assert resolved == str(PAID_PROVIDER_GUARD / "claude"), (
+        f"the guard directory resolves `claude` to {resolved}, so this would probe "
+        f"something other than the stand-in"
+    )
+
+    probed = subprocess.run(
+        [resolved, "-v"],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+
+    assert probed.returncode == 0, (
+        f"the guard failed a `-v` probe, so a chain probing it that way reads the "
+        f"identity as not installed and skips it:\n{probed.stdout}\n{probed.stderr}"
+    )
+    # Against the constant rather than a literal: what this holds is that the probe
+    # branch answered, not which version the stand-in claims.
+    assert probed.stdout == f"{VERSION}\n", (
+        f"a `-v` probe answered with something other than the version the stand-in "
+        f"claims: {probed.stdout!r}"
+    )
+    assert REFUSAL not in probed.stderr, (
+        f"a `-v` probe was read as a turn and refused, which is the failure accepting "
+        f"that spelling exists to prevent: {probed.stderr!r}"
     )
 
 

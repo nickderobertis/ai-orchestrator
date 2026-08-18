@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# This repository's subject policy; AGENTS.md's "Commits and merging" says why it is
+# this policy. Two constraints shape the code below rather than the rule:
+#
+# * It reads the subject and NOTHING else — no index, no diff, no branch. `onevcs`
+#   runs this against a subject it is about to publish, where none of that exists, so
+#   a policy consulting repository state would mean two different things.
+# * It stays pure bash with no subprocess, because it runs on every commit.
+set -euo pipefail
+
+message_file=${1:?commit-msg: the message file is the one argument this hook takes}
+
+# Subjects nobody wrote as a description of a change: autosquash markers a rebase
+# rewrites before they reach history, git's own merge and revert wording, and the two
+# provenance commits a publication squashes away — refusing either of those last would
+# break `repo-recover`, which commits them through this same path.
+#
+# Those last two are onevcs::provenance::ATTESTATION_SUBJECT and its INCOMPLETE_SUFFIX,
+# spelled here because the hook reads nothing but the subject and so cannot ask the
+# engine. `onevcs` is what authors them, so a reword there would make every
+# `repo-recover` in this repository a refused commit; the drift gate that catches it
+# drives both constants, read from a registered checkout of onevcs, through this hook
+# — tests/e2e/test_commit_msg_hook_e2e.py's
+# `test_the_provenance_subjects_the_hook_exempts_are_the_ones_onevcs_writes`.
+EXEMPT='^(fixup!|squash!|amend!|Merge |Revert ")|\(incomplete step\)$|^chore: attest verified recovery of preserved work$'
+
+# The types this repository releases from: a version is cut for a feature, a fix, or a
+# performance change, and for any breaking change whatever its type — `refactor!` is a
+# major, which is why the breaking marker is read before the type.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This repository is private and runs no release automation, so this set is its own declaration rather than a copy: there is no config to derive it from and no pipeline a gate could measure it against.
+RELEASING='^(feat|fix|perf)(\([^()]+\))?!?: '
+BREAKING='^[a-z]+(\([^()]+\))?!: '
+
+# A Conventional Commit subject: `type(optional scope)optional !: summary`.
+CONVENTIONAL='^[a-z]+(\([^()]+\))?!?: [^ ].*$'
+
+# onevcs::provenance::SUBJECT_LIMIT — what a publication subject is held to. Refusing
+# an over-long subject here is what keeps a branch from reaching publication and being
+# refused there, with the gate already paid for.
+SUBJECT_LIMIT=120
+
+# The subject is the first line that carries content. A commit written in an editor
+# arrives with git's `#` instructions appended, and an aborted one carries nothing but
+# those — git refuses that itself, so an empty subject here is not this hook's to name.
+subject=""
+while IFS= read -r line; do
+    case "$line" in
+        '#'* | '') continue ;;
+        *)
+            subject=$line
+            break
+            ;;
+    esac
+done <"$message_file"
+
+[ -n "$subject" ] || exit 0
+
+if [[ $subject =~ $EXEMPT ]]; then
+    exit 0
+fi
+
+if [[ ! $subject =~ $CONVENTIONAL ]]; then
+    echo "commit-msg: the subject is not a Conventional Commit: $subject" >&2
+    echo "commit-msg: write it as 'type(optional scope): summary'." >&2
+    exit 1
+fi
+
+if [ "${#subject}" -gt "$SUBJECT_LIMIT" ]; then
+    echo "commit-msg: the subject is ${#subject} characters, over the $SUBJECT_LIMIT" \
+        "characters onevcs holds a publication subject to: $subject" >&2
+    exit 1
+fi
+
+if [[ ! $subject =~ $RELEASING ]] && [[ ! $subject =~ $BREAKING ]]; then
+    type=${subject%%[(!:]*}
+    echo "commit-msg: this repository does not release from '$type:', and every commit" \
+        "here changes the deliverable: $subject" >&2
+    echo "commit-msg: a change published under it merges green and never cuts a" \
+        "release. Use feat:, fix:, or perf: — or mark it breaking with '!'." >&2
+    exit 1
+fi
