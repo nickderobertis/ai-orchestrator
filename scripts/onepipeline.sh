@@ -18,6 +18,12 @@
 #     is unset, and the launched graph runs the orchestrator and every worker
 #     under those configs.
 #
+# A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
+# `scripts/ask-manager.sh`. It is established here for the same reason the two above
+# are: it reaches a dispatch only by inheritance, so the launching process is the
+# last place that can put it there, and `start` and `adopt` are every shape of launch
+# this repository has. `scripts/ask-manager-env.sh` owns the path and the refusal.
+#
 # Detection is from the exported environment and never from process ancestry,
 # and a session nothing identifies stays unidentified: a run misattributed to a
 # planner who did not launch it is worse than one attributed to nobody.
@@ -64,6 +70,14 @@ case "${1:-}" in
         # shellcheck source=scripts/codex-alt-home.sh
         . "$codex_alt_helper"
         ensure_codex_alt_home onepipeline || exit $?
+        ask_manager_helper="$script_dir/ask-manager-env.sh"
+        if [ ! -f "$ask_manager_helper" ] || [ ! -r "$ask_manager_helper" ]; then
+            echo "onepipeline: required helper is not a readable regular file: $ask_manager_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+            exit 2
+        fi
+        # shellcheck source=scripts/ask-manager-env.sh
+        . "$ask_manager_helper"
+        export_ask_manager onepipeline || exit $?
         ;;
 esac
 

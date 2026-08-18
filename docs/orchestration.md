@@ -355,13 +355,22 @@ launch, and each refusal through the real script.
 ### A dispatched agent asks its manager
 
 The same `channel serve` verb is the other end of the channel: how a worker that
-has reached a decision fork stops and asks rather than guessing. `just plan` exports
-the path of `scripts/ask-manager.sh` into the launch environment as
-`ORCHESTRATOR_ASK_MANAGER`, and that wrapper is the one supported way to ask. It
-takes the question as an argument, as `--file <path>`, or on stdin, blocks, and
-prints the manager's answer on stdout. Only that recipe exports the variable, so a
-worker dispatched by any other launch has no path to name and asks the channel
-itself — which is why the fallback is stated in the persona rather than here.
+has reached a decision fork stops and asks rather than guessing. **Every launch this
+repository makes** exports the path of `scripts/ask-manager.sh` into the launch
+environment as `ORCHESTRATOR_ASK_MANAGER`, and that wrapper is the one supported way
+to ask. It takes the question as an argument, as `--file <path>`, or on stdin,
+blocks, and prints the manager's answer on stdout.
+
+`scripts/ask-manager-env.sh` is the one source of that path and of the refusal when
+it is not runnable, and `scripts/onepipeline.sh` takes it for `start` and `adopt` —
+which is `just orchestrate` attached, detached, and adopted, and `just plan`, and
+nothing else, because a read-only view dispatches nobody. `just plan` takes it a
+second time before it writes anything, so a checkout that cannot ask is refused
+rather than left holding a plan. It was once `just plan`'s alone, which meant no
+dispatch of an orchestrated run had ever been given it: a worker read its persona's
+instruction to run that command, found the empty string, and had nothing to fall
+back on and nothing to report it to. The persona's own fallback is for a dispatch
+some *other* launch made, which is why it is stated there rather than here.
 *When* a fork is worth blocking on is the dispatched role's judgment rather than
 this page's; both are in [`personas/planner.yaml`](../personas/planner.yaml).
 
@@ -370,8 +379,19 @@ The frame it writes is the shape the table above gives `channel serve`: kind
 `awaiting-planner` until an answer arrives. It is one compact line, because a
 pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
-ask on: every dispatch is started with its own, an observer member has none, and an
-unset one is refused rather than guessed at. `ORCHESTRATOR_ASK_MANAGER_NODE`
+ask on, and an unset one is refused rather than guessed at. What sets it depends on
+the launch, measured per shape by
+`tests/e2e/test_launch_ask_seam_e2e.py`: a dispatch of an **attached** `just
+orchestrate` carries the run's own id, and so does every `just plan` dispatch —
+that recipe exports it, which is sound only because it refuses a name whose run root
+is already taken — `onepipeline` mints `<name>-2` when one exists, so without that
+refusal the exported id could name a live run belonging to somebody else's
+workstream. A dispatch of a **detached** or **adopted** `just
+orchestrate` carries none; handing a worker its run is `onepipeline`'s own, and
+deriving one here from a plan this repository did not write would be restating how a
+run id is minted. An observer member carries the run's id too, so finding the
+variable says which run a process is *under* and never that it is a dispatch.
+`ORCHESTRATOR_ASK_MANAGER_NODE`
 optionally attaches the surface to a node, and a node the run does not have is a
 fatal refusal rather than a retry.
 

@@ -567,14 +567,17 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
     a launch that silently dropped it would produce the confidently-wrong plan the split
     exists to prevent — with nothing to distinguish it from a planner that had no
     questions. So a checkout missing the wrapper is refused before a run is started.
-    Driven by running the real script from a directory holding only itself, which is what
-    a half-restored checkout looks like.
+    Driven by running the real script beside the helper that establishes the seam but
+    without the wrapper that helper names, which is what a half-restored checkout looks
+    like.
     """
     detached = tmp_path / "checkout" / "scripts"
     detached.mkdir(parents=True)
+    for name in ("plan.sh", "ask-manager-env.sh"):
+        copied = detached / name
+        copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+        copied.chmod(0o755)
     copied = detached / "plan.sh"
-    copied.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
-    copied.chmod(0o755)
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")
 
@@ -589,7 +592,7 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
     )
 
     assert refused.returncode != 0, refused.stdout
-    assert "ask-manager wrapper is not executable" in refused.stderr, refused.stderr
+    assert "ask-manager wrapper is not an executable file" in refused.stderr, refused.stderr
     assert not (tmp_path / "scratch").exists(), "a plan was written for a launch that cannot ask"
 
 
@@ -601,13 +604,14 @@ BROKEN_INTERPRETER = "#!/usr/bin/env bash\necho 'half a plan'\nexit 1\n"
 def _detached_recipe(tmp_path: Path) -> Path:
     """A copy of the recipe's script and the seam it requires, outside this checkout.
 
-    Both, because the recipe refuses to launch a planner that could not ask questions
-    before it writes anything — so a copy carrying only itself would be refused for the
-    wrong reason.
+    All three, because the recipe refuses to launch a planner that could not ask
+    questions before it writes anything — the helper that establishes the seam, and the
+    wrapper that helper insists on — so a copy carrying only itself would be refused for
+    the wrong reason.
     """
     scripts = tmp_path / "checkout" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("plan.sh", "ask-manager.sh"):
+    for name in ("plan.sh", "ask-manager-env.sh", "ask-manager.sh"):
         copied = scripts / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)

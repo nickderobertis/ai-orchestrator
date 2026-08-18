@@ -164,6 +164,10 @@ upgrade:
 # Per-side routing is a property of the launched graphs. `onepipeline start`
 # forwards `--set` to the dag graph and `--node-set` to every dispatched node
 # graph; docs/onejudge-integration.md gives the exact config-ref overrides.
+#
+# All three shapes dispatch, so all three carry the ask-manager seam their workers
+# stop and ask through; `scripts/onepipeline.sh` establishes it for `start` and
+# `adopt` alike, and refuses a launch whose wrapper it cannot run.
 [doc('Launch a plan on the monitor and drafting graphs and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
 orchestrate *args:
     # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
@@ -174,8 +178,12 @@ orchestrate *args:
 # everything else reaches `onepipeline start` untouched.
 #
 # It writes the one-node plan rather than asking a manager to remember its shape;
-# `scripts/plan.sh` states what has to be right about that shape and why.
-[doc('Launch a planner on a manager-written brief as a one-node plan, with the ask-manager seam exported.')]
+# `scripts/plan.sh` states what has to be right about that shape and why. The
+# ask-manager seam every launch exports is not among them — that is
+# `scripts/onepipeline.sh`'s, for `start` and `adopt` alike — but the run id is: this
+# recipe owns the plan's `name`, so it refuses one already taken rather than letting
+# the engine mint a different id than the one it printed.
+[doc('Launch a planner on a manager-written brief as a one-node plan, under a run id this launch guarantees is its own.')]
 plan *args:
     @./scripts/plan.sh "$@"
 

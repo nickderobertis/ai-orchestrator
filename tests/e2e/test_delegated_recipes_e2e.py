@@ -43,8 +43,11 @@ WRAPPER_SCRIPTS = (
     # identity and a launch's harness environment are established.
     "onepipeline.sh",
     # `just plan` writes its one-node plan through this one, and refuses to launch at
-    # all unless the wrapper beside it is there for the planner to ask questions with.
+    # all unless the wrapper the seam names is there for the planner to ask questions
+    # with. Every launch takes that seam, `onepipeline.sh` included, so the helper that
+    # establishes it and the wrapper it names are both part of a runnable checkout.
     "plan.sh",
+    "ask-manager-env.sh",
     "ask-manager.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",

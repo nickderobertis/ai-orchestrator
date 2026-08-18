@@ -27,13 +27,13 @@ import os
 import re
 import shutil
 import subprocess
-import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict, cast
 
 import pytest
+from planner_channel import MANAGER_PATIENCE_SECONDS, TOKEN, Manager, next_surface, ruling
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -66,11 +66,6 @@ INHERITED_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: The correlation token the wrapper mints and asks the manager to echo. Its shape is
-#: the wrapper's published one; that a manager can find it in the surface and that
-#: echoing it is what gets the answer through is what these journeys prove.
-TOKEN = re.compile(r"ask-manager-token:[0-9a-f]+")
-
 #: `onepipeline channel serve`'s own reply window, measured at 29.8 seconds. The
 #: wrapper overrides it, and the journey below proves the override survives by
 #: watching past this.
@@ -83,17 +78,11 @@ OBSERVED_WAITING_AFTER_SECONDS = 35
 #: journey whose manager never answers fails in seconds rather than at the default.
 SHORT_WINDOW_SECONDS = 5
 
-#: How long the manager below keeps looking for a question to answer, and the reply
-#: window the wrapper is given while they look. Both load-scaled like every other hang
-#: guard here, because the manager is played by a thread driving real `just` recipes and
-#: a loaded suite slows every one of them down.
-#:
-#: The wrapper's window is deliberately the LONGER of the two, and that ordering is the
-#: point: with it the other way round the wrapper gave up first, so a journey whose
-#: manager was merely slow reported the timeout refusal — a real behavior, just not the
-#: one it was about — and a journey whose manager genuinely failed reported nothing
-#: about why.
-MANAGER_PATIENCE_SECONDS = 120
+#: The reply window the wrapper is given while `planner_channel.Manager` looks for the
+#: question. Deliberately the LONGER of the two, and that ordering is the point: with it
+#: the other way round the wrapper gave up first, so a journey whose manager was merely
+#: slow reported the timeout refusal — a real behavior, just not the one it was about —
+#: and a journey whose manager genuinely failed reported nothing about why.
 ANSWERED_WINDOW_SECONDS = int(e2e_timeout(MANAGER_PATIENCE_SECONDS * 2))
 
 #: A run's own name on the ledger. Every planner-facing verb takes one and the
@@ -118,13 +107,6 @@ class Asked(NamedTuple):
 
     environment: dict[str, str]
     run: RunId
-
-
-class SurfaceRead(TypedDict):
-    """`onepipeline next`'s answer, narrowed to what a manager reads off it."""
-
-    status: str
-    surface: dict[str, str] | None
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -258,101 +240,6 @@ def _finish(asking: subprocess.Popen[str], *, seconds: float = 180) -> tuple[int
     return asking.returncode, out, err
 
 
-def _next_surface(asked: Asked) -> str | None:
-    """Read the run's next unread surface, exactly as a manager reads one.
-
-    A read that FAILS is raised rather than reported as an empty queue. The two are
-    opposite states and look identical from a polling loop: treating a refusal as
-    "nothing there yet" turns every one of them into a timeout at the far end of a
-    wait, with the sentence that said what was wrong thrown away on the way.
-    """
-    handed = _just("channel-next", asked.run, environment=asked.environment, seconds=60)
-    assert handed.returncode == 0, (
-        f"`just channel-next {asked.run}` failed while reading this run's surfaces:\n"
-        f"{handed.stderr}{handed.stdout}"
-    )
-    if not handed.stdout.strip():
-        return None
-    # `cast` rather than a validating read: `onepipeline next` owns this schema and
-    # `SurfaceRead` states the part a manager consumes.
-    surface = cast(SurfaceRead, json.loads(handed.stdout))["surface"]
-    return None if surface is None else surface["message"]
-
-
-def _reply(asked: Asked, envelope: str) -> subprocess.CompletedProcess[str]:
-    """Send one reply envelope over the live channel, as `just channel-reply` does."""
-    return subprocess.run(
-        ["just", "channel-reply", asked.run],
-        cwd=REPO_ROOT,
-        env=asked.environment,
-        input=envelope,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-
-def _answer_each(
-    asked: Asked, answers: list[Callable[[str], str]], *, seconds: float = MANAGER_PATIENCE_SECONDS
-) -> None:
-    """Play the manager: read surfaces until the question appears, then reply. Once per answer.
-
-    Written as the loop a manager actually performs — `just channel-next` until
-    something is there, then `just channel-reply` — because handing out a blocking
-    surface is what opens the reply rendezvous at all: a reply sent to a run whose
-    surface nobody has read is refused with `nothing will ever read a reply to it`.
-    """
-    limit = deadline(seconds)
-    for compose in answers:
-        token = None
-        while token is None:
-            if time.monotonic() >= limit:
-                raise AssertionError(f"run {asked.run} never surfaced a question carrying a token")
-            message = _next_surface(asked)
-            found = None if message is None else TOKEN.search(message)
-            if found is not None:
-                token = found.group(0)
-                break
-            time.sleep(0.2)
-        sent = _reply(asked, compose(token))
-        assert sent.returncode == 0, f"the channel refused this reply:\n{sent.stderr}{sent.stdout}"
-
-
-class Manager:
-    """The manager, played beside the wrapper because the wrapper blocks on them.
-
-    Its failures are held rather than raised on its own thread: an assertion that died
-    in a thread nobody joined would leave the wrapper's own timeout as the only thing
-    the test reported, which says nothing about why the answer never came.
-    """
-
-    def __init__(self, asked: Asked, answers: list[Callable[[str], str]]) -> None:
-        self._failures: list[BaseException] = []
-        self._thread = threading.Thread(target=self._play, args=(asked, answers), daemon=True)
-        self._thread.start()
-
-    def _play(self, asked: Asked, answers: list[Callable[[str], str]]) -> None:
-        try:
-            _answer_each(asked, answers)
-        except BaseException as error:  # noqa: BLE001 - re-raised by `joined` below
-            self._failures.append(error)
-
-    def joined(self, *, wrapper_said: str = "") -> None:
-        """Wait for the manager to finish, and re-raise whatever it hit.
-
-        `wrapper_said` is the asking side's own stderr, folded into the failure: the
-        manager gives up when no question ever arrives, and the reason a question never
-        arrived is something only the wrapper said.
-        """
-        self._thread.join(timeout=e2e_timeout(60))
-        if self._failures:
-            failure = self._failures[0]
-            if wrapper_said:
-                raise AssertionError(f"{failure}\nthe asking side reported:\n{wrapper_said}")
-            raise failure
-
-
 #: Every journey that drives the live channel is pinned to one worker. Not because the
 #: channel is shared — each launches its own run under its own runs root — but because
 #: each one is a wrapper process and a manager thread both waiting on `just` recipes,
@@ -383,7 +270,7 @@ def _waited_for_question(
     """
     limit = deadline(seconds)
     while True:
-        message = _next_surface(asked)
+        message = next_surface(asked.run, asked.environment)
         if message is not None:
             return message
         if asking.poll() is not None:
@@ -400,11 +287,6 @@ def _waited_for_question(
 ANSWER = "Key it on the whole workspace; the narrower key would replay a stale verdict."
 
 
-def _ruling(message: str) -> str:
-    """One reply envelope carrying a decision, as a manager's answer is spelled."""
-    return json.dumps({"version": 1, "completion": True, "message": message})
-
-
 @pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_wrapper_answers_with_the_managers_message_and_nothing_else(asked: Asked) -> None:
     """The happy round trip: an agent asks, a manager answers, the agent reads the answer.
@@ -416,10 +298,10 @@ def test_the_wrapper_answers_with_the_managers_message_and_nothing_else(asked: A
     every caller parsing JSON out of what was supposed to be an answer.
     """
     asking = _ask(asked, "Should the test key cover docs?", window=ANSWERED_WINDOW_SECONDS)
-    manager = Manager(asked, [lambda token: _ruling(f"{ANSWER} {token}")])
+    manager = Manager(asked.run, asked.environment, [lambda token: ruling(f"{ANSWER} {token}")])
 
     status, out, err = _finish(asking)
-    manager.joined(wrapper_said=err)
+    manager.checked(asker_said=err)
 
     assert status == 0, f"the wrapper did not accept the manager's answer:\n{err}"
     assert TOKEN.sub("", out).strip() == ANSWER, out
@@ -477,10 +359,10 @@ def test_a_live_edit_envelope_routed_to_this_reader_is_refused_with_its_own_caus
             "commands": [{"op": "context", "id": WORK_NODE, "note": "the base moved under you"}],
         }
     )
-    manager = Manager(asked, [lambda _token: edit])
+    manager = Manager(asked.run, asked.environment, [lambda _token: edit])
 
     status, out, err = _finish(asking)
-    manager.joined(wrapper_said=err)
+    manager.checked(asker_said=err)
 
     assert status != 0, f"the wrapper returned a live graph edit as an answer:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"
@@ -503,10 +385,10 @@ def test_a_ruling_carrying_the_token_but_no_decision_is_refused(asked: Asked) ->
     """
     asking = _ask(asked, "Is the cursor opaque?", window=ANSWERED_WINDOW_SECONDS)
     undecided = [lambda token: json.dumps({"version": 1, "message": f"maybe {token}"})]
-    manager = Manager(asked, undecided)
+    manager = Manager(asked.run, asked.environment, undecided)
 
     status, out, err = _finish(asking)
-    manager.joined(wrapper_said=err)
+    manager.checked(asker_said=err)
 
     assert status != 0, f"the wrapper returned a decision-less envelope as an answer:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"
@@ -529,15 +411,16 @@ def test_a_ruling_addressed_to_another_reader_is_re_asked_rather_than_returned(
     manager who answered the wrong surface gets another chance at the right one,
     without the agent having to be restarted.
     """
-    misdirected = _ruling("yes, that other node can be dropped")
+    misdirected = ruling("yes, that other node can be dropped")
     asking = _ask(asked, "Should the listing be paginated?", window=ANSWERED_WINDOW_SECONDS)
     manager = Manager(
-        asked,
-        [lambda _token: misdirected, lambda token: _ruling(f"{ANSWER} {token}")],
+        asked.run,
+        asked.environment,
+        [lambda _token: misdirected, lambda token: ruling(f"{ANSWER} {token}")],
     )
 
     status, out, err = _finish(asking)
-    manager.joined(wrapper_said=err)
+    manager.checked(asker_said=err)
 
     assert status == 0, f"the wrapper did not survive a ruling meant for another reader:\n{err}"
     assert "that other node can be dropped" not in out, (
@@ -1000,13 +883,15 @@ def test_a_run_whose_channel_keeps_answering_other_readers_is_given_up_on(asked:
     shape that would otherwise loop.
     """
     asking = _ask(asked, "Which cursor shape?", window=ANSWERED_WINDOW_SECONDS)
-    misdirected = _ruling("this answers a different question")
+    misdirected = ruling("this answers a different question")
     # One more than the wrapper's own bound, so the last one is unread if it stopped
     # where it promised: a manager whose answer is never taken is what this looks like.
-    manager = Manager(asked, [lambda _token: misdirected for _ in range(MAX_ATTEMPTS)])
+    manager = Manager(
+        asked.run, asked.environment, [lambda _token: misdirected for _ in range(MAX_ATTEMPTS)]
+    )
 
     status, out, err = _finish(asking)
-    manager.joined(wrapper_said=err)
+    manager.checked(asker_said=err)
 
     assert status != 0, f"the wrapper never stopped re-asking:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"

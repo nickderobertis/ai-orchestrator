@@ -10,10 +10,20 @@
 #     `graphs/`. The bare name `planner` resolves to a role compiled into
 #     `oneagentgraph` and this repository's persona file is never read — a planner
 #     silently running the wrong role, with nothing in the launch to say so.
+#   * **The run id is guaranteed to be this run's own**, and then exported as
+#     `ONEPIPELINE_RUN_ID` so the dispatched planner asks on the channel this launch
+#     printed. `onepipeline` mints a run id from the plan's `name` and, when a run
+#     root of that name already exists, mints the first free `<name>-2` instead — so
+#     a name is only the run id while nothing has taken it. This recipe writes the
+#     plan and owns its `name`, so it guarantees that by refusing a name already
+#     taken rather than by predicting what will be minted.
 #   * **`ORCHESTRATOR_ASK_MANAGER` is exported into the launch environment**, holding
 #     the path of `scripts/ask-manager.sh`, which is how the dispatched planner stops
 #     and asks rather than guessing at a decision fork. A launch that dropped it would
 #     produce exactly the confidently-wrong plan the ask channel exists to prevent.
+#     Established through `scripts/ask-manager-env.sh`, which every launch path shares,
+#     and taken here before anything is written so a checkout that cannot ask is
+#     refused rather than left holding a plan.
 #   * **The watch command is printed**, so arming it is one copy-paste rather than
 #     something composed under time pressure. `just channel-next` and not `just
 #     monitor`: rendering a surface is not reading it, and only `channel-next`
@@ -53,8 +63,20 @@ NODE_ID="plan"
 #: the shared clause alone and is judged on nothing this manager asked for.
 REQUIRED_SECTIONS=("## What" "## Why" "## Acceptance criteria")
 
-#: The seam the dispatched planner reaches its manager through.
-ASK_MANAGER_ENV="ORCHESTRATOR_ASK_MANAGER"
+#: Where `onepipeline` keeps its ledger, and so where a run id is already taken. The
+#: same default and the same override every planner-facing verb reads, resolved
+#: against the working directory exactly as they resolve it.
+RUNS_ROOT_ENV="ONEPIPELINE_RUNS_DIR"
+DEFAULT_RUNS_ROOT="runs"
+
+#: The run this launch tells its dispatch it is under. Exported rather than left to
+#: the driver: an attached launch dispatches from the process `onepipeline start`
+#: became, which carries it, but a detached one dispatches from the `drive-run` it
+#: spawns — measured, a worker there is given no run id at all, so the wrapper refuses
+#: its question with `ONEPIPELINE_RUN_ID is not set`. Sound only beside the guarantee
+#: above: exporting a name the engine would have rewritten would send a blocking
+#: question to somebody else's live run.
+RUN_ID_ENV="ONEPIPELINE_RUN_ID"
 
 #: What this recipe will use as a plan name. Narrower than what
 #: `scripts/ask-manager.sh` accepts as a run id, and deliberately so: `onepipeline`
@@ -186,10 +208,32 @@ if [ -n "$max_turns" ]; then
         "give it a count like 40, or omit it for the persona's own budget"
 fi
 
-ask_manager="$script_dir/ask-manager.sh"
-[ -x "$ask_manager" ] || fail "the ask-manager wrapper is not executable at $ask_manager" \
-    "restore it from the repository and 'chmod +x' it, so the planner it launches can stop and ask rather than guess"
-export "$ASK_MANAGER_ENV=$ask_manager"
+# A run root that already exists is what makes `onepipeline` mint `<name>-2` instead,
+# so the name this recipe prints and exports would name a different — possibly live —
+# run belonging to another workstream, and a blocking question asked there would queue
+# on a channel its own manager is not watching. Refused rather than worked around: the
+# name is the manager's to choose, and this is the only place that knows it is taken
+# before a run exists under it.
+# The ledger itself is checked first, because otherwise the test below cannot tell an
+# unused name from one this process is not allowed to look up: both leave `-e` false, and
+# the second would launch under a name that is already somebody else's run.
+runs_root="${!RUNS_ROOT_ENV:-$DEFAULT_RUNS_ROOT}"
+if [ -e "$runs_root" ] && { [ ! -d "$runs_root" ] || [ ! -r "$runs_root" ] || [ ! -x "$runs_root" ]; }; then
+    fail "the run ledger at $runs_root cannot be searched, so this launch cannot tell whether '$name' is already a run" \
+        "fix its permissions, or point $RUNS_ROOT_ENV at a directory this launch can read, then retry"
+fi
+[ ! -e "$runs_root/$name" ] || fail "run '$name' already exists under $runs_root, so this launch would be given a different run id than the one it printed" \
+    "pass --name with a run id nothing has taken yet, or read the existing run with 'just channel-next $name'"
+export "$RUN_ID_ENV=$name"
+
+ask_manager_helper="$script_dir/ask-manager-env.sh"
+if [ ! -f "$ask_manager_helper" ] || [ ! -r "$ask_manager_helper" ]; then
+    fail "required helper is not a readable regular file: $ask_manager_helper" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+# shellcheck source=scripts/ask-manager-env.sh
+. "$ask_manager_helper"
+export_ask_manager plan || exit $?
 
 # Both checked rather than left to `set -e`, which would exit with whatever the
 # helper printed and no repair — and, for the write, would leave a half-written plan

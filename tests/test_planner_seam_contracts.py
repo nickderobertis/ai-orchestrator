@@ -1,16 +1,21 @@
-"""The two contracts the manager/planner seam restates are reconciled with their source.
+"""The three contracts the manager/planner seam restates are reconciled with their source.
 
 `scripts/plan.sh` and `scripts/ask-manager.sh` are shell, and shell cannot import. So
 each of them holds a copy of a contract that is owned somewhere else — the task
 template `personas/planner.yaml` states, and the reference grammar
 `scripts/channel-serve.py` checks — and a copy is only sound while something
-reconciles it.
+reconciles it. The third copy runs the other way: the wrapper declares what its
+environment must carry, and the journeys that prove a launch builds it hold their own
+list of those names.
 
-Both copies fail quietly if they drift, which is why they are gated here rather than
+Every copy fails quietly if it drifts, which is why they are gated here rather than
 reviewed. A `REQUIRED_SECTIONS` that no longer matches the template lets a brief
 through that is not a task, or refuses one that is. A `SAFE_REFERENCE` that no longer
 matches the grammar lets the two ends of the same channel disagree about what a run id
 is, so a value one of them passes to `onepipeline` is one the other would have refused.
+And an input the wrapper starts requiring that no journey checks for is a launch path
+free to stop providing it — which is exactly how a whole launch path came to export the
+seam nowhere at all, unnoticed for every run this host had ever driven.
 """
 
 from __future__ import annotations
@@ -32,6 +37,19 @@ TASK_TEMPLATE = REPO_ROOT / "personas" / "planner.yaml"
 #: dispatched agent asks through.
 CHANNEL_FILTER = REPO_ROOT / "scripts" / "channel-serve.py"
 ASK_SCRIPT = REPO_ROOT / "scripts" / "ask-manager.sh"
+
+#: The journeys that measure what each launch shape hands a dispatch, and the shape
+#: their list of required inputs is written in. Read textually rather than imported: it
+#: is a pytest module whose import would collect fixtures, and reading a declaration is
+#: what every other gate in this file does.
+LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "e2e" / "test_launch_ask_seam_e2e.py"
+CHECKED_INPUT = re.compile(r'Input\(\s*"([A-Z0-9_]+)"')
+
+#: How `scripts/ask-manager.sh` declares an environment variable it cannot ask without,
+#: in the `Environment:` block of its own header. The `(optional)` ones are deliberately
+#: not matched: a launch that provides none of them is still a launch an agent can ask
+#: from.
+REQUIRED_INPUT = re.compile(r"^#\s+([A-Z0-9_]+)\s+\(required\)", re.MULTILINE)
 
 #: `REQUIRED_SECTIONS=("## What" "## Why" "## Acceptance criteria")`, read out of the
 #: script rather than restated, so this gate compares the shell's own list.
@@ -120,4 +138,28 @@ def test_both_ends_of_the_planner_channel_check_one_reference_grammar() -> None:
         f"{CHANNEL_FILTER.name} accepts {named.group('pattern')!r} as a run id while "
         f"{ASK_SCRIPT.name} accepts {checked.group('pattern')!r}; one end of the channel "
         "would refuse a run the other passed on"
+    )
+
+
+def test_every_input_the_wrapper_requires_is_one_a_launch_is_measured_for() -> None:
+    """A launch is proven to build exactly what the wrapper refuses without.
+
+    The wrapper's header names each variable it cannot ask without, and the journeys
+    name each one they read out of a real dispatch's environment. Only one direction is
+    an error: a required input nothing measures is a launch path free to drop it, and
+    the failure lands on some agent's first blocking question rather than in the suite.
+    The journeys may check *more* than the wrapper strictly requires — the seam itself
+    is one such name, since a wrapper never reads the variable that names it.
+    """
+    required = set(REQUIRED_INPUT.findall(ASK_SCRIPT.read_text(encoding="utf-8")))
+    assert required, (
+        f"{ASK_SCRIPT.name}'s header declares no required environment at all; this gate "
+        "reads the `(required)` lines of its `Environment:` block"
+    )
+
+    measured = set(CHECKED_INPUT.findall(LAUNCH_JOURNEYS.read_text(encoding="utf-8")))
+
+    assert required <= measured, (
+        f"{ASK_SCRIPT.name} requires {sorted(required - measured)} of the environment a "
+        f"launch builds, and {LAUNCH_JOURNEYS.name} measures no launch shape for it"
     )

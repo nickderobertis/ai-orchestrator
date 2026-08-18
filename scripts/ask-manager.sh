@@ -56,10 +56,13 @@
 # what would silently return this to the 30-second default.
 #
 # Environment:
-#   ONEPIPELINE_RUN_ID                        (required) the run to ask. `onepipeline`
-#       exports one to a dispatch and to an observer member alike, both holding the
-#       run they are under, so an unset value means neither and is refused rather than
-#       guessed at.
+#   ONEPIPELINE_RUN_ID                        (required) the run to ask. What sets it
+#       depends on the launch: `just plan` exports it, and so does an attached
+#       `just orchestrate` — a detached or adopted one does not, and an observer member
+#       carries the run's id as well as a dispatch does. Measured per shape by
+#       `tests/e2e/test_launch_ask_seam_e2e.py`. So finding a value says which run this
+#       process is under and never that it is a dispatch, and an unset one is refused
+#       rather than guessed at.
 #   ONEPIPELINE_BIN                           (optional) which onepipeline answers.
 #   ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS  (optional) the reply window.
 #   ORCHESTRATOR_ASK_MANAGER_NODE             (optional) the node the question is

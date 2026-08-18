@@ -135,9 +135,32 @@ PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
 #: What a turn was *given* is otherwise unobservable from outside: a variable reaches
 #: a dispatch by inheritance through `onepipeline`, `oneagentgraph`, and `oneharness`,
 #: and none of them reports what it passed on. A name that is unset is recorded absent,
-#: which is the whole point for `ONEPIPELINE_RUN_ID`: a dispatched worker carries its
-#: run's id and an observer member carries none.
+#: which is the whole point: what a launch establishes is exactly what its dispatches
+#: have, and measurement is the only thing that says which launch shape establishes
+#: what. Both `ONEPIPELINE_RUN_ID` and `ORCHESTRATOR_ASK_MANAGER` are read this way by
+#: `tests/e2e/test_launch_ask_seam_e2e.py`, whose journeys own the current answers.
 ENVIRONMENT_KEYS_ENV = "FAKE_BACKEND_ENVIRONMENT_KEYS"
+
+#: The seam a dispatched agent reaches its manager through, run by the branch below
+#: exactly as `personas/planner.yaml` tells an agent to run it.
+ASK_MANAGER_ENV = "ORCHESTRATOR_ASK_MANAGER"
+
+#: The question one dispatched agent turn puts to its manager, and where what came
+#: back is written. Both, or neither: an ask is a blocking round trip through the
+#: run's own channel, so it happens only for a journey that is also playing the
+#: manager. Asking is otherwise unobservable for the same reason the environment is —
+#: a real agent runs that command inside its own turn, and nothing above the turn
+#: reports that it did.
+ASK_QUESTION_ENV = "FAKE_BACKEND_ASK_QUESTION"
+ASK_RECORD_ENV = "FAKE_BACKEND_ASK_RECORD"
+
+#: The `graphs/node-scope.yaml` member a dispatched plan node runs as, which is what
+#: makes the branch below about a *dispatch*: `oneagentgraph` names every member's
+#: scratch after it and pins that member's configs inside it, so the recorded
+#: `--config` is what says whose turn this is. The dag-scope monitor reaches the same
+#: agent branch and must never be the one that asks.
+DISPATCHED_MEMBER = "worker"
+MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 
 #: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
@@ -188,6 +211,64 @@ def _prompt(argv: list[str]) -> tuple[list[str], str]:
             replaced[index + 1] = spilled.name
             return replaced, text
     return argv, ""
+
+
+def _ask_manager(config: str | None) -> None:
+    """Put one blocking question to the manager, from a dispatched agent's own turn.
+
+    This is where a stand-in has to *act* rather than record: the seam is a command an
+    agent runs, so the only way to prove a dispatch can use it is for the process
+    serving that dispatch to run it and report what came back. Everything it needs —
+    the wrapper's path, the run to ask on, the reply window — comes from this turn's
+    own inherited environment, so a launch that established one of them badly fails
+    here exactly as it would for a real agent.
+
+    Exactly one turn asks, claimed by creating the record exclusively: a dispatch
+    reaches this repeatedly (the supervisor sends it back for more), and a manager
+    playing one answer would leave every later ask waiting on a reply nobody sends.
+
+    A wrapper that is not in the environment is recorded as absent rather than skipped,
+    because that absence IS the finding a journey is here to read.
+    """
+    question = os.environ.get(ASK_QUESTION_ENV)
+    record = os.environ.get(ASK_RECORD_ENV)
+    if not question or not record:
+        return
+    named = MEMBER_OF_CONFIG.search(config or "")
+    if named is None or named.group(1) != DISPATCHED_MEMBER:
+        return
+    claimed = Path(record)
+    try:
+        # The claim is the file's creation and the answer is its content, so a reader
+        # waits for the record to be non-empty rather than to exist: between the two is
+        # the whole round trip this is here to make.
+        claimed.touch(exist_ok=False)
+    except FileExistsError:
+        return
+    wrapper = os.environ.get(ASK_MANAGER_ENV)
+    if not wrapper:
+        claimed.write_text(
+            json.dumps({"wrapper": None, "status": None, "out": "", "err": ""}), encoding="utf-8"
+        )
+        return
+    asked = subprocess.run(  # noqa: S603 - the real wrapper, as a dispatched agent runs it
+        [wrapper, question],
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    claimed.write_text(
+        json.dumps(
+            {
+                "wrapper": wrapper,
+                "status": asked.returncode,
+                "out": asked.stdout,
+                "err": asked.stderr,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _answer(argv: list[str], text: str) -> int:
@@ -248,6 +329,7 @@ def main(argv: list[str]) -> int:
         )
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, "the stand-in pacemaker reported")
+    _ask_manager(config)
     if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
     return _answer(argv, "the stand-in worker reported without changing anything")

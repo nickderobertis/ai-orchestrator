@@ -740,13 +740,23 @@ one-node plan a manager-written brief becomes
 (`examples/planner-brief.example.md` → `examples/single-node-planner.plan.json`)
 and launches it. The brief is the dispatched task verbatim, so it is written in
 the `## What` / `## Why` / `## Acceptance criteria` template and refused when it is
-not. Two things about that plan are the reason the recipe writes it rather than a
+not. Two things about that launch are the reason the recipe makes it rather than a
 manager: the persona is the **path** `../personas/planner.yaml`, because the bare
 name resolves to a role built into the tool and this repository's file is never
-read; and the launch exports `ORCHESTRATOR_ASK_MANAGER`, the path of
-`scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking
+read; and the run id it prints is guaranteed to be the run's own, by refusing a name
+whose run root is already taken rather than by predicting the `<name>-2`
+`onepipeline` would mint instead. That refusal is what lets the recipe also hand
+that id to its dispatch as `ONEPIPELINE_RUN_ID`, the run whose channel a blocking
+question goes to — without it, a detached planner's questions would queue on a live
+run belonging to somebody else's workstream.
+
+**Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
+of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking
 question to its manager over the run's own channel instead of guessing at a
-decision fork. That wrapper is the only supported way to ask: `onepipeline channel
+decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
+`scripts/ask-manager-env.sh` is its one source and `scripts/onepipeline.sh` is where
+a launch takes it, so a read-only view — which dispatches nobody — takes it not at
+all. That wrapper is the only supported way to ask: `onepipeline channel
 serve` answers its own timeouts at exit 0 with a ruling that reads like a decision,
 and a reply is claimed by whichever reader reaches it next, so a question asked any
 other way can be answered by a fabricated verdict or by a live graph edit meant for
