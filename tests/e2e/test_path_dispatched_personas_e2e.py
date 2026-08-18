@@ -49,8 +49,20 @@ from orchestrator.root import REPO_ROOT
 #: than silently outside these journeys.
 DAG_SCOPE_GRAPH = REPO_ROOT / "graphs" / "dag-scope.yaml"
 
+#: Where its member block opens, and how a member states its own name inside it: one
+#: key at the block's own indentation. Read positionally because there is no YAML
+#: parser in this environment; `_observer_members` below is the whole of the parsing.
+DAG_SCOPE_MEMBERS = "members:"
+DAG_SCOPE_MEMBER = re.compile(r"^  (\S+):\s*$")
+
 #: How that document spells a path-named persona, relative to its own directory.
-PATH_NAMED_PERSONA = re.compile(r"^\s*persona:\s*\.\./(personas/\S+\.yaml)\s*$", re.MULTILINE)
+PATH_NAMED_PERSONA = re.compile(r"^\s*persona:\s*\.\./(personas/\S+\.yaml)\s*$")
+
+#: And the oneharness config a member's turn-taking side reads, wherever inside the
+#: member it is spelled. A two-party member nests it under `agent:` and a single-sided
+#: one states it at its own level; which of the two it is does not change that this is
+#: the file that member's turn is routed by, so the reconciliation reads either.
+PATH_NAMED_HARNESS_CONFIG = re.compile(r"^\s*oneharness_config:\s*\.\./(\S+\.toml)\s*$")
 
 #: The stand-in for the paid model at the seam a two-party member reaches it, and the
 #: stand-in one layer lower for the provider a single-sided member's in-library turn
@@ -133,7 +145,12 @@ class PathDispatched(NamedTuple):
     harness_config: str
 
 
-#: The two members of `graphs/dag-scope.yaml`, in that document's own shapes.
+#: The two members of `graphs/dag-scope.yaml`, in that document's own shapes. Every
+#: field here except `label` is that document's, and none of them is remembered:
+#: `test_the_declared_set_is_every_persona_the_observer_graph_names_by_path` reads the
+#: member name, the persona ref, and the oneharness config back out of the graph and
+#: fails on any of the three moving. `label` is reconciled against the persona file
+#: itself, one test below.
 PATH_DISPATCHED = (
     PathDispatched(
         member="monitor",
@@ -239,19 +256,67 @@ def _turns(prompt_log: Path) -> list[ProviderTurn]:
     ]
 
 
+def _observer_members() -> set[tuple[str, str, str]]:
+    """Each member of the observer graph that names its persona by path.
+
+    Returns `(member, persona, oneharness config)`, all three as that document spells
+    them, so the table above can be reconciled against the graph rather than trusted to
+    still describe it. A member is one key at the `members:` block's indentation and
+    everything indented under it, which is all the structure this needs; there is no
+    YAML parser in this environment and the document is this repository's own.
+    """
+    members: dict[str, dict[str, str]] = {}
+    current: dict[str, str] | None = None
+    within = False
+    for line in DAG_SCOPE_GRAPH.read_text(encoding="utf-8").splitlines():
+        if line.rstrip() == DAG_SCOPE_MEMBERS:
+            within = True
+            continue
+        if not within:
+            continue
+        named = DAG_SCOPE_MEMBER.match(line)
+        if named:
+            current = members.setdefault(named.group(1), {})
+            continue
+        if current is None:
+            continue
+        for key, pattern in (
+            ("persona", PATH_NAMED_PERSONA),
+            ("harness_config", PATH_NAMED_HARNESS_CONFIG),
+        ):
+            found = pattern.match(line)
+            if found:
+                current[key] = found.group(1)
+    return {
+        (member, read["persona"], read["harness_config"])
+        for member, read in members.items()
+        if "persona" in read and "harness_config" in read
+    }
+
+
 def test_the_declared_set_is_every_persona_the_observer_graph_names_by_path() -> None:
     """The table above is the graph's own list, not a remembered copy of it.
 
     A member added to `graphs/dag-scope.yaml` with a persona named by path is a third
     file a run reads and this file would otherwise say nothing about. Read from the
     document rather than restated, so adding one fails here until it has a journey.
+
+    The member's name and its oneharness config are read back with the persona rather
+    than only the persona, because the journeys below are written against all three and
+    a copy of any one of them can go stale the same way. A member renamed, or repointed
+    at another harness config, would otherwise leave those journeys passing against a
+    graph that no longer says what they assert about it.
     """
-    named = set(PATH_NAMED_PERSONA.findall(DAG_SCOPE_GRAPH.read_text(encoding="utf-8")))
-    assert named == {dispatched.persona for dispatched in PATH_DISPATCHED}, (
+    named = _observer_members()
+    declared = {
+        (dispatched.member, dispatched.persona, dispatched.harness_config)
+        for dispatched in PATH_DISPATCHED
+    }
+    assert named == declared, (
         f"{DAG_SCOPE_GRAPH.name} names {sorted(named)} by path; the journeys here cover "
-        f"{sorted(dispatched.persona for dispatched in PATH_DISPATCHED)}. Every persona a "
-        "run reads by path needs one, because validation alone would not catch it "
-        "failing to load."
+        f"{sorted(declared)}. Every persona a run reads by path needs one, because "
+        "validation alone would not catch it failing to load, and each journey's member "
+        "and oneharness config have to be the ones that document still states."
     )
 
 
