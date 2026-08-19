@@ -55,6 +55,14 @@ WRAPPER_SCRIPTS = (
     # an audit is asked for — pipes the answer through the filter it names.
     "repos.sh",
     "merge-path-audit.py",
+    # The two landing recipes go through this one, which reads the branch and `--repo`
+    # for the drafter and forwards everything else; the drafter itself is what it
+    # names, and a checkout without it would delegate through a wrapper that cannot
+    # run. `just recoverable` goes through the third, which re-renders the resume
+    # commands `onevcs` prints in their `just` form.
+    "land-branch.sh",
+    "draft-pr-body.sh",
+    "recoverable.sh",
 )
 
 
@@ -236,6 +244,22 @@ DELEGATIONS = (
         ),
         "uv run onevcs publish-branch claude/work --repo /checkout "
         "--title Add the thing --policy change-open",
+    ),
+    # The two escapes from drafting, which are the recipe's own additions to the verb's
+    # argument list rather than `onevcs` options. `--no-draft` is consumed here — the
+    # verb has no such option and would refuse the whole invocation — and a caller's own
+    # body is forwarded untouched. That no turn is spent for either is a claim this
+    # trace cannot make; `tests/e2e/test_publish_branch_e2e.py` makes it against a real
+    # drafting seam.
+    Delegation(
+        "publish-branch",
+        ("claude/work", "--repo", "/checkout", "--no-draft"),
+        "uv run onevcs publish-branch claude/work --repo /checkout",
+    ),
+    Delegation(
+        "repo-recover",
+        ("claude/work", "--repo", "/checkout", "--body-file", "/tmp/body.md"),
+        "uv run onevcs recover claude/work --repo /checkout --body-file /tmp/body.md",
     ),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
     # The two reads that close the gap the landing verbs left. `status` is the only

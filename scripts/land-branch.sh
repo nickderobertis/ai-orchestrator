@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# `just publish-branch` and `just repo-recover` — land one branch, with a drafted body.
+#
+# `scripts/land-branch.sh <publish-branch|recover> <branch> --repo <checkout> [...]`.
+#
+# Both recipes were argument passthroughs to `onevcs`, which opens a change request
+# with whatever body it was given — none, from an operator naming a branch. This is
+# what puts `scripts/draft-pr-body.sh` in front of the two verbs that open one, so the
+# body arrives without anyone remembering to draft it.
+#
+# What it owes the caller, in order of who wins:
+#
+#   * **Every argument reaches `onevcs` unchanged and in order.** This is a
+#     passthrough that adds one flag, not a command line of its own. `--no-draft` is
+#     the single exception, consumed here because `onevcs` has no such option.
+#   * **A caller who brought a body keeps it.** `--body` or `--body-file` in the
+#     argument list means the caller has already decided what the change request says,
+#     so no turn is spent and the list is forwarded verbatim.
+#   * **`--no-draft` skips drafting**, which is the escape for a bulk landing: an
+#     operator working down `just recoverable` over dozens of branches pays one agent
+#     turn per branch otherwise.
+#   * **Drafting never blocks a landing and never retries.** Whatever the drafter
+#     exits with other than 0, its own diagnostic goes to the operator's stderr and the
+#     verb runs anyway, with no body — exactly what a run's publication closeout does
+#     when its drafting graph produces nothing. A branch that could not be described is
+#     still a branch that has to land.
+#
+# **The turn is spent before the gate**, because the body is an argument to `onevcs`
+# and the verb is what runs the identity's gate — so a branch the gate then rejects has
+# paid for a body nothing used. `docs/repo-lifecycle.md` has why that is accepted.
+#
+# Reading the branch and `--repo` out of the argument list is what drafting needs, and
+# a list this cannot read that way is landed exactly as it is today: the point is that
+# adding a drafter never turns a working invocation into a refusal. `onevcs` remains
+# the one thing that judges the arguments.
+#
+# llmlint: ignore-file[boundary_inputs_validated] This is a passthrough: `onevcs` is the
+# one thing that judges these arguments, and a second opinion here would refuse
+# invocations the verb accepts — the failure this wrapper must not introduce. What it
+# reads out of the list is read for drafting alone, and a list it cannot read that way
+# is forwarded whole and landed with no body rather than refused.
+#
+# llmlint: ignore-file[tool_output_is_signal] What the verb verified and where it
+# published the branch — the gate verdict, the merge path taken, and the change
+# request's URL — is the product an operator runs this for, and the drafter's own
+# one-line ending on stderr is what says why a change request opened with no body.
+set -euo pipefail
+
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
+  printf 'land-branch: the checkout this recipe was run from could not be resolved; run it from a checkout, so the drafter it names is that checkout'"'"'s\n' >&2
+  exit 2
+}
+readonly script_dir
+readonly DRAFTER="$script_dir/draft-pr-body.sh"
+
+#: The options `onevcs publish-branch` and `onevcs recover` take a separate value for.
+#: Needed to find the first positional — the branch — without mistaking an option's
+#: value for it. An option this does not know about is not guessed at: the argument
+#: list is forwarded and no body is drafted, which is what this wrapper did before it
+#: drafted anything.
+readonly VALUED_OPTIONS=" --repo --title --policy --body --body-file "
+
+fail() {
+  printf 'land-branch: %s\n' "$1" >&2
+  exit 2
+}
+
+verb="${1:-}"
+case "$verb" in
+  publish-branch | recover) shift ;;
+  *) fail "the verb must be 'publish-branch' or 'recover', got '${verb:-nothing}'" ;;
+esac
+
+# Read for drafting only. `forwarded` is what `onevcs` is given, and nothing below
+# removes anything from it but `--no-draft`.
+forwarded=()
+branch=""
+checkout=""
+caller_has_body=0
+drafting=1
+readable=1
+positional_seen=0
+only_positionals=0
+#: Where `--` sits in `forwarded`, once one has been seen. The drafted `--body-file`
+#: goes in front of it: everything behind the marker is a positional to `onevcs`, so a
+#: flag appended after it is read as one and refuses the whole landing.
+marker_at=""
+
+while [ $# -gt 0 ]; do
+  argument="$1"
+  shift
+  if [ "$only_positionals" -eq 1 ]; then
+    forwarded+=("$argument")
+    positional_seen=$((positional_seen + 1))
+    [ "$positional_seen" -ne 1 ] || branch="$argument"
+    continue
+  fi
+  case "$argument" in
+    --no-draft)
+      # Consumed rather than forwarded: it is this wrapper's option, and `onevcs`
+      # would refuse it as unknown.
+      drafting=0
+      ;;
+    --)
+      only_positionals=1
+      marker_at=${#forwarded[@]}
+      forwarded+=("$argument")
+      ;;
+    --body | --body-file | --body=* | --body-file=*)
+      caller_has_body=1
+      forwarded+=("$argument")
+      case "$argument" in
+        --body | --body-file)
+          [ $# -gt 0 ] || continue
+          forwarded+=("$1")
+          shift
+          ;;
+      esac
+      ;;
+    --repo=*)
+      checkout="${argument#--repo=}"
+      forwarded+=("$argument")
+      ;;
+    --repo)
+      forwarded+=("$argument")
+      if [ $# -gt 0 ]; then
+        checkout="$1"
+        forwarded+=("$1")
+        shift
+      fi
+      ;;
+    --title=* | --policy=*)
+      forwarded+=("$argument")
+      ;;
+    -*)
+      forwarded+=("$argument")
+      case "$VALUED_OPTIONS" in
+        *" $argument "*)
+          if [ $# -gt 0 ]; then
+            forwarded+=("$1")
+            shift
+          fi
+          ;;
+        *)
+          # An option nothing here knows the shape of: whether the next word is its
+          # value or the branch is unanswerable, so the branch is unread from here on
+          # and this lands with no body rather than drafting for the wrong branch.
+          readable=0
+          ;;
+      esac
+      ;;
+    *)
+      forwarded+=("$argument")
+      positional_seen=$((positional_seen + 1))
+      [ "$positional_seen" -ne 1 ] || branch="$argument"
+      ;;
+  esac
+done
+
+land() {
+  # llmlint: ignore[tool_output_is_signal] see the file-scoped note above.
+  exec uv run onevcs "$verb" ${forwarded[@]+"${forwarded[@]}"}
+}
+
+if [ "$drafting" -eq 0 ] || [ "$caller_has_body" -eq 1 ] || [ "$readable" -eq 0 ] ||
+  [ -z "$branch" ] || [ -z "$checkout" ]; then
+  land
+fi
+
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when the host's temporary directory cannot be created at all; driving it would mean breaking the filesystem the suite itself runs on.
+scratch="$(mktemp -d -- "${TMPDIR:-/tmp}/orchestrator-land-branch-XXXXXXXX")" ||
+  fail "a temporary directory for the drafted body could not be created; check that ${TMPDIR:-/tmp} is writable, then retry"
+body="$scratch/body.md"
+# The drafted body outlives nothing: `onevcs` has read it by the time the verb
+# returns, and leaving it behind would leave a change request's prose in the host's
+# temporary directory.
+# shellcheck disable=SC2329,SC2317  # Invoked from the EXIT trap below, which shellcheck cannot follow.
+clean_up() {
+  # Reported rather than swallowed: the file holds a change request's prose, and an
+  # operator whose temporary directory is keeping copies of it should hear so. It is
+  # not fatal — the landing's own verdict is what the caller ran this for.
+  rm -rf -- "$scratch" ||
+    printf 'land-branch: the drafted body could not be removed from %s; remove it by hand\n' "$scratch" >&2
+}
+trap clean_up EXIT
+# So the EXIT trap above runs for an interrupted landing too.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# Its stdout is silent with `--out`, so the only thing this can put in front of the
+# verb's own report is the one line naming why no body was drafted.
+if "$DRAFTER" "$branch" --repo "$checkout" --out "$body"; then
+  if [ -n "$marker_at" ]; then
+    # In front of `--`, which is the only place an option is still an option. The
+    # caller's own arguments keep their order on both sides of it.
+    forwarded=(
+      "${forwarded[@]:0:$marker_at}"
+      --body-file "$body"
+      "${forwarded[@]:$marker_at}"
+    )
+  else
+    forwarded+=(--body-file "$body")
+  fi
+fi
+
+# Not `exec`: the trap has to run once `onevcs` is done, so the drafted body is
+# removed rather than left in the host's temporary directory.
+# llmlint: ignore[tool_output_is_signal] see the file-scoped note above.
+uv run onevcs "$verb" ${forwarded[@]+"${forwarded[@]}"}

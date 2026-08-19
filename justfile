@@ -270,9 +270,14 @@ sweep-scratch *args:
 #
 # `--policy` may narrow the rules-resolved policy but never widen it past requiring
 # approvals; the CLI enforces that rather than this wrapper.
+#
+# This is one of the two commands here that draft a change request's body: the branch
+# and `--repo` are read out of the arguments, `scripts/draft-pr-body.sh` writes the
+# body, and it reaches `onevcs` as `--body-file`. A caller's own `--body`/`--body-file`
+# wins and `--no-draft` skips it; see `scripts/land-branch.sh`.
 # llmlint: ignore[tool_output_is_signal] what this verified and where it published the branch — the gate verdict, the merge path taken, and the change request's URL — is the product an operator runs it for, exactly as for the `integrate` train below.
 publish-branch *args:
-    @uv run onevcs publish-branch "$@"
+    @./scripts/land-branch.sh publish-branch "$@"
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow,
 # attesting the incomplete-step marker it carries.
@@ -286,8 +291,12 @@ publish-branch *args:
 # This is the incomplete-provenance verb. A branch with nothing left incomplete is
 # `just publish-branch`'s; `onevcs recover` takes no `--policy`, because the policy a
 # recovered branch publishes under is the one its rules already resolved.
+#
+# It drafts the change request's body the same way `just publish-branch` does, under
+# the same two escapes; see `scripts/land-branch.sh`.
+# llmlint: ignore[tool_output_is_signal] what this verified, what it attested, and where it published the branch — the gate verdict, the recovered marker, and the change request's URL — is the product an operator runs it for, exactly as for `publish-branch` above.
 repo-recover *args:
-    @uv run onevcs recover "$@"
+    @./scripts/land-branch.sh recover "$@"
 
 # The across-round derivation this recipe used to print has no successor verb,
 # because it has no successor step: the engine reconciles a live desired graph
@@ -424,9 +433,14 @@ host *args:
 
 # List every preserved-but-unpublished branch across the registered repository
 # identities and the command that lands each one.
+#
+# Each resume command is printed in its `just` form, because those are the commands
+# that draft a body: the raw `onevcs publish-branch` line `onevcs recoverable` writes
+# is pasteable and lands with an empty description. `--json` is passed through whole,
+# `recover_command` included, since that field is what other consumers read.
 # llmlint: ignore[tool_output_is_signal] the requested recovery inventory is this viewing command's product.
 recoverable *args:
-    @uv run onevcs recoverable "$@"
+    @./scripts/recoverable.sh "$@"
 
 # Report everything onevcs knows about one piece of work:
 # `just work-status <change-url|session-token|branch|commit> [--json]`.

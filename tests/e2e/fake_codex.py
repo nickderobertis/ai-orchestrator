@@ -7,7 +7,7 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Five environment variables steer it, and each exists because a journey has to
+Six environment variables steer it, and each exists because a journey has to
 tell one outcome from another deterministically:
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
@@ -24,6 +24,11 @@ tell one outcome from another deterministically:
   oneharness carries a schema it validates this text against it and re-prompts on
   failure, so telling one launch from the next by its answer is the only way a
   journey can watch that retry happen. Absent, every launch answers ``smoke-ok``.
+* ``FAKE_CODEX_HOLD_SECONDS`` — the launch records itself, then holds that long
+  before answering. It exists so a journey can interrupt a turn that is provably
+  *in flight*: signalling a caller and hoping the turn had started is a race whose
+  failure mode is a green test, and the attempt log is the only moment a journey can
+  prove the provider was reached. Absent, a launch answers immediately.
 * ``FAKE_CODEX_PROMPT_LOG`` names a file this appends one JSON record to per
   launch, carrying the prompt the provider was actually given. It is how a journey
   reads the prompt of a turn nothing else can observe: since oneagentgraph 0.2.18 a
@@ -42,6 +47,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
@@ -144,9 +150,17 @@ def turn(launches: int | None) -> tuple[TurnEvent, ...]:
     return turn_events(answer(launches), billed=os.environ.get("FAKE_CODEX_OMIT_USAGE") != "1")
 
 
+def hold() -> None:
+    """Keep this turn in flight for as long as a journey asked, after recording it."""
+    seconds = float(os.environ.get("FAKE_CODEX_HOLD_SECONDS") or "0")
+    if seconds > 0:
+        time.sleep(seconds)
+
+
 def main() -> int:
     record_prompt(sys.argv[1:])
     launches = record_launch()
+    hold()
     unavailable = int(os.environ.get("FAKE_CODEX_UNAVAILABLE_ATTEMPTS") or "0")
     if launches is not None and launches <= unavailable:
         print("fake_codex: the provider started and then failed", file=sys.stderr)

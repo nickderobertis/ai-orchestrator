@@ -22,11 +22,19 @@ refusal rather than a slower merge.
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import signal
+import stat
 import subprocess
+import time
 from pathlib import Path
 from typing import NamedTuple
 
+import pytest
+from harness_indirections import established_indirections
+from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -48,10 +56,11 @@ RELEASING_TYPES = ("feat", "fix", "perf")
 HOOK_REFUSAL = "this repository does not release from that type"
 
 #: How the adopted onevcs refuses a subject the repository turns down, quoted to the
-#: words that make it 0.6.1's refusal and not the release before it. Kept phrased
-#: against the *arrival* rather than the pin: 0.7.0 is adopted now and changed nothing
-#: here, and a bump that had to retype this number would invite retyping it without
-#: re-reading which release the words belong to.
+#: words that make it 0.6.1's refusal and not the release before it, re-measured on
+#: every adoption since — which is what this journey is for. Kept phrased against the
+#: *arrival* rather than the pin: 0.7.0 is adopted now and changed nothing here, and a
+#: bump that had to retype this number would invite retyping it without re-reading which
+#: release the words belong to.
 #:
 #: The discriminator is load-bearing and was measured both ways. Below 0.6.1 the hook was
 #: still *reached* — a clone carries `core.hooksPath`, and git runs the hook itself on the
@@ -93,6 +102,46 @@ LOUD_GATE = (
 )
 
 
+#: The remote host's decisioning, as the program `ONEVCS_GH` names. Only the change
+#: requests it is asked to open are substituted; the pushes beside them are real git.
+FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
+
+#: The wrapper both landing recipes delegate to. Driven directly for the one thing no
+#: recipe can reach: the verb is the recipes' own first argument, so a wrong one is a
+#: mistake only a caller of the script itself can make.
+LANDER = REPO_ROOT / "scripts" / "land-branch.sh"
+
+#: The paid provider's stand-in for the drafting turn, and the guard covering the
+#: identities `ONEHARNESS_BIN_*` cannot reach. `graphs/pr-author.yaml`'s member is
+#: single-sided `kind: oneharness`, so it runs its turn through the oneharness library
+#: and no substituted `oneharness` CLI is on its path at all — the provider binary is.
+FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
+PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
+
+#: Who the indirection helpers attribute their diagnostics to when one of them refuses.
+INDIRECTION_CALLER = "tests/e2e/test_publish_branch_e2e.py"
+
+#: A branch carrying an unattested incomplete-step marker, which is the one state
+#: `just repo-recover` lands and `just publish-branch` refuses.
+INCOMPLETE_BRANCH = "claude/interrupted-work"
+
+#: What marks that branch's last commit, in the two ways `onevcs` recognizes one: the
+#: subject suffix, and the trailer under this host's own configured prefix.
+INCOMPLETE_SUBJECT = "feat: land half the work (incomplete step)"
+INCOMPLETE_TRAILER = "Orchestrator-Status: incomplete"
+
+#: The origin the hosted identity is resolved from. A GitHub URL, because a change
+#: request is a host's object and `onevcs` has a host only for a hosted identity; the
+#: remote git pushes to is still the throwaway bare origin on disk.
+HOSTED_ORIGIN = "https://github.com/acme-corp/hosted.git"
+
+#: The body the scripted provider answers the drafting turn with. It carries the
+#: characters a shell and a file round trip are tempted to mangle — a trailing newline,
+#: blank lines, and backticks — because what is asserted is the change request's own
+#: description, byte for byte.
+DRAFTED_BODY = "## What\n\nAdded `shipped.txt`.\n\n## Why\n\nThe work had to land.\n"
+
+
 class Publication(NamedTuple):
     """One throwaway repository, its scratch registry, and the origin behind it."""
 
@@ -106,6 +155,42 @@ class Publication(NamedTuple):
     #: `None` where this repository states no subject policy. Outside the checkout, so
     #: reading it cannot be confused with the branch's own content.
     subjects_seen: Path | None = None
+
+
+class OpenedChange(NamedTuple):
+    """One change request the substituted host was asked to open.
+
+    Named rather than the JSON mapping it is read from: what a journey asserts on is a
+    small, stable set of fields, and a typo in a string key would read as an absent
+    field rather than as the mistake it is.
+    """
+
+    #: Where it was opened, which is what the verb reports back to the operator.
+    url: str
+    #: The subject the publication composed, which is what a repository's own hook is
+    #: asked about.
+    title: str
+    #: The description a reviewer reads, and the whole point of drafting.
+    body: str
+
+
+class Hosted(NamedTuple):
+    """One throwaway identity whose rules open a change request, and what watched it."""
+
+    #: The registered publication checkout, and the `--repo` the recipe is given.
+    checkout: Path
+    #: The bare origin the branch is really pushed to.
+    origin: Path
+    #: The environment carrying the scratch registry, the substituted host, and the
+    #: scripted provider.
+    environment: dict[str, str]
+    #: Where the substituted host records each change request it was asked to open.
+    gh_state: Path
+    #: Every call that host was asked to make, one JSON argv per line.
+    gh_calls: Path
+    #: The file `tests/e2e/fake_codex.py` appends each turn's actual prompt to, which
+    #: is how a journey says whether a drafting turn was spent at all.
+    prompts: Path
 
 
 def _git(*arguments: str, cwd: Path) -> str:
@@ -122,15 +207,21 @@ def _git(*arguments: str, cwd: Path) -> str:
     return done.stdout
 
 
-def _just(*arguments: str, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Run one real recipe from this checkout, against the scratch registry."""
+def _just(
+    *arguments: str, environment: dict[str, str], timeout: float = 180
+) -> subprocess.CompletedProcess[str]:
+    """Run one real recipe from this checkout, against the scratch registry.
+
+    `timeout` is a hang guard like every other here, raised by the journeys whose
+    recipe spends a real drafting turn before it reaches `onevcs` at all.
+    """
     return subprocess.run(
         ["just", *arguments],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
         capture_output=True,
-        timeout=e2e_timeout(180),
+        timeout=e2e_timeout(timeout),
         check=False,
     )
 
@@ -243,6 +334,26 @@ def _finished_branch(checkout: Path) -> str:
     head = _git("rev-parse", "HEAD", cwd=checkout).strip()
     _git("checkout", "-q", BASE, cwd=checkout)
     return head
+
+
+def _incomplete_branch(checkout: Path) -> None:
+    """Commit work a step did not finish, as a stopped dispatch leaves it.
+
+    The state only `recover` lands: the marker its subject carries is what `onevcs`
+    recognizes, and the trailer is written under the prefix this host's rules file
+    configures rather than the published default.
+    """
+    _git("checkout", "-q", "-b", INCOMPLETE_BRANCH, cwd=checkout)
+    # The finished part of the work, whose subject is what a publication composes from:
+    # a branch carrying nothing but its marker describes no change and `onevcs` refuses
+    # it outright, which is a branch state no step ever leaves behind.
+    (checkout / PUBLISHED_FILE).write_text("the work\n", encoding="utf-8")
+    _git("add", "-A", cwd=checkout)
+    _git("commit", "-q", "-m", BRANCH_SUBJECT, cwd=checkout)
+    (checkout / "half.txt").write_text("half the work\n", encoding="utf-8")
+    _git("add", "-A", cwd=checkout)
+    _git("commit", "-q", "-m", f"{INCOMPLETE_SUBJECT}\n\n{INCOMPLETE_TRAILER}\n", cwd=checkout)
+    _git("checkout", "-q", BASE, cwd=checkout)
 
 
 def test_publish_branch_lands_a_complete_branch_on_its_base(tmp_path: Path) -> None:
@@ -502,4 +613,646 @@ def test_publish_branch_lands_a_subject_the_repositorys_own_hook_accepts(
     assert publication.subjects_seen is not None
     assert _asked_of_the_publication(publication) == {RELEASING_TITLE}, (
         publication.subjects_seen.read_text(encoding="utf-8")
+    )
+
+
+def _hosted(tmp_path: Path, *, answers: list[str], gate: list[str] | None = None) -> Hosted:
+    """A registered identity whose rules open a change request, with the drafter live.
+
+    `local-direct` above is enough to prove a branch lands; it opens no change request,
+    so it can say nothing about the description one carries. This is the other policy —
+    `change-open` — and everything below the remote host stays real: the branch is
+    pushed with real git into the same throwaway bare origin, the identity's gate is a
+    real command `onevcs` runs, and the body is drafted by the real
+    `graphs/pr-author.yaml` through the real `oneagentgraph`.
+
+    Two things are substituted, both external and both at their published seam. The
+    remote host's decisioning is `tests/e2e/fake_gh.py`, named by `ONEVCS_GH` — the
+    variable `onevcs` publishes for exactly this and uses the same way in its own
+    suite. The paid provider is `tests/e2e/fake_codex.py`, named at the one seam the
+    drafting graph's single-sided `kind: oneharness` member reaches a provider through.
+    """
+    home = tmp_path / "onevcs-home"
+    home.mkdir()
+    seed = tmp_path / "seed"
+    _git("init", "-q", "-b", BASE, str(seed), cwd=tmp_path)
+    (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    _git("add", "-A", cwd=seed)
+    _git("commit", "-q", "-m", "init", cwd=seed)
+    origin = tmp_path / "origin.git"
+    _git("clone", "-q", "--bare", str(seed), str(origin), cwd=tmp_path)
+    checkout = tmp_path / "checkout"
+    _git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
+    # A reviewed path behind a real command gate: `change-open` opens the change
+    # request and stops, which is the state whose description is under test. The gate is
+    # argv `onevcs` runs directly — no shell — so the verdict is that list's own exit
+    # status, and a journey about what a *rejected* branch costs states its own.
+    (home / "rules.yml").write_text(
+        "version: 2\n"
+        "trailer_prefix: Orchestrator-\n"
+        "rules: []\n"
+        "default:\n"
+        "  publication: change-open\n"
+        "  approvals: required\n"
+        "  gate:\n"
+        f"    command: {gate or ['true']!r}\n".replace("'", '"'),
+        encoding="utf-8",
+    )
+
+    state = tmp_path / "gh-state"
+    state.mkdir()
+    calls = tmp_path / "gh-calls.jsonl"
+    environment = dict(os.environ)
+    environment["ONEVCS_HOME"] = str(home)
+    # llmlint: ignore[e2e_not_mocked] Only the remote host's decisioning, at onevcs's seam.
+    environment["ONEVCS_GH"] = str(FAKE_GH)
+    environment["FAKE_GH_STATE"] = str(state)
+    environment["FAKE_GH_CALLS"] = str(calls)
+    environment["FAKE_GH_ORIGIN"] = str(origin)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # And the identities that seam cannot reach; see `no_paid_provider`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps(answers)
+    prompts = tmp_path / "prompts.jsonl"
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
+    # Keeps this journey's harness history out of the host's.
+    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment.update(established_indirections(INDIRECTION_CALLER))
+
+    # The origin the identity is resolved from is the one the rules and the host are
+    # written for; the remote git actually pushes to is still the bare origin above.
+    registered = _just(
+        "register-repo",
+        str(checkout),
+        "--origin",
+        HOSTED_ORIGIN,
+        environment=environment,
+    )
+    assert registered.returncode == 0, registered.stderr + registered.stdout
+    return Hosted(checkout, origin, environment, state, calls, prompts)
+
+
+def _opened_change_requests(hosted: Hosted) -> list[OpenedChange]:
+    """Every change request the substituted host was asked to open, with its body."""
+    opened = []
+    for record in sorted(hosted.gh_state.glob("pr-*.json")):
+        change = json.loads(record.read_text(encoding="utf-8"))
+        body = record.with_suffix(".body")
+        opened.append(
+            OpenedChange(
+                url=change["url"],
+                title=change["title"],
+                body=body.read_text(encoding="utf-8") if body.exists() else "",
+            )
+        )
+    return opened
+
+
+def _drafting_turns(hosted: Hosted) -> list[str]:
+    """Every prompt the paid provider's stand-in was given, which is every turn spent."""
+    if not hosted.prompts.exists():
+        return []
+    return [
+        json.loads(line)["prompt"]
+        for line in hosted.prompts.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_publish_branch_opens_the_change_request_with_the_drafted_body(
+    tmp_path: Path,
+) -> None:
+    """The whole journey this recipe exists for: a landed branch that describes itself.
+
+    Every pull request opened from this host lately carried an empty description,
+    because out-of-band landing is how branches usually reach a base here and it was
+    the one path that could not carry a body at all. What is asserted is the body the
+    host was asked to open the change request with, byte for byte: a wrapper that
+    drafted and then dropped the result, or handed `onevcs` a path instead of prose,
+    would land the branch just the same and leave the reviewer with nothing.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert len(opened) == 1, f"the host was asked to open {len(opened)} change requests"
+    assert opened[0].body == DRAFTED_BODY, (
+        f"the change request opened with {opened[0].body!r}; the drafting turn "
+        f"answered {DRAFTED_BODY!r}, and what a reviewer reads is this"
+    )
+    # The branch really landed on the reviewed path: it reached the origin, and the
+    # base did not move — which is what `change-open` means.
+    assert FINISHED_BRANCH in _git("branch", "--list", FINISHED_BRANCH, cwd=hosted.origin), (
+        f"the branch never reached the origin:\n{published.stdout}"
+    )
+    assert opened[0].url in published.stdout, published.stdout
+
+
+def test_publish_branch_lands_the_branch_when_the_draft_produces_no_body(
+    tmp_path: Path,
+) -> None:
+    """A draft that produced nothing costs the branch nothing: it lands, with no body.
+
+    Drafting sits in front of a landing, so the failure to protect against is a drafter
+    that can refuse one. `onepipeline`'s own closeout never lets a bodyless draft block
+    a publication, and neither does this: the change request opens with no body, the
+    branch lands anyway, and the one line naming which ending it was reaches the
+    operator's stderr rather than being swallowed — that word is what says whether the
+    fix is the graph, the schema, or the persona's prose.
+    """
+    # A conforming answer with nothing in it: validation passes and there is no body,
+    # which is `onepipeline`'s `no-body` ending and costs exactly one turn.
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": "   \n\n"})])
+    _finished_branch(hosted.checkout)
+
+    # `--repo=<checkout>` rather than the two-word form, so the spelling an operator
+    # types interchangeably is proven to be read well enough to draft from: a turn is
+    # spent here, and a turn is only spent once the branch and the checkout were both
+    # read out of the argument list.
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        f"--repo={hosted.checkout}",
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert len(opened) == 1, f"the host was asked to open {len(opened)} change requests"
+    assert opened[0].body == "", (
+        f"the change request opened with {opened[0].body!r}; a draft that produced "
+        "nothing must publish nothing rather than something composed to stand in"
+    )
+    assert "no-body" in published.stderr, (
+        "the operator was never told why the change request opened with no body:\n"
+        f"{published.stderr}"
+    )
+    assert len(_drafting_turns(hosted)) == 1, (
+        f"drafting spent {len(_drafting_turns(hosted))} turns; it never retries"
+    )
+
+
+#: The spellings a caller states its own body in. Every one the wrapper accepts, because
+#: each is a separate arm of its reading and a body it failed to notice is a drafting
+#: turn spent to overwrite a description somebody wrote deliberately. `--body-file` is
+#: the form a caller with real prose uses, and either `=` spelling is what an operator
+#: types without thinking about it.
+BODY_SPELLINGS = ("--body", "--body=", "--body-file", "--body-file=")
+
+
+@pytest.mark.parametrize("spelling", BODY_SPELLINGS)
+def test_publish_branch_forwards_a_callers_own_body_and_drafts_nothing(
+    tmp_path: Path, spelling: str
+) -> None:
+    """A caller who brought a body keeps it, and pays for no turn.
+
+    The body is prose the caller decided on, so re-deriving it from the diff would both
+    overwrite a deliberate description and spend an agent turn to do it. Read from what
+    the host was asked to open the change request with, because that is the only place
+    the two could differ.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+    caller_body = "## What\n\nWhat the caller says it is.\n"
+    if spelling.startswith("--body-file"):
+        written = tmp_path / "caller-body.md"
+        written.write_text(caller_body, encoding="utf-8")
+        value = str(written)
+    else:
+        value = caller_body
+    # The joined spellings carry their value in the one argument, which is exactly the
+    # arm a wrapper reading only the two-word forms would forward without noticing.
+    stated = (f"{spelling}{value}",) if spelling.endswith("=") else (spelling, value)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        *stated,
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert [change.body for change in opened] == [caller_body], (
+        f"the change request opened with {[change.body for change in opened]!r} "
+        f"rather than the caller's own {caller_body!r}"
+    )
+    assert _drafting_turns(hosted) == [], (
+        "a drafting turn was spent although the caller supplied the body"
+    )
+
+
+def test_publish_branch_skips_drafting_when_told_to_and_does_not_forward_the_flag(
+    tmp_path: Path,
+) -> None:
+    """`--no-draft` is the escape for a bulk landing, and `onevcs` never sees it.
+
+    An operator working down `just recoverable` lands dozens of branches, and each
+    drafting turn is a real agent turn. The flag is this wrapper's own — `onevcs` has
+    no such option and would refuse the whole invocation — so what is proven is both
+    halves: no turn was spent, and the landing still succeeded.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        "--no-draft",
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert [change.body for change in opened] == [""], (
+        f"the change request opened with {[change.body for change in opened]!r} "
+        "although drafting was skipped"
+    )
+    assert _drafting_turns(hosted) == [], "a drafting turn was spent despite --no-draft"
+
+
+def test_publish_branch_reads_a_branch_stated_after_the_end_of_options_marker(
+    tmp_path: Path,
+) -> None:
+    """`--` ends the options, and the branch behind it is still the one drafted for.
+
+    The marker is how a caller states a branch whose name would otherwise be read as a
+    flag, so the wrapper stops reading options at it and takes the next word as the
+    branch. Getting that wrong is silent in both directions: reading `--` as the branch
+    drafts a body for a name nothing has, and reading nothing at all lands the branch
+    with the empty description this whole recipe exists to end. What proves which
+    happened is that a turn was spent and the change request carries the drafted prose.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+
+    published = _just(
+        "publish-branch",
+        "--repo",
+        str(hosted.checkout),
+        "--",
+        FINISHED_BRANCH,
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert [change.body for change in opened] == [DRAFTED_BODY], (
+        f"the change request opened with {[change.body for change in opened]!r}; the "
+        f"branch behind `--` is the one that had to be drafted for"
+    )
+    assert len(_drafting_turns(hosted)) == 1, (
+        f"drafting spent {len(_drafting_turns(hosted))} turns for one landing"
+    )
+
+
+#: What a caller can put where the verb goes, other than the two the wrapper knows.
+#: `integrate` is the third landing verb and the plausible mistake; the empty case is a
+#: caller that stated no verb at all, which the refusal has to say rather than quote.
+WRONG_VERBS = (
+    pytest.param("integrate", id="the-third-landing-verb"),
+    pytest.param("", id="no-verb-at-all"),
+)
+
+
+@pytest.mark.parametrize("verb", WRONG_VERBS)
+def test_the_landing_wrapper_refuses_a_verb_that_is_not_one_of_the_two_it_lands(
+    tmp_path: Path, verb: str
+) -> None:
+    """A verb this wrapper does not know is refused here, not forwarded to `onevcs`.
+
+    The argument list is read for one of two verbs and appended to for whichever it
+    was, so forwarding an unknown one would hand `onevcs` a list assembled for a
+    command it is not being asked to run. The refusal has to name both verbs and what
+    it got, because a caller reaching this has typed the wrong one of three.
+    """
+    stated = [str(LANDER), verb, FINISHED_BRANCH] if verb else [str(LANDER)]
+    refused = subprocess.run(
+        stated,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode == 2, (
+        f"the wrapper exited {refused.returncode} for the verb {verb!r}; a command line "
+        f"it cannot act on is a usage failure\n{refused.stdout}\n{refused.stderr}"
+    )
+    assert refused.stdout == "", f"the wrapper printed {refused.stdout!r} having landed nothing"
+    assert "publish-branch" in refused.stderr and "recover" in refused.stderr, (
+        f"the refusal names neither verb it does land:\n{refused.stderr}"
+    )
+    assert (verb or "nothing") in refused.stderr, (
+        f"the refusal does not say what it was given instead:\n{refused.stderr}"
+    )
+
+
+def test_repo_recover_opens_the_change_request_with_the_drafted_body(tmp_path: Path) -> None:
+    """The other landing verb drafts too, through the same wrapper and the same graph.
+
+    It lives beside `publish-branch`'s journeys because both recipes are one wrapper
+    given a different verb, and the verb is exactly what a wrapper gets wrong: an
+    argument list read for `publish-branch` and forwarded to `recover` would land the
+    branch and describe it, and a body appended for one verb and dropped for the other
+    would leave the recovery path exactly where it started. What is asserted is the
+    body the host was asked to open the change request with, for a branch whose
+    provenance only `recover` knows how to attest.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _incomplete_branch(hosted.checkout)
+
+    recovered = _just(
+        "repo-recover",
+        INCOMPLETE_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert recovered.returncode == 0, recovered.stderr + recovered.stdout
+    opened = _opened_change_requests(hosted)
+    assert len(opened) == 1, f"the host was asked to open {len(opened)} change requests"
+    assert opened[0].body == DRAFTED_BODY, (
+        f"the recovery opened its change request with {opened[0].body!r}; the drafting "
+        f"turn answered {DRAFTED_BODY!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("sent", "expected"),
+    [
+        pytest.param(signal.SIGINT, 130, id="interrupted-at-the-terminal"),
+        pytest.param(signal.SIGTERM, 143, id="terminated"),
+        pytest.param(signal.SIGHUP, 129, id="hung-up-on"),
+    ],
+)
+def test_a_signalled_landing_leaves_no_drafted_body_behind(
+    tmp_path: Path, sent: signal.Signals, expected: int
+) -> None:
+    """A landing somebody stopped mid-draft tidies up, and lands nothing.
+
+    The drafted body is written to a temporary file only so `onevcs` can read it back,
+    and an `EXIT` trap alone does not cover the exits an operator actually takes: an
+    unhandled signal kills the shell outright and the file survives, which leaves a
+    change request's prose lying in the host's temporary directory. All three are
+    driven because each needs its own handler and a missing one is invisible from the
+    others — Ctrl-C at a terminal is `SIGINT`, a supervisor stopping it is `SIGTERM`,
+    and a closed session is `SIGHUP`. The wrapper is run directly rather than through
+    `just`, because signalling `just` says nothing about which process handled it.
+
+    Nothing may land either: the signal arrives while the turn is in flight, which is
+    before `onevcs` has been called at all.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+    # Long enough that the signal lands on a turn still in flight even when this host is
+    # busy, and no longer: the wrapper waits out the whole hold before its trap can run.
+    hosted.environment["FAKE_CODEX_HOLD_SECONDS"] = "4"
+    # Its own temporary directory, so what the wrapper left behind is readable rather
+    # than mixed in with the host's.
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    hosted.environment["TMPDIR"] = str(scratch)
+    launches = Path(hosted.environment["FAKE_CODEX_ATTEMPT_LOG"])
+
+    landing = subprocess.Popen(
+        [
+            str(REPO_ROOT / "scripts" / "land-branch.sh"),
+            "publish-branch",
+            FINISHED_BRANCH,
+            "--repo",
+            str(hosted.checkout),
+        ],
+        cwd=REPO_ROOT,
+        env=hosted.environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        until = deadline(120)
+        while not launches.exists():
+            assert time.monotonic() < until, "the drafting turn never reached the provider"
+            assert landing.poll() is None, "the landing exited before it spent a turn"
+            time.sleep(0.05)
+        landing.send_signal(sent)
+        printed, reported = landing.communicate(timeout=e2e_timeout(120))
+    finally:
+        if landing.poll() is None:  # pragma: no cover - only on a wrapper that ignored it
+            landing.kill()
+            landing.communicate()
+
+    assert landing.returncode == expected, (
+        f"the landing signalled with {sent.name} exited {landing.returncode}; {expected} is "
+        f"what says a caller stopped it rather than that the verb refused the branch"
+        f"\n{printed}\n{reported}"
+    )
+    # Named by the wrapper's own prefix rather than by an empty directory: `uv` leaves a
+    # lock of its own in whatever `TMPDIR` names, and that is not this wrapper's to clear.
+    left = list(scratch.glob("orchestrator-land-branch-*"))
+    assert left == [], f"the drafted body outlived the landing a caller interrupted: {left}"
+    assert _opened_change_requests(hosted) == [], (
+        "a change request was opened although the landing was stopped before its verb ran"
+    )
+
+
+def test_publish_branch_forwards_an_option_the_wrapper_does_not_know_and_drafts_nothing(
+    tmp_path: Path,
+) -> None:
+    """An argument list the wrapper cannot read lands exactly as it did before it drafted.
+
+    The failure a drafter must not introduce is turning a working invocation into a
+    refusal of its own. `--help` is the case that exists today: the wrapper does not
+    know whether the next word is that option's value or the branch, so it stops
+    reading, spends no turn, and hands the list to `onevcs` — which answers it. A
+    wrapper that guessed instead would draft for whatever word it mistook for a branch.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+
+    helped = _just("publish-branch", "--help", environment=hosted.environment)
+
+    assert helped.returncode == 0, helped.stderr + helped.stdout
+    assert "--body-file" in helped.stdout, (
+        f"`onevcs` never answered the option the wrapper forwarded:\n{helped.stdout}"
+    )
+    assert _drafting_turns(hosted) == [], "a drafting turn was spent on an unreadable list"
+
+
+def test_a_branch_its_gate_rejects_has_already_paid_for_its_body(tmp_path: Path) -> None:
+    """The accepted cost, proven rather than assumed: the turn is spent before the gate.
+
+    The body is an argument to `onevcs` and `onevcs` is what runs the identity's gate,
+    so drafting cannot wait for a verdict that has not been asked for yet. What that
+    buys a branch the gate then rejects is nothing, and this is the journey that says so
+    out loud — it is the trade `docs/repo-lifecycle.md` documents, and a reader who
+    doubts it can run this. Anyone moving drafting behind the gate will fail here, which
+    is the point: that change is a different repository's design and would be noticed.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})], gate=["false"])
+    _finished_branch(hosted.checkout)
+
+    refused = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert len(_drafting_turns(hosted)) == 1, (
+        f"the rejected branch spent {len(_drafting_turns(hosted))} drafting turns; one is "
+        "what being drafted before the gate costs"
+    )
+    assert _opened_change_requests(hosted) == [], (
+        "a change request was opened for a branch the identity's gate rejected"
+    )
+
+
+def test_publish_branch_lands_the_branch_when_the_drafting_dispatch_fails(
+    tmp_path: Path,
+) -> None:
+    """The other bodyless ending lands too, and says which one it was.
+
+    `no-body` is a turn that succeeded and answered with nothing; this is a dispatch
+    that never produced an answer the schema accepted at all, which is the ending an
+    exhausted retry budget reaches. They are separate endings because they take separate
+    fixes, and they are separate journeys because a wrapper that absorbed one and not the
+    other would leave every quota failure refusing a landing that has nothing to do with
+    the body.
+    """
+    # Prose rather than the object the schema declares, at every attempt: the member dies
+    # with no retained report, which is `onepipeline`'s `dispatch-failed`.
+    hosted = _hosted(tmp_path, answers=["Here is the body, as prose rather than the object."])
+    _finished_branch(hosted.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        environment=hosted.environment,
+        timeout=900,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert [change.body for change in opened] == [""], (
+        f"the change request opened with {[change.body for change in opened]!r}; a drafting "
+        "dispatch that failed must publish nothing rather than something composed to stand in"
+    )
+    assert "dispatch-failed" in published.stderr, (
+        "the operator was never told which ending left the change request bodyless:\n"
+        f"{published.stderr}"
+    )
+
+
+def test_a_landing_that_cannot_remove_the_drafted_body_reports_it_and_still_lands(
+    tmp_path: Path,
+) -> None:
+    """A body the wrapper could not delete is said out loud, and the branch lands anyway.
+
+    The drafted body is written to a temporary file only so `onevcs` can read it back,
+    and a copy of a change request's prose left in the host's temporary directory is
+    exactly what an operator has to be told about — the sibling journey above proves the
+    ordinary and the signalled exits leave none. What it must not do is take the landing
+    with it: the verb has already verified and published the branch by the time the trap
+    runs, so a wrapper that exited on a failed removal would report a landing that
+    happened as one that did not.
+
+    The condition is a real one and lands while the provider holds the drafting turn
+    open: unlinking an entry needs write permission on the directory holding it, so a
+    read-only subtree beside the body is what `rm -rf` reports and leaves. It is planted
+    beside the body rather than over it, because what is under test is a landing that
+    otherwise succeeded.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+    # Long enough that the condition lands on a turn still in flight even when this host
+    # is busy, and no longer: the wrapper waits out the whole hold before its trap runs.
+    hosted.environment["FAKE_CODEX_HOLD_SECONDS"] = "4"
+    # Its own temporary directory, so the scratch this landing makes is the only one
+    # under it and what it left behind is readable rather than mixed in with the host's.
+    scratch_root = tmp_path / "tmp"
+    scratch_root.mkdir()
+    hosted.environment["TMPDIR"] = str(scratch_root)
+    launches = Path(hosted.environment["FAKE_CODEX_ATTEMPT_LOG"])
+
+    landing = subprocess.Popen(
+        [
+            str(REPO_ROOT / "scripts" / "land-branch.sh"),
+            "publish-branch",
+            FINISHED_BRANCH,
+            "--repo",
+            str(hosted.checkout),
+        ],
+        cwd=REPO_ROOT,
+        env=hosted.environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    held: Path | None = None
+    try:
+        until = deadline(120)
+        while not launches.exists():
+            assert time.monotonic() < until, "the drafting turn never reached the provider"
+            assert landing.poll() is None, "the landing exited before it spent a turn"
+            time.sleep(0.05)
+        # Named by the wrapper's own prefix: `uv` leaves a lock of its own in whatever
+        # `TMPDIR` names, and that is not this wrapper's scratch.
+        made = sorted(scratch_root.glob("orchestrator-land-branch-*"))
+        assert made, f"the landing made no scratch directory under {scratch_root}"
+        scratch = made[0]
+        held = scratch / "held"
+        held.mkdir()
+        (held / "kept").write_text("kept\n", encoding="utf-8")
+        held.chmod(stat.S_IRUSR | stat.S_IXUSR)
+        printed, reported = landing.communicate(timeout=e2e_timeout(600))
+    finally:
+        if landing.poll() is None:  # pragma: no cover - only on a landing that hung
+            landing.kill()
+            landing.communicate()
+        if held is not None:
+            held.chmod(stat.S_IRWXU)
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+    assert landing.returncode == 0, (
+        f"the landing exited {landing.returncode} over cleanup it only had to report; the "
+        f"branch was already published by then\n{printed}\n{reported}"
+    )
+    assert f"the drafted body could not be removed from {scratch}" in reported, (
+        f"the copy of the change request's prose left behind was never reported:\n{reported}"
+    )
+    opened = _opened_change_requests(hosted)
+    assert len(opened) == 1, f"the host was asked to open {len(opened)} change requests"
+    assert opened[0].body == DRAFTED_BODY, (
+        f"the change request opened with {opened[0].body!r}; a cleanup the wrapper could "
+        f"not finish must not change what a reviewer reads"
     )

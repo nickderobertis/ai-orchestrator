@@ -67,13 +67,17 @@ resolve; `just repo-recover` is for a branch carrying **unattested incomplete
 provenance**, and is the only verb that knows how to attest that marker — do not
 bypass one with a normal commit; `just integrate` is the **local merge train**,
 merging named finished branches into their base and opening no change request.
-`just recoverable` names which of the three a given branch needs. **Give the two
-that open a change request a body**: nothing drafts one for a branch landed by
-hand — `graphs/pr-author.yaml` drafts only for a lifecycle publication — so before
-onevcs 0.7.0 took `--body <TEXT>` / `--body-file <PATH>` on `publish-branch` and
-`recover`, every branch recovered here opened with an empty description, and those
-are the branches whose context is least recoverable from the diff. `integrate`
-takes neither, because the local train opens no change request to describe. Two more verbs
+`just recoverable` names which of the three a given branch needs, and prints each
+resume command in its `just` form — the raw `onevcs publish-branch …` line that
+listing renders reaches the verb below the wrapper that drafts, so a copy-pasted one
+opens its change request with an empty description. **The two verbs that open a
+change request give it a body**, drafted from the branch's own diff before the verb
+runs: onevcs 0.7.0 took `--body <TEXT>` / `--body-file <PATH>` on `publish-branch`
+and `recover`, and until this repository passed them, every branch landed by hand
+opened with an empty description — and those are the branches whose context is least
+recoverable from the diff. See the drafting paragraph below for the two escapes and
+why the turn is spent before the gate. `integrate` takes neither, because the local
+train opens no change request to describe. Two more verbs
 answer the questions those three raise. `just work-status <ref>` — a change
 request's URL, a session token, a branch name, or a commit — reports everything
 `onevcs` knows about one piece of work, and is how a planner or a worker asks what
@@ -1047,7 +1051,25 @@ they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries
 that ending — while a launch that named no graph, and a node that carried its own
-`body`, emit nothing, because neither spends a dispatch and neither is a fault. See
+`body`, emit nothing, because neither spends a dispatch and neither is a fault.
+**Three commands here draft, and they are the three that open a change request**: that
+launch, `just publish-branch`, and `just repo-recover`. The two landing verbs go
+through `scripts/land-branch.sh`, which reads the branch and `--repo` out of the
+arguments, drafts through the same graph out of band, and appends `--body-file` to
+what it forwards; an argument list it cannot read that way lands exactly as it did
+before. Two escapes, in the order they win: a caller's own `--body` or `--body-file`
+is forwarded untouched and spends no turn, and `--no-draft` skips drafting and is
+consumed here rather than forwarded, because `onevcs` has no such option. It is the
+escape for a bulk landing. **The turn is spent before the gate** — the body is an
+argument to `onevcs` and the verb is what runs the gate, so a branch its gate then
+rejects has paid for a body nothing used; that is accepted rather than overlooked, and
+moving drafting behind the gate would be a different repository's design. `just
+integrate` drafts nothing and needs nothing, because the local merge train opens no
+change request. And **`onevcs recoverable`'s own printed `Resume:` line drafts
+nothing**: it renders `onevcs publish-branch …`, which reaches the verb below the
+wrapper and opens an empty description, so `just recoverable` re-renders each of those
+commands in its `just` form and passes every other line — and the whole of `--json`,
+whose `recover_command` other consumers read — through untouched. See
 [Diff-derived PR
 descriptions](docs/repo-lifecycle.md#diff-derived-pr-descriptions).
 
@@ -1187,7 +1209,9 @@ plan and was caught both times only by a person reading the title. The hook read
 subject and nothing else — no index, no diff, no branch — because the adopted
 **onevcs 0.7.0** puts the composed subject a publication is about to land under to
 that repository's own `commit-msg` hook, where none of that exists, and one policy
-must mean the same thing to both callers. **What 0.6.1 changed is *when* the
+must mean the same thing to both callers. It is 0.6.1 that started asking, and
+re-measured here on the adopted 0.7.0 rather than carried forward: the same journeys
+drive the same refusal on that release. **What 0.6.1 changed is *when* the
 question is asked, not whether the hook runs**, and the difference is the whole
 value: the disposable clone a publication works in is given the lender's
 `core.hooksPath` (or its tracked `.githooks/`) when it is cut, so git has always run

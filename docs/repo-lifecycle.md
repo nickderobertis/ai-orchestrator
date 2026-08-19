@@ -1051,6 +1051,19 @@ against the complete stack, but the PR diff against its stack base is child-only
 
 <!-- llmlint: ignore[changed_behavior_has_e2e] Every behaviour this section describes past the graph run belongs to `onepipeline` and `onevcs` — when drafting is invoked, what the plan's own `body` bypasses, and what a publication does when a draft cannot start — and each is proven in its repository. This suite doubles the published CLIs at the recipe boundary precisely because driving one for real would open a pull request on a real repository. What this repository owns is the graph and its response contract, and `tests/e2e/test_orchestrate_launch_e2e.py` drives that for real: the launch record's `pr_author_graph`, a drafting turn answering `{body}`, and a non-conforming answer being re-prompted. -->
 
+**Three commands here draft a body, and they are the three that open a change
+request.** A run's own publication closeout is one of them; the other two are the
+out-of-band landing verbs, which is how branches usually reach a base on this host:
+
+| command | what it lands | how drafting reaches it |
+| --- | --- | --- |
+| `just orchestrate <plan.json>` | a run's own lifecycle publications | `onepipeline start --pr-author-graph graphs/pr-author.yaml` |
+| `just publish-branch <branch> --repo <checkout>` | a complete branch no session holds | `scripts/land-branch.sh` → `scripts/draft-pr-body.sh` → `onevcs publish-branch --body-file <PATH>` |
+| `just repo-recover <branch> --repo <checkout>` | a preserved branch with an incomplete-step marker | the same, into `onevcs recover --body-file <PATH>` |
+
+`just integrate` is not among them and needs nothing: the local merge train opens no
+change request, so there is no body for it to carry.
+
 A change request's body is drafted by an **agent graph the launch names**, exactly
 as its observer is: `onepipeline start --pr-author-graph <REF>`. Naming none is the
 shipped default, and a launch that names none opens its change requests with the
@@ -1059,8 +1072,42 @@ body its plan states, or with none. `just orchestrate` names
 from this host is drafted and a bare `onepipeline start` elsewhere is not. A node
 that states its own `body` (a plan schema 3 field) publishes with that.
 
-What runs is one turn of that graph, after the final branch-vs-base gate passes and
-before the change request is opened. `onepipeline` composes the task — "Read this
+The two landing verbs reach the **same** surface out of band:
+`scripts/draft-pr-body.sh` composes `onepipeline`'s own task, runs that same graph in
+a temporary worktree of the branch, and reads the body back out of the same field —
+so what an operator's landing publishes is what the run path would have published for
+that branch. `scripts/land-branch.sh` is the wrapper both recipes go through: it reads
+the branch and `--repo` out of the arguments, hands them to the drafter, and appends
+`--body-file` to the argument list it forwards. An argument list it cannot read that
+way — an option it does not know the shape of, or no `--repo` — lands exactly as it
+did before, with no body and no refusal.
+
+Two escapes, in the order they win. A caller who passed `--body` or `--body-file` has
+already decided what the change request says, so it is forwarded untouched and no turn
+is spent. `--no-draft` skips drafting; it is this wrapper's own option, consumed rather
+than forwarded, since `onevcs` has no such thing. It is the escape for a bulk landing —
+an operator working down `just recoverable` over dozens of branches pays one agent turn
+per branch otherwise.
+
+**The turn is spent before the gate**, which is a decision rather than an oversight.
+The body is an argument to `onevcs`, so it has to exist before the verb is called, and
+the verb is what runs the identity's gate: a branch the gate then rejects has paid for
+a body nothing used. Moving drafting behind the gate would mean `onevcs` calling out
+to a drafter, which is a different repository's design. The cost is bounded and rare,
+and `--no-draft` is the escape.
+
+**`onevcs recoverable`'s printed `Resume:` line drafts nothing.** It renders its own
+argv — `onevcs publish-branch <BRANCH> --repo <PATH>` — and pasting that reaches the
+verb directly, below the wrapper, which is a change request opened with an empty
+description. `just recoverable` re-renders each of those commands in its `just` form
+for that reason, so the line an operator pastes is the one that drafts; every other
+line of the report, and the whole of `--json`, is `onevcs`'s own and passes through
+untouched.
+
+On the run path, what runs is one turn of that graph, after the final branch-vs-base
+gate passes and before the change request is opened — the one ordering the landing
+verbs cannot have, for the reason above: there, drafting is what produces an argument
+to the verb that runs the gate. `onepipeline` composes the task — "Read this
 branch's diff and write the change request's body, following the repository's own
 template", followed by the task the branch delivered — runs the graph in the
 branch's worktree, and reads the drafted body out of `results[].structured.body` of
