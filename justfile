@@ -255,12 +255,18 @@ sweep-scratch *args:
 
 # Verify and publish a complete unpublished branch that no session holds, under the
 # policy its identity's rules resolve.
-# `just publish-branch <branch> --repo <checkout> [--title <T>] [--policy <P>]`.
+# `just publish-branch <branch> --repo <checkout> [--title <T>] [--policy <P>]
+#  [--body <TEXT> | --body-file <PATH>]`.
 #
 # The state between the two verbs below: `onevcs recover` is for a branch whose
 # provenance is incomplete, and `integrate` is a local merge train that opens no
 # change request. A branch that is simply *done* and unpublished had neither of
 # those, which is what left an agent reaching for `gh pr create` by hand.
+#
+# Give it a body. A remote lifecycle publication has its body drafted for it by
+# `graphs/pr-author.yaml`; a branch landed by hand has nobody drafting one, and
+# every one of them opened with an empty description until onevcs 0.7.0 took a
+# caller's. Naming both `--body` and `--body-file` is refused rather than ranked.
 #
 # `--policy` may narrow the rules-resolved policy but never widen it past requiring
 # approvals; the CLI enforces that rather than this wrapper.
@@ -270,7 +276,12 @@ publish-branch *args:
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow,
 # attesting the incomplete-step marker it carries.
-# `just repo-recover <branch> --repo <canonical-checkout> [--title <T>]`.
+# `just repo-recover <branch> --repo <canonical-checkout> [--title <T>]
+#  [--body <TEXT> | --body-file <PATH>]`.
+#
+# It takes a body on the same terms `publish-branch` does, and wants one more: a
+# branch reached this verb because its workstream died, so what it was doing is
+# exactly what no reader can reconstruct from the diff.
 #
 # This is the incomplete-provenance verb. A branch with nothing left incomplete is
 # `just publish-branch`'s; `onevcs recover` takes no `--policy`, because the policy a

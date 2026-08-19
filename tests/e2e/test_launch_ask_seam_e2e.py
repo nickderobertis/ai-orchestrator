@@ -25,10 +25,12 @@ worked: the attached `just plan` ask, which is the one shape this host had ever 
 and which is why nothing noticed the rest. Each journey below says which it is; asking a
 regression guard to fail first would be asking for the impossible.
 
-What is deliberately **not** proven here is a run id for `just orchestrate`'s detached
-and adopted shapes. That launch runs a plan this repository did not write, so deriving
-the run id from that plan's `name` would be restating how `onepipeline` mints one —
-which is that repository's to hand its workers, and is asserted nowhere here.
+Handing a worker its run id is `onepipeline`'s own to do for a `just orchestrate`
+launch, whose plan this repository did not write — so what is asserted of those three
+shapes is that the id a dispatch was given names **the one run that launch created**,
+read off its own runs root. Deriving the id from the plan's `name` instead would be
+restating how a run id is minted, which is that repository's to decide and is asserted
+nowhere here.
 """
 
 from __future__ import annotations
@@ -174,9 +176,14 @@ The browser view cannot deep-link to a page until that is settled.
 #: The journeys that ask keep it, and that is not symmetry: `just plan` always names this
 #: host's graph and refuses `--dag-graph`, so a watched run is the shape a real question
 #: is asked on, and the monitor reading the same channel is part of what an answer has to
-#: get past. Measured, a dropped observer changed the environment too — the attached
-#: dispatch was given no run id — so an ask journey launched without one would be proving
-#: the round trip on a shape this host never launches.
+#: get past.
+#:
+#: Dropping it used to change the environment as well — below onepipeline 0.8.1 the run
+#: id reached a dispatch only by leaking out of an *attached* driver's own process after
+#: it had started an observer there, so an unwatched launch dispatched a worker that
+#: could not ask. That is why the two journeys below launch without one and still measure
+#: a run id: on the adopted release the dispatch site composes it, so what carries it is
+#: no longer who is watching.
 WITHOUT_OBSERVER = ("--dag-graph", "off")
 
 #: Where `scripts/plan.sh` writes what it generates, relative to this checkout.
@@ -681,6 +688,41 @@ def test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run(
     assert os.access(wrapper, os.X_OK), (
         f"a dispatch of run {dispatch.run} was given {wrapper} to ask through, which is "
         f"not runnable"
+    )
+
+
+@pytest.mark.xdist_group(LAUNCH_GROUP)
+@pytest.mark.parametrize(
+    "shape", ["orchestrate_attached", "orchestrate_detached", "orchestrate_adopted"]
+)
+def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """A defect journey for two of the three: only an attached launch used to carry one.
+
+    The wrapper above is half a seam. Without a run id it refuses rather than guessing,
+    so the other half is this — and below onepipeline 0.8.1 a dispatch got it only by
+    accident of process: an attached driver started its observer in its own process and
+    the export leaked into every dispatch it made afterwards, which is why the two shapes
+    here that launch **without** an observer are the ones this fails on before the bump.
+    The adopted release composes the pair at the dispatch site instead, from the run the
+    node belongs to.
+
+    What it is compared against is this launch's own runs root rather than the plan's
+    `name`: minting a run id is `onepipeline`'s, and a journey that restated it would
+    pass on a release that had stopped exporting anything at all. One run root, and the
+    id names it — which is the property an answer depends on, since a question put on
+    another run's channel is one this run's manager never sees.
+    """
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    given = _given(dispatch, RUN_ID)
+    assert given.strip(), f"{RUN_ID.name} reached the dispatch blank, and it is {RUN_ID.why}"
+
+    root = Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"])
+    created = sorted(child.name for child in root.iterdir() if child.is_dir())
+    assert created == [given], (
+        f"a dispatch was told it is under run '{given}', but this launch's runs root "
+        f"holds {created}; a question goes to the channel that id names"
     )
 
 

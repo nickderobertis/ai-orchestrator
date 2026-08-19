@@ -1081,7 +1081,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.8.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.8.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1101,6 +1101,29 @@ dispatch, and an event for either would report the shipped default as a fault. B
 0.7.5 there was no kind for any of this and the warning on the node was the whole
 record, which is why a bodyless change request could not say whether the drafter ran
 and failed or was never wired at all.
+
+### A branch landed by hand takes the body its caller gives it
+
+All of the above is the *lifecycle's* path to a body, and nothing drafts one for a
+branch an operator lands themselves. Until onevcs 0.7.0 there was nowhere to put one
+either: `publish-branch` and `recover` took a `--title` and no body, so every branch
+recovered by hand opened a change request with an empty description — and those are
+the branches with the most context to lose, because a branch reaches those verbs by
+its workstream dying rather than by finishing.
+
+Both now take `--body <TEXT>` or `--body-file <PATH>`, and the body reaches the
+change request verbatim whichever publication path lands the branch. Naming both is
+refused by name rather than ranked. Omitting both keeps the old behaviour, so this
+is worth stating as a habit rather than a flag: **write the body**. A file is the
+usual shape, since a body is prose and a shell is not where prose is edited.
+
+```sh
+just publish-branch <branch> --repo <checkout> --body-file /tmp/body.md
+just repo-recover <branch> --repo <checkout> --body-file /tmp/body.md
+```
+
+`integrate` takes neither, and that is not an omission: the local merge train opens
+no change request, so there is nothing for a body to be the description of.
 
 Run these nodes with `just orchestrate`, the one way to dispatch; it still accepts
 old lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,

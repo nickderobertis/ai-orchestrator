@@ -39,7 +39,7 @@ Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
 
 A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
 name to `oneagentgraph` as the node-scope worker's persona override, where a
-built-in role of that name wins. `oneagentgraph` 0.3.0 ships exactly five:
+built-in role of that name wins. `oneagentgraph` 0.3.1 ships exactly five:
 `docs-writer`, `engineer`, `planner`, `researcher`, and `reviewer`. This directory
 is not on the search path, so **any other name is taken as a path relative to
 `graphs/`** — which is why `crozier/crozier-corpus` fails a dispatch with `cannot
@@ -50,8 +50,10 @@ naming either as a plan node's `persona` fails the same way `crozier/…` does.
 `pr-author` is refused earlier still and by name: `onepipeline` dispatches change
 request drafting under it, so a plan node's own worker may not run as it.
 
-That the shipped set is those five and no more is measured two ways, both against
-oneagentgraph 0.3.0 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs each:
+That the shipped set is those five and no more is measured two ways — once against
+the pinned oneagentgraph 0.3.1 CLI, and once against the 0.3.0 `onepipeline` links,
+which is the one a dispatch reads. `tests/e2e/test_shipped_persona_catalog_e2e.py`
+runs each:
 
 - A graph carrying its own `personas` catalog is refused when one of its files
   collides with a shipped name (`persona "engineer" names both …/engineer.yaml in
@@ -64,8 +66,8 @@ oneagentgraph 0.3.0 — `tests/e2e/test_shipped_persona_catalog_e2e.py` runs eac
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.8.0 and
-oneagentgraph 0.3.0 by launching a plan whose two nodes name `engineer` and
+Three consequences, the first two re-measured against onepipeline 0.8.1 and the
+oneagentgraph 0.3.0 it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -147,17 +149,22 @@ authoritative spec for all of it.
 
 ### Which oneagentgraph reads these files
 
-Two different ones, and they have to agree. `just validate-personas` runs the
-oneagentgraph **CLI** that `config/oneagentgraph.version` pins; what reads a
-persona at **dispatch** is the oneagentgraph `onepipeline` links, which is
-`0.3.0` at onepipeline v0.8.0, confirmed from that tag's `Cargo.lock` rather than
+Two different ones, and what they have to agree on is the persona **shape**.
+`just validate-personas` runs the oneagentgraph **CLI** that
+`config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
+oneagentgraph `onepipeline` links, which is
+`0.3.0` at onepipeline v0.8.1, confirmed from that tag's `Cargo.lock` rather than
 from its `Cargo.toml` requirement — a caret requirement permits a version the lock
 has not resolved, so the requirement is not evidence of what a dispatch reads.
+Those two numbers are not equal today and do not have to be: the pin is 0.3.1 and
+the linked reader is 0.3.0, and the only thing 0.3.1 changed is how long a cancelled
+process tree is left before Windows ends its job. Both read the shape below, which
+is the agreement that matters.
 
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.3.0 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.3.1 refuses the
 previous shape outright, naming the field to write instead:
 
 ```
@@ -167,8 +174,8 @@ fragment, and onejudge has no `agent` field. To migrate this file, write
 `agent.instructions` as the top-level `system_prompt`, …
 ```
 
-So a split pin — the CLI on one shape and the linked reader on the other — would
-certify files that produce no member at all, and `graphs/dag-scope.yaml` names
+So a split *across that break* — the CLI on one shape and the linked reader on the
+other — would certify files that produce no member at all, and `graphs/dag-scope.yaml` names
 `../personas/orchestrator.yaml` and `../personas/check-in.yaml` **by path**, so the
 monitor and the pacemaker are what a split would silently cost.
 `tests/e2e/test_path_dispatched_personas_e2e.py` is what keeps that from being an

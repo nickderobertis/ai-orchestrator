@@ -76,10 +76,11 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1, Path("graphs/pr-author.yaml"): 1},
     # Two: the frame shape this filter parses, and the run-id export it deliberately
     # does not read. Both are per-release measurements of the same crate.
-    # Four in the operating manual: which plan schema versions the reconciler reads,
-    # what a monitor member's environment carries, what a judge command's does, and
-    # where a `context` note is delivered.
-    "onepipeline": {Path("scripts/channel-serve.py"): 2, Path("docs/orchestration.md"): 4},
+    # Five in the operating manual: which plan schema versions the reconciler reads,
+    # what a monitor member's environment carries, what a judge command's does, which
+    # dispatches are handed the run they may ask their manager on, and where a
+    # `context` note is delivered.
+    "onepipeline": {Path("scripts/channel-serve.py"): 2, Path("docs/orchestration.md"): 5},
 }
 
 
@@ -246,9 +247,22 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         "member's whole environment",
         # The channel-serve section, on what its filter reads and what it leaves.
         "measured against onepipeline {version} in the judge command's own environment",
+        # The ask-manager section, on which launch shapes reach a worker that can ask.
+        # The reference half of the `AGENTS.md` sentence below, and its own site: a
+        # reader reaches this page for the wrapper's contract and that one for the
+        # manager's loop, so one shared phrase would gate only whichever came first.
+        "every node dispatch of a run carries it as of onepipeline {version}",
     ),
     "AGENTS.md": (
         "measured against onepipeline {version} on a real launch",
+        # Which dispatches can put a blocking question to their manager at all. Half
+        # the ask seam is this repository's — the wrapper — and half is the engine's,
+        # and the engine's half moved: below this release only an attached launch's
+        # dispatch carried a run id, and it carried one by leaking out of a driver
+        # that had started an observer in its own process rather than by design. A
+        # sentence that outlived the bump would tell a manager to write every brief
+        # around a question nobody can ask.
+        "every node dispatch of a run carries it as of onepipeline {version}",
         # Why the pin is where it is: the fix a plan node gets is the one this
         # release's *lockfile* resolved, not the one its `Cargo.toml` permits.
         "is the adopted onepipeline {version}",
