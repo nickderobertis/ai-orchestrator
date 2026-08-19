@@ -291,8 +291,10 @@ git -C "$checkout" show-ref --verify --quiet "refs/heads/$branch" || fail "the c
 
 if [ -n "$out" ]; then
     out_directory=$(dirname -- "$out")
-    [ -d "$out_directory" ] && [ -w "$out_directory" ] || fail "the body cannot be written to '$out'" \
-        "name a path in an existing writable directory, or omit --out to print the body"
+    if [ ! -d "$out_directory" ] || [ ! -w "$out_directory" ]; then
+        fail "the body cannot be written to '$out'" \
+            "name a path in an existing writable directory, or omit --out to print the body"
+    fi
     # A destination that is already a directory is a mistake in the command line, not a
     # fault of the run: nothing can write a file there. Refused here, because past this
     # point the next thing that happens is a real provider turn, and the caller would
@@ -339,15 +341,19 @@ git -C "$checkout" rev-parse --verify --quiet "$base^{commit}" >/dev/null || fai
 # `ensure_codex_alt_home` creating a directory for a turn that will never run, which is
 # the rule `scripts/onepipeline.sh` applies to its own read-only verbs.
 alt_config_helper="$script_dir/claude-alt-config-dir.sh"
-[ -f "$alt_config_helper" ] && [ -r "$alt_config_helper" ] || fail "required helper is not a readable regular file: $alt_config_helper" \
-    "restore it from the repository or run 'just bootstrap', then retry"
+if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
+    fail "required helper is not a readable regular file: $alt_config_helper" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
 # shellcheck source=scripts/claude-alt-config-dir.sh
 . "$alt_config_helper"
 # llmlint: ignore[changed_behavior_has_e2e] What this line owes is that the helper is invoked and its refusal propagated, which `test_an_indirection_its_helper_refuses_stops_the_drafter_before_the_turn` drives per variable. The helper's own branches — an unset HOME, an existing directory it cannot read — are driven at the seam its file declares, where `scripts/claude-alt-config-dir.sh`'s sibling carries the file-scoped ignore naming them; re-driving them through this entry point would prove the same helper a second time.
 resolve_claude_alt_config_dir draft-pr-body || exit $?
 codex_alt_helper="$script_dir/codex-alt-home.sh"
-[ -f "$codex_alt_helper" ] && [ -r "$codex_alt_helper" ] || fail "required helper is not a readable regular file: $codex_alt_helper" \
-    "restore it from the repository or run 'just bootstrap', then retry"
+if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
+    fail "required helper is not a readable regular file: $codex_alt_helper" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
 # shellcheck source=scripts/codex-alt-home.sh
 . "$codex_alt_helper"
 # llmlint: ignore[changed_behavior_has_e2e] As above: the invocation and the propagated refusal are driven, and this helper's own branches — an unset HOME, a directory it cannot create or restrict — are covered at the seam `scripts/codex-alt-home.sh` declares in its own file-scoped ignore.

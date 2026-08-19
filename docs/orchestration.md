@@ -337,7 +337,30 @@ needs, both out of the frame itself:
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
-- **the surface message**, from the last thing the monitor said.
+- **the surface message**, from the last thing the monitor said — unless the turn
+  failed, in which case that is not something the monitor said at all.
+
+A turn the agent side lost writes the harness's own machine transcript into that
+message: measured off this host's `runs/rc-fixes-brief` channel, fifteen JSON-RPC
+frames and 21,531 characters, most of it the prompt echoed back, ending in a
+`method: error` frame and a `turn/completed` whose `status` is `failed`. Twenty of
+them queued unread on one run. The planner may not filter the unread-surface line —
+a blocking surface produces no other signal until it is read — so raising one of
+those verbatim is unreadable and undroppable at once. The filter recognises a lost
+turn and raises it as a named failure instead, under its own kind:
+
+| | |
+| --- | --- |
+| kind | `monitor-failed` |
+| message | ``monitor turn failed: usageLimitExceeded on codex. It said nothing, so there is nothing to answer; its 21531-character transcript is not repeated here. Read it with `just monitor rc-fixes-brief --filter monitor`.`` |
+
+The identity is the actionable half — this host's two codex identities hold separate
+quotas — and it is read out of the transcript's own opening frame, compared against
+`ORCHESTRATOR_CODEX_ALT_HOME`. A transcript that names no harness says so rather than
+guessing at one. Only a turn the filter can *prove* was lost is reclassified: a
+terminal turn status of `failed`, or an error frame. Anything else, including an
+observation that quotes one of those frames, is still raised verbatim under
+`monitor`.
 
 It raises the surface **non-blocking**. A blocking one would hold the run at
 `awaiting-planner` on every monitor turn — ending the attached launch's

@@ -1027,7 +1027,14 @@ the whole suite. Where no key would be right the tier is **uncached** instead:
 `orchestrator:test-checkouts` reconciles this repository's routing against the
 registered checkouts of the repositories it routes — which of them run cargo-nextest,
 against the gate argv each rule gives — and those live outside the workspace, so a
-memo would describe whatever they looked like when it was recorded. No split may go
+memo would describe whatever they looked like when it was recorded. The same tier
+holds the **lost-turn wire drift gate**, for the same reason and against a different
+outsider: `tests/test_lost_turn_wire_contract.py` reconciles the harness wire shape
+`scripts/channel-serve.py` restates against the installed `codex` — what it emits on a
+real lost turn, and what `codex app-server generate-json-schema` says it emits — and
+`tests/e2e/test_lost_turn_wire_contract_e2e.py` drives that same lost turn through the
+filter to a real channel. A memo keyed on this workspace would replay a green across
+the very producer upgrade both exist to catch. No split may go
 stale silently: an undeclared test that opens
 this checkout's own documentation fails in `tests/conftest.py` and is told to carry
 `@pytest.mark.reads_docs`, a `@pytest.mark.reads_recipes` test that opens

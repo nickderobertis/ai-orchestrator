@@ -33,10 +33,11 @@ CODE_SCOPED = "test"
 DOCS_SCOPED = "test-docs"
 #: The tier that drives this repository's `just` recipes and shell scripts.
 RECIPE_SCOPED = "test-recipes"
-#: The uncached tier that reconciles this repository's configuration against the
-#: registered checkouts of the repositories it routes. Deliberately unmemoized: what
-#: it reads lives outside the workspace, so no `nx.json` key could cover it and any
-#: memo would be a verdict on whatever those repositories looked like when recorded.
+#: The uncached tier that reconciles this repository's configuration against what
+#: lives outside the workspace: the registered checkouts of the repositories it routes,
+#: and the installed producer whose wire format `scripts/channel-serve.py` reads.
+#: Deliberately unmemoized: no `nx.json` key could cover either, so any memo would be a
+#: verdict on whatever they looked like when it was recorded.
 CHECKOUT_SCOPED = "test-checkouts"
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

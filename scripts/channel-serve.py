@@ -34,7 +34,18 @@ out of what the frame itself carries:
   is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where
   this file stands and re-takes the measurement rather than trusting this paragraph.
 * **What to surface.** The last assistant message of the conversation is what the
-  monitor just said, which is the thing the planner is being asked to answer.
+  monitor just said, which is the thing the planner is being asked to answer —
+  **unless the turn failed**, because then it is not something the monitor said at
+  all. A turn the agent side lost writes its own machine transcript into that
+  message: measured off this host's `runs/rc-fixes-brief` channel, fifteen
+  JSON-RPC frames and 21,531 characters, most of it the prompt echoed back, ending
+  in `method: error` and a `turn/completed` whose `status` is `failed`. Twenty of
+  those queued unread on one run. A planner may not filter the unread-surface line
+  — a blocking surface produces no other signal until it is read — so a transcript
+  raised verbatim is simultaneously unreadable and undroppable. Such a turn is
+  recognised and surfaced as what it is: a short line naming the failure and the
+  harness identity it happened on, under its own kind, with the transcript left
+  where the run already keeps it.
 
 The surface is raised **non-blocking**. Blocking it would hold the run at
 `awaiting-planner` on every monitor turn, which would end the attached launch's
@@ -59,7 +70,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import NewType, TypedDict
+from typing import NewType, TypedDict, cast
 
 #: A onepipeline run id. Distinguished from the task prose and message text it is
 #: parsed out of, because the only thing that makes it a run id is where it was found.
@@ -87,6 +98,39 @@ SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 #: names what the surface *is* rather than borrowing the pacemaker's word for it.
 SURFACE_KIND = "monitor"
 
+#: And the kind a turn that failed instead of speaking is raised under. Its own kind
+#: rather than a differently worded `monitor`, because the planner-facing views name
+#: the kinds a run has queued: it is what an operator who may not filter that line can
+#: read off it without opening one.
+SURFACE_KIND_OF_A_FAILED_TURN = "monitor-failed"
+
+#: How much of a failure's cause may reach the surface message. The cause is the one
+#: part of the line copied out of somebody else's transcript, so it is the one part
+#: bounded. Bounding it rather than clamping the composed line is deliberate: a clamp
+#: would cut off the remedy, which is the half a reader acts on. The run id is left
+#: whole for the same reason — it is rendered inside a command they copy.
+CAUSE_LIMIT = 80
+
+#: What a cause may not carry into a one-line surface as itself, collapsed to a single
+#: space before it is bounded. The text is the losing harness's: a newline in it would
+#: make the line two, an escape sequence would rewrite what the reader's terminal shows,
+#: and a run of ordinary spaces is only ever noise in a line this short.
+COLLAPSED_IN_A_CAUSE = re.compile(r"[\s\x00-\x1f\x7f]+")
+
+#: What the line says when the transcript records a failed turn and nothing about why,
+#: and when it names no harness. Naming one it does not name would send a planner to
+#: the wrong quota.
+NO_CAUSE_RECORDED = "no cause recorded"
+UNIDENTIFIED_HARNESS = "an unidentified harness"
+
+#: How a codex transcript names the home it was credentialed from, and the variable
+#: that says which of this host's two codex identities that is —
+#: `scripts/codex-alt-home.sh` owns the path, so it is compared rather than copied.
+CODEX_HOME_IN_TRANSCRIPT = "codexHome"
+CODEX_ALT_HOME = "ORCHESTRATOR_CODEX_ALT_HOME"
+CODEX_IDENTITY = "codex"
+CODEX_ALTERNATE_IDENTITY = "codex:alternate"
+
 #: Which `onepipeline` answers the planner. Named so the binary is a seam a journey
 #: can drive, exactly as `ONEAGENTGRAPH_ONEHARNESS_BIN` is for a dispatch; unset, the
 #: release this checkout pins is used.
@@ -103,6 +147,63 @@ class ConversationMessage(TypedDict, total=False):
 
     role: str
     content: str
+
+
+# The five models below state a wire format this file does not own, so the one thing
+# keeping them true is `tests/test_lost_turn_wire_contract.py`: it reconciles each field
+# against the installed producer — what it emits on a real lost turn, and what its own
+# generated protocol schema declares — and fails the gate on drift. Add a field here and
+# that gate refuses it until it names who declares it upstream.
+class TurnError(TypedDict, total=False):
+    """What a harness records about a turn it could not take.
+
+    `total=False`, and read defensively, for the reason every other wire model here is:
+    this is the losing harness's own vocabulary. `codexErrorInfo` is the classification
+    a planner acts on — `usageLimitExceeded` names the quota to go and look at — and
+    `message` is the paragraph beside it.
+    """
+
+    message: str
+    code: str
+    codexErrorInfo: str
+
+
+class TurnRecord(TypedDict, total=False):
+    """One turn as its harness reports it, narrowed to what says it was lost."""
+
+    id: str
+    status: str
+    error: TurnError
+
+
+class FrameParams(TypedDict, total=False):
+    """The payload of one streamed frame, narrowed to the two that carry a failure."""
+
+    turn: TurnRecord
+    error: TurnError
+
+
+class HarnessResult(TypedDict, total=False):
+    """A reply frame, narrowed to the one field that says which identity is running.
+
+    A codex stream opens with the home it was credentialed from, which is what tells
+    this host's two codex identities apart.
+    """
+
+    codexHome: str
+
+
+class TranscriptFrame(TypedDict, total=False):
+    """One line of the machine transcript a lost turn leaves behind.
+
+    The harness's own stream rather than onejudge's or `onepipeline`'s, and the only
+    wire format here that reaches this filter by accident: it arrives as the monitor's
+    "last assistant message" when the turn failed instead of producing one.
+    """
+
+    method: str
+    result: HarnessResult
+    params: FrameParams
 
 
 class SupervisorFrame(TypedDict, total=False):
@@ -213,8 +314,124 @@ def named_run(frame: SupervisorFrame) -> RunId | None:
     return RunId(named.group(1)) if named is not None else None
 
 
+def transcript_frames(spoken: str) -> list[TranscriptFrame] | None:
+    """The machine transcript this message *is*, or `None` when it is the monitor's prose.
+
+    A turn the monitor completed answers in prose. A turn its agent side lost answers
+    with the harness's own stream instead — one JSON object per line and nothing else —
+    so "every non-blank line parses as a JSON object" is what tells the two apart
+    without guessing at the vocabulary inside either.
+    """
+    frames: list[TranscriptFrame] = []
+    for line in spoken.splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        frames.append(cast(TranscriptFrame, parsed))
+    return frames or None
+
+
+def lost_turn_error(frames: list[TranscriptFrame]) -> TurnError | None:
+    """What a lost turn recorded: `{}` if it recorded nothing, `None` if it was not lost.
+
+    Read from the end backwards, because a transcript ends in what became of the turn.
+    Two shapes say it was lost and neither is one harness's own: a terminal turn status
+    of `failed`, and an error frame. A turn that failed carrying no error object is
+    still a turn nobody took, which is why the empty record and the `None` are different
+    answers rather than one falsy one.
+
+    Recognising only a failure — never "this looks like a transcript" — is deliberate.
+    Anything this cannot prove was lost is surfaced verbatim exactly as before, so a
+    real observation is never swallowed by a classifier that guessed.
+    """
+    for frame in reversed(frames):
+        match frame:
+            case {"params": {"turn": {"status": "failed", "error": dict() as recorded}}}:
+                return cast(TurnError, recorded)
+            case {"method": "error", "params": {"error": dict() as recorded}}:
+                return cast(TurnError, recorded)
+            case {"params": {"turn": {"status": "failed"}}} | {"method": "error"}:
+                return TurnError()
+    return None
+
+
+def clipped(cause: str) -> str:
+    """One cause as a single bounded line, so what is built around it stays readable."""
+    named = COLLAPSED_IN_A_CAUSE.sub(" ", cause).strip()
+    return named if len(named) <= CAUSE_LIMIT else named[: CAUSE_LIMIT - 1].rstrip() + "\u2026"
+
+
+def cause_of(error: TurnError) -> str:
+    """The shortest true name for why the turn was lost.
+
+    A classification is preferred to prose — `usageLimitExceeded` is the whole answer,
+    where the sentence beside it is a paragraph about buying credits — and the prose is
+    the fallback rather than the omission, because a harness that classifies nothing
+    still says something. Each candidate is normalized before it is judged empty, so a
+    value that is only whitespace or control characters falls through to the next.
+    """
+    for stated in (error.get("codexErrorInfo"), error.get("code"), error.get("message")):
+        named = clipped(stated) if isinstance(stated, str) else ""
+        if named:
+            return named
+    return NO_CAUSE_RECORDED
+
+
+def identity_in(frames: list[TranscriptFrame]) -> str:
+    """The harness identity the lost turn ran as, as its own transcript names it.
+
+    Which quota to go and look at is the actionable half of the line, and the two codex
+    identities have separate ones. The transcript names the home it was credentialed
+    from, so the alternate is recognised by comparing that against
+    `ORCHESTRATOR_CODEX_ALT_HOME` — every launch exports it, and
+    `scripts/codex-alt-home.sh` owns the path — rather than by a second copy of it here.
+    A transcript naming no home at all is reported as naming none.
+    """
+    for frame in frames:
+        result = frame.get("result")
+        home = result.get(CODEX_HOME_IN_TRANSCRIPT) if isinstance(result, dict) else None
+        if isinstance(home, str) and home.strip():
+            alternate = os.environ.get(CODEX_ALT_HOME)
+            named_the_alternate = alternate is not None and os.path.normpath(
+                alternate
+            ) == os.path.normpath(home)
+            return CODEX_ALTERNATE_IDENTITY if named_the_alternate else CODEX_IDENTITY
+    return UNIDENTIFIED_HARNESS
+
+
+def failed_turn_surface(
+    error: TurnError, frames: list[TranscriptFrame], spoken: str, run: RunId
+) -> ObserverFrame:
+    """One lost turn, named rather than transcribed.
+
+    The transcript itself stays out of the message on purpose: this is the line the
+    planner cannot filter, and the run already keeps the turn where the remedy points.
+    """
+    return ObserverFrame(
+        kind=SURFACE_KIND_OF_A_FAILED_TURN,
+        message=(
+            f"monitor turn failed: {cause_of(error)} on {identity_in(frames)}. "
+            f"It said nothing, so there is nothing to answer; its {len(spoken)}-character "
+            f"transcript is not repeated here. "
+            f"Read it with `just monitor {run} --filter monitor`."
+        ),
+        blocking=False,
+    )
+
+
 def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
-    """Turn one supervisor frame into the surface the planner is asked to answer."""
+    """Turn one supervisor frame into the surface the planner is asked to answer.
+
+    What the conversation ends in decides which surface that is. A turn the monitor
+    spoke in is raised verbatim, as the planner's question is the monitor's own words.
+    A turn its agent side lost ends in that harness's transcript instead, and is raised
+    as a named failure under its own kind — see `lost_turn_error`.
+    """
     messages = frame.get("messages")
     if not isinstance(messages, list):
         return fail(
@@ -235,7 +452,12 @@ def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
             f"read its turns with `just monitor {run} --filter monitor` to see why the "
             "turn produced no message",
         )
-    return ObserverFrame(kind=SURFACE_KIND, message=spoken[-1], blocking=False)
+    said = spoken[-1]
+    frames = transcript_frames(said)
+    lost = None if frames is None else lost_turn_error(frames)
+    if frames is not None and lost is not None:
+        return failed_turn_surface(lost, frames, said, run)
+    return ObserverFrame(kind=SURFACE_KIND, message=said, blocking=False)
 
 
 def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:

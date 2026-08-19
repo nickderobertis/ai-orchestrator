@@ -2270,6 +2270,333 @@ def test_the_channel_filter_relays_a_ruling_whole_including_fields_it_does_not_k
     }, surface
 
 
+#: The kind `scripts/channel-serve.py` raises a turn its agent side lost under.
+SURFACE_KIND_OF_A_LOST_TURN = "monitor-failed"
+
+#: The ceiling the surface's composition may not exceed, for any transcript, identity,
+#: and run id these journeys drive through it. The raw transcript it replaces was 21,531
+#: characters.
+NAMED_FAILURE_LIMIT = 400
+
+#: How the recorded transcript's harness classified the refusal it ended on.
+LOST_TURN_CAUSE = "usageLimitExceeded"
+
+#: Text that occurs only inside the transcript, asserted absent from the surface: a
+#: frame name, a key, and the URL out of the refusal's own prose.
+ONLY_IN_THE_TRANSCRIPT = ("turn/completed", "codexErrorInfo", "chatgpt.com")
+
+#: The prompt the harness echoes back at itself, which is most of a lost turn's weight.
+ECHOED_PROMPT = (
+    "Actively monitor one executing tracked graph and report what drifts from it.\n" * 100
+)
+
+
+def _lost_turn_transcript(codex_home: str) -> str:
+    """What a monitor turn its agent side lost leaves as the last thing it "said".
+
+    The shape measured off this host's own `runs/rc-fixes-brief` channel queue: the
+    harness's own JSON-RPC stream, one frame per line, opening with the home the
+    identity it ran as is credentialed from, echoing the whole prompt back, and ending
+    in an error frame and a `turn/completed` whose status is `failed`. Twenty of these
+    queued unread on one run, each one 21,531 characters that had to be opened to find
+    out it said nothing.
+
+    Thread and session identifiers are this fixture's own and the echoed prompt is the
+    monitor's role rather than the recorded run's; the frames, their order, and the two
+    that carry the refusal are as recorded.
+    """
+    refusal = (
+        "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+        "to purchase more credits or try again at Aug 20th, 2026 3:30 AM."
+    )
+    thread = "01a01a5d-8df8-77b0-aace-730d932eefe4"
+    turn = "01a01a5d-8f08-7642-947f-d6103de39e42"
+    echoed = {
+        "type": "userMessage",
+        "id": "01a01a5d-9351-77a1-b947-d7aa89759a9c",
+        "content": [{"type": "text", "text": ECHOED_PROMPT}],
+    }
+    error = {"message": refusal, "codexErrorInfo": LOST_TURN_CAUSE, "additionalDetails": None}
+    frames: list[dict[str, object]] = [
+        {
+            "id": 1,
+            "result": {
+                "userAgent": "oneharness/0.145.0 (Ubuntu 24.4.0; x86_64)",
+                "codexHome": codex_home,
+                "platformFamily": "unix",
+                "platformOs": "linux",
+            },
+        },
+        {"method": "thread/started", "params": {"thread": {"id": thread}}},
+        {
+            "method": "turn/started",
+            "params": {"threadId": thread, "turn": {"id": turn, "status": "inProgress"}},
+        },
+        {"method": "item/started", "params": {"item": echoed}},
+        {"method": "item/completed", "params": {"item": echoed}},
+        {
+            "method": "account/rateLimits/updated",
+            "params": {"rateLimits": {"credits": {"hasCredits": False, "balance": "0"}}},
+        },
+        {
+            "method": "thread/status/changed",
+            "params": {"threadId": thread, "status": {"type": "systemError"}},
+        },
+        {"method": "error", "params": {"error": error, "willRetry": False, "threadId": thread}},
+        {
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread,
+                "turn": {"id": turn, "items": [], "status": "failed", "error": error},
+            },
+        },
+    ]
+    return _transcript(*frames)
+
+
+def _transcript(*frames: dict[str, object]) -> str:
+    """One machine transcript, in the form a harness streams it: a JSON object per line."""
+    return "\n".join(json.dumps(frame) for frame in frames)
+
+
+def _capturing_channel(tmp_path: Path, environment: dict[str, str]) -> Path:
+    """A stand-in `channel serve` that keeps the surface it was handed, and answers.
+
+    What these journeys are about is the surface the filter *sends*, and the published
+    `channel serve` neither hands one back nor answers one without a live run whose
+    planner is reading it. Everything else is real: the filter, its argv, the frame on
+    its stdin, and the response it validates off this stdout.
+    """
+    channel = tmp_path / "stand-in-channel"
+    captured = tmp_path / "surface.json"
+    # llmlint: ignore[e2e_not_mocked] A reader is what makes the sent surface readable.
+    channel.write_text(
+        f'#!/usr/bin/env bash\ncat > {captured}\necho \'{{"completion": false, '
+        '"message": "keep watching", "reason": "mid-run"}\'\n',
+        encoding="utf-8",
+    )
+    channel.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] A reader is what makes the sent surface readable.
+    environment[ONEPIPELINE_BIN] = str(channel)
+    return captured
+
+
+def _frame_ending_in(said: str) -> str:
+    """The recorded supervisor frame, with the monitor's conversation ending in `said`."""
+    messages = [*cast(list[dict[str, str]], SUPERVISOR_FRAME["messages"])[:-1]]
+    return json.dumps(
+        {**SUPERVISOR_FRAME, "messages": [*messages, {"role": "assistant", "content": said}]}
+    )
+
+
+def test_the_channel_filter_names_a_lost_monitor_turn_instead_of_transcribing_it(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A turn the agent side lost reaches the planner as a named failure, not a dump.
+
+    The planner may not filter the unread-surface line, because a blocking surface
+    produces no other signal until it is read. So a monitor turn that failed rather than
+    spoke used to arrive as twenty-one thousand characters of the harness's own JSON-RPC
+    stream — unreadable and undroppable at once, and each one had to be opened to find
+    out it said nothing. What has to arrive instead is the two things a planner acts on:
+    what the failure was, and which identity's quota it happened on.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    captured = _capturing_channel(tmp_path, environment)
+    transcript = _lost_turn_transcript("/home/nick/.codex")
+
+    relayed = _serve(_frame_ending_in(transcript), environment)
+
+    assert relayed.returncode == 0, relayed.stderr
+    surface = json.loads(captured.read_text(encoding="utf-8"))
+    assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, surface
+    assert surface["blocking"] is False, surface
+    named = surface["message"]
+    assert f"monitor turn failed: {LOST_TURN_CAUSE} on codex." in named, named
+    assert len(named) <= NAMED_FAILURE_LIMIT, f"{len(named)} characters is not a line: {named}"
+    for buried in ONLY_IN_THE_TRANSCRIPT:
+        assert buried not in named, f"the raw transcript reached the surface message: {named}"
+    assert ECHOED_PROMPT.splitlines()[0] not in named, named
+
+
+def test_the_channel_filter_names_which_codex_identity_lost_the_turn(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The identity is read out of the transcript, so the alternate is named as itself.
+
+    The actionable half of the line is which quota to go and look at, and this host's
+    two codex identities have separate ones. The transcript names the home it was
+    credentialed from; `ORCHESTRATOR_CODEX_ALT_HOME` is what says which identity that
+    is, and this journey establishes it exactly as a launch does. Reporting `codex` for
+    a turn the alternate lost would send a planner to a quota that is fine.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    captured = _capturing_channel(tmp_path, environment)
+    alternate = environment["ORCHESTRATOR_CODEX_ALT_HOME"]
+
+    relayed = _serve(_frame_ending_in(_lost_turn_transcript(alternate)), environment)
+
+    assert relayed.returncode == 0, relayed.stderr
+    named = json.loads(captured.read_text(encoding="utf-8"))["message"]
+    assert f"monitor turn failed: {LOST_TURN_CAUSE} on codex:alternate." in named, named
+    assert len(named) <= NAMED_FAILURE_LIMIT, f"{len(named)} characters is not a line: {named}"
+
+
+def test_the_channel_filter_names_a_lost_turn_however_its_harness_recorded_it(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Every shape a lost turn is recorded in still reaches the planner as one line.
+
+    The recorded transcript is one harness classifying one refusal, and the branches
+    around it are what the next one will land on: an error frame with no terminal turn
+    after it, a turn that failed recording nothing, an unclassified error whose only
+    account of itself is prose, and a stream that never says which harness ran it. Each
+    still has to name what it can and stay a line — including the two that would not on
+    their own, a cause longer than the whole surface and a cause carrying newlines,
+    which is text the harness controls and this filter renders.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    captured = _capturing_channel(tmp_path, environment)
+    opening = {"result": {"codexHome": "/home/nick/.codex"}}
+    recorded = {
+        "an error frame with no terminal turn behind it": (
+            _transcript(opening, {"method": "error", "params": {"error": {"code": "quotaLost"}}}),
+            "monitor turn failed: quotaLost on codex.",
+        ),
+        "a turn that failed recording nothing about why": (
+            _transcript(
+                opening,
+                {"method": "turn/completed", "params": {"turn": {"status": "failed"}}},
+            ),
+            "monitor turn failed: no cause recorded on codex.",
+        ),
+        "an error whose only account of itself is prose": (
+            _transcript(
+                opening,
+                {"method": "error", "params": {"error": {"message": "the provider hung up"}}},
+            ),
+            "monitor turn failed: the provider hung up on codex.",
+        ),
+        "a stream that never says which harness ran it": (
+            _transcript({"method": "error", "params": {"error": {"code": "quotaLost"}}}),
+            "monitor turn failed: quotaLost on an unidentified harness.",
+        ),
+        "a cause carrying the newlines that would make the line two": (
+            _transcript(
+                opening,
+                {"method": "error", "params": {"error": {"message": "hung up.\n\nRetry at 3AM."}}},
+            ),
+            "monitor turn failed: hung up. Retry at 3AM. on codex.",
+        ),
+    }
+    for case, (said, expected) in recorded.items():
+        relayed = _serve(_frame_ending_in(said), environment)
+
+        assert relayed.returncode == 0, f"{case}: {relayed.stderr}"
+        surface = json.loads(captured.read_text(encoding="utf-8"))
+        assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, f"{case}: {surface}"
+        assert expected in surface["message"], f"{case}: {surface['message']}"
+        assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, f"{case}: {surface['message']}"
+
+
+def test_the_channel_filter_bounds_a_cause_its_harness_did_not_bound(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A refusal that is a paragraph still lands as a line a planner reads where it is.
+
+    The cause is the one part of the line copied out of somebody else's transcript, and
+    nothing on the far side of that boundary keeps it short: the recorded refusal is
+    already two sentences and a URL. So the bound is asserted against a cause far longer
+    than the whole surface may be, and the identity and the remedy — the two halves a
+    reader acts on — have to survive it.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    captured = _capturing_channel(tmp_path, environment)
+    unbounded = "the provider refused this turn and explained itself at length. " * 20
+    said = _transcript(
+        {"result": {"codexHome": "/home/nick/.codex"}},
+        {"method": "error", "params": {"error": {"message": unbounded}}},
+    )
+
+    relayed = _serve(_frame_ending_in(said), environment)
+
+    assert relayed.returncode == 0, relayed.stderr
+    named = json.loads(captured.read_text(encoding="utf-8"))["message"]
+    assert len(named) <= NAMED_FAILURE_LIMIT, f"{len(named)} characters is not a line: {named}"
+    assert named.startswith("monitor turn failed: the provider refused this turn"), named
+    assert "on codex." in named, named
+    assert "`just monitor serve-e2e --filter monitor`" in named, named
+
+
+def test_the_channel_filter_leaves_anything_it_cannot_prove_was_lost_alone(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """What the monitor said is raised verbatim under its own kind, exactly as before.
+
+    The complement of the journeys above, and the thing recognising a failure must not
+    cost: the filter reclassifies only what it can *prove* was lost, so everything else
+    is the planner's question in the monitor's own words. The three cases are the ones a
+    careless classifier swallows — an observation that quotes the very frame the
+    classifier keys on, a stream that is every bit as machine-shaped and reports a turn
+    that finished, and a transcript one of whose lines is not an object at all.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    captured = _capturing_channel(tmp_path, environment)
+    left_alone = {
+        "an observation that quotes a failed turn": (
+            "node api's dispatch died to its provider. Its last frame was "
+            '{"method": "turn/completed", "params": {"turn": {"status": "failed"}}} — retry it?'
+        ),
+        "a transcript of a turn that finished": _transcript(
+            {"result": {"codexHome": "/home/nick/.codex"}},
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        ),
+        "a transcript one of whose lines is not an object": (
+            _transcript({"method": "error", "params": {"error": {"code": "quotaLost"}}})
+            + '\n"node api has drifted"'
+        ),
+    }
+    for case, said in left_alone.items():
+        relayed = _serve(_frame_ending_in(said), environment)
+
+        assert relayed.returncode == 0, f"{case}: {relayed.stderr}"
+        raised = captured.read_text(encoding="utf-8")
+        assert json.loads(raised) == {
+            "kind": SURFACE_KIND_OF_A_MONITOR,
+            "message": said,
+            "blocking": False,
+        }, f"{case}: {raised}"
+
+
+def test_a_named_failure_still_never_answers_for_the_planner(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Naming the failure changes nothing about who rules on the run.
+
+    The filter now composes a message of its own, which is exactly the point at which
+    answering the planner's question for them would become easy — and onejudge reads
+    this stdout as the planner's ruling, so a fabricated `{"completion": ...}` would
+    continue or settle a run nobody ruled on. A lost turn whose channel cannot be
+    reached at all still exits non-zero with the cause and the remedy.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    frame = _frame_ending_in(_lost_turn_transcript("/home/nick/.codex"))
+
+    for case, override in (
+        ("a channel that is not installed", str(tmp_path / "no-such-onepipeline")),
+        ("a channel that cannot be executed", str(_unrunnable(tmp_path))),
+    ):
+        environment[ONEPIPELINE_BIN] = override
+
+        refused = _serve(frame, environment)
+
+        assert refused.returncode != 0, f"{case} was answered: {refused.stdout}"
+        assert "could not run" in refused.stderr, f"{case}: {refused.stderr}"
+        assert "just bootstrap" in refused.stderr, f"{case}: {refused.stderr}"
+        assert "Traceback" not in refused.stderr, f"{case}: {refused.stderr}"
+        assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
+
+
 def test_the_channel_filter_reports_a_channel_that_cannot_be_executed(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
