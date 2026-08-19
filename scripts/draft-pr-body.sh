@@ -40,8 +40,9 @@
 #
 # Exits: 0 with the body (on stdout, or in `--out`'s file with stdout silent);
 # 3 when no body was drafted, naming which of `onepipeline`'s three endings it was;
-# 2 for usage, or for a base that could not be resolved. Nothing but a drafted body
-# ever reaches stdout. There is no retry of its own — `schema_max_retries` in
+# 2 for usage, for a base that could not be resolved, or for an environment the
+# drafting turn could not be started in. Nothing but a drafted body ever reaches
+# stdout. There is no retry of its own — `schema_max_retries` in
 # `oneharness.pr-author.toml` is the only retry there is.
 #
 # llmlint: ignore-file[tool_output_is_signal] The body on stdout and the ending on
@@ -325,6 +326,32 @@ sys.stdout.write(base if isinstance(base, str) else "")
 fi
 git -C "$checkout" rev-parse --verify --quiet "$base^{commit}" >/dev/null || fail "'$base' is not a commit the checkout '$checkout' holds" \
     "fetch it, or pass --base with a ref that checkout can resolve"
+
+# The alternate identities' environment indirections, taken from the two helpers that
+# own them rather than derived here: `oneharness` refuses to start a variant whose
+# `env_from` names a variable the parent process does not set, and
+# `oneharness.pr-author.toml`'s chain names one per alternate identity. A dispatch
+# exports all three, so a drafter that inherits them instead of establishing them works
+# on the run path and dies `unstartable` on every out-of-band landing — which is the
+# only way this script is run.
+#
+# Placed here rather than at the top so a mistyped command line is refused without
+# `ensure_codex_alt_home` creating a directory for a turn that will never run, which is
+# the rule `scripts/onepipeline.sh` applies to its own read-only verbs.
+alt_config_helper="$script_dir/claude-alt-config-dir.sh"
+[ -f "$alt_config_helper" ] && [ -r "$alt_config_helper" ] || fail "required helper is not a readable regular file: $alt_config_helper" \
+    "restore it from the repository or run 'just bootstrap', then retry"
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$alt_config_helper"
+# llmlint: ignore[changed_behavior_has_e2e] What this line owes is that the helper is invoked and its refusal propagated, which `test_an_indirection_its_helper_refuses_stops_the_drafter_before_the_turn` drives per variable. The helper's own branches — an unset HOME, an existing directory it cannot read — are driven at the seam its file declares, where `scripts/claude-alt-config-dir.sh`'s sibling carries the file-scoped ignore naming them; re-driving them through this entry point would prove the same helper a second time.
+resolve_claude_alt_config_dir draft-pr-body || exit $?
+codex_alt_helper="$script_dir/codex-alt-home.sh"
+[ -f "$codex_alt_helper" ] && [ -r "$codex_alt_helper" ] || fail "required helper is not a readable regular file: $codex_alt_helper" \
+    "restore it from the repository or run 'just bootstrap', then retry"
+# shellcheck source=scripts/codex-alt-home.sh
+. "$codex_alt_helper"
+# llmlint: ignore[changed_behavior_has_e2e] As above: the invocation and the propagated refusal are driven, and this helper's own branches — an unset HOME, a directory it cannot create or restrict — are covered at the seam `scripts/codex-alt-home.sh` declares in its own file-scoped ignore.
+ensure_codex_alt_home draft-pr-body || exit $?
 
 # What the branch says about its own work, oldest commit first. Read from the checkout
 # rather than from the worktree below so a range git cannot walk is reported before

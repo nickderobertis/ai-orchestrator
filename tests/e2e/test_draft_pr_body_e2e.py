@@ -34,7 +34,11 @@ from typing import NamedTuple
 
 import pytest
 from drafting_task_contract import onepipeline_opening
-from harness_indirections import established_indirections
+from harness_indirections import (
+    INDIRECTION_SOURCES,
+    INDIRECTIONS,
+    established_indirections,
+)
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -240,6 +244,162 @@ def test_a_conforming_answer_reaches_stdout_as_the_characters_it_answered_with(
         f"the drafter printed {drafted.stdout!r}; `onevcs` publishes exactly what is "
         f"printed here, and the turn answered {DRAFTED_BODY!r}"
     )
+
+
+def test_the_drafting_graph_starts_from_a_shell_that_establishes_no_indirection(
+    tmp_path: Path,
+) -> None:
+    """The drafter establishes its own indirections, which is what a plain shell has.
+
+    `oneharness` refuses to start a variant whose `env_from` names a variable the parent
+    process does not set, and `oneharness.pr-author.toml`'s chain names one per alternate
+    identity. A dispatch exports all three, so a drafter that only inherits them passes
+    every other journey here and fails every out-of-band landing, which is the only way
+    this script is run.
+
+    What is stripped is read from those configs rather than listed, so a newly declared
+    indirection reaches this journey at once; `HOME` is this journey's own because the
+    helpers derive from it, which is what makes the derivation observable below.
+    """
+    assert INDIRECTIONS, (
+        "no `env_from` indirection was found in the drafting configs, so stripping them "
+        "proves nothing; check SINGLE_SIDED_CONFIGS in tests/e2e/harness_indirections.py"
+    )
+    identity = _identity(tmp_path, answers=_conforming())
+    for indirection in INDIRECTIONS:
+        identity.environment.pop(indirection, None)
+    home = tmp_path / "plain-home"
+    home.mkdir()
+    identity.environment["HOME"] = str(home)
+
+    drafted = _draft(identity, WORK_BRANCH, "--repo", str(identity.checkout), "--base", BASE)
+
+    assert drafted.returncode == 0, (
+        f"the drafter could not run without {', '.join(INDIRECTIONS)} in its "
+        f"environment, which is every out-of-band landing:\n{drafted.stderr}{drafted.stdout}"
+    )
+    assert drafted.stdout == DRAFTED_BODY, drafted.stderr + drafted.stdout
+    # `ensure_codex_alt_home` creates the directory it resolves, so finding one under a
+    # `HOME` that held nothing is that helper having run inside the drafter.
+    assert (home / ".codex-alt").is_dir(), (
+        "the alternate Codex home was never derived under this journey's own HOME, so "
+        "the drafter did not establish the indirections through the helpers that own them"
+    )
+
+
+#: The helpers the drafter has to source for those indirections, derived from the module
+#: that declares each one's ONE source rather than listed again here: a helper added there
+#: is one this journey demands the drafter cannot run without, without anybody remembering
+#: to widen a second list.
+SOURCED_HELPERS = tuple(Path(source.helper).name for source in INDIRECTION_SOURCES)
+
+
+#: The three states a real restore can leave a sourced helper in. All three are driven
+#: because the drafter tests two things about that path and no one state proves both:
+#: `[ -f ]` refuses `absent` and `not-a-file`, and `[ -r ]` refuses `unreadable`.
+UNUSABLE = ("absent", "unreadable", "not-a-file")
+
+
+def _make_unusable(helper: Path, state: str) -> None:
+    """Put one helper into the named state, in the checkout under test."""
+    match state:
+        case "absent":
+            helper.unlink()
+        case "unreadable":
+            helper.chmod(0o000)
+        case "not-a-file":
+            helper.unlink()
+            helper.mkdir()
+        case unknown:
+            raise AssertionError(f"{unknown} is not a state this journey knows how to make")
+
+
+@pytest.mark.parametrize("unusable", UNUSABLE)
+@pytest.mark.parametrize("helper", SOURCED_HELPERS)
+def test_a_checkout_whose_helper_cannot_be_sourced_is_refused_by_that_file(
+    tmp_path: Path, helper: str, unusable: str
+) -> None:
+    """A drafter that cannot establish the indirections says which file it wanted.
+
+    Driven against a checkout of the scripts alone, so the refusal is this repository's
+    own rather than one produced by breaking it. What must not happen is falling through
+    to the turn: a helper this script cannot source is a value it cannot derive, and
+    running anyway is the `unstartable` death the sourcing exists to prevent — reported
+    from `oneagentgraph`'s exit code rather than from the file nobody can read.
+    """
+    scripts = tmp_path / "restored" / "scripts"
+    shutil.copytree(REPO_ROOT / "scripts", scripts)
+    _make_unusable(scripts / helper, unusable)
+    identity = _identity(tmp_path, answers=_conforming(), register=False)
+    launches = Path(identity.environment["FAKE_CODEX_ATTEMPT_LOG"])
+
+    refused = subprocess.run(  # noqa: S603 - the real script, in a checkout one helper short
+        [
+            str(scripts / "draft-pr-body.sh"),
+            WORK_BRANCH,
+            "--repo",
+            str(identity.checkout),
+            "--base",
+            BASE,
+        ],
+        cwd=identity.checkout.parent,
+        env=identity.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert refused.returncode == 2, (
+        f"the drafter exited {refused.returncode} with {helper} unsourceable; a helper it "
+        f"cannot read is an environment failure\n{refused.stdout}\n{refused.stderr}"
+    )
+    assert refused.stdout == "", f"the drafter printed {refused.stdout!r} having drafted nothing"
+    assert helper in refused.stderr, (
+        f"the refusal does not name {helper}, so it does not say which file to restore:"
+        f"\n{refused.stderr}"
+    )
+    assert not launches.exists(), "a drafting turn was spent by a drafter that could not start"
+
+
+#: What a caller can set an indirection to that its helper will not take. Both refuse a
+#: relative path outright, which is the one unusable value a caller can actually reach:
+#: everything else about these paths the helpers derive from `HOME` themselves.
+NOT_ABSOLUTE = "relative/not/absolute"
+
+
+@pytest.mark.parametrize("overridden", INDIRECTIONS)
+def test_an_indirection_its_helper_refuses_stops_the_drafter_before_the_turn(
+    tmp_path: Path, overridden: str
+) -> None:
+    """An unusable override is the caller's mistake, and it is reported as one.
+
+    `oneharness` would read this value into the variant it starts, so a drafter that
+    carried it through would spend a turn to reach the same refusal from further away.
+    What is asserted is what this script owes — a refusal, attributed to it, naming the
+    variable an operator has to fix. The wording is the helpers' own, and pinning it here
+    would be the second copy those files exist to prevent.
+    """
+    identity = _identity(tmp_path, answers=_conforming(), register=False)
+    identity.environment[overridden] = NOT_ABSOLUTE
+    launches = Path(identity.environment["FAKE_CODEX_ATTEMPT_LOG"])
+
+    refused = _draft(identity, WORK_BRANCH, "--repo", str(identity.checkout), "--base", BASE)
+
+    assert refused.returncode == 2, (
+        f"the drafter exited {refused.returncode} on a {overridden} its helper refuses"
+        f"\n{refused.stdout}\n{refused.stderr}"
+    )
+    assert refused.stdout == "", f"the drafter printed {refused.stdout!r} having drafted nothing"
+    assert overridden in refused.stderr, (
+        f"the refusal does not name {overridden}, so an operator is not told which "
+        f"indirection to fix:\n{refused.stderr}"
+    )
+    assert "draft-pr-body" in refused.stderr, (
+        f"the refusal is not attributed to the drafter, so an operator cannot tell which "
+        f"command refused:\n{refused.stderr}"
+    )
+    assert not launches.exists(), "a drafting turn was spent on an environment it could not use"
 
 
 def test_the_composed_task_carries_onepipelines_sentence_and_the_branchs_own_commits(
