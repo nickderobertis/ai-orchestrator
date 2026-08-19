@@ -2867,6 +2867,13 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
 CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
 CANCEL_GRACE_SECONDS = 5
 
+#: The grace the *graceful* journey runs under, and the one of this pair that may be
+#: scaled: there the deadline is only the premise, so it has to be long enough for a
+#: real process teardown to finish under this tier's own load, which the unscaled five
+#: seconds have not been. The escalation journey keeps them, because there the deadline
+#: expiring *is* the behaviour under test.
+STOPPING_GRACE_SECONDS = round(e2e_timeout(CANCEL_GRACE_SECONDS))
+
 #: How long the worker below is held for. Comfortably past the grace above, because the
 #: stand-in answers on a timer and takes no redirection: it is the dispatch that does
 #: *not* stop when asked, which is exactly the arm the deadline exists for.
@@ -2882,14 +2889,14 @@ KILLED = "dispatch-killed"
 
 
 def _cancellable(
-    tmp_path: Path, oneharness_bin: str, run: RunId, held_seconds: int
+    tmp_path: Path, oneharness_bin: str, run: RunId, held_seconds: int, grace_seconds: int
 ) -> Iterator[LiveRun]:
     """A run whose only node is held open, under a grace period short enough to wait out."""
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     environment = _environment(tmp_path, oneharness_bin)
     environment[AGENT_DELAY_ENV] = str(held_seconds)
-    environment[CANCEL_GRACE_ENV] = str(CANCEL_GRACE_SECONDS)
+    environment[CANCEL_GRACE_ENV] = str(grace_seconds)
     plan = tmp_path / f"{run}.plan.json"
     cancellable: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
     plan.write_text(json.dumps(cancellable), encoding="utf-8")
@@ -2913,7 +2920,11 @@ def _cancellable(
 def cancellable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """A run whose only node is held far past a short cancellation grace period."""
     yield from _cancellable(
-        tmp_path, oneharness_bin, RunId("cancel-escalation-e2e"), CANCELLED_WORKER_HELD_SECONDS
+        tmp_path,
+        oneharness_bin,
+        RunId("cancel-escalation-e2e"),
+        CANCELLED_WORKER_HELD_SECONDS,
+        CANCEL_GRACE_SECONDS,
     )
 
 
@@ -2921,7 +2932,11 @@ def cancellable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
 def stopping_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """A run whose only node ends well inside a short cancellation grace period."""
     yield from _cancellable(
-        tmp_path, oneharness_bin, RunId("cancel-graceful-e2e"), STOPPING_WORKER_HELD_SECONDS
+        tmp_path,
+        oneharness_bin,
+        RunId("cancel-graceful-e2e"),
+        STOPPING_WORKER_HELD_SECONDS,
+        STOPPING_GRACE_SECONDS,
     )
 
 
@@ -3032,9 +3047,11 @@ def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
     assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
 
     _awaited(stopping_run, INTERRUPTED, seconds=120)
-    # Past the deadline the escalation journey waits out, so a kill this run was going
-    # to raise has had every chance to arrive.
-    time.sleep(CANCEL_GRACE_SECONDS * 3)
+    # Past this run's own deadline, so a kill it was going to raise has had every chance
+    # to arrive. It is `STOPPING_GRACE_SECONDS` the kill would be timed from, not the
+    # unscaled constant, so a wait measured against that one could end before the engine
+    # had reached the decision this asserts the outcome of.
+    time.sleep(STOPPING_GRACE_SECONDS + CANCEL_GRACE_SECONDS * 2)
     stream = _just("monitor", stopping_run.run, "--all", environment=stopping_run.environment)
     assert stream.returncode == 0, stream.stderr
     assert KILLED not in stream.stdout, (
