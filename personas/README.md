@@ -39,7 +39,7 @@ Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
 
 A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
 name to `oneagentgraph` as the node-scope worker's persona override, where a
-built-in role of that name wins. `oneagentgraph` 0.3.1 ships exactly five:
+built-in role of that name wins. `oneagentgraph` 0.3.3 ships exactly five:
 `docs-writer`, `engineer`, `planner`, `researcher`, and `reviewer`. This directory
 is not on the search path, so **any other name is taken as a path relative to
 `graphs/`** — which is why `crozier/crozier-corpus` fails a dispatch with `cannot
@@ -51,7 +51,7 @@ naming either as a plan node's `persona` fails the same way `crozier/…` does.
 request drafting under it, so a plan node's own worker may not run as it.
 
 That the shipped set is those five and no more is measured two ways — once against
-the pinned oneagentgraph 0.3.1 CLI, and once against the 0.3.0 `onepipeline` links,
+the pinned oneagentgraph 0.3.3 CLI, and once against the 0.3.0 `onepipeline` links,
 which is the one a dispatch reads. `tests/e2e/test_shipped_persona_catalog_e2e.py`
 runs each:
 
@@ -156,15 +156,29 @@ oneagentgraph `onepipeline` links, which is
 `0.3.0` at onepipeline v0.8.1, confirmed from that tag's `Cargo.lock` rather than
 from its `Cargo.toml` requirement — a caret requirement permits a version the lock
 has not resolved, so the requirement is not evidence of what a dispatch reads.
-Those two numbers are not equal today and do not have to be: the pin is 0.3.1 and
-the linked reader is 0.3.0, and the only thing 0.3.1 changed is how long a cancelled
-process tree is left before Windows ends its job. Both read the shape below, which
-is the agreement that matters.
+Those two numbers are not equal today and do not have to be: the pin is 0.3.3 and
+the linked reader is 0.3.0. What the three releases between them changed is how
+long a cancelled process tree is left before Windows ends its job, that a member
+whose tree cannot be found is not a member proven idle, and — in 0.3.3 — the
+conversation label and the oneharness-session pointer a member's turns are
+published with. Both read the shape below, which is the agreement that matters.
+
+**That last one is the case where the gap between these two numbers is the whole
+story, and it is worth reading before predicting what a bump here buys.** The
+label and the pointer are what makes a run's transcripts openable in the DAG
+Observatory, and they are stamped by whichever oneagentgraph *runs the graph* —
+which is the linked one, not this pin. So adopting 0.3.3 here moves
+`just validate-personas` and nothing a dispatch writes: real run stores on this
+host carry no conversation label until `onepipeline` releases with a lock
+resolving oneagentgraph 0.3.3 or later, and `config/onepipeline.version` moves to
+it. `tests/e2e/test_read_api_producer_contract_e2e.py` proves the *reader* against
+a store written by hand for exactly that reason — it is the half of the agreement
+this host can hold on its own.
 
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.3.1 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.3.3 refuses the
 previous shape outright, naming the field to write instead:
 
 ```

@@ -77,6 +77,14 @@ if (!/^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])$/.test(hostname)) {
 const server = Bun.serve({
   port,
   hostname,
+  // Disabled rather than raised. The only long-lived connection here is the read
+  // API's `/api/v2/events` stream, whose client sends nothing after the request —
+  // its liveness signal is the read API's own keepalive, on the read API's interval.
+  // Any bound here would be a second, weaker liveness rule kept in step by hand with
+  // a constant in another repository, and Bun's 10-second default is already shorter
+  // than that interval: every stream closed before its first keepalive, which the
+  // view reported as live telemetry lost, every few seconds, forever.
+  idleTimeout: 0,
   // The bundle is a single-page app, so an unknown path is a client route rather
   // than a missing file. `..` is refused outright: this serves one directory, and
   // a path that climbs out of it is never a route the app asked for.

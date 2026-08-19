@@ -23,7 +23,7 @@
 # six literal characters. Neither half is remembered: `tests/e2e/`'s launch suite
 # runs a member at the version declared below on every gate run and fails if `{task}`
 # reached it literally, and the range is re-read off the pinned binary at each
-# adoption, which refuses 0 and 7 by naming it. oneagentgraph 0.3.1 reads 1 through 6.
+# adoption, which refuses 0 and 7 by naming it. oneagentgraph 0.3.3 reads 1 through 6.
 version: 4
 name: dag-scope
 members:

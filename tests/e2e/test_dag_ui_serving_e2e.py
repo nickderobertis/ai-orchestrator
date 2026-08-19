@@ -16,7 +16,9 @@ run store and starts no agents.
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
+import http.client
 import json
 import os
 import shutil
@@ -25,6 +27,7 @@ import socket
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -42,6 +45,14 @@ pytestmark = [requires_workspace_install]
 #: too — restating it here would let this journey pass while `just dag-ui` and
 #: `just telemetry-server` stopped finding each other.
 READ_API_ADDRESS = REPO_ROOT / "config" / "read-api.address"
+
+#: How many of the read API's keepalive comments an idle stream is held for: the first
+#: proves the connection outlived one of its idle intervals, the second that it was not
+#: the last thing the connection carried.
+KEEPALIVES_HELD = 2
+#: How much shorter than the read API's own the proxied stream's idle stretch may be.
+#: Both are opened at once and paced by the same timer, so they differ by scheduling.
+IDLE_TOLERANCE = 0.9
 
 
 def _free_port() -> int:
@@ -197,6 +208,114 @@ def test_the_read_api_answers_on_the_same_origin_as_the_view(served: Served) -> 
     listed = json.loads(served.get("/api/v2/runs")[1])
     assert listed["api_version"] == 2
     assert listed["runs"] == []
+
+
+@dataclass
+class HeldStream:
+    """What one event stream carried while the client that opened it sent nothing."""
+
+    snapshot: bool
+    keepalives: int
+    #: The longest the stream went carrying nothing — read off the stream rather than
+    #: restated here, because the interval that produces it is the read API's.
+    longest_idle: float
+    #: How long it lasted before the far side ended it, or `None` if it was still open.
+    closed_after: float | None
+
+
+def _keepalives(stream: str) -> int:
+    """Count the SSE comment lines that are all an idle stream ever carries."""
+    return sum(1 for line in stream.splitlines() if line.startswith(":"))
+
+
+def _hold_event_stream(origin: str, keepalives: int) -> HeldStream:
+    """Read `/api/v2/events` from ``origin``, never sending on it, as an `EventSource` does.
+
+    The stream's only traffic is the opening snapshot and the read API's own keepalive
+    comment, so waiting for ``keepalives`` of them is both the hold and the
+    measurement: the gap between two is an idle stretch the connection survived.
+
+    The wait is not scaled by `waits`, because it is not a hang guard — it is a signal
+    ticking in another process, and a multiple of it would only sit longer on a
+    schedule that does not move. The socket deadline is the hang guard, and it is
+    scaled.
+    """
+    address = urllib.parse.urlsplit(origin)
+    connection = http.client.HTTPConnection(
+        address.hostname or "", address.port or 80, timeout=e2e_timeout(60)
+    )
+    started = last = time.monotonic()
+    received = ""
+    longest_idle = 0.0
+    closed_after = None
+    try:
+        connection.request("GET", "/api/v2/events", headers={"Accept": "text/event-stream"})
+        response = connection.getresponse()
+        assert response.status == 200, f"{origin} refused the event stream: {response.status}"
+        while _keepalives(received) < keepalives:
+            # `read1` rather than `read`, which would block for a full buffer an idle
+            # stream never fills. Both ways this route can end are the far side hanging
+            # up: an empty result, and — because an event stream is sent chunked and
+            # never reaches a terminating chunk — a truncated body.
+            try:
+                chunk = response.read1(4096)
+            except (http.client.IncompleteRead, ConnectionError):
+                chunk = b""
+            arrived = time.monotonic()
+            if not chunk:
+                closed_after = arrived - started
+                break
+            received += chunk.decode()
+            longest_idle = max(longest_idle, arrived - last)
+            last = arrived
+    finally:
+        connection.close()
+    return HeldStream(
+        snapshot="event: snapshot" in received,
+        keepalives=_keepalives(received),
+        longest_idle=longest_idle,
+        closed_after=closed_after,
+    )
+
+
+def test_an_idle_event_stream_is_held_open_through_the_proxy(served: Served) -> None:
+    """The view's live telemetry is one stream nobody writes to, and it must survive.
+
+    `Bun.serve` closes a connection nothing has been sent on after ten seconds by
+    default, which is shorter than the interval between the read API's keepalives — so
+    a proxy taking that default can never carry this stream. The browser renders each
+    close as a live-telemetry warning, reconnects, and loses it again, which is an
+    indicator that fires every few seconds and therefore says nothing when telemetry
+    is genuinely gone.
+
+    Both streams are held at once and asserted on separately, because "the stream
+    closed" has two suspects. A journey watching only the proxied one would blame this
+    repository for the read API's bug, and neither the bound nor the keepalive
+    interval is restated here — the proxied stream is held to what the read API's own
+    stream did beside it, whatever that turns out to be.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        proxied = pool.submit(_hold_event_stream, served.base, KEEPALIVES_HELD)
+        direct = pool.submit(_hold_event_stream, served.api, KEEPALIVES_HELD)
+        through_proxy, from_the_api = proxied.result(), direct.result()
+
+    assert from_the_api.closed_after is None, (
+        f"the read API closed its own event stream after {from_the_api.closed_after:.1f}s, "
+        "so nothing here can be concluded about the proxy in front of it"
+    )
+    assert through_proxy.closed_after is None, (
+        f"the proxy closed the event stream after {through_proxy.closed_after:.1f}s while "
+        "the read API held its own open; `just dag-ui` is imposing an idle bound"
+    )
+    for what, held in (("proxied", through_proxy), ("direct", from_the_api)):
+        assert held.snapshot, f"the {what} stream carried no opening snapshot"
+        assert held.keepalives >= KEEPALIVES_HELD, (
+            f"the {what} stream carried {held.keepalives} keepalive(s), not {KEEPALIVES_HELD}"
+        )
+    assert through_proxy.longest_idle >= from_the_api.longest_idle * IDLE_TOLERANCE, (
+        f"the proxied stream went idle for at most {through_proxy.longest_idle:.1f}s where the "
+        f"read API's own went {from_the_api.longest_idle:.1f}s, so the proxy is pacing it"
+    )
 
 
 def test_an_api_path_the_read_api_refuses_is_passed_back_as_it_refused_it(
