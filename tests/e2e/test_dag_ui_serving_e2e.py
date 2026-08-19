@@ -19,6 +19,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import http.client
+import importlib.metadata
 import json
 import os
 import shutil
@@ -35,6 +36,7 @@ from pathlib import Path
 
 import pytest
 from nx_workspace import requires_workspace_install
+from published_tools import PUBLISHED_TOOLS
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -45,6 +47,15 @@ pytestmark = [requires_workspace_install]
 #: too — restating it here would let this journey pass while `just dag-ui` and
 #: `just telemetry-server` stopped finding each other.
 READ_API_ADDRESS = REPO_ROOT / "config" / "read-api.address"
+
+#: The adopted `onepipeline-ui` release, taken from the same table every other pin
+#: check reads rather than from a literal here. Both halves of that release — the
+#: wheel behind `just telemetry-server` and the npm bundle behind `just dag-ui` —
+#: are pinned to it, which is what makes one value enough to judge both.
+ADOPTED_UI = next(tool for tool in PUBLISHED_TOOLS if tool.npm_package == "onepipeline-ui")
+#: Where the npm half of that release installs, and what `scripts/dag-ui-server.js`
+#: serves by default.
+INSTALLED_BUNDLE = REPO_ROOT / "node_modules" / "onepipeline-ui"
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -208,6 +219,75 @@ def test_the_read_api_answers_on_the_same_origin_as_the_view(served: Served) -> 
     listed = json.loads(served.get("/api/v2/runs")[1])
     assert listed["api_version"] == 2
     assert listed["runs"] == []
+
+
+def _linked_onepipeline_release() -> str:
+    """The `onepipeline` release the adopted read-API wheel was built against.
+
+    The reader answers `/healthz` with this value, and nothing this repository
+    tracks declares it — `config/onepipeline.version` pins the *engine CLI*, which
+    is a separate adoption and is deliberately allowed to differ. So the expectation
+    comes from the adopted wheel's own bill of materials, which ships in its
+    `dist-info` and moves with every release: a literal here would have to be
+    hand-edited on each bump, which is exactly the drift this journey is about.
+    """
+    distribution = importlib.metadata.distribution(ADOPTED_UI.distribution)
+    boms = [entry for entry in distribution.files or [] if "sboms/" in str(entry)]
+    if len(boms) != 1:
+        pytest.fail(
+            f"{ADOPTED_UI.distribution} must ship exactly one bill of materials to read "
+            f"its linked releases from; found {[str(entry) for entry in boms]}"
+        )
+    components = json.loads(Path(boms[0].locate()).read_text(encoding="utf-8"))["components"]
+    linked = [item["version"] for item in components if item["name"] == "onepipeline"]
+    if len(linked) != 1:
+        pytest.fail(
+            f"{ADOPTED_UI.distribution} {ADOPTED_UI.adopted_version} must record exactly one "
+            f"linked onepipeline release; found {linked}"
+        )
+    return str(linked[0])
+
+
+def test_the_served_bundle_is_the_adopted_release(served: Served) -> None:
+    """What a browser is handed is the npm half of the release `config/` adopted.
+
+    Moving the pin installs a release; it does not put one in front of anybody. A
+    `node_modules` nobody reinstalled goes on serving the bundle it already has, and
+    no pin check can see that — every one of them reads a declaration rather than
+    the server. So the release is read off the package the bundle server is serving
+    out of, and the bytes handed back are held to that same package's `index.html`.
+    """
+    installed = json.loads((INSTALLED_BUNDLE / "package.json").read_text(encoding="utf-8"))
+
+    assert installed["version"] == ADOPTED_UI.adopted_version, (
+        f"{INSTALLED_BUNDLE} holds {ADOPTED_UI.npm_package} {installed['version']}, not the "
+        f"adopted {ADOPTED_UI.adopted_version} — run 'just bootstrap' and restart 'just dag-ui'"
+    )
+    assert served.get("/")[1] == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
+
+
+def test_the_served_reader_links_the_engine_the_adopted_wheel_links(served: Served) -> None:
+    """The reader answering says which engine release it reads run stores through.
+
+    This host pins the engine that *writes* a run store and the reader of it
+    separately, and nothing but `/healthz` says whether the reader answering is the
+    one the adopted wheel would have started: a reader left over from before a bump
+    holds the same port and serves the same route table. So the field is read off
+    the running server and held to what the adopted wheel records linking.
+
+    It bounds the answering release rather than naming it — the surface publishes no
+    release of its own, and two `onepipeline-api-cli` releases linking one engine are
+    indistinguishable here. That the *installed* wheel is the adopted one is
+    `tests/test_published_tools.py`'s; what this adds is that the process answering
+    is not some older reader still holding the port, which no file can show.
+    """
+    health = json.loads(served.get("/healthz")[1])
+
+    assert health.get("onepipeline_version") == _linked_onepipeline_release(), (
+        f"the read API answering here reports {health!r}, which is not what "
+        f"{ADOPTED_UI.distribution} {ADOPTED_UI.adopted_version} links — "
+        "run 'just bootstrap' and restart 'just telemetry-server'"
+    )
 
 
 @dataclass

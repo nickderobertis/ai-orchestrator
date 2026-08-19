@@ -44,6 +44,35 @@ and the runs root defaults to the one `just runs` and `just status` read
 (`ONEPIPELINE_RUNS_DIR`, or `runs`), so the API serves the runs the planner is
 already looking at.
 
+## Which release is answering
+
+Moving `config/onepipeline-ui.version` installs a release; it does not put one in
+front of an operator. Both pieces are loaded once, at start: a `just
+telemetry-server` and a `just dag-ui` left running from before a bump go on
+serving what they loaded, so **an adoption reaches a browser only after both are
+restarted**. Neither notices the other's release either — the reader and the
+bundle are separate artifacts of one version.
+
+`/healthz` is what answers the question without guessing. The read API reports its
+own liveness *and* the `onepipeline` release it links:
+
+```sh
+curl -s http://127.0.0.1:8765/healthz
+{"status":"ok","onepipeline_version":"0.7.3"}
+```
+
+That release is the reader's own, and it is **not**
+`config/onepipeline.version` — this host pins the engine CLI and this reader
+separately, and the reader links whatever its release was built against. So the
+two are expected to differ; what the field is for is being able to say which
+reader is answering rather than assuming it.
+
+`tests/e2e/test_dag_ui_serving_e2e.py` holds a freshly started pair to the
+adopted release from that same served surface: the bundle handed back is the npm
+half installed at `config/onepipeline-ui.version`, and the reader answering links
+the engine the adopted wheel links. So a bump that installs one release and
+serves another fails there instead of being noticed by a person.
+
 ## Photograph it
 
 ```sh
