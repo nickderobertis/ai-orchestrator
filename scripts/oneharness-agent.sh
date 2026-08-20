@@ -26,7 +26,7 @@
 # same seam, applied the same way and on the same two branches. Each is applied
 # twice, because the two mechanisms cover different ground: `--model` on this
 # branch's own `oneharness run` is the only one that beats the `model` a config pins
-# for the selected harness (oneharness 0.10.1 lets that config value beat
+# for the selected harness (oneharness 0.10.2 lets that config value beat
 # ONEHARNESS_MODEL), and the exported ONEHARNESS_MODEL is what carries the side's
 # choice to everything it subsequently runs. That precedence is a fact about one
 # release, so config/oneharness.version owns the literal above and

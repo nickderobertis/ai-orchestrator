@@ -271,7 +271,7 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         "is the adopted onepipeline {version}",
         # The re-measurement of that lock, which is what makes the CLI-versus-linked
         # distinction concrete rather than a warning.
-        "at v{version} and its lock still resolves 0.4.2",
+        "at v{version} and its lock still resolves 0.8.0",
         # What a bodyless change request now says about itself. Phrased against the
         # adopted release rather than the one it arrived in, for the reason the
         # repo-lifecycle entry below records.
