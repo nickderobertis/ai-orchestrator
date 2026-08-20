@@ -221,8 +221,11 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
     "personas/README.md": (
         "measured against onepipeline {version}",
         # Which oneagentgraph a dispatch reads a persona with, which is what decides
-        # the shape every file in that directory has to be written in.
-        "at onepipeline v{version}, confirmed from that tag's",
+        # the shape every file in that directory has to be written in. What that
+        # version *is* has its own source and its own gate — the engine wheel's SBOM,
+        # read by `tests/test_linked_libraries.py`. This one holds the other half: that
+        # the sentence naming it names the engine release it was read from.
+        "at onepipeline v{version}. Read that from what the release",
     ),
     # What a run names to the agent graph watching it — `ONEPIPELINE_RUN_ID`, set to
     # the run id — restated in five places because the claim is load-bearing in five

@@ -75,8 +75,10 @@ observer member is given, and the `--config` a dispatched agent side arrives wit
 Three sentences changed wording rather than only their number, in `AGENTS.md` and
 `docs/repo-lifecycle.md`. Each said "since onepipeline <adopted>" about a behaviour
 that arrived in 0.7.5, and the adopted release and the arrival release stopped being
-the same one at 0.8.0; they now say "on the adopted onepipeline 0.8.0", which is what
-the gate is actually asking them to keep true.
+the same one at 0.8.0; they were rewritten to say "on the adopted onepipeline
+<adopted>", which is what the gate is actually asking them to keep true, and
+`tests/test_onejudge_version.py` has moved that number with the pin at every
+adoption since.
 
 ---
 

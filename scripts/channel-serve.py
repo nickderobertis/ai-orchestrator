@@ -11,7 +11,7 @@ The two halves already agree on the **response**. `channel serve` answers with
 exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
 onejudge's `supervisor` op expects. What they do not agree on is the **request**,
 and this filter is that one reconciliation, as onejudge 0.4.0 writes it and
-`onepipeline` 0.8.1 reads it:
+`onepipeline` 0.8.3 reads it:
 
     onejudge  ->  {"op": "supervisor", "task", "persona", "done_when",
                    "worktree", "history_name", "messages": [...], "session"}
@@ -28,7 +28,7 @@ out of what the frame itself carries:
 * **The run id.** The task `onepipeline` composes for the graph opens by naming
   the run, so the id is read from there. The environment names it too —
   `ONEPIPELINE_RUN_ID` is set to the run id on both sides of an observer member,
-  measured against onepipeline 0.8.1 by dumping this command's whole environment on
+  measured against onepipeline 0.8.3 by dumping this command's whole environment on
   a real launch — but that is a per-release export while the composed task is the
   contract this filter already validates, so the task stays the source. The export
   is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where

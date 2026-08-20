@@ -126,7 +126,7 @@ supervisor came to read a stale tree and report no progress while the dispatch w
 committing. onevcs 0.4.2 and later take up the session a stopped run left on a
 pinned branch instead of cutting a second one on the same name, which is what lets
 a retry reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.8.1**, and what moved to carry it was the
+plan node is the adopted onepipeline 0.8.3**, and what moved to carry it was the
 *lockfile*: onepipeline links onevcs as a Rust library, and its `Cargo.toml`
 declares `onevcs = "0.4.1"` byte-identically in v0.7.1 and v0.7.2 — a caret
 requirement, so it permitted 0.4.2 all along and was never the constraint. Only
@@ -136,9 +136,18 @@ unrefreshed lock against a fix its own requirement already accepted. **Widening
 that declaration is therefore a lever connected to nothing** — the resolution is
 the whole of the fix, and a reader who edits the requirement instead observes no
 change and wrongly concludes the bug is open. That declaration is still
-`onevcs = "0.4.1"` at v0.8.1 and its lock still resolves 0.4.2, which is the same
+`onevcs = "0.4.1"` at v0.8.3 and its lock still resolves 0.4.2, which is the same
 thing said a second way: **for anything onepipeline links, the adopted CLI version
-is not the version in force.** `config/onevcs.version` pins the onevcs *CLI* the
+is not the version in force.** That reading is not about onevcs, and **it has
+already bitten a second time**, for `oneagentgraph`: `config/oneagentgraph.version`
+read 0.3.3 — the release that added the session-conversation producer the DAG
+Observatory's transcript route reads — and a real run under it emitted nothing,
+because onepipeline v0.8.1's lock resolved oneagentgraph **0.3.0**. Its `Cargo.toml`
+declares `oneagentgraph = "0.3.0"` at v0.8.3 as well, and that tag's lock resolves
+**0.3.4**; adopting onepipeline 0.8.3 here is what put the producer in force. So
+**when a fix lives in something onepipeline links, the pin to move is
+`config/onepipeline.version`**, and the release note to read is the one that names
+the lock. `config/onevcs.version` pins the onevcs *CLI* the
 manager verbs run — `publish-branch`, `recoverable`, `work-status`, `integrate` —
 and moving it moves nothing a dispatch does, because a dispatched session publishes
 through the copy onepipeline's own lock resolved. Read a fix's release note against
@@ -492,7 +501,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.8.1 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.8.3 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -787,7 +796,7 @@ question to its manager over the run's own channel instead of guessing at a
 decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
-dispatch of a run carries it as of onepipeline 0.8.1**, composed where the dispatch
+dispatch of a run carries it as of onepipeline 0.8.3**, composed where the dispatch
 is made. Below that release nothing composed it: it reached a worker only by leaking
 out of an *attached* driver that had started an observer graph in its own process, so
 a dispatch of a detached or adopted run met its first fork with the wrapper there and
@@ -842,7 +851,7 @@ run` — distinct from `PARKED`, which is a launch that still holds its pid. The
 tier is served as run-scope timeline spans, from a bounded local capture when the
 harness refused to write its history; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
-cannot fully answer: on the adopted onepipeline 0.8.1 a run whose journal does not hold
+cannot fully answer: on the adopted onepipeline 0.8.3 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
 is the one line that makes the rest unprovable, so read it before acting on a node
 those views show as never settled. It used to be said only on the driver's stderr,
@@ -1053,7 +1062,7 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.8.1
+graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.8.3
 they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries

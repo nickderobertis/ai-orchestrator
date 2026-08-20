@@ -66,8 +66,8 @@ runs each:
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.8.1 and the
-oneagentgraph 0.3.0 it links, by launching a plan whose two nodes name `engineer` and
+Three consequences, the first two re-measured against onepipeline 0.8.3 and the
+oneagentgraph 0.3.4 it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -152,28 +152,45 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is
-`0.3.0` at onepipeline v0.8.1, confirmed from that tag's `Cargo.lock` rather than
-from its `Cargo.toml` requirement — a caret requirement permits a version the lock
-has not resolved, so the requirement is not evidence of what a dispatch reads.
-Those two numbers are not equal today and do not have to be: the pin is 0.3.3 and
-the linked reader is 0.3.0. What the three releases between them changed is how
-long a cancelled process tree is left before Windows ends its job, that a member
-whose tree cannot be found is not a member proven idle, and — in 0.3.3 — the
-conversation label and the oneharness-session pointer a member's turns are
-published with. Both read the shape below, which is the agreement that matters.
+oneagentgraph `onepipeline` links, which is `0.3.4` at onepipeline v0.8.3. Read that
+from what the release *resolved*, never from its `Cargo.toml` requirement — that
+requirement is a caret one and permits versions the build did not resolve, so it is
+not evidence of what a dispatch reads. The installed wheel is the source and
+`tests/test_linked_libraries.py` is what reads it: `onepipeline-cli` ships a
+CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked crate,
+and that gate reconciles this sentence against it on every gate run. So the two
+numbers are not equal today and do not have to be: the pin is 0.3.3 and the linked
+reader is 0.3.4. What changed across that range is how long a cancelled process tree
+is left before Windows ends its job, that a member whose tree cannot be found is not
+a member proven idle, and — in 0.3.3 — the conversation label and the
+oneharness-session pointer a member's turns are published with. Both read the shape
+below, which is the agreement that matters.
 
 **That last one is the case where the gap between these two numbers is the whole
-story, and it is worth reading before predicting what a bump here buys.** The
-label and the pointer are what makes a run's transcripts openable in the DAG
-Observatory, and they are stamped by whichever oneagentgraph *runs the graph* —
-which is the linked one, not this pin. So adopting 0.3.3 here moves
-`just validate-personas` and nothing a dispatch writes: real run stores on this
-host carry no conversation label until `onepipeline` releases with a lock
-resolving oneagentgraph 0.3.3 or later, and `config/onepipeline.version` moves to
-it. `tests/e2e/test_read_api_producer_contract_e2e.py` proves the *reader* against
-a store written by hand for exactly that reason — it is the half of the agreement
-this host can hold on its own.
+story, and it is worth reading before predicting what a bump here buys.** The label
+and the pointer are what makes a run's transcripts openable in the DAG Observatory,
+and they are stamped by whichever oneagentgraph *runs the graph* — which is the
+linked one, not this pin. So adopting 0.3.3 here moved `just validate-personas` and
+nothing a dispatch writes, and this host paid for that literally: for a whole
+release cycle `config/oneagentgraph.version` read 0.3.3, every dispatched run
+recorded no `oneharness-session` event at all, and nothing said so — a missing event
+looks exactly like a turn that did nothing. What fixed it was moving
+`config/onepipeline.version`. The same gate now refuses a linked `oneagentgraph`
+below the producer release, which is the check that was missing rather than a second
+copy of the number.
+
+The producer was then observed directly, on 2026-08-19, on a real `just orchestrate`
+run of one direct `engineer` node (`producer-probe-0-8-3`): 4 `oneharness-session`
+events, each carrying its `role`/`turn`/`identity` payload and one
+`oneharness_session` artifact reference, and 3 turn envelopes — `turn-started`,
+`turn-activity`, `turn-completed` — carrying a `<stream>.<member>` session label.
+Two things that observation is worth keeping for. The `oneharness-session` events
+carry no `session` label of their own, so counting one is not a way of counting the
+other. And **that `session` label is not onevcs's session token**, which shares the
+key name, is spelled `s-<hex>`, and names a worktree lease rather than a
+conversation; the producer's value is the graph stream joined to the member that
+spoke and always ends in `.<member>` — `.worker`, `.judge` — where onevcs's never
+does. That pair has been confused once already.
 
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
