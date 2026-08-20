@@ -353,10 +353,12 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
 #: * **onevcs** needs its own entry because the two onevcs versions in play are
 #:   deliberately different things: `config/onevcs.version` installs the **CLI** the
 #:   manager verbs run, while a dispatched session publishes through the onevcs
-#:   `onepipeline` links — 0.4.2 at the adopted engine release. A claim about one is
-#:   never a claim about the other, and mistaking the CLI pin for the version in
-#:   force has already produced a wrong diagnosis here. `AGENTS.md` names the 0.4.2
-#:   retry floor and the 0.5.0 that carried no `commit-msg` code at all.
+#:   `onepipeline` links. They read 0.8.0 alike today and have not always — the
+#:   linked copy was 0.4.2 while the pin was several releases past it — so a claim
+#:   about one is never a claim about the other, and mistaking the CLI pin for the
+#:   version in force has already produced a wrong diagnosis here. The linked copy
+#:   is measured rather than restated, by `tests/test_linked_libraries.py`;
+#:   `AGENTS.md` names the 0.5.0 that carried no `commit-msg` code at all.
 ADOPTED_SIBLING_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
     "oneagentgraph": {
         "personas/README.md": (

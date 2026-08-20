@@ -123,46 +123,90 @@ whatever the dispatch's own record names — the `session-opened` the run's jour
 carries for it, or the `worktree:` line `just work-status` renders for that
 session — never a path remembered from an earlier dispatch, which is how a
 supervisor came to read a stale tree and report no progress while the dispatch was
-committing. onevcs 0.4.2 and later take up the session a stopped run left on a
-pinned branch instead of cutting a second one on the same name, which is what lets
-a retry reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.8.5**, and what moved to carry it was the
-*lockfile*: onepipeline links onevcs as a Rust library, and its `Cargo.toml`
-declares `onevcs = "0.4.1"` byte-identically in v0.7.1 and v0.7.2 — a caret
-requirement, so it permitted 0.4.2 all along and was never the constraint. Only
-`Cargo.lock` moved, resolving 0.4.1 in v0.7.1 and 0.4.2 in v0.7.2; onevcs 0.4.2
-published half an hour before v0.7.1 was tagged, so that release shipped an
-unrefreshed lock against a fix its own requirement already accepted. **Widening
-that declaration is therefore a lever connected to nothing** — the resolution is
-the whole of the fix, and a reader who edits the requirement instead observes no
-change and wrongly concludes the bug is open. That declaration is still
-`onevcs = "0.8.0"` at v0.8.5 and its lock still resolves 0.8.0, which is the same
-thing said a second way: **for anything onepipeline links, the adopted CLI version
-is not the version in force.** That reading is not about onevcs, and **it has
-already bitten a second time**, for `oneagentgraph`: `config/oneagentgraph.version`
-read 0.3.3 — the release that added the session-conversation producer the DAG
-Observatory's transcript route reads — and a real run under it emitted nothing,
-because onepipeline v0.8.1's lock resolved oneagentgraph **0.3.0**. Its `Cargo.toml`
-declares `oneagentgraph = "0.3.0"` at v0.8.3 as well, and that tag's lock resolves
+committing. onevcs 0.8.0 and later take up the session a stopped run left on a
+pinned branch instead of cutting a second one on the same name, and **continue** a
+pinned branch nothing holds — opening the worktree at that branch's tip and
+merging the base into it — rather than refusing the pin. Both are what let a retry
+reach the work its predecessor stranded. **What carries that fix into a
+plan node is the adopted onepipeline 0.8.5**, never `config/onevcs.version`:
+onepipeline links onevcs, oneagentgraph, and onejudge as Rust libraries, so a
+dispatch runs the copy that release resolved, while `config/onevcs.version` pins
+the onevcs *CLI* the manager verbs run — `publish-branch`, `recoverable`,
+`work-status`, `integrate` — and moving it moves nothing a dispatch does. **For
+anything onepipeline links, the adopted CLI version is not the version in force**,
+and **when a fix lives in something onepipeline links, the pin to move is
+`config/onepipeline.version`**.
+
+**The deciding artifact is the installed binary, and measuring it is the answer.**
+The `onepipeline-cli` wheel this host installed ships its own built `onepipeline`,
+and that binary carries the registry path of every crate it was compiled against:
+
+```sh
+strings -a "$(readlink -f "$(command -v onepipeline)")" \
+  | grep -oE '(onevcs|oneagentgraph|onejudge)-[0-9]+\.[0-9]+\.[0-9]+' | sort -u
+```
+
+On the adopted release that answers `oneagentgraph-0.3.4`, `onejudge-0.4.0`, and
+`onevcs-0.8.0`. A second published source says the same without `strings`, without
+a network and without a clone: the same wheel ships a CycloneDX SBOM under its
+`dist-info/sboms/` declaring one version per linked crate, and
+`tests/test_linked_libraries.py` — whose docstring records where that lives and
+why — reads it on every gate run to hold this repository's prose to it.
+
+**Read the locks after that measurement, and in this order.** `git show
+v0.8.5:Cargo.lock`, at the tag of the release actually *installed*, is
+corroboration that should agree: onepipeline's requirement is still
+`onevcs = "0.8.0"` at v0.8.5 and its lock still resolves 0.8.0. `origin/main`'s
+lock answers a different question — what the *next* release would link — and is
+evidence about this host only by coincidence. The ordering matters because a lock
+describes what a release *would* link while a host runs what it *installed*, and
+the two part company exactly when something was rebuilt, repaired, or installed
+from somewhere else, which is the case a reader most needs to catch and the one no
+lock can report. It is written from a real cost: a manager read that lock from
+`origin/main`, concluded a fix was adopted, overrode a documented constraint on
+the strength of it, and lost a dispatch.
+
+Two worked examples of what the measurement catches, both from this host.
+**onevcs:** onepipeline's `Cargo.toml` declared `onevcs = "0.4.1"`
+byte-identically in v0.7.1 and v0.7.2 — a caret requirement, so it permitted 0.4.2
+all along and was never the constraint. Only `Cargo.lock` moved, resolving 0.4.1
+in v0.7.1 and 0.4.2 in v0.7.2; onevcs 0.4.2 published half an hour before v0.7.1
+was tagged, so that release shipped an unrefreshed lock against a fix its own
+requirement already accepted. **Widening that declaration is therefore a lever
+connected to nothing** — the resolution is the whole of the fix, and a reader who
+edits the requirement instead observes no change and wrongly concludes the bug is
+open. **oneagentgraph:** `config/oneagentgraph.version` read 0.3.3 — the release
+that added the session-conversation producer the DAG Observatory's transcript
+route reads — and a real run under it emitted nothing, because onepipeline
+v0.8.1's lock resolved oneagentgraph **0.3.0**. The `Cargo.toml` declares
+`oneagentgraph = "0.3.0"` at v0.8.3 as well, and that tag's lock resolves
 **0.3.4**; adopting onepipeline 0.8.3 here is what put the producer in force. So
-**when a fix lives in something onepipeline links, the pin to move is
-`config/onepipeline.version`**, and the release note to read is the one that names
-the lock. `config/onevcs.version` pins the onevcs *CLI* the
-manager verbs run — `publish-branch`, `recoverable`, `work-status`, `integrate` —
-and moving it moves nothing a dispatch does, because a dispatched session publishes
-through the copy onepipeline's own lock resolved. Read a fix's release note against
-that lock before predicting what a bump here will change; misreading it once
-produced a wrong diagnosis of this very bug and a wrong prediction of which
-adoption would fix it. Below that resolution a retry pinned to a preserved branch
-fails with `branch ... already carries N commit(s) that main does not`, which was
-not academic — it stranded four nodes across three runs, three
-on 2026-08-16 and one on 2026-08-18, each needing an out-of-band `just
-publish-branch` to recover. So never regress the lock floor, and adopt a fix like
-this **between** runs: a live driver keeps the binary it launched with, so no retry
-inside a running run can pick one up. Preserved
-stacked branches
-record their PR base so recovery targets the stack rather than the root. A plan is
-the one tracked hierarchical graph: its
+never regress that floor, and adopt a bump like either of these **between** runs:
+a live driver keeps the binary it launched with, so no retry inside a running run
+can pick one up.
+
+One failure this block used to explain is worth reading for what it was **not**. A
+retry pinned to a preserved branch could fail with `branch ... already carries N
+commit(s) that main does not`, and it was not academic — it stranded four nodes
+across three runs, three on 2026-08-16 and one on 2026-08-18, each needing an
+out-of-band `just publish-branch` to recover. **An unadopted onevcs was never the
+cause.** onevcs 0.4.2's fix is a *resume* path, reached only when `resumable()`
+answers `Some`, and that filter's first condition is
+`record.state == Lifecycle::Open`: a settled branch-preserving node leaves a
+**closed** session record, and a reclaimed run root — the record names a
+`run_root` and a `clone` that must still be directories — declines the same way.
+Resume then declined, and control fell through to `honour_or_refuse`, which is
+byte-identical in 0.4.1 and 0.4.2 and emitted that exact refusal at either.
+Session `s-bbb59ee283af` closes the case: it opened 02:52:54Z and closed
+03:25:59Z, its four refusals are stamped 03:38:18Z, 03:38:29Z, 03:41:55Z and
+03:42:06Z — twelve to sixteen minutes after the close — and its record still reads
+`"state":"closed"` with both its run root and its clone still on disk. **Under the
+onevcs 0.8.0 the adopted release links there is no `honour_or_refuse` and no such
+refusal at all**, so read that message as history rather than as something to
+plan around.
+
+Preserved stacked branches record their PR base so recovery targets the stack
+rather than the root. A plan is the one tracked hierarchical graph: its
 top-level DAG may mix direct agents, lifecycle agents, and explicit
 human actions; a lifecycle node may itself run **several agent and human steps in
 sequence on one branch**. Its reconciler accepts graph edits at any moment, because
@@ -1274,8 +1318,11 @@ that satisfies it`. `tests/e2e/test_publish_branch_e2e.py` holds both halves and
 against 0.5.0 on that wording. Two things it is therefore *not*: `just integrate`
 composes the train's subject through `provenance::publication_subject` rather than
 the publication path, so it never asks; and a lifecycle dispatch publishes through
-the onevcs onepipeline links (0.4.2), where the question reaches an operator only as
-git's own refusal of the commit. Git's own generated subjects, autosquash
+the onevcs `onepipeline` links, which is 0.8.0 too, so it asks the same question
+before anything is written. That last one was worth stating separately only while
+the two numbers differed: through the cycle when the linked copy was 0.4.2, a
+dispatched publication met this hook as git's own refusal of the commit and nothing
+earlier, and it will read that way again the moment they part. Git's own generated subjects, autosquash
 markers, and the `(incomplete step)` marker and its attestation are exempt: no
 publication carries them.
 

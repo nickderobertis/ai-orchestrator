@@ -835,15 +835,30 @@ checkpoint is refused at submission when the two name different branches: the
 lifecycle honours the checkpoint's branch and ignores the pin, so the planner
 would not get the branch it named. A retry that states a `resume` and **no**
 `branch` is pinned to the resume's own branch, because naming a continuation is
-naming the branch it lives on. When the pin and the resume agree but the
-preserved work can no longer be resumed — it stopped being unattested-incomplete
-because a recovery or an attestation landed on it, its branch is gone, or its
-checkpoint is not in the repository — the node settles `resume-failed` on the
-pinned branch with that reason, rather than moving to a freshly generated branch.
-Which branch a retry produces is a function of the envelope alone; resubmit with
-neither a `branch` pin nor a `resume` to start the work fresh. This is why an
-accepted `retry` cannot quietly re-derive the work somewhere else: the reconciler
-either honours the continuation the planner named or the dispatch says why not.
+naming the branch it lives on. A pin is honoured whether or not the branch it
+names still exists: on the onevcs the adopted engine links, a session **continues**
+the copy some checkout of the identity or origin carries — opening its worktree at
+that branch's tip and merging the base in — and cuts the name fresh from the base
+when nothing carries it. So a branch that was landed and deleted between the
+attempt and the retry is a fresh cut under the pinned name rather than a failure,
+and it is the `resume`'s `completed_steps` that keep the continuation from redoing
+steps the branch already holds. What is refused is an ambiguity nothing can
+resolve — a checkout's copy of the name and origin's that have diverged, neither
+carrying the other — and that ends the dispatch as `infrastructure-failure`
+carrying onevcs's own message, which names both tips and what to reconcile.
+A replacement that names **neither** a `branch` nor a `resume` is still pinned:
+`edits::compile_retry` runs `inherit_preserved_branch` before the envelope is
+compiled, and it copies the superseded node's `branch` *and* its `resume` onto the
+replacement. That is deliberate — the attempt being retried ran, committed, and
+stopped, so cutting a fresh branch beside its preserved one would retry the
+publication against an empty tree and leave the committed work for a person to
+find — and it means an empty envelope is a request to continue, never a request to
+start over. Naming either field is answered with what was named. So there is no
+envelope that starts the work fresh: to put a retry's work on a new branch, `add` a
+new node carrying the task and `reparent` the superseded node's dependents onto it.
+This is why an accepted `retry` cannot quietly re-derive the work somewhere else:
+the reconciler honours the continuation the planner named, or the one the run
+recorded where they named none, and the dispatch says why not when it cannot.
 
 Dropping or retrying a running node raises its cancellation signal, and that
 signal [reaches the agent](#what-a-cancellation-does-to-a-live-dispatch). A

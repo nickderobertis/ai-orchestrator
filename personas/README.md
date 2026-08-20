@@ -49,7 +49,7 @@ Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
 
 A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
 name to `oneagentgraph` as the node-scope worker's persona override, where a
-built-in role of that name wins. `oneagentgraph` 0.3.3 ships exactly five:
+built-in role of that name wins. `oneagentgraph` 0.3.4 ships exactly five:
 `docs-writer`, `engineer`, `planner`, `researcher`, and `reviewer`. This directory
 is not on the search path, so **any other name is taken as a path relative to
 `graphs/`** — which is why `crozier/crozier-corpus` fails a dispatch with `cannot
@@ -61,8 +61,8 @@ naming either as a plan node's `persona` fails the same way `crozier/…` does.
 request drafting under it, so a plan node's own worker may not run as it.
 
 That the shipped set is those five and no more is measured two ways — once against
-the pinned oneagentgraph 0.3.3 CLI, and once against the 0.3.0 `onepipeline` links,
-which is the one a dispatch reads. `tests/e2e/test_shipped_persona_catalog_e2e.py`
+the pinned oneagentgraph 0.3.4 CLI, and once against the oneagentgraph the adopted
+`onepipeline` links, which is the one a dispatch reads and is 0.3.4 as well. `tests/e2e/test_shipped_persona_catalog_e2e.py`
 runs each:
 
 - A graph carrying its own `personas` catalog is refused when one of its files
@@ -181,15 +181,16 @@ not evidence of what a dispatch reads. The installed wheel is the source and
 `tests/test_linked_libraries.py` is what reads it: `onepipeline-cli` ships a
 CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
-numbers are not equal today and do not have to be: the pin is 0.3.3 and the linked
-reader is 0.3.4. What changed across that range is how long a cancelled process tree
-is left before Windows ends its job, that a member whose tree cannot be found is not
-a member proven idle, and — in 0.3.3 — the conversation label and the
-oneharness-session pointer a member's turns are published with. Both read the shape
+numbers agree today and do not have to: the pin is 0.3.4 and the linked reader is
+0.3.4. For the release cycle before this one they were 0.3.3 and 0.3.4, and what
+separated them is how long a cancelled process tree is left before Windows ends its
+job, that a member whose tree cannot be found is not a member proven idle, and — in
+0.3.3 — the conversation label and the oneharness-session pointer a member's turns
+are published with. Both read the shape
 below, which is the agreement that matters.
 
-**That last one is the case where the gap between these two numbers is the whole
-story, and it is worth reading before predicting what a bump here buys.** The label
+**That last one is the case where such a gap is the whole story, and it is worth
+reading before predicting what a bump here buys.** The label
 and the pointer are what makes a run's transcripts openable in the DAG Observatory,
 and they are stamped by whichever oneagentgraph *runs the graph* — which is the
 linked one, not this pin. So adopting 0.3.3 here moved `just validate-personas` and
