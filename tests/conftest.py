@@ -30,6 +30,7 @@ from nx_inputs import (
     named_input_globs,
     repository_relative,
 )
+from registered_checkouts import listed_checkout_paths
 
 from orchestrator.root import REPO_ROOT
 
@@ -267,21 +268,14 @@ def _recipe_reads_are_declared(
 def _registered_checkout_roots() -> tuple[str, ...]:
     """Every directory the tracked list says another repository is checked out in.
 
-    Read from the same file the registry recipe registers, so the guard below covers
-    whatever this host actually holds rather than a restatement. This checkout is
-    excluded: the list names `ai-orchestrator` too, and reading *this* tree is what
-    the keys already describe.
+    Resolved from the same list the guards that reconcile against those checkouts
+    read, so the tier boundary and the tests it routes cannot disagree about which
+    directories are outside this workspace. This checkout is excluded: the list names
+    `ai-orchestrator` too, and reading *this* tree is what the keys already describe.
     """
-    listed = (REPO_ROOT / "config" / "onevcs.checkouts").read_text(encoding="utf-8").splitlines()
-    roots = []
-    for line in listed:
-        entry = line.partition("#")[0].strip()
-        if not entry:
-            continue
-        resolved = str(Path(entry).expanduser())
-        if resolved != str(REPO_ROOT):
-            roots.append(f"{resolved}{os.sep}")
-    return tuple(sorted(set(roots)))
+    return tuple(
+        sorted(f"{path}{os.sep}" for path in listed_checkout_paths() if str(path) != str(REPO_ROOT))
+    )
 
 
 #: Resolved once: the guard consults it on every open in the suite.

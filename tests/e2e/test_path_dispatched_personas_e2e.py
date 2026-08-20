@@ -30,17 +30,20 @@ member's in-library turn spawns.
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 from pathlib import Path
-from typing import NamedTuple, NotRequired, TypedDict, cast
+from typing import NamedTuple
 
 import pytest
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
-from harness_indirections import established_indirections
+from persona_probe import (
+    probe_environment,
+    recorded_turns,
+    run_graph,
+    settlement,
+    started_member,
+)
 from shared_dispatch_bar import shared_agent_preamble
-from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
@@ -64,65 +67,8 @@ PATH_NAMED_PERSONA = re.compile(r"^\s*persona:\s*\.\./(personas/\S+\.yaml)\s*$")
 #: the file that member's turn is routed by, so the reconciliation reads either.
 PATH_NAMED_HARNESS_CONFIG = re.compile(r"^\s*oneharness_config:\s*\.\./(\S+\.toml)\s*$")
 
-#: The stand-in for the paid model at the seam a two-party member reaches it, and the
-#: stand-in one layer lower for the provider a single-sided member's in-library turn
-#: spawns. Both are this suite's own; see each file's header.
-FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
-FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
-
-#: The directory put ahead of everything on `PATH`, holding a `claude` that refuses the
-#: turn. It covers the identities `ONEHARNESS_BIN_*` cannot, which is every claude-code
-#: variant these configs would fall through to.
-PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
-
 #: Who the indirection helpers attribute their diagnostics to when one of them refuses.
 INDIRECTION_CALLER = "tests/e2e/test_path_dispatched_personas_e2e.py"
-
-
-class EnvelopeLabels(TypedDict, total=False):
-    """The labels `oneagentgraph` stamps on an envelope, narrowed to what is read here.
-
-    `total=False` because a graph-scope envelope carries only `run_id`: the member and
-    the persona it resolved are what a member-scope one adds, and telling those apart is
-    the whole of what these journeys read.
-    """
-
-    run_id: str
-    member: str
-    persona: str
-
-
-class Settlement(TypedDict):
-    """A `graph-settled` payload: how the run ended, and how each member did."""
-
-    exit_code: int
-    members: dict[str, str]
-
-
-class Envelope(TypedDict):
-    """One NDJSON envelope of a run, narrowed to the fields these journeys read.
-
-    `oneagentgraph` owns the rest of the schema. `payload` is left untyped because the
-    two kinds read here carry different ones, and only the settlement's is asserted on
-    — through `Settlement`, at the site that knows which kind it is holding.
-    """
-
-    kind: str
-    labels: EnvelopeLabels
-    payload: object
-
-
-class ProviderTurn(TypedDict):
-    """One turn a stand-in recorded, as `fake_backend.py` and `fake_codex.py` write it.
-
-    Both files are this suite's own on both ends, which is why this states their schema
-    rather than validating somebody else's: `config` is absent from the codex record,
-    because a single-sided member's in-library turn names none.
-    """
-
-    config: NotRequired[str | None]
-    prompt: str
-    system: NotRequired[str]
 
 
 class ObserverMember(NamedTuple):
@@ -193,90 +139,6 @@ PATH_DISPATCHED = (
 #: read against. Arbitrary prose: what is under test is which document reached the
 #: turn, never what a model did with it.
 PROBE_TASK = "Probe that this member's persona loaded."
-
-
-def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
-    """The environment a probe run gets, with the paid provider substituted twice.
-
-    Both seams, because the two member shapes reach a provider by different paths and
-    a journey covering one would let the other spend real quota: a two-party member
-    spawns an `oneharness` CLI, and a single-sided one runs oneharness in-library and
-    spawns only the provider binary. The indirections come from the helpers that own
-    them, because a real oneharness refuses to start a variant whose `env_from` is
-    unset and nothing on the `just gate` path exports one.
-    """
-    environment = dict(os.environ)
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
-    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
-    environment.update(established_indirections(INDIRECTION_CALLER))
-    # Keeps this run's graph scratch and history out of the host's, so a probe never
-    # reads or reclaims a live dispatch's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
-    return environment
-
-
-def _run(graph: Path, environment: dict[str, str]) -> list[Envelope]:
-    """Run one probe graph for real, and return the envelopes it streamed.
-
-    `oneagentgraph run` is the verb `onepipeline` starts an observer graph with, and
-    its NDJSON stream is where a member starting is observable at all.
-    """
-    ran = subprocess.run(
-        ["oneagentgraph", "run", str(graph), "--task", PROBE_TASK],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(300),
-        check=False,
-    )
-    assert ran.returncode == 0, (
-        f"{graph.name} did not run to a settlement; a persona refused for its shape "
-        f"fails here, in config validation, before any member starts:\n"
-        f"{ran.stdout}\n{ran.stderr}"
-    )
-    # `cast` rather than a validating read: this is `oneagentgraph`'s own published
-    # envelope stream, proven in its own repository, and `Envelope` states the three
-    # fields these journeys read out of it.
-    return [cast(Envelope, json.loads(line)) for line in ran.stdout.splitlines() if line.strip()]
-
-
-def _started(envelopes: list[Envelope], member: str) -> Envelope:
-    """The `member-started` envelope for one member, which a refused persona has none of."""
-    started = [
-        envelope
-        for envelope in envelopes
-        if envelope["kind"] == "member-started" and envelope["labels"].get("member") == member
-    ]
-    assert started, (
-        f"no member started for {member!r}, so its persona produced no member at all:\n"
-        f"{json.dumps(envelopes, indent=2)}"
-    )
-    return started[0]
-
-
-def _settled(envelopes: list[Envelope]) -> Settlement:
-    """The graph's own settlement, as its last envelope states it."""
-    settled = [envelope for envelope in envelopes if envelope["kind"] == "graph-settled"]
-    assert settled, f"the probe graph never settled:\n{json.dumps(envelopes, indent=2)}"
-    return cast(Settlement, settled[0]["payload"])
-
-
-def _turns(prompt_log: Path) -> list[ProviderTurn]:
-    """Every turn a stand-in recorded, as it was actually given it."""
-    if not prompt_log.is_file():
-        return []
-    # Test-owned on both ends, so the cast states that schema rather than skipping a
-    # validation of somebody else's.
-    return [
-        cast(ProviderTurn, json.loads(line))
-        for line in prompt_log.read_text(encoding="utf-8").splitlines()
-    ]
 
 
 def _observer_members() -> set[ObserverMember]:
@@ -378,7 +240,8 @@ def test_the_monitors_persona_loads_and_reaches_the_turn(
     conversation between the two sides — is the shipped one.
     """
     dispatched = PATH_DISPATCHED[0]
-    environment = _environment(tmp_path, oneharness_bin)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment = probe_environment(tmp_path, oneharness_bin, INDIRECTION_CALLER)
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
 
@@ -399,15 +262,15 @@ def test_the_monitors_persona_loads_and_reaches_the_turn(
         encoding="utf-8",
     )
 
-    envelopes = _run(graph, environment)
-    started = _started(envelopes, dispatched.member)
+    envelopes = run_graph(graph, environment, PROBE_TASK)
+    started = started_member(envelopes, dispatched.member)
 
     assert started["labels"].get("persona") == dispatched.label, (
         f"the member started under persona label {started['labels'].get('persona')!r} "
         f"rather than {dispatched.label!r}, so a different document was resolved:\n"
         f"{json.dumps(started, indent=2)}"
     )
-    assert _settled(envelopes)["members"] == {dispatched.member: "settled"}, (
+    assert settlement(envelopes)["members"] == {dispatched.member: "settled"}, (
         f"the probe graph did not settle its one member:\n{json.dumps(envelopes, indent=2)}"
     )
 
@@ -415,7 +278,9 @@ def test_the_monitors_persona_loads_and_reaches_the_turn(
     # turn pinned to the judge config.
     # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the system prompt.
     working = [
-        turn for turn in _turns(prompt_log) if Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
+        turn
+        for turn in recorded_turns(prompt_log)
+        if Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
     ]
     assert working, "no agent-side turn was taken, so nothing here reads a merged prompt"
     role = _persona_role(dispatched.persona)
@@ -449,7 +314,8 @@ def test_the_pacemakers_persona_loads_and_labels_its_member(
     crate refuses costs this member exactly as completely.
     """
     dispatched = PATH_DISPATCHED[1]
-    environment = _environment(tmp_path, oneharness_bin)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment = probe_environment(tmp_path, oneharness_bin, INDIRECTION_CALLER)
     prompt_log = tmp_path / "codex-prompts.jsonl"
     environment["FAKE_CODEX_PROMPT_LOG"] = str(prompt_log)
 
@@ -467,20 +333,20 @@ def test_the_pacemakers_persona_loads_and_labels_its_member(
         encoding="utf-8",
     )
 
-    envelopes = _run(graph, environment)
-    started = _started(envelopes, dispatched.member)
+    envelopes = run_graph(graph, environment, PROBE_TASK)
+    started = started_member(envelopes, dispatched.member)
 
     assert started["labels"].get("persona") == dispatched.label, (
         f"the member started under persona label {started['labels'].get('persona')!r} "
         f"rather than {dispatched.label!r}, so a different document was resolved:\n"
         f"{json.dumps(started, indent=2)}"
     )
-    assert _settled(envelopes)["members"] == {dispatched.member: "settled"}, (
+    assert settlement(envelopes)["members"] == {dispatched.member: "settled"}, (
         f"the probe graph did not settle its one member:\n{json.dumps(envelopes, indent=2)}"
     )
 
     # llmlint: ignore[tests_mirror_real_usage] No view carries a single-sided member's prompt.
-    turns = _turns(prompt_log)
+    turns = recorded_turns(prompt_log)
     assert turns, "the single-sided member took no provider turn, so nothing here is proven"
     role = _persona_role(dispatched.persona)
     for turn in turns:

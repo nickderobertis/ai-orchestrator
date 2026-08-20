@@ -129,6 +129,16 @@ slash-qualified name (`crozier/crozier-corpus`), stored as
 per the resolution measured above. `just new-persona <name>` creates either
 layout, and `just validate-personas` checks the tracked catalog recursively.
 
+A repo-specific persona also states which repository it is for by the directory it
+sits in, and `just check` holds its prose to that repository: every `` `just
+<recipe>` `` it names is reconciled against the recipes the registered checkout of
+that repository actually defines
+(`tests/test_persona_recipe_drift.py`, in the uncached `test-checkouts` tier). A
+review bar the worker never sees, demanding a recipe nobody can run, fails finished
+work — which is what `crozier-corpus.yaml` did while it asked for a `just gate`
+crozier has no recipe for. A flat, cross-repo persona names no repository and is
+outside that reconciliation.
+
 ## The delta contract
 
 `just validate-personas` enforces the shape of every YAML persona recursively

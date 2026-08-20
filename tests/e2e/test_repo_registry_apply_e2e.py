@@ -31,13 +31,17 @@ from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
 import pytest
+from registered_checkouts import (
+    TRACKED_CHECKOUTS,
+    RepoIdentity,
+    defined_recipes,
+    registered_checkouts,
+)
 
 from orchestrator.root import REPO_ROOT
 
 #: The registry this host ran on before `onevcs` owned one, verbatim.
 GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
-#: The tracked checkout list the recipe registers by default.
-TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
 #: The tracked rules file the recipe installs, which decides every listed checkout's
 #: publication path and is the rule of every gate asserted here.
 TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
@@ -114,12 +118,6 @@ GATE_TRANSCRIPTS: dict[str, tuple[str, ...]] = {
     ),
     "github.com/petsinc/org-apps": ("check NEXTEST=unset",),
 }
-
-#: One repository as `onevcs` names it once its origin URL is normalized:
-#: `host/owner/name`. The rules file matches on its three parts, the registry files
-#: identities under it, and `onevcs rules check` takes it as its argument — so it is
-#: the vocabulary every set and helper below is keyed by, rather than bare text.
-RepoIdentity = str
 
 #: The environment `config/onevcs.rules.yml` used to prepend to the gate of every
 #: repository that tests with cargo-nextest, and now prepends to none. It silenced
@@ -268,53 +266,6 @@ def ruled_identities() -> tuple[RepoIdentity, ...]:
     return named
 
 
-def normalized_identity(origin: str) -> RepoIdentity:
-    """The identity `onevcs` files an origin URL under: `host/owner/name`.
-
-    Both spellings this host's checkouts carry are handled — `https://host/owner/name`
-    with or without `.git`, and git's scp-like `user@host:owner/name` — because which
-    one a clone has is an accident of how it was made.
-    """
-    without_scheme = re.sub(r"^[a-z][a-z0-9+.-]*://", "", origin.strip())
-    user, _, remainder = without_scheme.rpartition("@")
-    if user:
-        # scp-like: the host is separated from the path by a colon, not a slash.
-        remainder = remainder.replace(":", "/", 1)
-    return remainder.removesuffix(".git").removesuffix("/")
-
-
-class Recipes(NamedTuple):
-    """The recipes a repository defines, and whether they could be read at all."""
-
-    #: False when `just` could not parse the repository's recipes, so `names` is not
-    #: evidence of anything and the reconciliation must report rather than assert.
-    readable: bool
-    names: frozenset[str]
-
-
-def defined_recipes(root: Path) -> Recipes:
-    """Every recipe `root`'s own justfile defines.
-
-    Read through the tool that owns the definitions rather than by scanning text:
-    `just --dump` is the recipe runner's own parse of its justfile, so what comes back
-    is the set a gate's `just <recipe>` would really resolve against — aliases and
-    imports included, comments and documentation already gone.
-    """
-    dumped = subprocess.run(
-        ["just", "--dump", "--dump-format", "json"],
-        cwd=root,
-        text=True,
-        capture_output=True,
-    )
-    if dumped.returncode != 0:
-        return Recipes(readable=False, names=frozenset())
-    document = json.loads(dumped.stdout)
-    return Recipes(
-        readable=True,
-        names=frozenset(document["recipes"]) | frozenset(document.get("aliases") or {}),
-    )
-
-
 def gate_recipes(gate: str) -> frozenset[str]:
     """Every `just <recipe>` the resolved gate command reaches."""
     return frozenset(match["recipe"] for match in JUST_RECIPE.finditer(gate))
@@ -323,31 +274,15 @@ def gate_recipes(gate: str) -> frozenset[str]:
 def checkouts_on_this_host() -> dict[RepoIdentity, Path]:
     """Each ruled identity this host actually holds a checkout of.
 
-    The tracked list names where a checkout of each identity lives under either of the
-    two layouts this host clones into, and git is asked which identity one really is
-    rather than the path being trusted to say. A host holding none of them resolves
+    `registered_checkouts` resolves every listed checkout to the identity git says it
+    really is; this narrows that to the identities the tracked rules file names, which
+    are the ones with a gate to reconcile. A host holding none of them resolves
     nothing, which is what the reconciliation below reports rather than asserts on.
     """
     ruled = frozenset(ruled_identities())
-    found: dict[RepoIdentity, Path] = {}
-    for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines():
-        entry = line.partition("#")[0].strip()
-        if not entry:
-            continue
-        path = Path(entry).expanduser()
-        if not (path / ".git").exists():
-            continue
-        origin = subprocess.run(
-            ["git", "-C", str(path), "remote", "get-url", "origin"],
-            text=True,
-            capture_output=True,
-        )
-        if origin.returncode != 0:
-            continue
-        identity = normalized_identity(origin.stdout)
-        if identity in ruled:
-            found.setdefault(identity, path)
-    return found
+    return {
+        identity: path for identity, path in registered_checkouts().items() if identity in ruled
+    }
 
 
 class MergePath(NamedTuple):

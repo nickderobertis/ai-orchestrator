@@ -58,8 +58,12 @@ user:
       pass is an automatic rejection. `matched` grows only from
       `just fixtures-candidates` output, never a hand-picked list.
     - Proof: is byte-match demonstrated by `just test-corpus-match` for this
-      corpus (not asserted in prose), with attribution files intact, `just gate`
-      fully green, and llmlint clear?
+      corpus (not asserted in prose), with attribution files intact, and
+      crozier's complete gate green — `just check` for the deterministic tier and
+      `just lint-llm-diff` against the branch's comparison base for the judged
+      one, which together are what its merge path verifies? crozier has no `gate`
+      recipe, so demanding one, or accepting a report that one was green, holds
+      the work to something nobody can run.
     For registration-only work (before the CI golden exists), "done" means the row
     plus wiring land, the offline gate is green, and the corpus is left with an
     empty `matched` awaiting its golden. For byte-match work, "done" means the
