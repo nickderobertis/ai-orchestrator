@@ -25,17 +25,22 @@ system_prompt: |
     `x-fern-enum` name. Prefer specs whose request bodies are `$ref`s to named
     component schemas.
   - Register in ALL the places the process requires: one numbered eight-cell
-    `CORPUS.md` row; a `Corpus { .., matched: &[] }` const plus its
+    `CORPUS.md` row; a `Corpus { .., unmatched: &[] }` const plus its
     `#[test] fn <name>_matches_fern_output` in `tests/e2e.rs`; and the matching
-    `just test-corpus-match` line in the `justfile`. Start `matched` EMPTY.
+    `just test-corpus-match` line in the `justfile`. `unmatched` is the residual
+    EXCLUSION list, not an allowlist of what matches: an empty one gates EVERY
+    expected file, so a new corpus registers with `unmatched: &[]` — parity is
+    the default and a path enters that list only as a measured, genuine gap.
 
   Repairing crozier to byte-match a golden:
   - The committed Fern `expected/` tree is the golden. NEVER edit a fixture to
-    make crozier pass — fix the GENERATOR (`src/*.rs`) instead. Use
-    `just fixtures-diff [<corpus> [<file>]]` to see exactly the normalized bytes
-    the gate compares, and `just fixtures-candidates` to add only newly
-    byte-matched paths to a corpus's `matched` list. Repeat until every file
-    reproduces byte-for-byte and `just test-corpus-match` is green for it.
+    make crozier pass — fix the GENERATOR (`src/*.rs`) instead. Measure with
+    `just fixtures-gaps <corpus>`, whose output IS the ready-to-paste `unmatched`
+    array, and read why a file diverges with
+    `just fixtures-diff [<corpus> [<file>]]`, which prints exactly the normalized
+    bytes the gate compares. Repair crozier and re-measure until that gap list is
+    EMPTY — it shrinks, it never grows — and `just test-corpus-match` is green
+    for the corpus.
   - Preserve Fern attribution: `NOTICE` and `licenses/fern-APACHE-2.0.txt` must
     survive any regeneration.
 
@@ -55,8 +60,9 @@ user:
       all three, with consistent names.
     - The non-negotiable: was the golden left untouched and crozier's GENERATOR
       fixed instead? Any edit to a committed `expected/` fixture to make crozier
-      pass is an automatic rejection. `matched` grows only from
-      `just fixtures-candidates` output, never a hand-picked list.
+      pass is an automatic rejection. `unmatched` is an exclusion list that
+      SHRINKS to empty: only what `just fixtures-gaps` measured may enter it,
+      never a hand-picked list, and a path that byte-matches again must leave it.
     - Proof: is byte-match demonstrated by `just test-corpus-match` for this
       corpus (not asserted in prose), with attribution files intact, and
       crozier's complete gate green — `just check` for the deterministic tier and
@@ -66,6 +72,6 @@ user:
       the work to something nobody can run.
     For registration-only work (before the CI golden exists), "done" means the row
     plus wiring land, the offline gate is green, and the corpus is left with an
-    empty `matched` awaiting its golden. For byte-match work, "done" means the
+    empty `unmatched` awaiting its golden. For byte-match work, "done" means the
     corpus reproduces Fern's tree exactly.
   max_turns: 24

@@ -21,18 +21,33 @@ gate` again, whose delivered bar must be reported — naming the persona, the re
 the checkout searched. The drifted copy is what keeps the passing case honest: without
 it, a reconciliation that silently found no demands at all would read the same green.
 
-`tests/test_persona_recipe_drift.py` asks this of the tracked file for every
-repo-specific persona, which is the cheap gate; this asks it of the prose a supervisor
-was handed, which is the thing that actually fails work.
+Both reconciliations a repo-specific persona is held to run against that delivered bar,
+because both failures reach a supervisor the same way: the recipes it demands
+(`tests/persona_recipes.py`) and the identifiers it names of the repository it reviews
+(`tests/persona_identifiers.py`). They are separate checks because they are separate
+failures — a recipe that disappears is a command nobody can run, while an identifier that
+changes meaning is a command that still runs and now asks for the opposite of the work —
+so the drifted copy below carries one drift of each kind and the report for each is read
+on its own.
+
+`tests/test_persona_recipe_drift.py` and `tests/test_persona_identifier_drift.py` ask this
+of the tracked files for every repo-specific persona, which is the cheap gate; this asks it
+of the prose a supervisor was handed, which is the thing that actually fails work.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
+from persona_identifiers import (
+    NamedIdentifiers,
+    identifiers_of,
+    undefined_identifiers,
+)
 from persona_probe import (
     ProviderTurn,
     probe_environment,
@@ -63,6 +78,11 @@ PROBE_TASK = "Probe that this persona's review bar reached its supervisor."
 #: into a copy of the persona to drive the failure path.
 DRIFTED_RECIPE = "gate"
 
+#: The file crozier registers every corpus in, named by the tracked bar, and the rename
+#: put in its place to drive the identifier failure path. crozier tracks no such path.
+CORPUS_REGISTRY = "tests/e2e.rs"
+DRIFTED_REGISTRY = "tests/corpus-e2e.rs"
+
 
 def _probe_graph(destination: Path, persona: Path) -> Path:
     """A one-member graph in the shape a repo-specific persona is dispatched in.
@@ -90,6 +110,18 @@ def _probe_graph(destination: Path, persona: Path) -> Path:
     return graph
 
 
+class DeliveredBar(NamedTuple):
+    """One supervisor's delivered bar, read into what each reconciliation needs of it.
+
+    Both views are of the same prompt: what that bar demands the repository *run*, and
+    what it names *of* the repository. They travel together because one graph run
+    produces both, and they stay named apart because they are reconciled apart.
+    """
+
+    demands: RepoPersona
+    names: NamedIdentifiers
+
+
 def _supervisor_turns(turns: list[ProviderTurn]) -> list[ProviderTurn]:
     """The turns the supervisor side took, by the one property that separates the two.
 
@@ -101,10 +133,10 @@ def _supervisor_turns(turns: list[ProviderTurn]) -> list[ProviderTurn]:
     return [turn for turn in turns if Path(turn["config"] or "").name == JUDGE_CONFIG_NAME]
 
 
-def _delivered_bar(tmp_path: Path, oneharness_bin: str, persona: Path) -> RepoPersona:
+def _delivered_bar(tmp_path: Path, oneharness_bin: str, persona: Path) -> DeliveredBar:
     """Run `persona` as a real member and return what its supervisor was demanded of.
 
-    The recipes come out of the prompt the supervisor was handed rather than out of the
+    Both views come out of the prompt the supervisor was handed rather than out of the
     file, which is the point: a merge that dropped the bar, or a release that stopped
     delivering it, would leave the file correct and the supervisor told something else.
     """
@@ -128,10 +160,14 @@ def _delivered_bar(tmp_path: Path, oneharness_bin: str, persona: Path) -> RepoPe
     assert supervising, (
         "the supervisor side took no turn, so nothing here reads the bar it was given"
     )
-    return RepoPersona(
-        named=str(persona),
-        repository=persona.parent.name,
-        recipes=named_recipes("\n".join(turn["prompt"] for turn in supervising)),
+    delivered = "\n".join(turn["prompt"] for turn in supervising)
+    return DeliveredBar(
+        demands=RepoPersona(
+            named=str(persona),
+            repository=persona.parent.name,
+            recipes=named_recipes(delivered),
+        ),
+        names=identifiers_of(named=str(persona), repository=persona.parent.name, prose=delivered),
     )
 
 
@@ -149,11 +185,12 @@ def crozier_checkout() -> Path:
 
 @pytest.mark.reads_checkouts
 @pytest.mark.xdist_group("persona-review-bar")
-def test_the_delivered_crozier_bar_demands_only_verification_that_repository_has(
+def test_the_delivered_crozier_bar_demands_and_names_only_what_that_repository_has(
     tmp_path: Path, oneharness_bin: str, crozier_checkout: Path
 ) -> None:
-    """The corrected clause, where it takes effect: the supervisor's own prompt."""
-    delivered = _delivered_bar(tmp_path, oneharness_bin, CROZIER_PERSONA)
+    """The corrected clauses, where they take effect: the supervisor's own prompt."""
+    bar = _delivered_bar(tmp_path, oneharness_bin, CROZIER_PERSONA)
+    delivered, named = bar.demands, bar.names
 
     # A subset, not the whole file: `system_prompt` is the worker's role and reaches the
     # agent side, so the recipes only it names — the fixture-repair commands — are
@@ -174,20 +211,32 @@ def test_the_delivered_crozier_bar_demands_only_verification_that_repository_has
     report = undefined_recipes(delivered, crozier_checkout)
     assert report is None, report
 
+    # The other half of the same bar: what it names *of* crozier rather than what it asks
+    # crozier to run. A supervisor pointed at a file that repository does not have holds a
+    # worker to prose only this host wrote, exactly as a dead recipe does.
+    assert CORPUS_REGISTRY in named.paths, (
+        "the delivered bar no longer points its supervisor at the file crozier registers "
+        f"every corpus in, so this reconciliation reads nothing: {sorted(named.paths)}"
+    )
+    assert undefined_identifiers(named, crozier_checkout) is None, undefined_identifiers(
+        named, crozier_checkout
+    )
+
 
 @pytest.mark.reads_checkouts
 @pytest.mark.xdist_group("persona-review-bar")
-def test_a_delivered_bar_naming_a_recipe_crozier_lacks_is_reported(
+def test_a_delivered_bar_demanding_or_naming_what_crozier_lacks_is_reported(
     tmp_path: Path, oneharness_bin: str, crozier_checkout: Path
 ) -> None:
-    """The failure path, driven the same way: the clause as it read before correction.
+    """The failure path, driven the same way: one drift of each kind in one dispatched copy.
 
-    A copy of the tracked persona with `just gate` put back into its proof clause is
-    dispatched for real, and what its supervisor is handed is reconciled against the
-    same checkout. This is the regression the correction was made for, so it is driven
-    rather than described — and the report is read for all three facts a reader needs,
-    because one saying only that something drifted sends them back through the whole
-    investigation.
+    A copy of the tracked persona is dispatched for real with `just gate` put back into
+    its proof clause and the file crozier registers every corpus in renamed to one that
+    repository does not track, and what its supervisor is handed is reconciled against
+    the same checkout by both reconciliations. This is the regression each correction was
+    made for, so both are driven rather than described — and each report is read for all
+    three facts a reader needs, because one saying only that something drifted sends them
+    back through the whole investigation.
     """
     catalog = tmp_path / "personas" / CROZIER_PERSONA.parent.name
     catalog.mkdir(parents=True)
@@ -197,11 +246,19 @@ def test_a_delivered_bar_naming_a_recipe_crozier_lacks_is_reported(
         "the tracked persona no longer names `just check`, so this journey cannot drift "
         "it back to the clause it was corrected from"
     )
+    assert f"`{CORPUS_REGISTRY}`" in corrected, (
+        f"the tracked persona no longer names `{CORPUS_REGISTRY}`, so this journey cannot "
+        "drift that path to one crozier does not track"
+    )
     drifted.write_text(
-        corrected.replace("`just check`", f"`just {DRIFTED_RECIPE}`", 1), encoding="utf-8"
+        corrected.replace("`just check`", f"`just {DRIFTED_RECIPE}`", 1).replace(
+            CORPUS_REGISTRY, DRIFTED_REGISTRY
+        ),
+        encoding="utf-8",
     )
 
-    delivered = _delivered_bar(tmp_path, oneharness_bin, drifted)
+    bar = _delivered_bar(tmp_path, oneharness_bin, drifted)
+    delivered, named = bar.demands, bar.names
     assert DRIFTED_RECIPE in delivered.recipes, (
         "the drifted demand did not reach the supervisor, so this journey proves nothing "
         f"about the failure path: {sorted(delivered.recipes)}"
@@ -215,3 +272,18 @@ def test_a_delivered_bar_naming_a_recipe_crozier_lacks_is_reported(
     assert str(drifted) in report
     assert f"`just {DRIFTED_RECIPE}`" in report
     assert str(crozier_checkout) in report
+
+    # The same journey drives the identifier drift, because a bar carries both kinds of
+    # name and one report must not stand in for the other.
+    assert DRIFTED_REGISTRY in named.paths, (
+        "the drifted path did not reach the supervisor, so the identifier half of this "
+        f"journey proves nothing: {sorted(named.paths)}"
+    )
+    named_report = undefined_identifiers(named, crozier_checkout)
+    assert named_report is not None, (
+        f"a bar pointing its supervisor at `{DRIFTED_REGISTRY}` was accepted against "
+        f"{crozier_checkout}, which tracks no such path"
+    )
+    assert str(drifted) in named_report
+    assert f"`{DRIFTED_REGISTRY}`" in named_report
+    assert str(crozier_checkout) in named_report

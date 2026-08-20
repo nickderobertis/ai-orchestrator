@@ -66,25 +66,33 @@ def persona_at(path: Path) -> RepoPersona:
     )
 
 
-def repo_specific_personas() -> tuple[RepoPersona, ...]:
-    """Every tracked persona that states a repository, and the recipes it names.
+def repo_specific_persona_files() -> tuple[Path, ...]:
+    """Every tracked persona file that states a repository.
 
-    **This is where the scope is decided.** A repo-specific persona states its
-    repository by the subdirectory it lives in (`personas/<repo>/<name>.yaml`), so that
-    directory name is what resolves the checkout to reconcile it against. A flat
-    persona at the top of the catalog is a general, cross-repo role: it names no
-    repository, no one checkout is the one to ask about its recipes, and it is
-    deliberately outside this reconciliation rather than merely unmatched by it.
+    **This is where the scope is decided**, for every reconciliation that holds a
+    persona to the repository it reviews — the recipes it names below, and the
+    identifiers `tests/persona_identifiers.py` holds to the same checkout. A
+    repo-specific persona states its repository by the subdirectory it lives in
+    (`personas/<repo>/<name>.yaml`), so that directory name is what resolves the
+    checkout to reconcile it against. A flat persona at the top of the catalog is a
+    general, cross-repo role: it names no repository, no one checkout is the one to ask
+    about its recipes, and it is deliberately outside these reconciliations rather than
+    merely unmatched by them.
 
     Underscore-prefixed files and directories are skipped for the reason
     `just validate-personas` skips them — they are templates, not dispatchable
     personas.
     """
     return tuple(
-        persona_at(path)
+        path
         for path in sorted(PERSONA_ROOT.glob("*/*.yaml"))
         if not path.name.startswith("_") and not path.parent.name.startswith("_")
     )
+
+
+def repo_specific_personas() -> tuple[RepoPersona, ...]:
+    """Every tracked persona that states a repository, and the recipes it names."""
+    return tuple(persona_at(path) for path in repo_specific_persona_files())
 
 
 @cache

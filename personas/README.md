@@ -130,14 +130,30 @@ per the resolution measured above. `just new-persona <name>` creates either
 layout, and `just validate-personas` checks the tracked catalog recursively.
 
 A repo-specific persona also states which repository it is for by the directory it
-sits in, and `just check` holds its prose to that repository: every `` `just
-<recipe>` `` it names is reconciled against the recipes the registered checkout of
-that repository actually defines
-(`tests/test_persona_recipe_drift.py`, in the uncached `test-checkouts` tier). A
-review bar the worker never sees, demanding a recipe nobody can run, fails finished
-work — which is what `crozier-corpus.yaml` did while it asked for a `just gate`
-crozier has no recipe for. A flat, cross-repo persona names no repository and is
-outside that reconciliation.
+sits in, and `just check` holds its prose to that repository. Two reconciliations do
+it, both in the uncached `test-checkouts` tier, and they are separate because they
+catch separate failures:
+
+- **The commands it demands.** Every `` `just <recipe>` `` it names is reconciled
+  against the recipes that repository's registered checkout actually defines
+  (`tests/test_persona_recipe_drift.py`). A review bar the worker never sees,
+  demanding a recipe nobody can run, fails finished work — which is what
+  `crozier-corpus.yaml` did while it asked for a `just gate` crozier has no recipe
+  for.
+- **The names it uses of that repository.** Every backticked path it names must be a
+  path that repository tracks, and every `` `Type { field: … }` `` literal it writes
+  must name fields that repository's own declaration of `Type` declares
+  (`tests/test_persona_identifier_drift.py`). A recipe check cannot catch this: the
+  same `crozier-corpus.yaml` went on describing a corpus registered by an allowlist
+  of files that `matched`, months after crozier inverted it to an exclusion list of
+  files that are `unmatched`, and the recipe it named for measuring one —
+  crozier's `fixtures-candidates` — still exists there as a backward-compatible
+  alias. Every name resolved, and the model they described asked for the opposite of
+  the work.
+
+`tests/e2e/test_persona_review_bar_e2e.py` asks both of the bar a real supervisor was
+handed on a real graph run, which is where either failure takes effect. A flat,
+cross-repo persona names no repository and is outside both reconciliations.
 
 ## The delta contract
 
