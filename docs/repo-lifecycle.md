@@ -8,177 +8,183 @@ is the reference for that layer, implemented by `onevcs` and driven by
 `onepipeline`; the
 onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integration.md).
 
-## The unit of work: `run_repo_task`
+## What the adopted engines actually do, and when this was checked
+
+Everything below about engine behaviour was read out of the engines' own source
+rather than remembered, and the load-bearing part of it — [the outcome
+vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
+that source on every `just check` rather than restated: **`onepipeline` v0.8.5**
+(`config/onepipeline.version`) and
+the **`onevcs` 0.8.0** its `Cargo.lock` resolves, which is the copy a dispatched
+lifecycle node publishes through. The manager verbs — `just publish-branch`,
+`just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
+the `onevcs` CLI `config/onevcs.version` pins, which is **0.8.0** as well at this
+pair of pins; the two are separate pins that have coincided before and will diverge
+again, so where a claim depends on which copy runs it this document says so. Re-read the source before trusting a claim
+here against a later pin; that is the discipline this section exists to replace, and
+the sentences it replaced described a Python implementation that was deleted when
+those crates were extracted.
+
+## The unit of work: one lifecycle node
 
 ```
-ensure clone (once per repo)  →  fresh worktree on a new branch off base
-   →  dispatch onejudge in the worktree  (agent makes the change, bypass mode)
-   →  commit the agent's changes
-   →  fetch + merge the current origin/base into the branch  (pre-handoff sync)
-   →  push the branch  (the repository's pre-push hook runs its complete gate)
-   →  publish + merge  (strategy: GitHub PR / local direct-merge)
-   →  remove the worktree
+onevcs session open  →  per-run clone of the execution checkout, worktree, branch
+   →  dispatch each step into that one worktree  (agent commits its own work)
+   →  onevcs publish  →  fetch, merge the change base, run the gate the rules
+                          file resolves, push, open/merge the change request
+   →  onevcs session close  →  worktree and occupancy lease released
 ```
 
-Everything up to "publish + merge" is identical for every repo; only the last
-step differs by where the repo lives (see *Merge strategies*). The authoritative
-closed `LifecycleResult.outcome` domain is `LifecycleOutcome` in
-the published outcome type; recorded values outside it are rejected during
-recovery. In its common publication states, `merged` means publication created
-and landed a commit, `pr-open` means policy `change-open` left a successful
-publication open, and `already-integrated` means the verified content was already present in
-the publication base. Failure and recovery outcomes retain their specific
-gate, check, conflict, timeout, or retry diagnosis rather than collapsing to a
-generic task failure.
+Every step of a node runs in the worktree the *first* step's session opened;
+`onepipeline` asks for a session only once and passes the path thereafter, because a
+second session on the same branch would start from the base and reclaim the first
+one's workspace. A `kind: human` step settles the node `waiting` and holds the
+branch — the harness never infers that a person acted.
 
-Local publication builds its squash in an intentionally detached scratch
-worktree. If the squash produces no tree change, closeout treats that as
-`already-integrated`, records `publication-finished`, and fast-forwards the
-registered publication checkout. A no-change commit is never attempted, so this
-case cannot be misreported as `Not currently on any branch`.
+### The outcome vocabulary is closed, and it is this
 
-Lifecycle agent steps use a larger turn segment than the shared direct-dispatch
-budget: repository orientation, implementation, and the complete gate commonly
-need more than one short conversation. The executable segment size and bounded
-continuation count live in `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` and
-the engine's automatic step-resume ceiling. A step that hits its
-cap and leaves a preserved incomplete commit automatically continues on the same
-branch, carrying completed step IDs so earlier steps are not re-run. An explicit
-step or node `max_turns` replaces the default segment size. Cancellation, a
-`worker-died` dispatch signal, missing preserved work, or exhausted automatic
-continuations settles as `not-completed` for planner review; partial committed
-work retains the same incomplete provenance marker. The orchestrator can retry
-through its existing bounded continuation/live-edit path, and a later explicit
-retry uses the same recorded resume metadata. A `worker-died` settlement carries
-the dispatcher's account of the death — the watchdog pid, the agent child's exit
-status, and the tail of its stderr — because a worker that dies before its first
-turn leaves no report, transcript, or verdict to read instead.
+A node's `outcome` is not free text. `onepipeline` writes exactly these words, and
+`just results` and `just status` render them:
 
-### A death that left no work is not charged to the work budget
+| Status | Outcome | What it is |
+| --- | --- | --- |
+| `done` | `merged` | The change reached its base, at a commit `onevcs` observed. |
+| `done` | `change-open` | A change request is open, which the policy asked for. |
+| `done` | `queued` | The host took the merge and will land it once its checks pass. |
+| `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
+| `done` | *(none)* | A direct agent node — no publication to name. |
+| `waiting` | *(none)* | A `kind: human` step is ready and the branch is held for a person. |
+| `failed` | `publication-failed` | The publication started and did not land. **One word for every such ending.** |
+| `failed` | `task-failed` | The dispatch failed its own judge. |
+| `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
+| `failed` | `no-agent-progress` | Every boundary attempt was spent and the agent produced nothing. |
+| `failed` | `infrastructure-failure` | The dispatch layer refused before any work began. |
+| `failed` | `invalid-node` | The node itself could not be run as written. |
+| `cancelled` / `parked` | *(none)* | A stop, engine-taken or planner-taken. |
 
-`MAX_AUTOMATIC_STEP_RESUMES` is the budget for carrying *work* forward across a
-stop, so a dispatch with no work to carry must not spend it. A dispatch that
-reports `worker-died` having left the worktree exactly as it found it — no commit,
-no dirty tree — produced nothing, and provider throttling, an out-of-quota
-harness, and an OOM kill all arrive in that shape. Charging those to the resume
-budget turned a transient provider outage into a failed node in thirty-four
-seconds, three deaths deep, with the task never attempted once. And because the
-work path only continued when the branch already carried commits, such a death on
-a fresh branch failed the node on its *first* death, with no retry at all.
+**This table is reconciled, not copied.**
+`tests/test_engine_contracts.py` reads every settlement the adopted
+`onepipeline` release composes — `Settlement::plain`, the `failed(node, …)` helper,
+and `vcs::outcome_of` — across the crate whole rather than a named handful of files,
+with test modules stripped, and fails when a **pairing** appears on one side and not
+the other, in whichever direction it drifted. Both columns, because a table of
+pairings gated on one of them is gated on neither: a row that moved
+`publication-failed` to `done` would invent no word and drop none. The same gate covers the other engine contracts this
+document and `telemetry.md` state: every enum a passage enumerates exhaustively
+(`FailureKind`, `Retention`, `GateKind`, the telemetry `BucketName`, `Resume`'s
+fields) against the engine's own declaration, and every constant either quotes a
+number for (the boundary attempts and backoff, the two git bounds and the drain, the
+preserved-gate-log retention and directory) rebuilt from the engine's own `const`. It
+runs in the uncached tier, because the source it reads is another repository's
+checkout and no cache key here describes one.
 
-`StepRun.died_leaving_no_work` records that condition — all of it, since a death
-that reports a turn or that a signal ended is a work stop whatever the tree shows —
-and the workstream answers it
-from `MAX_EMPTY_DEATH_RELAUNCHES`, waiting `RELAUNCH_BACKOFF_SECONDS` times the
-relaunch number first — the "only the launch is retried" shape
-`oneagentgraph smoke` already uses. Unlike the work path it does not require the
-branch to carry commits. A cancellation event interrupts that wait, so a cancel
-does not have to outlast a backoff before the branch is preserved; a cancelled
-workstream is reported as the cancellation it was.
+`gate-failed` and `checks-failed` are **not** in it and never were on this stack, and
+that gate holds them absent too, so the denial fails the moment either becomes real.
+The only `gate-failed` either engine writes is `onevcs integrate`'s per-candidate
+*skip reason* — the train's word for "this branch's gate said no, so the train
+stepped over it" — which is not a node outcome and never reaches a plan.
 
-The predicate proves the worktree is unchanged, not that the harness never
-started, so a worker that reads and reasons before dying is relaunched too. That
-is the same right answer: a workstream with nothing to resume has nothing to be
-charged for. When the relaunches are spent, the settlement says the dispatch died
-leaving no work behind and names `just smoke`, the cheap probe for the launch path.
+### What a failed publication actually settles
 
-The harness's *own* diagnosis still wins where it has one: the agent wrapper
-recognizes a quota refusal on the child's stdout and marks it `dispatch failure:`,
-which `dispatch` raises rather than returning, so an outage with a stated reset
-time settles as an infrastructure failure instead of being relaunched into.
+`onevcs` distinguishes four failures and `onepipeline` keeps none of the
+distinction. `PublishOutcome::Failed` carries a `kind` — `gate`, `invalid`,
+`sync-conflict`, or `not-implemented`, which the CLI reports as exit 1, 2, 3, and 70
+— a human-readable `reason`, and a `retained` saying whether the branch was
+`handed-back` to a registered checkout or `refused` by it. `onepipeline`'s
+`vcs::outcome_of` matches on the variant alone, so all four settle the node `failed`
+with the single outcome `publication-failed`. The `kind` is dropped; the `reason` is
+kept, prefixed `onevcs: `, as the settlement's `detail`. **So the detail string is
+the only place a run says whether the gate rejected the work or the base moved under
+it** — read it, and read the session's own `gate-verdict` event, rather than looking
+for a second outcome word that will never come.
 
-Each agent step names its conversation for the branch **and** the worktree it
-runs in (`dispatch.scoped_session`), and so does the PR-author dispatch. Steps and
-automatic continuations within one run share that worktree and therefore one
-conversation; a later run pinned, resumed, or recovered onto the same branch cuts
-a worktree under its own run root and gets its own. A name that repeated across
-runs would ask the harness to resume a conversation it filed under a directory
-that no longer exists, which fails before the first turn.
+A drafting failure adds words to that same detail and never causes it; see
+[Diff-derived PR descriptions](#diff-derived-pr-descriptions).
 
-**A relaunch is the one continuation that must not continue.** Every relaunch above
-follows a dispatch that died leaving nothing behind — on this host, a provider
-refusing the turn — and the conversation it died in is bound to the identity that
-refused. Reusing its name asks that identity for a session it may no longer hold,
-and `No conversation found with session ID ...` is another death, which earns
-another relaunch, which asks again; whole lineages have been spent on that loop
-without one turn of work. So relaunch *N* dispatches as `<session>#relaunchN`
-(the run's own recorded launch parameters), which is also what frees the fallback chain to run
-the turn on whichever identity still can — a fresh conversation carries no binding
-across harnesses.
+### The one automatic re-dispatch, and everything it is not
 
-Continuity comes from context rather than from the session. The dead conversation's
-own recorded turns are read back out of oneharness history, bounded and redacted,
-and given to the relaunched dispatch as prompt text ahead of the task, stating
-plainly that the prior session is gone and cannot be resumed. A history read that
-finds nothing — including the death that happened before the first turn ever
-recorded — degrades to the task alone, because the seed improves a relaunch and is
-never a precondition for one. The turn-cap resume is deliberately *not* a relaunch
-and keeps its conversation: it is continuing work the harness still holds.
+`engine::attempt` asks a dispatch again **only when it produced no events at all** —
+a provider that refused before the first turn, an executor that could not start
+anything. An attempt that recorded anything has already answered, whatever its exit
+status, and is never re-asked. The budget is `DEFAULT_BOUNDARY_ATTEMPTS` = **3**,
+with a 5-second backoff that doubles to a 120-second ceiling
+(`ONEPIPELINE_BOUNDARY_ATTEMPTS`, `ONEPIPELINE_BOUNDARY_BACKOFF_SECONDS`). Spent
+without the agent producing anything, the node settles `no-agent-progress`; a
+dispatch that never started settles `infrastructure-failure`. Each attempt is its own
+`node-dispatched` record carrying `attempt`, `attempts`, and the previous attempt's
+bounded reason, so counting dispatches per node shows the re-ask.
 
-`just orchestrate <plan.json>` runs one, over a plan holding a single lifecycle
-node (`examples/single-node-lifecycle.plan.json`); it is the only way to dispatch,
-so there is no second path a single workstream can take. The node's `repo` is a
-registered identity key, an exact checkout alias shown by `just repos`, an origin
-URL, or a **local filesystem path**. Bare `owner/name` is not an identity spelling
-accepted by `onevcs resolve`; use the full origin URL when a plan should be
-portable. The value selects the publication repository identity and checkout.
-For self-dispatch safety, the node's `execution_checkout` likewise accepts a path or
-alias and cuts the task worktree from that exact clone while keeping `repo`'s
-publication workflow and post-merge fast-forward.
+Nothing else re-dispatches anything. In particular there is **no** automatic
+continuation of a failed, cancelled, or turn-capped node, no per-node continuation
+budget, and no relaunch of a dead conversation with its history seeded back in. The
+pre-extraction lifecycle's `MAX_AUTOMATIC_STEP_RESUMES` and its
+`DEFAULT_LIFECYCLE_STEP_MAX_TURNS` segment size are in neither engine; a step's turn
+budget is its own `max_turns` and nothing tops it up. A step that hits its cap ends
+its workstream with that settlement and the branch is preserved; picking it back up
+is a manager `retry` or `requeue` live edit and nothing else.
 
-Before resolving or cloning the target, lifecycle dispatch checks free space on
-the filesystem backing Python's temporary directory. It refuses to start below
-a conservative default and reports the scratch path, available bytes, and
-`just sweep-scratch`.
-Set `ORCHESTRATOR_MIN_FREE_BYTES` to a non-negative byte count when a host needs a
-different threshold. This preflight is a terminal infrastructure failure in a
-tracked graph, so nothing redispatches the node against the same full disk.
+### What a preserved branch carries into a continuation
 
-The lifecycle acquires the host scratch shared lock before this preflight and
-holds it through dispatch, verification, and publication. Destructive cleanup of
-aged third-party scratch requires the exclusive lock, so a concurrent sweep
-cannot remove scratch that an in-flight target gate owns or is about to use.
-The families a dispatch produces itself are exempt from that lock and swept while
-it runs, because they only accumulate while dispatches run; their safety comes from
-proven non-reference rather than quiescence.
+A node settling `failed`, `cancelled`, or `parked` is pinned by
+`projection::pin_preserved_branch` to the branch its attempt left behind, so a later
+`retry` or `requeue` continues that branch rather than cutting a fresh one beside
+committed work. A `branch` the planner wrote wins outright.
 
-### Every git command is bounded
+The pin is a `Resume`, and it has exactly three fields —
+`branch`, an optional `checkpoint`, and `completed_steps` — under
+`deny_unknown_fields`. There is **no** `mode`, no `attempts`, and no `stack_bases`;
+a plan carrying any of them is refused while it loads. `completed_steps` is the only
+record of what a workstream finished, and empty or absent re-runs the whole thing,
+which is the safe direction: work is repeated, never skipped.
 
-`gitops._git` bounds every call and, on expiry, raises `GitError` naming the
-command and the elapsed time — the shape `github.py`'s `gh` boundary has always
-had. An unbounded git turns a transient network problem or an unreleasable
-`index.lock` into a run that looks exactly like one still working, and from outside
-the only way to tell the two apart was reading `/proc` by hand.
+Which steps carry forward is decided by *where* the node stopped, and the two cases
+differ:
 
-There are two bounds because the two populations differ by orders of magnitude,
-and both are measured rather than guessed:
+* **A step failed, was cancelled, or hit its cap.** The settlement carries the steps
+  that had already completed, so the continuation skips them.
+* **The steps all completed and the publication failed.** The settlement records
+  **no** completed steps, because `publication_failed` builds a plain settlement and
+  never populates them. A continuation therefore re-dispatches every declared step
+  over a branch that already carries their work. That is the engine's behaviour as
+  written, not a design this document is defending: if the re-run matters, land the
+  branch directly with `just publish-branch` instead of retrying the node.
 
-- `ORCHESTRATOR_GIT_TIMEOUT` (default **600s**) covers a command that runs no
-  repository hook. A full `git clone` of *this* repository over the network takes
-  about 2.3 seconds for an 11 MB tree, so the default sits more than two orders of
-  magnitude above the largest ordinary operation the lifecycle performs against a
-  repository this size.
-- `ORCHESTRATOR_GIT_HOOK_TIMEOUT` (default **5400s**) covers a command that runs
-  the repository's own hooks. This repository's `pre-push` hook runs `just gate`,
-  about fourteen minutes, so the default leaves it roughly six times its measured
-  cost: room for a gate slowed by everything else on the host, without letting a
-  genuinely hung push sit forever. Bounding these at the ordinary value would abort
-  every publication the harness exists to perform.
+`checkpoint` is carried, never derived — `onepipeline` records the value it was
+given and nothing it was not.
+
+## Every git command is bounded
+
+`onevcs` bounds every git call it makes and, on expiry, fails naming the command and
+the elapsed time. An unbounded git turns a transient network problem or an
+unreleasable `index.lock` into a run that looks exactly like one still working, and
+from outside the only way to tell the two apart was reading `/proc` by hand.
+
+There are two bounds because the two populations differ by orders of magnitude:
+
+- `ONEVCS_GIT_TIMEOUT` (default **600s**) covers a command that runs no repository
+  hook — two orders of magnitude above the largest ordinary operation performed
+  against a repository of this size.
+- `ONEVCS_GIT_HOOK_TIMEOUT` (default **5400s**) covers a command that runs the
+  repository's own hooks. This repository's `pre-push` hook runs `just gate`, about
+  fourteen minutes, so the default leaves room for a gate slowed by everything else
+  on the host without letting a genuinely hung push sit forever. Bounding these at
+  the ordinary value would abort every publication the harness exists to perform.
 
 Hook-running commands: `git clone`, `git checkout`, `git commit`, `git merge`, `git push`, `git rebase`, `git worktree add`.
 
-`gitops.HOOK_RUNNING_COMMANDS` is that list's one source and `_git` classifies each
-call from its own argv, so a new hook-running operation cannot silently inherit the
-ordinary bound; `tests/test_documented_environment.py` fails if the line above and
-that constant drift apart. A non-numeric, zero, negative, or infinite value is
-refused at the boundary rather than silently reverting to unbounded.
+`git::HOOK_RUNNING` is that list's one source and `git::run` classifies each call
+from its own argv, so a new hook-running operation cannot silently inherit the
+ordinary bound. A non-numeric, zero, negative, or infinite value is refused at the
+boundary rather than silently reverting to unbounded.
 
 When a bound fires, the whole git process *group* is terminated before its output is
-collected. That is not a courtesy: a hook's children inherit git's pipes and outlive
-the shell that started them, so reading those pipes after killing git alone blocks
-on exactly the processes the bound stopped waiting for. It is also what stops a
-fired bound from manufacturing the reparented leavings the scratch sweep then has to
-recognise days later.
+collected, and the drain then waits at most `DRAIN` (30s) for pipes that have not
+already reached EOF — a call whose pipes drained and whose process merely would not
+exit is killed straight away, because a second EOF that will never come would add
+that whole drain to the bound that just fired. That wait is not a courtesy: a hook's
+children inherit git's pipes and outlive the shell that started them, so reading
+those pipes after killing git alone blocks on exactly the processes the bound
+stopped waiting for.
 
 The group, and not a walk from git's pid, because a walk names the set of processes
 that existed when it ran and a git being torn down goes on starting more. Its
@@ -188,9 +194,9 @@ born after the walk that was supposed to have found everything. Measured under t
 host's ordinary concurrent-dispatch load: the bound fired, the sampled transport
 died, a second one appeared with `init` for a parent, and the drain then sat out its
 whole 30s ceiling on pipes nothing would ever close — turning a 3s bound into a 33s
-one and leaving a live process behind. `_git` therefore starts git in a session of
-its own, the same shape `verify` runs a gate in, so every process git starts is born
-into one group the kernel keeps valid across all of that reparenting.
+one and leaving a live process behind. git is therefore started in a session of its
+own, so every process it starts is born into one group the kernel keeps valid across
+all of that reparenting.
 
 ## Repository identity, checkout roles, and isolation
 
@@ -444,55 +450,52 @@ confirm what it resolved to with `just repos`.
 
 ## Merge-path verification
 
-Before publication, the lifecycle fetches `origin` and merges the current
-`origin/<base>` into the dispatched branch. A sync conflict aborts before any
-push.
+Before publication, `onevcs` fetches `origin` and merges the current change base
+into the dispatched branch. A sync conflict that the bounded resolve-and-requeue
+cannot converge aborts before any push, as `FailureKind::SyncConflict`.
 
-For a local workflow, each push runs the repository's executable pre-push hook.
-The branch push verifies the branch-plus-current-base tree; the later direct-base
-push verifies the detached squash publication tree itself. The orchestrator does
-not invoke the stored command again before either push. A hook rejection becomes
-a recorded `gate-failed` outcome when its output identifies the pre-push gate;
-otherwise the lifecycle records `error`, preserving a self-describing publication
-failure and Git's diagnostic
-because Git cannot distinguish an arbitrary hook rejection from a transport
-rejection.
+**`onevcs` recognises three kinds of gate, and runs exactly one of them itself.**
+The rules file the identity matches names which (`gate:` on the matching rule):
 
-For a remote-first workflow, required status checks are authoritative at PR merge
-time. A remote identity may also carry a pre-push hook, and then the branch push
-is gated too: a rejection there settles the node the same way, before any PR
-exists, rather than surfacing as a raw Git error.
-A node's `recorded_gate` runs nothing: it overrides which gate command the run
-*records* as the identity's complete bar, and cannot bypass or replace
-merge-path coverage. `verify_cmd` is its pre-merge-path spelling and remains
-accepted. The gate-skipping switch is gone — the `--skip-verify` flag was
-removed, and the `skip_verify` and `no_identity_gate` plan keys are accepted and
-ignored so existing plans and in-flight ledgers keep loading. Neither ever
-skipped merge-path verification, and nothing can.
+| Gate | Who runs it | When the verdict arrives |
+| --- | --- | --- |
+| `{command: [...]}` | `onevcs`, directly — no shell, no `{base}` substitution | Before the push, in the publication worktree |
+| `{kind: pre-push}` | git, at the publishing push | As push output |
+| `{kind: checks}` | the host, on the change request | After the change request exists |
 
-Because the gate's verdict now arrives late — as `git push` output — each
-lifecycle node records one `merge-gate-coverage` event before it dispatches,
-naming the hook path, the required checks, and the identity gate that hook stands
-for. That is what separates "the gate ran and rejected this" from "nothing was
-ever going to run" without re-auditing the identity after the fact.
+Only the first is `onevcs`'s own invocation, and only it emits the `gate-started` /
+`gate-verdict` pair described below; `gate::own_command` returns nothing for the
+other two, so the verify step is a no-op and nothing is bracketed. **Every rule in
+`config/onevcs.rules.yml` on this host currently names a `command:` gate**, so the
+first row is what a lifecycle publication here actually does. Which gate a given
+identity gets is routing and belongs to that file, not here.
 
-Two gate runs are deliberately **not** removed, because no merge-path verifier
-subsumes them:
+Whichever runs, it is handed the comparison identity as environment —
+`ONEVCS_COMPARISON_REMOTE` and `ONEVCS_COMPARISON_BASE`, the remote and base this
+change is being published onto. A gate left to discover its own base resolves the
+repository default, which for a stacked change is not the base the push is
+publishing onto; see [One judged diff, one verdict](#one-judged-diff-one-verdict).
 
-| Gate run | Why it stays |
-| --- | --- |
-| `just integrate` per candidate | Each candidate fast-forwards the *local* base before the single optional push, so skipping it lets unverified commits reach the local base — and a later aggregate hook rejection can no longer name the branch of the train that broke it. |
-| The repository's own `pre-push` hook | It is the merge-path gate. Never weaken it, and never push with `--no-verify`. |
+A `command:` gate that exits non-zero is `Ruling::Rejected` and the publication ends
+`PublishOutcome::Failed { kind: Gate, .. }`, which the node settles as
+`publication-failed` with `onevcs: <command> rejected "<branch>"` for its detail. A
+`pre-push` rejection is not distinguished from any other refused push: git cannot
+tell an arbitrary hook rejection from a transport rejection, so `onevcs` reports what
+git said per ref and the node settles under the same one word.
 
-For work whose real verifier is remote CI, `verify_via_ci: true` (or the
-run-level `--verify-via-ci`) injects a standard CI iteration contract into the
-agent instructions. The agent must push and iterate on the branch until its
-required checks pass; after dispatch, the lifecycle independently confirms that
-the pushed head has a non-empty set of required checks and that all are green.
-Red, pending, or absent required checks produce `not-completed` with their names
-and states. This mode requires a remote GitHub/PR workflow and fails before
-dispatch when no such path exists. An explicit plan-node boolean beats the
-run-level flag, including `false` to opt a node out.
+There is no gate-skipping switch, and no plan key that names or overrides a gate. The
+`Node` schema is `deny_unknown_fields`, so `recorded_gate`, `verify_cmd`,
+`skip_verify`, and `no_identity_gate` are not "accepted and ignored" — a plan
+carrying any of them is **refused while it loads**. `verify_via_ci` is the one
+survivor: it is still a field of `Node` on onepipeline v0.8.5 and is read by nothing
+in the crate, so setting it changes no behaviour. Treat the CI-iteration contract it
+once named as gone until something reads the field again.
+
+`just integrate` runs the same gate per candidate, because each candidate
+fast-forwards the *local* base before the single optional push; skipping it would let
+unverified commits reach the local base. A candidate its gate rejects is skipped with
+the reason `gate-failed` and the train moves on — that word is the train's, and it is
+not a node outcome.
 
 This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
@@ -509,32 +512,42 @@ origin, and `just sync <branch>` names one rather than the registered base.
 
 ### Where a merge-path verdict is preserved
 
-Every merge-path invocation for one branch is written twice, and the second copy is
-the point:
+A `command:` gate's run is written twice, and the second copy is the point:
 
-* into the node's own run artifacts, which is where the node result and the
-  `verification-finished` event's `log_path` point; and
-* into **`<worktree root>/gate-logs/<branch with `/` flattened to `-`>/`**, one file
-  per invocation, `gate-0001.log` upward in the order they were claimed, reported as
-  the same event's `preserved_log_path`.
+* as an event **artifact** — `stream::store_artifact("log", …)` on the
+  `gate-verdict` event, reachable through `onevcs artifact`; and
+* into **`<run root>/gate-logs/<branch with `/` flattened>/`**, one file per
+  invocation, `gate-0001.log` upward in the order they were claimed, named on the
+  same event as `preserved_log`.
 
 The durable copy exists because the run does not. The gate runs inside a worktree that
 is removed as soon as the workstream settles, and a run root is retained only while
 recovery may still need it — so a *passing* gate used to leave nothing readable once
 the work landed, while the *failure* it superseded stayed on disk. A branch whose 16:55
 rejection was recoverable and whose 17:48 pass was not is what this closed. Both
-verdicts, and a publication that failed before any gate ruled, now land in the same
-place by the same mechanism, whichever driver published: a lifecycle node, `just
-repo-recover`, or the squash push a local workflow makes.
+verdicts land in the same place by the same mechanism, whichever driver published: a
+lifecycle node, `just repo-recover`, `just publish-branch`, or `just integrate`.
 
 One file per invocation rather than one appended log, because reading the second of
-four attempts out of a single 190 KB file meant counting bytes into it. A number
-another writer already claimed is never written over, so two publications of one
-branch — a retry beside the recovery of what it replaced — cannot share a file.
-Retention keeps the newest **10** (`PRESERVED_GATE_LOG_ATTEMPTS`) and prunes the rest, so
-a branch that re-pushes through a red gate all night cannot grow the directory without
-end. The single `gate.log` a branch recovered before this split still has is neither
-counted nor pruned: it is the whole history of those attempts.
+four attempts out of a single 190 KB file meant counting bytes into it. Numbering
+starts from the highest the branch has ever reached rather than the first free gap, so
+the directory reads in the order the attempts happened, and a number another writer
+already claimed is never written over — a retry beside the recovery of what it
+replaced is exactly that race. Retention keeps the newest **10**
+(`gate::PRESERVED_LOG_ATTEMPTS`) and prunes the rest, so a branch that re-pushes
+through a red gate all night cannot grow the directory without end. Contents are
+passed through `stream::redact` before they are written.
+
+A publication that fails *before* any gate ruled — a base that moved, a fetch or a
+worktree that could not be built — preserves no log, because none was produced. Its
+whole account is the `reason` on `PublishOutcome::Failed`, which reaches the node as
+its settlement detail.
+
+Three things a reader may arrive looking for are not here: there is no
+`merge-gate-coverage` event recorded before a dispatch, no `verification-finished`
+event bracketing a gated push, and no `gate_log` on a node's artifacts. `gate-started`
+and `gate-verdict` on the session's own stream are the whole record, and a node result
+carries no artifact paths at all.
 
 ### Keeping a process that outlives its launcher
 
@@ -655,19 +668,20 @@ refetches; expect it to invalidate every cached run.
 
 **The cached green for exactly that content, base commit, and judge configuration
 is authoritative, and the worker's gate is where it is paid for.**
-The merge-path gate — the `pre-push` hook, which is the only verifier the
-lifecycle now runs — looks up the same key and replays what the worker cleared.
-That is the only assignment consistent with the invariant that *a dispatched
-change is not done until its own gate is green*: an agent can only clear findings
-it was shown, so a verdict that first appears after the agent has settled can
-neither be cleared nor appealed.
+The merge-path gate looks up the same key and replays what the worker cleared —
+this identity's `command:` gate, which is `just gate`, and the `pre-push` hook the
+publishing push then runs, which is the same recipe again. That is the only
+assignment consistent with the invariant that *a dispatched change is not done until
+its own gate is green*: an agent can only clear findings it was shown, so a verdict
+that first appears after the agent has settled can neither be cleared nor appealed.
 
 A worker that settled **red** is judged again on the merge path, because nothing
-was stored for it. That is not a way past the gate: the hook runs the same tier
-over the same content and base, findings still reject the push, and the run still
-ends `gate-failed`. What it costs is a second roll of a non-deterministic judge on
-work that already failed once — the accepted price of the trade above, and the one
-direction where the two paths no longer share an answer.
+was stored for it. That is not a way past the gate: the merge path runs the same
+tier over the same content and base, findings still reject it, and the node still
+settles `publication-failed` naming the rejecting command. What it costs is a second
+roll of a non-deterministic judge on work that already failed once — the accepted
+price of the trade above, and the one direction where the two paths no longer share
+an answer.
 
 Keeping the key equal across the two runs is what makes this hold, and the
 comparison base is the part that used to drift. A worker left to discover its own
@@ -922,7 +936,7 @@ repository — here, in `AGENTS.md`, and in `docs/orchestration.md` — to that
 enumeration.
 
 - **Team** — always effective workflow `remote`. Omitted policy opens an ordinary
-  ready-for-review PR and returns `pr-open` immediately, without polling checks.
+  ready-for-review PR and returns `change-open` immediately, without polling checks.
   Explicit `change-auto` or `change-direct` merges the PR by that policy. Team
   plus local registration/workflow migration/direct integration is rejected.
 - **Single owner** — omitted policy preserves `local-direct` publication or
@@ -949,16 +963,32 @@ the git identity, elapsed seconds, and the original one-based queue position.
 If the current base content-conflicts with a local branch at the head, the turn is
 dequeued before its original `branch:step` worker session resolves the conflict.
 The resolved branch takes a new ticket at the queue tail; it never holds the head
-while authoring. Resolve-and-requeue attempts are bounded before the lifecycle
-returns `sync-conflict` and retains the branch for manual recovery.
+while authoring. Resolve-and-requeue attempts are bounded before the publication
+fails with `FailureKind::SyncConflict`, which the node settles as
+`publication-failed` with that reason as its detail; the branch is retained for
+manual recovery. A push declined because the branch moved on the host since this
+run last had it is the same failure kind, and its reason names the two shas and the
+`just publish-branch` that lands it after a reconcile.
 
-- **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
-  once the repo's required (blocking) checks are green**. The default policy is
+- **The change-request path** (`change-*`, GitHub repos) — `publish_as_change`
+  pushes the branch, then adopts an existing change request for the same head and
+  base or opens one, then asks the host to land it. `change-open` returns there.
+  The rest take a ticket in the identity's merge queue first. The default policy is
   GitHub **native auto-merge** (`gh pr merge --auto`), which by construction gates
   on required checks and ignores optional ones — so a non-blocking check never
   triggers or holds a merge. Policies: `change-auto` (native auto-merge; falls
-  back to merging directly if the repo disallows it), `change-direct` (poll and
-  merge ourselves on green required checks), `change-open` (open the PR and stop).
+  back to merging directly if the repo disallows it), `change-direct` (merge it
+  ourselves), `change-open` (open the change request and stop).
+
+  **`onevcs` waits for required checks only when the resolved gate is
+  `{kind: checks}`.** That is what calls `await_checks`; under a `command:` gate —
+  which is every rule on this host — nothing polls the host and the merge is asked
+  for as soon as the change request exists. Where it *does* poll, only required
+  checks count (`statusCheckRollup.isRequired`), each transition is emitted as an
+  `EventKind::ChangeCheck` event carrying the check's log as an artifact, and a red required
+  check or a bounded wait that never settles is `Error::GateFailed` — so it reaches
+  the node as `publication-failed`, exactly like a rejected `command:` gate. There
+  is no separate `checks-failed`.
 
   **Under `change-auto` a node settles when its change request is published with
   auto-merge armed, not when the merge completes.** GitHub lands it later, on its
@@ -967,18 +997,14 @@ returns `sync-conflict` and retains the branch for manual recovery.
   life of the run — after the PR merged, after the release went out, forever. Read
   that counter as "handed to GitHub", not as unfinished work: check the PR or
   `origin/main` before going looking for a branch that is already on it.
-  Required-vs-optional comes from
-  `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
-  Before opening a PR, closeout queries all PR states for the same head and base.
-  It adopts an existing open PR. It also treats a merged PR as authoritative
-  completion when that PR's recorded head SHA equals the branch head being
-  published; a stale merged PR whose branch later advanced is not reused.
-- **`LocalMergeStrategy`** (`workflow: local`) — there is no PR/CI to wait on, so
+  Before opening one, `find_changes` queries the host for the same head and base and
+  the first result is adopted rather than a second opened.
+- **The local path** (`local-direct`) — there is no change request to wait on, so
   it builds the branch-to-base merge in a detached scratch worktree and pushes
-  that exact tree through the repository's pre-push gate. The branch lands as one squashed commit whose
-  single parent is the prior base tip and whose message is the merge title. This
-  is the model for direct merge into main after the checks pass, including GitHub
-  origins intentionally marked local.
+  that exact tree, which is where the repository's own `pre-push` hook runs. The
+  branch lands as one squashed commit whose single parent is the prior base tip and
+  whose message is the composed subject. This is the model for direct merge into
+  main after the checks pass, including GitHub origins intentionally marked local.
   A **bare** local origin accepts the push directly; a non-bare origin needs
   `receive.denyCurrentBranch=updateInstead` so its working tree updates too.
 
@@ -989,7 +1015,7 @@ checkout, or hard reset occurs in that canonical working tree.
 
 ### Merged is not necessarily published
 
-A `merged` lifecycle outcome proves that the change reached its base branch. It
+A `merged` node outcome proves that the change reached its base branch. It
 does not prove a downstream release, deployment, package, generated changelog, or
 other task destination consumed that change. Identify the destination and its
 trigger while planning, then keep closeout open until the destination records the
@@ -1006,11 +1032,16 @@ from both the release and `CHANGELOG`.
 ## Lifecycle nodes in the tracked graph
 
 A lifecycle node is an `agent` node in a plan with a `repo` and either a
-`persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
-`branch`, `title`, `recorded_gate`, `verify_via_ci`, `merge_policy`, `workflow`,
-`repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
-metadata. Independent top-level nodes run concurrently, and a node whose
-dependency failed is skipped. Cross-repository dependencies only schedule. A
+`persona`+`task` or a `steps` workstream. The `Node` schema is
+`deny_unknown_fields`, so what it may carry is a closed list —
+`id`, `kind`, `task`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
+`context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
+`merge_policy`, `base_branch`, `branch`, `title`, `body`, `execution_checkout`,
+`verify_via_ci`, `steps`, `resume` — and
+anything else is refused while the plan loads. `stack_bases` is a pre-adoption
+field held only in `tests/fixtures/legacy-runs/`; a plan that writes one is refused.
+`verify_via_ci` loads and is read by nothing. Independent top-level nodes run
+concurrently, and a node whose dependency failed is skipped. Cross-repository dependencies only schedule. A
 successful same-identity dependency not landed on the root base becomes a stack
 prerequisite:
 
@@ -1197,78 +1228,84 @@ the one-step case.
 
 ### Human pause and branch continuation
 
-When a human step becomes ready, the node returns `waiting-human`; later steps
-are `blocked`. The tracked result exposes a `NODE_ID/STEP_ID` human action and
-records step results plus `resume` metadata: branch, root base, PR base,
-checkpoint SHA, completed steps, and optional draft PR URL. The temporary
-worktree is always removed, but the branch and commits are preserved.
+When a human step becomes ready the node settles **`waiting`** — the status is that
+one word; there is no `waiting-human` — and its dependents derive `blocked`. The
+settlement carries the branch and the steps already completed, and the session's
+event follow is dropped, because nothing is left to read for as long as the driver
+lives. The branch and its commits are preserved; the worktree is the session's and
+goes when the session does.
 
-Once that step is attested, the derived node carries that validated resume
-metadata. Continuation fetches the branch,
-fast-forwards safely, requires the recorded checkpoint to remain in its history,
-and skips every recorded completed agent/human step. A missing or rewritten
-branch/checkpoint fails as `resume-failed`; a recorded draft closed without merge
-also fails explicitly. A draft made ready or merged before final workstream
-success is likewise rejected so unfinished work cannot publish while paused. The
-harness never infers the human completion.
+**A pause pushes nothing and opens nothing.** There is no draft change request at a
+pause on either engine at the adopted versions — `onepipeline` v0.8.5 has no notion
+of one and `onevcs` 0.8.0 has none to open — and no gate runs, on a local or a remote
+identity, until the last step has settled and the publication starts. A pause is
+purely local branch state.
 
-For `workflow: local`, a pause remains only on the isolated local branch: no gate,
-push, or base publication occurs until the final agent steps complete. For a
-remote workflow with commits, the pause fetches and merges current
-`origin/<pr-base>` and pushes the branch without force through any configured
-pre-push hook. It
-then creates or reuses a draft PR. A sync conflict or gate failure publishes no
-draft; a pause with no commits creates no empty draft. Later pauses reuse the PR.
-On final success the existing draft is marked ready, then the repository's normal
-`change-auto`, `change-direct`, or `change-open` publication policy applies. Each checkpoint must be an
-ancestor of the continued branch, so force-rewritten history cannot be blessed.
+**`attest` takes a node id, and it folds that node to `done`.** This is the part
+most worth re-reading before relying on a human step. `compile_attest` accepts one
+of exactly two references — a node recorded `waiting`, or a node that settled
+`failed` — and records it `done`; there is no `NODE_ID/STEP_ID` reference on the
+adopted schema. Since `graph::derive` leaves a recorded settlement standing, a
+lifecycle node attested at a human step is `done` and is **not** dispatched again,
+so the steps after that human step do not run. Model a human action that work must
+follow as its own `kind: human` node with the follow-on work depending on it, not as
+a middle step of a lifecycle node.
 
-### Preserved committed work implies a recorded continuation
+`resume.checkpoint` is the one field of that record that **does nothing**.
+`onepipeline` records the value it was given and carries it forward, but the
+`SessionRequest` it builds for a dispatch has only `repo`, `branch`, `base`, and
+`execution_checkout` — there is nowhere for a commit to go. So nothing on the
+adopted stack checks that a checkpoint is still an ancestor of the continued branch,
+and force-rewritten history is not caught here. The one thing validated is
+agreement: a `retry` whose `branch` pin and `resume.branch` name different branches
+is refused at submission rather than resolved silently.
+
+### Preserved committed work implies a recorded pin
 
 A pause is not the only settlement that leaves commits on a branch, and a preserved
-branch is continued **only** when the recorded result names a `resume`. So an ending
-that preserved work without recording one silently discarded it: the node was
+branch is continued only when the node carries a `resume`. So an ending that
+preserved work without recording one silently discarded it: the node was
 redispatched unpinned, against a fresh branch beside finished work nothing would look
 at again. A merge-path gate rejection and a publication that refused its own commit
 subject — both after every step had settled `done` — cost one planner three
 hand-written branch pins in a single run.
 
-Recording is therefore keyed on the **outcome domain**, not on the endings somebody
-remembered: the engine states the *exceptions* and derives the eligible set by
-subtraction, so a newly added outcome is eligible until somebody decides otherwise —
-the failure that costs work is the one nobody classified. Eligibility is a question,
-not a verdict: `error`, `timeout`, and `not-completed` can each settle before the
-agent commits anything, so the branch is what answers it. A complete `Resume` is
-recorded on the one exit path every settlement passes through, for any eligible
-outcome whose branch carries commits, skipping the settlements that already recorded
-their own (the cooperative cancel, the human pause, the workstream that did not
-complete) because those know which steps still have to run. The invariant is held
-across the whole outcome domain by the published crate's own tests against real
-git.
+`projection::pin_preserved_branch` is what closes that, and it is keyed on the
+**status**, not on a list of endings somebody remembered: `failed`, `cancelled`, and
+`parked` all preserve their branch, because each of them may hold work and anything
+that runs the node again has to continue it. `done` never reaches there, and
+`waiting` and `skipped` never dispatched. The pin is folded from the run's own
+journal rather than held in a process, so the graph a later driver reads already
+carries it. A `branch` the planner wrote wins outright, and the `resume` follows it.
 
-A continuation is only worth what the checkout can produce, so every eligible outcome
-also hands its branch to the registered execution checkout before teardown — the run's
-own clone is disposable. That copy is fast-forward only, to protect a concurrent run
-holding the same branch name, and a refusal is reported in the settlement's detail for
-**every** eligible outcome rather than only for the merge-path rejection: the pin a
-continuation would otherwise adopt names a branch nothing outside this run carries,
-and that line is the only warning it does.
+What the pin **does not** do is re-dispatch anything. A recorded settlement stands:
+`graph::derive` re-derives only the two gates `blocked` and `skipped`, so a node
+recorded `failed` or `cancelled` keeps that status for the life of the run and a
+later pass never picks it up. A `retry` or `requeue` live edit is the whole of how a
+preserved branch is continued.
 
-Two things about that recording are decided by branch state rather than chosen:
+Two things about the pin are worth knowing before reading one:
 
-* **The mode.** `retry` is the mode whose validation *demands* unattested incomplete
-  provenance, and a whole branch carries none — claiming it produces a pin the
-  dispatch declines in favour of a fresh branch, which is the discarded work again. A
-  branch that carries a marker gets `retry`; a whole one gets `continue`. Marking a
-  gate-rejected branch instead would be a lie about it, and `just recoverable` reads
-  that marker to decide which command it offers an operator — so the branch would be
-  handed to `just repo-recover`, which recovers an interrupted step, rather than to
-  `just integrate`, which publishes finished work.
-* **The completed steps.** An outcome where the merge path refused the *content*
-  (`gate-failed`, `checks-failed`) records none, so the continuation re-dispatches its
-  steps; skipping them as completed would republish the identical rejected tree. Every
-  other preserving outcome carries its done steps forward, because what failed there was
-  publication rather than the work.
+* **There is no mode.** `Resume` is `{branch, checkpoint?, completed_steps}` under
+  `deny_unknown_fields` — no `mode: retry`, no `mode: continue`, no `attempts`. Which
+  verb an operator should reach for is read from the branch itself: `just
+  recoverable` looks for an unattested incomplete-provenance marker and offers `just
+  repo-recover` when it finds one and `just publish-branch` or `just integrate` when
+  it does not. See [Which verb lands which branch
+  state](#which-verb-lands-which-branch-state).
+* **The completed steps depend on where it stopped.** A step that failed, was
+  cancelled, or hit its cap settles carrying the steps already done, so a
+  continuation skips them. A publication that failed after every step settled `done`
+  records **none** — `publication_failed` builds a plain settlement and never
+  populates them — so a continuation re-dispatches the whole workstream over a branch
+  that already carries its work. Land such a branch with `just publish-branch`
+  instead of retrying the node.
+
+`onevcs` hands a branch back where it can: `PublishOutcome::Failed` carries a
+`retained` naming whether the branch was `handed-back` to a registered checkout or
+`refused` by it. A pin that names a branch no checkout outside the run holds is a pin
+a continuation cannot use, and `just work-status <branch>` says so in as many words —
+`nothing on this host holds the branch`.
 
 ## Adapting a running graph
 
@@ -1276,12 +1313,12 @@ The DAG is never static and there is no interval between adaptations: the
 reconciler converges the live desired graph continuously, so an accepted edit —
 `retry`, `add`, `drop`, `reparent`, `cancel`, `requeue`, `context`, `attest` — is
 applied on its next pass. Completed nodes landed on root leave the frontier as
-satisfied. Completed-but-open dependencies become `stack_bases` anchors, and a
-merge into a feature or synthetic base carries that landed base until the content
-reaches root. Those anchors also survive a completed top-level human gate or other
-removed non-publication node, preserving same-repository ancestry. Waiting
-lifecycle nodes keep their resume checkpoint. Every edit is validated against the
-live graph before it is accepted, so bad edits and human references fail loudly and
+satisfied. A same-identity dependency whose change has not reached the root base is
+that repository's **publication anchor**: `drop` refuses to remove the last
+unresolved one, so the stack always keeps something to publish onto. There is no
+`stack_bases` field on the adopted schema; the anchor is derived from the graph on
+each pass rather than recorded. Every edit is validated against the live graph
+before it is accepted, so bad edits and human references fail loudly and
 synchronously.
 
 Publication closeout is executed by the engine, not the planner. The resulting
@@ -1291,10 +1328,20 @@ channel; the planner accepts completion only after reviewing that evidence.
 Every run is recorded, and the ledger is flat:
 
 ```
+runs/<run-id>/launch.json    who owns the run, and what to relaunch it with
 runs/<run-id>/plan.json      the plan as launched, preserved exactly
-runs/<run-id>/events.jsonl   the authoritative journal
-runs/<run-id>/result.json    the settlement, rewritten as it moves
+runs/<run-id>/events.jsonl   the authoritative merged three-stream journal
+runs/<run-id>/result.json    rewritten whenever a driver closes out
+runs/<run-id>/owner.lock     the single-writer ownership lock
+runs/<run-id>/driver.log     a detached driver's own output
+runs/<run-id>/channel/       the planner channel's transport state
+runs/<run-id>/dispatches/    per-dispatch records
+runs/<run-id>/reports/       per-node raw reports
 ```
+
+`launch.json` is what a run is *discovered* by, so a runs root without one is
+invisible to every read verb. `result.json` appears when a driver closes out, which
+is why a run still working commonly has none.
 
 The plan mapping is preserved exactly and the result is the command's JSON payload.
 Journal appends and result writes are atomic, and a second process cannot drive the
@@ -1437,113 +1484,74 @@ the publication checkout is still never worked in) and, when the work was done
 somewhere the identity does not know about, accepts `--execution-checkout PATH`.
 A branch found nowhere names every checkout that was searched.
 
-A merge-path gate rejection still does not publish the work, but it does not
-discard it either. Before removing the run worktree, the lifecycle copies the
-rejected branch into the registered execution checkout and names both that
-checkout and branch in the `gate-failed` result. An operator can inspect the local
-branch there or retry it by that branch name without reaching into run scratch.
-Because the dispatch itself completed, this preservation does not add incomplete
-provenance; genuine stopped dispatches retain the marker contract above.
+A publication that its gate rejected does not publish the work, and does not discard
+it either. The branch outlives the run: `PublishOutcome::Failed` carries a `retained`
+naming whether it was `handed-back` to a registered checkout of the identity or
+`refused` by it, and the node's settlement names the branch. An operator inspects it
+there, or lands it by name, without reaching into run scratch. Because the dispatch
+itself completed, this preservation adds no incomplete provenance; a genuinely
+stopped dispatch is what leaves the marker.
 
-An automatic continuation may temporarily add that provenance when its first
-bounded attempt stops after committing work. If a later attempt in the same
-lifecycle completes, the provisional empty marker is removed from the unpublished
-branch while any later commits are replayed. Markers inherited from an earlier
-run are not provisional and still require `repo-recover` attestation.
+`onevcs recover` is what verifies and publishes a branch that *does* carry an
+unattested marker, and it refuses everything else by name:
 
-Recovery retains the source branch on failure. It refuses an identity whose merge
-path has no coverage, exactly as dispatch does, then uses an isolated worktree,
-infers a recorded stack/PR base from new preserved commits, fetches and merges
-current `origin/<pr-base>`, writes an attestation, and pushes the feature branch
-through the same pre-push/required-check merge path. It still refuses a `<no-op>`
-identity gate: an identity that cannot name its complete bar has nothing to hand a
-resolver worker or a reader of the recovery attestation. Recovery uses the type the
-rules file resolves and takes no option that overrides it: a team identity leaves
-its ready-for-review PR open, a remote single-owner identity enables auto-merge, and
-a local single-owner identity uses direct merge. `just repo-recover` forwards only
-`--repo` and `--title`, so there is no base or type to pass — an older stacked
-preserved commit without the base trailer is recovered by restoring that trailer on
-the branch, not by naming the base on the command line. Recovery never
-fast-forwards the root publication checkout after a merge into a non-root base.
-A node that settles `not-completed` names its preserved branch in the recorded
-result, which is what this command takes.
+- **A branch with no unattested marker** is refused with the verb it actually needs —
+  `publish-branch` for a team or remote identity, `integrate` otherwise, read from
+  the stored `repo_type` and `workflow`.
+- **A marker written under a prefix this host is not configured with** is refused as
+  unreadable rather than read or ignored; `trailer_prefix` in the rules file is the
+  one source of that spelling.
+- **An identity that "names no complete bar and its merge path runs no gate"** is
+  refused before anything is written: `attests_nothing` fires when the *stored*
+  identity gate is `<no-op>`, the rules file's gate is `{kind: pre-push}`, and the
+  source checkout carries no executable `pre-push` hook. Its message names both ways
+  to give the identity a bar.
+- **A branch whose subjects will not compose a publication subject** is refused
+  before the attestation is written, so `--title` is offered on the branch as the
+  operator left it.
 
-Local recovery performs its base sync, recovery attestation, gated branch push,
-and gated direct merge inside one FIFO turn. A content conflict dequeues the turn,
-resumes the worker session recorded by the incomplete step commit, and requeues at
-the tail after the worker commits a resolution. Recovery uses the same bounded
-retry policy. Missing or invalid worker metadata, an incomplete resolver, or exhausted
-cycles returns `sync-conflict` without discarding the preserved branch.
+Only then does it sync the change base, write the attestation, emit
+`recovery-attested`, and publish through the *same* landing path everything else
+uses — the same rules-resolved policy and the same gate. It takes no option that
+overrides that policy: `just repo-recover` forwards `--repo` and `--title` (plus the
+`--body-file` this repository drafts for it), and there is no base or type to pass.
+Recovery cuts its own run root under `~/.onevcs/workspaces/`, with a clone sharing
+the source checkout's objects and a worktree of its own; the publication checkout is
+still never worked in.
 
-When a lifecycle attempt exhausts those conflict-resolution cycles after committing
-clean work, it records the preserved branch and commit as a retry resume checkpoint.
-A later graph retry carries that checkpoint forward and resumes the same branch;
-automatic retry behavior is unchanged. An attempt that produced no commit has no
-checkpoint and retries from a fresh worktree as before.
+**A `resume` the planner names is authoritative.** A `retry` that states one, through
+`just channel-reply`, is answering "continue *this* work". `validate_retry_pin`
+refuses a replacement whose `branch` pin and `resume.branch` disagree rather than
+resolving it silently, and `pin_retry_branch` fills the pin in from the resume where
+only the resume was given. `inherit_preserved_branch` carries the superseded node's
+branch and resume onto the replacement **only when the replacement names neither** —
+so to deliberately discard a preserved attempt and start fresh, set `branch` to a
+*different* valid branch name in the retry edit. The opt-out belongs on `branch`
+because it is already the plan's authoritative branch-routing field. Naming the
+preserved branch itself is not an opt-out in any useful sense: the dispatch lands on
+those commits either way, and all that is lost is the record of the continuation and
+the completed steps it carried.
 
-A later dispatch treats an unresolved lifecycle node the same way as a retry
-replacement: if its prior attempt recorded a committed retry checkpoint, the
-unchanged node resumes that branch automatically. That covers a node that was
-**cancelled** as well as one that failed — a cooperative stop (a live retry, a
-settled sibling, a planner `cancel`) commits its partial work and leaves the same
-incomplete-step marker, so it is a checkpoint rather than a discarded attempt, and
-it spends the same bounded budget. A dispatch that outlived the [cancellation grace
-period](orchestration.md#what-a-cancellation-does-to-a-live-dispatch) is the
-exception: it was killed rather than asked to stop, so its checkpoint carries only
-what it had already committed and not what its turn was mid-way through. To
-deliberately discard a
-preserved attempt and start fresh, set `branch` to a *different* valid branch name
-in the retry edit. The opt-out belongs on `branch` because it is already the plan's
-authoritative branch-routing field; a separate reset flag could conflict with it
-and create two sources of truth. A `branch` naming the preserved branch itself is
-not an opt-out: the dispatch lands on those commits either way, so discarding the
-continuation only lost the record of it and the completed steps it carries. That
-precedence covers preserved attempts only. A waiting workstream is
-not choosing a branch, so an explicit `branch` never discards its pause resume
-and the human steps it already recorded as completed.
-
-**A `resume` the planner names is authoritative.** A `retry` that states one,
-through `just channel-reply`, is answering "continue *this* work", so the edit
-records it as the branch pin it already implies and nothing derived from the node's
-own result overrules it. A pinned branch the lifecycle
-cannot adopt fails the dispatch as `resume-failed`, naming the pin and the reason;
-substituting a fresh branch for a pin the planner named is the defect that rule
-exists to prevent, because the edit is reported as applied and the work is then
-re-derived somewhere else.
-
-**A precondition the harness cannot even check is a resume failure too.** Adopting
-the preserved branch, resolving the checkpoint, reading the provenance over
-`origin/<pr-base>`, and querying a recorded draft are all git or GitHub calls that
-can fail outright rather than answer — a stacked PR base a prerequisite's merge
-deleted from origin is the common one. Each raised straight past the resume
-reporting into the handler that wraps publication, so the node settled as
-`merge-path failure: publication of <branch>` — a phase the run stops well short
-of, since it never cuts a worktree. It now settles `resume-failed` with
-`cannot check whether <precondition> for branch <branch> at recorded checkpoint
-<sha>`, and `just results` renders that reason beside the status. Nothing falls
-back to a fresh branch on this path: an unanswered question is not evidence that
-the preserved work is unusable. A continuation the harness carried forward on its own
-may still fall back to a fresh branch when the preserved work is no longer
-adoptable, and it says so where the run is read: `branch-discovered` carries
-`resume_declined` and the settled node's `detail` carries the same reason, beside
-the `retry_lineage` that records the abandoned branch and checkpoint.
-
-`branch-discovered` records the decision rather than leaving it to be inferred
-from a branch name: `resumed` says whether preserved work was adopted,
-`resumed_from` names the checkpoint commit it was adopted at, and
-`resume_declined` is the reason a requested continuation was not. The lifecycle
-that emits the event owns those names; this paragraph restates them, so
-`test_documented_branch_discovered_continuation_fields_track_the_producer` reads
-them off an event a real run emitted and fails when the two drift apart.
+What this document used to describe here, and what is **not** on the adopted stack:
+there is no `not-completed` and no `resume-failed` outcome, no `branch-discovered`
+event, no `resumed` / `resumed_from` / `resume_declined` / `retry_lineage` fields, no
+provisional incomplete-provenance marker that a later attempt removes, and no bounded
+conflict-resolution cycle that a recovery reports as its own outcome. A node that
+stopped short reads `task-failed`; there is no separate word for the turn cap. A pinned branch
+a dispatch cannot adopt fails as whatever `onevcs` says went wrong, reaching the node
+as `publication-failed` or `task-failed` with that reason as its detail. **How a
+dispatch behaves when its pinned branch is unusable is not stated here, because
+nothing in either engine's source states it** — do not infer a fallback either way;
+read `just work-status <branch>`, which answers where the work is now.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a
 `retry` live edit through `just channel-reply` to replace only the capped node.
 Give the replacement a new id, copy the original node (including
 routing fields such as `execution_checkout`, dependencies, or `steps`), and set
-the larger `max_turns`. The reconciler discovers the capped node's preserved
-lifecycle branch and checkpoint from the run ledger, adds retry-resume metadata
-to the replacement, and continues authoring on that branch. `repo-recover` is
+the larger `max_turns`. The replacement inherits the capped node's preserved branch
+and its completed steps from the pin the run's own journal already carries, and
+continues authoring on that branch. `repo-recover` is
 different: use it when the preserved commits are already complete and need
 verification and publication, not when the worker needs more turns.
 
@@ -1654,13 +1662,14 @@ raw `git`, which is the point — see [which verb lands which branch
 state](#which-verb-lands-which-branch-state).
 
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
-it skips a candidate for incomplete provenance. A recovery whose push a pre-push
-hook gates also preserves that gate run under the recovery workspace's
-[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named as `gate_log` in
-the reported detail, so consecutive attempts on one branch are comparable instead
-of reading alike.
-An identity covered by required PR checks instead has no gate at its push — the
-checks decide afterwards — so no verdict is recorded there.
+it skips a candidate for incomplete provenance. A recovery under a `command:` gate
+preserves that run under its own run root's
+[`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named as `preserved_log`
+on the `gate-verdict` event, so consecutive attempts on one branch are comparable
+instead of reading alike. An identity whose gate is `{kind: pre-push}` or
+`{kind: checks}` runs nothing `onevcs` owns, so it emits no verdict and preserves no
+log — a `pre-push` rejection is whatever git printed at the push, and required
+checks decide afterwards.
 
 A branch can nevertheless be complete and unpublished: the agent finishes and
 commits, then publication fails at push because of the environment. For example,
@@ -1697,9 +1706,10 @@ the result.
   only shared state left is the registry, the ledger claim, and short mutations of
   the execution/publication checkouts. OS advisory locks serialize those, queueing
   contenders rather than racing them; automated single-owner merges use the FIFO
-  queue above. Locks and queue state live under
-  `$AI_ORCHESTRATOR_HOME/locks` (normally `~/.ai-orchestrator/locks`) and protect
-  only that machine. Raise `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS` when a legitimate
+  queue above. Locks and queue state live under `$ONEVCS_HOME/locks` (normally
+  `~/.onevcs/locks`) and protect only that machine — the same root holds
+  `registry.json`, `rules.yml`, `sessions/`, `streams/`, `artifacts/`, and the
+  per-run `workspaces/`. Raise `ONEVCS_LOCK_TIMEOUT_SECONDS` when a legitimate
   turn (a gate inside a merge) can exceed the default. On timeout, inspect the
   reported PID and host rather than deleting a live lock or worktree.
 - **Several machines, remote-first:** GitHub is the remote coordinator. Local
@@ -1757,89 +1767,32 @@ part of this harness's own gate; foreign repository workers inherit
 
 ## The two external seams (and how they're tested)
 
-Git is real everywhere. Only the two things the offline gate genuinely cannot run
-for free are injected, each at its own seam:
+The lifecycle's own suite is `onepipeline`'s, not this checkout's — the
+implementation moved to that crate and its journeys went with it. What is worth
+knowing here is where it draws its seams, because the same two are the only things
+this repository doubles either.
 
-| Seam | Real thing | Test double |
-| --- | --- | --- |
-| The paid harness | `dispatch` (onejudge + model) | a `dispatch_fn` that makes a real edit and returns a completed `Report` |
-| GitHub PR/CI | `CliGitHubBackend` (`gh`) | a `GitHubBackend` that decides PR/check state but performs the merge with **real git** against a local bare repo |
+Git is real everywhere. Two things the offline gate cannot run for free are stood
+in for, each at its own seam: the **paid harness**, and the **GitHub host** behind
+`onevcs`. `onepipeline`'s `crates/testfakes` holds both — a double for
+`oneagentgraph`, and one for the `gh` the host calls — and the crate's own comment
+on it is the discipline worth copying: the `oneagentgraph` double answers out of the
+real crate's own types and refuses what the real CLI refuses, because a double that
+accepted more than the sibling is an oracle for a build nothing runs. `onevcs` is
+*called* rather than spawned, so nothing stands in for it, and
+`tests/e2e/real_vcs.rs` drives the real one.
 
-So the lifecycle e2e (`tests/e2e/test_lifecycle_e2e.py`) drives the whole journey
-— clone, worktree, branch, commit, push, and merge — against a real bare git
-origin, for team open PRs, team/single-owner merged PRs, local direct and
-run-only-open publication, linear and synthetic stacks, conflict safety,
-gate-failure, not-completed, no-changes, checks-failed, and a multi-PR DAG. The
-merge is never mocked; only GitHub's decisioning and the paid model are.
+Read those journeys in `onepipeline`'s own `tests/e2e/` — `lifecycle.rs`,
+`real_vcs.rs`, `session.rs`, `session_reuse.rs`, `boundary.rs`, `cancellation.rs`,
+`live_edit.rs` and the rest — rather than from a list restated here, which is
+exactly how the list that used to be here came to name journeys that no longer
+exist.
 
-### What a lifecycle journey costs, and which part of it is a choice
-
-These journeys and the measurements below belong to the published `onepipeline`
-crate, which is where the lifecycle implementation and its suite now live; they are
-kept here because the judgment is the operator's to apply when reading a slow
-lifecycle run. Every journey named below is that crate's, not this checkout's.
-
-**Where the time is.** Not in git. Instrumenting every subprocess and every
-lifecycle phase of the slowest journeys puts essentially the whole of each one
-inside `run_repo_task` → `dispatch` → the real `onejudge` subprocess: in
-`test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks`, the 771
-synchronous subprocesses it runs — almost all of them git — account for about one
-second of the eighteen its twelve `run_repo_task` calls take. The
-clone, the worktree, the commit and the push are not the cost and never were; the
-**dispatch count** is. Read a journey's price as its number of dispatches times the
-price of one, and optimise only those two numbers.
-
-**What one dispatch costs.** A step that completes on its first turn costs about
-0.4s, and that figure is flat in the turn cap — a cap it never reaches charges
-nothing. A step that *exhausts* its budget costs about 1.0s at a cap of one and
-about 0.5s more per additional turn of cap, because it is dispatched
-`MAX_AUTOMATIC_STEP_RESUMES + 1` times and every turn of every segment is two
-provider processes. Those numbers are what make the two paragraphs below the only
-levers: the cap on an exhausting step, and the fixed cost every dispatch pays.
-
-**The fixed cost, and the part of it that was waste.** Every dispatch tears down
-its worker tree through `terminate_processes`, `terminate_process_group` and
-`terminate_tree`, and each of those holds a `SIGKILL` back from its `SIGTERM` for
-a grace period. That grace exists so a harness with a shutdown handler can use it.
-It was slept out unconditionally, including on the overwhelmingly common path
-where the dispatch had already finished and there was nothing left to be graceful
-toward — four grace periods, 200ms, per dispatch, which was 2.49s of a 9.04s
-`test_ordinary_next_round_resumes_committed_lifecycle_branch`. `_await_shutdown`
-in the engine's teardown now waits on the processes rather than on the clock:
-same ceiling for anything still running, nothing for anything already gone. It is
-a per-dispatch saving, so it applies to every journey in the suite. It is also a
-*latency* saving — the waits it removes consumed no CPU, so it shows up in full on
-a quiet host and is progressively masked when this host is already oversubscribed
-by concurrent dispatches.
-
-**What is left is the dispatch, and the dispatch is the unit under test.** A journey
-that proves four branch-selection behaviors pays for the four dispatches they need;
-one that asserts twelve distinct PR-body outcomes pays for twelve publication
-journeys. Of the six slowest journeys in the lifecycle e2e:
-
-| Journey | Why it costs what it does |
-| --- | --- |
-| `..._drafts_pr_bodies_and_preserves_fallbacks` | 35 dispatches, every one of them a first-turn completion at the 0.4s floor, for twelve asserted PR-body and title outcomes. Cost *is* coverage. |
-| `test_ordinary_next_round_resumes_committed_lifecycle_branch` | Four attempts for four branch-selection behaviors — first attempt, ordinary resume, explicit fresh branch, explicit pin — each needing a node that commits and then fails. |
-| `test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever` | Its subject *is* the automatic-resume bound. Every dispatch it drives is that bound being exercised. |
-| `test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget` | Needs the same exhausted budget as a precondition, and the ledger it asserts against is written by real dispatches. Cheaper only by fabricating the state the `retry` is supposed to act on. |
-| `test_lifecycle_failure_survives_simultaneous_deferred_teardown` | Exactly one not-completed dispatch. That is the floor for its outcome. |
-| `test_repo_plan_ledger_and_guided_next_round` | Three dispatches, plus about a third of its time in real `just telemetry` and `just runs` invocations — the CLI boundary it exists to prove. |
-
-None of them is reducible by dropping work it does not need; each is reducible
-only by dropping a case it asserts. What remains after the cap below and the
-teardown above is the `onejudge` launch and the provider processes underneath it.
-
-What sits on top of the floor is a choice, and it used to be an accidental one. A
-step that never completes spends its whole turn budget and is then automatically
-resumed `MAX_AUTOMATIC_STEP_RESUMES` more times, and every turn is two provider
-processes. At `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` that is 147 provider processes
-and about twelve seconds for a single dispatch whose only job is to reach *a* cap.
-Naming a small explicit cap at those call sites — `EXHAUSTED_STEP_MAX_TURNS` in
-the lifecycle e2e — keeps the exhaustion, the three segments, the preserved
-branch, and the node-level budget exactly as they were, for 15 processes instead
-of 147. The default's own height stays pinned by
-`test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
-`tests/test_lifecycle_unit.py`, which spends no processes at all. A journey about
-what happens *at* a cap should say which cap it means; inheriting the production
-default there buys no coverage and costs the whole difference.
+**The cost analysis that used to follow this section has been removed rather than
+corrected.** It measured a Python lifecycle implementation that no longer exists —
+`run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
+journey it named are absent from `onepipeline` v0.8.5 — so every number in it was a
+measurement of something else. The one part of it that still holds is the shape:
+**read a journey's price as its number of dispatches times the price of one**, since
+the clone, the worktree, the commit and the push are not the cost and never were.
+Any figure beyond that has to be re-measured against the crate that runs it.

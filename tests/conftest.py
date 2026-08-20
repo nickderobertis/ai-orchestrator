@@ -187,8 +187,19 @@ def _code_key_reads_are_declared(
     instead, which is the direction this decision has to fail in. A read from inside
     a child process is out of reach — but a journey that hands a real tool the whole
     tree copies it first, and copying is itself a read.
+
+    `reads_checkouts` satisfies this too, and for the reason the rule is about rather
+    than by exception: that marker puts a test in the *uncached* tier, so there is no
+    memoized verdict for a dropped input to make stale. Demanding `reads_docs` beside
+    it would put the same test back into a whole-workspace tier that memoizes a
+    verdict depending on another repository's checkout — which is the false green the
+    checkout guard below exists to prevent. A test reconciling this repository's prose
+    against an engine's own source needs exactly one of these markers, and it is that
+    one.
     """
     if request.node.get_closest_marker(READS_DOCS_MARKER) is not None:
+        return
+    if request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None:
         return
     # Resolved before the wrapper is installed: reading the declaration through the
     # guard that consults it is a loop waiting for its first prose-shaped path.

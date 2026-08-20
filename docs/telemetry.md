@@ -18,196 +18,234 @@ monitor` and `just status` resolve it — an exact run directory, or a plan name
 that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
-A run's `result.json` is rewritten as it moves, so its nodes are described by the
-run journal: a node reads `running` only until the journal records it settling, and
-a node recorded as `node-failed` reads `failed` here while the rest of the graph is
-still going.
+**The view is run-scoped, and it has no per-node rows.** Everything below was
+re-measured against `onepipeline` v0.8.5 on this host's own runs root; the per-node
+table, session timeline, turn histogram, and llmlint retry-rate cohort this document
+used to describe belonged to the pre-extraction implementation and are not in the
+adopted crate.
 
-The breakdown prints a run row and an indented row for every node. A typical
-enriched row and timeline look like this:
+With no flag, each run is one JSON document on a line:
 
 ```text
-RUN/NODE              WALL   WORKER      JUDGE       LLMLINT     TOOL        GATE PUB LOCK SETUP SCHED IDLE UNATTR  TOKENS IN W/J/L OUT W/J/L  CACHE R/W  COST  TURNS LINT QUALITY
-deploy                 950ms   500 52.6%   120 12.6%   100 10.5%    40  4.2%   20   10   30    20     0   110 11.6%      0  420/90/30 85/18/6 300/0 0.014 4 2 complete
-  Timeline (UTC):
-    turn 0 agent: 2026-07-19T12:00:00Z -> 2026-07-19T12:00:00.600Z [agent-7]
-    turn 1 judge: 2026-07-19T12:00:00.600Z -> 2026-07-19T12:00:00.720Z [judge-2]
-Turn histogram: 4=1
+{"schema_version":2,"run_id":"fix86-llmlint","wall_ms":3022255,
+ "buckets":[{"name":"agent","ms":1718526},{"name":"judge"},{"name":"llmlint"},
+            {"name":"gate","ms":1288078},{"name":"publication_wait","ms":1181},
+            {"name":"lock_wait","ms":0},{"name":"setup","ms":14455},
+            {"name":"scheduling","ms":15}],
+ "usage":{"agent":{"input":68,"output":9692,"cache_read":1300969,
+                   "cache_write":35173,"cost_usd":1.2448545},
+          "judge":{"input":76046,"output":421,"cache_read":33024},
+          "total":{"input":49783,"output":9937,"cache_read":1322985,
+                   "cache_write":35173,"cost_usd":1.2448545}},
+ "dispatches":1,"settled_done":0,"no_diff":0,
+ "surfaces_queued":50,"surfaces_read":0}
 ```
 
-`WALL` is elapsed run or node time, not summed work; concurrent node time is
-available as `node_work_ms` in JSON. `WORKER`, `JUDGE`, and `LLMLINT` are measured
-provider latency for their respective roles. `TOOL` is measured execution inside tool
-calls. `IDLE` is the non-negative remainder: orchestration, process handoffs,
-unknown time after the explicit harness buckets. `LOCK` is time waiting for
-process-shared locks, `SETUP` is fetch and worktree creation, and `SCHED` is time
-from dependency readiness until the node worker starts. `UNATTR` is the part of the remainder that
-legacy inputs cannot classify. Each timing category shows milliseconds and its
-share of wall time.
-`GATE` is repository verification and `PUB` is the wait from a green gate to
-publication closeout. Since the repository's own merge path became the
-authoritative verifier, the lifecycle runs no gate of its own, so `GATE` reads
-zero for new runs and the gate's cost lands inside `PUB`, where `git push` runs
-the `pre-push` hook. It stays populated for runs recorded before that change.
-Both are clipped to their non-overlapping share of the
-remaining wall budget, so the displayed model, tool, gate, publication, lock,
-setup, scheduling, and idle buckets sum exactly to `WALL` even when raw journal
-intervals overlap.
+`--breakdown` renders that same document as text:
 
-`TOKENS IN W/J/L` and `OUT W/J/L` are worker/judge/llmlint input and output tokens. `CACHE
-R/W` is total cache-read/cache-write tokens, `COST` is total `cost_usd`, and
-`TURNS` feeds the histogram at the bottom and counts only worker/judge conversation
-turns; `LINT` counts llmlint invocations separately. A `?` means unknown; it never means
-measured zero. JSON contains the same counters separately under `usage.agent`,
-`usage.judge`, `usage.llmlint`, and `usage.total`, both per run and per node.
+```text
+fix86-llmlint  WALL 50m22s
+  agent                  28m38s   56%
+  judge              not measured
+  llmlint            not measured
+  gate                   21m28s   42%
+  publication_wait           1s    0%
+  lock_wait                  0s    0%
+  setup                     14s    0%
+  scheduling                 0s    0%
+  usage agent        in 68  out 9692  cache r 1300969 w 35173  $1.2449
+  usage judge        in 76046  out 421  cache r 33024 w not measured  $not measured
+  usage llmlint      not measured
+  usage total        in 49783  out 9937  cache r 1322985 w 35173  $1.2449
+  1 dispatch(es), 0 done, 0 no-diff; 50 surface(s) sent, 0 read
+```
 
-## Three session roles
+`WALL` is the run's elapsed time, not summed work. The **eight buckets are a closed
+set and sum exactly to it** — and the set below is reconciled against
+`onepipeline`'s own `BucketName` enum by
+`tests/test_engine_contracts.py`, so a bucket the engine adds or renames
+fails here rather than leaving this table quietly short of one: a bucket named by a free string could be added without
+anything noticing the parts no longer add up to the whole. An absent `ms` is *not
+measured*, which is a different fact from a measured `0`.
 
-Every session is classified as worker (`agent`), `judge`, or `llmlint`. Llmlint
-sessions are nested quality checks and do not count against onejudge's `max_turns`.
-Their wrong-file correction prompts are llmlint's retry loop, so they contribute to
-`LINT`, not `TURNS`. Legacy sessions without a role label retain the documented
-fallback, with the known llmlint prompt/name signatures checked first.
+| Bucket | What it counts |
+| --- | --- |
+| `agent` | At least one agent dispatch in flight and nothing more specific happening |
+| `judge` | A judge side of a dispatch running |
+| `llmlint` | An LLM-lint pass running |
+| `gate` | A repository's own verification gate running |
+| `publication_wait` | The push, the change request, its checks, and the merge |
+| `lock_wait` | Blocked on a repository identity's lock |
+| `setup` | Preparing a workspace: the clone, the worktree, the fetch |
+| `scheduling` | Everything else the run's clock covers — waiting on a decision or a person, and the gaps between dispatches |
 
-## Llmlint wrong-file retry rate
+The four repository buckets come from a phase machine over the node's `onevcs`
+session stream:
 
-The bottom of the breakdown reports wrong-file correction sessions divided by
-initial llmlint evaluation sessions, overall, by oneharness repository project,
-and by node when the session has a `node` label. JSON exposes the same cohort as
-`metrics.llmlint_wrong_file_retries`, including the numerator, denominator, rate,
-observed `period_start`/`latest_session_start`, and the `by_repository` and
-`by_node` splits.
+| Bucket | The session event kinds that put a node in it |
+| --- | --- |
+| `setup` | `session-opened`, `fetch`, `commit-preserved`, `lock-acquired`, `recovery-attested` |
+| `lock_wait` | `lock-wait` |
+| `gate` | `gate-started` |
+| `publication_wait` | `gate-verdict`, `push`, `change-opened`, `change-check`, `merge-queued`, `change-merged`, `merge-completed`, `sync-conflict` |
 
-`oneharness_retry_sessions` is the broader guardrail: it counts all llmlint
-oneharness sessions in the cohort that are not initial evaluations. Compare it
-alongside `wrong_file_corrections` so a prompt or template change that moves
-rework away from the known correction signature remains visible. The cohort is
-whatever the store holds — `onepipeline telemetry` takes no window — so a
-repeatable before/after comparison is made by recording the reported
-`period_start` and `latest_session_start` on each side and comparing those.
+A session's last record is what it is doing until the next one, and a kind this build
+does not know — one a newer `onevcs` emits, or one that ends the session — leaves it
+where it was rather than stopping its clock. Where two sessions disagree about a
+millisecond the more specific state wins, blocked before working: `lock_wait`, then
+`gate`, then `publication_wait`, then `setup`.
 
-## Full timing versus fallback
+That table and that order are reconciled against `telemetry.rs`'s own `Phase::of`,
+`Phase::bucket`, and `Phase::PRECEDENCE` on every `just check`, in both directions.
 
-For records produced after the 0.10.2/0.4.0 upgrade, `AGENT`/`JUDGE` use <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions enforces this version boundary against the authoritative pins. -->
-onejudge's typed party summaries, `TOOL` uses oneharness' normalized `tool_ms`
-and per-tool-call `duration_ms`, and the timeline interleaves native
-agent and judge sessions by `turn_index`. `QUALITY` renders
-`<timing_quality>/<linkage_quality>`: timing is `complete`, `partial`, or
-`legacy` according to measured-field completeness, independently of linkage,
-which is `native`, `labelled`, or `inferred`.
-`native` requires onejudge session linkage to cover every history summary
-contributing to the row; mixed native and label-linked summaries are `labelled`
-when every role label is valid.
+**`judge` and `llmlint` read `not measured` on this host, and that is expected.** The
+bucket is filled from a `role` on a relayed turn, and nothing stamps one today —
+`onepipeline`'s own `docs/contract-divergences.md` divergence 10 is the open proposal
+that something should. Read a `judge` of `not measured` beside a non-zero `usage
+judge` as exactly that: the supervisor ran and its tokens were counted, but no
+interval was attributed to it. It is not evidence that judging took no time.
 
-Pre-upgrade reports and history remain readable through a documented fallback.
-Missing onejudge linkage falls back
-to `labels.role` (then recognized legacy judge names), and missing timed fields
-fall back to journal wall time. Untimed `command_execution` events still identify
-the dominant command class, but do not invent a duration: model and tool time
-render as `?` and the unknown share appears in `UNATTR`. History schemas `1.1`
-and `1.2` are recognized. Schema `1.2` `observed_tool_ms` and tool events marked
-`timing_source: stdout_observed` remain visible but make timing quality `partial`;
-only provider-measured timing can contribute to `complete`.
-Records from a newer, unrecognized history schema are also read best-effort and
-marked degraded.
-Missing or null run timing and tool-event timing/status degrade only the affected
-session. In contrast, malformed present values and contradictory timing remain
-errors: finish cannot precede start, and model plus tool time cannot exceed the
-record duration. Measured WORKER/JUDGE/LLMLINT/TOOL values remain visible for
-`complete` and `partial` timing; `?` means no measurement exists. `UNATTR` and
-the two quality dimensions qualify those values. JSON consumers use
-`timing_presence` to distinguish a measured zero from an unavailable category.
-The breakdown says
-`Timeline: unavailable (legacy session linkage)`, and quality is `legacy` or
-`partial`. Treat that as degraded evidence, not proof that judging or tools took
-no time.
+### What `gate` actually reads on this host
+
+`gate` is the span from `onevcs`'s `gate-started` to its `gate-verdict`. Those
+events are emitted **only where the resolved policy names a `{command: [...]}`
+gate** — `gate::own_command` returns nothing for `{kind: pre-push}` and
+`{kind: checks}`, so `onevcs`'s verify step is a no-op and no span opens.
+
+**Every rule in `config/onevcs.rules.yml` on this host currently names a `command:`
+gate**, so `gate` is populated for new runs and is often the largest bucket after
+`agent`: the `fix86-llmlint` run above spent 21m28s — 42% of its wall clock — there.
+It reads `0` for a run whose nodes published nothing, and it would read `0` for an
+identity routed to `{kind: pre-push}`, whose cost would land in
+`publication_wait` where `git push` runs the hook, or to `{kind: checks}`, whose
+cost falls outside the run entirely because the host decides after the node settled.
+That routing is the rules file's to change; this paragraph only says what follows
+from it.
+
+The document is `deny_unknown_fields` and its top-level fields are
+`schema_version`, `run_id`, `wall_ms`, `buckets`, `usage`, `dispatches`,
+`settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` — a tenth would be
+a schema version, not a field to discover.
+
+`usage` is per party — `agent`, `judge`, `llmlint`, `total` — each carrying
+`input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
+omitted rather than zeroed when it was never measured.
+Everything said here about those fields was measured on records this host wrote
+after the 0.10.2/0.4.0 upgrade (`config/oneharness.version` and
+`config/onejudge.version`), which is the boundary the older per-party accounting
+sat behind. What a run recorded *before* that pair reports is **not established
+here** — re-measure rather than assuming the shape carries backwards, and re-check
+this paragraph whenever either pin moves. `dispatches`,
+`settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
+counters; `surfaces_read` is what resets the planner-update pacemaker.
 
 ## Finding an optimization target
 
-1. Run `just telemetry --breakdown` and start with the largest wall-time
-   run and node. Check `node_work_ms` in JSON when nodes overlapped.
-2. Compare model latency with tool time. High `AGENT` suggests prompt/context or
-   turn-count work; high `TOOL` suggests inspecting `tool_commands` and the
-   slowest timed tool calls in oneharness history.
-3. Compare `JUDGE` with `AGENT`. Disproportionate judge time points to supervisor
-   or evaluation overhead. Use the timeline to see repeated alternation or a
-   long judge turn.
-4. Large `IDLE` with low `UNATTR` points to orchestration or handoff overhead.
-   Large `UNATTR`, a missing timeline, or `legacy/inferred` quality means collect richer
-   upstream telemetry before optimizing from the apparent split.
-5. Correlate long turns with token/cache/cost growth. A high turn-histogram bucket
-   can expose stalled agents even when individual calls are not unusually slow.
+1. Run `just telemetry --breakdown` and start with the largest `WALL`.
+2. Compare `agent` with `gate`. A run that is mostly `agent` is prompt, context, or
+   turn-count work; one that is mostly `gate` is paying for the repository's own
+   bar, and `just lint-llm-diff`'s cached verdict is the lever there rather than
+   anything in this view.
+3. A large `scheduling` bucket on a wide graph is the frontier waiting — on a
+   decision point, on a person, or on concurrency. Compare it with the graph's
+   `concurrency` and with `just status`, which names what each node is waiting for.
+4. `dispatches` against `settled_done` is the re-ask rate. A dispatch that produced
+   nothing is asked again up to `ONEPIPELINE_BOUNDARY_ATTEMPTS` times, and each
+   attempt counts here, so `dispatches` well above the node count is a provider
+   problem rather than a scheduling one — read
+   [Diagnosing a provider failure](#diagnosing-a-provider-failure).
+5. `usage total` against `WALL` is the spend rate. `cost_usd` is absent, not zero,
+   wherever a provider reported none.
 
 ## Diagnosing a slow or stalled run
 
-1. Run `just telemetry --breakdown` and locate the largest run and node.
-2. A large `LOCK` bucket means another process held a shared registry, journal,
-   checkout, or worktree resource. Inspect `lock-wait` journal events for the
-   recorded lock identity and whether acquisition timed out.
-3. A large `SETUP` bucket distinguishes repository fetch cost from `git worktree
-   add`; inspect `setup-finished.detail.operation` in `events.jsonl`.
-4. A large `SCHED` bucket means the node was dependency-ready but waited for a
-   worker slot. Compare it with the graph concurrency and adjacent node intervals.
-5. For a failed gate, read the node result detail: it names the rejecting
-   `pre-push` hook and carries the Git diagnostic, so reproducing the gate is not
-   required to identify the failing tier. Read it against the node's
-   `merge-gate-coverage` event, which records the hook and required checks
-   dispatch expected to run, and against `verification-finished`, which brackets
-   each gated push with its verdict and a bounded `detail.output_tail`. The whole
-   run is preserved at the node's `artifacts.gate_log`, which accumulates one
-   record per gated push (branch, then publication) — so a green publication can
-   also show what its gate did, not only that nothing objected.
-6. For a failure that never reached a gate — a base advanced under the rebuild,
-   a fetch or worktree that could not be built — read `publication-failed`. It
-   carries the same bounded `output_tail` and points at the same log, so "the
-   gate rejected it", "a sibling run moved the base", and "the host failed" are
-   three different readings rather than one silent settle.
+1. Run `just telemetry --breakdown` and locate the largest run.
+2. A large `lock_wait` bucket means another process held the identity's merge queue
+   or an advisory lock. The `lock-wait` events in `events.jsonl` carry the identity,
+   the elapsed seconds, and the one-based queue position.
+3. A large `setup` bucket is the clone, the worktree, and the fetch. On this host
+   that is normally 14-22s per lifecycle node; well above it means a cold or a
+   contended execution checkout.
+4. A large `scheduling` bucket means the graph was not working. `just status` is
+   where that is diagnosed, not here — it names the in-flight dispatches, the
+   surfaces waiting unread, and whether anything is driving the run at all.
+5. **For a failed gate, read the node's settlement detail and the session's own
+   `gate-verdict`.** The detail is `onevcs: <command> rejected "<branch>"`, and the
+   verdict event carries the command, the verdict, the output, a `preserved_log`
+   path that outlives the run's worktree, and the whole run again as an artifact
+   (`onevcs artifact`). The read API serves the same run as a `verification` span
+   whose `detail.output_tail` is the tail of it and whose `detail.artifact_id`
+   opens the rest — see [Seeing the supervisory
+   tier](#seeing-the-supervisory-tier). There is no `merge-gate-coverage` or
+   `verification-finished` *event*, and no `artifacts.gate_log` on the node
+   result.
+6. **For a failure that never reached a gate** — a base advanced under the
+   publication, a fetch or a worktree that could not be built — there is no gate
+   span and no preserved log, because none was produced. The whole account is the
+   same settlement detail, carrying `onevcs`'s own reason. Both cases settle the
+   node under the one outcome `publication-failed`, so the detail is the only place
+   "the gate rejected it" and "a sibling run moved the base" read differently.
 
 ## Seeing the supervisory tier
 
 The `monitor` member and the scheduled `check-in` dispatches beside it are agents
-like any other, and they are visible the same way — with one addition and one
-fallback.
+like any other, and they are visible the same way — with one addition and one gap
+this document is explicit about.
 
 They were invisible for longer than the workers, and the reason is worth keeping:
 oneharness *was* recording them. This host's history store holds 157 supervisory
 and 728 `check-in` run records, correctly role-labelled, out of 12,387 runs. Nothing
-served them. So the run-scope span below is the fix; the capture is a fallback for
-the narrower case where the write itself was refused.
+served them.
 
-1. **`just status <run-id>` and `just runs`** carry one driver line per unfinished
-   launch: whether the recorded pid is still there, which part of its loop the run's
-   own state places it in, and how long since anything of it was last observed
-   doing something. A
-   driver this host has *proved* is gone reads `DRIVER DEAD (pid N is gone) — …;
-   nothing is driving this run`. That is deliberately distinct from `PARKED`, which
-   is a launch that still holds its pid while nothing progresses, and from a node
-   the planner idled with `cancel`.
-2. **The run timeline** (`GET /api/v2/runs/{run_id}/timeline?scope=run`) serves one
-   dispatch span per supervisory session, role-labelled through `agent_role`, open
-   (`ended_at: null`) while the session is still speaking. The driver's span also
-   carries `phase`, the same vocabulary the CLI prints.
-3. **When the harness refused the history write**, the span comes from the run's own
-   bounded local capture under `runs/<run-id>/supervisory/` instead of from a
-   transcript: same role, timing and liveness, the captured turns as
-   `conversation-turn` events with status `captured`, the bounded text under
-   `detail.output_tail`, and the refusal itself as a `history-write-failed` event
-   carrying the reason. A capture-backed span has no `conversation` reference,
-   because there is no transcript to open. A capture stands down as soon as history
-   *did* record that session, so a session is never drawn twice.
+1. **`just status <run-id>` and `just runs`** report two independent liveness
+   verdicts, and confusing them is the common mistake. The **driver** verdict is
+   one of `ACTIVE`, `DRIVER DEAD`, `PARKED`, or `UNDRIVEN`; `just orchestrate
+   --adopt` is the way back from the two that mean nothing is driving the run
+   (`DRIVER DEAD` and `PARKED`). The **observer** verdict is separate and prints
+   beside it: `OBSERVER DEAD` when the launch named an observer graph whose run has
+   ended, `NO OBSERVER` when it named none, and nothing at all while it is
+   watching. A run can read `ACTIVE  OBSERVER DEAD` — driving fine, unwatched — and
+   that is a different fix from a dead driver.
+2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
+   `just telemetry-server`) is the structured view. Measured against a real run on
+   **`onepipeline-api` 0.5.0**, the release `config/onepipeline-ui.version` pins —
+   a measurement rather than a reading, because that crate has no registered checkout
+   on this host and its CLI dumps no schema, so a bump is what re-opens this
+   paragraph: `timeline_schema_version` 5, spans of kind `run`,
+   `node`, `rollup`, `verification`, and `publication`, each with `started_at` and
+   an `ended_at` that is `null` while it is open. The `run` span carries `phase`
+   (`dispatching`, `surfacing`, `settled`). A **`rollup`** span is the dispatch
+   tier, labelled by `agent_role` — `worker`, `orchestrator`, `pr-author` — and
+   `transport_role` (`agent` or `judge`), with a `count`. A **`verification`** span
+   is a gate run, carrying `status` and a `detail` of
+   `{ok, output_tail, artifact_id}`; the tail is where a failed gate's own words
+   are, and `artifact_id` opens the whole log.
+   <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These field names
+   have no authoritative declaration this host can read: `onepipeline-api` is in no
+   registered checkout, its source is in neither the `onepipeline` repository nor the
+   installed wheel, and `onepipeline-api serve` is its only verb — there is no schema
+   to dump. Every other engine contract in these documents is reconciled against
+   source; this one is a *measurement* off a live response, so what
+   `tests/test_onejudge_version.py::test_claims_about_the_adopted_read_api_name_the_adopted_release`
+   holds is the half that can be held — that the paragraph names the release it was
+   measured on, so a pin bump fails the gate and re-opens it. Reconciling the fields
+   themselves needs a registered checkout of that crate or a schema verb on its CLI,
+   and is tracked as follow-up. -->
+3. **The gap, stated rather than papered over.** The run measured above carried
+   `rollup` spans only for `pr-author` — none for `orchestrator` — so a supervisory
+   session is *representable* here but is not reliably *present*. There is no
+   `runs/<run-id>/supervisory/` capture, no `conversation-turn` event, and no
+   `history-write-failed` event on the adopted stack; the bounded local capture this
+   document used to describe belonged to the pre-extraction dispatch layer and went
+   with it. When a supervisory turn is missing from the timeline, the oneharness
+   history store is where it is, and reading it is a manual step.
 
-The capture is written by the dispatch layer at the seams it already owns:
-`just orchestrate` opens the driver's, the channel relay appends one bounded turn
-per orchestrator turn, and the check-in dispatcher opens and closes its own. It is a
-summary and never a replacement — bounded to the newest few turns, each cut to a
-readable head, so it stays sized by the tier rather than by the run.
-
-The upstream defect it exists for is oneharness refusing a history write with
-`new history run lacks complete v1.0 telemetry` (and the `cannot write vN history
-telemetry` variants), raised in `crates/oneharness-core/src/io/history.rs`.
-`onepipeline` owns those patterns now: it classifies a dispatch that died on one as
-an infrastructure failure, and its capture records the same string as the reason a
-session is missing.
+The upstream defect that motivated the capture is oneharness refusing a history
+write with `new history run lacks complete v1.0 telemetry` (and the `cannot write vN
+history telemetry` variants), raised in
+`crates/oneharness-core/src/io/history.rs`. A dispatch that dies on one reaches the
+run as a failure like any other; whether `onepipeline` classifies it specifically is
+**not established here** — do not assume it does.
 
 That refusal is not codex-specific, though it was assumed to be, and the assumption
 sent a night's debugging at the wrong harness. A refused write leaves nothing behind,
@@ -216,8 +254,8 @@ show is that every one of codex's 7,642 run records is `ok` with complete native
 telemetry, while claude-code supplies no native per-phase timing at all (`started_at`,
 `finished_at`, `tool_ms`, `time_to_first_token_ms`, `model_ms` are absent from all
 4,745 of its records) and carries every recorded failure. Those counts come from
-reading `type: "run"` lines out of the history store (`just telemetry` reaches the
-same records); re-measure there rather than inferring the harness from chain order.
+reading `type: "run"` lines out of the history store; re-measure there rather than
+inferring the harness from chain order.
 
 ## Diagnosing a provider failure
 
@@ -227,27 +265,39 @@ without any further command, because the incident this exists for cost a night:
 every death printed `provider error (respond): harness failed (quota)`, which
 names neither.
 
-1. Read the **provider health** block both views print. It lists all five
-   configured identities under the same indirections dispatch uses
-   (`scripts/claude-alt-config-dir.sh`, `scripts/codex-alt-home.sh`), with each
-   one's binding window, utilization, and reset time. An identity whose probe
-   failed is listed as `unknown` rather than dropped, so a chain is never
-   silently short one member.
-2. Read the rolled-up failure lines beneath each run. Repeated deaths on one
-   cause collapse to one line — `3 nodes failed on judge-side codex
-   quota mid conversation, resets Aug 8` — so a whole frontier's worth of the same
-   refusal reads as the single fact it is.
-3. `just results <run-id>` and the read API's `failure` record carry the same
-   attribution per node, plus a bounded `raw_tail` of what the harness actually
-   printed and, where the harness stated one, its structured error payload.
-   `quota_at_launch` fell through to the next identity; `quota_mid_conversation`
-   could not, because the conversation was already bound to the refusing one.
-4. A dispatch whose agent side was recorded but whose judge side was not is
-   marked `judge_unrecorded`. The supervisor did not vanish — its harness failed
-   to write history — so read the raw session rather than concluding the run was
-   unsupervised.
+1. Read the **provider health block** both views print. It is `oneagentgraph
+   health`'s own JSON report, forwarded verbatim — that call is
+   `oneharness_core::io::usage::report`, the `oneharness usage` verb as a library
+   call, so the identities and their windows are oneharness's to define and nothing
+   is re-assembled on the way through. Each identity carries its `harness`, the
+   `selector` naming the indirection dispatch uses
+   (`scripts/claude-alt-config-dir.sh`, `scripts/codex-alt-home.sh`), its
+   `auth_mode` and `plan`, and an `availability` listing every window with
+   `used_percent`, `resets_at`, and which one `is_binding`.
+   <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These field names
+   are `oneharness_core::io::usage::report`'s, and this host cannot resolve one
+   authoritative declaration for them: the adopted engine wheel's SBOM declares
+   `oneharness-core` at two versions at once (0.10.1 and 0.8.0), and the registered
+   `oneharness` checkout's tags stop at v0.9.0, so neither is fetchable to read. Every
+   other engine contract in these documents is reconciled against source; this one is
+   a restatement of a forwarded JSON shape, and gating it would mean pinning it to a
+   ref nothing here can name. Tracked as follow-up. --> Every probe there is
+   free: no harness takes a model turn. A health probe that cannot run at all is
+   silence rather than a failure — the block is simply absent and the rest of the
+   view still reports.
+2. Read the failure line beneath each run. It names the **side** and the
+   **identity**: `dispatch-appendix: failed — the agent side: identity
+   'claude-code:alternate' refused (quota)`. Read the side first — the agent and
+   judge chains prefer different identities, so a fix aimed at the wrong one
+   changes nothing.
+3. `just results <run-id>` carries the same attribution per node with the harness's
+   own bounded output.
 
-The probe is read-only and cheap, but it does reach the configured providers.
-Set `ORCHESTRATOR_PROVIDER_HEALTH_PROBE=0` on an offline or metered host to
-answer every view with unknown identities instead; this repository's own test
-suite sets it so a suite run never touches a paid identity.
+**Two things this document used to claim and cannot.** There is no
+`ORCHESTRATOR_PROVIDER_HEALTH_PROBE` switch — it appears in no engine and in no
+script here, so a host that must not probe has no documented way to say so. And
+there are no `raw_tail`, `quota_at_launch`, `quota_mid_conversation`, or
+`judge_unrecorded` fields: whether a refusal fell through to the next identity or
+was bound to the refusing one has to be read from the chain order in the relevant
+`oneharness.*.toml` against the health block above. Both are gaps to close
+upstream, not settings to reach for.

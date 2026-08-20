@@ -922,6 +922,28 @@ worktree commit log, and contemporaneous process tree: the first three stop
 after the green gate while the last shows the provider descendants gone and the
 owning orchestrator still alive.
 
+> **This section and the two after it describe the pre-extraction Python dispatch
+> wrapper.** The incident is real and its judgment is worth keeping, but the symbols
+> below — `worker-died`, `AGENT_STATUS_NAMES`, `Report.outcome_detail`, the
+> `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
+> `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
+> `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
+> functions — are in neither `onepipeline` v0.8.5,
+> `oneagentgraph` 0.3.4, nor `onevcs` 0.8.0. **Do not configure against them.** The
+> teardown functions are named one by one rather than as a `terminate_*` family,
+> because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
+> which tears down a git process group when a bound fires and has nothing to do with
+> a dispatch. What is
+> measurably in force is named where it is known: `ONEPIPELINE_STALL_AFTER_SECONDS`
+> for the engine's quiet-worker proposal, `ONEAGENTGRAPH_STALL_TIMEOUT` and
+> `ONEAGENTGRAPH_HEARTBEAT_TIMEOUT` for the graph's own, and `oneagentgraph`'s
+> `src/scratch.rs` for the ownership stamp and the teardown that reads it.
+> `ORCHESTRATOR_AGENT_STATUS_DIR` is consumed by `scripts/oneharness-agent.sh` and
+> `scripts/oneharness-stream.py` here but is exported by nothing on the adopted
+> stack except `scripts/smoke.sh` — so the wrapper's own status-marker path is, on
+> an ordinary dispatch, unexercised. Re-deriving what each engine actually does at
+> this seam is unfinished work, not a claim this document can make.
+
 Dispatch wraps the SDK-owned `onejudge` process with a stable pid and additionally
 wraps the agent-side oneharness process with its own pid, completion marker, and
 monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
@@ -1096,12 +1118,15 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   is the preferred worker; Codex is its fallback and the preferred judge.
   Codex installs in `~/.local/node/bin`. Keep that
   directory on `PATH` so worker fallback, supervision, and llmlint remain available;
-  `scripts/session-setup.sh` persists the path. The dispatch code also sets
-  `ONEHARNESS_TIMEOUT` to 10,800 seconds (three hours), a temporary hard per-turn
-  ceiling so legitimate build-heavy agents can finish. Set the variable
-  explicitly to override it; onejudge's `max_turns` and the lifecycle `--timeout`
-  still bound the whole run independently. Finer phase budgets remain tracked
-  in issue #6. Project dispatch also pins the agent-side
+  `scripts/session-setup.sh` persists the path. **Nothing here sets
+  `ONEHARNESS_TIMEOUT` any more**, and nothing should: since oneharness 0.7.0 an
+  absent per-turn deadline means *no* deadline, and the worker, judge, and llmlint
+  configs take that default deliberately while `oneharness.orchestrator.toml`,
+  `oneharness.check-in.toml`, and `oneharness.pr-author.toml` set their own. The
+  variable is process-wide for a whole graph run and beats every file, so setting it
+  moves every member at once — see [Choosing a deadline per
+  side](#choosing-a-deadline-per-side). `onepipeline start` takes no `--timeout`
+  either; a node's turn budget is its `max_turns`. Project dispatch also pins the agent-side
   oneharness `--config` to this repo's config, which selects the configured
   alternate-subscription Claude model before the configured Codex fallback. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
@@ -1147,10 +1172,13 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   same executor, ledger, and progress views as a wide DAG, so no piece of running
   work is invisible to them. See `examples/single-node-direct.plan.json` and
   `examples/single-node-lifecycle.plan.json`.
-- **Inspect a `not-completed` branch.** This status commonly means the agent hit
-  the turn cap at the moment it finished, not that its work failed or vanished.
-  Agents commit incrementally, and the lifecycle preserves those commits on the
-  branch. Check its commit delta before deciding whether to recover or redispatch.
+- **Inspect the branch behind a `task-failed` node.** That outcome commonly means
+  the agent hit its turn cap at the moment it finished, not that its work failed or
+  vanished — onejudge exits 1 both ways. Agents commit incrementally, and the
+  settlement pins the branch those commits are on, so check its commit delta before
+  deciding whether to recover or redispatch. `task-failed-change-open` is the same
+  reading with a change request already waiting: its URL is on the settlement, and
+  re-running that work would duplicate a change somebody can already read.
   `just repo-recover <branch> --repo <checkout>` verifies and publishes a branch
   whose provenance is incomplete; `just publish-branch <branch> --repo <checkout>`
   is the one for a branch that is simply finished and unpublished.

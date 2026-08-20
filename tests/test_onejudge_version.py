@@ -217,7 +217,14 @@ def test_claims_about_the_adopted_release_name_the_adopted_release(
 #: statements. Naming the sentence gates the claim about today's release and leaves both
 #: of those alone.
 ADOPTED_ONEPIPELINE_CLAIMS = {
-    "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
+    "docs/onejudge-integration.md": (
+        "measured against onepipeline {version}",
+        # The pre-extraction callout: the symbols below it are absent from the engines
+        # at this release, which is a claim that has to be re-read when the pin moves.
+        # Kept to the one line it sits on: this is a blockquote, and the `>` prefix of
+        # the next line survives the whitespace normalization these gates compare under.
+        "in neither `onepipeline` v{version},",
+    ),
     "personas/README.md": (
         "measured against onepipeline {version}",
         # Which oneagentgraph a dispatch reads a persona with, which is what decides
@@ -288,7 +295,21 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
     # that never happened.
     "docs/repo-lifecycle.md": (
         "**It is not silent either, on the adopted onepipeline {version}.**",
+        # The release every engine-behaviour claim in that document was read at. It is
+        # the header a reader checks before trusting any of them, so a bump that left it
+        # behind would date the whole document to a release nothing runs.
+        "restated: **`onepipeline` v{version}**",
+        # The one `Node` field that survives unread, and the removed cost analysis:
+        # both are statements that a named release does *not* do something, which a
+        # stale version number turns into a statement about a release nobody dispatches.
+        "field of `Node` on onepipeline v{version} and is read by nothing",
+        "absent from `onepipeline` v{version} — so every number in it was a",
+        "`onepipeline` v{version} has no notion",
     ),
+    # Where the pre-extraction dispatch wrapper's symbols are denied, and where the
+    # run-scope telemetry view was re-measured. Both are per-release readings of the
+    # crate rather than of anything this repository writes.
+    "docs/telemetry.md": ("re-measured against `onepipeline` v{version} on this host's own",),
     # Two independent per-release claims share this file. Its header states the
     # request shape each side of the channel writes, so a bump that moved either side
     # would leave it reconciling a frame nobody sends; the second is the run-id export
@@ -298,6 +319,42 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         "measured against onepipeline {version} by dumping this command's whole environment",
     ),
 }
+
+
+#: The read API's own per-release facts. It is the one engine here whose source this
+#: host does not have — no registered checkout, and `onepipeline-api --help` offers
+#: only `serve` — so the wire shape below was *measured* off a live run rather than
+#: read off a declaration, and nothing can reconcile the field names. What can be
+#: held is the freshness: the paragraph names the release it was measured on, and a
+#: bump fails here rather than leaving a schema version and five span kinds asserting
+#: something about a build nobody re-ran. Its pin is `config/onepipeline-ui.version`,
+#: which `scripts/session-setup.sh` installs `onepipeline-api-cli` from.
+ADOPTED_READ_API_CLAIMS = {
+    "docs/telemetry.md": ("**`onepipeline-api` {version}**, the release",),
+}
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(("relative_path", "templates"), ADOPTED_READ_API_CLAIMS.items())
+def test_claims_about_the_adopted_read_api_name_the_adopted_release(
+    relative_path: str, templates: tuple[str, ...]
+) -> None:
+    """A measurement is dated to what was measured, since nothing else can check it.
+
+    Every other engine claim in this repository is reconciled against a declaration.
+    This one cannot be, so the gate holds the next best thing — that the paragraph
+    says which build it describes — and a bump turns a silent staleness into a failing
+    check that names the paragraph to re-measure.
+    """
+    adopted = _adopted("onepipeline-ui")
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+    for template in templates:
+        stated = template.format(version=adopted)
+        assert written.count(stated) == 1, (
+            f"{relative_path} states {stated!r} {written.count(stated)} times, not once; "
+            f"`onepipeline-api` {adopted} is what this host serves, so re-measure the "
+            "timeline against it and update that one site in the same change"
+        )
 
 
 @pytest.mark.reads_docs

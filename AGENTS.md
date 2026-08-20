@@ -42,9 +42,20 @@ checkout list `config/onevcs.checkouts`, and `just repos-apply` installs both �
 idempotently, so it is re-run after an edit rather than migrated. Editing that file
 is how routing changes, and `onevcs rules check <repo>` is what shows the resolved
 policy an identity ends up with. `just repos` only lists registered identities and
-checkouts: the `workflow` and `repo_type` it also prints are `onevcs register`'s
-derivation from the origin, unsettable and read by nothing on the publication path.
-Dispatch uses the gate that file resolves and never auto-detects one.
+checkouts: the `workflow`, `repo_type`, and `gate` it also prints are `onevcs
+register`'s derivation from the origin and the checkout — no flag sets them, and
+none of them is the routing. But **"unsettable" is not "unread"**, and the third one
+is read where it matters least obviously: `onevcs recover`'s `attests_nothing` (onevcs
+0.7.0, `crates/onevcs/src/recover.rs`) compares the *stored* identity gate against
+`store::NOOP_GATE` and, when it is that, the rules file's gate is `{kind: pre-push}`,
+and the source checkout carries no executable `pre-push` hook, refuses the recovery
+outright — because an attestation with nothing behind it attests nothing. The other
+two decide which verb that file's refusals hand an operator: `complete_branch_verb`
+reads `repo_type` and `workflow` to offer `publish-branch` for a team or remote
+identity and `integrate` for the rest. So a gate this host resolves through the rules
+file does not remove the stored one from the path; it is still the value a recovery
+checks itself against. Dispatch uses the gate that file resolves and never
+auto-detects one.
 Team repositories default to an ordinary ready-for-review
 open PR; explicit `change-auto` or `change-direct` merges their remote PR.
 Single-owner repositories preserve local direct or remote auto behavior, while
@@ -899,25 +910,39 @@ refuses every plan it has. All three paths
 resolve against the directory a run is launched from, which is why `just
 orchestrate` is run from the repository root.
 
-Those views also stop guessing at what is *running*. A node the ledger records as
-started now reports which side of the conversation is serving it, on which harness
-identity, and for how long — with an anomalous duration for that role flagged, and a
-node nothing is driving flagged `UNDRIVEN` (deliberately not `parked`, which is the
-node state a manager's own `cancel` produces). All of it is proven
-from the dispatch ownership registry, never from `ps` output matched by pattern: the
-`ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into every process a dispatch
-starts, plus the owner lock a live dispatcher holds. `just status` carries the host's
-load averages with that same attribution, and **`just host`** is the whole-host
-view — per live dispatch, its owning session, run/node, role, turn age, and load
-contribution. Miscounting live dispatches from `ps`, and missing a judge turn wedged
-for nearly two hours, are what these replace.
+Those views also stop guessing at what is *running*, and what they print is worth
+knowing exactly, because the sentence here used to promise more than the commands
+give. A node the ledger records as started reports how long it has been running,
+what it is doing *now* from its streamed events, how many events it has recorded and
+how long ago, and — where the dispatch is streaming — when it was last alive:
+`stale-engine-docs-2: running for 25m21s — now Bash … (213 event(s), 9s ago; alive
+3s ago)`. A node nothing is driving is flagged `UNDRIVEN` (deliberately not `parked`,
+which is the node state a manager's own `cancel` produces). The **side and identity**
+attribution is on a *failure* line rather than a running one —
+`dispatch-appendix: failed — the agent side: identity 'claude-code:alternate'
+refused (quota)`. **`just host`** is the whole-host view, one row per live dispatch:
+run, node, harness, and turn age, above the run roots it could not read and why.
+Miscounting live dispatches from `ps`, and missing a judge turn wedged for nearly
+two hours, are what these replace.
+
+Two things this paragraph used to claim are **not** in force and should not be
+planned around: there is no `ORCHESTRATOR_AGENT_STATUS_DIR` stamp on a dispatched
+process — no engine on the adopted stack exports that variable, and only
+`scripts/smoke.sh` sets it here, so `scripts/oneharness-agent.sh`'s status-marker
+path is unexercised on an ordinary dispatch — and neither view prints host load
+averages. How `onepipeline` proves a live dispatch is its own is unestablished here;
+read it out of the crate before relying on it.
 They also report the tier *above* those dispatches: one driver line per unfinished
 launch naming whether the orchestrator's recorded pid is still there, which part of
 its loop the run's own state places it in, and how long since anything of it was last observed doing something.
 A driver this host has proved is gone reads `DRIVER DEAD … nothing is driving this
-run` — distinct from `PARKED`, which is a launch that still holds its pid. The same
-tier is served as run-scope timeline spans, from a bounded local capture when the
-harness refused to write its history; see [Seeing the supervisory
+run` — distinct from `PARKED`, which is a launch that still holds its pid, and
+distinct again from the separate **observer** verdict printed beside it
+(`OBSERVER DEAD` / `NO OBSERVER`), which says whether anything is *watching* rather
+than whether anything is driving. The same tier is representable as run-scope
+timeline spans — `rollup` spans labelled `agent_role: orchestrator` — but a real run
+measured here carried none, and the bounded local capture that used to back-fill
+them exists nowhere on the adopted stack; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
 cannot fully answer: on the adopted onepipeline 0.8.5 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
@@ -969,13 +994,15 @@ lock` rather than the silent rewrite `uv run` performs on its way into a target 
 the difference between the two on a branch whose subject *is* a pin. `UV_NO_SYNC`
 turns it off, which is how the journeys that copy this checkout keep pointing uv at
 this one's environment.
-Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
-turn timeline with `just telemetry`.
+Use `docs/telemetry.md` to inspect a run's wall-clock breakdown and usage with
+`just telemetry`; it is run-scoped, with no per-node rows and no turn timeline —
+the timeline is the read API's, at `/api/v2/runs/{run}/timeline`.
 A node that died to the provider is diagnosed from `just status` alone: it and
-`just runs` print a provider-health block for all five configured identities —
-each one's binding window, utilization, and reset, with a failed probe listed as
-`unknown` rather than dropped — above one rolled-up line per repeated cause naming
-the refusing **side** and **identity**. Read the side first: the agent and judge
+`just runs` print `oneagentgraph health`'s own JSON report — every identity oneharness
+knows, not only the five these configs name, each with its selector, auth mode, and
+every availability window's `used_percent`, `resets_at`, and `is_binding`, and a
+failed probe listed as `state: unknown` with the reason rather than dropped — above
+a per-node failure line naming the refusing **side** and **identity**. Read the side first: the agent and judge
 chains prefer different identities, so a fix aimed at the wrong one changes
 nothing, and a whole night was once lost to a judge-chain quota that read as a
 bare `harness failed (quota)`. `just results` and the read API carry the same

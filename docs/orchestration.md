@@ -1022,9 +1022,9 @@ fields, and the `oneharness` provider composes them into one prompt reading
 `Original task:` … `Completion criterion:` … then the transcript.
 
 An unsatisfiable criterion does not fail fast. The simulated-user supervisor is
-working correctly when it refuses completion, so the worker is parked and
-re-asked until the turn cap — spending a full attempt, often several, to produce
-a generic `not-completed` that names neither the criterion nor the cause. Before
+working correctly when it refuses completion, so the worker is re-asked until the
+turn cap — spending a full attempt, often several, to produce a bare `task-failed`
+that names neither the criterion nor the cause. Before
 dispatch, ask of each criterion: what would the worker run to satisfy it, and can
 that command succeed right now? When a criterion's proof is necessarily
 indirect, pair it with an `## Additional info` instruction to state the blocker in
@@ -1250,30 +1250,31 @@ now — `now Bash just gate (7 event(s), 4s ago)` — read from the events the h
 is publishing as it works. A dispatch that is not streaming, or has published
 nothing yet, reads exactly as it did before.
 
-Each recorded schema-v4 node result carries its own `artifacts` paths. Lifecycle
-step payloads carry their step-specific raw onejudge report and stable
-oneharness-session pointer. Local gate failures surface from `git push`; the
-lifecycle records `gate-failed` when hook output identifies the gate and otherwise
-records a self-describing `error` outcome with Git's diagnostic.
-Remote-first failures remain named required-check outcomes. Each lifecycle node
-also records one `merge-gate-coverage` event before it dispatches, naming the
-`pre-push` hook and required checks that will verify it, so a late rejection can
-be read against what was expected to run. Each gated push then records a
-`verification-finished` event with its verdict and a bounded `output_tail`, and
-appends the whole run to the node's `artifacts.gate_log` — for a green
-publication as much as a rejected one, so a settled node can show what its gate
-did rather than only that nothing objected.
+**Where a node's gate evidence actually is.** `result.json` is terse and carries no
+artifact paths: at `schema_version` 3 each node reads `id`, `status`, `outcome`,
+`landing`, `branch`, `change_url`, and the human-action fields. The evidence lives
+in `events.jsonl`, the merged three-stream journal, where a lifecycle node's
+`onevcs` session is **followed** while it runs and every envelope is stamped with
+the node it belongs to. The gate is a pair of that session's events —
+`gate-started` naming the command and the comparison remote and base, then
+`gate-verdict` carrying `pass`/`fail`, the command, the output, a `preserved_log`
+path that outlives the run's worktree, and the whole run again as an `artifact`
+reachable with `onevcs artifact`. Both are emitted for a green publication as much
+as a rejected one. The per-dispatch raw reports are files under
+`runs/<run-id>/reports/`.
 
-That log holds every record the merge path produced, in order, including the
-publications that never reached a gate at all: a rebuild whose base was advanced
-under it, or that could not fetch, build its worktree, or write. Those settle
-with a `publication-failed` event carrying the same bounded `output_tail` — for a
-lost base race, one line per attempt naming the sha it verified against and the
-sha it then observed — and the result's detail names the log. Before that, such a
-failure recorded neither, which is how a run could settle seconds after a green
-gate with no evidence of what went wrong. Because artifact
-paths are in the terminal `GraphResultItem`, crash projection retains them
-byte-for-byte.
+Those events exist only where `onevcs` ran a gate of its own — a `{command: [...]}`
+rule. A `{kind: pre-push}` identity's verdict arrives as `git push` output and a
+`{kind: checks}` identity's arrives from the host afterwards, so neither emits a
+`gate-verdict` and neither preserves a log.
+
+A publication that never reached a gate at all — a base advanced under it, a fetch
+or a worktree it could not build — produces no gate events either. There is no
+`publication-failed` *event*: `publication-failed` is the node's settled outcome,
+and its whole account is the settlement's `detail`, which is `onevcs`'s own reason
+prefixed `onevcs: `. That is what `just results` renders and it is the only place
+the distinction between "the gate rejected this" and "the base moved" survives —
+`vcs::outcome_of` collapses `onevcs`'s four failure kinds into that one word.
 
 A failed `just gate` names the tier that failed and the loop to close it. An
 llmlint failure also prints the comparison base the gate resolved: clear those
@@ -1421,13 +1422,13 @@ quota that turn just spent. One refusal there used to kill the process that owne
 the whole run.
 
 Those requests are retried with bounded backoff before the process is allowed to
-die, and only for a classified provider refusal: an attempt that ran and simply did
-its job badly is a different failure. The check-in pacemaker's is deferred to its
-next interval by its own lease instead.
+die, and the test is not a classification of the refusal — it is **whether the
+attempt produced any events at all**. `engine::attempt` re-asks a failed dispatch
+that reached silence; one that recorded anything has already answered, whatever its
+exit status, and asking again would spend another budget on work already done. A
+provider that refuses before the first turn is the case this exists for: the failure
+carries no work to lose.
 
-Each attempt takes a conversation of its own (`…#relaunchN`), for the same reason a
-lifecycle relaunch does — see
-[repo-lifecycle.md](repo-lifecycle.md#a-death-that-left-no-work-is-not-charged-to-the-work-budget).
 Three attempts by default, five seconds apart and doubling to a two-minute ceiling;
 `ONEPIPELINE_BOUNDARY_ATTEMPTS` and `ONEPIPELINE_BOUNDARY_BACKOFF_SECONDS` change
 both, and an unusable value falls back to the default rather than disabling the
@@ -1721,13 +1722,13 @@ Everything a transition used to do, the reconciler does as it goes:
 - **Unresolved lifecycle stack anchors and resume checkpoints stay on their nodes**,
   because nothing re-derives those nodes. An unresolved same-repository publication
   anchor is never cut by an attestation removing the human gate in front of it.
-- **A preserved branch is continued from where it stopped.** Which failures leave
-  one is not a judgement anything makes at a boundary: every settlement that
-  preserves committed work records the continuation, keyed on the outcome domain —
-  see [Preserved committed work implies a recorded
-  continuation](repo-lifecycle.md#preserved-committed-work-implies-a-recorded-continuation).
-  A gate rejection and a refused publication are both continued on their branch
-  with no planner edit.
+- **A preserved branch stays pinned to its node.** Which failures leave one is not a
+  judgement anything makes at a boundary: `pin_preserved_branch` keys on the
+  *status*, so `failed`, `cancelled`, and `parked` all keep their branch — see
+  [Preserved committed work implies a recorded
+  pin](repo-lifecycle.md#preserved-committed-work-implies-a-recorded-pin). A gate
+  rejection and a refused publication both keep theirs. Nothing continues one on its
+  own; a `retry` or `requeue` edit is what picks it up.
 
 A **cross-DAG reference is not a dependency the graph can satisfy**:
 `run:<id>#<node>` names no node of this graph, so nothing here ever removes it. It
@@ -1738,20 +1739,34 @@ reporting `upstream-modified` and stop blocking on an upstream that became
 unresolvable, which is exactly what the reference is for. A consumer with no
 dependents leaves nothing to carry the watch, and it ends there.
 
-An automatic continuation of a failed or cancelled lifecycle node is **bounded**:
-the count is kept on the node's `resume.attempts` and, once spent, the failing
-result stands for the planner and the branch stays recoverable with `just
-repo-recover`. An explicit `retry` edit clears the count, so the bound only ever
-stops the harness repeating itself — never a decision the planner made after
-reading the result.
+**Nothing continues a failed or cancelled lifecycle node on its own.** There is no
+continuation budget and no `resume.attempts` field — `Resume` is
+`{branch, checkpoint?, completed_steps}` under `deny_unknown_fields`, so a plan
+writing an `attempts` is refused while it loads. A recorded settlement stands:
+`graph::derive` re-derives only the two gates `blocked` and `skipped`, so a node
+recorded `failed` or `cancelled` keeps that status for the life of the run. A
+`retry` or `requeue` live edit is the whole of how one is picked back up, and the
+branch stays recoverable with `just repo-recover` or `just publish-branch` in the
+meantime.
 
-A **parked** node is the deliberate exception, and the distinction is worth holding
-onto: `cancelled` is a stop the engine took, so continuing it is the harness
-finishing what it started and it spends that budget. `parked` is a stop the
-*planner* or the monitor took with `cancel`, so nothing redispatches it and it
-spends nothing. It keeps its checkpoint regardless, because that preserved branch
-is exactly what a later [`requeue`](#parking-a-node-and-picking-it-up-again) has to
-pick up rather than cutting a fresh one beside it.
+The one automatic re-dispatch in the engine is narrower than that and is not about
+continuation at all: `engine::attempt` asks again **only when a dispatch produced no
+events whatsoever** — a provider that refused before the first turn. Three attempts
+by default (`ONEPIPELINE_BOUNDARY_ATTEMPTS`), 5 seconds of backoff doubling to a
+120-second ceiling, and each one recorded as its own `node-dispatched` carrying
+`attempt` and `attempts`. Spent without the agent producing anything, the node
+settles `no-agent-progress`; a dispatch that never started settles
+`infrastructure-failure`. An attempt that recorded anything is never re-asked,
+whatever its exit status.
+
+`cancelled` and `parked` still differ, but in what the *planner* may do rather than
+in what the engine does: `cancelled` is a stop the engine took (a `drop` or a
+`retry` stopping a live dispatch), while `parked` is the planner's or the monitor's
+own idle through `cancel`, and only a
+[`requeue`](#parking-a-node-and-picking-it-up-again) lifts it. Both preserve their
+branch — `projection::pin_preserved_branch` treats `failed`, `cancelled`, and
+`parked` alike — so a later pick-up continues that branch rather than cutting a
+fresh one beside it.
 
 This replaced a rule under which the plan of record was re-read from a launch file
 between rounds and structural live edits were round-scoped. Two failures were not

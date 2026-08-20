@@ -114,11 +114,28 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         # Why an empty transcript surface is an engine-pin question and not a reader one.
         "docs/dag-ui.md": ("the adopted release that is **oneagentgraph {version}**",),
+        # The pre-extraction callout's third denial, beside the onepipeline and onevcs
+        # halves their own gates hold.
+        "docs/onejudge-integration.md": ("`oneagentgraph` {version}, nor `onevcs`",),
     },
     "onevcs": {
         # The retry floor: a dispatched session publishes through the linked onevcs, so
         # the CLI pin beside it is not the version in force.
         "AGENTS.md": ("its lock still resolves {version}",),
+        # Which onevcs the engine-behaviour claims in that document were read at. Every
+        # one of them is about the copy a *dispatched* node publishes through, so the
+        # linked version is the only one that answers for them — and `DRAIN_SECONDS`
+        # becoming `DRAIN` between 0.4.2 and 0.8.0 is what this gate is for: the
+        # constant gate below caught the rename, and nothing held the header sentence
+        # that had just stopped naming the release the rename happened in.
+        "docs/repo-lifecycle.md": (
+            "the **`onevcs` {version}** its `Cargo.lock` resolves",
+            "`onevcs` {version} has none to open",
+        ),
+        # The pre-extraction callout's denial: those symbols are absent from the engines
+        # at named releases, and a bump that left the numbers behind would be a denial
+        # about releases nothing runs.
+        "docs/onejudge-integration.md": ("nor `onevcs` {version}.",),
     },
 }
 
