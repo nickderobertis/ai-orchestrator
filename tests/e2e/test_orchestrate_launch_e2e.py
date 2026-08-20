@@ -766,7 +766,8 @@ def test_the_shared_preamble_reaches_a_dispatched_worker_itself(launched: Launch
 
     The worker's role is appended after it rather than replacing it, which is why this
     is a containment check and not an equality one: for the shipped plan's `engineer`
-    node that role is the one built into the tool, not `personas/engineer.yaml`.
+    node that role is the one built into the tool, which is why `personas/` carries no
+    file for it to be confused with.
     """
     preamble = shared_agent_preamble()
     # The system prompt a dispatch was given appears on no read-only view either, for

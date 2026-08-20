@@ -8,57 +8,38 @@ turn — which is why the journeys proving each one arrives are separate. What t
 is this file, so the readers of it live here once: a copy per journey would be somewhere
 for two tests to disagree about what it says.
 
-Read with readers written for these fields rather than with a YAML library: the
+Read with a reader written for this shape rather than with a YAML library: the
 workspace installs none, and adding a parser as a dependency to read three blocks of a
-file this repository writes is a worse trade than the few lines below, which state the
-shape they accept and fail loudly when the file leaves it.
+file this repository writes is a worse trade. That reader is
+`orchestrator.criteria_guard.block_scalar`, which `just check-plan` already needs to
+read a persona fragment lifted out of a binary — so this file states the *shape* it
+expects on top of it and fails loudly when the file leaves it, rather than carrying a
+second copy of the parsing for the two of them to disagree over.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from orchestrator.criteria_guard import LITERAL_HEADERS, block_scalar
 from orchestrator.root import REPO_ROOT
 
 BASE_CONFIG = Path("config") / "onejudge.base.yaml"
 
-#: Every block-scalar header a field here may open with. Which one it uses decides how
-#: the value reaches the model — `>` folds its newlines to spaces, `|` keeps them — so
-#: the readers below fold or keep to match, and a style change is not a test change.
-FOLDING_HEADERS = (">", ">-", ">+")
-LITERAL_HEADERS = ("|", "|-", "|+")
-BLOCK_SCALAR_HEADERS = FOLDING_HEADERS + LITERAL_HEADERS
 
+def _block_scalar(key: str) -> tuple[str, str]:
+    """The header a `key:` opens with, and its block normalized for reading.
 
-def _block_scalar(key: str) -> tuple[str, list[str]]:
-    """The header a `key:` opens with, and the more-indented block it introduces.
-
-    The block is returned with the scalar's own indentation stripped and nothing else
-    touched, which is exactly what a YAML reader hands the value's consumer.
+    Folded or literal to match that header, which is what makes comparing it against
+    a whitespace-normalized prompt valid — and the only comparison a model's
+    rendering of these fields supports.
     """
-    text = (REPO_ROOT / BASE_CONFIG).read_text(encoding="utf-8")
-    lines = text.splitlines()
-    opened = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.strip() in {f"{key}: {header}" for header in BLOCK_SCALAR_HEADERS}
-        ),
-        None,
-    )
-    assert opened is not None, (
+    read = block_scalar((REPO_ROOT / BASE_CONFIG).read_text(encoding="utf-8"), key)
+    assert read is not None, (
         f"{BASE_CONFIG} no longer opens `{key}` as a block scalar, so this reader "
         "cannot state what that field says"
     )
-    header = lines[opened].strip().split(": ", 1)[1]
-    indent = len(lines[opened]) - len(lines[opened].lstrip())
-    block: list[str] = []
-    for line in lines[opened + 1 :]:
-        if line.strip() and len(line) - len(line.lstrip()) <= indent:
-            break
-        block.append(line)
-    inner = min((len(line) - len(line.lstrip()) for line in block if line.strip()), default=0)
-    return header, [line[inner:] if line.strip() else "" for line in block]
+    return read
 
 
 def shared_completion_bar() -> str:
@@ -69,8 +50,7 @@ def shared_completion_bar() -> str:
     would reach it with those newlines intact; both are accepted and both are compared
     against a whitespace-normalized prompt, so the field's style is free to move.
     """
-    _, block = _block_scalar("done_when")
-    bar = " ".join(" ".join(block).split())
+    _, bar = _block_scalar("done_when")
     assert bar, f"{BASE_CONFIG} states an empty shared completion bar"
     return bar
 
@@ -82,8 +62,7 @@ def shared_judge_persona() -> str:
     for the same reason the completion bar is: it reaches the judge as one line either
     way, so the field's style is free to move without moving what it says.
     """
-    _, block = _block_scalar("persona")
-    persona = " ".join(" ".join(block).split())
+    _, persona = _block_scalar("persona")
     assert persona, f"{BASE_CONFIG} states an empty judge persona default"
     return persona
 
@@ -93,14 +72,13 @@ def shared_agent_preamble() -> str:
 
     A literal scalar, because this one is paragraphs: it reaches the worker's system
     prompt with its line structure intact and a persona's role appended after it, so
-    the value is returned verbatim rather than folded.
+    the block's own lines are kept rather than folded together.
     """
-    header, block = _block_scalar("system_prompt")
+    header, preamble = _block_scalar("system_prompt")
     assert header in LITERAL_HEADERS, (
         f"{BASE_CONFIG} opens `system_prompt` as {header!r}, a folding scalar; the "
         "shared preamble is paragraphs and reaches a worker with its line structure "
         "intact, so this reader states the literal style it expects"
     )
-    preamble = "\n".join(block).strip("\n")
     assert preamble, f"{BASE_CONFIG} states an empty shared agent preamble"
     return preamble

@@ -323,6 +323,12 @@ and is never a command.
    `check-in` is built in at all, which is why the dag-scope graph names both by path.
    All re-measured on the adopted stack; see
    [Which of these files a dispatch actually reads](personas/README.md#which-of-these-files-a-dispatch-actually-reads).
+   Because that bar is upstream's, this host has **no lever over it**: amend an
+   engineer node's review bar in its own `task`, not in `personas/`. `engineer.yaml`
+   was deleted rather than kept for exactly that reason — it read like the bar and was
+   read by nothing — and `just check-plan` now resolves each node's real bar out of the
+   `oneagentgraph` `onepipeline` links and refuses a task whose criteria are silent
+   about a demand it makes.
 6. **Launch and supervise.** Before a lifecycle run, use `just repos` to confirm
    its registered identity and available checkout aliases, and `onevcs rules check
    <repo>` for its resolved publication, approvals, and gate — `just repos`'s type,
@@ -789,6 +795,24 @@ whose run root is already taken rather than by predicting the `<name>-2`
 that id to its dispatch as `ONEPIPELINE_RUN_ID`, the run whose channel a blocking
 question goes to — without it, a detached planner's questions would queue on a live
 run belonging to somebody else's workstream.
+
+**`just check-plan <plan.json>` reads a plan against the bar each of its nodes will
+actually be judged against**, and is the cheap read to make before launching one. It
+refuses a node whose `## Acceptance criteria` name a procedure instead of a property,
+and one whose criteria are silent about a demand its resolved bar — or its own
+`## Additional info` — makes of it. Both are how correct, gate-green work gets failed
+on procedure rather than on its work: the judge reads a demand nobody wrote as a
+criterion and supplies its own reading of it, the node settles `failed`, and its
+dependents never schedule. Two things it does are worth knowing before trusting or
+arguing with it. It resolves a node's `persona` the way a dispatch does — a bare name
+is a role compiled into the `oneagentgraph` **`onepipeline` links**, not the pinned
+`oneagentgraph` CLI and not `personas/` — so a name nothing ships is refused here
+instead of costing a scheduled node, and a demand it reports is one the run's own
+judge will make. And it holds every task to `config/dispatch-appendix.md`, this host's
+**one source** for the operational text a task's `## Additional info` carries: that
+text was gitignored scratch propagated by copy-paste, which is why it contradicted
+itself about the complete gate for long enough to fail a node. Rebuild a task's
+appendix from that file rather than from an older builder's copy.
 
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking

@@ -187,6 +187,17 @@ orchestrate *args:
 plan *args:
     @./scripts/plan.sh "$@"
 
+# Read a plan against the bar each of its nodes will actually be judged against:
+# `just check-plan <plan.json>`. What it refuses and why is
+# `orchestrator/criteria_guard.py`'s to say; two things about the *result* are this
+# seam's. Exit 1 is a refusal, naming the node, the demand, and where that demand is
+# made; exit 2 is a plan that could not be read at all, so nothing was judged — a
+# plan builder branches on the difference. And it reads the plan only: it launches
+# nothing, spends no provider turn, and is safe to run beside live work.
+[doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
+check-plan *args:
+    @uv run orchestrator-check-plan "$@"
+
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.
 #

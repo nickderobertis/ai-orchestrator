@@ -11,7 +11,6 @@ the role-specific parts live here.
 
 | Persona | Use it for |
 | --- | --- |
-| `engineer` | General implementation and realistic testing across server-side systems, UI, accessibility, and contract-aware libraries. |
 | `planner` | Decomposing work into a dependency-ordered plan cut at contract seams, asking the manager at every fork and recording its exceptions, under a judge that holds the plan to the original goals (no implementation). |
 | `orchestrator` | Actively monitoring an executing tracked graph: judging observed activity against the plan, surfacing what it finds, and applying only unambiguous in-allowlist fixes. |
 | `check-in` | Synthesizing a read-only, durable-state-derived planner status update. |
@@ -22,6 +21,17 @@ the role-specific parts live here.
 | `crozier/crozier-corpus` | Crozier-specific corpus research and curation. |
 
 The test suite requires these rows to match recursive persona discovery exactly.
+
+`engineer` is deliberately absent. Every plan names it as a bare `engineer`, which
+resolves to the role built into `oneagentgraph` — so the file that used to sit here
+was read by nothing but `just validate-personas` and by readers who reasonably took
+it for the bar a node is judged under. It is gone rather than corrected: this
+repository has no lever over that review bar, and a catalog entry implying otherwise
+is worse than none. Amend an engineer node's review bar in its own task, as
+`## Acceptance criteria`; change the role itself upstream, in `oneagentgraph`. The
+four flat files still here whose names a built-in claims — `docs-writer`, `planner`,
+`researcher`, `reviewer` — are inert for exactly the same reason, and each is kept
+only for what its row above describes.
 
 ## Adding a persona
 
@@ -78,9 +88,11 @@ which re-takes both measurements on every gate run:
 pinned binary, and `tests/e2e/test_orchestrate_launch_e2e.py` reads the composed
 completion criterion out of a real dispatch.
 
-- Editing `engineer.yaml` here does not change what an `engineer` node is dispatched
-  with. The flat files whose names match a built-in are a catalog and a validation
-  target, not the dispatch input.
+- Editing a flat file here whose name a built-in claims does not change what a node
+  naming that role is dispatched with. Those files are a catalog and a validation
+  target, not the dispatch input — which is why `engineer.yaml` is gone rather than
+  maintained, and why `orchestrator/criteria_guard.py` resolves a node's bar out of
+  the `oneagentgraph` `onepipeline` links instead of out of this directory.
 - A built-in role's own `user.done_when` is enforced **alongside**
   `config/onejudge.base.yaml`'s, not instead of it. The `reviewer` node's supervisor
   was given "Both of these must hold: 1. every acceptance criterion stated in the
@@ -110,7 +122,7 @@ just orchestrate scratch/draft.plan.json
 
 Once proven, add it to this catalog through the orchestrator's isolated
 self-dispatch lifecycle; do not edit the canonical checkout directly. General,
-cross-repo roles use a flat name (`engineer`); repo-specific roles use a
+cross-repo roles use a flat name (`orchestrator`); repo-specific roles use a
 slash-qualified name (`crozier/crozier-corpus`), stored as
 `personas/crozier/crozier-corpus.yaml` — and dispatched by that *path* relative to
 `graphs/` (`../personas/crozier/crozier-corpus.yaml`), never by the catalog name,

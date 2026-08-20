@@ -13,11 +13,16 @@ dependencies = [
 ]
 
 [project.scripts]
-# The one command this repository still owns. Every other verb is a thin `just`
-# wrapper over a published CLI; this one exists because `just lint-llm` has to hand
+# The two commands this repository still owns. Every other verb is a thin `just`
+# wrapper over a published CLI; the first exists because `just lint-llm` has to hand
 # a tool it shells out to a merged `ONEHARNESS_HISTORY_LABELS` value, and the merge
 # has to preserve an inherited value whose shape the recipe does not know.
 orchestrator-history-labels = "orchestrator.labels:main"
+# The second reads a plan against the review bar each of its nodes resolves to, which
+# no published CLI knows how to do: the bar is composed from this host's own base
+# config and the role `onepipeline` links, and the plan is refused before a launch
+# spends a dispatch on a node its own judge would fail on procedure.
+orchestrator-check-plan = "orchestrator.criteria_guard:main"
 
 [dependency-groups]
 dev = [
