@@ -39,11 +39,12 @@
 # runs-root journal would encode a private layout into this repository.
 #
 # Exits: 0 with the body (on stdout, or in `--out`'s file with stdout silent);
-# 3 when no body was drafted, naming which of `onepipeline`'s three endings it was;
-# 2 for usage, for a base that could not be resolved, or for an environment the
-# drafting turn could not be started in. Nothing but a drafted body ever reaches
-# stdout. There is no retry of its own — `schema_max_retries` in
-# `oneharness.pr-author.toml` is the only retry there is.
+# 3 when no body was drafted, naming which of `onepipeline`'s three endings it was —
+# and, for the `dispatch-failed` ending, what `oneagentgraph` said killed each member
+# and where the events it said it in were kept; 2 for usage, for a base that could not
+# be resolved, or for an environment the drafting turn could not be started in. Nothing
+# but a drafted body ever reaches stdout. There is no retry of its own —
+# `schema_max_retries` in `oneharness.pr-author.toml` is the only retry there is.
 #
 # llmlint: ignore-file[tool_output_is_signal] The body on stdout and the ending on
 # stderr are this command's whole product: an operator runs it to obtain a change
@@ -78,6 +79,17 @@ ONEPIPELINE_OPENING="Read this branch's diff and write the change request's body
 # apart because they take three different fixes — the graph or its quota, the schema
 # or the prompt that answers it, the persona's prose.
 #
+# It reads the OTHER kind in the same pass, and that is the difference between a
+# diagnosis and a sentence. A member that never answered emits `member-died` carrying
+# `oneagentgraph`'s own classification of why — `rule`, `cause`, and a `detail` naming,
+# for instance, the environment indirection nobody set — and a reader that looked only
+# for the kind carrying a body threw that away and reported nothing but the exit code
+# the graph ended on. So the two are collected by two branches rather than by one
+# predicate, and the deaths are reported above the `dispatch-failed` ending they
+# explain. `detail` is bounded and flagged `truncated` by `oneagentgraph` already:
+# re-bounding it here would cut a diagnosis twice, and printing a cut one unflagged
+# would present it as whole.
+#
 # Which ending an exhausted schema retry budget lands on is measured rather than
 # assumed, and it is not the one the name suggests: on the adopted `oneagentgraph` a
 # member whose every answer was refused **dies** and retains no report at all, so the
@@ -89,7 +101,12 @@ ONEPIPELINE_OPENING="Read this branch's diff and write the change request's body
 READ_PROGRAM='
 import json, pathlib, sys
 
-events, out, status = sys.argv[1], sys.argv[2], sys.argv[3]
+events, out, status, keep_events_status = (
+    sys.argv[1],
+    sys.argv[2],
+    sys.argv[3],
+    int(sys.argv[4]),
+)
 
 # The three ending names, each on a line of its own, because the vocabulary belongs to
 # onepipeline rather than to this script: tests/drafting_task_contract.py reads them
@@ -106,9 +123,43 @@ SCHEMA_REFUSED = (
 NO_BODY = "the drafting dispatch succeeded and there was no body in what it answered with"
 
 
-def give_up(ending: str, detail: str) -> None:
+def give_up(ending: str, detail: str, diagnosis: tuple = (), keep_events: bool = False) -> None:
+    """Report an ending, with whatever oneagentgraph said about it written above it.
+
+    The ending line goes last because it is the sentence an operator reads first and
+    the one every journey reads back; the diagnosis above it is the classification a
+    member that never answered was killed under. keep_events is how this half tells the
+    shell half that the events file behind that diagnosis has to outlive the run.
+    """
+    for line in diagnosis:
+        sys.stderr.write(f"draft-pr-body: {line}\n")
     sys.stderr.write(f"draft-pr-body: no body was drafted ({ending}): {detail}\n")
-    raise SystemExit(3)
+    raise SystemExit(keep_events_status if keep_events else 3)
+
+
+def death(envelope: dict) -> str:
+    """One member-died envelope, as the line that says why nothing was drafted.
+
+    Everything here is oneagentgraph own words: rule is how it classified the death,
+    cause is what it attributed it to, and detail is the sentence naming the thing an
+    operator has to fix. A detail it marked truncated is said to be truncated rather
+    than quietly presented whole, because the fix could be in the part that was cut.
+    """
+    payload = mapping(mapping(envelope).get("payload"))
+    member = mapping(mapping(envelope).get("labels")).get("member")
+    # llmlint: ignore[changed_behavior_has_e2e] Not producible against the real oneagentgraph: every member-died envelope it emits is stamped with the member it is about, because that label is how a run addresses a member at all. Reaching this needs an events file written by hand, and a fixture is the one thing these journeys refuse — what makes the protocol restated above honest is that it is only ever checked against the tool that owns it. The fallback stays because a shape that tool never emitted must not become a traceback where the ending belongs.
+    named = member if isinstance(member, str) and member else "an unnamed member"
+    stated = " ".join(
+        f"{field}={payload[field]}"
+        for field in ("rule", "cause", "detail")
+        if isinstance(payload.get(field), str) and payload[field]
+    )
+    # llmlint: ignore[changed_behavior_has_e2e] The same, for the same reason: oneagentgraph classifies every death it reports, and both classifications this suite can drive carry rule, cause, and detail together — unstartable/spawn and provider-failure/unclassified. A death it named nothing for is a shape the adopted release does not emit, so only a hand-written events file could produce one. What this line owes an operator is that such an envelope would still read as a sentence rather than trail off after "died:".
+    if not stated:
+        stated = "oneagentgraph named no rule, cause, or detail for it"
+    elif payload.get("truncated") is True:
+        stated = f"{stated} (oneagentgraph truncated this detail)"
+    return f"{named} died: {stated}"
 
 
 def mapping(value: object) -> dict:
@@ -122,6 +173,7 @@ def mapping(value: object) -> dict:
 
 
 results = []
+deaths = []
 try:
     recorded = pathlib.Path(events).read_text(encoding="utf-8")
 except OSError as unreadable:
@@ -134,7 +186,12 @@ for line in recorded.splitlines():
         envelope = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if mapping(envelope).get("kind") != "member-settled":
+    kind = mapping(envelope).get("kind")
+    if kind == "member-died":
+        # llmlint: ignore[changed_behavior_has_e2e] One line per dead member is what a graph of several members owes, and this script runs exactly one: graphs/pr-author.yaml declares the pr-author drafter and nothing else, so no run of it can carry a second death to drive. A journey that produced one would have to run a different graph than the drafter runs, which would prove that graph rather than this reader. The one-death path is driven end to end by test_a_member_that_could_not_start_reports_what_oneagentgraph_said_killed_it.
+        deaths.append(death(envelope))
+        continue
+    if kind != "member-settled":
         continue
     reported = mapping(mapping(envelope).get("payload")).get("report_path")
     if not isinstance(reported, str) or not reported:
@@ -152,7 +209,13 @@ for line in recorded.splitlines():
 # with; a recorded one is classified by what it says, because a turn that answered is
 # a dispatch that ran.
 if not results:
-    give_up(DISPATCH_FAILED_ENDING, f"{DISPATCH_FAILED} (the drafting graph exited {status})")
+    give_up(
+        DISPATCH_FAILED_ENDING,
+        f"{DISPATCH_FAILED} (the drafting graph exited {status});"
+        f" its events are kept at {events}",
+        tuple(deaths),
+        True,
+    )
 
 conformed = [result for result in results if mapping(result).get("schema_valid") is True]
 if not conformed:
@@ -372,6 +435,17 @@ scratch=$(mktemp -d -- "${TMPDIR:-/tmp}/orchestrator-draft-pr-body-XXXXXXXX") ||
     "check that ${TMPDIR:-/tmp} is writable, then retry"
 worktree="$scratch/branch"
 
+#: What the reader below exits with when the ending it reported is one whose diagnosis
+#: lives in the events file, so this trap must not take that file away. Declared here as
+#: the ONE source of it: the reader is handed this value rather than restating it, and
+#: it is mapped back to 3 before the script exits, so no caller ever sees it.
+KEEP_EVENTS_STATUS=4
+
+#: Set to the events path when that ending was reached, and read by `clean_up` below.
+#: Empty on every other path, which is every path where the scratch directory holds
+#: only a spent task and a change request's prose.
+keep_events=""
+
 # The checkout is never left holding this script's worktree, on any exit path — not a
 # refusal, not a failed turn, not a signal. `git worktree remove` is what takes the
 # entry out of the checkout's worktree list; removing only the directory would leave a
@@ -392,6 +466,15 @@ clean_up() {
     # that says there was none, is what the caller ran this for.
     git -C "$checkout" worktree remove --force "$worktree" >/dev/null 2>&1 ||
         printf 'draft-pr-body: the worktree at %s could not be removed from %s; remove it with git -C %s worktree remove --force %s\n' "$worktree" "$checkout" "$checkout" "$worktree" >&2
+    # The worktree entry above comes out of the checkout either way — that promise is
+    # about somebody else's repository and is not the run's to keep. What survives a
+    # `dispatch-failed` ending is this run's own scratch, because the events file in it
+    # is the whole diagnosis and the ending already named where it is. Deleting it was
+    # how a member's classified death became a sentence about an exit code with nothing
+    # left to check it against.
+    if [ -n "$keep_events" ]; then
+        return
+    fi
     rm -rf -- "$scratch" ||
         printf 'draft-pr-body: the scratch directory %s could not be removed; remove it by hand\n' "$scratch" >&2
 }
@@ -440,4 +523,13 @@ status=0
 (cd "$repo_root" && uv run oneagentgraph run "$PR_AUTHOR_GRAPH" \
     --task-file "$task" --dir "$worktree" --output json) >"$events" || status=$?
 
-"$python" -c "$READ_PROGRAM" "$events" "$out" "$status"
+# The reader's status is captured rather than propagated, because one of the endings it
+# reports decides something this shell owns: `set -e` would exit out from under that
+# decision, and the events file the ending points at would go with the trap.
+read_status=0
+"$python" -c "$READ_PROGRAM" "$events" "$out" "$status" "$KEEP_EVENTS_STATUS" || read_status=$?
+if [ "$read_status" -eq "$KEEP_EVENTS_STATUS" ]; then
+    keep_events="$events"
+    read_status=3
+fi
+exit "$read_status"

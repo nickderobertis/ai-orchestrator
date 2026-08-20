@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -38,7 +39,9 @@ from harness_indirections import (
     INDIRECTION_SOURCES,
     INDIRECTIONS,
     established_indirections,
+    harness_routing,
 )
+from nx_workspace import copy_working_tree
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -505,6 +508,344 @@ def test_an_answer_that_conforms_with_nothing_in_it_draws_no_body(tmp_path: Path
     assert "no-body" in drafted.stderr, (
         f"the drafter did not report `no-body`, which is the ending that points at the "
         f"drafting persona's prose:\n{drafted.stderr}"
+    )
+
+
+#: The variable a mutated drafting chain reads its one candidate's identity out of, and
+#: that nothing the drafter establishes sets. `oneharness` refuses to start a variant
+#: whose `env_from` names an unset variable, which is the state an operator's landing
+#: was actually in when this diagnosis went missing.
+UNSET_INDIRECTION = "ORCHESTRATOR_DRAFT_PR_BODY_NOBODY_SETS_THIS"
+
+#: The same thing, long enough that `oneagentgraph`'s own bound on a death detail cuts
+#: it. Measured rather than chosen: that bound is 4096 characters on the adopted
+#: release, and only a detail past it carries the flag this journey reads back.
+OVERLONG_INDIRECTION = f"ORCHESTRATOR_{'U' * 8000}"
+
+#: What the drafter appends to a detail `oneagentgraph` flagged as cut.
+TRUNCATION_FLAG = "(oneagentgraph truncated this detail)"
+
+#: The chain declaration a mutated config narrows to one candidate. Anchored to the
+#: start of a line so the same word inside the prose above it cannot be rewritten.
+HARNESS_CHAIN = re.compile(r"^harnesses = \[[^]]*\]", re.MULTILINE)
+
+#: How the `dispatch-failed` ending names the file its diagnosis was read out of.
+KEPT_EVENTS = re.compile(r"its events are kept at (?P<path>\S+)")
+
+#: The line the drafter writes above that ending for each member `oneagentgraph` said
+#: it killed. Read for presence by the death journeys and for absence by the run that
+#: recorded none, so the same pattern decides both and neither can be vacuous.
+DEATH_SENTENCE = re.compile(r"^draft-pr-body: .* died: ", re.MULTILINE)
+
+#: The drafting chain this journey makes unstartable, as the drafter really resolves it.
+DRAFTING_CONFIG = REPO_ROOT / "oneharness.pr-author.toml"
+
+
+class Candidate(NamedTuple):
+    """One identity of the drafting chain, and the indirection its variant reads.
+
+    Named rather than positional because the two are both strings and are used for
+    opposite things: one is written into the chain to keep it, the other is written
+    over to kill it, and swapping them would produce a chain that starts.
+    """
+
+    #: The chain entry, spelled as `harnesses` spells it (`codex:alternate`).
+    identity: str
+    #: The variable in the parent process that entry takes its own value out of.
+    source: str
+
+
+class DiedDrafting(NamedTuple):
+    """One real drafting run whose only candidate could not start.
+
+    Three unrelated things, which is why they are named: the finished process whose
+    stderr is the diagnosis under test, the identity it drafted against, and what its
+    publication checkout looked like before the run.
+    """
+
+    drafted: subprocess.CompletedProcess[str]
+    identity: Identity
+    before: Untouched
+
+
+def _indirected_candidate() -> Candidate:
+    """One identity of the drafting chain that reads an indirection, and that variable.
+
+    Read out of the config rather than named here. The chain reorders and renames as
+    identities come and go, and a journey that killed one this drafter no longer routes
+    to would pass while proving nothing about the chain it actually runs.
+    """
+    routing = harness_routing(DRAFTING_CONFIG)
+    for candidate in routing.get("harnesses", []):
+        harness, _, variant = candidate.partition(":")
+        declared = (
+            routing.get("harness", {})
+            .get(harness, {})
+            .get("variant", {})
+            .get(variant, {})
+            .get("env_from", {})
+        )
+        for source in declared.values():
+            return Candidate(candidate, source)
+    raise AssertionError(
+        f"no identity in {DRAFTING_CONFIG.name}'s chain reads an environment "
+        "indirection, so nothing in it can be made unstartable this way"
+    )
+
+
+def _unstartable_checkout(tmp_path: Path, indirection: str) -> Path:
+    """A copy of this checkout whose drafting chain holds one candidate that cannot start.
+
+    A copy, because the script resolves the graph, the configs, and the schema from its
+    own directory: the only way to hand it a chain that dies is to hand it a checkout of
+    its own. The working tree rather than a `git worktree add` of HEAD, because the
+    script this proves is the uncommitted one.
+
+    The mutation is the one this suite already makes to prove an indirection refusal —
+    an `env_from` pointed at a variable the parent process does not set — with the chain
+    narrowed to that candidate first, so no identity behind it can rescue the turn and
+    hide the death.
+    """
+    checkout = tmp_path / "drafter-checkout"
+    checkout.mkdir()
+    copy_working_tree(checkout)
+    candidate = _indirected_candidate()
+    configuration = checkout / DRAFTING_CONFIG.name
+    routing = configuration.read_text(encoding="utf-8")
+    narrowed, chains = HARNESS_CHAIN.subn(f'harnesses = ["{candidate.identity}"]', routing)
+    assert chains == 1, (
+        f"{DRAFTING_CONFIG.name} declares {chains} `harnesses = [...]` lines where one "
+        "was expected, so this journey cannot narrow the chain it must narrow"
+    )
+    assert candidate.source in narrowed, (
+        f"{DRAFTING_CONFIG.name} no longer names {candidate.source}, so repointing it "
+        f"would leave {candidate.identity} startable and the member alive"
+    )
+    configuration.write_text(narrowed.replace(candidate.source, indirection), encoding="utf-8")
+    return checkout
+
+
+def _draft_from(
+    checkout: Path, identity: Identity, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """Run a copied checkout's own drafter, against this checkout's provisioned tools.
+
+    The copy is not a synced project of its own and must not become one: `uv run` inside
+    it is pointed at the environment this checkout already has, which is the same wiring
+    every other journey that copies this tree uses.
+    """
+    return subprocess.run(
+        [str(checkout / "scripts" / "draft-pr-body.sh"), *arguments],
+        cwd=identity.checkout.parent,
+        env={
+            **identity.environment,
+            "UV_NO_SYNC": "1",
+            "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+
+
+def _died_drafting(tmp_path: Path, indirection: str) -> DiedDrafting:
+    """One real drafting run whose only candidate cannot start, and what it started from."""
+    identity = _identity(tmp_path, answers=_conforming(), register=False)
+    # Its own temporary directory, so the scratch a kept diagnosis leaves behind is
+    # under this journey's `tmp_path` rather than the host's `/tmp`.
+    scratch_root = tmp_path / "tmp"
+    scratch_root.mkdir()
+    identity.environment["TMPDIR"] = str(scratch_root)
+    checkout = _unstartable_checkout(tmp_path, indirection)
+    before = _untouched(identity.checkout)
+
+    drafted = _draft_from(
+        checkout, identity, WORK_BRANCH, "--repo", str(identity.checkout), "--base", BASE
+    )
+
+    assert drafted.returncode == 3, (
+        f"the drafter exited {drafted.returncode} on a member that never started; a run "
+        f"that drafted no body exits 3\n{drafted.stdout}\n{drafted.stderr}"
+    )
+    assert drafted.stdout == "", (
+        f"the drafter printed {drafted.stdout!r} having drafted no body; only a drafted "
+        "body ever reaches stdout"
+    )
+    return DiedDrafting(drafted, identity, before)
+
+
+@pytest.mark.reads_docs
+def test_a_member_that_could_not_start_reports_what_oneagentgraph_said_killed_it(
+    tmp_path: Path,
+) -> None:
+    """The dead member's own classification reaches the operator reading the failure.
+
+    `oneagentgraph` hands over exactly the three things that decide what to fix — how it
+    classified the death, what it attributed it to, and the sentence naming the variable
+    nobody set — and the drafter used to drop all three and report the exit code the
+    graph ended on. Finding that variable by hand cost twenty minutes, and drafting is
+    read mid-landing, between a passed gate and a publication.
+
+    The events file behind that diagnosis has to survive too. It lives in the scratch
+    directory the drafter removes on every other path, so a run whose only record of why
+    it failed had already been deleted left nothing to check the sentence against.
+    """
+    died = _died_drafting(tmp_path, UNSET_INDIRECTION)
+    launches = Path(died.identity.environment["FAKE_CODEX_ATTEMPT_LOG"])
+    report = died.drafted.stderr
+
+    assert not launches.exists(), "a turn was spent by a member that could not start"
+    assert DEATH_SENTENCE.search(report) is not None, (
+        f"the failure carries no `<member> died:` line, so the pattern the result-less "
+        f"run reads for absence would pass against any report at all:\n{report}"
+    )
+    for stated in ("rule=unstartable", "cause=spawn", "detail=", UNSET_INDIRECTION):
+        assert stated in report, (
+            f"the failure does not carry {stated!r}, so it does not say what killed the "
+            f"drafting member:\n{report}"
+        )
+    assert TRUNCATION_FLAG not in report, (
+        f"a detail oneagentgraph handed over whole was reported as cut:\n{report}"
+    )
+    ending = report.strip().splitlines()[-1]
+    assert "dispatch-failed" in ending, (
+        f"the drafter reported {ending!r} last, where the ending an operator reads first "
+        f"belongs; the diagnosis goes above it, not in place of it:\n{report}"
+    )
+
+    named = KEPT_EVENTS.search(report)
+    assert named is not None, (
+        f"the failure names no events file, so the diagnosis it just quoted cannot be "
+        f"checked against the run that produced it:\n{report}"
+    )
+    kept = Path(named.group("path"))
+    assert kept.is_file(), (
+        f"the events file the failure named at {kept} did not survive the run, so what "
+        "an operator is sent to read was deleted on the way out"
+    )
+    assert "member-died" in kept.read_text(encoding="utf-8"), (
+        f"the events kept at {kept} hold no member-died envelope, so they are not the "
+        "record the reported diagnosis came out of"
+    )
+    assert _untouched(died.identity.checkout) == died.before, (
+        "the drafter kept its scratch directory and this checkout's worktree entry with "
+        "it; what a diagnosis needs is the events file, never an entry left behind in "
+        f"somebody else's repository:\nbefore {died.before}\n"
+        f"after  {_untouched(died.identity.checkout)}"
+    )
+
+
+@pytest.mark.reads_docs
+def test_a_detail_oneagentgraph_cut_is_reported_as_cut(tmp_path: Path) -> None:
+    """A bounded detail is said to be bounded, rather than presented as the whole of it.
+
+    `oneagentgraph` bounds a death detail itself and flags the ones it cut, so the honest
+    report is its flag rather than a second bound applied here — and a cut detail passed
+    on silently is worse than a long one, because the thing an operator has to fix can be
+    in the part that is missing. This one is: the variable's name is cut off its front.
+    """
+    report = _died_drafting(tmp_path, OVERLONG_INDIRECTION).drafted.stderr
+    assert TRUNCATION_FLAG in report, (
+        f"a detail oneagentgraph flagged as truncated was reported as though it were "
+        f"whole:\n{report}"
+    )
+    assert OVERLONG_INDIRECTION not in report, (
+        "the whole indirection reached the failure, so this run did not truncate and the "
+        "flag above was read off some other detail"
+    )
+
+
+def _configless_checkout(tmp_path: Path) -> Path:
+    """A copy of this checkout with the config `graphs/pr-author.yaml` names taken out.
+
+    That ref is relative to the graph document, so `oneagentgraph` refuses the document
+    before it starts anything: no member, no turn, and no death to classify. It is the
+    state a checkout whose files were never restored is really in — the one the helper
+    checks in this script answer with "run 'just bootstrap'" — and it is the half of the
+    result-less path a dead member cannot produce, because there the diagnosis is the
+    death and here there is no diagnosis at all.
+    """
+    checkout = tmp_path / "configless-checkout"
+    checkout.mkdir()
+    copy_working_tree(checkout)
+    configuration = checkout / DRAFTING_CONFIG.name
+    assert configuration.is_file(), (
+        f"{DRAFTING_CONFIG.name} is not in a copy of this working tree, so removing it "
+        "is not what makes the drafting graph unrunnable and this journey proves nothing"
+    )
+    configuration.unlink()
+    return checkout
+
+
+@pytest.mark.reads_docs
+def test_a_dispatch_that_recorded_no_death_still_names_the_events_it_kept(
+    tmp_path: Path,
+) -> None:
+    """Every result-less dispatch keeps its events and says where, death or no death.
+
+    Naming and retaining that file is not the death diagnosis's own doing: the ending
+    carries the path for any dispatch that produced no result, and the scratch directory
+    survives with it. When `oneagentgraph` did classify a death the sentence above the
+    ending is what an operator fixes from; when it recorded nothing — this run, where it
+    refused the graph document before starting a member — the path is the only evidence
+    there is, and a retention that silently stopped would leave the ending pointing at
+    a file the trap had already removed.
+    """
+    identity = _identity(tmp_path, answers=_conforming(), register=False)
+    # As the death journeys do: the scratch this run is expected to keep lands under
+    # `tmp_path` rather than in the host's `/tmp`, so pytest reclaims what it retains.
+    scratch_root = tmp_path / "tmp"
+    scratch_root.mkdir()
+    identity.environment["TMPDIR"] = str(scratch_root)
+    checkout = _configless_checkout(tmp_path)
+    before = _untouched(identity.checkout)
+
+    drafted = _draft_from(
+        checkout, identity, WORK_BRANCH, "--repo", str(identity.checkout), "--base", BASE
+    )
+
+    assert drafted.returncode == 3, (
+        f"the drafter exited {drafted.returncode} on a graph that never ran; a run that "
+        f"drafted no body exits 3\n{drafted.stdout}\n{drafted.stderr}"
+    )
+    assert drafted.stdout == "", (
+        f"the drafter printed {drafted.stdout!r} having drafted no body; only a drafted "
+        "body ever reaches stdout"
+    )
+    report = drafted.stderr
+    assert not Path(identity.environment["FAKE_CODEX_ATTEMPT_LOG"]).exists(), (
+        "a turn was spent by a graph oneagentgraph refused, so this run is not the "
+        f"nothing-was-recorded case it is written to drive:\n{report}"
+    )
+    assert DEATH_SENTENCE.search(report) is None, (
+        f"the drafter reported a death for a run that recorded none, so the sentence an "
+        f"operator fixes from was invented rather than quoted:\n{report}"
+    )
+    ending = report.strip().splitlines()[-1]
+    assert "dispatch-failed" in ending, (
+        f"the drafter reported {ending!r} last, which names none of `onepipeline`'s "
+        f"endings:\n{report}"
+    )
+
+    named = KEPT_EVENTS.search(report)
+    assert named is not None, (
+        f"the failure names no events file, so a run whose only evidence is that file "
+        f"never tells an operator where it is:\n{report}"
+    )
+    kept = Path(named.group("path"))
+    assert kept.is_file(), (
+        f"the events file the failure named at {kept} did not survive the run; with no "
+        "death to quote, the ending is pointing at evidence the trap removed"
+    )
+    assert "member-died" not in kept.read_text(encoding="utf-8"), (
+        f"the events kept at {kept} hold a member-died envelope, so this run had a "
+        "diagnosis after all and the retention it proves is the death journey's"
+    )
+    assert _untouched(identity.checkout) == before, (
+        "the drafter kept its scratch directory and this checkout's worktree entry with "
+        f"it; retention covers the events file alone:\nbefore {before}\n"
+        f"after  {_untouched(identity.checkout)}"
     )
 
 

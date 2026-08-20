@@ -1120,6 +1120,17 @@ than forwarded, since `onevcs` has no such thing. It is the escape for a bulk la
 an operator working down `just recoverable` over dozens of branches pays one agent turn
 per branch otherwise.
 
+**A drafter whose member died says what killed it, and keeps the proof.** Where the
+graph ran and nothing answered, `oneagentgraph` is what knows why: it classifies each
+dead member with a `rule`, a `cause`, and a `detail` naming the thing to fix — the
+environment indirection nobody set, say. So the drafter writes one line per dead member
+above the `dispatch-failed` ending, and reports a detail `oneagentgraph` marked
+`truncated` as truncated rather than bounding it a second time. That ending also names
+the events file those lines came out of, and keeps it: the temporary directory removed
+on every other path survives this one, which is what lets an operator check the reported
+diagnosis against the run that produced it. Finding that unset indirection by hand cost
+twenty minutes once, out of a file the script had already read and then deleted.
+
 **The turn is spent before the gate**, which is a decision rather than an oversight.
 The body is an argument to `onevcs`, so it has to exist before the verb is called, and
 the verb is what runs the identity's gate: a branch the gate then rejects has paid for

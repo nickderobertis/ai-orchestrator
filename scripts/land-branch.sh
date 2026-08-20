@@ -190,7 +190,8 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 # Its stdout is silent with `--out`, so the only thing this can put in front of the
-# verb's own report is the one line naming why no body was drafted.
+# verb's own report is why no body was drafted: the ending, and — where a drafting
+# member died — what killed it and where the events saying so were kept.
 if "$DRAFTER" "$branch" --repo "$checkout" --out "$body"; then
   if [ -n "$marker_at" ]; then
     # In front of `--`, which is the only place an option is still an option. The
