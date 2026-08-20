@@ -762,8 +762,8 @@ equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
 is the complete pre-push bar: `check` plus the llmlint diff tier. Both report the
 line-coverage total they measured, and every stage that captures its output keeps
-it at `.logs/<label>.log` (`nx`, `workspace-install`, `check`, `upgrade`,
-`gate-check`, `gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
+it at `.logs/<label>.log` (`nx`, `workspace-install`, `python-install`, `check`,
+`upgrade`, `gate-check`, `gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
 per run. Each log fills as its own stage runs, so follow the innermost one:
 `.logs/nx.log` while the Nx targets run (the long part), `.logs/check.log` for
 the stages after them. Read a finished run from the same paths, and never read a
@@ -914,6 +914,17 @@ and heals itself; `just bootstrap` runs it with `--force`, which reapplies a
 lockfile that moved. Nothing here asks an operator to run Bun by hand, and the e2e
 journeys that drive real Nx provision through the same script rather than skipping
 when a worktree is fresh — a bare `pytest` in one means what the gate means.
+`scripts/python-install.sh` is the same self-heal for the other half of the
+toolchain, and `scripts/nx.sh` runs it beside the Bun one for the same reason: a
+fresh worktree and a publication clone carry no `.venv` either, and a missing one
+does not fail — every reader of `<root>/.venv/bin` **falls through to whatever other
+checkout is on PATH**, which is how a gate came to verify a branch against the
+engine versions the branch had already moved past. It is `uv sync --locked`, so the
+committed lockfile decides and one that would have to move is a refusal naming `uv
+lock` rather than the silent rewrite `uv run` performs on its way into a target —
+the difference between the two on a branch whose subject *is* a pin. `UV_NO_SYNC`
+turns it off, which is how the journeys that copy this checkout keep pointing uv at
+this one's environment.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 A node that died to the provider is diagnosed from `just status` alone: it and

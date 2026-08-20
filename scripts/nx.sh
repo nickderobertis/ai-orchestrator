@@ -19,6 +19,14 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # an operator running Bun by hand first. It exits immediately once provisioned.
 "$script_dir/workspace-install.sh" || exit 1
 
+# The other half of the same self-heal. Every target below runs its tool through
+# `uv run`, and `.venv` is ignored state a fresh worktree or publication clone
+# arrives without — where a reader of `<root>/.venv/bin` does not fail but falls
+# through to another checkout's environment, which is how a gate came to verify a
+# branch against versions the branch had already moved. It exits immediately once
+# the environment matches the lockfile.
+"$script_dir/python-install.sh" || exit 1
+
 repo_identity="$(git config --get remote.origin.url || git rev-parse --show-toplevel)" || { echo "nx: cannot resolve repository identity; run from a Git checkout and retry" >&2; exit 1; }
 repo_key="$(printf '%s' "$repo_identity" | sha256sum | cut -c1-16)" || { echo "nx: cannot derive the repository cache key; verify sha256sum is available and retry" >&2; exit 1; }
 [[ "$repo_key" =~ ^[0-9a-f]{16}$ ]] || { echo "nx: derived an invalid repository cache key; verify sha256sum output and retry" >&2; exit 1; }
