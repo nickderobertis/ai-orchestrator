@@ -59,6 +59,71 @@ stdout as the planner's ruling, so a fabricated `{"completion": ...}` would
 continue or settle a run nobody ruled on. Every path that cannot reach a real
 answer — including a channel response this cannot recognise — exits non-zero with
 what went wrong and what to do about it.
+
+**Two ops reach this filter, and both are the planner's own question.** onejudge asks
+`supervisor` at each turn boundary and `judge` once the conversation ends, to score the
+`user.done_when` — always, whether the supervisor ruled complete or the turn cap ran
+out, and independently of `evals` and `assessment` (measured on onejudge 0.4.0 with a
+`kind: command` judge that logged every op). That second one has no configuration
+escape: `oneagentgraph` refuses a persona that replaces the base's bar with nothing, so
+a `kind: onejudge` member always has a `done_when` and is always asked to score it. It
+used to be refused here, which killed the monitor at the end of every run it watched —
+`got 'judge'`, `provider-failure`/`protocol` — after which the run went on being driven
+and reporting `ACTIVE` with nobody watching.
+
+It is served the same way `supervisor` is, and for the same reason: the planner **is**
+this member's judge side, so the planner scores the criterion. The criterion is raised
+as its own non-blocking surface and the ruling that comes back is the score —
+`completion` becomes the boolean, and the prose beside it becomes the rationale.
+Nothing is invented, and a planner who never answers costs nothing: `channel serve`
+times out with its own non-completion, which is the conservative reading (`unsatisfied`)
+rather than a fabricated success. The one thing this op cannot take from the frame is
+the run, because onejudge writes no `task` into it; it is read from `ONEPIPELINE_RUN_ID`
+instead, which `onepipeline` exports to both sides of an observer member and which
+`tests/e2e/test_orchestrate_launch_e2e.py` re-measures on a real launch every gate run.
+
+`assess` and a non-boolean `judge` are still refused by name. Both come only from
+`assessment` and `evals`, which `tests/test_observer_judge_ops.py` forbids any
+channel-served persona from carrying, so neither can arrive from this repository's own
+graphs — and a `completion` boolean is not a score on a 1-to-5 scale in any case.
+
+**One answer is recognised, and it is not addressed to this reader at all.** The
+channel is a durable queue whose replies are claimed "by whichever reader reaches
+it next" (`onepipeline`'s own `Channel::claim_replies`), and the engine's
+reconciler is the other reader. So a manager's live graph edit —
+`{"version":1,"commands":[…]}` carrying no boolean `completion` — reaches this
+reader by arrival order alone. Forty of this host's recorded dag-scope runs died
+on it, refused as "not a supervisor ruling" and killed. The timing is the worst
+part: it fires precisely while a manager is supervising, because the manager's own
+correction is what kills the watcher.
+
+Such an answer is **recognised, reported to the monitor, and not acted on**, and the
+member survives it. Not acted on is the measured half. `onepipeline reply` applies an
+envelope's commands *itself*, before the envelope is queued for any reader: measured
+against onepipeline 0.8.5 by replying `{"op":"add", …}` to a real run, which answers
+`{"reply":0,"state":"applied"}` and records `edit-committed` there and then. So the
+edit has already reached the engine by the time it arrives here, and this reader has
+nothing left to route. Handing it back with a second `onepipeline reply` — the obvious
+repair, and the one to resist — **re-applies** it: the same measurement, re-submitted,
+is refused with `add: node 'added-by-the-edit' already exists`, and an op with no such
+guard (`retry`, `cancel`, `requeue`) would simply be applied twice. Nothing here is
+worth a duplicated graph edit.
+
+What is left is to survive and to say so. The monitor is answered with a
+**non-completion** naming the edits that arrived, which is not answering for the
+planner: a non-completion settles nothing, completes nothing, and rules on no work,
+and all it says is that this surface has not been answered yet — which is what
+happened, since the planner sent the engine an edit rather than answering the monitor.
+Any prose riding beside the edits is carried through, because this reader is the last
+thing holding it.
+
+Two things hold that reasoning to the release rather than to this paragraph, because
+if `reply` ever stopped applying commands itself, ignoring one here *would* lose it:
+`tests/e2e/test_monitor_survives_the_channel_e2e.py` sends a real commands-only
+envelope on a real run's channel, asserts the verb answered it the way this paragraph
+quotes, asserts it reached the graph, and asserts the member lives through it. The
+durable fix is upstream — a reply routed by its intended reader rather than claimed by
+arrival — and this reader holds the same line independently of it.
 """
 
 from __future__ import annotations
@@ -70,7 +135,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import NewType, TypedDict, cast
+from typing import NamedTuple, NewType, TypedDict, cast
 
 #: A onepipeline run id. Distinguished from the task prose and message text it is
 #: parsed out of, because the only thing that makes it a run id is where it was found.
@@ -135,6 +200,82 @@ CODEX_ALTERNATE_IDENTITY = "codex:alternate"
 #: can drive, exactly as `ONEAGENTGRAPH_ONEHARNESS_BIN` is for a dispatch; unset, the
 #: release this checkout pins is used.
 ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
+
+#: How `onepipeline` names the run to both sides of an observer member. The scoring op
+#: is the one frame that carries no `task`, so this is its only source; measured against
+#: onepipeline 0.8.5 and re-measured on a real launch by
+#: `tests/e2e/test_orchestrate_launch_e2e.py` every gate run.
+RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
+
+#: The extra fields a scoring frame carries, checked before either is used.
+SCORE_KIND = "kind"
+SCORE_CRITERION = "criterion"
+
+#: What a reply envelope carries when it is a live graph edit, and the field that makes
+#: one a ruling instead. `completion` is the whole discriminator: onejudge acts on that
+#: boolean and on nothing else, so an answer without it is not a ruling however much
+#: prose rides beside it, and an answer with it is one however many edits do.
+LIVE_EDIT_COMMANDS = "commands"
+RULING_VERDICT = "completion"
+
+#: How one live-edit command names what it does and what it does it to, for the line a
+#: planner reads when the engine would not take it. Neither is required of a command by
+#: anything here — `onepipeline` owns that schema — so both are read defensively.
+EDIT_OP = "op"
+EDIT_TARGET = "id"
+UNNAMED_EDIT = "an unnamed edit"
+
+#: The prose a planner may send beside their edits. Relayed to the monitor rather than
+#: dropped: an envelope carrying both is a manager saying something as well as changing
+#: the graph, and this reader is the only thing that would have carried the saying.
+PLANNER_PROSE = ("message", "reason")
+
+#: What the monitor is told when the planner's answer was a graph edit. Its own turn
+#: was not answered, so it is told that and told to carry on: a monitor that read this
+#: as a verdict on its watch would stop watching.
+ANSWERED_THE_ENGINE = (
+    "The planner's answer to this surface was a live graph edit addressed to the "
+    "engine, not a ruling on your watch: {named}. `onepipeline reply` applied it when "
+    "it was sent, so there is nothing here to route and nothing has been re-sent. Your "
+    "surface has not been answered — keep watching the detailed stream and raise what "
+    "you find."
+)
+PLANNER_ALSO_SAID = " The planner also said: {said}"
+
+#: The two ops this filter serves. `supervisor` is the turn boundary; `judge` is the
+#: end-of-conversation score of the `user.done_when`, which no configuration can turn
+#: off for a `kind: onejudge` member.
+SUPERVISOR_OP = "supervisor"
+SCORE_OP = "judge"
+SERVED_OPS = (SUPERVISOR_OP, SCORE_OP)
+
+#: The only score shape a planner ruling can answer: `completion` is a boolean, so a
+#: boolean criterion is a relay and a numeric one would be an invention.
+BOOLEAN_SCORE = "boolean"
+
+#: The kind the completion criterion is raised under. Its own kind, like a lost turn's,
+#: because the planner-facing views name the kinds a run has queued and this one is a
+#: different question from a monitor's observation: it arrives once, at the end.
+SURFACE_KIND_OF_A_COMPLETION = "monitor-completion"
+
+#: How that surface asks it. The criterion is quoted whole rather than bounded — it is
+#: this operator's own configuration rather than a foreign transcript, and a planner
+#: cannot rule on a bar they were shown half of.
+SCORE_ASKED = (
+    "The monitor's conversation has ended and onejudge is scoring that conversation "
+    "against the monitor's own completion bar. You are this member's judge side, so the "
+    "score is yours: did this watch meet the bar quoted below? Reply `completion: true` "
+    "if it did, `false` if it did not. THE RUN IS NOT BLOCKED ON THIS and nothing waits "
+    "for you: the surface is non-blocking, no answer is read as `false`, and the run "
+    "settles either way.\n\n{criterion}"
+)
+
+#: What the score says when the planner said nothing else. `rationale` is optional to
+#: onejudge, but a score with no reason beside it is unreadable in a transcript.
+SCORE_UNEXPLAINED = "the planner ruled on this member's completion bar over the channel"
+
+#: Why that ruling is a non-completion, for the reader who sees it in the transcript.
+NOT_A_RULING = "the planner sent a graph edit rather than a ruling on this surface"
 
 
 class ConversationMessage(TypedDict, total=False):
@@ -222,6 +363,11 @@ class SupervisorFrame(TypedDict, total=False):
     history_name: str
     messages: list[ConversationMessage]
     session: str
+    # The scoring op's own two, which no `supervisor` frame carries and the other way
+    # round: onejudge writes `{"op":"judge","kind","criterion","messages"}` and nothing
+    # else, so every field here is read defensively at the one place it is used.
+    kind: str
+    criterion: str
 
 
 class ObserverFrame(TypedDict):
@@ -232,12 +378,40 @@ class ObserverFrame(TypedDict):
     blocking: bool
 
 
+class LiveEdit(NamedTuple):
+    """A manager's graph edit, recognised where a ruling was expected.
+
+    Both fields are for *saying* what arrived, which is the whole of what this reader
+    does with one: the edits themselves are already applied by the time the envelope
+    gets here, so nothing is kept to act on. Named rather than positional because the
+    two go to different halves of the same sentence.
+    """
+
+    #: The edits it carries, named the way a planner would recognise them.
+    named: str
+    #: Whatever prose rode beside them, or `""`. This reader is the last thing that
+    #: could carry it to the monitor.
+    said: str
+
+
 class SupervisorResponse(TypedDict, total=False):
     """The ruling onejudge acts on, and the shape `channel serve` already answers in."""
 
     completion: bool
     message: str
     reason: str
+
+
+class CriterionScore(TypedDict):
+    """What onejudge's `judge` op reads back: one boolean score and why.
+
+    `rationale` is optional to onejudge and always sent anyway — a bare boolean in a
+    transcript says which way the criterion went and nothing about who decided it, and
+    here the answer to that is "the planner did", which is the interesting half.
+    """
+
+    value: bool
+    rationale: str
 
 
 def fail(problem: str, remedy: str) -> int:
@@ -298,11 +472,12 @@ def read_frame(raw: str) -> SupervisorFrame | int:
             "check the onejudge release against the frame recorded in this file's header",
         )
     frame: SupervisorFrame = parsed
-    if frame.get("op") != "supervisor":
+    if frame.get("op") not in SERVED_OPS:
         return fail(
-            f"only the `supervisor` op reaches the planner channel, got {frame.get('op')!r}",
-            "leave `evals` and `assessment` unset for this member, since neither has a "
-            "planner question to ask",
+            f"only the {' and '.join(f'`{op}`' for op in SERVED_OPS)} ops reach the planner "
+            f"channel, got {frame.get('op')!r}",
+            "leave `evals` and `assessment` unset for this member, since neither asks "
+            "anything a planner can rule on",
         )
     return frame
 
@@ -502,31 +677,80 @@ def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:
     return parsed
 
 
-def main() -> int:
-    frame = read_frame(sys.stdin.read())
-    if isinstance(frame, int):
-        return frame
-    run = named_run(frame)
-    if run is None:
-        return fail(
-            "the composed task does not name its run, so there is no channel to serve",
-            "give this member no `task` of its own, or open one with `{task}`, so the "
-            "run-level task reaches it",
-        )
-    if SAFE_RUN_ID.match(run) is None:
-        return fail(
-            f"the composed task names {run!r}, which this filter will not pass to "
-            "`onepipeline channel serve` as a run",
-            "a run id is one word of letters, digits, `_`, `.`, and `-`; check the "
-            "run-level task's opening line against the runs `just runs` lists",
-        )
-    surface = surface_for(frame, run)
-    if isinstance(surface, int):
-        return surface
+def live_edit(answer: str) -> LiveEdit | None:
+    """The graph edits this answer carries, when it is not a ruling for this reader.
 
-    binary = onepipeline_binary(run)
-    if isinstance(binary, int):
-        return binary
+    `None` for everything else, including an answer that is not JSON at all: what is
+    wrong with those is `ruling_from`'s to report, and recognising only what this can
+    prove is a live edit keeps a malformed ruling from being quietly re-addressed to
+    the engine.
+
+    A boolean `completion` is what makes an answer a ruling, so an envelope carrying
+    one is left alone however many edits ride with it — onejudge can act on it, and
+    relaying it is what this reader is for. What is recognised here is the envelope
+    with edits and no verdict: `onepipeline`'s reconciler is the reader that grammar
+    belongs to, and it reached this one only because a durable queue hands each reply
+    to whoever asks first.
+    """
+    try:
+        parsed = json.loads(answer)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or isinstance(parsed.get(RULING_VERDICT), bool):
+        return None
+    commands = parsed.get(LIVE_EDIT_COMMANDS)
+    if not isinstance(commands, list) or not commands:
+        return None
+    said = " ".join(
+        parsed[field].strip()
+        for field in PLANNER_PROSE
+        if isinstance(parsed.get(field), str) and parsed[field].strip()
+    )
+    return LiveEdit(named=named_edits(commands), said=said)
+
+
+def named_edits(commands: list[object]) -> str:
+    """The edits an envelope carries, named as the planner who sent them would.
+
+    Read defensively and bounded, because this is somebody else's payload rendered
+    into a line a planner acts on: `onepipeline` owns what a command may be, and a
+    command that names no op is reported as naming none rather than as `None`.
+    """
+    named = []
+    for command in commands:
+        stated = command.get(EDIT_OP) if isinstance(command, dict) else None
+        target = command.get(EDIT_TARGET) if isinstance(command, dict) else None
+        spelled = stated if isinstance(stated, str) and stated.strip() else UNNAMED_EDIT
+        if isinstance(target, str) and target.strip():
+            spelled = f"{spelled} {target.strip()}"
+        named.append(spelled)
+    return clipped(", ".join(named))
+
+
+def ruling_for_a_live_edit(edit: LiveEdit) -> SupervisorResponse:
+    """Tell the monitor what became of its surface, and leave the edit alone.
+
+    Always a non-completion, and never an exit status: the member has to survive an
+    answer that was never meant for it, and a completion would settle a watch nobody
+    ruled on. Deliberately inert about the edit itself — see this file's header for the
+    measurement that says why re-sending it would apply it twice.
+    """
+    message = ANSWERED_THE_ENGINE.format(named=edit.named)
+    if edit.said:
+        message += PLANNER_ALSO_SAID.format(said=edit.said)
+    return SupervisorResponse(completion=False, message=message, reason=NOT_A_RULING)
+
+
+def served_by_the_planner(
+    surface: ObserverFrame, run: RunId, binary: str
+) -> SupervisorResponse | int:
+    """Raise one surface and hand back the ruling the planner answered it with.
+
+    The whole round trip both ops share: a surface out, a ruling back, and every way
+    that can fail reported as a cause and a remedy rather than as an answer. A live edit
+    claimed here is recognised as not this reader's and turned into the non-completion
+    that keeps the member alive — see `ruling_for_a_live_edit` and this file's header.
+    """
     try:
         served = subprocess.run(
             [binary, "channel", "serve", run],
@@ -559,7 +783,100 @@ def main() -> int:
             f"check with `just status {run}` whether the run settled while the monitor "
             "was waiting, which leaves nothing to answer it",
         )
-    ruling = ruling_from(served.stdout.strip(), run)
+    answer = served.stdout.strip()
+    # An answer addressed to the engine's reconciler rather than to this reader is
+    # recognised and survived, not refused: exiting here is what killed the monitor of
+    # every run whose manager corrected it. See this file's header.
+    addressed_elsewhere = live_edit(answer)
+    if addressed_elsewhere is not None:
+        return ruling_for_a_live_edit(addressed_elsewhere)
+    return ruling_from(answer, run)
+
+
+def scored(frame: SupervisorFrame, run: RunId, binary: str) -> CriterionScore | int:
+    """Put this member's completion bar to the planner, and relay how they ruled.
+
+    A boolean criterion only: a planner ruling is a `completion` boolean, so it relays
+    onto a boolean score and would have to be invented onto anything else. Nothing here
+    can arrive from this repository's graphs — a non-boolean `judge` comes only from
+    `evals`, which no channel-served persona may carry — so this is the boundary rather
+    than a branch anybody takes.
+    """
+    kind = frame.get("kind")
+    criterion = frame.get("criterion")
+    if kind != BOOLEAN_SCORE or not isinstance(criterion, str) or not criterion.strip():
+        return fail(
+            f"the planner channel scores a `{BOOLEAN_SCORE}` criterion and run {run} was "
+            f"asked for {kind!r} ({criterion!r})",
+            "leave `evals` unset for this member: a planner rules with a `completion` "
+            "boolean, which is not a score on a scale",
+        )
+    ruled = served_by_the_planner(
+        ObserverFrame(
+            kind=SURFACE_KIND_OF_A_COMPLETION,
+            message=SCORE_ASKED.format(criterion=criterion.strip()),
+            blocking=False,
+        ),
+        run,
+        binary,
+    )
+    if isinstance(ruled, int):
+        return ruled
+    said = ruled.get("reason") or ruled.get("message") or ""
+    return CriterionScore(value=ruled["completion"], rationale=said.strip() or SCORE_UNEXPLAINED)
+
+
+def main() -> int:
+    frame = read_frame(sys.stdin.read())
+    if isinstance(frame, int):
+        return frame
+    scoring = frame.get("op") == SCORE_OP
+    # Each op is held to its OWN source for the run, and they are different sources: the
+    # composed task is a contract this filter already validates, while the scoring frame
+    # carries no `task` at all and leaves the environment as the only place `onepipeline`
+    # names the run to it. Reporting them separately is what keeps each refusal pointed
+    # at the thing its own caller can fix.
+    if scoring:
+        named = os.environ.get(RUN_ID_ENV, "")
+        if not named:
+            return fail(
+                f"{RUN_ID_ENV} names no run, and a `{SCORE_OP}` frame carries no task to "
+                "read one out of, so there is no channel to serve",
+                f"{RUN_ID_ENV} is exported to both sides of an observer member; check "
+                "the onepipeline release against this file's header if it is missing",
+            )
+    else:
+        found = named_run(frame)
+        if found is None:
+            return fail(
+                "the composed task does not name its run, so there is no channel to serve",
+                "give this member no `task` of its own, or open one with `{task}`, so the "
+                "run-level task reaches it",
+            )
+        named = found
+    run = RunId(named)
+    if SAFE_RUN_ID.match(run) is None:
+        return fail(
+            f"the run is named {run!r}, which this filter will not pass to "
+            "`onepipeline channel serve` as a run",
+            "a run id is one word of letters, digits, `_`, `.`, and `-`; check the "
+            f"run-level task's opening line, or {RUN_ID_ENV}, against `just runs`",
+        )
+
+    binary = onepipeline_binary(run)
+    if isinstance(binary, int):
+        return binary
+    if scoring:
+        score = scored(frame, run, binary)
+        if isinstance(score, int):
+            return score
+        print(json.dumps(score, ensure_ascii=False))
+        return 0
+
+    surface = surface_for(frame, run)
+    if isinstance(surface, int):
+        return surface
+    ruling = served_by_the_planner(surface, run, binary)
     if isinstance(ruling, int):
         return ruling
     # Re-serialized from the ruling this validated rather than echoed through, so

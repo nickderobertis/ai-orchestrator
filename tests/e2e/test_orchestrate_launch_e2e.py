@@ -2084,9 +2084,13 @@ def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
         "nothing on stdin at all": ("", "no supervisor frame on stdin"),
         "not JSON at all": ("this is not a frame", "not JSON"),
         "not an object": ("[1, 2]", "must be a JSON object"),
-        "an eval call rather than a supervisor one": (
-            json.dumps({**SUPERVISOR_FRAME, "op": "eval"}),
-            "only the `supervisor` op",
+        # The two ops the filter serves are `supervisor` and `judge`; an `assess` — the
+        # op a top-level `assessment` produces — is refused by name, and
+        # `tests/test_observer_judge_ops.py` is what keeps any channel-served persona
+        # from declaring the key that would ask it.
+        "an assess call rather than one of the two served ops": (
+            json.dumps({**SUPERVISOR_FRAME, "op": "assess"}),
+            "reach the planner channel, got 'assess'",
         ),
         "a task that names no run": (
             json.dumps({**SUPERVISOR_FRAME, "task": "no run named here"}),

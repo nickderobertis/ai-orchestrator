@@ -122,5 +122,25 @@ user:
     it is — that decision was the planner's to make and escalating it was the
     available action. Reject any target-project content this agent authored
     itself.
+  # Scored by the PLANNER over the channel, not by a model — `scripts/channel-serve.py`
+  # raises this text as its own surface and relays the ruling. So the prose below is read
+  # by a person, and is written to be ruled on.
+  #
+  # Do not try to declare it unset; both spellings have been tried and refused. A
+  # persona's `user.done_when` merges as a *second* bar alongside the base's rather than
+  # over it, so `null` adds nothing, and `done_when_replaces_base` is refused with
+  # `names nothing to replace the base's bar with`. Why that matters, and the measurement
+  # behind it, is docs/orchestration.md, "The completion bar is scored by the planner too".
   done_when: "Complete only when the run has settled, every issue, opportunity, and anomaly observed in the detailed stream has been surfaced to the planner or fixed by an attributed in-allowlist edit, and nothing ambiguous was decided by an edit rather than escalated."
   max_turns: 50
+
+# Unset, and it has to be said rather than omitted: `config/onejudge.base.yaml` declares
+# an `assessment` for the dispatched workers it is shared with, and a persona silent
+# about a key inherits the base's. `null` is onejudge's own unset form and oneagentgraph
+# inserts it, so this overrides rather than being skipped as absent. Measured against
+# onejudge 0.4.0.
+#
+# It has nothing to answer anyway — this member authors no target-project content — and
+# its judge side is the planner channel, which cannot serve the `assess` op the key would
+# ask. `tests/test_observer_judge_ops.py` holds that class rather than this line.
+assessment: null

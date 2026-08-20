@@ -19,9 +19,21 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # it honest, and it is exactly the literal an upgrade has to re-measure.
     Path("graphs/dag-scope.yaml"): 1,
     # The filter standing between onejudge's supervisor frame and the planner channel
-    # parses that frame's exact shape. Which shape a release writes is per-release, so
-    # a bump has to re-measure the parser rather than discover it in a dead monitor.
-    Path("scripts/channel-serve.py"): 1,
+    # parses that frame's exact shape, and serves the two ops that release asks a judge
+    # side. Both are per-release measurements — which shape a release writes, and which
+    # ops it asks and when — so a bump has to re-measure the parser and the op set rather
+    # than discover either in a dead monitor.
+    Path("scripts/channel-serve.py"): 2,
+    # The same two measurements, said to an operator and to the model that lives under
+    # them. The prose half is what a reader acts on and the persona half is what the
+    # member is configured by, so a bump that moved either would leave both wrong.
+    Path("docs/orchestration.md"): 2,
+    Path("personas/orchestrator.yaml"): 1,
+    # And the gates that state which onejudge release each op measurement was taken
+    # against. A test asserting a per-release behaviour under a release that has moved
+    # is the worst kind of green, so its claim is dated here like every other.
+    Path("tests/test_observer_judge_ops.py"): 1,
+    Path("tests/e2e/test_monitor_survives_the_channel_e2e.py"): 1,
     # The base config's `user.done_when` is the whole review bar for every dispatch,
     # and it is written to be resolved by the judge against the task. That only works
     # because onejudge hands the criterion over verbatim beside a transcript opening
@@ -74,13 +86,16 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # schema versions the build reads, and from which one `{task}` stops being
     # literal — so each carries a literal this gate holds to the pin.
     "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1, Path("graphs/pr-author.yaml"): 1},
-    # Two: the frame shape this filter parses, and the run-id export it deliberately
-    # does not read. Both are per-release measurements of the same crate.
-    # Five in the operating manual: which plan schema versions the reconciler reads,
-    # what a monitor member's environment carries, what a judge command's does, which
-    # dispatches are handed the run they may ask their manager on, and where a
-    # `context` note is delivered.
-    "onepipeline": {Path("scripts/channel-serve.py"): 2, Path("docs/orchestration.md"): 5},
+    # Four in the filter: the frame shape it parses, the run-id export it deliberately
+    # does not read at a supervisor boundary, the same export as the ONLY source it has
+    # at a scoring one, and that `reply` applies an envelope's commands itself — which is
+    # the premise the filter's own inaction on a claimed live edit rests on, so a release
+    # that moved it would have this reader start losing manager edits.
+    # Six in the operating manual: which plan schema versions the reconciler reads, what
+    # a monitor member's environment carries, what a judge command's does, which
+    # dispatches are handed the run they may ask their manager on, where a `context` note
+    # is delivered, and that same `reply` measurement said to an operator.
+    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 6},
 }
 
 

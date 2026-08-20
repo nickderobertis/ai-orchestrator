@@ -375,6 +375,91 @@ verdict there would continue or settle a run nobody ruled on.
 `tests/e2e/test_orchestrate_launch_e2e.py` drives the whole round trip on a real
 launch, and each refusal through the real script.
 
+#### The completion bar is scored by the planner too
+
+onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
+boundary; `judge` comes once the conversation ends, to score `user.done_when` —
+always, whether the supervisor ruled complete or the turn cap ran out, and
+independently of `evals` and `assessment`. Measured on onejudge 0.4.0 with a
+`kind: command` judge that logged every op it was asked.
+
+That second one has **no configuration escape**, and the attempts are worth knowing
+so they are not retried. `oneagentgraph` merges a persona's `user.done_when` as a
+*second* bar alongside the base's rather than over it, so `done_when: null` adds
+nothing and the base's bar survives into the member's effective config; and
+`user.done_when_replaces_base` is refused outright — `names nothing to replace the
+base's bar with` — for both `null` and `""`. A `kind: onejudge` member therefore
+always carries a bar it is always asked to score, whether or not its judge side is a
+model. Editing the bar out of `config/onejudge.base.yaml` is not the answer either:
+that one is the shared dispatch bar for every worker on this host.
+
+So the filter serves that op the same way it serves `supervisor`, and for the same
+reason — **the planner is this member's judge side, so the planner scores the
+criterion**. It raises the criterion as its own non-blocking surface, under kind
+`monitor-completion`, and relays the ruling that comes back: `completion` becomes the
+boolean score and the prose beside it becomes the rationale. Nothing is invented. The
+surface says in as many words that the run is not blocked on it, because it arrives
+once, at the end, and a manager meeting it for the first time must not read it as a
+run held up on them. A planner who never answers costs nothing: `channel serve` times
+out with its own non-completion, which reads through as `unsatisfied` — the
+conservative direction, and only for the run nobody answered rather than permanently.
+
+This is a **workaround for an upstream gap**, and it is written down as one so it can
+be retired rather than maintained: a member whose judge side is not a harness still
+gets a scored bar it cannot answer, and neither `done_when: null` nor
+`done_when_replaces_base` can remove it. `tests/test_observer_judge_ops.py` holds the
+filter to going on serving the op, and
+`tests/e2e/test_monitor_survives_the_channel_e2e.py` asserts on a real launch that the
+member still carries a bar at all — so the day a release lets one decline it, that
+check fails and the score path can go.
+
+`assess`, the op a top-level `assessment` produces, is still refused by name, as is a
+`judge` asking for a score on a scale: a planner rules with a boolean, and a boolean is
+not a number. Neither can arrive from this repository's graphs, because
+`tests/test_observer_judge_ops.py` forbids any channel-served persona from declaring
+the keys that would ask them.
+
+#### An answer addressed to the engine, not to this reader
+
+There is one answer the filter recognises and does **not** refuse, and it is the
+second way a monitor dies. The channel is a durable queue whose replies are claimed
+"by whichever reader reaches it next" (`onepipeline`'s own `Channel::claim_replies`),
+and the engine's reconciler is the other reader. So a manager's [live
+edit](#live-graph-edits) — `{"version":1,"commands":[…]}` with no boolean
+`completion` — reaches the monitor's judge side by arrival order alone. Forty of this
+host's recorded dag-scope runs died there, refused as `is not a supervisor ruling` and
+killed. The timing is the worst part: it fires precisely while a manager is
+supervising, because the manager's own correction is what kills the watcher.
+
+The filter discriminates on the verdict. An envelope carrying a boolean `completion`
+is a ruling and is relayed exactly as before, however many edits ride with it. An
+envelope carrying `commands` and no `completion` is not this reader's, and is
+**recognised, named back to the monitor in a non-completion ruling, and otherwise left
+alone** — so the member takes another turn instead of dying. A non-completion is not a
+verdict on the planner's behalf: it settles nothing, completes nothing, and rules on
+no work, and all it says is that this surface has not been answered yet, which is what
+happened. Any prose the planner sent beside their edits is carried through to the
+monitor, since this reader is the last thing holding it.
+
+**Left alone, and not handed back.** The obvious repair — re-send the envelope with
+`onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
+measured rather than argued. `onepipeline reply` applies an envelope's commands
+*itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
+a real run on onepipeline 0.8.5 answers `{"reply":0,"state":"applied"}` and records
+`edit-committed` there and then. The edit has therefore already reached the engine by
+the time it arrives at this reader, which has nothing left to route — and re-sending
+it applies it a **second** time. The same measurement, re-submitted, comes back
+`add: node 'added-by-the-edit' already exists`; an op with no such guard (`retry`,
+`cancel`, `requeue`) would simply be applied twice.
+
+That premise is the load-bearing one: if `reply` ever stopped applying commands
+itself, ignoring one here would lose it. So it is gated rather than remembered —
+`tests/e2e/test_monitor_survives_the_channel_e2e.py` sends a real commands-only
+envelope on a real run's channel, asserts the verb answered it the way this paragraph
+quotes, asserts it reached the graph, and asserts the member lived through it. This is a local mirror in any case: the durable fix is upstream, a
+reply routed by its intended reader rather than claimed by arrival, and the filter
+holds the same line independently of whatever release is installed.
+
 ### A dispatched agent asks its manager
 
 The same `channel serve` verb is the other end of the channel: how a worker that
