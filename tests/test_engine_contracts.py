@@ -7,7 +7,10 @@ contract, and a copy of an engine contract is exactly what goes stale in silence
 here: for a whole release cycle this repository documented `gate-failed` and
 `checks-failed` at seven sites, a manager read them, and neither word had ever been
 written by either engine. The engines were extracted from this repository, the prose
-stayed where it was, and nothing noticed.
+stayed where it was, and nothing noticed. `checks-failed` has since become real —
+onevcs 0.10.0 names that failure and onepipeline 0.10.0 settles a node on it — which
+is the other direction this gate reads: a denial goes stale exactly as a description
+does, and it went stale here first.
 
 So the prose is reconciled rather than trusted, in five shapes:
 
@@ -108,17 +111,33 @@ RELAY_SITE = re.compile(
     re.DOTALL,
 )
 
-#: The guard that keeps one `outcome_of` arm away from that relay. `publication-failed`
-#: is an arm of it *and* a literal settlement under `Failed`, and only this early
-#: return decides which pairing is real — so it is asserted rather than assumed, and
-#: a release that drops it fails here instead of leaving the table quietly wrong.
+#: The guard that keeps every failure word away from that relay. `outcome_of`'s
+#: `Failed` arm answers whatever `failure_of` decides — the residual, or one of the
+#: four preserving words — and each of those settles the node `Failed` somewhere
+#: else. Only this early return decides which pairing is real, so it is asserted
+#: rather than assumed, and a release that drops it fails here instead of leaving
+#: every failure row of the table quietly reading `done`.
 RELAY_GUARD = re.compile(
-    r"if let onevcs::PublishOutcome::Failed \{[^}]*\} = &published\.outcome \{\s*"
-    r"return publication_failed\("
+    r"if let onevcs::PublishOutcome::Failed \{[^}]*?\}\s*=\s*&published\.outcome\s*\{\s*"
+    r"return failed_publication\("
 )
 
-#: The arm that guard intercepts. Its pairing comes from the literal site instead.
-RELAY_GUARDED_ARM = "publication-failed"
+#: What that guard sends a failure to instead, and the two sites there that settle
+#: on the word it chose: the failure's own, and the roll-up a spent publication
+#: budget writes. Read for the status rather than the word, because the word comes
+#: from `Preserving::outcome` below and a settlement that moved off `Failed` would
+#: otherwise change nothing this gate can see.
+FAILURE_RELAY = re.compile(
+    r"Settlement::plain\(\s*node,\s*NodeStatus::(\w+),\s*"
+    r"Some\((?:failure|preserved\.outcome)\.outcome\(\)\)"
+)
+
+#: Where those words are declared: the closed set of publication failures a further
+#: attempt could answer. The residual beside them is a plain literal settlement and
+#: is read as one.
+PRESERVING_OUTCOME = re.compile(
+    r"impl Preserving \{.*?pub fn outcome\(self\).*?\n    \}", re.DOTALL
+)
 
 #: Rust's own marker for code that is not the shipped crate. A settlement written in
 #: a test fixture is not a settlement the engine makes, and reading one as though it
@@ -126,11 +145,13 @@ RELAY_GUARDED_ARM = "publication-failed"
 #: builder rather than against the settlement path.
 TEST_MODULE = re.compile(r"\n#\[cfg\(test\)\]\nmod tests \{.*", re.DOTALL)
 
-#: The two words this repository documented for a release cycle and neither engine
-#: has ever written as a node outcome. Declared here so the gate fails if one ever
-#: becomes real — at which point the prose that says they are absent is the thing to
-#: correct, not this list.
-DECLARED_ABSENT = ("gate-failed", "checks-failed")
+#: The word this repository documented for a release cycle and neither engine has
+#: ever written as a node outcome. Declared here so the gate fails if it ever becomes
+#: real — at which point the prose that says it is absent is the thing to correct,
+#: not this list. `checks-failed` was the other one and is no longer denied anywhere:
+#: onevcs 0.10.0 gave it a `FailureKind` and onepipeline 0.10.0 a settlement, so it
+#: left this list in the same change that gave it a row of the outcome table.
+DECLARED_ABSENT = ("gate-failed",)
 
 
 class Engine(NamedTuple):
@@ -481,7 +502,8 @@ ABSENT_SYMBOLS: dict[tuple[Path, tuple[Engine, ...]], tuple[str, ...]] = {
         # never real is `gate-failed` as a *node outcome*, and that narrower claim is
         # what `DECLARED_ABSENT` above holds — a blanket absence check would fail on
         # the very sentence that draws the distinction.
-        "checks-failed",
+        # `checks-failed` is not here for a different reason: it stopped being
+        # absent. Both engines write it now, so the document describes it instead.
         "not-completed",
         # The continuation machinery the pre-extraction lifecycle had.
         "MAX_AUTOMATIC_STEP_RESUMES",
@@ -739,11 +761,19 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
     )
     assert RELAY_GUARD.search(shipped), (
         f"onepipeline {ONEPIPELINE.ref} no longer returns early on "
-        f"`PublishOutcome::Failed`, so {RELAY_GUARDED_ARM!r} now reaches the "
-        f"`{relay.group(1)}` relay as well as its own `Failed` literal. That guard is "
-        "the whole reason the table pairs it with one status; re-read the path and "
-        "correct the row before relaxing this"
+        f"`PublishOutcome::Failed`, so every word `failure_of` chooses now reaches the "
+        f"`{relay.group(1)}` relay as well as the failure sites that settle it. That "
+        "guard is the whole reason the table pairs those words with one status; re-read "
+        "the path and correct the rows before relaxing this"
     )
+
+    failure_statuses = {status.lower() for status in FAILURE_RELAY.findall(shipped)}
+    assert failure_statuses, (
+        f"onepipeline {ONEPIPELINE.ref} no longer settles a publication failure on the "
+        "word `failure_of` chose where this gate reads it, so the preserving words have "
+        "lost the status they pair with"
+    )
+    preserving = _region(shipped, PRESERVING_OUTCOME, "`Preserving::outcome`")
 
     found = {(status.lower(), outcome) for status, outcome in LITERAL_SETTLEMENTS.findall(shipped)}
     found.update(
@@ -753,7 +783,9 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
         (relay.group(1).lower(), arm)
         for body in OUTCOME_OF.findall(shipped)
         for arm in OUTCOME_OF_ARM.findall(body)
-        if arm != RELAY_GUARDED_ARM
+    )
+    found.update(
+        (status, word) for status in failure_statuses for word in OUTCOME_OF_ARM.findall(preserving)
     )
     assert found, (
         f"no settlement was found in onepipeline {ONEPIPELINE.ref}; the engine settles a "
@@ -823,7 +855,7 @@ def test_the_documented_outcomes_are_the_ones_the_engine_writes(
 def test_the_words_the_prose_declares_absent_are_absent(
     engine_settlements: frozenset[tuple[str, str]],
 ) -> None:
-    """`gate-failed` and `checks-failed` are still not outcomes, and the prose still says so.
+    """`gate-failed` is still not a node outcome, and the prose still says so.
 
     The correction this gate was written for. Both halves matter: if the engine ever
     gains one of these, the prose denying it becomes the new stale claim, and this

@@ -110,7 +110,17 @@ branches and its `main` against `origin/main`, and the repo's open PRs. **Read
 every settled state that way, not only that one outcome.** A node that settles
 `failed` may still have published a change: a dispatch that ran `onevcs publish` in
 its own final turn settles `task-failed-change-open` carrying the URL, and
-re-running that work would duplicate a change already waiting to be read. And a
+re-running that work would duplicate a change already waiting to be read. **Four
+more failure words each say the publication reached the merge path and was refused
+there**, and they arrive already retried: `checks-failed`, `checks-unsettled`,
+`push-rejected`, and `sync-conflict` are the endings a further attempt could answer,
+so the engine dispatches the node again onto the *same* branch with the failure's
+reason and `onevcs`'s own evidence — three attempts by default — and settles only
+when that budget is spent. Read one as "this branch exists, carries the rejected
+tree, and has already been worked three times", never as a node to `retry` blind: a
+retry naming no branch would cut a fresh one beside committed work, and the thing
+that refused it is still there. `just work-status` on the branch, and the evidence
+the detail points at, are what say whether the next move is a person's. And a
 node's **landing is dated to the moment it settled** — nothing in the run re-reads
 it, so `just results` and `just status` render a change that merged an hour later
 as not landed *as of that settlement*. The re-read is `just work-status
@@ -139,7 +149,7 @@ pinned branch instead of cutting a second one on the same name, and **continue**
 pinned branch nothing holds — opening the worktree at that branch's tip and
 merging the base into it — rather than refusing the pin. Both are what let a retry
 reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.8.5**, never `config/onevcs.version`:
+plan node is the adopted onepipeline 0.10.1**, never `config/onevcs.version`:
 onepipeline links onevcs, oneagentgraph, and onejudge as Rust libraries, so a
 dispatch runs the copy that release resolved, while `config/onevcs.version` pins
 the onevcs *CLI* the manager verbs run — `publish-branch`, `recoverable`,
@@ -157,17 +167,17 @@ strings -a "$(readlink -f "$(command -v onepipeline)")" \
   | grep -oE '(onevcs|oneagentgraph|onejudge)-[0-9]+\.[0-9]+\.[0-9]+' | sort -u
 ```
 
-On the adopted release that answers `oneagentgraph-0.3.4`, `onejudge-0.4.0`, and
-`onevcs-0.8.0`. A second published source says the same without `strings`, without
+On the adopted release that answers `oneagentgraph-0.3.6`, `onejudge-0.5.0`, and
+`onevcs-0.10.0`. A second published source says the same without `strings`, without
 a network and without a clone: the same wheel ships a CycloneDX SBOM under its
 `dist-info/sboms/` declaring one version per linked crate, and
 `tests/test_linked_libraries.py` — whose docstring records where that lives and
 why — reads it on every gate run to hold this repository's prose to it.
 
 **Read the locks after that measurement, and in this order.** `git show
-v0.8.5:Cargo.lock`, at the tag of the release actually *installed*, is
-corroboration that should agree: onepipeline's requirement is still
-`onevcs = "0.8.0"` at v0.8.5 and its lock still resolves 0.8.0. `origin/main`'s
+v0.10.1:Cargo.lock`, at the tag of the release actually *installed*, is
+corroboration that should agree: onepipeline's requirement is
+`onevcs = "0.10.0"` at v0.10.1 and its lock still resolves 0.10.0. `origin/main`'s
 lock answers a different question — what the *next* release would link — and is
 evidence about this host only by coincidence. The ordering matters because a lock
 describes what a release *would* link while a host runs what it *installed*, and
@@ -177,7 +187,7 @@ lock can report. It is written from a real cost: a manager read that lock from
 `origin/main`, concluded a fix was adopted, overrode a documented constraint on
 the strength of it, and lost a dispatch.
 
-Two worked examples of what the measurement catches, both from this host.
+Three worked examples of what the measurement catches, all from this host.
 **onevcs:** onepipeline's `Cargo.toml` declared `onevcs = "0.4.1"`
 byte-identically in v0.7.1 and v0.7.2 — a caret requirement, so it permitted 0.4.2
 all along and was never the constraint. Only `Cargo.lock` moved, resolving 0.4.1
@@ -191,10 +201,17 @@ that added the session-conversation producer the DAG Observatory's transcript
 route reads — and a real run under it emitted nothing, because onepipeline
 v0.8.1's lock resolved oneagentgraph **0.3.0**. The `Cargo.toml` declares
 `oneagentgraph = "0.3.0"` at v0.8.3 as well, and that tag's lock resolves
-**0.3.4**; adopting onepipeline 0.8.3 here is what put the producer in force. So
-never regress that floor, and adopt a bump like either of these **between** runs:
-a live driver keeps the binary it launched with, so no retry inside a running run
-can pick one up.
+**0.3.4**; adopting onepipeline 0.8.3 here is what put the producer in force.
+**onepipeline, in this adoption:** the producer that publishes tool results, live
+turn text, and per-turn usage is oneagentgraph 0.3.6, and onepipeline v0.10.0 — the
+newest tag at the time — was cut before the lock that resolves it and still linked
+0.3.4. Its `Cargo.toml` said `oneagentgraph = "0.3.0"` at both tags, so the
+declaration answered nothing; v0.10.1 is the release whose *lock* moved, and it is
+the one this host adopts. **Never pick a release by being the newest tag** — pick it
+by what its lock resolved, and confirm that against the binary once it is installed.
+So never regress that floor either, and adopt a bump like any of these **between**
+runs: a live driver keeps the binary it launched with, so no retry inside a running
+run can pick one up.
 
 One failure this block used to explain is worth reading for what it was **not**. A
 retry pinned to a preserved branch could fail with `branch ... already carries N
@@ -212,7 +229,7 @@ Session `s-bbb59ee283af` closes the case: it opened 02:52:54Z and closed
 03:25:59Z, its four refusals are stamped 03:38:18Z, 03:38:29Z, 03:41:55Z and
 03:42:06Z — twelve to sixteen minutes after the close — and its record still reads
 `"state":"closed"` with both its run root and its clone still on disk. **Under the
-onevcs 0.8.0 the adopted release links there is no `honour_or_refuse` and no such
+onevcs 0.10.0 the adopted release links there is no `honour_or_refuse` and no such
 refusal at all**, so read that message as history rather than as something to
 plan around.
 
@@ -224,6 +241,52 @@ sequence on one branch**. Its reconciler accepts graph edits at any moment, beca
 there is no moment at which the graph stops being live. Review surfaced proposals
 and use the [live-edit protocol](docs/orchestration.md#live-graph-edits) to change
 the desired frontier.
+
+## Which pin governs a dispatch
+
+Every file in `config/` ending `.version` names one adopted release, and they do
+**not** all answer the same question. Exactly one of them decides what a dispatched
+node runs; the rest decide what this host's own commands run. Reading the wrong one
+has produced a wrong diagnosis here twice, both times with every version file on the
+host looking current while a real run came out empty.
+
+| Pin | What it governs | What it does **not** |
+| --- | --- | --- |
+| `config/onepipeline.version` | The engine CLI every `just` launch verb runs — **and, through the crates that release linked, the oneagentgraph, onevcs, and onejudge a dispatched node actually runs.** This is the pin to move when a fix lives in any of them. | Nothing a dispatch does is decided anywhere else. |
+| `config/oneagentgraph.version` | The CLI `just validate-personas` runs, and the `oneagentgraph` a `context` edit's live delivery invokes. | Which oneagentgraph reads a persona **at dispatch** — that is the linked one. |
+| `config/onevcs.version` | The CLI the manager verbs run: `publish-branch`, `repo-recover`, `recoverable`, `work-status`, `integrate`, `repos`, `sweep`. | Which onevcs a dispatched node **publishes through** — that is the linked one. |
+| `config/onejudge.version` | The PyPI `onejudge` distribution session setup installs and verifies, `onejudge_sdk` import included. | The `onejudge` crate a dispatched two-party member settles on — that is the linked one. |
+| `config/oneharness.version` | The `oneharness` CLI the wrapper scripts and the smoke spawn. | `oneharness-core`, which the engine links at **two** versions at once and which no pin here names. |
+| `config/onepipeline-ui.version` | The read API wheel and the browser bundle `just dag-ui` serves as one release. | Anything a dispatch runs; nothing in a run reads it. |
+
+**The CLI pins are reconciled against the engine's own resolution, not moved one at
+a time.** `tests/test_linked_libraries.py` reads the CycloneDX SBOM the
+`onepipeline-cli` wheel ships and fails when a pin here names a different release
+from the one that wheel linked — so a bump to `config/onepipeline.version` that left
+a sibling pin behind is a failing check rather than a silent divergence, and the
+manager verbs stay on the same `onevcs` a dispatch publishes through. That is a
+narrower guarantee than it sounds and worth stating exactly: it makes the two
+*agree*, and it is the SBOM that decides which value they agree on.
+
+A divergence is allowed only where the linked release is not installable, and only
+as a **declared** one naming both versions, so the next bump fails on it rather than
+inheriting it. There is exactly one today: onepipeline 0.10.1 links the `onejudge`
+crate 0.5.0, and PyPI carries no `onejudge` 0.5.0 — the tag is published and the
+distribution is not — so `config/onejudge.version` stays at 0.4.0 and
+`tests/test_linked_libraries.py` holds that pair. Move it the moment 0.5.0 is on the
+registry.
+
+**While it stands, read every dated onejudge claim as a claim about the CLI copy.**
+The measurements this repository restates about onejudge — the supervisor frame's
+shape, which ops a judge side is asked and when, that `user.done_when` is handed
+over verbatim — are dated to `config/onejudge.version` by
+`tests/test_onejudge_version.py`, and that file names 0.4.0 while a dispatched
+member's judge side runs the linked 0.5.0. 0.5.0 is additive over 0.4.0 — it offers
+an observing embedder a live turn's instruction, reply text, and own usage — so
+those measurements are believed to hold; what is *gated* is the CLI number beside
+them, not the copy a dispatch runs. Re-dating them to the linked release is
+follow-up work, and until it happens a claim that reads "onejudge 0.4.0 writes …"
+is a claim nothing here has re-taken against the copy that writes it.
 
 ## What "agent" means here
 
@@ -491,7 +554,11 @@ detail:
 
 - **Read `runs/<run-id>/channel/queue.json` before replying**, and confirm the
   `pending` surface is the one being answered. A reply binds to whatever is
-  pending at that instant, not to the surface you just read.
+  pending at that instant, not to the surface you just read. What it binds to is
+  decided by the halves it carries: a verdict answers the pending surface, a
+  commands-only envelope answers nothing and leaves it standing, and one carrying
+  both does both. So an edit issued while a question is waiting no longer consumes
+  that question — and no longer kills the monitor either.
 - **A blocking surface may have no asker.** A `channel serve` that timed out exits
   without withdrawing its surface, so `awaiting-planner` does not prove anybody is
   still waiting for the answer.
@@ -562,7 +629,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.8.5 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.10.1 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -875,7 +942,7 @@ question to its manager over the run's own channel instead of guessing at a
 decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
-dispatch of a run carries it as of onepipeline 0.8.5**, composed where the dispatch
+dispatch of a run carries it as of onepipeline 0.10.1**, composed where the dispatch
 is made. Below that release nothing composed it: it reached a worker only by leaking
 out of an *attached* driver that had started an observer graph in its own process, so
 a dispatch of a detached or adopted run met its first fork with the wrapper there and
@@ -888,9 +955,12 @@ and its run-id journey fails on the detached and adopted shapes below the bump.
 is where a launch takes it, so a read-only view — which dispatches nobody — takes it
 not at all. That wrapper is the only supported way to ask: `onepipeline channel
 serve` answers its own timeouts at exit 0 with a ruling that reads like a decision,
-and a reply is claimed by whichever reader reaches it next, so a question asked any
-other way can be answered by a fabricated verdict or by a live graph edit meant for
-the engine. A question is answered with `just channel-next` and `just
+and a verdict on the queue is claimed by whichever reader reaches it next, so a
+question asked any other way can be answered by a fabricated verdict or by another
+reader's ruling. A live graph edit is no longer among the things that can answer it:
+the adopted release routes a reply by the halves it carries, so a commands-only
+envelope stays on the command path and never reaches a reader waiting for a verdict.
+A question is answered with `just channel-next` and `just
 channel-reply`, which the launch prints.
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
@@ -944,7 +1014,7 @@ timeline spans — `rollup` spans labelled `agent_role: orchestrator` — but a 
 measured here carried none, and the bounded local capture that used to back-fill
 them exists nowhere on the adopted stack; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
-cannot fully answer: on the adopted onepipeline 0.8.5 a run whose journal does not hold
+cannot fully answer: on the adopted onepipeline 0.10.1 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
 is the one line that makes the rest unprovable, so read it before acting on a node
 those views show as never settled. It used to be said only on the driver's stderr,
@@ -955,8 +1025,14 @@ whether it carries an incomplete-step marker, and the exact command that lands i
 `just repo-recover` for incomplete provenance, `just publish-branch` for a complete
 branch under its identity's policy, `just integrate` for the local merge train,
 with the fetch included when the publication checkout does not have the
-branch. Reach for it instead of diffing clones by hand. **Which branches "every"
-covers is decided by where you run it**, and it is not always every identity: run
+branch. Reach for it instead of diffing clones by hand. **What it will no longer
+offer is a branch that already landed.** Through onevcs 0.8.x it decided that by
+comparing trees, so a stale copy of a merged branch could be listed as work to
+resume and the command beside it would have reopened it; 0.9.0 infers landing from
+history instead, and ties it to the copy whose work it accounts for. So a branch
+missing from the listing is a branch this verb has evidence about, not one it failed
+to notice — and `just work-status <branch>` is where that evidence is read.
+**Which branches "every" covers is decided by where you run it**, and it is not always every identity: run
 inside a registered checkout it answers for that checkout's identity **alone**, and
 run anywhere else it answers across every registered identity. Run from this
 repository root — a registered checkout — it lists ai-orchestrator branches and no
@@ -1199,7 +1275,7 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.8.5
+graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.10.1
 they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries
@@ -1360,7 +1436,7 @@ type marked breaking with `!`). A `docs:` or `chore(deps):` change to tracked so
 merges green and then never cuts a release, which is what cost two changes in one
 plan and was caught both times only by a person reading the title. The hook reads the
 subject and nothing else — no index, no diff, no branch — because the adopted
-**onevcs 0.8.0** puts the composed subject a publication is about to land under to
+**onevcs 0.10.0** puts the composed subject a publication is about to land under to
 that repository's own `commit-msg` hook, where none of that exists, and one policy
 must mean the same thing to both callers. It is 0.6.1 that started asking, and
 re-measured here on the adopted 0.7.0 rather than carried forward: the same journeys
@@ -1376,7 +1452,7 @@ that satisfies it`. `tests/e2e/test_publish_branch_e2e.py` holds both halves and
 against 0.5.0 on that wording. Two things it is therefore *not*: `just integrate`
 composes the train's subject through `provenance::publication_subject` rather than
 the publication path, so it never asks; and a lifecycle dispatch publishes through
-the onevcs `onepipeline` links, which is 0.8.0 too, so it asks the same question
+the onevcs `onepipeline` links, which is 0.10.0 too, so it asks the same question
 before anything is written. That last one was worth stating separately only while
 the two numbers differed: through the cycle when the linked copy was 0.4.2, a
 dispatched publication met this hook as git's own refusal of the commit and nothing

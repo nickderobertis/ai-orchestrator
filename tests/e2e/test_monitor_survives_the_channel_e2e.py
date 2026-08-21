@@ -12,21 +12,29 @@ had two ways of dying on its own judge side — both of which leave the run repo
    produce which op is a declaration, and `tests/test_observer_judge_ops.py` holds it.
    What a declaration cannot say is whether the merged configuration a **launch**
    composes still carries one, or whether the member actually lives to the end.
-2. **An answer addressed to somebody else.** The channel is a durable queue whose
-   replies are claimed by whichever reader reaches one next, so a manager's live graph
-   edit — `commands` and no `completion` — arrives at the monitor's judge side by
-   arrival order alone. Forty of this host's recorded dag-scope runs died on it, which
-   is the worst possible timing: it fires precisely while a manager is supervising,
-   because the manager's own correction is what kills the watcher.
+2. **An answer addressed to somebody else.** The channel is a durable queue with two
+   readers, and through onepipeline 0.8.x it arbitrated between them by arrival order —
+   so a manager's live graph edit, `commands` and no `completion`, reached the monitor's
+   judge side whenever it got there first. Forty of this host's recorded dag-scope runs
+   died on it, at the worst possible timing: it fired precisely while a manager was
+   supervising, because the manager's own correction was what killed the watcher.
+
+   **The adopted release routes a reply by the halves it carries**, so that envelope
+   never reaches this reader at all. That is what the second half of this journey now
+   measures: a manager who answers a real run with nothing but live edits for the whole
+   life of that run, and a judge side that is handed none of them. The filter's own
+   recognition of one is kept — it is what stands between a run and that death if a
+   release regresses — and is driven directly, against a stand-in channel made to hand
+   one back, at both of the boundaries a member has.
 
 So this launches one real run and plays a manager who answers **only** with live
 edits, which is the reproduction rather than a stand-in for it: the real recipe, the
 real engine, the real graph, the real filter, and the real channel. Nothing is
 substituted but the paid model, at the `oneharness` seam every other journey here
 substitutes it at. The run is then driven to settlement and the whole of it is judged
-at once — the effective config the member was launched with, the ruling the filter
-gave it, the edit the engine got anyway, and the graph's own record of how each member
-ended.
+at once — the effective config the member was launched with, what the judge side was
+and was not handed, the edits the engine got, and the graph's own record of how each
+member ended.
 """
 
 from __future__ import annotations
@@ -55,7 +63,6 @@ from test_orchestrate_launch_e2e import (
     _environment,
     _just,
 )
-from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -222,6 +229,13 @@ class EditingManager:
         self._thread = threading.Thread(target=self._edit, daemon=True)
         self._thread.start()
 
+    #: How long to leave between edits. Nothing at all while this raced a reader that
+    #: no longer takes these envelopes means editing flat out for the whole run: one
+    #: send added one node, and a three-minute run took over thirteen hundred of them
+    #: before it settled. A monitor's turn lasts seconds, so this is still an edit
+    #: inside every window there is to arrive in.
+    INTERVAL_SECONDS = 0.5
+
     def _edit(self) -> None:
         while not self._stopping.is_set():
             self._sent += 1
@@ -238,6 +252,7 @@ class EditingManager:
             self._answers.append(
                 ReplyAnswer(returncode=answered.returncode, stdout=answered.stdout)
             )
+            self._stopping.wait(self.INTERVAL_SECONDS)
 
     @property
     def answers(self) -> list[ReplyAnswer]:
@@ -331,12 +346,13 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
         )
         manager = EditingManager(environment)
         try:
-            # The claim is a race by design — the engine's reconciler reads the same
-            # queue — so the manager keeps editing until one reaches the filter, or
-            # until the wait is out and the journey reports that it never did.
-            answered = deadline(300)
+            # Edits for the whole life of the run, and stops when the run does. The
+            # window used to be a fixed one because reaching the filter was a race the
+            # manager had to win; now it must never be won, and "for as long as there
+            # was a run to edit" is both the stronger window and the one that does not
+            # spend twenty minutes proving a negative after the run has settled.
             reached = False
-            while not reached and time.monotonic() < answered:
+            while launch.poll() is None and not reached:
                 reached = any(ROUTED_RULING in prompt for prompt in _monitor_prompts(prompt_log))
                 if not reached:
                     time.sleep(0.5)
@@ -428,36 +444,40 @@ def test_the_bar_the_member_cannot_decline_is_still_there_to_be_served(
     )
 
 
-def test_a_manager_live_edit_claimed_at_the_monitors_judge_side_does_not_end_it(
+def test_no_manager_live_edit_is_handed_to_the_monitors_judge_side(
     watched: Watched,
 ) -> None:
-    """A live edit that reached the filter was recognised, answered, and survived.
+    """The failure this journey was written for is fixed at its source, and measured.
 
-    This is the second failure driven end to end. The manager playing this run never
-    sends a verdict — only graph edits — so every reply on the queue is addressed to
-    the engine's reconciler, and the monitor's judge side claims one whenever it gets
-    there first. Before this change that claim killed the member within the second.
+    The manager playing this run sends nothing but graph edits, for the whole life of
+    the run — every one of them a reply that, under onepipeline 0.8.x, this reader
+    would have claimed whenever it got to the queue first, and died on. The adopted
+    release routes a reply by the halves it carries: a commands-only envelope belongs
+    to the command path, and the verdict queue this reader claims from does not hold
+    it.
 
-    What proves it now is the monitor's *next prompt*: the filter's ruling can only be
-    there if the filter recognised the envelope rather than exiting on it, if it
-    answered onejudge with something onejudge could act on, and if the member then took
-    another turn. Three things one string cannot be true without.
+    So the assertion is that the monitor was handed **none** of them, and it is only
+    worth anything beside the two below it: that the edits really were sent and really
+    did reach the graph. Without those this would pass for a manager that sent nothing.
     """
-    assert watched.filter_answered_a_live_edit, (
-        "no live edit ever reached the monitor's judge side within the wait, so this run "
-        "never drove the failure it exists to drive — the engine's reconciler claimed "
-        f"every reply first. The monitor was given:\n{watched.monitor_prompts}"
-    )
-    answered = [prompt for prompt in watched.monitor_prompts if ROUTED_RULING in prompt]
     assert ROUTED_RULING in FILTER.read_text("utf-8"), (
         f"{FILTER.name} no longer opens that ruling with {ROUTED_RULING!r}, so this journey "
         "is matching a string nothing produces; read the constant out of it again"
     )
-    assert answered, watched.monitor_prompts
-    assert watched.monitor_prompts.index(answered[0]) < len(watched.monitor_prompts) - 1, (
-        "the monitor's last turn is the one carrying the filter's ruling, so it was given "
-        "the ruling and never spoke again — surviving the answer is what this asserts, and "
-        f"a member that stops there did not:\n{watched.monitor_prompts}"
+    assert watched.reply_answers, (
+        "this manager sent no live edit at all, so nothing here says anything about how "
+        "one is routed"
+    )
+    answered = [prompt for prompt in watched.monitor_prompts if ROUTED_RULING in prompt]
+    assert not watched.filter_answered_a_live_edit and not answered, (
+        "a live edit was handed to the monitor's judge side, which the adopted release "
+        "routes away from it. Either the routing regressed — in which case the filter "
+        "below is the only thing keeping this member alive and every document describing "
+        f"that routing is now wrong — or this run reached it another way:\n{answered}"
+    )
+    assert len(watched.monitor_prompts) > 1, (
+        "the monitor took one turn or none, so this run never watched anything and the "
+        f"absence above says nothing:\n{watched.monitor_prompts}"
     )
 
 

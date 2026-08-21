@@ -82,7 +82,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.3.4**.
+linked crate; on the adopted release that is **oneagentgraph 0.3.6**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
@@ -96,7 +96,12 @@ That is the failure this section exists to make cheap to recognise, because it
 shows up as a route that renders and finds nothing behind it rather than as an
 error. `tests/test_linked_libraries.py` now reads that SBOM on every gate run and
 refuses a linked `oneagentgraph` below the producer release, so the silent version
-of this cannot come back. When a transcript surface is empty for a **new** run,
+of this cannot come back. It holds a **second** floor beside it, for the same class
+of silence one layer in: 0.3.6 publishes the whole of a turn rather than an outline
+— the tool result that answered a call, the live turn text, and the turn's own usage
+— and under an older one this view renders a transcript with the tool results
+missing from it and a cost of "Not reported", neither of which looks like a missing
+producer. When a transcript surface is empty for a **new** run,
 check the engine pin before the reader pins, and read the answer out of the run's
 own journal: a member turn carries `labels.session` as `<stream>.<member>` —
 `node-scope-….worker` — and an `oneharness-session` event carries the pointer and

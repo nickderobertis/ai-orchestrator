@@ -29,10 +29,14 @@
 # exactly that string is refused here, loudly, with nothing on stdout.
 #
 # **A reply is claimed by whichever reader arrives next, not by the call that asked.**
-# Measured on a live run: a re-ask returned
+# That was measured on a live run under onepipeline 0.8.x: a re-ask returned
 # `{"version":1,"author":"monitor","commands":[{"op":"context",...}]}` — a live graph
 # edit the monitor addressed to the engine, delivered here because this call happened
-# to be the next reader. Two checks close that, in this order:
+# to be the next reader. The adopted release routes a reply by the halves it carries,
+# so that envelope now stays on the command path and never reaches this rendezvous;
+# `tests/e2e/test_ask_manager_e2e.py` measures that from the reply verb's own answer.
+# Both checks below are kept anyway, and are what an agent has left if a release
+# regresses to arrival order. In this order:
 #
 #   1. An answer is a ruling only when it carries a boolean `completion`. The live
 #      edit above carries none, so it is refused rather than returned as prose.
@@ -299,7 +303,7 @@ while true; do
             # A live graph edit the manager addressed to the engine reaches here
             # exactly this way. It is not prose and must never be reported as one.
             fail "the planner channel handed back something that is not a ruling: $classified" \
-                "a ruling is a JSON object carrying a boolean 'completion'; this is what a live graph edit routed to this reader looks like, so ask again once the edit has landed"
+                "a ruling is a JSON object carrying a boolean 'completion'; a live graph edit routed here looks like this, so ask again once the edit has landed"
             ;;
         12)
             if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then

@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.8.5 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.10.1 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -182,9 +182,11 @@ counters; `surfaces_read` is what resets the planner-update pacemaker.
 6. **For a failure that never reached a gate** — a base advanced under the
    publication, a fetch or a worktree that could not be built — there is no gate
    span and no preserved log, because none was produced. The whole account is the
-   same settlement detail, carrying `onevcs`'s own reason. Both cases settle the
-   node under the one outcome `publication-failed`, so the detail is the only place
-   "the gate rejected it" and "a sibling run moved the base" read differently.
+   same settlement detail, carrying `onevcs`'s own reason. Those two no longer settle
+   alike: a rejected gate is terminal and settles `publication-failed`, while a base
+   that moved under the publication is `sync-conflict` — a word of its own, reached
+   only after the node was dispatched again on that branch. The detail is still where
+   each of them says what happened.
 
 ## Seeing the supervisory tier
 

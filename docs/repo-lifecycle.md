@@ -13,12 +13,12 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.8.5**
+that source on every `just check` rather than restated: **`onepipeline` v0.10.1**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.8.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.10.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **0.8.0** as well at this
+the `onevcs` CLI `config/onevcs.version` pins, which is **0.10.0** as well at this
 pair of pins; the two are separate pins that have coincided before and will diverge
 again, so where a claim depends on which copy runs it this document says so. Re-read the source before trusting a claim
 here against a later pin; that is the discipline this section exists to replace, and
@@ -54,7 +54,11 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
 | `done` | *(none)* | A direct agent node — no publication to name. |
 | `waiting` | *(none)* | A `kind: human` step is ready and the branch is held for a person. |
-| `failed` | `publication-failed` | The publication started and did not land. **One word for every such ending.** |
+| `failed` | `publication-failed` | The publication started and did not land, and **nothing a further attempt could answer** ended it: a request `onevcs` refused, a seam with no implementation, or `onevcs`'s own gate rejecting the tree as it stands. |
+| `failed` | `checks-failed` | A required check the host reports concluded red, and the publication budget is spent. |
+| `failed` | `checks-unsettled` | The bound on watching the host elapsed with the change still outstanding, and the budget is spent. |
+| `failed` | `push-rejected` | The publishing push was refused by the merge path, and the budget is spent. |
+| `failed` | `sync-conflict` | The base moved under the publication and the bounded resolve-and-requeue did not converge, and the budget is spent. |
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
 | `failed` | `no-agent-progress` | Every boundary attempt was spent and the agent produced nothing. |
@@ -65,7 +69,9 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 **This table is reconciled, not copied.**
 `tests/test_engine_contracts.py` reads every settlement the adopted
 `onepipeline` release composes — `Settlement::plain`, the `failed(node, …)` helper,
-and `vcs::outcome_of` — across the crate whole rather than a named handful of files,
+`vcs::outcome_of`, and the words `vcs::Preserving::outcome` declares for a
+publication a further attempt could answer — across the crate whole rather than a
+named handful of files,
 with test modules stripped, and fails when a **pairing** appears on one side and not
 the other, in whichever direction it drifted. Both columns, because a table of
 pairings gated on one of them is gated on neither: a row that moved
@@ -78,25 +84,49 @@ preserved-gate-log retention and directory) rebuilt from the engine's own `const
 runs in the uncached tier, because the source it reads is another repository's
 checkout and no cache key here describes one.
 
-`gate-failed` and `checks-failed` are **not** in it and never were on this stack, and
-that gate holds them absent too, so the denial fails the moment either becomes real.
-The only `gate-failed` either engine writes is `onevcs integrate`'s per-candidate
-*skip reason* — the train's word for "this branch's gate said no, so the train
-stepped over it" — which is not a node outcome and never reaches a plan.
+`gate-failed` is **not** in it and never was on this stack, and that gate holds it
+absent too, so the denial fails the moment it becomes real. The only `gate-failed`
+either engine writes is `onevcs integrate`'s per-candidate *skip reason* — the
+train's word for "this branch's gate said no, so the train stepped over it" — which
+is not a node outcome and never reaches a plan. `checks-failed` was denied here for
+the same release cycles and is denied no longer: onevcs 0.10.0 gave it a
+`FailureKind` and onepipeline 0.10.0 gave it a settlement, so it is a row of the
+table above rather than a word to look for and never find.
 
 ### What a failed publication actually settles
 
-`onevcs` distinguishes four failures and `onepipeline` keeps none of the
-distinction. `PublishOutcome::Failed` carries a `kind` — `gate`, `invalid`,
-`sync-conflict`, or `not-implemented`, which the CLI reports as exit 1, 2, 3, and 70
-— a human-readable `reason`, and a `retained` saying whether the branch was
-`handed-back` to a registered checkout or `refused` by it. `onepipeline`'s
-`vcs::outcome_of` matches on the variant alone, so all four settle the node `failed`
-with the single outcome `publication-failed`. The `kind` is dropped; the `reason` is
-kept, prefixed `onevcs: `, as the settlement's `detail`. **So the detail string is
-the only place a run says whether the gate rejected the work or the base moved under
-it** — read it, and read the session's own `gate-verdict` event, rather than looking
-for a second outcome word that will never come.
+`onevcs` distinguishes seven failures and `onepipeline` now keeps the distinction
+that decides what happens next. `PublishOutcome::Failed` carries a `kind` — `gate`,
+`invalid`, `sync-conflict`, `not-implemented`, `checks-failed`, `checks-unsettled`,
+or `push-rejected`, which the CLI reports as exit 1 for the four verification
+failures, 2 for `invalid`, 3 for `sync-conflict`, and 70 for `not-implemented` — a
+human-readable `reason`, and a `retained` saying whether the branch was
+`handed-back` to a registered checkout or `refused` by it.
+
+`onepipeline`'s `vcs::failure_of` sorts those seven kinds into two, arm by arm
+rather than by a wildcard, and the sort **is** the routing. Four of them are
+`Preserving` — `checks-failed`, `checks-unsettled`, `push-rejected`, and
+`sync-conflict` — because their fix is more work on the same branch, and each
+settles under its own word. The other three are terminal: `gate` ran on the tree as
+it stands and said no, `invalid` was refused at a trust boundary, and
+`not-implemented` has nothing behind it, so all three settle the residual
+`publication-failed` — the word every publication failure used to settle on, kept
+for exactly the endings no continuation follows from.
+
+A preserving failure whose branch `onevcs` handed back is **not settled at all on
+the first attempt**: the node is dispatched again onto that same branch, carrying
+the failure's reason and pointers to `onevcs`'s own evidence, so the worker meets
+the thing that rejected it rather than a fresh worktree cut from the base. The
+budget is `ONEPIPELINE_PUBLICATION_ATTEMPTS`, **3** by default and the whole budget
+rather than the retries beside it. Only when it is spent does the node settle
+`failed` under the last failure's word, with a roll-up of every attempt in the
+detail. A preserving kind whose branch the execution checkout *refused* settles
+straight away, because there is nothing left to continue.
+
+Either way the `reason` is kept, prefixed `onevcs: `, as the settlement's `detail`.
+**So the outcome word now says which merge-path refusal this was, and the detail
+says what it said** — read both, and read the session's own `gate-verdict` event
+beside them.
 
 A drafting failure adds words to that same detail and never causes it; see
 [Diff-derived PR descriptions](#diff-derived-pr-descriptions).
@@ -481,15 +511,24 @@ A `command:` gate that exits non-zero is `Ruling::Rejected` and the publication 
 `publication-failed` with `onevcs: <command> rejected "<branch>"` for its detail. A
 `pre-push` rejection is not distinguished from any other refused push: git cannot
 tell an arbitrary hook rejection from a transport rejection, so `onevcs` reports what
-git said per ref and the node settles under the same one word.
+git said per ref, as `Error::PushRejected` rather than as a gate failure — a
+different word from the gate's, and one a further attempt could answer, so the node
+is dispatched again onto that same branch before it settles `push-rejected`. What
+the hook wrote is not inline; it is the artifact `record_push` stored a moment
+earlier, because it is a run of the repository's whole verification.
 
 There is no gate-skipping switch, and no plan key that names or overrides a gate. The
 `Node` schema is `deny_unknown_fields`, so `recorded_gate`, `verify_cmd`,
 `skip_verify`, and `no_identity_gate` are not "accepted and ignored" — a plan
-carrying any of them is **refused while it loads**. `verify_via_ci` is the one
-survivor: it is still a field of `Node` on onepipeline v0.8.5 and is read by nothing
-in the crate, so setting it changes no behaviour. Treat the CI-iteration contract it
-once named as gone until something reads the field again.
+carrying any of them is **refused while it loads**. `verify_via_ci` was the one
+survivor and is no longer even that: it is not a field of `Node` on onepipeline
+v0.10.1 and is refused **by its own name**, at every schema version and on a live
+edit's `add` alike, because a plan's author has to act on the field rather than on
+a version number. The refusal says where what it asked for went, which is the whole
+of the change: nothing ever read the flag, and the host's own required checks are
+now the merge-path verification of a `change-auto` node — watched to their
+conclusion, settling the node `checks-failed` when one concludes red and
+`checks-unsettled` when the bound elapses with one still outstanding.
 
 `just integrate` runs the same gate per candidate, because each candidate
 fast-forwards the *local* base before the single optional push; skipping it would let
@@ -964,11 +1003,12 @@ If the current base content-conflicts with a local branch at the head, the turn 
 dequeued before its original `branch:step` worker session resolves the conflict.
 The resolved branch takes a new ticket at the queue tail; it never holds the head
 while authoring. Resolve-and-requeue attempts are bounded before the publication
-fails with `FailureKind::SyncConflict`, which the node settles as
-`publication-failed` with that reason as its detail; the branch is retained for
-manual recovery. A push declined because the branch moved on the host since this
-run last had it is the same failure kind, and its reason names the two shas and the
-`just publish-branch` that lands it after a reconcile.
+fails with `FailureKind::SyncConflict`, which is one of the four a further attempt
+could answer: the branch is retained, the node is dispatched again onto it with that
+reason, and only a spent publication budget settles it `sync-conflict`. A push
+declined because the branch moved on the host since this run last had it is the same
+failure kind, and its reason names the two shas and the `just publish-branch` that
+lands it after a reconcile.
 
 - **The change-request path** (`change-*`, GitHub repos) — `publish_as_change`
   pushes the branch, then adopts an existing change request for the same head and
@@ -980,23 +1020,32 @@ run last had it is the same failure kind, and its reason names the two shas and 
   back to merging directly if the repo disallows it), `change-direct` (merge it
   ourselves), `change-open` (open the change request and stop).
 
-  **`onevcs` waits for required checks only when the resolved gate is
-  `{kind: checks}`.** That is what calls `await_checks`; under a `command:` gate —
-  which is every rule on this host — nothing polls the host and the merge is asked
-  for as soon as the change request exists. Where it *does* poll, only required
-  checks count (`statusCheckRollup.isRequired`), each transition is emitted as an
-  `EventKind::ChangeCheck` event carrying the check's log as an artifact, and a red required
-  check or a bounded wait that never settles is `Error::GateFailed` — so it reaches
-  the node as `publication-failed`, exactly like a rejected `command:` gate. There
-  is no separate `checks-failed`.
+  **What `onevcs` watches follows the merge policy, and never the gate the policy
+  names.** That is the correction onevcs 0.10.0 made, and the old rule is worth
+  knowing because it silently did nothing here: watching used to happen only where
+  the resolved gate was `{kind: checks}`, and every rule on this host names a
+  `command:` gate — so the host's required checks were observed for no repository at
+  all. Now a `change-direct` publication calls `await_checks` before asking for the
+  merge it is about to perform itself, and a `change-auto` one arms auto-merge
+  inside a watch that ends at the merge the host performs. Only required checks
+  count (`statusCheckRollup.isRequired`), each transition is emitted as an
+  `EventKind::ChangeCheck` event carrying the check's log as an artifact, and the
+  three ways out are each named: the watch's own ending, a required check concluding
+  red (`Error::ChecksFailed`, quoting its log), or the bound elapsing with one still
+  outstanding (`Error::ChecksUnsettled`, naming what was pending). Those are two
+  different situations and they now settle two different words — see [What a failed
+  publication actually settles](#what-a-failed-publication-actually-settles) — where
+  a single sentence about settled checks used to cover both.
 
-  **Under `change-auto` a node settles when its change request is published with
-  auto-merge armed, not when the merge completes.** GitHub lands it later, on its
-  own clock, and nothing reports back into a run that has already settled the node.
-  So `just status` keeps counting that node as *settled without landing* for the
-  life of the run — after the PR merged, after the release went out, forever. Read
-  that counter as "handed to GitHub", not as unfinished work: check the PR or
-  `origin/main` before going looking for a branch that is already on it.
+  **Under `change-auto` a node settles when the merge completes, at the commit the
+  host merged it at.** That is the other half of 0.10.0: the watch runs to `merged`,
+  the landing is recorded as a provenance trailer on the branch itself, and the
+  publication checkout is fast-forwarded. So a `change-auto` node no longer counts
+  as *settled without landing* for the life of the run — the state that used to
+  persist after the PR merged, after the release went out, forever. What it costs is
+  time: the node holds its identity's merge slot until the host lands the change or
+  the bound elapses, and a host holding it behind a check nobody declared is what
+  `checks-unsettled` is for.
   Before opening one, `find_changes` queries the host for the same head and base and
   the first result is adopted rather than a second opened.
 - **The local path** (`local-direct`) — there is no change request to wait on, so
@@ -1037,10 +1086,10 @@ A lifecycle node is an `agent` node in a plan with a `repo` and either a
 `id`, `kind`, `task`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
 `context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
 `merge_policy`, `base_branch`, `branch`, `title`, `body`, `execution_checkout`,
-`verify_via_ci`, `steps`, `resume` — and
+`steps`, `resume` — and
 anything else is refused while the plan loads. `stack_bases` is a pre-adoption
-field held only in `tests/fixtures/legacy-runs/`; a plan that writes one is refused.
-`verify_via_ci` loads and is read by nothing. Independent top-level nodes run
+field held only in `tests/fixtures/legacy-runs/`; a plan that writes one is refused,
+and so is `verify_via_ci`, which this schema once accepted. Independent top-level nodes run
 concurrently, and a node whose dependency failed is skipped. Cross-repository dependencies only schedule. A
 successful same-identity dependency not landed on the root base becomes a stack
 prerequisite:
@@ -1170,7 +1219,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.8.5.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.10.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1247,8 +1296,8 @@ lives. The branch and its commits are preserved; the worktree is the session's a
 goes when the session does.
 
 **A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.8.5 has no notion
-of one and `onevcs` 0.8.0 has none to open — and no gate runs, on a local or a remote
+pause on either engine at the adopted versions — `onepipeline` v0.10.1 has no notion
+of one and `onevcs` 0.10.0 has none to open — and no gate runs, on a local or a remote
 identity, until the last step has settled and the publication starts. A pause is
 purely local branch state.
 
@@ -1307,10 +1356,15 @@ Two things about the pin are worth knowing before reading one:
 * **The completed steps depend on where it stopped.** A step that failed, was
   cancelled, or hit its cap settles carrying the steps already done, so a
   continuation skips them. A publication that failed after every step settled `done`
-  records **none** — `publication_failed` builds a plain settlement and never
-  populates them — so a continuation re-dispatches the whole workstream over a branch
-  that already carries its work. Land such a branch with `just publish-branch`
-  instead of retrying the node.
+  records **none**, and since onepipeline 0.10.0 that is deliberate rather than
+  incidental: the engine's own re-dispatch of a preserving failure is made under the
+  same rule, because a continuation that skipped the steps the branch already holds
+  would publish that same rejected tree again and meet the same refusal. So a
+  continuation re-dispatches the whole workstream over a branch that already carries
+  its work — which is what you want when the merge path rejected the tree, and not
+  what you want when it did not. For a node that settled `publication-failed`,
+  nothing further was tried and `just publish-branch` is usually the move; for one
+  that settled under a preserving word, three attempts already were.
 
 `onevcs` hands a branch back where it can: `PublishOutcome::Failed` carries a
 `retained` naming whether the branch was `handed-back` to a registered checkout or
@@ -1802,7 +1856,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.8.5 — so every number in it was a
+journey it named are absent from `onepipeline` v0.10.1 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

@@ -9,10 +9,13 @@ and launches nothing.
 
 Both directions are driven, because only the pair means anything. A plan whose nodes
 state the bar they will be judged against passes and says how many it read; one whose
-node omits a demand the appendix it carries makes is refused, with a non-zero exit
-and the reason on stderr, before a single node is scheduled. The refused shape here
-is the one that actually happened: criteria that were complete about the work and
-silent about proving it end to end, under a role whose bar demands exactly that.
+node omits a demand it will be held to is refused, with a non-zero exit and the reason
+on stderr, before a single node is scheduled. The refused shape here is the one that
+actually happened: criteria that were complete about the work and silent about proving
+it end to end. A demand is refused **against whichever source really makes it**, and
+both sources are driven — the appendix this repository tracks, and the role lifted out
+of the engine binary — because a refusal naming the wrong one sends a plan's author to
+edit something that decides nothing.
 
 These journeys read the tracked appendix, so they belong to the tier keyed on this
 repository's prose: editing that file changes what this recipe accepts.
@@ -54,11 +57,25 @@ STATES_ITS_BAR = (
 )
 
 #: The same node with the end-to-end criterion dropped. This is the shape that was
-#: dispatched, finished, gate-green, and failed anyway — the bar demanded proof end to
-#: end, the criteria never said so, and the judge supplied its own reading.
+#: dispatched, finished, gate-green, and failed anyway — the demand was made, the
+#: criteria never said so, and the judge supplied its own reading. On the adopted
+#: stack that demand comes from the appendix rather than from the role: oneagentgraph
+#: 0.3.5 holds a dispatch to what it can prove from inside its own run, so the shipped
+#: `engineer` bar asks for the change to be "proven at the level this run can reach"
+#: and no longer says "end to end" at all. Which is the guard working as designed —
+#: it enforces a demand only where it is really made.
 OMITS_A_DEMAND = (
     "- The route accepts a valid request and rejects an invalid one.\n"
     "- The dispatch closes with a completion report naming the evidence it verified."
+)
+
+#: And the same node with the *report* criterion dropped instead, which is the demand
+#: the shipped role still makes. Both fixtures are here because the two are refused
+#: through different halves of the guard, and only this one exercises the role lifted
+#: out of the engine binary — the reading `AGENTS.md` records losing a dispatch to.
+OMITS_A_DEMAND_THE_ROLE_MAKES = (
+    "- The route accepts a valid request and rejects an invalid one.\n"
+    "- A request-level test drives the route end to end and covers both paths."
 )
 
 
@@ -156,9 +173,9 @@ def test_a_plan_whose_node_omits_a_demand_it_will_be_held_to_is_refused(tmp_path
     """The refusal, at the seam and for the reason it exists.
 
     The message has to carry both halves for the plan's author to act on it: which
-    demand went unanswered, and where it is made — here the `engineer` role compiled
-    into the `oneagentgraph` `onepipeline` links, which is the bar in force and not
-    anything in this repository's `personas/`.
+    demand went unanswered, and where it is made — here the appendix this repository
+    tracks and every node's task carries, which is where the end-to-end demand lives
+    on the adopted stack.
     """
     refused = _check_plan(_plan(tmp_path, OMITS_A_DEMAND))
 
@@ -166,6 +183,25 @@ def test_a_plan_whose_node_omits_a_demand_it_will_be_held_to_is_refused(tmp_path
     reported = refused.stderr
     assert "route:" in reported, reported
     assert "proof end to end" in reported, reported
+    assert "Operational notes for this host" in reported, reported
+    assert "State it as a criterion" in reported, reported
+
+
+def test_a_demand_the_shipped_role_makes_is_refused_against_that_role(tmp_path: Path) -> None:
+    """The other half of the same seam: a demand that comes from the engine binary.
+
+    This is the reading the guard exists to make and the one this repository has
+    already lost a dispatch to getting wrong — the bar in force is the role compiled
+    into the `oneagentgraph` the adopted `onepipeline` links, never a file in
+    `personas/` and never the CLI pinned beside it. A refusal that named the wrong
+    source would send a plan's author to edit something that decides nothing.
+    """
+    refused = _check_plan(_plan(tmp_path, OMITS_A_DEMAND_THE_ROLE_MAKES))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    reported = refused.stderr
+    assert "route:" in reported, reported
+    assert "a completion report" in reported, reported
     assert "engineer" in reported and "onepipeline" in reported, reported
     assert "State it as a criterion" in reported, reported
 

@@ -107,14 +107,21 @@ def answer_each(
     answers: list[Callable[[str], str]],
     *,
     seconds: float = MANAGER_PATIENCE_SECONDS,
-) -> None:
+) -> list[subprocess.CompletedProcess[str]]:
     """Read surfaces until a question appears, then reply. Once per answer.
 
     A surface carrying no token is discarded rather than answered: this host's monitor
     and its pacemaker raise their own on the same channel, and a run watched by them is
     the ordinary case rather than the exception.
+
+    Hands back what the reply verb *answered*, one per send, rather than only asserting
+    it was accepted. The answer is evidence in its own right: `onepipeline reply` reports
+    `{"reply":N,"state":"applied"}`, and the `N` there is how many pending surfaces that
+    send also answered — which is the one direct reading of how the adopted release
+    routed an envelope, as opposed to inferring it from who blocked afterwards.
     """
     limit = deadline(seconds)
+    answered: list[subprocess.CompletedProcess[str]] = []
     for compose in answers:
         token = None
         while token is None:
@@ -128,6 +135,8 @@ def answer_each(
             time.sleep(0.2)
         sent = reply(run, environment, compose(token))
         assert sent.returncode == 0, f"the channel refused this reply:\n{sent.stderr}{sent.stdout}"
+        answered.append(sent)
+    return answered
 
 
 def answer_persistently(
@@ -254,6 +263,7 @@ class Manager:
         seconds: float = MANAGER_PATIENCE_SECONDS,
     ) -> None:
         self._failures: list[BaseException] = []
+        self._answers: list[subprocess.CompletedProcess[str]] = []
         self._thread = threading.Thread(
             target=self._play, args=(run, environment, answers, seconds), daemon=True
         )
@@ -267,9 +277,18 @@ class Manager:
         seconds: float,
     ) -> None:
         try:
-            answer_each(run, environment, answers, seconds=seconds)
+            self._answers.extend(answer_each(run, environment, answers, seconds=seconds))
         except BaseException as error:  # noqa: BLE001 - re-raised by `checked` below
             self._failures.append(error)
+
+    @property
+    def answers(self) -> list[subprocess.CompletedProcess[str]]:
+        """What the reply verb answered each send, for a journey whose subject is routing.
+
+        Read after `checked`, which is where a manager that never got to send at all is
+        re-raised as its own cause rather than as an empty list somebody has to explain.
+        """
+        return list(self._answers)
 
     def failure(self) -> BaseException | None:
         """Whatever the manager has already given up on, if it has given up at all.

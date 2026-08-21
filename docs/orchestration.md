@@ -41,7 +41,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.8.5 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.10.1 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -159,7 +159,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.8.5 by dumping both sides of a monitor member's whole
+  against onepipeline 0.10.1 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -333,7 +333,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.8.5 in the judge command's own environment on a real
+  measured against onepipeline 0.10.1 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -422,14 +422,25 @@ the keys that would ask them.
 #### An answer addressed to the engine, not to this reader
 
 There is one answer the filter recognises and does **not** refuse, and it is the
-second way a monitor dies. The channel is a durable queue whose replies are claimed
-"by whichever reader reaches it next" (`onepipeline`'s own `Channel::claim_replies`),
-and the engine's reconciler is the other reader. So a manager's [live
-edit](#live-graph-edits) — `{"version":1,"commands":[…]}` with no boolean
-`completion` — reaches the monitor's judge side by arrival order alone. Forty of this
-host's recorded dag-scope runs died there, refused as `is not a supervisor ruling` and
-killed. The timing is the worst part: it fires precisely while a manager is
-supervising, because the manager's own correction is what kills the watcher.
+second way a monitor dies. The channel is a durable queue with two readers — the
+monitor's judge side, which wants a supervisor ruling, and the engine's reconciler,
+which wants graph edits — and through onepipeline 0.8.x it arbitrated between them by
+arrival order. So a manager's [live edit](#live-graph-edits) —
+`{"version":1,"commands":[…]}` with no boolean `completion` — reached the monitor's
+judge side whenever it got there first. Forty of this host's recorded dag-scope runs
+died there, refused as `is not a supervisor ruling` and killed. The timing was the
+worst part: it fired precisely while a manager was supervising, because the manager's
+own correction was what killed the watcher.
+
+**The adopted release fixed that at its source, and the filter stayed.** A reply is
+now routed by the halves it carries: `Channel::answer_if_verdict` puts a commands-only
+envelope on the command path alone and leaves the pending surface — and any reader
+waiting there — untouched, `Channel::claim_reply` hands the verdict reader one ruling
+per claim and passes over such an envelope an older build already queued, and an
+envelope carrying both goes to both paths. So a manager issuing a live edit mid-turn
+no longer reaches the monitor at all. What the filter below keeps is the answer for a
+release that regresses, driven directly at both boundaries rather than through the
+channel, because this failure announces itself nowhere else.
 
 The filter discriminates on the verdict. An envelope carrying a boolean `completion`
 is a ruling and is relayed exactly as before, however many edits ride with it. An
@@ -445,7 +456,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.8.5 answers `{"reply":0,"state":"applied"}` and records
+a real run on onepipeline 0.10.1 answers `{"reply":0,"state":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
 it applies it a **second** time. The same measurement, re-submitted, comes back
@@ -489,7 +500,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/e2e/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.8.5**, composed where the
+node dispatch of a run carries it as of onepipeline 0.10.1**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 Below that release only the **attached** shape did, and by accident of process rather
 than by design — an attached driver starts its observer graph in its own process, and
@@ -1403,11 +1414,15 @@ rule. A `{kind: pre-push}` identity's verdict arrives as `git push` output and a
 
 A publication that never reached a gate at all — a base advanced under it, a fetch
 or a worktree it could not build — produces no gate events either. There is no
-`publication-failed` *event*: `publication-failed` is the node's settled outcome,
-and its whole account is the settlement's `detail`, which is `onevcs`'s own reason
-prefixed `onevcs: `. That is what `just results` renders and it is the only place
-the distinction between "the gate rejected this" and "the base moved" survives —
-`vcs::outcome_of` collapses `onevcs`'s four failure kinds into that one word.
+`publication-failed` *event*: `publication-failed` is a node's settled outcome, and
+its whole account is the settlement's `detail`, which is `onevcs`'s own reason
+prefixed `onevcs: `. It is no longer the *only* such outcome, and that is the part
+worth knowing: `vcs::failure_of` sorts `onevcs`'s seven failure kinds into the four
+a further attempt could answer — which settle `checks-failed`, `checks-unsettled`,
+`push-rejected`, or `sync-conflict`, each after the node was dispatched again on the
+same branch — and the three that nothing further could, which keep the residual
+word. So "the gate rejected this" and "the base moved" are now two outcomes rather
+than one; the detail still says what each of them said.
 
 A failed `just gate` names the tier that failed and the loop to close it. An
 llmlint failure also prints the comparison base the gate resolved: clear those
@@ -1949,7 +1964,7 @@ and `note`, and omitting it means `auto`:
 Live delivery is `oneagentgraph interrupt` against **the dispatch's own control
 socket**, so it reaches a node only once something of that dispatch has reported a
 member; before then there is no turn to address and `auto` falls through to the next
-dispatch. All of this is read from onepipeline 0.8.5 and measured on a live run: a
+dispatch. All of this is read from onepipeline 0.10.1 and measured on a live run: a
 note sent to a worker three hours into its dispatch recorded `"delivery":"live"`, and
 the worker changed what it was doing in its next turn. A delivery that was *attempted
 and broke* is neither ending and is refused under every mode, `auto` included — being

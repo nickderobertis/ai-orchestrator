@@ -292,8 +292,11 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # release's *lockfile* resolved, not the one its `Cargo.toml` permits.
         "is the adopted onepipeline {version}",
         # The re-measurement of that lock, which is what makes the CLI-versus-linked
-        # distinction concrete rather than a warning.
-        "at v{version} and its lock still resolves 0.8.0",
+        # distinction concrete rather than a warning. Its onevcs half is held to the
+        # *linked* version by `tests/test_linked_libraries.py`, so the two gates meet
+        # on this one sentence: this one dates it to the adopted onepipeline, that one
+        # holds the number in it to what that release's wheel actually resolved.
+        "at v{version} and its lock still resolves 0.10.0",
         # What a bodyless change request now says about itself. Phrased against the
         # adopted release rather than the one it arrived in, for the reason the
         # repo-lifecycle entry below records.
@@ -314,10 +317,12 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # the header a reader checks before trusting any of them, so a bump that left it
         # behind would date the whole document to a release nothing runs.
         "restated: **`onepipeline` v{version}**",
-        # The one `Node` field that survives unread, and the removed cost analysis:
-        # both are statements that a named release does *not* do something, which a
-        # stale version number turns into a statement about a release nobody dispatches.
-        "field of `Node` on onepipeline v{version} and is read by nothing",
+        # The `Node` field that was accepted and read by nothing, and the removed cost
+        # analysis: both are statements that a named release does *not* do something,
+        # which a stale version number turns into a statement about a release nobody
+        # dispatches. The first moved in this bump — `verify_via_ci` is no longer a
+        # field at all — which is exactly the re-reading this gate exists to force.
+        "not a field of `Node` on onepipeline v{version} and is refused",
         "absent from `onepipeline` v{version} — so every number in it was a",
         "`onepipeline` v{version} has no notion",
     ),

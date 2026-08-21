@@ -85,6 +85,15 @@ SHORT_WINDOW_SECONDS = 5
 #: and a journey whose manager genuinely failed reported nothing about why.
 ANSWERED_WINDOW_SECONDS = int(e2e_timeout(MANAGER_PATIENCE_SECONDS * 2))
 
+#: The reply window the misrouted-edit journey pins, and deliberately neither of the
+#: two above. There the wrapper must outlast the manager because it is waiting for an
+#: answer; here it is waiting for one that never comes — a live edit no longer answers
+#: a question — so the window is what the journey *spends*, and the whole of it. It
+#: only has to outlast a manager's send rather than a manager's search, since the send
+#: is what has to land while the question is still pending, and a manager who loses
+#: that race is refused by the channel and re-raised as itself rather than passing.
+MISROUTED_EDIT_WINDOW_SECONDS = int(e2e_timeout(60))
+
 #: A run's own name on the ledger. Every planner-facing verb takes one and the
 #: wrapper reads one out of the environment, so it is distinguished from the prose it
 #: is built out of: what makes a string a run id is where it came from.
@@ -333,24 +342,35 @@ def test_the_channels_own_timeout_ruling_is_refused_rather_than_returned(asked: 
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
-def test_a_live_edit_envelope_routed_to_this_reader_is_refused_with_its_own_cause(
+def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
     asked: Asked,
 ) -> None:
-    """A graph mutation delivered to the asking call is not the manager's answer.
+    """A graph mutation sent while this question is pending does not answer it.
 
-    This is measured, not defensive padding. A reply on this channel is claimed by
-    whichever reader reaches it next, and a real re-ask returned
-    `{"version":1,"author":"monitor","commands":[{"op":"context",...}]}` — the monitor's
-    live edit, addressed to the engine and delivered here because this call happened to
-    arrive first. It carries no `completion` and no `reason`, so a wrapper checking only
-    for the timeout string would pass a graph mutation through as prose.
+    This journey was written for a delivery that no longer happens. Through onepipeline
+    0.8.x the channel was a durable queue whose replies were claimed by whichever reader
+    reached one next, so a manager's live edit —
+    `{"version":1,"author":"monitor","commands":[{"op":"context",...}]}`, measured on a
+    real re-ask — arrived at the asking call by arrival order alone, and the wrapper had
+    to refuse it naming a cause of its own.
 
-    The envelope below is the real one: `just channel-reply` accepts it, the engine
-    applies it to the graph, and it reaches the wrapper — which must refuse it naming a
-    cause of its own, distinct from the timeout's.
+    **The adopted release routes a reply by the halves it carries**, so a commands-only
+    envelope belongs to the command path and the verdict rendezvous this call waits on
+    never holds it. Asserting the old refusal would now be asserting about a release
+    nothing runs — the wrapper would simply wait, which is what it did, for its whole
+    window.
+
+    So the routing itself is what is measured, and by the verb that performed it rather
+    than by inference: `just channel-reply` accepts the envelope, answers
+    `{"reply":0,"state":"applied"}` — the edit landed on the graph, and it answered
+    **zero** surfaces though a question was pending on this very run — and the asking
+    call, handed none of it, falls through to the timeout refusal an unanswered question
+    gets. The wrapper's own non-ruling check is deliberately left standing and is proved
+    by `test_a_ruling_carrying_the_token_but_no_decision_is_refused`: it is what stands
+    between an agent and a graph edit returned as prose if a release ever regresses.
     """
     asking = _ask(
-        asked, "Which cursor shape should the route take?", window=ANSWERED_WINDOW_SECONDS
+        asked, "Which cursor shape should the route take?", window=MISROUTED_EDIT_WINDOW_SECONDS
     )
     edit = json.dumps(
         {
@@ -361,15 +381,34 @@ def test_a_live_edit_envelope_routed_to_this_reader_is_refused_with_its_own_caus
     )
     manager = Manager(asked.run, asked.environment, [lambda _token: edit])
 
-    status, out, err = _finish(asking)
+    status, out, err = _finish(asking, seconds=MISROUTED_EDIT_WINDOW_SECONDS + 120)
     manager.checked(asker_said=err)
+
+    applied = [
+        json.loads(answered.stdout)
+        for answered in manager.answers
+        if answered.stdout.strip().startswith("{")
+    ]
+    assert applied, (
+        f"the reply verb answered nothing this journey can read the routing out of, so "
+        f"neither half below is evidence about it: {[a.stdout for a in manager.answers]}"
+    )
+    assert all(answer.get("state") == "applied" for answer in applied), (
+        f"a commands-only envelope was no longer applied to the graph, so this is a "
+        f"lost edit rather than a routed one, and `docs/orchestration.md`'s quoted "
+        f"answer wants re-measuring in this change: {applied}"
+    )
+    assert all(answer.get("reply") == 0 for answer in applied), (
+        f"the live edit answered a pending surface, so the release has gone back to "
+        f"routing by arrival order and this call's question can be consumed by a graph "
+        f"edit again — the wrapper's non-ruling check is now load-bearing: {applied}"
+    )
 
     assert status != 0, f"the wrapper returned a live graph edit as an answer:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"
-    assert "is not a ruling" in err and "boolean 'completion'" in err, err
-    assert "synthesized its own ruling" not in err, (
-        f"a misrouted live edit was reported as a timeout, which sends a manager to the "
-        f"wrong repair:\n{err}"
+    assert "synthesized its own ruling" in err and "no manager answered" in err, (
+        f"the question was answered by something, though the only reply sent was a "
+        f"graph edit the verb says answered no surface:\n{err}"
     )
 
 

@@ -68,6 +68,18 @@ class Release(NamedTuple):
 PRODUCER_FLOOR = Release(0, 3, 3)
 
 
+#: The oneagentgraph release that stopped publishing an *outline* of a turn and
+#: started publishing the turn: the `turn-message` kind, a turn's opening and the
+#: instruction it answers, the observation that answered a tool call and the id
+#: joining the two, and a `turn-completed` closing one turn on that turn's own
+#: account. Beneath it a run records that a turn happened and almost nothing of what
+#: was in it — so the Observatory renders a transcript with no tool results in it and
+#: reports a cost of "Not reported", both of which read as a quiet run rather than as
+#: a missing producer. Asserted for the same reason the floor above is: nothing else
+#: on this host would say.
+TURN_CONTENT_FLOOR = Release(0, 3, 6)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -169,6 +181,24 @@ def test_the_linked_oneagentgraph_carries_the_session_conversation_producer() ->
     )
 
 
+def test_the_linked_oneagentgraph_carries_the_whole_turn_it_relays() -> None:
+    """Above the outline release a turn's own content reaches the run's record.
+
+    The bump this floor was added for, and it is invisible from exactly the angles
+    the last one was: every gate here passes over a run whose turns carry no tool
+    results and no per-turn usage, because a producer that publishes less looks
+    identical to agents that did less. Only the linked release says which it was.
+    """
+    linked = Release.parse(_linked_version("oneagentgraph"))
+
+    assert linked >= TURN_CONTENT_FLOOR, (
+        f"the adopted engine links oneagentgraph {linked}, below the {TURN_CONTENT_FLOOR} "
+        "that publishes tool results, live turn text, and per-turn usage; dispatched runs "
+        "under it record an outline of each turn and the Observatory reports their cost "
+        "as not reported"
+    )
+
+
 @pytest.mark.reads_docs
 @pytest.mark.parametrize(
     ("crate", "relative_path", "templates"),
@@ -200,4 +230,140 @@ def test_claims_about_a_linked_library_name_the_linked_version(
             f"{relative_path} states {stated!r} {written.count(stated)} times, not once; "
             f"the adopted engine links {crate} {linked}, so re-read the claim against "
             "that and update the one site in the same change"
+        )
+
+
+class Divergence(NamedTuple):
+    """One pin this host deliberately holds away from what the engine linked.
+
+    Both versions are named, so the declaration goes stale the moment either moves:
+    a divergence inherited across a bump is exactly the state these gates exist to
+    end, and one that only named a reason would be inherited silently.
+    """
+
+    #: What the adopted engine wheel resolved.
+    linked: str
+    #: What `config/<crate>.version` names instead.
+    pinned: str
+    #: Why the two cannot be the same release today.
+    because: str
+
+
+#: Every crate the adopted engine links that this repository also pins a CLI for,
+#: as crate → the version file beside it. The pin and the linked copy answer
+#: different questions — one is what this host's own verbs run, the other is what a
+#: dispatched node runs — and the point of naming them together is that they should
+#: nonetheless resolve to the *same release*, so a manager reading either is reading
+#: one number. See `AGENTS.md`'s "Which pin governs a dispatch".
+RECONCILED_PINS = {
+    "oneagentgraph": "oneagentgraph.version",
+    "onevcs": "onevcs.version",
+    "onejudge": "onejudge.version",
+}
+
+#: The pins that may not be reconciled today, each with the measured pair it was
+#: declared against. A divergence is permitted only where the linked release is not
+#: installable from PyPI at all — never as a convenience, and never as "not yet
+#: looked at", because both read identically from here a release cycle later.
+DECLARED_DIVERGENCES = {
+    "onejudge": Divergence(
+        linked="0.5.0",
+        pinned="0.4.0",
+        because=(
+            "onejudge v0.5.0 is tagged and the PyPI `onejudge` distribution stops at "
+            "0.4.0, so `scripts/session-setup.sh` has nothing to install; the pin "
+            "moves the moment that release is on the registry"
+        ),
+    )
+}
+
+#: Where the one divergence is explained to an operator, and the sentence naming
+#: both of its versions. Prose rather than only a comment, because the person who
+#: meets this is a manager reading why two version files disagree, and the numbers
+#: in that explanation go stale the same way every other restated measurement does.
+DIVERGENCE_PROSE = (
+    "AGENTS.md",
+    "onepipeline 0.10.1 links the `onejudge` crate {linked}, and PyPI carries no "
+    "`onejudge` {linked} — the tag is published and the distribution is not — so "
+    "`config/onejudge.version` stays at {pinned}",
+)
+
+
+def _pinned_cli(version_file: str) -> str:
+    """The release `config/<file>` adopts for a CLI this host runs itself."""
+    return (REPO_ROOT / "config" / version_file).read_text(encoding="utf-8").strip()
+
+
+def test_every_linked_crate_with_a_cli_pin_here_is_reconciled() -> None:
+    """A pin added beside a linked crate joins this gate rather than going unread.
+
+    The hole this closes is the one the module docstring's two incidents came
+    through: a `config/<tool>.version` that nothing compares against the engine's own
+    resolution reads as authoritative while a dispatch runs something else entirely.
+    """
+    linked = _linked_versions()
+    pinnable = {
+        crate: f"{crate}.version"
+        for crate in linked
+        if (REPO_ROOT / "config" / f"{crate}.version").is_file()
+    }
+
+    assert pinnable == RECONCILED_PINS, (
+        f"{ENGINE_DISTRIBUTION} links {sorted(pinnable)} and this gate reconciles "
+        f"{sorted(RECONCILED_PINS)}; a crate in one and not the other is a pin nothing "
+        "holds to what the engine resolved"
+    )
+
+
+@pytest.mark.parametrize(("crate", "version_file"), sorted(RECONCILED_PINS.items()))
+def test_the_cli_pin_names_the_release_the_engine_linked(crate: str, version_file: str) -> None:
+    """`config/<crate>.version` is the release the adopted engine wheel resolved.
+
+    Not because the two *have* to be one number — they are genuinely different
+    adoptions — but because a host on which they differ has two answers to "which
+    `onevcs` is in force", and this host has twice acted on the wrong one. Held
+    against the wheel's own SBOM rather than against a lockfile or a `Cargo.toml`
+    requirement, for the reason the module docstring gives.
+    """
+    linked = _linked_version(crate)
+    pinned = _pinned_cli(version_file)
+    declared = DECLARED_DIVERGENCES.get(crate)
+
+    if declared is None:
+        assert pinned == linked, (
+            f"config/{version_file} adopts {crate} {pinned} while the adopted engine "
+            f"links {linked}. Move the pin, or — only if {linked} cannot be installed — "
+            "declare the divergence in DECLARED_DIVERGENCES with both versions and why"
+        )
+        return
+    assert (declared.linked, declared.pinned) == (linked, pinned), (
+        f"the declared {crate} divergence was written against linked {declared.linked} / "
+        f"pinned {declared.pinned}, and this host measures {linked} / {pinned}. Re-read "
+        f"whether it still holds — {declared.because} — and reconcile the pin or "
+        "re-declare it against the pair that is really there"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_declared_divergence_is_explained_where_an_operator_meets_it() -> None:
+    """The prose naming both versions is held to the pair this host measures.
+
+    A divergence is a thing a manager has to be told, not only a thing a gate
+    tolerates: the whole failure mode is somebody reading one version file and
+    concluding a fix is in force. So the explanation names both numbers, and this
+    fails when either moves — which is the prompt to re-read the paragraph rather
+    than to inherit it.
+    """
+    relative_path, template = DIVERGENCE_PROSE
+    stated = {
+        crate: template.format(linked=declared.linked, pinned=declared.pinned)
+        for crate, declared in DECLARED_DIVERGENCES.items()
+    }
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+
+    for crate, sentence in stated.items():
+        assert written.count(sentence) == 1, (
+            f"{relative_path} states the {crate} divergence {written.count(sentence)} "
+            f"times, not once; it must say {sentence!r} so the operator who meets two "
+            "disagreeing version files is told which one governs a dispatch"
         )
