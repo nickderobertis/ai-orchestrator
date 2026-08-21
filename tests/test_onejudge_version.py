@@ -33,6 +33,7 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # against. A test asserting a per-release behaviour under a release that has moved
     # is the worst kind of green, so its claim is dated here like every other.
     Path("tests/test_observer_judge_ops.py"): 1,
+    Path("tests/test_planner_channel_personas.py"): 1,
     Path("tests/e2e/test_monitor_survives_the_channel_e2e.py"): 1,
     # The base config's `user.done_when` is the whole review bar for every dispatch,
     # and it is written to be resolved by the judge against the task. That only works

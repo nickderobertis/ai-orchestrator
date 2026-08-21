@@ -84,11 +84,18 @@ HELD_SECONDS = 90
 FILTER = REPO_ROOT / "scripts" / "channel-serve.py"
 ROUTED_RULING = "live graph edit addressed to the"
 
-#: What the member's own effective onejudge config may not carry. `oneagentgraph`
-#: composes it from `config/onejudge.base.yaml` ⊕ `personas/orchestrator.yaml` and
-#: writes it into the member's scratch, which is the only place the *merged* answer
-#: exists — the two files it is merged from each say half of it.
-DECLINED = ("assessment:", "evals:")
+#: What the member's own effective onejudge config may not carry, against the written
+#: value that says it is not carried. `oneagentgraph` composes it from
+#: `config/onejudge.base.yaml` ⊕ `personas/orchestrator.yaml` and writes it into the
+#: member's scratch, which is the only place the *merged* answer exists — the two files
+#: it is merged from each say half of it.
+#:
+#: Per key, because the two are not unset by the same word: `assessment` is free text
+#: and unsets as `null`, while `evals` is a sequence `oneagentgraph` refuses a null one
+#: of, so the empty list unsets that one. `tests/test_planner_channel_personas.py`
+#: reconciles these with the spellings that file advises a persona to write, so this
+#: half cannot start refusing what the other half asks for.
+DECLINED = {"assessment": ("null",), "evals": ("[]",)}
 
 #: And the one it always carries however it is declared, which is why the filter serves
 #: the op that scores it. Asserted PRESENT deliberately; see the test below.
@@ -399,14 +406,15 @@ def test_the_merged_config_a_launch_hands_the_monitor_declines_what_it_can(
     # the same file for the same reason.
     # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
     effective = watched.monitor_config.read_text("utf-8")
-    for question in DECLINED:
+    for question, unset in DECLINED.items():
         asked = [
             line
             for line in effective.splitlines()
-            if line.strip().startswith(question) and line.split(":", 1)[1].strip() != "null"
+            if line.strip().startswith(f"{question}:")
+            and line.split(":", 1)[1].strip() not in unset
         ]
         assert not asked, (
-            f"the launch handed the `{MONITOR_MEMBER}` member a `{question.rstrip(':')}` to "
+            f"the launch handed the `{MONITOR_MEMBER}` member a `{question}` to "
             f"answer ({asked}), and its judge side is the planner channel. onejudge asks "
             f"that question once the conversation ends and the member dies on the "
             f"refusal:\n{effective}"

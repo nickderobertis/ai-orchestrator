@@ -47,6 +47,17 @@ BACKGROUNDED = re.compile(r"\(\s*(?P<command>[^()]*?)\s*\)\s*&")
 #: named two of these instead of the gate they compose into.
 CHAIN_STEP = re.compile(r"\bjust +(?:bootstrap|gate|lint-llm-diff)\b")
 
+#: The two halves of the "once" rule, matched on their load-bearing words rather than
+#: on a sentence — the same way everything else here is held, so that a reword is free
+#: and a dropped half is not. The first says the complete gate confirms a finished tree
+#: instead of being the loop that finds the findings; the second says "once" bounds
+#: looping rather than budgeting a run that a later edit may then be charged to.
+#: Written with `\s+` between words because this file is hard-wrapped, so any phrase
+#: long enough to be worth pinning is one reflowing a paragraph can break across a line.
+AGAINST_LOOPING = re.compile(r"over\s+the\s+\*\*finished\*\*\s+tree", re.IGNORECASE)
+NOT_A_BUDGET = re.compile(r"not\s+a\s+per-dispatch\s+budget", re.IGNORECASE)
+STALE_GREEN = re.compile(r"predates\s+your\s+last\s+edit", re.IGNORECASE)
+
 
 @pytest.fixture(scope="module")
 def appendix() -> str:
@@ -120,12 +131,32 @@ def test_the_cheap_iteration_rule_is_the_first_thing_a_reader_meets(appendix: st
     )
 
 
-def test_the_rule_still_says_to_run_the_complete_gate_once_at_the_end(appendix: str) -> None:
-    """The other half of the rule: the cheap loop is the judged tier, not the gate."""
+def test_the_rule_still_bounds_looping_on_the_complete_gate_without_capping_it(
+    appendix: str,
+) -> None:
+    """The other half of the rule: the cheap loop is the judged tier, not the gate.
+
+    "Once" is asserted here as a bound on *looping*, not as a cap on runs — the appendix
+    is required to say both, and a rerun after a reported failure is the rule working.
+
+    Both halves of "once" are required together, because each alone has been read
+    wrongly here. Dropping the first lets a worker loop on the ~28-minute chain to
+    discover findings the judged tier reports in two. Dropping the second lets a worker
+    read "once" as a per-dispatch allowance — one did, edited a file after its gate had
+    gone green, and would have reported that green as its verification, which by the
+    letter of the older wording it was entitled to do.
+    """
     assert "just lint-llm-diff" in appendix
-    assert re.search(r"exactly \*\*once\*\*, at the end", appendix), (
-        f"{APPENDIX} no longer says the complete gate is run once at the end, which is "
-        "the half of the rule that stops a worker looping on it"
+    assert AGAINST_LOOPING.search(appendix), (
+        f"{APPENDIX} no longer says the complete gate is run over the finished tree "
+        "rather than looped on, which is the half of the rule that stops a worker "
+        "spending 28 minutes a round on findings the judged tier reports in two"
+    )
+    assert NOT_A_BUDGET.search(appendix) and STALE_GREEN.search(appendix), (
+        f'{APPENDIX} no longer says that the "once" is a rule against looping rather '
+        "than a budget, or no longer says that a green predating your last edit has not "
+        "verified your work; without both, a worker may cite a stale green and be right "
+        "by the letter of this file"
     )
 
 
