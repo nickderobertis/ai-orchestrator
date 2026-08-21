@@ -1,0 +1,14 @@
+{
+  "schema_version": 3,
+  "run_id": "orchestrator-gate-fix-findings-2",
+  "state": "failed",
+  "ok": false,
+  "nodes": [
+    {
+      "id": "gate-fix-findings-2",
+      "status": "failed",
+      "outcome": "task-failed",
+      "branch": "onevcs/s-1f7fa4974b9e"
+    }
+  ]
+}

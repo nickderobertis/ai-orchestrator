@@ -1,0 +1,17 @@
+{
+  "run_id": "relink-race",
+  "plan": "scratch/plans/relink-race.plan.json",
+  "dir": "/home/nick/projects/ai-orchestrator",
+  "graph": "/home/nick/projects/ai-orchestrator/graphs/dag-scope.yaml",
+  "graph_run": "dag-scope-1787318325264-2751800",
+  "node_graph": "/home/nick/projects/ai-orchestrator/graphs/node-scope.yaml",
+  "pr_author_graph": "/home/nick/projects/ai-orchestrator/graphs/pr-author.yaml",
+  "launcher": "claude-code",
+  "session": "63b3d17a-3f1f-5873-a6e0-1d3a6a125dc2",
+  "pid": 2751798,
+  "host": "U-17UN402ICR95C",
+  "started": "Fri Aug 21 13:18:45 2026",
+  "started_at": "2026-08-21T13:18:45.237Z",
+  "heartbeat_interval": 1800,
+  "adoptions": 0
+}

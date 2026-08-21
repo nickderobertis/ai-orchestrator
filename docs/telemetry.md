@@ -207,19 +207,50 @@ served them.
    watching. A run can read `ACTIVE  OBSERVER DEAD` — driving fine, unwatched — and
    that is a different fix from a dead driver.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
-   `just telemetry-server`) is the structured view. Measured against a real run on
-   **`onepipeline-api` 0.5.0**, the release `config/onepipeline-ui.version` pins —
+   `just telemetry-server`) is the structured view. Measured against real runs on
+   **`onepipeline-api` 0.6.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because that crate has no registered checkout
    on this host and its CLI dumps no schema, so a bump is what re-opens this
-   paragraph: `timeline_schema_version` 5, spans of kind `run`,
-   `node`, `rollup`, `verification`, and `publication`, each with `started_at` and
-   an `ended_at` that is `null` while it is open. The `run` span carries `phase`
-   (`dispatching`, `surfacing`, `settled`). A **`rollup`** span is the dispatch
-   tier, labelled by `agent_role` — `worker`, `orchestrator`, `pr-author` — and
-   `transport_role` (`agent` or `judge`), with a `count`. A **`verification`** span
-   is a gate run, carrying `status` and a `detail` of
-   `{ok, output_tail, artifact_id}`; the tail is where a failed gate's own words
-   are, and `artifact_id` opens the whole log.
+   paragraph: `timeline_schema_version` 6, spans of kind `run`, `dispatch`, `node`,
+   `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
+   and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
+   which read `waiting`, `deciding`, `surfacing`, `settled`, and `finished` across the
+   runs read here; no run read served the `dispatching` this paragraph used to name.
+   **The dispatch tier is two span kinds, and confusing them is the easy mistake.** A
+   **`dispatch`** span is one supervisory conversation, parented on the *run*, with an
+   `agent_role` of `orchestrator` (the monitor) or `check-in` (the pacemaker), a
+   `transport_role`, a `status`, and a `reference` of `{kind: conversation}`. A
+   **`rollup`** span is the per-node tier, parented on the *node*, and comes in two
+   shapes: labelled `dispatch` it carries `agent_role` — `worker` or `pr-author` — a
+   `transport_role`, and a `count`; labelled `lock-wait` it carries
+   `total_duration_ms` and no roles at all. A **`verification`** span is a gate run,
+   carrying `status` and a `detail` of `{ok, output_tail, artifact_id}`; the tail is
+   where a failed gate's own words are, and `artifact_id` opens the whole log. A
+   **`publication`** span carries `status` (`open`, `merged`, `conflict` were served
+   here) and, once it has one, a `reference` of `{kind: pr}`.
+   **None of the lists above is a closed contract, and reading one as though it were
+   is the mistake this paragraph most invites.** The reader declares none of it, so
+   each list is the set of values *observed*, and a value missing from one is
+   unmeasured rather than impossible. What is held rather than observed is what
+   `tests/e2e/test_dag_ui_serving_e2e.py` serves five checked-in runs to assert: every
+   span kind above except `human-wait`, each one's fields and parentage, the `waiting`,
+   `settled`, and `finished` phases, both the `open` and `merged` publication statuses,
+   and both supervisory `agent_role`s. The fifth of those runs is **derived rather than
+   recorded**, and the only one here that is: `dag-ui-truth` is the sole run on this
+   host whose *monitor* member ever completed a turn — which is what makes an
+   `orchestrator` label exist at all — and it is 8.9MB of journal whose worker
+   transcripts quote an `llmlint: ignore` directive the linter then reads as a real
+   one, so the whole run cannot be checked in. `dag-ui-truth-monitor-slice` is the six
+   events of its dag-scope graph, kept verbatim; the fixture's own docstring records
+   what was dropped and the one field rewritten. Four values are still observed and
+   unheld: `deciding`, `surfacing` and `conflict` off `dag-ui-truth` and `issue-27`,
+   and `human-wait` off `pr-author-body`. A bump re-measures those four by hand against
+   this host's runs root; everything else fails the gate on its own.
+   **The listing is the live runs, and a settled one leaves it.** `GET /api/v2/runs`
+   carried every run read here whose `phase` was `waiting` or `surfacing` and none
+   whose phase was `settled` or `finished` — but a settled run's timeline is still
+   served in full by id. So a run an operator knows finished, missing from the view's
+   list, is this rather than a reader that lost it.
    <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These field names
    have no authoritative declaration this host can read: `onepipeline-api` is in no
    registered checkout, its source is in neither the `onepipeline` repository nor the
@@ -231,9 +262,22 @@ served them.
    measured on, so a pin bump fails the gate and re-opens it. Reconciling the fields
    themselves needs a registered checkout of that crate or a schema verb on its CLI,
    and is tracked as follow-up. -->
-3. **The gap, stated rather than papered over.** The run measured above carried
-   `rollup` spans only for `pr-author` — none for `orchestrator` — so a supervisory
-   session is *representable* here but is not reliably *present*. There is no
+3. **What 0.6.1 changed, and what is still missing.** Serving the same runs from
+   0.5.0 and 0.6.1 side by side is what dates this section, and the delta is the
+   reason the pin moved. On `dag-ui-truth` the older release served **no `worker`
+   rollup at all** and left the monitor's `dispatch` span with a null `agent_role`,
+   so the tier this section is about was invisible in the one view built to show it;
+   0.6.1 serves 26 worker rollups for that run and labels that dispatch
+   `orchestrator`, and `issue-27` reproduces the same thing at 0 against 42. **Span
+   bounds moved with them, so a duration read off the older release is not
+   comparable.** 0.5.0 opened a `publication` span per session and never closed the
+   superseded ones — 26 of them on `dag-ui-truth` against 0.6.1's 8, the 18 dropped
+   all open-ended and status-less — and bounded the survivors by the node that
+   started the work rather than by the publication: `publication.workspace-staleness`
+   ran 20:24:50Z to never at 0.5.0 and runs 11:54:16Z to 12:07:15Z at 0.6.1. The
+   `pr-author` rollups moved the same way, from the node's dispatch window onto the
+   drafting turn itself.
+   What is still absent is not the read API's to supply: there is no
    `runs/<run-id>/supervisory/` capture, no `conversation-turn` event, and no
    `history-write-failed` event on the adopted stack; the bounded local capture this
    document used to describe belonged to the pre-extraction dispatch layer and went

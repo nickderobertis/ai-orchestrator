@@ -32,6 +32,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,52 @@ ADOPTED_UI = next(tool for tool in PUBLISHED_TOOLS if tool.npm_package == "onepi
 #: Where the npm half of that release installs, and what `scripts/dag-ui-server.js`
 #: serves by default.
 INSTALLED_BUNDLE = REPO_ROOT / "node_modules" / "onepipeline-ui"
+
+#: A runs root holding real recorded runs, so the timeline `docs/telemetry.md`
+#: documents can be asserted against what the adopted reader actually answers rather
+#: than against the empty root the connectivity journeys use. They are checked in because
+#: this host's own runs root is not reproducible: runs are added and reclaimed
+#: continuously, so a journey reading it would assert against a different tree on every
+#: invocation.
+TIMELINE_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
+#: The smallest recorded run still exhibiting the whole per-node tier — a node, its
+#: worker dispatch, and its gate run — which is what makes a 60KB fixture enough.
+RECORDED_RUN = "orchestrator-gate-fix-findings-2"
+#: A second run, for the half the first one has no occasion to show: it published and
+#: it queued behind a lock, so it carries the `publication`, `lock-wait` and
+#: `pr-author` spans, and it settled, so it carries a `finished` phase and drops out
+#: of the listing. Several runs rather than one because none exhibits every kind.
+SETTLED_RUN = "relink-race"
+#: A third, for the supervisory tier: its pacemaker completed a turn and settled, which
+#: is what makes a `dispatch` span exist at all. Neither run above has one — a run whose
+#: observer never finished a turn records the members and no conversation.
+SUPERVISED_RUN = "dag-ui-conversation"
+#: A fourth, for the publication that reached its base: it is the one recorded here
+#: whose publication span reads `merged`, and it reached that state without ever
+#: carrying a change-request reference.
+MERGED_RUN = "gate-parity-2"
+#: A fifth, for the `orchestrator` half of `agent_role`, and the one fixture here that
+#: is **derived rather than recorded** — so its provenance is bounded on purpose:
+#:
+#: * Source: the recorded run `dag-ui-truth`, whose *monitor* member is the only one on
+#:   this host ever to have completed a turn. That turn is what makes an `orchestrator`
+#:   label exist, so no other run can stand in.
+#: * Kept, verbatim: the six events whose `labels.run_id` is that run's dag-scope graph
+#:   `dag-scope-1787308673405-2003245` — its `graph-started`, both members'
+#:   `member-started`, the monitor's `turn-completed` and `member-settled`, and
+#:   `graph-settled`.
+#: * Dropped: that graph's `member-heartbeat` and `cron-reset` noise, and every event
+#:   belonging to any other graph or node. The whole run is 8.9MB and its worker
+#:   transcripts quote an `llmlint: ignore` directive that the judged tier then reads
+#:   as a real directive and refuses, so checking the run in is not open to us.
+#: * Rewritten: one field, `labels["onepipeline.run_id"]`, to this fixture's own id, so
+#:   a reader cannot mistake six events for the run they came from.
+SUPERVISING_RUN = "dag-ui-truth-monitor-slice"
+#: The timeline schema `docs/telemetry.md` documents for the adopted release. Restated
+#: here rather than read from the response, because reading it from the response is what
+#: an assertion about a schema version cannot do: the paragraph and the reader have to be
+#: moved together, and a bump that moved neither would pass.
+TIMELINE_SCHEMA_VERSION = 6
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -149,8 +196,8 @@ def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
     pytest.fail(f"{what} never answered")
 
 
-@pytest.fixture
-def served(tmp_path: Path) -> Iterator[Served]:
+@contextlib.contextmanager
+def _both_recipes(runs_root: Path) -> Iterator[Served]:
     """Both recipes, for real: `just telemetry-server` behind `just dag-ui`.
 
     This is the arrangement the documentation tells an operator to start in two
@@ -162,8 +209,6 @@ def served(tmp_path: Path) -> Iterator[Served]:
     """
     api_port = _free_port()
     ui_port = _free_port()
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir()
     api = _serve(
         ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)]
     )
@@ -182,6 +227,29 @@ def served(tmp_path: Path) -> Iterator[Served]:
         yield Served(base=base, api=f"http://127.0.0.1:{api_port}")
     finally:
         _stop(recipe, api)
+
+
+@pytest.fixture
+def served(tmp_path: Path) -> Iterator[Served]:
+    """The recipes over an empty runs root, which is what connectivity needs."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    with _both_recipes(runs_root) as pair:
+        yield pair
+
+
+@pytest.fixture
+def served_recorded(tmp_path: Path) -> Iterator[Served]:
+    """The same recipes over a private copy of the checked-in recorded run.
+
+    Copied rather than served in place so no journey can write to the fixture: the
+    read API only reads, but the recipes are the real ones and a future flag that
+    wrote would corrupt the tree rather than a temporary directory.
+    """
+    runs_root = tmp_path / "runs"
+    shutil.copytree(TIMELINE_RUNS, runs_root)
+    with _both_recipes(runs_root) as pair:
+        yield pair
 
 
 def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
@@ -219,6 +287,222 @@ def test_the_read_api_answers_on_the_same_origin_as_the_view(served: Served) -> 
     listed = json.loads(served.get("/api/v2/runs")[1])
     assert listed["api_version"] == 2
     assert listed["runs"] == []
+
+
+def test_the_timeline_this_repository_documents_is_what_the_reader_answers(
+    served_recorded: Served,
+) -> None:
+    """`docs/telemetry.md`'s timeline paragraph, held to the adopted reader's own answer.
+
+    Asserted over the proxy, because the proxied origin is the only one the bundle
+    asks on. Every assertion below fails on 0.5.0, which is what the pin was moved for.
+    """
+    status, body, content_type = served_recorded.get(
+        f"/api/v2/runs/{RECORDED_RUN}/timeline?scope=run"
+    )
+
+    assert status == 200, body
+    assert content_type == "application/json"
+    timeline = json.loads(body)
+    assert timeline["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION, (
+        f"the reader answers timeline schema {timeline['timeline_schema_version']}, and "
+        f"docs/telemetry.md documents {TIMELINE_SCHEMA_VERSION}; re-measure that "
+        "paragraph against what this release serves and move both together"
+    )
+
+    spans = {span["kind"]: span for span in timeline["spans"]}
+    assert spans.keys() == {"run", "node", "rollup", "verification"}, sorted(spans)
+
+    # The per-node dispatch tier, which is the half 0.5.0 did not serve at all.
+    rollup = spans["rollup"]
+    assert rollup["label"] == "dispatch"
+    assert rollup["agent_role"] == "worker"
+    assert rollup["transport_role"] == "agent"
+    assert rollup["count"] == 1
+    assert rollup["parent_id"] == spans["node"]["id"], (
+        "a dispatch rollup hangs off its node, not off the run; the paragraph "
+        "distinguishes it from a `dispatch` span on exactly that"
+    )
+
+    # The gate run, whose `detail` is what makes a failed gate readable from the view.
+    verification = spans["verification"]
+    assert verification["status"] == "ok"
+    assert verification["detail"].keys() == {"ok", "output_tail", "artifact_id"}
+
+    # Every span is bounded the same way, which is what lets a duration be read off one.
+    for kind, span in spans.items():
+        assert span["started_at"], kind
+        assert "ended_at" in span, kind
+
+
+def _at(timestamp: str) -> datetime:
+    """One span timestamp, for the assertions that are about where a span starts and ends."""
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+def test_the_publication_and_wait_tier_is_what_the_reader_answers(
+    served_recorded: Served,
+) -> None:
+    """The rest of the paragraph's span vocabulary, on a run that has occasion to show it.
+
+    The other fixture never published, never queued behind a lock and never drafted a
+    body, so a journey reading only that one leaves `publication`, `lock-wait` and the
+    `pr-author` rollup as prose no response was ever held to.
+    """
+    status, body, _ = served_recorded.get(f"/api/v2/runs/{SETTLED_RUN}/timeline?scope=run")
+
+    assert status == 200, body
+    timeline = json.loads(body)
+    assert timeline["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION
+    spans = [span for span in timeline["spans"] if span["kind"] != "verification"]
+    node = next(span for span in spans if span["kind"] == "node")
+
+    # A publication span hangs off its node and says where the change went.
+    publication = next(span for span in spans if span["kind"] == "publication")
+    assert publication["status"] == "open"
+    assert publication["reference"] == {
+        "kind": "pr",
+        "value": "https://github.com/nickderobertis/onepipeline/pull/98",
+    }
+    assert publication["parent_id"] == node["id"]
+
+    # And it is bounded by the publication rather than by the node that started it,
+    # which is the half a status assertion cannot see: 0.5.0 left superseded spans
+    # open-ended and stretched the survivors across their node's whole window, so a
+    # duration read off this view was the node's work, not the publication's.
+    assert publication["ended_at"] is not None
+    started, ended = _at(publication["started_at"]), _at(publication["ended_at"])
+    node_started, node_ended = _at(node["started_at"]), _at(node["ended_at"])
+    assert node_started < started and ended < node_ended
+    assert ended - started < (node_ended - node_started) / 2
+
+    # Both rollup shapes, which the paragraph distinguishes on exactly these fields:
+    # a `dispatch` carries roles and a `count`, a `lock-wait` carries neither.
+    rollups = {span["label"]: span for span in spans if span["kind"] == "rollup"}
+    assert rollups.keys() == {"dispatch", "lock-wait"}, sorted(rollups)
+    assert rollups["lock-wait"]["total_duration_ms"] is not None
+    assert rollups["lock-wait"].get("agent_role") is None
+    assert rollups["lock-wait"].get("transport_role") is None
+
+    dispatches = [span for span in spans if span.get("label") == "dispatch"]
+    assert {span["agent_role"] for span in dispatches} == {"worker", "pr-author"}
+    assert all(span["transport_role"] == "agent" for span in dispatches), dispatches
+    assert all(span["parent_id"] == node["id"] for span in dispatches), dispatches
+    assert all(span["count"] >= 1 for span in dispatches), dispatches
+
+
+def test_a_merged_publication_reads_merged_and_need_carry_no_reference(
+    served_recorded: Served,
+) -> None:
+    """The other end of a publication's life, and the `reference` clause's escape.
+
+    A publication that reached its base reads `merged` rather than staying `open`, and
+    this one got there with no change request at all — which is what makes "once it has
+    one" a real qualifier rather than a hedge, and what a view rendering an empty link
+    for every merged publication would get wrong.
+    """
+    status, body, _ = served_recorded.get(f"/api/v2/runs/{MERGED_RUN}/timeline?scope=run")
+
+    assert status == 200, body
+    spans = json.loads(body)["spans"]
+    publication = next(span for span in spans if span["kind"] == "publication")
+
+    assert publication["status"] == "merged"
+    assert publication.get("reference") is None
+    assert publication["ended_at"] is not None
+
+
+def test_the_supervisory_dispatch_span_is_what_the_reader_answers(
+    served_recorded: Served,
+) -> None:
+    """The supervisory tier, which is the whole reason this section of the view exists.
+
+    A `dispatch` span and a `dispatch`-labelled `rollup` are the pair the paragraph
+    warns are easy to confuse, so both are read off one response and told apart on the
+    two fields that actually differ: what they hang off, and what they reference.
+    """
+    status, body, _ = served_recorded.get(f"/api/v2/runs/{SUPERVISED_RUN}/timeline?scope=run")
+
+    assert status == 200, body
+    timeline = json.loads(body)
+    assert timeline["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION
+    spans = timeline["spans"]
+    run_span = next(span for span in spans if span["kind"] == "run")
+    assert run_span["phase"] == "settled"
+
+    dispatch = next(span for span in spans if span["kind"] == "dispatch")
+    assert dispatch["agent_role"] == "check-in"
+    assert dispatch["transport_role"] == "agent"
+    assert dispatch["status"] == "done"
+    assert dispatch["reference"]["kind"] == "conversation"
+    assert dispatch["parent_id"] == run_span["id"], (
+        "a supervisory dispatch hangs off the run; only the per-node rollup hangs off a node"
+    )
+
+    # The rollup of the same name, for contrast: a node's tier, carrying a count.
+    rollup = next(span for span in spans if span["kind"] == "rollup")
+    assert rollup["label"] == "dispatch"
+    assert rollup["agent_role"] == "worker"
+    assert rollup["count"] >= 1
+    assert rollup["parent_id"] != run_span["id"]
+
+
+def test_the_monitors_dispatch_is_labelled_orchestrator(served_recorded: Served) -> None:
+    """The other supervisory `agent_role`, and the one this release was adopted to fix.
+
+    0.5.0 served this dispatch with a null `agent_role`, so the monitor was present in
+    the timeline and unattributable in it — the defect the pin moved for. The pacemaker
+    above proves the field is populated; only this proves it is populated *per role*,
+    which a reader distinguishing the monitor from the pacemaker depends on.
+    """
+    status, body, _ = served_recorded.get(f"/api/v2/runs/{SUPERVISING_RUN}/timeline?scope=run")
+
+    assert status == 200, body
+    timeline = json.loads(body)
+    assert timeline["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION
+    spans = timeline["spans"]
+    run_span = next(span for span in spans if span["kind"] == "run")
+
+    dispatch = next(span for span in spans if span["kind"] == "dispatch")
+    assert dispatch["agent_role"] == "orchestrator"
+    assert dispatch["transport_role"] == "agent"
+    assert dispatch["reference"] == {
+        "kind": "conversation",
+        "value": "dag-scope-1787308673405-2003245.monitor",
+    }
+    assert dispatch["parent_id"] == run_span["id"]
+
+    # The monitor's own turn is what carries the label, so the span has to hold it.
+    assert [event["kind"] for event in dispatch["events"]] == ["turn-completed"]
+
+
+def test_a_settled_run_keeps_its_timeline_but_leaves_the_listing(
+    served_recorded: Served,
+) -> None:
+    """The listing is the live runs, and a finished one is reachable only by id.
+
+    An operator who cannot find a run they know finished has met this rather than a
+    broken reader, and a browser following the listing alone would never open it. Both
+    halves are asserted together because either on its own reads as the other's bug.
+    """
+    listed = json.loads(served_recorded.get("/api/v2/runs")[1])
+
+    assert listed["api_version"] == 2
+    listed_runs = {run["run_id"]: run["phase"] for run in listed["runs"]}
+
+    # The split is on the phase rather than on which fixtures happen to be checked in,
+    # so adding one to this root does not quietly change what this journey claims.
+    assert set(listed_runs) == {RECORDED_RUN, SUPERVISING_RUN}, listed_runs
+    assert not {"settled", "finished"} & set(listed_runs.values()), listed_runs
+    for absent in (SETTLED_RUN, SUPERVISED_RUN, MERGED_RUN):
+        assert absent not in listed_runs, listed_runs
+
+    # Gone from the listing, still served in full by id.
+    status, body, _ = served_recorded.get(f"/api/v2/runs/{SETTLED_RUN}/timeline?scope=run")
+    assert status == 200, body
+    run_span = next(span for span in json.loads(body)["spans"] if span["kind"] == "run")
+    assert run_span["phase"] == "finished"
+    assert run_span["ended_at"] is not None
 
 
 def _linked_onepipeline_release() -> str:

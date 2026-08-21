@@ -1,0 +1,16 @@
+{
+  "run_id": "gate-parity-2",
+  "plan": "scratch/gate-parity-2.plan.json",
+  "dir": "/home/nick/projects/ai-orchestrator",
+  "graph": "/home/nick/projects/ai-orchestrator/graphs/dag-scope.yaml",
+  "graph_run": "dag-scope-1786920911077-3261533",
+  "node_graph": "/home/nick/projects/ai-orchestrator/graphs/node-scope.yaml",
+  "pr_author_graph": "/home/nick/projects/ai-orchestrator/graphs/pr-author.yaml",
+  "launcher": "claude-code",
+  "session": "8ea9aff4-fc73-4c01-8f6f-4ff75c5364c7",
+  "pid": 3261528,
+  "host": "U-17UN402ICR95C",
+  "started_at": "2026-08-16T22:55:11.062Z",
+  "heartbeat_interval": 1800,
+  "adoptions": 0
+}

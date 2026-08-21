@@ -1,0 +1,15 @@
+{
+  "schema_version": 3,
+  "run_id": "gate-parity-2",
+  "state": "complete",
+  "ok": true,
+  "nodes": [
+    {
+      "id": "gate-parity-land",
+      "status": "done",
+      "outcome": "merged",
+      "landing": "landed",
+      "branch": "onevcs/s-968142414f3a"
+    }
+  ]
+}

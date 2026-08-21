@@ -1,0 +1,17 @@
+{
+  "run_id": "orchestrator-gate-fix-findings-2",
+  "plan": "scratch/plans/orchestrator-gate-fix-findings.plan.json",
+  "dir": "/home/nick/projects/ai-orchestrator",
+  "graph": "/home/nick/projects/ai-orchestrator/graphs/dag-scope.yaml",
+  "graph_run": "dag-scope-1787237767762-569082",
+  "node_graph": "/home/nick/projects/ai-orchestrator/graphs/node-scope.yaml",
+  "pr_author_graph": "/home/nick/projects/ai-orchestrator/graphs/pr-author.yaml",
+  "launcher": "claude-code",
+  "session": "8fb3ecd6-4173-4e91-9068-be4a9354add1",
+  "pid": 569067,
+  "host": "U-17UN402ICR95C",
+  "started": "Thu Aug 20 14:56:07 2026",
+  "started_at": "2026-08-20T14:56:07.717Z",
+  "heartbeat_interval": 1800,
+  "adoptions": 0
+}
