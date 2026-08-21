@@ -235,18 +235,13 @@ channel-reject *args:
 channel-continue *args:
     @./scripts/planner-verdict.sh continue "$@"
 
-# Reclaim the scratch `oneagentgraph` itself produces. Pass `--dry-run` to inspect
-# candidates without removing them, `--min-age-hours` to move the stale threshold.
-#
-# This reclaims less than the name suggests, which is worth knowing before trusting
-# it with a full disk: it sweeps the two families that engine owns (`runs`, `temp`)
-# and reaps no processes. The volume families a dispatch leaves — the per-invocation
-# `nx` install, Nx's per-worktree native binary, pytest run directories, onejudge
-# scratch — and a leaked worker are nobody's to collect here. Not papered over with a
-# second sweeper beside this one: two cleaners racing one directory is worse. See
-# docs/orchestration.md, "The recorded run".
-sweep-scratch *args:
-    @uv run oneagentgraph sweep "$@"
+# Reclaim the dead working directories this host accumulates: `scripts/sweep.sh`
+# composes `oneagentgraph sweep` and `onevcs sweep` and adds the trailer naming what
+# neither examined. Quiet on success — the two reports and that trailer appear only
+# when a verb failed or a family went unexamined, and `--dry-run` always prints them.
+# What it still does not reclaim is docs/orchestration.md, "The recorded run".
+sweep *args:
+    @./scripts/sweep.sh "$@"
 
 # Three verbs, one per branch state, and between them they cover every state a
 # branch here can be in — so no branch state is a reason to reach for raw `git` or

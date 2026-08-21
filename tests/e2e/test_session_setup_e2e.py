@@ -58,8 +58,8 @@ def _setup_repo(
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, repo / name)
     shutil.copy2(REPO_ROOT / "justfile", repo / "justfile")
-    # Session setup runs no orchestrator code — the scratch sweep it invokes is a
-    # published CLI now — so the package exists here only because `pyproject.toml`
+    # Session setup runs no orchestrator code — the sweep it invokes composes two
+    # published CLIs — so the package exists here only because `pyproject.toml`
     # declares it as the wheel's one package and `uv sync` builds it.
     if dependency_oneharness != ONEHARNESS_VERSION:
         pyproject = repo / "pyproject.toml"
@@ -72,6 +72,13 @@ def _setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
+    # The sweep session setup runs is a composition of two published verbs rather
+    # than one of them, so the wrapper that composes them is part of a repo this
+    # script can be run in. `HOME` above already points every family it judges inside
+    # `tmp_path`, so the sweep it performs here is real and reaches nothing.
+    sweep = scripts / "sweep.sh"
+    shutil.copy2(REPO_ROOT / "scripts" / "sweep.sh", sweep)
+    sweep.chmod(0o755)
     # Every adopted release is copied, so a further pinned tool needs no fixture edit;
     # the parameters below then restate only what a journey deliberately moves.
     for declared in (REPO_ROOT / "config").glob("*.version"):
@@ -146,7 +153,15 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
 
     assert installed.returncode == 0, installed.stderr
     assert f"at {repo / '.venv' / 'bin' / 'onejudge'}" in installed.stderr
-    assert "sweep: examined family" in installed.stderr
+    # Both halves of the composed sweep reach a session, and on a host where every
+    # family was examined and nothing was left to act on that is the whole of what it
+    # says — one line naming the four families it judged, rather than four sections a
+    # reader learns to skim past.
+    assert (
+        "just sweep: nothing to act on — every family examined: "
+        "oneagentgraph runs, temp; onevcs publications, recoveries." in installed.stderr
+    )
+    assert "=== just sweep — what this run looked at ===" not in installed.stderr
     assert (
         subprocess.run(
             [repo / ".venv" / "bin" / "oneharness", "--version"],
@@ -218,31 +233,41 @@ def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Pa
     )
 
 
-def test_session_setup_continues_when_scratch_sweep_fails(tmp_path: Path) -> None:
+def test_session_setup_continues_when_the_workspace_sweep_fails(tmp_path: Path) -> None:
+    """A real failing sweep, produced by real state rather than by replacing the recipe.
+
+    Substituting `false` for the recipe body proved only that session setup survives a
+    non-zero exit; it proved nothing about the artifact that produces one, and it would
+    have gone on passing if the wrapper had stopped exiting non-zero at all. A
+    `workspaces` that is a file is what a half-provisioned or hand-edited onevcs state
+    root looks like, and the real verb refuses it — so this drives the real recipe, the
+    real wrapper, and both real verbs, and reads the failure they actually produce.
+    """
     repo = _setup_repo(tmp_path)
-    justfile = repo / "justfile"
-    justfile.write_text(
-        justfile.read_text(encoding="utf-8").replace(
-            '@uv run oneagentgraph sweep "$@"',
-            "@false",
-        ),
-        encoding="utf-8",
-    )
+    # `HOME` is `tmp_path`, so this is the state root the real `onevcs sweep` reads.
+    (tmp_path / ".onevcs").mkdir()
+    (tmp_path / ".onevcs" / "workspaces").write_text("not a directory\n", encoding="utf-8")
 
     result = _run_setup(repo, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert "scratch sweep failed; continuing session setup" in result.stderr
+    assert "cannot read the workspaces under" in result.stderr
+    # One verb down never costs the other its reclamation, and never leaves its own
+    # families out of both lists — the property session setup's sweep is worth running
+    # for at all.
+    assert "sweep: examined family" in result.stderr
+    assert "onevcs publications, recoveries — onevcs sweep exited 2" in result.stderr
+    assert "workspace sweep failed; continuing session setup" in result.stderr
 
 
-def test_session_setup_continues_when_scratch_sweep_is_unavailable(tmp_path: Path) -> None:
+def test_session_setup_continues_when_the_workspace_sweep_is_unavailable(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     (repo / "justfile").unlink()
 
     result = _run_setup(repo, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert "scratch sweep unavailable; continuing session setup" in result.stderr
+    assert "workspace sweep unavailable; continuing session setup" in result.stderr
 
 
 def test_session_setup_fails_when_synced_onejudge_misses_adopted_version(

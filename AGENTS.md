@@ -1015,15 +1015,37 @@ view is the `onepipeline-ui` bundle — so `just dag-ui` puts the two behind one
 and `just dag-ui-screens` photographs that bundle at every viewport in the matrix,
 printing the gitignored per-invocation gallery it wrote. Operational detail lives in
 [`docs/dag-ui.md`](docs/dag-ui.md).
-`just sweep-scratch` reclaims the scratch a dispatch leaves behind — the families
-`oneagentgraph` itself produces, each judged on proven non-reference: a candidate no
-live process names in its argv, environment, `cwd`/`root`/`exe`, open descriptors,
-or memory mappings, past a short age that only covers the gap between creating a
-directory and first naming it. `--dry-run` inspects without removing, and
-`--min-age-hours` moves the conservative threshold for scratch that is only stale.
-Session setup runs it automatically. Every sweep names the families it examined and
-the families it could not, so a sweep that reclaimed nothing never hides an unswept
-one.
+`just sweep` reclaims the dead working directories this host accumulates, by
+composing the **two** published verbs that own them rather than reimplementing
+either: `oneagentgraph sweep` for the scratch a dispatch leaves behind, and `onevcs
+sweep` for the publication and recovery workspaces a lifecycle leaves behind. Both
+judge a candidate on proven non-reference — no live process names it in its argv,
+environment, `cwd`/`root`/`exe`, open descriptors, or memory mappings — past a short
+age that only covers the gap between creating a directory and first naming it.
+`--dry-run` inspects without removing and `--min-age-hours` moves the conservative
+threshold, and each reaches **both** verbs, because an age floor that meant one thing
+to one family and another to the next would be worse than no floor. Session setup
+runs it automatically. The recipe was named `sweep-scratch` while the first verb was
+the whole of it; a publication workspace is not scratch, so the name now names the
+composition and `sweep-scratch` is gone rather than kept as a misleading synonym.
+Neither verb's report is rewritten — each names its own families, its own retentions,
+and its own reason for each. It is **quiet on success**: a sweep that examined every
+family and left nothing to act on is one line naming those families, and the two
+reports and the trailer appear only when a verb failed or a family went unexamined,
+which is what makes them worth reading when they do. `--dry-run` always prints them,
+because it removes nothing and those reports are the answer it was asked for. What
+the composition adds is the **trailer**, which is the part no single verb can write:
+the families examined *across* the two, and the families **neither** examined, each
+with a reason, so that every family appears in exactly one list. That is the whole point of it. A sweep reporting `0 B reclaimed`
+while a family it never looked at fills the disk answers the operator's question with
+a number that reads like an all-clear, and this host has been in exactly that state.
+Two consequences to read rather than infer: a verb that **fails** moves its families
+into the not-examined list and the other verb still sweeps, with the recipe exiting
+non-zero so the gap shows in the status as well as the report; and the pre-adoption
+`~/.ai-orchestrator/worktrees` root is **reported with its size, never reclaimed** —
+every directory under it is a *registered* git worktree whose lender still lists it
+and whose branch can still hold unpublished work, so land or discard that branch
+(`just recoverable` names the verb) and then `git worktree remove` it in the lender.
 
 The processes that are *meant* to outlive their launcher — the driver `just
 orchestrate` starts, and the dispatches and publications it forks — are the

@@ -32,7 +32,7 @@ idempotent. It:
   `onevcs`, `onepipeline`, and `onepipeline-ui` (PyPI's `onepipeline-api-cli`) —
   from PyPI through that same `uv sync`, at the releases adopted in
   `config/<tool>.version`, and verifies each one the same two ways;
-- sweeps reclaimable scratch (`just sweep-scratch`);
+- sweeps the reclaimable scratch and publication workspaces (`just sweep`);
 - installs `bun` via npm, and `codex` via npm when it is absent, exposing a stable
   `~/.local/bin/codex`;
 - wires allowlister's codex `repo-write` PreToolUse hook — **only if allowlister is
@@ -55,7 +55,7 @@ exactly what the rest of this document is.
 | Tool | Why this repository needs it |
 | --- | --- |
 | `git` | every checkout, worktree, clone, and merge in the lifecycle |
-| `just` | the whole command surface; session setup itself shells to `just sweep-scratch` |
+| `just` | the whole command surface; session setup itself shells to `just sweep` |
 | `uv` | installs the pinned onejudge/oneharness into `.venv` and llmlint via `uv tool` |
 | `jq` | the only tool that can mark the alternate Claude workspaces trusted |
 | `gh` | GitHub publication (PRs, checks) and repository-type inference (`gh api user --jq .login`) |

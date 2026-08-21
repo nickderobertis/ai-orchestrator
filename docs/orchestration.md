@@ -1257,11 +1257,19 @@ adds structured provider failure attribution; schema v5 added the terminal
 
 Recording is on by default:
 
-The conservative scratch sweep exposed as `just sweep-scratch` reclaims what a
-finished dispatch left behind. A directory its ownership proof does not clear is
-reported as retained rather than removed, and scratch that is only stale is
-eligible after the conservative age threshold alone. Use `just sweep-scratch
---dry-run` to inspect candidates without removing any of them.
+The conservative sweep exposed as `just sweep` reclaims what a finished dispatch or
+a finished publication left behind. A directory its ownership proof does not clear is
+reported as retained rather than removed, and a directory that is only stale is
+eligible after the conservative age threshold alone. Use `just sweep --dry-run` to
+inspect candidates without removing any of them.
+
+It is a **composition of two published verbs**, not one: `oneagentgraph sweep` for
+the scratch a dispatch leaves behind, and `onevcs sweep` for the publication and
+recovery workspaces a lifecycle leaves behind. `--dry-run` and `--min-age-hours`
+reach both and mean one thing across every family. Neither verb's report is
+rewritten — reformatting another repository's report here would make this listing
+drift from the one that repository prints everywhere else — so what the recipe adds
+is the trailer below.
 
 Scratch a dispatch itself produces cannot wait for quiescence, so what replaces
 quiescence is proven non-reference: a candidate a live process names — in its argv,
@@ -1281,13 +1289,53 @@ onejudge's own scratch — are the *volume* ones, appearing because dispatches a
 running, and nothing reclaims them now. Neither does anything reclaim the
 **processes** a finished dispatch left running, which reparenting to init puts
 outside every tree walk; the engines that start them own keeping them alive and
-reaping them. `just sweep-scratch` says the same at the seam an operator touches.
+reaping them. `just sweep` says the same at the seam an operator touches.
 
 Every sweep names the families it examined and, separately, the families it could
 not. Each family appears in exactly one of the two lists, so a sweep that reclaimed
 nothing always means "nothing was reclaimable", never "a family was never looked
 at". A cleanup run that silently skips the family filling the disk reads as a clean
 bill of health, which is worse than no cleanup at all.
+
+**That is why the sections are rationed.** A sweep that examined every family and
+left nothing to act on prints one line naming the families it judged, and prints no
+sections at all:
+
+```text
+just sweep: nothing to act on — every family examined: oneagentgraph runs, temp; onevcs publications, recoveries.
+```
+
+Both verbs' reports and the trailer appear when — and only when — a verb failed or a
+family went unexamined, which are the two states an operator has to do something
+about. Four sections of retentions on a host where everything was judged teach a
+reader to skim, and what they learn to skim past is the trailer that names the family
+nothing looked at. Rationing them is what keeps that trailer worth reading.
+`--dry-run` is the exception and always prints them: it removes nothing and is asked
+in order to be answered, so those reports are its return value rather than narration
+of work it did. Neither verb's report is edited either way — being held back is not
+being rewritten.
+
+`just sweep`'s trailer is that invariant held across the two verbs rather than
+inside one, and three cases are worth reading rather than inferring:
+
+- **A verb that fails takes only its own families with it.** They move into the
+  not-examined list with the exit status that produced them, the other verb still
+  sweeps and still reclaims, and the recipe exits non-zero so the gap is in the
+  status as well as in the report. Silently absent from both lists is the one
+  outcome the trailer exists to rule out.
+- **The pre-adoption `~/.ai-orchestrator/worktrees` root is reported, never
+  reclaimed.** It is the family that has actually filled this host's disk, and it is
+  neither verb's: every directory under it is a *registered* git worktree, still
+  listed by the checkout that lent it, still able to hold a branch nothing has
+  published. So the trailer names it with its size and its directory count and stops
+  — land or discard that branch first (`just recoverable` names the verb for it),
+  then remove the tree with `git worktree remove` in the lender. A root that cannot
+  be walked or measured is still named, without the number it could not get.
+- **The trailer restates each verb's family names** rather than pointing back at a
+  report an operator has to scroll through. That restatement is held against what
+  the installed verbs report examining, in `tests/e2e/test_sweep_e2e.py`, so a
+  release that renames a family or adds one fails there rather than leaving the
+  trailer quietly describing the previous release.
 
 The ledger is **flat**, because a run has no phases to number:
 

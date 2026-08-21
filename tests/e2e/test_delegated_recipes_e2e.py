@@ -63,6 +63,9 @@ WRAPPER_SCRIPTS = (
     "land-branch.sh",
     "draft-pr-body.sh",
     "recoverable.sh",
+    # `just sweep` goes through this one, which composes the two published sweep
+    # verbs and writes the trailer neither of them can.
+    "sweep.sh",
 )
 
 
@@ -86,6 +89,9 @@ class Delegation(NamedTuple):
     arguments: tuple[str, ...]
     #: The one command line that invocation must produce, whole.
     published: str
+    #: The further command lines a recipe that composes several verbs must produce,
+    #: in order, after the one above. Empty for every recipe that reaches exactly one.
+    then: tuple[str, ...] = ()
 
     @property
     def invocation(self) -> tuple[str, ...]:
@@ -93,10 +99,12 @@ class Delegation(NamedTuple):
         return (self.recipe, *self.arguments)
 
 
-#: The whole delegation table, as `just` invocation → the one command line it must
-#: produce. This is the mapping this repository promises, in one place: a recipe
-#: that starts naming a different verb, or dropping an argument on the way, fails
-#: here rather than in an operator's terminal.
+#: The whole delegation table, as `just` invocation → the command lines it must
+#: produce, in order: one for nearly every recipe, and the sequence a recipe that
+#: composes several verbs owes. This is the mapping this repository promises, in one
+#: place: a recipe that starts naming a different verb, dropping an argument on the
+#: way, or reaching only the first of the verbs it composes, fails here rather than in
+#: an operator's terminal.
 DELEGATIONS = (
     # The two graph flags are the recipe's own addition, and the reason it exists:
     # both ship defaulted to nothing, so a bare launch runs with no agent watching it
@@ -203,7 +211,28 @@ DELEGATIONS = (
     Delegation("history", (), "uv run oneagentgraph history"),
     Delegation("history-show", ("oh:abc123",), "uv run oneagentgraph history show oh:abc123"),
     Delegation("smoke", (), "uv run oneagentgraph smoke"),
-    Delegation("sweep-scratch", ("--dry-run",), "uv run oneagentgraph sweep --dry-run"),
+    # The one recipe here that reaches two verbs. Both are named because a sweep that
+    # silently dropped one would report a clean host while a family filled the disk,
+    # and both carry the options, because an age floor that meant one thing to one
+    # family and another to the next would be worse than no floor.
+    Delegation(
+        "sweep",
+        ("--dry-run",),
+        "uv run oneagentgraph sweep --dry-run",
+        then=("uv run onevcs sweep --dry-run",),
+    ),
+    Delegation(
+        "sweep",
+        ("--min-age-hours", "0"),
+        "uv run oneagentgraph sweep --min-age-hours 0",
+        then=("uv run onevcs sweep --min-age-hours 0",),
+    ),
+    Delegation(
+        "sweep",
+        (),
+        "uv run oneagentgraph sweep",
+        then=("uv run onevcs sweep",),
+    ),
     Delegation("validate-personas", (), "uv run oneagentgraph persona validate personas"),
     Delegation("register-repo", ("/checkout",), "uv run onevcs register /checkout"),
     Delegation("repos", (), "uv run onevcs repos"),
@@ -349,6 +378,10 @@ def _run(
     environment = os.environ.copy()
     environment["PATH"] = f"{checkout / 'bin'}{os.pathsep}{environment['PATH']}"
     environment["TRACE_FILE"] = str(trace)
+    # `just sweep` reports on the pre-adoption worktree root, and this host's
+    # own is 41 GB: pointing it at a path inside the throwaway checkout keeps these
+    # journeys off it.
+    environment["AI_ORCHESTRATOR_HOME"] = str(checkout / "ai-orchestrator-home")
     environment.pop("ONEPIPELINE_RUNS_DIR", None)
     # This suite is itself run from inside a dispatch, whose real status directory and
     # history store would otherwise reach the recipe under test. Each journey states
@@ -384,7 +417,7 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     result = _run(checkout, trace, *delegation.invocation)
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [delegation.published]
+    assert trace.read_text().splitlines() == [delegation.published, *delegation.then]
 
 
 #: Records argv one word per line rather than as one joined string. The shared trace

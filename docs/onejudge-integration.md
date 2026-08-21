@@ -998,7 +998,7 @@ recorded nothing past `ONEPIPELINE_STALL_AFTER_SECONDS` (default `2400`).
 ### Dispatch scratch ownership
 
 Each dispatch works in an `orchestrator-watchdog-*` scratch directory, and the
-unattended sweep (`just sweep-scratch`, session setup) may delete it
+unattended sweep (`just sweep`, session setup) may delete it
 concurrently. The pid recorded in `<dir>/pid` cannot
 decide that: it is the *worker's*, and the wrapper `execvpe`s onejudge in place,
 so it dies the moment the worker exits — while the dispatcher is still reaping
