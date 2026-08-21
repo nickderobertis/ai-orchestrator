@@ -15,7 +15,9 @@ pass](#5-the-trust-marking-pass-order-matters) apply.
 **Do not install these by hand.** `just bootstrap` runs, in order:
 
 1. `scripts/session-setup.sh` (below),
-2. `scripts/workspace-install.sh --force` — the locked Bun install, reapplied,
+2. `scripts/workspace-install.sh --force` — the locked Bun install, applied to a
+   discarded tree rather than reconciled with the one that is there (every
+   `scripts/nx.sh` already reconciles),
 3. `scripts/nx.sh run-many -t bootstrap` — each project's own setup,
 4. `git config core.hooksPath .githooks` — activates the pre-push `just gate` and
    the `commit-msg` subject policy, since the setting names the whole directory,

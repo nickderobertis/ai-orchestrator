@@ -979,8 +979,17 @@ install precede Nx because they make Nx available; bootstrap then delegates
 project setup through uniform Nx `bootstrap` targets.
 `scripts/workspace-install.sh` is that locked Bun install's one source. A freshly
 created worktree carries no `node_modules`, so every `scripts/nx.sh` runs it first
-and heals itself; `just bootstrap` runs it with `--force`, which reapplies a
-lockfile that moved. Nothing here asks an operator to run Bun by hand, and the e2e
+and heals itself — and so does a worktree whose `node_modules` no longer matches
+`bun.lock`, because the guard is `bun install --frozen-lockfile` itself rather
+than a check for the Nx binary. Presence answered for *an* install rather than
+*the locked* one, so a moved pin was invisible to every checkout that already had
+a `node_modules`: this one served `onepipeline-ui` 0.3.3 under a 0.5.0 pin, and
+six defects were reported against a bundle that had already shipped them fixed.
+Asking Bun costs ~18ms against ~4ms, on a wrapper whose cheapest Nx invocation is
+~1.6s. `just bootstrap` runs it with `--force`, which is now the one thing the
+ordinary run does not do: discard the installed tree first, since what the
+lockfile does not describe is what Bun reconciling against it will keep. Nothing
+here asks an operator to run Bun by hand, and the e2e
 journeys that drive real Nx provision through the same script rather than skipping
 when a worktree is fresh — a bare `pytest` in one means what the gate means.
 `scripts/python-install.sh` is the same self-heal for the other half of the

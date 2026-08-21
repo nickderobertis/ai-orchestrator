@@ -1,0 +1,9 @@
+# This fixture is a miniature of the workspace it proves the cache contract for,
+# and the contract is about *source* inputs: a task's hash may not move because a
+# recipe wrote a log on its way in. Nx hashes untracked files that nothing ignores,
+# so without this the fixture's cross-worktree hit held only while no wrapper wrote
+# into the tree first — and `scripts/workspace-install.sh` writing Bun's own
+# millisecond-stamped reconciliation there made the hit intermittent.
+/.logs/
+/.nx/
+node_modules/

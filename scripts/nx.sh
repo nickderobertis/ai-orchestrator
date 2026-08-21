@@ -16,7 +16,8 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # Healing it here rather than in one recipe is what stops the same missing install
 # from failing `just lint` with "Could not find Nx modules" while `just check`
 # quietly repaired it — and what lets a bare `pytest` drive these targets without
-# an operator running Bun by hand first. It exits immediately once provisioned.
+# an operator running Bun by hand first. It exits immediately once the installed
+# tree matches the lockfile, which is Bun's own answer rather than this wrapper's.
 "$script_dir/workspace-install.sh" || exit 1
 
 # The other half of the same self-heal. Every target below runs its tool through

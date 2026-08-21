@@ -511,3 +511,32 @@ def test_the_nx_cache_check_key_covers_every_repository_path_that_check_reads() 
     # pass the assertion above and replay nothing.
     assert not covers(globs, "AGENTS.md")
     assert not covers(globs, "orchestrator/labels.py")
+
+
+def test_the_cache_fixture_ignores_what_the_wrapper_chain_writes_into_it() -> None:
+    """The fixture's cross-worktree hit must not turn on what a wrapper wrote first.
+
+    `scripts/nx.sh` provisions before it reaches Nx, and provisioning writes a
+    preserved log into the tree it is provisioning. Bun's carries its own
+    millisecond stamp, so two worktrees' copies of it differ — and Nx hashes an
+    untracked file nothing ignores. Measured in the fixture: one differing file
+    under that directory took a 100% cache hit to 0%. So the fixture has to ignore
+    the state this repository ignores, or the contract it proves holds only while
+    no wrapper writes anything on its way in.
+    """
+    preserved = (REPO_ROOT / "scripts/preserved-log.sh").read_text(encoding="utf-8")
+    directory = re.search(r'dir="\$root/([^"]+)"', preserved)
+    assert directory is not None, (
+        "scripts/preserved-log.sh no longer names the directory it writes into as "
+        '`dir="$root/<name>"`; this gate reads it from there rather than restating it'
+    )
+    rule = f"/{directory.group(1)}/"
+
+    rules = REPO_ROOT / "tests/fixtures/nx-cache/.gitignore"
+    assert rules.is_file(), f"{rules} is gone, so the fixture ignores nothing a wrapper writes"
+    ignored = rules.read_text(encoding="utf-8")
+
+    assert rule in ignored.splitlines(), (
+        f"the cache fixture does not ignore {rule}, which every `scripts/nx.sh` in it "
+        "writes into before Nx hashes anything"
+    )

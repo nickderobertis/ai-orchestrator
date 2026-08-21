@@ -226,11 +226,22 @@ def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _add_bun_double(checkout: Path) -> None:
-    """Trace Bun, and let it provision what the real one would."""
+    """Trace Bun, and let it provision what the real one would.
+
+    It answers a tree it has already installed the way the real one does — the
+    measured `Checked 122 installs across 132 packages (no changes)` — because the
+    installer no longer decides that itself. Which invocations *installed* is the
+    whole question the traces below ask, so a double that installed on every call
+    would answer it wrong.
+    """
     bun = checkout / "bin/bun"
     bun.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+if [[ -x node_modules/.bin/nx ]]; then
+  printf 'bun %s (no changes)\\n' "$*" >>"$TRACE_FILE"
+  exit 0
+fi
 printf 'bun %s\\n' "$*" >>"$TRACE_FILE"
 if [[ "${FAIL_COMMAND:-}" == "bun" ]]; then
   echo "bun: captured failure detail" >&2
@@ -655,6 +666,12 @@ def test_dag_ui_screens_recipe_reports_a_gallery_root_it_cannot_create(
     # The doubles append to it, and a directory nothing may be created in is exactly
     # what this journey installs.
     trace.touch()
+    # The recipe provisions before it captures anything, and provisioning reconciles
+    # the installed tree against the lockfile through a log it writes here — so a
+    # checkout that has ever run a recipe carries this directory, and one that has
+    # not is refused at that path instead. What this journey is about is the *output*
+    # root, which is the next thing the recipe cannot create.
+    (checkout / ".logs").mkdir(exist_ok=True)
     checkout.chmod(0o500)
     try:
         result = _recipe_run(checkout, trace, "dag-ui-screens")
@@ -702,8 +719,14 @@ def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
 
 
 def _nx_nesting_checkout(tmp_path: Path) -> Path:
-    """The wrapper checkout with its workspace already provisioned."""
+    """The wrapper checkout with its workspace already provisioned.
+
+    Bun is doubled here even though this checkout is provisioned, because every
+    `scripts/nx.sh` now asks Bun whether the tree still matches the lockfile — and
+    a checkout with no `package.json` is one the real Bun refuses.
+    """
     checkout = _nx_wrapper_checkout(tmp_path, "nesting")
+    _add_bun_double(checkout)
     _mark_nx_installed(checkout)
     return checkout
 
@@ -766,8 +789,14 @@ def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: 
 
 
 @pytest.mark.reads_recipes
-def test_nx_wrapper_skips_provisioning_once_the_workspace_is_installed(tmp_path: Path) -> None:
-    """The heal is a no-op on every ordinary invocation, which is most of them."""
+def test_nx_wrapper_installs_nothing_when_the_tree_already_matches_the_lockfile(
+    tmp_path: Path,
+) -> None:
+    """The heal is a no-op on every ordinary invocation, which is most of them.
+
+    A no-op decided by Bun rather than by the installer, though: the ordinary
+    invocation asks, and what it must not do is spend an install on the answer.
+    """
     checkout = _nx_wrapper_checkout(tmp_path, "provisioned")
     _add_nx_wrapper_doubles(checkout)
     _mark_nx_installed(checkout)
@@ -782,7 +811,10 @@ def test_nx_wrapper_skips_provisioning_once_the_workspace_is_installed(tmp_path:
     )
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == ["bunx nx run cached"]
+    assert trace.read_text().splitlines() == [
+        "bun install --frozen-lockfile (no changes)",
+        "bunx nx run cached",
+    ]
 
 
 @pytest.mark.reads_recipes
@@ -836,6 +868,11 @@ def test_workspace_install_rejects_arguments_it_does_not_define(
 
     assert result.returncode == 2
     assert message in result.stderr
+    # And what the one accepted flag *does*, which is no longer "reinstall an
+    # already provisioned workspace": the ordinary run reinstalls whenever the tree
+    # and the lockfile disagree, so a refusal that still advertised the old meaning
+    # would send an operator to `--force` for a heal they already get.
+    assert "discard the installed tree and reinstall it from the lockfile" in result.stderr
     assert not trace.exists(), "a rejected invocation must not have run Bun"
 
 
@@ -905,6 +942,71 @@ def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
 
 
 @pytest.mark.reads_recipes
+def test_a_forced_workspace_install_discards_the_installed_tree_first(tmp_path: Path) -> None:
+    """`--force` is what distrusts the tree itself, now that the ordinary run reconciles.
+
+    Reconciling against the lockfile leaves whatever the lockfile does not describe
+    — measured: Bun keeps a package no committed dependency names. A clean-clone
+    bootstrap is the caller that cannot afford that, so its forced run installs
+    from nothing rather than on top of what is there.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "forced")
+    _add_nx_wrapper_doubles(checkout)
+    _mark_nx_installed(checkout)
+    leftover = checkout / "node_modules" / "leftover-package"
+    leftover.mkdir(parents=True)
+    (leftover / "package.json").write_text('{"name": "leftover-package"}\n', encoding="utf-8")
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        "--force",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    # The plain line, not the `(no changes)` one an ordinary run against this same
+    # provisioned tree records: a forced run installs unconditionally.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert not leftover.exists(), "a forced install left a package no lockfile describes"
+    assert (checkout / "node_modules/.bin/nx").is_file()
+
+
+@pytest.mark.reads_recipes
+def test_a_forced_install_that_cannot_discard_the_tree_stops_before_bun(tmp_path: Path) -> None:
+    """Discarding is the whole of what `--force` adds, so failing at it is not a warning.
+
+    A forced run that installed over a tree it could not remove would report success
+    for the one thing the caller asked for and did not get — and `just bootstrap` is
+    that caller, on a clone whose `node_modules` is exactly what it distrusts.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "unremovable")
+    _add_nx_wrapper_doubles(checkout)
+    _mark_nx_installed(checkout)
+    modules = checkout / "node_modules"
+    # Children that cannot be unlinked: `rm -rf` refuses, while the checkout itself
+    # stays writable so the install lock and its log are not what refuses instead.
+    modules.chmod(0o500)
+    trace = tmp_path / "trace"
+
+    try:
+        result = _run(
+            str(checkout / "scripts" / "workspace-install.sh"),
+            "--force",
+            cwd=checkout,
+            env=_nx_wrapper_env(checkout, tmp_path, trace),
+        )
+    finally:
+        modules.chmod(0o700)
+
+    assert result.returncode == 1
+    assert f"cannot remove '{modules}'" in result.stderr
+    assert "permissions" in result.stderr
+    assert not trace.exists(), "a forced install that kept the tree must not have run Bun"
+
+
+@pytest.mark.reads_recipes
 def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
     """Two Nx invocations in one fresh worktree must not install over each other.
 
@@ -938,7 +1040,14 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
     outcomes = [install.communicate(timeout=e2e_timeout(60)) for install in installs]
 
     assert [install.returncode for install in installs] == [0, 0], outcomes
-    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    # Both asked; only the first installed. The second ran after the lock was
+    # released, against the tree the first had just provisioned, and found nothing
+    # left to do — which is what "serialized" has to mean now that the ordinary
+    # path reconciles instead of checking for a binary.
+    assert trace.read_text().splitlines() == [
+        "bun install --frozen-lockfile",
+        "bun install --frozen-lockfile (no changes)",
+    ]
     assert (checkout / "node_modules/.bin/nx").is_file()
 
 
@@ -994,6 +1103,80 @@ def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
         # test is a leak the guard reports, and rightly. `remove` deregisters this
         # one on its own; `prune` would reach across a registry other live
         # orchestrator runs share.
+        _run("git", "worktree", "remove", "--force", str(worktree))
+
+
+#: The dependency this journey moves the pin of, chosen because a stale
+#: `node_modules` really did go on serving an older copy of it under a current pin.
+STALENESS_WITNESS = "onepipeline-ui"
+
+
+@pytest.mark.reads_docs
+def test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile(
+    tmp_path: Path,
+) -> None:
+    """A moved pin heals itself, the way a missing `node_modules` already did.
+
+    Every checkout that already had a `node_modules` used to be exempt from the
+    lockfile: the installer asked whether Nx was there, which answers for *an*
+    install rather than *the locked* one. So the pin moved, nothing reinstalled,
+    and an operator reading the served view had no way to tell a stale install
+    from a broken feature.
+
+    Driven against real Bun and a lockfile that really moved, because the whole
+    defect was an install nobody could see: both entry points into the wrapper
+    chain are exercised — the script every recipe routes through, and a `just`
+    recipe on top of it.
+    """
+    worktree = tmp_path / "moved-pin-worktree"
+    # `--no-checkout`, so this working tree's own change is what provisions here.
+    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
+    try:
+        copy_working_tree(worktree)
+        manifest = worktree / "package.json"
+        lockfile = worktree / "bun.lock"
+        committed_manifest = manifest.read_bytes()
+        committed_lock = lockfile.read_bytes()
+        pinned = json.loads(committed_manifest)["dependencies"][STALENESS_WITNESS]
+
+        # Provisioned from the lockfile as it was before the bump, for real: the
+        # tree a checkout carries when the pin moves under it.
+        before_the_bump = json.loads(committed_manifest)
+        del before_the_bump["dependencies"][STALENESS_WITNESS]
+        manifest.write_text(json.dumps(before_the_bump, indent=2) + "\n", encoding="utf-8")
+        provision = _run("bun", "install", cwd=worktree)
+        assert provision.returncode == 0, provision.stderr
+        assert (worktree / "node_modules/.bin/nx").is_file()
+        assert not (worktree / "node_modules" / STALENESS_WITNESS).exists()
+
+        # The bump lands: the committed manifest and lockfile move, and nothing
+        # else does.
+        manifest.write_bytes(committed_manifest)
+        lockfile.write_bytes(committed_lock)
+
+        wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
+
+        assert wrapper.returncode == 0, wrapper.stderr
+        bundle = worktree / "node_modules" / STALENESS_WITNESS / "package.json"
+        assert bundle.is_file(), (
+            f"the wrapper left {STALENESS_WITNESS} uninstalled under a {pinned} pin: a tree "
+            f"provisioned before the bump stayed exempt from the lockfile"
+        )
+        installed = json.loads(bundle.read_text(encoding="utf-8"))
+        assert installed["version"] == pinned, (
+            f"the wrapper left {STALENESS_WITNESS} {installed['version']} installed under a "
+            f"{pinned} pin"
+        )
+        assert lockfile.read_bytes() == committed_lock, "the committed lockfile decides"
+
+        # Again from the recipe an operator runs, against a tree that disagrees with
+        # the lockfile the other way: a package the lockfile names, gone.
+        shutil.rmtree(worktree / "node_modules" / STALENESS_WITNESS)
+        recipe = _run("just", "format-check", cwd=worktree)
+
+        assert recipe.returncode == 0, recipe.stdout + recipe.stderr
+        assert (worktree / "node_modules" / STALENESS_WITNESS / "package.json").is_file()
+    finally:
         _run("git", "worktree", "remove", "--force", str(worktree))
 
 
@@ -1456,6 +1639,7 @@ def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> N
     env = os.environ.copy()
     env["PATH"] = f"{checkout / 'bin'}:{env['PATH']}"
     env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    env["TRACE_FILE"] = str(tmp_path / "trace")
     # Whatever claims this process already inherited belong to other checkouts and
     # must not divert anything here; the outer run below is the first claim on it.
     env.pop("ORCHESTRATOR_PRESERVED_LOGS", None)

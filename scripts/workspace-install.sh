@@ -5,9 +5,16 @@
 # worktree until this has. `scripts/nx.sh` heals through it before every
 # invocation and `just bootstrap` forces it, so no caller has to decide.
 #
-# Idempotent and quiet: without `--force`, an already provisioned workspace exits
-# having done and said nothing, and concurrent callers serialize on one lock so
-# two Nx invocations in a fresh worktree cannot install over each other.
+# Bun itself is the guard: `bun install --frozen-lockfile` reconciles the
+# installed tree against the committed lockfile and installs only the difference,
+# so a workspace already in agreement with it exits in milliseconds having
+# installed nothing and said nothing. Testing for the Nx binary instead answered
+# for *an* install rather than *the locked* one, which left a moved pin invisible
+# to every checkout that already had a `node_modules`.
+#
+# Concurrent callers still serialize on one lock, so two Nx invocations in a
+# fresh worktree cannot install over each other: the loser waits, then asks Bun,
+# which finds the winner's tree already in agreement and installs nothing.
 set -euo pipefail
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
@@ -20,21 +27,16 @@ case $# in
     0) ;;
     1)
         if [[ $1 != --force ]]; then
-            echo "workspace-install: unknown argument '$1'; pass --force to reinstall an already provisioned workspace" >&2
+            echo "workspace-install: unknown argument '$1'; pass --force to discard the installed tree and reinstall it from the lockfile" >&2
             exit 2
         fi
         force=true
         ;;
     *)
-        echo "workspace-install: expected at most one argument; pass --force alone to reinstall an already provisioned workspace" >&2
+        echo "workspace-install: expected at most one argument; pass --force alone to discard the installed tree and reinstall it from the lockfile" >&2
         exit 2
         ;;
 esac
-
-nx_bin="$repo_root/node_modules/.bin/nx"
-if [[ $force == false && -x $nx_bin ]]; then
-    exit 0
-fi
 
 # The lock lives beside the preserved logs because both are per-worktree
 # diagnostic state that is already ignored; the repository root stays clean.
@@ -57,10 +59,13 @@ if ! flock 9; then
     echo "workspace-install: cannot serialize the locked install; retry once no other install is running" >&2
     exit 1
 fi
-# Re-read under the lock: whoever held it may have just installed what this call
-# came for, and reinstalling on top of that is pure cost.
-if [[ $force == false && -x $nx_bin ]]; then
-    exit 0
+# What a forced run adds, now that the ordinary one already reconciles: distrust
+# the installed tree itself. `just bootstrap` is its caller, and a clone it runs
+# in can carry a `node_modules` no lockfile describes — one Bun would keep,
+# because nothing in the lockfile contradicts it.
+if [[ $force == true && -e "$repo_root/node_modules" ]] && ! rm -rf -- "$repo_root/node_modules"; then
+    echo "workspace-install: cannot remove '$repo_root/node_modules' to reinstall it; repair its permissions and retry" >&2
+    exit 1
 fi
 
 preserved_log_open "$repo_root" workspace-install || exit 1

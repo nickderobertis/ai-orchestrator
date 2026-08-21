@@ -21,8 +21,10 @@ default:
 # activate the committed git hooks (the pre-push llmlint gate).
 #
 # `--force` is what distinguishes this from the self-heal every `scripts/nx.sh`
-# already performs: bootstrap re-applies the lockfile even when a stale
-# `node_modules` is present, which is exactly what a refreshed lockfile needs.
+# already performs: that one reconciles the installed tree against the lockfile,
+# which a refreshed lockfile is enough to trigger, while bootstrap discards the
+# tree and installs from nothing — a clone can carry a `node_modules` no lockfile
+# describes, and reconciling against a lockfile keeps whatever it does not name.
 # llmlint: ignore[changed_behavior_has_e2e] This provisioning journey is run on every clean-clone bootstrap; recursively bootstrapping from its own e2e would replace the active test environment.
 bootstrap:
     ./scripts/session-setup.sh
