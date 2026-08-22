@@ -80,6 +80,22 @@ PRODUCER_FLOOR = Release(0, 3, 3)
 TURN_CONTENT_FLOOR = Release(0, 3, 6)
 
 
+#: The onevcs release that removed the **gate**: the tier that library ran itself in a
+#: publication's own clone, before it would push. Below it a `gate:` on a rule is not
+#: only accepted but *executed*, so a host whose rules file has been migrated to schema
+#: 3 does not merely lose a deprecation warning — its rules file stops loading at all
+#: (`default: missing field `gate``), and a host that has not migrated silently returns
+#: to running a verifier beside the real one and throwing its answer away.
+#:
+#: Asserted as a floor rather than left to the pin reconciliation below, because the two
+#: fail differently and only this one is about a *dispatch*. `config/onevcs.version` is
+#: the CLI the manager verbs run; what a dispatched node publishes through is this
+#: linked copy, and a bump to `config/onepipeline.version` that resolved an older onevcs
+#: would put the gate back into every dispatch while every version file on the host
+#: still read 0.11.0.
+GATE_FREE_FLOOR = Release(0, 11, 0)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -199,6 +215,26 @@ def test_the_linked_oneagentgraph_carries_the_whole_turn_it_relays() -> None:
     )
 
 
+def test_the_linked_onevcs_runs_no_gate_of_its_own() -> None:
+    """Above the removal, the repository's own merge path is the only verifier.
+
+    The regression this floor stops is silent in the direction that matters. A
+    dispatch publishing through an older linked onevcs would resolve the `gate:` a
+    version 1 or 2 rules file names and run it — and this host's tracked file is
+    version 3, which such a release cannot load at all, so what a dispatch would
+    actually meet is a publication refused for a malformed rules file. Neither
+    outcome is visible from `config/onevcs.version`, which names the CLI the manager
+    verbs run rather than the copy a node publishes through.
+    """
+    linked = Release.parse(_linked_version("onevcs"))
+
+    assert linked >= GATE_FREE_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below the {GATE_FREE_FLOOR} that "
+        "removed the gate; a dispatch would publish through a release that still runs "
+        "a tier of its own, and cannot read this host's version 3 rules file at all"
+    )
+
+
 @pytest.mark.reads_docs
 @pytest.mark.parametrize(
     ("crate", "relative_path", "templates"),
@@ -283,7 +319,7 @@ DECLARED_DIVERGENCES = {
 #: in that explanation go stale the same way every other restated measurement does.
 DIVERGENCE_PROSE = (
     "AGENTS.md",
-    "onepipeline 0.10.1 links the `onejudge` crate {linked}, and PyPI carries no "
+    "onepipeline 0.11.0 links the `onejudge` crate {linked}, and PyPI carries no "
     "`onejudge` {linked} — the tag is published and the distribution is not — so "
     "`config/onejudge.version` stays at {pinned}",
 )

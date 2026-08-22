@@ -283,15 +283,17 @@ for alias_name in ${aliases[@]+"${aliases[@]}"}; do
     identity=$(field identity <<<"$resolved")
     publication=$(field publication <<<"$resolved")
     approvals=$(field approvals <<<"$resolved")
-    gate=$(field gate <<<"$resolved")
+    # A resolved policy is `{publication, approvals}` and nothing else: onevcs 0.11.0
+    # removed the gate, so a third field read here would be one no rules file can set
+    # and every checkout would report as invalid.
     if [[ -z $identity || ! $publication =~ ^(local-direct|change-open|change-auto|change-direct)$ || \
-        ! $approvals =~ ^(none|required)$ || -z $gate ]]; then
+        ! $approvals =~ ^(none|required)$ ]]; then
         echo "$resolved" >&2
         echo "apply-repo-registry: policy output for $alias_name is incomplete or invalid" >&2
         exit 1
     fi
-    printf '  %-28s %-44s %-13s %-9s %s\n' \
-        "$alias_name" "$identity" "$publication" "$approvals" "$gate"
+    printf '  %-28s %-44s %-13s %s\n' \
+        "$alias_name" "$identity" "$publication" "$approvals"
 done
 
 if [[ ${#unmatched[@]} -gt 0 ]]; then

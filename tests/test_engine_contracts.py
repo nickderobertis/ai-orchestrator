@@ -21,7 +21,7 @@ So the prose is reconciled rather than trusted, in five shapes:
   that says which way it drifted. The two words the prose declares *absent* are held
   absent by the same read, so the denial fails the moment either becomes real.
 * **Every closed vocabulary the prose enumerates exhaustively**, against the engine
-  enum it is an enumeration of — `FailureKind`, `Retention`, `GateKind`, the
+  enum it is an enumeration of — `FailureKind`, `Retention`, `Coverage`, the
   telemetry `BucketName`, and `Resume`'s field list.
 * **Every engine constant the prose quotes a number for**, rebuilt from the engine's
   own declaration and looked for in the document that quotes it.
@@ -254,15 +254,19 @@ VOCABULARIES = (
         re.compile(r"a `retained` saying whether the branch was\s+(.*?) by it\.", re.DOTALL),
         re.compile(r"`([a-z][a-z-]*)`"),
     ),
+    # `GateKind` was this row until onevcs 0.11.0 removed the gate concept along with
+    # the enum. What replaced it is the enum that answers the question the gate used
+    # to: which verifier an identity's merge path actually has. Reconciled the same
+    # way, so the table in the prose cannot outlive the variants it names.
     Vocabulary(
-        "onevcs GateKind",
+        "onevcs Coverage",
         ONEVCS,
-        "rules.rs",
-        re.compile(r"(?:#\[[^\]]*\]\s*)*pub enum GateKind \{.*?\n\}", re.DOTALL),
-        re.compile(r"^\s{4}([A-Z][A-Za-z]*),", re.MULTILINE),
+        "store.rs",
+        re.compile(r"(?:#\[[^\]]*\]\s*)*pub enum Coverage \{.*?\n\}", re.DOTALL),
+        re.compile(r"^\s{4}([A-Z][A-Za-z]*)[,(]", re.MULTILINE),
         LIFECYCLE,
-        re.compile(r"\| Gate \| Who runs it \|(.*?)\n\n", re.DOTALL),
-        re.compile(r"\{kind: ([a-z][a-z-]*)\}"),
+        re.compile(r"\| Coverage \| What verifies a change \|(.*?)\n\n", re.DOTALL),
+        re.compile(r"\| `([A-Z][A-Za-z]*)"),
     ),
     Vocabulary(
         "onepipeline telemetry BucketName",
@@ -374,8 +378,8 @@ VOCABULARIES = (
 
 #: How a serde `rename_all` spells a Rust variant on the wire, and what a passage
 #: therefore has to name. Read from the declaration rather than assumed, because the
-#: two enums this module compares against tables disagree: `GateKind` is kebab and
-#: `BucketName` is snake, and guessing one would make the other's gate vacuous.
+#: two enums this module compares against tables disagree in spelling, and guessing
+#: one would make the other's gate vacuous.
 RENAME_ALL = re.compile(r'rename_all\s*=\s*"([a-z_-]+)"')
 
 
@@ -458,17 +462,21 @@ CONSTANTS = (
         "at most DRAIN ({value}s)",
     ),
     Constant(
-        "preserved gate logs retained",
+        "preserved merge-path logs retained",
         ONEVCS,
-        "gate.rs",
+        "merge_path.rs",
         re.compile(r"pub const PRESERVED_LOG_ATTEMPTS: usize = (\d+);"),
         LIFECYCLE,
-        "the newest {value} (gate::PRESERVED_LOG_ATTEMPTS)",
+        "the newest {value} (merge_path::PRESERVED_LOG_ATTEMPTS)",
     ),
+    # Still `gate-logs`, and deliberately: it is an on-disk layout every run root an
+    # earlier build left behind already carries, and `sweep` reads it to decide
+    # whether a root may be reclaimed. The prose says why, and this holds it to the
+    # value rather than to the reason.
     Constant(
-        "preserved gate log directory",
+        "preserved merge-path log directory",
         ONEVCS,
-        "gate.rs",
+        "merge_path.rs",
         re.compile(r"pub const PRESERVED_LOG_DIRNAME: &str = \"([a-z-]+)\";"),
         LIFECYCLE,
         "{value}",
@@ -597,11 +605,12 @@ PRESENT_SYMBOLS: dict[Path, tuple[tuple[Engine, str], ...]] = {
         (ONEAGENTGRAPH, "src/scratch.rs"),
     ),
     LIFECYCLE: (
-        # Where a merge-path verdict is preserved: the event it hangs off, the call
-        # that stores the log as an artifact, and the field naming the durable copy.
-        # A reader follows all three to find a gate's own words, and each is `onevcs`'s
-        # to rename.
-        (ONEVCS, "gate-verdict"),
+        # Where a merge-path verdict is preserved: the module that owns the durable
+        # copy, the call that stores the log as an artifact, and the field naming it.
+        # A reader follows all three to find the merge path's own words, and each is
+        # `onevcs`'s to rename. `gate-verdict` was the first of these until onevcs
+        # 0.11.0 deleted the tier that emitted it.
+        (ONEVCS, "merge_path::preserve_log"),
         (ONEVCS, 'store_artifact("log"'),
         (ONEVCS, "preserved_log"),
     ),

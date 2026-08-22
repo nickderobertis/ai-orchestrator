@@ -85,21 +85,20 @@ LAUNCHER_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: The scratch identity's policy: merged in the local checkout, verified by a gate
-#: that is trivially green. The publication path is not this journey's subject — the
+#: The scratch identity's policy: merged in the local checkout. It names no verifier
+#: because onevcs 0.11.0 removed the concept, and this repository never had one to
+#: name here anyway. The publication path is not this journey's subject — the
 #: worker reports without changing anything, so nothing is ever published — but a
 #: registered checkout that matched no rule fails `just repos-apply` outright.
-RULES = """version: 2
+RULES = """version: 3
 trailer_prefix: Orchestrator-
 rules:
   - match: {path: "*"}
     publication: local-direct
     approvals: none
-    gate: {command: ["true"]}
 default:
   publication: local-direct
   approvals: none
-  gate: {command: ["true"]}
 """
 
 #: The committer this journey's own seed commit carries. `tests/conftest.py` exports

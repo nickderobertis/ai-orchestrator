@@ -1,8 +1,8 @@
 """Where the repositories this host routes are checked out, and what each one defines.
 
 Several guards here reconcile this repository's own configuration against another
-repository — a rule's gate against the recipes that repository has, a repo-specific
-persona's review bar against the same. All of them need the same two facts first:
+repository — a repo-specific persona's review bar against the recipes that
+repository has. All of them need the same two facts first:
 which identity each listed checkout really is, and what its justfile defines. Stating
 that twice would let two guards disagree about which checkout they searched, so both
 resolve it from here.

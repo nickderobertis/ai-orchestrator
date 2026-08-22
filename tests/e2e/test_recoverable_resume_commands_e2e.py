@@ -100,14 +100,12 @@ def _registry(tmp_path: Path) -> Registry:
     home = tmp_path / "onevcs-home"
     home.mkdir()
     (home / "rules.yml").write_text(
-        "version: 2\n"
+        "version: 3\n"
         "trailer_prefix: Orchestrator-\n"
         "rules: []\n"
         "default:\n"
         "  publication: local-direct\n"
-        "  approvals: none\n"
-        "  gate:\n"
-        '    command: ["true"]\n',
+        "  approvals: none\n",
         encoding="utf-8",
     )
     seed = tmp_path / "seed"

@@ -114,14 +114,12 @@ def _identity(tmp_path: Path, *, answers: list[str], register: bool = True) -> I
     home = tmp_path / "onevcs-home"
     home.mkdir()
     (home / "rules.yml").write_text(
-        "version: 2\n"
+        "version: 3\n"
         "trailer_prefix: Orchestrator-\n"
         "rules: []\n"
         "default:\n"
         "  publication: local-direct\n"
-        "  approvals: none\n"
-        "  gate:\n"
-        '    command: ["true"]\n',
+        "  approvals: none\n",
         encoding="utf-8",
     )
     seed = tmp_path / "seed"
@@ -685,7 +683,7 @@ def test_a_member_that_could_not_start_reports_what_oneagentgraph_said_killed_it
     classified the death, what it attributed it to, and the sentence naming the variable
     nobody set — and the drafter used to drop all three and report the exit code the
     graph ended on. Finding that variable by hand cost twenty minutes, and drafting is
-    read mid-landing, between a passed gate and a publication.
+    read mid-landing, between the drafting turn and the publication.
 
     The events file behind that diagnosis has to survive too. It lives in the scratch
     directory the drafter removes on every other path, so a run whose only record of why

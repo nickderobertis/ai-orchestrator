@@ -283,7 +283,7 @@ sweep *args:
 # and `--repo` are read out of the arguments, `scripts/draft-pr-body.sh` writes the
 # body, and it reaches `onevcs` as `--body-file`. A caller's own `--body`/`--body-file`
 # wins and `--no-draft` skips it; see `scripts/land-branch.sh`.
-# llmlint: ignore[tool_output_is_signal] what this verified and where it published the branch — the gate verdict, the merge path taken, and the change request's URL — is the product an operator runs it for, exactly as for the `integrate` train below.
+# llmlint: ignore[tool_output_is_signal] what this verified and where it published the branch — the merge path's verdict, the route taken, and the change request's URL — is the product an operator runs it for, exactly as for the `integrate` train below.
 publish-branch *args:
     @./scripts/land-branch.sh publish-branch "$@"
 
@@ -302,7 +302,7 @@ publish-branch *args:
 #
 # It drafts the change request's body the same way `just publish-branch` does, under
 # the same two escapes; see `scripts/land-branch.sh`.
-# llmlint: ignore[tool_output_is_signal] what this verified, what it attested, and where it published the branch — the gate verdict, the recovered marker, and the change request's URL — is the product an operator runs it for, exactly as for `publish-branch` above.
+# llmlint: ignore[tool_output_is_signal] what this verified, what it attested, and where it published the branch — the merge path's verdict, the recovered marker, and the change request's URL — is the product an operator runs it for, exactly as for `publish-branch` above.
 repo-recover *args:
     @./scripts/land-branch.sh recover "$@"
 
@@ -348,15 +348,16 @@ goals *args:
 results *args:
     @./scripts/onepipeline.sh results "$@"
 
-# Register a repository checkout alias. Type, workflow, and gate come from the
-# rules file the identity matches rather than from flags here.
+# Register a repository checkout alias. Type and workflow come from the rules file
+# the identity matches rather than from flags here; `onevcs` detects the gate the
+# checkout itself carries, which is a different thing and not the routing.
 register-repo *args:
     @uv run onevcs register "$@"
 
 # List repository identities and checkout aliases.
-# `just repos --audit-gate-coverage` also reports, per identity, which required
-# checks on its merge path this host's gate does not run — each of which can refuse
-# a merge the gate already passed.
+# `just repos --audit-gate-coverage` also reports, per identity, every required check
+# on its merge path — each of which can refuse a merge, and none of which anything on
+# this host runs, since onevcs 0.11.0 removed the gate it used to run itself.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:
     @./scripts/repos.sh "$@"

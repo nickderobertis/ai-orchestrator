@@ -107,21 +107,20 @@ LAUNCHER_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: The scratch identity's policy: merged in the local checkout, verified by a gate that
-#: is trivially green. The gate is not this journey's subject — what is under test is
-#: which session a dispatch runs in — but a registered checkout matching no rule fails
-#: `just repos-apply` outright.
-RULES = """version: 2
+#: The scratch identity's policy: merged in the local checkout, naming no verifier —
+#: onevcs 0.11.0 removed the concept, and the scratch repository has no `pre-push` hook
+#: for the merge path to find. Publication is not this journey's subject — what is under
+#: test is which session a dispatch runs in — but a registered checkout matching no rule
+#: fails `just repos-apply` outright.
+RULES = """version: 3
 trailer_prefix: Orchestrator-
 rules:
   - match: {path: "*"}
     publication: local-direct
     approvals: none
-    gate: {command: ["true"]}
 default:
   publication: local-direct
   approvals: none
-  gate: {command: ["true"]}
 """
 
 #: The committer this journey's own seed and stranded commits carry. `tests/conftest.py`

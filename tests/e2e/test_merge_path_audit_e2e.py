@@ -1,15 +1,17 @@
-"""`just repos --audit-gate-coverage` says what can still refuse a merge it passed.
+"""`just repos --audit-gate-coverage` says what can refuse a merge its verifier passed.
 
 The published audit answers whether *something* verifies an identity's merge path and
 prints one `merge-path coverage:` line saying which. Read as coverage, that line is
 what hid this host's defect: `nick-derobertis-site` reported coverage, a dispatched
-branch passed the gate `config/onevcs.rules.yml` names, published as PR #77, and the
-required `llmlint` check the gate never ran refused it — a full dispatch and a full
-gate cycle spent before anybody learned the verification was incomplete.
+branch passed the gate `config/onevcs.rules.yml` then named, published as PR #77, and
+the required `llmlint` check that gate never ran refused it — a full dispatch and a
+full gate cycle spent before anybody learned the verification was incomplete.
 
-So these journeys drive the real recipe against a scratch registry and hold the
-answer to naming the required checks no gate here runs. The recipe, its wrapper, the
-filter, `onevcs`, and git are all real; only the checkouts are scratch.
+onevcs 0.11.0 removed the gate, so nothing on this host front-runs a merge path any
+more and *every* required check is one only the merge path runs. That makes the
+question these journeys hold the answer to the only one left: what can refuse this
+merge. The recipe, its wrapper, the filter, `onevcs`, and git are all real; only the
+checkouts are scratch.
 
 llmlint: ignore-file[e2e_not_mocked] The scratch checkouts stand in for this host's
 own clones, which a test may not register or publish from. Everything under test —
@@ -33,11 +35,12 @@ FILTER = REPO_ROOT / "scripts" / "merge-path-audit.py"
 INTERPRETER = REPO_ROOT / ".venv" / "bin" / "python3"
 MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
 
-#: The identity whose merge path required a check its gate did not run, and the
-#: required check that is still decided remotely once the gate does run the rest.
+#: The identity whose merge path required a check the retired gate did not run, which
+#: is the defect this whole surface was built for.
 SITE = "github.com/nickderobertis/nick-derobertis-site"
 SITE_REMOTE_CHECK = "classify-gate"
-#: The one identity that opens no pull request, so nothing remote can overturn it.
+#: The one identity that opens no pull request, so its merge path declares no required
+#: checks and the inventory has nothing to list for it.
 LOCAL_DIRECT = "github.com/nickderobertis/ai-orchestrator"
 #: The identity with the most required checks nothing here runs — cross-compilation,
 #: installs of a published artifact, the pull request's own title, a hosted visual
@@ -48,9 +51,8 @@ MANY_REMOTE_CHECKS = "github.com/nickderobertis/llmlint"
 #: with exactly one thing wrong with it, so what each case demonstrates is that field
 #: rather than an unrelated absence somewhere else in a hand-written fragment.
 VALID = (
-    '{"version": 1, "reasons": {"r": "why"}, '
-    '"identities": {"a/b/c": {"branch": "main", '
-    '"gate_runs": {"gate": ["just check"]}, "not_run": {"llmlint": "r"}}}}'
+    '{"version": 2, "reasons": {"r": "why"}, '
+    '"identities": {"a/b/c": {"branch": "main", "checks": {"llmlint": "r"}}}}'
 )
 
 
@@ -136,29 +138,39 @@ def filtered(stdin: str, *arguments: str) -> subprocess.CompletedProcess[str]:
 # llmlint: ignore-end[tests_mirror_real_usage]
 
 
-def test_the_audit_names_the_required_check_no_gate_here_runs(registry: Registry) -> None:
+def test_the_audit_names_the_required_checks_that_can_refuse_the_merge(
+    registry: Registry,
+) -> None:
     """The defect's own case: coverage is reported, and what can still refuse it is named."""
     audited = repos(registry.home, "repos", "--audit-gate-coverage")
 
     assert audited.returncode == 0, audited.stderr
     report = coverage_lines(audited.stdout)[SITE]
     assert report[0].endswith("— not the whole merge path"), report
-    assert any("that this host's gate does not run" in line for line in report[1:]), report
+    assert any("nothing on this host runs any of them" in line for line in report[1:]), report
     assert any(line.startswith(f"{SITE_REMOTE_CHECK} —") for line in report[1:]), report
 
 
-def test_an_identity_nothing_remote_can_overturn_is_reported_whole(registry: Registry) -> None:
-    """The other half of an honest answer: the identity whose gate really is the bar.
+def test_an_identity_with_no_required_checks_is_reported_as_having_none(
+    registry: Registry,
+) -> None:
+    """The other half of an honest answer: an identity with nothing to list.
 
     A report that flagged every identity would be as useless as one that flagged none;
-    `local-direct` publication opens no pull request, so no required check exists to
-    refuse a merge its pre-push gate passed.
+    `local-direct` publication opens no change request, so no required check exists to
+    refuse a merge its own `pre-push` hook passed.
+
+    The clause is about the *inventory* rather than about the verifier the published
+    line just named, and deliberately: `onevcs` reports a checkout with no hook as
+    covered by the host's required checks, and a clause answering "there are none"
+    would contradict the sentence it is appended to instead of extending it.
     """
     audited = repos(registry.home, "repos", "--audit-gate-coverage")
 
     report = coverage_lines(audited.stdout)[LOCAL_DIRECT]
     assert report == [
-        f"{report[0].split(' — ')[0]} — and this host's gate runs every required check on it"
+        f"{report[0].split(' — ')[0]} — and config/merge-path-checks.json inventories "
+        "no required check on main, so nothing recorded here can refuse a merge"
     ]
 
 
@@ -171,14 +183,14 @@ def test_an_identity_with_several_remote_checks_names_every_one_of_them(
     checks is the one their branch is about to fail on.
     """
     declared = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))
-    expected = declared["identities"][MANY_REMOTE_CHECKS]["not_run"]
+    expected = declared["identities"][MANY_REMOTE_CHECKS]["checks"]
 
     audited = repos(registry.home, "repos", "--audit-gate-coverage")
 
     report = coverage_lines(audited.stdout)[MANY_REMOTE_CHECKS]
     assert report[0].endswith("— not the whole merge path"), report
     assert report[1].startswith(f"{len(expected)} required checks on main"), report
-    assert report[1].endswith("does not run, each able to refuse the merge:"), report
+    assert report[1].endswith("nothing on this host runs any of them:"), report
     assert sorted(line.split(" — ")[0] for line in report[2:]) == sorted(expected)
 
 
@@ -275,8 +287,8 @@ def test_the_filter_refuses_a_call_that_names_no_one_declaration() -> None:
         (None, "not a readable merge-path declaration"),
         ("[]", "must be a JSON object"),
         ("{not json", "not a readable merge-path declaration"),
-        (VALID.replace('"version": 1', '"version": 2'), "`version` must be 1"),
-        (VALID.replace('"version": 1', '"schema": 1'), "`version` must be 1"),
+        (VALID.replace('"version": 2', '"version": 1'), "`version` must be 2"),
+        (VALID.replace('"version": 2', '"schema": 2'), "`version` must be 2"),
         (VALID.replace('"reasons": {"r": "why"}', '"reasons": []'), "reasons must be an object"),
         (
             VALID.replace('"reasons": {"r": "why"}', '"reasons": {"r": ""}'),
@@ -286,17 +298,10 @@ def test_the_filter_refuses_a_call_that_names_no_one_declaration() -> None:
         (VALID.replace('"a/b/c"', '"b/c"'), "identities.b/c is not a `host/owner/name`"),
         (VALID.replace('{"branch"', '7, "d/e/f": {"branch"'), "identities.a/b/c must be an object"),
         (VALID.replace('"branch": "main"', '"branch": ""'), "branch must be the base branch"),
+        (VALID.replace('"checks": {"llmlint": "r"}', '"checks": []'), "checks must be an object"),
+        (VALID.replace('"checks": {"llmlint": "r"}', '"checks": {"llmlint": 1}'), "checks must"),
         (
-            VALID.replace('"gate_runs": {"gate": ["just check"]}', '"gate_runs": {"gate": []}'),
-            "gate_runs must map each required check to a non-empty list",
-        ),
-        (
-            VALID.replace('["just check"]', '"just check"'),
-            "gate_runs must map each required check to a non-empty list",
-        ),
-        (VALID.replace('"not_run": {"llmlint": "r"}', '"not_run": {"llmlint": 1}'), "not_run must"),
-        (
-            VALID.replace('"not_run": {"llmlint": "r"}', '"not_run": {"llmlint": "nowhere"}'),
+            VALID.replace('"checks": {"llmlint": "r"}', '"checks": {"llmlint": "nowhere"}'),
             "names reasons ['nowhere'] that the top-level `reasons` object does not define",
         ),
     ],
@@ -324,7 +329,7 @@ def test_a_declaration_it_cannot_believe_is_refused_by_name(
 def test_a_declaration_that_is_not_even_text_is_refused_the_same_way(tmp_path: Path) -> None:
     """The read itself is part of the boundary: bytes that are not UTF-8 never parse."""
     declaration = tmp_path / "merge-path-checks.json"
-    declaration.write_bytes(b'{"version": 1, "reasons": {"r": "\xff\xfe"}}')
+    declaration.write_bytes(b'{"version": 2, "reasons": {"r": "\xff\xfe"}}')
 
     result = filtered("", str(declaration))
 
@@ -394,7 +399,7 @@ def test_every_reason_the_declaration_names_reaches_the_report(registry: Registr
     """The prose an operator acts on is the tracked prose, not a paraphrase of it."""
     declared = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))
     site = declared["identities"][SITE]
-    reason = declared["reasons"][site["not_run"][SITE_REMOTE_CHECK]]
+    reason = declared["reasons"][site["checks"][SITE_REMOTE_CHECK]]
 
     audited = repos(registry.home, "repos", "--audit-gate-coverage")
 

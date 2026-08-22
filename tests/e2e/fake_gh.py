@@ -4,8 +4,9 @@
 `ONEVCS_GH` is the seam `onevcs` publishes for exactly this: it names the program
 every `gh` call goes through, and `onevcs`'s own suite substitutes it the same way.
 Nothing else about a publication is substituted here — the branch is pushed with real
-git into a real bare origin, the identity's gate is a real command, and the change
-request this records is opened by the real `onevcs` from the real recipe.
+git into a real bare origin — judged by a real `pre-push` hook where the journey asks
+for one — and the change request this records is opened by the real `onevcs` from the
+real recipe.
 
 What it answers is the four calls opening a change request makes: who is
 authenticated, which changes already exist for a head and base, the `pr create`

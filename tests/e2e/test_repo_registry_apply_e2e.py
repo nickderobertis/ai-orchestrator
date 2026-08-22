@@ -24,114 +24,34 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
 import pytest
-from registered_checkouts import (
-    TRACKED_CHECKOUTS,
-    RepoIdentity,
-    defined_recipes,
-    registered_checkouts,
-)
+from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
 
 from orchestrator.root import REPO_ROOT
 
 #: The registry this host ran on before `onevcs` owned one, verbatim.
 GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
 #: The tracked rules file the recipe installs, which decides every listed checkout's
-#: publication path and is the rule of every gate asserted here.
+#: publication path — and, since onevcs 0.11.0, nothing else. It names no verifier,
+#: because this host runs none.
 TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 
-#: The tracked record of what each repository's merge path really requires, and which
-#: of those checks the gate above runs. `config/onevcs.rules.yml` decides the gate;
-#: this decides whether that gate is the whole bar, and the tests below are what hold
-#: the two together.
+#: The schema this host's rules file declares. At 3 a `gate:` anywhere is refused by
+#: `deny_unknown_fields`; at 1 and 2 it is accepted, ignored, and reported once. Both
+#: halves are driven below, because "we migrated" and "the engine still tolerates an
+#: unmigrated host" are separate claims and only one of them is about this file.
+RULES_SCHEMA_VERSION = 3
+
+#: The tracked inventory of what each repository's merge path really requires. It was
+#: a coverage claim — which required checks this host's gate reproduced — until that
+#: gate was removed; the first category is now empty by construction, so the file
+#: records the merge path's own checks and every one of them can refuse a merge.
 MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
-
-#: A comparison identity no repository's fallback could produce, so a gate that
-#: renders it demonstrably read the environment rather than a hardcoded base.
-COMPARISON = ("upstream", "release")
-
-#: Every command line each identity's gate must run, in order, against the fixture
-#: command surface below. `{base}` is the comparison identity the gate resolved.
-#:
-#: This is the successor to the pre-adoption gate column in
-#: `tests/fixtures/pre-adoption-repos.json`, which is no longer what a gate must
-#: reproduce: those gates named each repository's `check`, and most of these
-#: repositories require their judged llmlint tier as a separate status check that
-#: `check` deliberately does not reach. Carrying the migration verbatim is what let a
-#: `nick-derobertis-site` branch pass this gate and be refused as PR #77. The
-#: migration's own claim — which publication path and approvals each identity keeps —
-#: is asserted from that fixture still.
-GATE_TRANSCRIPTS: dict[str, tuple[str, ...]] = {
-    "github.com/nickderobertis/ai-orchestrator": (
-        "gate base=none NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/crozier": (
-        "check NEXTEST=unset",
-        "lint-llm-diff {base} NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/dero-skills": (
-        "check NEXTEST=unset",
-        "lint-llm-diff {base} NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/llmlint": (
-        "check NEXTEST=unset",
-        "check-version-bump {base} NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/nick-derobertis-site": (
-        "bootstrap NX_BASE={base}",
-        "gate base=none NX_BASE={base} NX_HEAD=unset NEXTEST=unset",
-        "lint-llm-diff {base} NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/oneagentgraph": (
-        "gate base={base} NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/oneharness": (
-        "gate base=none NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    # The one gate that resolves the base to a commit before handing it on: this
-    # repository's `check-affected` refuses anything but a 40-character SHA pair.
-    "github.com/nickderobertis/oneharness-ui": (
-        "gate base=none NX_BASE={sha} NX_HEAD=HEAD NEXTEST=unset",
-        "lint-llm-diff {base} NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/onejudge": (
-        "check NEXTEST=unset",
-        "lint-llm-diff {base} NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/onepipeline": (
-        "gate base={base} NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/onepipeline-ui": (
-        "gate base={base} NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/onevcs": (
-        "gate base={base} NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    "github.com/nickderobertis/screencomp": (
-        "gate base=none NX_BASE=unset NX_HEAD=unset NEXTEST=unset",
-    ),
-    "github.com/petsinc/org-apps": ("check NEXTEST=unset",),
-}
-
-#: The environment `config/onevcs.rules.yml` used to prepend to the gate of every
-#: repository that tests with cargo-nextest, and now prepends to none. It silenced
-#: cargo-nextest's per-test status lines so a gate could not fill the single stderr
-#: pipe an `onevcs` before 0.2.10 read only after draining stdout. That release
-#: drains both concurrently, this host is past it, and the retirement is held here:
-#: a loud gate is the case the workaround was hiding, so a wrapper reintroduced by
-#: hand would hide it again.
-RETIRED_CAPTURE_WORKAROUND = ("env", "NEXTEST_STATUS_LEVEL=fail")
-
-#: Every `just <recipe>` a gate command reaches, in both shapes the rules file writes:
-#: bare argv (`["just", "check"]`) and a `bash -c` script chaining two of them. Used to
-#: reconcile each rule against the recipes its own repository actually defines.
-JUST_RECIPE = re.compile(r"\bjust\s+(?!-)(?P<recipe>[A-Za-z0-9_][A-Za-z0-9_-]*)")
 
 #: How every rule in the tracked file names the repository it matches. Reading them
 #: back out is what makes a rule added later fail here, rather than at that
@@ -139,14 +59,6 @@ JUST_RECIPE = re.compile(r"\bjust\s+(?!-)(?P<recipe>[A-Za-z0-9_][A-Za-z0-9_-]*)"
 RULE_MATCH = re.compile(
     r"- match: \{host: (?P<host>[^,]+), owner: (?P<owner>[^,]+), name: (?P<name>[^}]+)\}"
 )
-
-#: One fixture command surface every gate is run against: a recipe per name any rule
-#: reaches, each reporting the arguments and environment it received. Running the
-#: gates rather than reading them is what makes the assertions above about a `bash -c`
-#: script — which recipes it reaches, in what order, with which base, and whether the
-#: nextest capture workaround survived into each one — evidence rather than a reading.
-FIXTURE_JUSTFILE = REPO_ROOT / "tests" / "fixtures" / "gate-command-surface.justfile"
-
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -164,8 +76,6 @@ class Identity(NamedTuple):
     repo_type: RepoType
     #: `local` or `remote`.
     workflow: Workflow
-    #: The gate command template, which may carry a `{base}` placeholder.
-    gate: str
 
     @property
     def publication(self) -> str:
@@ -203,7 +113,6 @@ def _golden() -> tuple[tuple[Identity, ...], tuple[Checkout, ...]]:
             origin=record["origin"],
             repo_type=record["repo_type"],
             workflow=record["workflow"],
-            gate=record["gate"],
         )
         for url, record in sorted(document["identities"].items())
     )
@@ -266,76 +175,31 @@ def ruled_identities() -> tuple[RepoIdentity, ...]:
     return named
 
 
-def gate_recipes(gate: str) -> frozenset[str]:
-    """Every `just <recipe>` the resolved gate command reaches."""
-    return frozenset(match["recipe"] for match in JUST_RECIPE.finditer(gate))
-
-
-def checkouts_on_this_host() -> dict[RepoIdentity, Path]:
-    """Each ruled identity this host actually holds a checkout of.
-
-    `registered_checkouts` resolves every listed checkout to the identity git says it
-    really is; this narrows that to the identities the tracked rules file names, which
-    are the ones with a gate to reconcile. A host holding none of them resolves
-    nothing, which is what the reconciliation below reports rather than asserts on.
-    """
-    ruled = frozenset(ruled_identities())
-    return {
-        identity: path for identity, path in registered_checkouts().items() if identity in ruled
-    }
-
-
 class MergePath(NamedTuple):
-    """One identity's merge path, as `config/merge-path-checks.json` records it."""
+    """One identity's merge path, as `config/merge-path-checks.json` inventories it."""
 
-    #: The branch its required checks are declared on, which is also the base its gate
-    #: falls back to when no comparison identity is exported.
+    #: The branch its required checks are declared on.
     branch: str
-    #: Required check → the commands this host's identity gate runs for it.
-    gate_runs: dict[str, tuple[str, ...]]
-    #: Required check → the reason slug saying why nothing here runs it.
-    not_run: dict[str, str]
+    #: Required check → the reason slug saying what that check is.
+    checks: dict[str, str]
 
     @property
     def required(self) -> frozenset[str]:
-        """Every check the merge path requires, however it is classified."""
-        return frozenset(self.gate_runs) | frozenset(self.not_run)
+        """Every check the merge path requires."""
+        return frozenset(self.checks)
 
 
 def merge_path_checks() -> tuple[dict[RepoIdentity, MergePath], dict[str, str]]:
     """The tracked declaration, read once into records with a shape to check."""
     document = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))
     declared = {
-        key: MergePath(
-            branch=record["branch"],
-            gate_runs={check: tuple(commands) for check, commands in record["gate_runs"].items()},
-            not_run=dict(record["not_run"]),
-        )
+        key: MergePath(branch=record["branch"], checks=dict(record["checks"]))
         for key, record in sorted(document["identities"].items())
     }
     return declared, dict(document["reasons"])
 
 
 MERGE_PATHS, REASONS = merge_path_checks()
-
-
-def gate_command(home: Path, key: RepoIdentity) -> str:
-    """The gate `onevcs` resolves for an identity, without its `command:` label.
-
-    Read from the tool rather than from the YAML, so what is asserted is the argv a
-    publication would really run.
-    """
-    return reported(onevcs(home, "rules", "check", key).stdout, "gate").removeprefix("command: ")
-
-
-def runs_command(gate: str, command: str) -> bool:
-    """Whether `gate` reaches `command` — as that recipe, not as a longer-named one.
-
-    `just check` must not be satisfied by `just check-version-bump`: they are separate
-    required checks on `llmlint`'s merge path, and treating one as the other is how a
-    gate reports a tier it never ran.
-    """
-    return re.search(rf"{re.escape(command)}(?![\w-])", gate) is not None
 
 
 def reported(output: str, key: str) -> str:
@@ -483,201 +347,6 @@ def test_this_repository_still_publishes_locally(applied: Applied) -> None:
     assert reported(checked.stdout, "approvals") == "none"
 
 
-class CommandSurface(NamedTuple):
-    """A directory a gate can be run in: the fixture recipes, in a real git checkout."""
-
-    root: Path
-    #: What every remote-tracking ref in it points at, which is what a gate that
-    #: resolves its base to a commit before handing it on must render.
-    sha: str
-
-
-@pytest.fixture(scope="module")
-def command_surface(tmp_path_factory: pytest.TempPathFactory) -> CommandSurface:
-    """The fixture command surface, with every base any gate resolves already present.
-
-    A real checkout because one gate resolves its base through `git rev-parse` before
-    it can hand it to a recipe; every ref points at the one commit, so what that gate
-    renders is the same whichever comparison identity it was given.
-    """
-    root = tmp_path_factory.mktemp("command-surface")
-    shutil.copy2(FIXTURE_JUSTFILE, root / "justfile")
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=True
-    ).stdout.strip()
-    exported = "/".join(COMPARISON)
-    for ref in (
-        "refs/remotes/origin/main",
-        "refs/remotes/origin/master",
-        f"refs/remotes/{exported}",
-    ):
-        subprocess.run(["git", "update-ref", ref, sha], cwd=root, check=True)
-    return CommandSurface(root=root, sha=sha)
-
-
-# llmlint: ignore-block[tests_mirror_real_usage] The interface that runs a gate for
-# real is `onevcs`'s publication path, which clones a repository, dispatches an agent
-# into a worktree, and pushes the result — a test may not drive that, and this suite
-# doubles the published CLIs at exactly that boundary by charter. What is left to
-# mirror is how the gate is *executed*, and that is what this reproduces argv for argv.
-def run_gate(
-    gate: str,
-    surface: CommandSurface,
-    comparison: tuple[str, str] | None,
-    failing: str | None = None,
-) -> list[str]:
-    """Run a resolved gate against the fixture surface and return what it reached.
-
-    The gate is executed as the argv `onevcs` would execute — `env` prefixes included,
-    since a `command:` gate runs with no shell and `env` is a binary in argument
-    position there rather than a prefix something interprets.
-
-    `failing` names the one fixture recipe that reports itself and then exits non-zero.
-    The gate is then required to fail, which is the half a surface of succeeding recipes
-    cannot establish: that a tier's failure ends the gate rather than being swallowed.
-    """
-    prefix, shell, script = gate.partition("bash -c ")
-    argv = [*shlex.split(prefix), *(["bash", "-c", script] if shell else [])] or shlex.split(gate)
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if name not in ("NEXTEST_STATUS_LEVEL", "NX_BASE", "NX_HEAD", "GATE_FIXTURE_FAIL")
-    }
-    if comparison is not None:
-        environment["ONEVCS_COMPARISON_REMOTE"], environment["ONEVCS_COMPARISON_BASE"] = comparison
-    if failing is not None:
-        environment["GATE_FIXTURE_FAIL"] = failing
-    run = subprocess.run(
-        argv, cwd=surface.root, env=environment, text=True, capture_output=True, check=False
-    )
-    if failing is None:
-        assert run.returncode == 0, run.stdout + run.stderr
-    else:
-        assert run.returncode != 0, (
-            f"the gate reported success while its {failing!r} tier failed:\n"
-            f"{run.stdout}{run.stderr}"
-        )
-    return run.stdout.splitlines()
-
-
-# llmlint: ignore-end[tests_mirror_real_usage]
-
-
-@pytest.mark.parametrize("key", sorted(GATE_TRANSCRIPTS))
-def test_each_gate_runs_its_repositorys_whole_bar_against_the_comparison_base(
-    ruled: Path, command_surface: CommandSurface, key: RepoIdentity
-) -> None:
-    """The gate is proven by running it, against a base only the environment could name.
-
-    What a rule promises is a command line, and reading one back tells you only that
-    somebody wrote it down. So each gate is executed: the recipes it reaches, their
-    order, the base it resolved, and whether the nextest capture workaround survived
-    into each one all come out of the fixture surface's own report.
-    """
-    remote, base = COMPARISON
-    transcript = run_gate(gate_command(ruled, key), command_surface, COMPARISON)
-
-    assert transcript == [
-        line.format(base=f"{remote}/{base}", sha=command_surface.sha)
-        for line in GATE_TRANSCRIPTS[key]
-    ]
-
-
-@pytest.mark.parametrize("key", sorted(GATE_TRANSCRIPTS))
-def test_a_gate_run_with_no_comparison_identity_falls_back_to_its_own_base_branch(
-    ruled: Path, command_surface: CommandSurface, key: RepoIdentity
-) -> None:
-    """The fallback has to be the repository's real base branch, and one of them is not `main`.
-
-    `onevcs` exports the comparison identity on every lifecycle path, so the fallback
-    only shows up when an operator runs a gate by hand — which is exactly when a wrong
-    one is least likely to be noticed. `nick-derobertis-site` publishes to `master`,
-    and a gate defaulting to `origin/main` there judges against a ref that repository
-    does not have.
-    """
-    branch = MERGE_PATHS[key].branch
-    transcript = run_gate(gate_command(ruled, key), command_surface, None)
-
-    assert transcript == [
-        line.format(base=f"origin/{branch}", sha=command_surface.sha)
-        for line in GATE_TRANSCRIPTS[key]
-    ]
-
-
-@pytest.mark.parametrize("key", sorted(GATE_TRANSCRIPTS))
-def test_a_gate_stops_at_its_first_failing_tier_and_reports_the_failure(
-    ruled: Path, command_surface: CommandSurface, key: RepoIdentity
-) -> None:
-    """The property success cannot show: a tier that fails ends the gate, loudly.
-
-    `onevcs` decides whether a branch may publish from this argv's exit status alone, so
-    a gate that ran a failing tier and still exited 0 would publish work nothing verified
-    — the same outcome PR #77 had, reached from the opposite direction. Every chained
-    gate here is `&&`-joined, and that chain is only load-bearing when the first failure
-    ends it: a rule respelled with `;` or `||`, or wrapped in something that swallows a
-    status, keeps every transcript above green and fails only here.
-    """
-    remote, base = COMPARISON
-    expected = [
-        line.format(base=f"{remote}/{base}", sha=command_surface.sha)
-        for line in GATE_TRANSCRIPTS[key]
-    ]
-    first_tier = expected[0].split()[0]
-
-    transcript = run_gate(gate_command(ruled, key), command_surface, COMPARISON, failing=first_tier)
-
-    assert transcript == expected[:1], (
-        f"{key}'s gate reached a tier past the {first_tier!r} that failed, so its "
-        "chain does not short-circuit"
-    )
-
-
-@pytest.mark.reads_checkouts
-def test_every_gate_names_a_recipe_its_repository_defines(ruled: Path) -> None:
-    """The drift gate: each rule's `just <recipe>`, against the justfile that owns it.
-
-    A gate is argv `onevcs` runs in the repository being published, and every rule here
-    but one names a `just` recipe. Which recipes a repository has is a fact no file in
-    *this* repository decides, so a rule naming one that was renamed away is a merge
-    path that fails at publication — after a worker has done the work — for a reason
-    this host authored. Reconciling it here is what turns that into a failed gate on
-    the change that caused it.
-
-    This is why the tier is uncached. Its inputs are checkouts outside the workspace,
-    which no `nx.json` key covers, and a memoized green would be a verdict on whatever
-    those repositories looked like when it was recorded.
-    """
-    present = checkouts_on_this_host()
-    if not present:
-        pytest.skip(
-            "this host holds no checkout of any ruled identity, so there is nothing "
-            "to reconcile the rules file against"
-        )
-
-    found = {identity: defined_recipes(path) for identity, path in sorted(present.items())}
-    unreadable = sorted(identity for identity, result in found.items() if not result.readable)
-    assert not unreadable, (
-        "`just --dump` could not parse the recipes of these registered checkouts, so "
-        f"their gates could not be reconciled at all: {unreadable}"
-    )
-
-    gates = {identity: gate_command(ruled, identity) for identity in found}
-    missing = {
-        identity: sorted(gate_recipes(gates[identity]) - result.names)
-        for identity, result in found.items()
-        if gate_recipes(gates[identity]) - result.names
-    }
-    assert not missing, "\n".join(
-        f"{identity}: its rule's gate ({gates[identity]}) runs `just "
-        f"{'`, `just '.join(recipes)}`, which {present[identity]} does not define — "
-        "correct the gate in config/onevcs.rules.yml"
-        for identity, recipes in missing.items()
-    )
-
-
 def required_checks(key: RepoIdentity) -> tuple[frozenset[str], str | None]:
     """What GitHub really requires to merge into an identity's base branch.
 
@@ -746,82 +415,154 @@ def test_the_declared_required_checks_match_each_repositorys_branch_protection()
     }
     assert not drifted, "\n".join(
         f"{key}: config/merge-path-checks.json and {MERGE_PATHS[key].branch}'s branch "
-        f"protection disagree about {sorted(difference)} — classify each one under "
-        "`gate_runs` with the command this host's gate runs for it, or under `not_run` "
-        "with the reason nothing here does"
+        f"protection disagree about {sorted(difference)} — inventory each one under "
+        "`checks` with the reason saying what that check is, or drop it if it no longer "
+        "gates the merge"
         for key, difference in drifted.items()
     )
     if unread:
         pytest.skip(f"branch protection could not be read for {unread}")
 
 
-@pytest.mark.parametrize("key", sorted(frozenset(ruled_identities())))
-def test_no_gate_carries_the_retired_capture_workaround(ruled: Path, key: RepoIdentity) -> None:
-    """Every gate is the argv its repository verifies with, and nothing wraps one.
-
-    Nine rules once ran their argv through `env NEXTEST_STATUS_LEVEL=fail` to silence
-    cargo-nextest, because an `onevcs` before 0.2.10 could be wedged by a gate that
-    filled its stderr pipe. That release drains both pipes, so the silencing is retired
-    and a loud gate is judged by its own exit status — which is the case the workaround
-    was hiding. Asserted on the gate `onevcs` resolves, so a wrapper written back into
-    the rules file in either position fails here: leading the argv of a `command:` gate,
-    which runs with no shell, or inside the `bash -c` script the translated gates run.
-    That no recipe a gate reaches *receives* the variable by some other route is what
-    the `NEXTEST=unset` in every transcript above shows.
-    """
-    gate = gate_command(ruled, key)
-    assert RETIRED_CAPTURE_WORKAROUND[1] not in gate, gate
-
-
 def test_every_ruled_identity_declares_what_its_merge_path_requires() -> None:
-    """A rule nobody classified is a gate nobody compared against the merge path.
+    """A rule nobody inventoried is a merge path nobody looked at.
 
     The two files decide different halves of one question — `config/onevcs.rules.yml`
-    what a publication verifies, `config/merge-path-checks.json` what the merge really
-    requires — and an identity present in only one of them is the half nobody checked.
+    how a change publishes, `config/merge-path-checks.json` what can then refuse it —
+    and an identity present in only one of them is the half nobody checked.
     """
     assert set(MERGE_PATHS) == set(ruled_identities())
-    assert set(GATE_TRANSCRIPTS) == set(ruled_identities())
 
 
 @pytest.mark.parametrize("key", sorted(MERGE_PATHS))
-def test_every_required_check_is_classified_exactly_once(key: RepoIdentity) -> None:
-    """A check in both maps claims to be run and not run at once, and one of them is wrong."""
-    declared = MERGE_PATHS[key]
-    overlap = set(declared.gate_runs) & set(declared.not_run)
-    assert not overlap, f"{key} classifies {sorted(overlap)} as both run and not run"
-    unknown = {reason for reason in declared.not_run.values() if reason not in REASONS}
+def test_every_required_check_names_a_reason_the_vocabulary_defines(key: RepoIdentity) -> None:
+    """A check whose reason nothing defines renders to an operator as a blank."""
+    unknown = {reason for reason in MERGE_PATHS[key].checks.values() if reason not in REASONS}
     assert not unknown, f"{key} names reasons no `reasons` entry defines: {sorted(unknown)}"
 
 
 def test_every_declared_reason_is_one_some_identity_uses() -> None:
     """The vocabulary is small on purpose: an unused reason is one nobody had to justify."""
-    used = {reason for declared in MERGE_PATHS.values() for reason in declared.not_run.values()}
+    used = {reason for declared in MERGE_PATHS.values() for reason in declared.checks.values()}
     assert set(REASONS) == used, f"unused reasons: {sorted(set(REASONS) - used)}"
 
 
-@pytest.mark.parametrize("key", sorted(MERGE_PATHS))
-def test_every_declared_gate_command_is_in_the_rule_gate(ruled: Path, key: RepoIdentity) -> None:
-    """The contract this whole file exists for: the gate runs every tier it claims to.
+def test_the_tracked_rules_declare_the_migrated_schema_and_name_no_gate() -> None:
+    """The file itself: version 3, and no `gate:` anywhere in it.
 
-    A rule edited back to a bare `check` — which is what every one of these rules said
-    until a `nick-derobertis-site` branch passed its gate and was refused as PR #77 —
-    stops naming the command its merge path's judged tier is declared against, and
-    fails here rather than after a full dispatch and a published change request.
+    Asserted on the tracked bytes as well as on what `onevcs` resolves, because the two
+    fail differently. A `gate:` reintroduced under `version: 3` is refused by the
+    engine and shows up as a broken apply; one reintroduced together with a *downgrade*
+    to `version: 2` resolves perfectly well, prints one deprecation nobody reads, and
+    silently returns this host to running a verifier beside the real one.
     """
-    gate = gate_command(ruled, key)
-    missing = {
-        check: command
-        for check, commands in MERGE_PATHS[key].gate_runs.items()
-        for command in commands
-        if not runs_command(gate, command)
-    }
-    assert not missing, (
-        f"{key}'s gate does not run what config/merge-path-checks.json declares it runs "
-        f"for its required checks {sorted(missing)}: {sorted(missing.values())} are absent "
-        f"from {gate!r} — add them to the rule in config/onevcs.rules.yml, or correct the "
-        "declaration if that check no longer gates the merge"
+    text = TRACKED_RULES.read_text(encoding="utf-8")
+    declared = [line for line in text.splitlines() if line.startswith("version:")]
+
+    assert declared == [f"version: {RULES_SCHEMA_VERSION}"], declared
+    named = [
+        line for line in text.splitlines() if not line.lstrip().startswith("#") and "gate" in line
+    ]
+    assert not named, (
+        "config/onevcs.rules.yml names a gate again; onevcs 0.11.0 removed the concept "
+        f"and the merge path is the verifier: {named}"
     )
+
+
+@pytest.mark.parametrize("key", sorted(frozenset(ruled_identities())))
+def test_the_resolved_policy_is_publication_and_approvals_and_nothing_else(
+    ruled: Path, key: RepoIdentity
+) -> None:
+    """Contract A, read off the engine: `rules check` reports no `gate:` line at all.
+
+    The reading that matters is the tool's rather than the file's. A rules file this
+    host writes could be silent about a gate while the engine still resolved one from
+    a default, which is exactly the shape of the two wrong diagnoses this repository
+    records — so what is asserted is the policy a publication would really run under.
+    """
+    checked = onevcs(ruled, "rules", "check", key)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+    fields = {
+        line.partition(": ")[0].strip() for line in checked.stdout.splitlines() if ": " in line
+    }
+    assert "gate" not in fields, checked.stdout
+    assert {"publication", "approvals"} <= fields, checked.stdout
+    assert reported(checked.stdout, "matched").startswith("rule ")
+
+
+def test_a_gate_at_the_migrated_schema_version_is_refused_by_name(tmp_path: Path) -> None:
+    """The half of Contract A that keeps this file from drifting back.
+
+    At `version: 3` a rule is `{publication, approvals}` exactly and `gate:` is an
+    unknown field, so a rules file carrying one does not load. Driven through the real
+    recipe because that is where an operator meets it: an apply that installed a file
+    the engine cannot read would leave every publication resolving the previous rules.
+    """
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    gated = tmp_path / "gated.yml"
+    gated.write_text(
+        f"version: {RULES_SCHEMA_VERSION}\n"
+        "rules:\n"
+        "  - match: {host: github.com, owner: nickderobertis, name: onevcs}\n"
+        "    publication: change-auto\n"
+        "    approvals: none\n"
+        '    gate: {command: ["just", "gate"]}\n'
+        "default:\n"
+        "  publication: change-open\n"
+        "  approvals: required\n",
+        encoding="utf-8",
+    )
+
+    result = apply_registry(manifest, tmp_path / "home", "--rules", str(gated))
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "is not a valid onevcs rules file" in result.stderr
+    assert "gate" in result.stderr, result.stderr
+    assert not (tmp_path / "home" / "rules.yml").exists()
+
+
+def test_a_gate_at_an_older_schema_version_is_accepted_ignored_and_reported(
+    tmp_path: Path,
+) -> None:
+    """The other half: an unmigrated host keeps publishing, and is told why once.
+
+    This is the measurement that makes the removal real rather than nominal on this
+    host. The same `gate: ["false"]` that an `onevcs` before 0.11.0 would have run and
+    been refused by is now read, dropped, and named on stderr — so the *engine*, not
+    just this repository's file, is what stopped running a tier of its own.
+    """
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    legacy = tmp_path / "legacy.yml"
+    legacy.write_text(
+        "version: 2\n"
+        "rules:\n"
+        "  - match: {host: github.com, owner: nickderobertis, name: onevcs}\n"
+        "    publication: change-auto\n"
+        "    approvals: none\n"
+        '    gate: {command: ["false"]}\n'
+        "default:\n"
+        "  publication: change-open\n"
+        "  approvals: required\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    result = apply_registry(manifest, home, "--rules", str(legacy))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    checked = onevcs(home, "rules", "check", "github.com/nickderobertis/onevcs")
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "gate" not in {
+        line.partition(": ")[0].strip() for line in checked.stdout.splitlines() if ": " in line
+    }, checked.stdout
+    assert reported(checked.stdout, "publication") == "change-auto"
+    assert "version 3 removed" in checked.stderr, checked.stderr
+    assert str(home / "rules.yml") in checked.stderr, checked.stderr
 
 
 def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:

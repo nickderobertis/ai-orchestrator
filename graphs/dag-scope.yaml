@@ -82,7 +82,7 @@ members:
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
   # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
   # launcher identity —
-  # measured against onepipeline 0.10.1 on both of that member's sides, by dumping
+  # measured against onepipeline 0.11.0 on both of that member's sides, by dumping
   # each one's whole environment on a real launch. `{task}` is still what this member
   # is written against: it is this graph's own contract rather than a per-release
   # export, and it carries the run's goal as well as its id.

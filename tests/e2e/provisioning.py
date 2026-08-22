@@ -108,6 +108,7 @@ def run_setup(
         check=True,
     ).stdout.strip()
     shared_cache = _shared_uv_cache()
+    _carry_asdf_versions(tmp_path)
     return subprocess.run(
         ["bash", str(repo / "scripts" / "session-setup.sh")],
         text=True,
@@ -129,6 +130,40 @@ def run_setup(
             **({"UV_CACHE_DIR": shared_cache} if shared_cache else {}),
         },
     )
+
+
+#: Where asdf reads a host's tool versions from when nothing nearer sets one. It is
+#: keyed on `$HOME`, and `run_setup` redirects `$HOME` into `tmp_path` so the sweep it
+#: performs reaches nothing real — which takes this file with it.
+TOOL_VERSIONS = ".tool-versions"
+
+
+def _carry_asdf_versions(home: Path) -> None:
+    """Give the redirected `$HOME` the tool versions the real one resolves.
+
+    `uv`, `just`, and `bun` are asdf **shims** on this host — `/home/…/.local/bin/uv`
+    is a shim, not the binary — and a shim resolves its version from `.tool-versions`,
+    walking up from the working directory and ending at `$HOME`. Redirecting `$HOME`
+    to isolate the sweep therefore removes the only file that says which `uv` to run,
+    and every shim on the path exits **126** listing the versions it could have picked.
+
+    That surfaces as a failure nowhere near its cause: `session-setup.sh` completes
+    and verifies every pinned tool, and then `just sweep` reports `onevcs sweep exited
+    126, so nothing in these families was judged` — which reads like a defect in the
+    sweep. Whether it happens at all depends on PATH ordering, so the journey passed
+    wherever the real binary's directory preceded the shim directory and failed
+    wherever it did not.
+
+    Copying the file is the faithful repair rather than exporting one
+    `ASDF_<TOOL>_VERSION` per tool: it reproduces the host's own resolution for every
+    asdf-managed tool at once, including ones added later, instead of enumerating the
+    three that happen to be shimmed today. `ASDF_BUN_VERSION` above predates this and
+    stays: it is measured from the `bun` this process really resolved, which is a
+    stronger statement than the file makes.
+    """
+    source = Path.home() / TOOL_VERSIONS
+    if source.is_file():
+        shutil.copy2(source, home / TOOL_VERSIONS)
 
 
 def path_without_uv(tmp_path: Path) -> str:

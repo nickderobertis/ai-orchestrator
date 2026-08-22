@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Say what `onevcs repos --audit-gates` cannot: which required checks no gate here runs.
+"""Say what `onevcs repos --audit-gates` cannot: what can still refuse each merge.
 
 The published audit answers whether *something* verifies an identity's merge path —
 an executable `pre-push` hook, or the host's required checks — and prints one
-`merge-path coverage:` line per checkout saying which. Read as "covered", that line
-is wrong for every remote-publishing identity on this host, in two ways at once.
+`merge-path coverage:` line per checkout saying which. That line names a verifier; it
+does not name what the verifier has to satisfy, and read as "covered" it is what hid
+this host's defect. `nick-derobertis-site` reported coverage, a branch passed the gate
+`config/onevcs.rules.yml` then named, published as PR #77, and the required `llmlint`
+check that gate never ran refused it.
 
-The hook it names is often not a gate at all: four of the identities registered here
-report coverage by a `pre-push` hook that is a screencomp visual-regression guard,
-which re-captures screenshots and never runs the identity's gate. And even a hook
-that does run the gate is not the merge path — a pull request merges when GitHub's
-required checks pass, and a gate running less than they do verifies a branch that
-cannot merge. `nick-derobertis-site` reported exactly that coverage, published PR
-#77, and had it refused by the required `llmlint` check.
+The gate is gone — onevcs 0.11.0 removed the concept, and this host runs nothing
+beside the merge path any more — which makes the remaining question sharper rather
+than moot. Every required check is now one only the merge path runs, so every one of
+them can refuse a merge, and an operator about to dispatch work wants them named.
 
 So this filter rewrites each of those lines from what verifies the identity into what
-can still refuse it, out of the required checks recorded in
+can refuse it, out of the required checks inventoried in
 `config/merge-path-checks.json`. Everything else in the audit is forwarded verbatim.
 An identity that file does not classify is reported as unknown rather than covered,
 because the direction this has to fail in is the one that sends somebody to look.
@@ -39,9 +39,9 @@ from typing import TypedDict
 RepoIdentity = str
 #: One required check as the merge path names it, which is what an operator reads back.
 Check = str
-#: A key into `reasons`, never the prose itself: the declaration says *why* nothing here
-#: runs a check by naming one of a small closed vocabulary, and `identity` below refuses
-#: a record naming one that `reasons` does not define rather than rendering a blank.
+#: A key into `reasons`, never the prose itself: the inventory says *what* each required
+#: check is by naming one of a small closed vocabulary, and `identity` below refuses a
+#: record naming one that `reasons` does not define rather than rendering a blank.
 Reason = str
 
 #: The audit line that heads one identity's block, which is what the coverage lines
@@ -59,24 +59,26 @@ IDENTITY_KEY = re.compile(r"[^\s/]+/[^\s/]+/[^\s/]+")
 NOTHING_REGISTERED = "no repositories registered"
 #: The one `version` of `config/merge-path-checks.json` this filter reads. A newer
 #: schema is refused rather than read as this one, which is the difference between a
-#: report that is wrong and a report that says it cannot be made.
-VERSION = 1
+#: report that is wrong and a report that says it cannot be made. Version 2 dropped
+#: `gate_runs` — with no gate on this host the map was empty by construction — and
+#: renamed `not_run` to `checks`, because every required check is now one only the
+#: merge path runs.
+VERSION = 2
 
 
 class Identity(TypedDict):
-    """One identity's merge path, as `config/merge-path-checks.json` records it."""
+    """One identity's merge path, as `config/merge-path-checks.json` inventories it."""
 
     branch: str
-    #: Required check → the commands this host's identity gate runs for it.
-    gate_runs: dict[Check, list[str]]
-    #: Required check → the slug in `reasons` saying why nothing here runs it.
-    not_run: dict[Check, Reason]
+    #: Required check → the slug in `reasons` saying what that check is. Every one of
+    #: them can refuse the merge; the reason says what an operator is looking at.
+    checks: dict[Check, Reason]
 
 
 class Declaration(TypedDict):
     """The tracked declaration, as much of it as this filter reads."""
 
-    #: The closed vocabulary every `not_run` slug is resolved through, into its prose.
+    #: The closed vocabulary every `checks` slug is resolved through, into its prose.
     reasons: dict[Reason, str]
     identities: dict[RepoIdentity, Identity]
 
@@ -98,28 +100,6 @@ def strings(value: object, where: str) -> dict[str, str]:
     return value
 
 
-def commands(runs: object, where: str) -> dict[Check, list[str]]:
-    """Each required check's gate commands, refused unless every one of them is nameable.
-
-    A check declared with no command, or with an empty one, claims coverage that names
-    nothing — and `test_every_declared_gate_command_is_in_the_rule_gate` would find
-    every gate satisfies it, which is the reassurance this whole surface exists to stop.
-    """
-    if not isinstance(runs, dict) or not all(
-        isinstance(check, str)
-        and check
-        and isinstance(entries, list)
-        and entries
-        and all(isinstance(command, str) and command for command in entries)
-        for check, entries in runs.items()
-    ):
-        raise Malformed(
-            f"{where} must map each required check to a non-empty list of the commands "
-            "this host's gate runs for it"
-        )
-    return runs
-
-
 def identity(record: object, key: RepoIdentity, reasons: dict[Reason, str]) -> Identity:
     """One identity's record, checked before anything indexes into it.
 
@@ -134,18 +114,14 @@ def identity(record: object, key: RepoIdentity, reasons: dict[Reason, str]) -> I
     branch = record.get("branch")
     if not isinstance(branch, str) or not branch:
         raise Malformed(f"identities.{key}.branch must be the base branch its checks run on")
-    not_run = strings(record.get("not_run"), f"identities.{key}.not_run")
-    undefined = sorted(set(not_run.values()) - set(reasons))
+    checks = strings(record.get("checks"), f"identities.{key}.checks")
+    undefined = sorted(set(checks.values()) - set(reasons))
     if undefined:
         raise Malformed(
-            f"identities.{key}.not_run names reasons {undefined} that the top-level "
+            f"identities.{key}.checks names reasons {undefined} that the top-level "
             "`reasons` object does not define"
         )
-    return {
-        "branch": branch,
-        "gate_runs": commands(record.get("gate_runs"), f"identities.{key}.gate_runs"),
-        "not_run": not_run,
-    }
+    return {"branch": branch, "checks": checks}
 
 
 def load(path: str) -> Declaration:
@@ -173,8 +149,8 @@ def verdict(declaration: Declaration, identity: RepoIdentity | None) -> tuple[st
     """What to say about `identity`: the clause to end its coverage line with, and detail.
 
     The detail lines are returned separately because they are only worth printing when
-    there is something to name — a merge path this host's gate matches whole should
-    read as one line, not as a heading over nothing.
+    there is something to name — a merge path with no required checks on it should read
+    as one line, not as a heading over nothing.
     """
     record = declaration["identities"].get(identity or "")
     if record is None:
@@ -184,15 +160,24 @@ def verdict(declaration: Declaration, identity: RepoIdentity | None) -> tuple[st
             f"checks for {named}, so nothing here says one will not refuse the merge",
             [],
         )
-    missing = sorted(record["not_run"].items())
-    if not missing:
-        return " — and this host's gate runs every required check on it", []
-    checks, each = ("check", "which can") if len(missing) == 1 else ("checks", "each able to")
+    required = sorted(record["checks"].items())
+    if not required:
+        # Said about the inventory rather than about the verifier the published line
+        # just named. The two are different facts and this clause is appended to that
+        # one: an identity whose checkout has no hook is reported as covered by the
+        # host's required checks, and answering "there are none" would read as a
+        # contradiction of the sentence it is extending rather than as what it is.
+        return (
+            f" — and config/merge-path-checks.json inventories no required check on "
+            f"{record['branch']}, so nothing recorded here can refuse a merge",
+            [],
+        )
+    checks, each = ("check", "which can") if len(required) == 1 else ("checks", "each able to")
     detail = [
-        f"{len(missing)} required {checks} on {record['branch']} that this host's gate "
-        f"does not run, {each} refuse the merge:"
+        f"{len(required)} required {checks} on {record['branch']}, {each} refuse the "
+        "merge, and nothing on this host runs any of them:"
     ]
-    detail += [f"  {name} — {declaration['reasons'][reason]}" for name, reason in missing]
+    detail += [f"  {name} — {declaration['reasons'][reason]}" for name, reason in required]
     return " — not the whole merge path", detail
 
 

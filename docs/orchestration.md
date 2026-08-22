@@ -41,7 +41,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.10.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.11.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -159,7 +159,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.10.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.11.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -333,7 +333,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.10.1 in the judge command's own environment on a real
+  measured against onepipeline 0.11.0 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -456,7 +456,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.10.1 answers `{"reply":0,"state":"applied"}` and records
+a real run on onepipeline 0.11.0 answers `{"reply":0,"state":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
 it applies it a **second** time. The same measurement, re-submitted, comes back
@@ -500,7 +500,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/e2e/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.10.1**, composed where the
+node dispatch of a run carries it as of onepipeline 0.11.0**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 Below that release only the **attached** shape did, and by accident of process rather
 than by design — an attached driver starts its observer graph in its own process, and
@@ -1399,21 +1399,20 @@ artifact paths: at `schema_version` 3 each node reads `id`, `status`, `outcome`,
 `landing`, `branch`, `change_url`, and the human-action fields. The evidence lives
 in `events.jsonl`, the merged three-stream journal, where a lifecycle node's
 `onevcs` session is **followed** while it runs and every envelope is stamped with
-the node it belongs to. The gate is a pair of that session's events —
-`gate-started` naming the command and the comparison remote and base, then
-`gate-verdict` carrying `pass`/`fail`, the command, the output, a `preserved_log`
-path that outlives the run's worktree, and the whole run again as an `artifact`
-reachable with `onevcs artifact`. Both are emitted for a green publication as much
-as a rejected one. The per-dispatch raw reports are files under
+the node it belongs to. Since onevcs 0.11.0 there is no `gate-started` /
+`gate-verdict` pair to look for — that release removed the tier that emitted them —
+and what the merge path wrote arrives on the session's **`push`** event: the
+output, a `preserved_log` path that outlives the run's worktree, and the whole run
+again as an `artifact` reachable with `onevcs artifact`. It is emitted for a green
+publication as much as a refused one. The per-dispatch raw reports are files under
 `runs/<run-id>/reports/`.
 
-Those events exist only where `onevcs` ran a gate of its own — a `{command: [...]}`
-rule. A `{kind: pre-push}` identity's verdict arrives as `git push` output and a
-`{kind: checks}` identity's arrives from the host afterwards, so neither emits a
-`gate-verdict` and neither preserves a log.
+An identity verified by the host's required checks preserves no local log, because
+nothing local produced one: its verdict arrives afterwards, as
+`EventKind::ChangeCheck` events carrying each check's own log.
 
-A publication that never reached a gate at all — a base advanced under it, a fetch
-or a worktree it could not build — produces no gate events either. There is no
+A publication that never reached the merge path at all — a base advanced under it, a
+fetch or a worktree it could not build — produces no such evidence either. There is no
 `publication-failed` *event*: `publication-failed` is a node's settled outcome, and
 its whole account is the settlement's `detail`, which is `onevcs`'s own reason
 prefixed `onevcs: `. It is no longer the *only* such outcome, and that is the part
@@ -1964,7 +1963,7 @@ and `note`, and omitting it means `auto`:
 Live delivery is `oneagentgraph interrupt` against **the dispatch's own control
 socket**, so it reaches a node only once something of that dispatch has reported a
 member; before then there is no turn to address and `auto` falls through to the next
-dispatch. All of this is read from onepipeline 0.10.1 and measured on a live run: a
+dispatch. All of this is read from onepipeline 0.11.0 and measured on a live run: a
 note sent to a worker three hours into its dispatch recorded `"delivery":"live"`, and
 the worker changed what it was doing in its next turn. A delivery that was *attempted
 and broke* is neither ending and is refused under every mode, `auto` included — being

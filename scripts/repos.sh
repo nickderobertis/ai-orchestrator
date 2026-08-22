@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `just repos` — list the registered identities and checkouts, and audit their gates.
+# `just repos` — list the registered identities and checkouts, and audit their merge paths.
 #
 # Two things happen here that a bare `onevcs repos` does not do. The published flag is
 # spelled `--audit-gates`; the planner doctrine names it `--audit-gate-coverage`, and

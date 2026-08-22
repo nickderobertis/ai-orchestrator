@@ -113,7 +113,7 @@ def _just(*arguments: str, environment: dict[str, str]) -> subprocess.CompletedP
 
 
 def _identity(tmp_path: Path) -> Identity:
-    """A registered repository whose identity publishes locally under a passing gate.
+    """A registered repository whose identity publishes locally, naming no verifier.
 
     `local-direct` deliberately, for the reason the publish-branch journey names: it is
     the one published policy that opens no change request, so the whole sequence
@@ -133,14 +133,12 @@ def _identity(tmp_path: Path) -> Identity:
     elsewhere = tmp_path / "elsewhere"
     _git("clone", "-q", str(origin), str(elsewhere), cwd=tmp_path)
     (home / "rules.yml").write_text(
-        "version: 2\n"
+        "version: 3\n"
         "trailer_prefix: Orchestrator-\n"
         "rules: []\n"
         "default:\n"
         "  publication: local-direct\n"
-        "  approvals: none\n"
-        "  gate:\n"
-        '    command: ["true"]\n',
+        "  approvals: none\n",
         encoding="utf-8",
     )
     environment = dict(os.environ)

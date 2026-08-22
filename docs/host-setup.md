@@ -305,7 +305,7 @@ shape on the way across, none of them silently:
 | --- | --- | --- |
 | alias `local/ai-orchestrator`, `nickderobertis/crozier` | `ai-orchestrator`, `nickderobertis__crozier` | `onevcs` derives the alias from the checkout's directory name; no surface names one. |
 | identity `repo_type` / `workflow` / merge strategy | a rule's `publication` + `approvals` | The registry's own copies are `register`'s derivation and unsettable; the rules file is what publication reads. |
-| a gate template with `{base}` | `bash -c` reading `$ONEVCS_COMPARISON_BASE` | A `command:` gate is argv run without a shell and with no substitution; the comparison identity arrives as environment instead. |
+| a gate template with `{base}` | nothing — the rules file names no verifier | onevcs 0.11.0 removed the gate concept. What verifies a change is the repository's own merge path, which reads the comparison identity from `$ONEVCS_COMPARISON_REMOTE` / `$ONEVCS_COMPARISON_BASE`. |
 
 ## 8. Verify the host
 

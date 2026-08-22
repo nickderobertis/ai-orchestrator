@@ -32,30 +32,44 @@ Beyond dispatching at a directory, the harness manages a change's **full
 life cycle** against any repo (GitHub or a local path): resolve its normalized
 origin to one **repository identity**, choose a registered publication checkout,
 do the work in an **isolated worktree cut from a per-run clone of an execution
-checkout**, verify it with the repo's own gate, and merge it. That per-run clone
+checkout**, let the repo's own merge path verify it, and merge it. That per-run clone
 shares the execution checkout's object store and is what keeps concurrent
-orchestrators from racing one worktree registry. Checkout aliases share one identity, and its
-`workflow`, `repo_type` (`single-owner` or `team`), and verification `gate` come
-from the **rules file** the identity matches rather than from anything stored per
-identity. This host's copy of it is tracked as `config/onevcs.rules.yml` beside the
+orchestrators from racing one worktree registry. Checkout aliases share one identity,
+and its `workflow` and `repo_type` (`single-owner` or `team`) come from the **rules
+file** the identity matches rather than from anything stored per identity. This host's
+copy of it is tracked as `config/onevcs.rules.yml` beside the
 checkout list `config/onevcs.checkouts`, and `just repos-apply` installs both —
 idempotently, so it is re-run after an edit rather than migrated. Editing that file
 is how routing changes, and `onevcs rules check <repo>` is what shows the resolved
 policy an identity ends up with. `just repos` only lists registered identities and
 checkouts: the `workflow`, `repo_type`, and `gate` it also prints are `onevcs
 register`'s derivation from the origin and the checkout — no flag sets them, and
-none of them is the routing. But **"unsettable" is not "unread"**, and the third one
-is read where it matters least obviously: `onevcs recover`'s `attests_nothing` (onevcs
-0.7.0, `crates/onevcs/src/recover.rs`) compares the *stored* identity gate against
-`store::NOOP_GATE` and, when it is that, the rules file's gate is `{kind: pre-push}`,
-and the source checkout carries no executable `pre-push` hook, refuses the recovery
-outright — because an attestation with nothing behind it attests nothing. The other
-two decide which verb that file's refusals hand an operator: `complete_branch_verb`
-reads `repo_type` and `workflow` to offer `publish-branch` for a team or remote
-identity and `integrate` for the rest. So a gate this host resolves through the rules
-file does not remove the stored one from the path; it is still the value a recovery
-checks itself against. Dispatch uses the gate that file resolves and never
-auto-detects one.
+none of them is the routing.
+
+**Nothing this host configures runs a gate any more, and that is the point.** The
+rules file carried a third field until **onevcs 0.11.0 removed the concept**: a
+`gate:` named a command `onevcs` ran in the branch's own clone before it would
+publish. It was a verifier beside the real one that threw its answer away — for this
+host's one locally-published repository it was literally the work the `pre-push` hook
+then does again, and for every other one it front-ran CI and discarded the verdict.
+Where it ran *less* than the merge path did it was worse than nothing, because it read
+as verification: a `nick-derobertis-site` branch passed it, published as PR #77, and
+sat blocked on a required check that gate never ran. At rules `version: 3` a `gate:`
+anywhere is refused by name; at `1` and `2` it is accepted, ignored, and reported once
+on stderr. What verifies a change now is the repository's own merge path — the host's
+required checks for a remote identity, the `pre-push` hook for a local one — and
+`onevcs` **detects** which rather than being told: `store::merge_path_coverage`
+answers `PrePushHook(path)`, `RequiredChecks`, or `None`, and `onevcs register`, `just
+repos --audit-gate-coverage`, and `just integrate` all read that one answer.
+
+But **"unsettable" is not "unread"**, and the stored `gate` — a different thing from
+the rules gate, and the one that survives — is read where it matters least obviously:
+`onevcs recover`'s `attests_nothing` (`crates/onevcs/src/recover.rs`) refuses a
+recovery outright when the stored identity gate is `store::NOOP_GATE` **and**
+`merge_path_coverage` is `None`, because an attestation with nothing behind it attests
+nothing. `repo_type` and `workflow` decide which verb that file's refusals hand an
+operator: `complete_branch_verb` reads both to offer `publish-branch` for a team or
+remote identity and `integrate` for the rest.
 Team repositories default to an ordinary ready-for-review
 open PR; explicit `change-auto` or `change-direct` merges their remote PR.
 Single-owner repositories preserve local direct or remote auto behavior, while
@@ -87,7 +101,7 @@ runs: onevcs 0.7.0 took `--body <TEXT>` / `--body-file <PATH>` on `publish-branc
 and `recover`, and until this repository passed them, every branch landed by hand
 opened with an empty description — and those are the branches whose context is least
 recoverable from the diff. See the drafting paragraph below for the two escapes and
-why the turn is spent before the gate. `integrate` takes neither, because the local
+why the turn is spent before the publication. `integrate` takes neither, because the local
 train opens no change request to describe. Two more verbs
 answer the questions those three raise. `just work-status <ref>` — a change
 request's URL, a session token, a branch name, or a commit — reports everything
@@ -98,8 +112,8 @@ checkouts, which is what the landing verbs need: they read the branch from the
 **publication checkout**, never from wherever a session happens to be working, so a
 branch finished in a session worktree or a run clone is refused as being in none of
 the identity's checkouts until it is imported. Improvising past a missing verb is
-what puts a change on a base branch without its gate, which is the failure this
-routing exists to prevent; the table is
+what puts a change on a base branch without its merge path ever ruling on it, which is
+the failure this routing exists to prevent; the table is
 [in the lifecycle doc](docs/repo-lifecycle.md#which-verb-lands-which-branch-state).
 The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
@@ -149,7 +163,7 @@ pinned branch instead of cutting a second one on the same name, and **continue**
 pinned branch nothing holds — opening the worktree at that branch's tip and
 merging the base into it — rather than refusing the pin. Both are what let a retry
 reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.10.1**, never `config/onevcs.version`:
+plan node is the adopted onepipeline 0.11.0**, never `config/onevcs.version`:
 onepipeline links onevcs, oneagentgraph, and onejudge as Rust libraries, so a
 dispatch runs the copy that release resolved, while `config/onevcs.version` pins
 the onevcs *CLI* the manager verbs run — `publish-branch`, `recoverable`,
@@ -168,16 +182,19 @@ strings -a "$(readlink -f "$(command -v onepipeline)")" \
 ```
 
 On the adopted release that answers `oneagentgraph-0.3.6`, `onejudge-0.5.0`, and
-`onevcs-0.10.0`. A second published source says the same without `strings`, without
+`onevcs-0.11.0`. A second published source says the same without `strings`, without
 a network and without a clone: the same wheel ships a CycloneDX SBOM under its
 `dist-info/sboms/` declaring one version per linked crate, and
 `tests/test_linked_libraries.py` — whose docstring records where that lives and
 why — reads it on every gate run to hold this repository's prose to it.
 
 **Read the locks after that measurement, and in this order.** `git show
-v0.10.1:Cargo.lock`, at the tag of the release actually *installed*, is
+v0.11.0:Cargo.lock`, at the tag of the release actually *installed*, is
 corroboration that should agree: onepipeline's requirement is
-`onevcs = "0.10.0"` at v0.10.1 and its lock still resolves 0.10.0. `origin/main`'s
+`onevcs = "0.11.0"` at v0.11.0 and its lock still resolves 0.11.0 — this adoption
+is the one case in this block where the *requirement* moved with the lock, which
+is why the two agree here and why that agreement proves nothing on its own.
+`origin/main`'s
 lock answers a different question — what the *next* release would link — and is
 evidence about this host only by coincidence. The ordering matters because a lock
 describes what a release *would* link while a host runs what it *installed*, and
@@ -202,7 +219,7 @@ route reads — and a real run under it emitted nothing, because onepipeline
 v0.8.1's lock resolved oneagentgraph **0.3.0**. The `Cargo.toml` declares
 `oneagentgraph = "0.3.0"` at v0.8.3 as well, and that tag's lock resolves
 **0.3.4**; adopting onepipeline 0.8.3 here is what put the producer in force.
-**onepipeline, in this adoption:** the producer that publishes tool results, live
+**onepipeline, in the previous adoption:** the producer that publishes tool results, live
 turn text, and per-turn usage is oneagentgraph 0.3.6, and onepipeline v0.10.0 — the
 newest tag at the time — was cut before the lock that resolves it and still linked
 0.3.4. Its `Cargo.toml` said `oneagentgraph = "0.3.0"` at both tags, so the
@@ -229,7 +246,7 @@ Session `s-bbb59ee283af` closes the case: it opened 02:52:54Z and closed
 03:25:59Z, its four refusals are stamped 03:38:18Z, 03:38:29Z, 03:41:55Z and
 03:42:06Z — twelve to sixteen minutes after the close — and its record still reads
 `"state":"closed"` with both its run root and its clone still on disk. **Under the
-onevcs 0.10.0 the adopted release links there is no `honour_or_refuse` and no such
+onevcs 0.11.0 the adopted release links there is no `honour_or_refuse` and no such
 refusal at all**, so read that message as history rather than as something to
 plan around.
 
@@ -270,7 +287,7 @@ narrower guarantee than it sounds and worth stating exactly: it makes the two
 
 A divergence is allowed only where the linked release is not installable, and only
 as a **declared** one naming both versions, so the next bump fails on it rather than
-inheriting it. There is exactly one today: onepipeline 0.10.1 links the `onejudge`
+inheriting it. There is exactly one today: onepipeline 0.11.0 links the `onejudge`
 crate 0.5.0, and PyPI carries no `onejudge` 0.5.0 — the tag is published and the
 distribution is not — so `config/onejudge.version` stays at 0.4.0 and
 `tests/test_linked_libraries.py` holds that pair. Move it the moment 0.5.0 is on the
@@ -449,24 +466,21 @@ and is never a command.
    about a demand it makes.
 6. **Launch and supervise.** Before a lifecycle run, use `just repos` to confirm
    its registered identity and available checkout aliases, and `onevcs rules check
-   <repo>` for its resolved publication, approvals, and gate — `just repos`'s type,
+   <repo>` for its resolved publication and approvals — `just repos`'s type,
    workflow, and gate columns are not the routing. Durable routing is the **rules
    file**'s: a rule matches a repository by pattern and names the publication
-   policy, approvals, and gate that follow, so a routing change is an edit to
+   policy and approvals that follow, so a routing change is an edit to
    `config/onevcs.rules.yml` plus `just repos-apply` rather than a command that
    writes a policy. Change it there rather than reaching for an accidental run-only
-   override. A rule's `gate` must run every tier its repository's merge path
-   requires, and naming that repository's `check` usually does not: most of these
-   repositories keep the judged llmlint tier deliberately outside `check` and
-   require it as a separate status check, so a gate that skips it verifies a branch
-   that cannot merge — which is what let a `nick-derobertis-site` branch pass,
-   publish as PR #77, and sit blocked. Each merge path's required checks are tracked
-   in `config/merge-path-checks.json` against the command the gate runs for them, so
-   a new identity gets a rule *and* an entry there. Run `just repos
-   --audit-gate-coverage` before relying on hooks or required PR checks as
-   merge-path verification: it names, per identity, the required checks no gate here
-   runs, each of which can still refuse a merge the gate passed. Keep missing and
-   unknown coverage visible.
+   override. **A rule names no verifier, because this host runs none.** Since onevcs
+   0.11.0 the merge path is the whole of the verification: the host's required checks
+   for a remote identity, the `pre-push` hook for a local one. Those
+   required checks are inventoried per identity in `config/merge-path-checks.json`,
+   so a new identity gets a rule *and* an entry there. Run `just repos
+   --audit-gate-coverage` before relying on that verification: it names, per
+   identity, every required check on its merge path, each of which can refuse the
+   merge — and it reports an identity it cannot classify as unknown rather than as
+   covered. Keep missing and unknown coverage visible.
 
    Start the graph with `just orchestrate <plan.json>`,
    which stays attached and hands the run back when it settles (see below), and
@@ -629,7 +643,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.10.1 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.11.0 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -750,7 +764,7 @@ exists to prevent. The primary Claude identity is last everywhere:
   `oneharness.pr-author.toml`, named by `graphs/pr-author.yaml`'s one member as its
   **agent** side; it has no judge side, because the review is a JSON Schema. The same
   supervisory order and a third copy of it, for the same per-deadline reason the
-  pacemaker's is a copy: a drafter sits between a passed gate and a publication, so it
+  pacemaker's is a copy: a drafter sits between a finished branch and its publication, so it
   keeps a finite `timeout`. It is also the one side here with `stream = false`, which
   is forced rather than chosen — oneharness validates a structured answer against the
   complete response, so `stream = true` and `schema_file` cannot both hold.
@@ -942,7 +956,7 @@ question to its manager over the run's own channel instead of guessing at a
 decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
-dispatch of a run carries it as of onepipeline 0.10.1**, composed where the dispatch
+dispatch of a run carries it as of onepipeline 0.11.0**, composed where the dispatch
 is made. Below that release nothing composed it: it reached a worker only by leaking
 out of an *attached* driver that had started an observer graph in its own process, so
 a dispatch of a detached or adopted run met its first fork with the wrapper there and
@@ -1014,7 +1028,7 @@ timeline spans — `rollup` spans labelled `agent_role: orchestrator` — but a 
 measured here carried none, and the bounded local capture that used to back-fill
 them exists nowhere on the adopted stack; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
-cannot fully answer: on the adopted onepipeline 0.10.1 a run whose journal does not hold
+cannot fully answer: on the adopted onepipeline 0.11.0 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
 is the one line that makes the rest unprovable, so read it before acting on a node
 those views show as never settled. It used to be said only on the driver's stderr,
@@ -1140,7 +1154,7 @@ Dead lifecycle runs form a separate bounded recovery history: retain the newest
 **3** run roots with unpublished work. A retry or `repo-recover` adopts the exact
 worktree only after claiming its free occupancy lease and rejecting a live
 recorded owner; dirty adopted work becomes an incomplete-step commit and must
-pass the ordinary merge-path gate before publication.
+pass the ordinary merge path before publication.
 
 `just smoke` spends one real agent-harness turn in a throwaway directory and
 verifies exact prompt delivery plus a successful, fully accounted oneharness
@@ -1247,9 +1261,10 @@ workspace minus `docs/**` and `**/*.md`.
 scripts it builds its two worktrees from. A documentation edit stops charging for
 the whole suite. Where no key would be right the tier is **uncached** instead:
 `orchestrator:test-checkouts` reconciles this repository's routing against the
-registered checkouts of the repositories it routes — which of them run cargo-nextest,
-against the gate argv each rule gives — and those live outside the workspace, so a
-memo would describe whatever they looked like when it was recorded. The same tier
+repositories it routes — the required checks each merge path really declares, read
+from GitHub, against the inventory in `config/merge-path-checks.json` — and those
+live outside the workspace, so a memo would describe whatever they required when it
+was recorded. The same tier
 holds the **lost-turn wire drift gate**, for the same reason and against a different
 outsider: `tests/test_lost_turn_wire_contract.py` reconciles the harness wire shape
 `scripts/channel-serve.py` restates against the installed `codex` — what it emits on a
@@ -1275,7 +1290,7 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.10.1
+graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.11.0
 they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries
@@ -1289,10 +1304,10 @@ what it forwards; an argument list it cannot read that way lands exactly as it d
 before. Two escapes, in the order they win: a caller's own `--body` or `--body-file`
 is forwarded untouched and spends no turn, and `--no-draft` skips drafting and is
 consumed here rather than forwarded, because `onevcs` has no such option. It is the
-escape for a bulk landing. **The turn is spent before the gate** — the body is an
-argument to `onevcs` and the verb is what runs the gate, so a branch its gate then
-rejects has paid for a body nothing used; that is accepted rather than overlooked, and
-moving drafting behind the gate would be a different repository's design. `just
+escape for a bulk landing. **The turn is spent before the push** — the body is an
+argument to `onevcs` and the verb is what pushes, so a branch the merge path then
+refuses has paid for a body nothing used; that is accepted rather than overlooked, and
+moving drafting behind the push would be a different repository's design. `just
 integrate` drafts nothing and needs nothing, because the local merge train opens no
 change request. And **`onevcs recoverable`'s own printed `Resume:` line drafts
 nothing**: it renders `onevcs publish-branch …`, which reaches the verb below the
@@ -1312,7 +1327,7 @@ dispatch: one subtask is a plan holding one node — one direct agent
 with more nodes. Nothing about plan schema, personas, or node semantics changes
 with the node count, so a one-node run still gets a journal, an ownership row,
 planner surfaces, and a place in the DAG UI. Lifecycle nodes clone the target,
-work in an isolated worktree, verify with its gate, and publish. Dispatch smaller
+work in an isolated worktree, publish, and let its merge path verify. Dispatch smaller
 project work with a single-node plan rather than doing it directly; only the
 slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
@@ -1436,7 +1451,7 @@ type marked breaking with `!`). A `docs:` or `chore(deps):` change to tracked so
 merges green and then never cuts a release, which is what cost two changes in one
 plan and was caught both times only by a person reading the title. The hook reads the
 subject and nothing else — no index, no diff, no branch — because the adopted
-**onevcs 0.10.0** puts the composed subject a publication is about to land under to
+**onevcs 0.11.0** puts the composed subject a publication is about to land under to
 that repository's own `commit-msg` hook, where none of that exists, and one policy
 must mean the same thing to both callers. It is 0.6.1 that started asking, and
 re-measured here on the adopted 0.7.0 rather than carried forward: the same journeys
@@ -1452,7 +1467,7 @@ that satisfies it`. `tests/e2e/test_publish_branch_e2e.py` holds both halves and
 against 0.5.0 on that wording. Two things it is therefore *not*: `just integrate`
 composes the train's subject through `provenance::publication_subject` rather than
 the publication path, so it never asks; and a lifecycle dispatch publishes through
-the onevcs `onepipeline` links, which is 0.10.0 too, so it asks the same question
+the onevcs `onepipeline` links, which is 0.11.0 too, so it asks the same question
 before anything is written. That last one was worth stating separately only while
 the two numbers differed: through the cycle when the linked copy was 0.4.2, a
 dispatched publication met this hook as git's own refusal of the commit and nothing

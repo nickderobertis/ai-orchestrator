@@ -13,12 +13,12 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.10.1**
+that source on every `just check` rather than restated: **`onepipeline` v0.11.0**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.10.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.11.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **0.10.0** as well at this
+the `onevcs` CLI `config/onevcs.version` pins, which is **0.11.0** as well at this
 pair of pins; the two are separate pins that have coincided before and will diverge
 again, so where a claim depends on which copy runs it this document says so. Re-read the source before trusting a claim
 here against a later pin; that is the discipline this section exists to replace, and
@@ -30,8 +30,8 @@ those crates were extracted.
 ```
 onevcs session open  →  per-run clone of the execution checkout, worktree, branch
    →  dispatch each step into that one worktree  (agent commits its own work)
-   →  onevcs publish  →  fetch, merge the change base, run the gate the rules
-                          file resolves, push, open/merge the change request
+   →  onevcs publish  →  fetch, merge the change base, push (the repository's own
+                          `pre-push` hook rules on it), open/merge the change request
    →  onevcs session close  →  worktree and occupancy lease released
 ```
 
@@ -54,7 +54,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
 | `done` | *(none)* | A direct agent node — no publication to name. |
 | `waiting` | *(none)* | A `kind: human` step is ready and the branch is held for a person. |
-| `failed` | `publication-failed` | The publication started and did not land, and **nothing a further attempt could answer** ended it: a request `onevcs` refused, a seam with no implementation, or `onevcs`'s own gate rejecting the tree as it stands. |
+| `failed` | `publication-failed` | The publication started and did not land, and **nothing a further attempt could answer** ended it: a request `onevcs` refused, a seam with no implementation, or something that judged the publication turning it down where no narrower kind says which — the repository's own `commit-msg` hook refusing the composed subject, or a host that took a merge and then reported it unperformed. |
 | `failed` | `checks-failed` | A required check the host reports concluded red, and the publication budget is spent. |
 | `failed` | `checks-unsettled` | The bound on watching the host elapsed with the change still outstanding, and the budget is spent. |
 | `failed` | `push-rejected` | The publishing push was refused by the merge path, and the budget is spent. |
@@ -77,17 +77,17 @@ the other, in whichever direction it drifted. Both columns, because a table of
 pairings gated on one of them is gated on neither: a row that moved
 `publication-failed` to `done` would invent no word and drop none. The same gate covers the other engine contracts this
 document and `telemetry.md` state: every enum a passage enumerates exhaustively
-(`FailureKind`, `Retention`, `GateKind`, the telemetry `BucketName`, `Resume`'s
+(`FailureKind`, `Retention`, `Coverage`, the telemetry `BucketName`, `Resume`'s
 fields) against the engine's own declaration, and every constant either quotes a
 number for (the boundary attempts and backoff, the two git bounds and the drain, the
-preserved-gate-log retention and directory) rebuilt from the engine's own `const`. It
+preserved merge-path-log retention and directory) rebuilt from the engine's own `const`. It
 runs in the uncached tier, because the source it reads is another repository's
 checkout and no cache key here describes one.
 
 `gate-failed` is **not** in it and never was on this stack, and that gate holds it
 absent too, so the denial fails the moment it becomes real. The only `gate-failed`
 either engine writes is `onevcs integrate`'s per-candidate *skip reason* — the
-train's word for "this branch's gate said no, so the train stepped over it" — which
+train's word for "something said no about this branch, so the train stepped over it" — which
 is not a node outcome and never reaches a plan. `checks-failed` was denied here for
 the same release cycles and is denied no longer: onevcs 0.10.0 gave it a
 `FailureKind` and onepipeline 0.10.0 gave it a settlement, so it is a row of the
@@ -125,8 +125,8 @@ straight away, because there is nothing left to continue.
 
 Either way the `reason` is kept, prefixed `onevcs: `, as the settlement's `detail`.
 **So the outcome word now says which merge-path refusal this was, and the detail
-says what it said** — read both, and read the session's own `gate-verdict` event
-beside them.
+says what it said** — read both, and read the session's own `push` event beside
+them, which is where what the merge path wrote is stored.
 
 A drafting failure adds words to that same detail and never causes it; see
 [Diff-derived PR descriptions](#diff-derived-pr-descriptions).
@@ -321,7 +321,7 @@ are kept, matching pytest's useful bounded failure history. A retry or recovery
 for one of their branches claims the dead run's occupancy lease and adopts its
 exact worktree, including uncommitted files; a held lease or live recorded owner
 forces a fresh worktree. Dirty adopted work is committed with incomplete-step
-provenance before it proceeds and must pass the ordinary merge-path gate before
+provenance before it proceeds and must pass the ordinary merge path before
 publication. Published roots are immediately reclaimable and older incomplete
 roots age out. Rejoin a retained run with that run's token to recover it explicitly
 (tearing its worktree down copies the branch into the execution checkout). Flat
@@ -398,21 +398,29 @@ Registration prints ranked gate candidates. Monorepo affected commands (Nx,
 Turborepo, Bazel, pnpm, or Lerna) rank ahead of whole-repository gates (`just
 check`, `make check`, `npm test`, Cargo, or pytest). Accept one, override it with
 `--gate`, or investigate first. A gateless checkout stores `<no-op>` and warns
-that it is unproven. The stored identity gate describes the repository's complete
-bar and remains available to agents and recovery metadata. The merge path itself
-is authoritative: an executable pre-push hook runs the local bar, or required PR
-status checks gate remote-first publication. Correct an identity's gate by editing the rule
-that matches it; the change reaches every alias at once, because the rule is what
-resolves the policy.
+that it is unproven.
 
-Registration also audits whether the merge path itself runs a gate. It reports an
+**This stored gate is not the retired rules gate, and confusing the two is easy.**
+It is the registry's own *detection* of what a checkout verifies with — a
+description of that repository, available to agents and to recovery metadata, and
+never a command `onevcs` runs before publishing. Nothing resolves it from
+`config/onevcs.rules.yml`, so there is no rule to correct it in; re-register the
+checkout to change it. It is still read where it matters: `onevcs recover`'s
+`attests_nothing` refuses a recovery when the stored gate is `<no-op>` **and** the
+merge path covers nothing, because an attestation with nothing behind it attests
+nothing. The merge path itself is what is authoritative and what actually rules:
+an executable `pre-push` hook runs the local bar, or required PR status checks
+decide a remote-first publication.
+
+Registration also audits what the merge path itself runs, which since onevcs 0.11.0
+is the whole of the verification. It reports an
 executable effective `pre-push` hook (respecting `core.hooksPath`) and required
 GitHub status checks on the repository's actual default branch. A configured
 hooks directory without an executable `pre-push` does not count. Which evidence
 counts depends on the identity's workflow: a **local** workflow pushes straight
 to its base branch and never opens a PR, so branch protection has nothing to run
 against and only the hook can cover it. A remote workflow is covered by either —
-the hook gates the branch push that feeds the PR, and required checks gate the
+the hook judges the branch push that feeds the PR, and required checks decide the
 merge. If nothing applicable is
 present, registration succeeds but prints an identity-specific warning; an
 unavailable GitHub response is reported as unknown, and local-only origins are
@@ -428,45 +436,46 @@ just repos --audit-gate-coverage
 That published answer is about the *presence* of a verifier, and reading it as
 coverage is what hid this host's own defect. Two things it does not say:
 
-- **A `pre-push` hook is not necessarily a gate.** Four identities registered here
-  report coverage by a hook that is a screencomp visual-regression guard — it
-  re-captures screenshots and never runs the identity gate at all.
+- **A `pre-push` hook is not necessarily a complete bar.** Four identities
+  registered here report coverage by a hook that is a screencomp
+  visual-regression guard, which re-captures screenshots and judges nothing else.
 - **No local verifier is the merge path for a remote-publishing identity.** A pull
-  request merges when GitHub's required checks pass, so a gate that runs less than
-  they do verifies a branch that cannot merge. `nick-derobertis-site` reported
-  coverage, a dispatched branch passed its gate, published as PR #77, and the
-  required `llmlint` check the gate never ran refused it.
+  request merges when GitHub's required checks pass, and a local hook running less
+  than they do verifies a branch that cannot merge. `nick-derobertis-site` reported
+  coverage, a dispatched branch passed the gate this host then ran, published as PR
+  #77, and the required `llmlint` check that gate never ran refused it.
 
 So `just repos --audit-gate-coverage` here is `onevcs repos --audit-gates` with each
 `merge-path coverage:` line rewritten from what verifies the identity into what can
-still refuse it, out of the required checks tracked in
+refuse it, out of the required checks inventoried in
 `config/merge-path-checks.json`:
 
 ```
 github.com/nickderobertis/nick-derobertis-site	remote	team	just gate
   nickderobertis__nick-derobertis-site	/home/…/nickderobertis__nick-derobertis-site
     merge-path coverage: pre-push hook at /home/… — not the whole merge path
-      1 required check on master that this host's gate does not run, which can refuse the merge:
+      3 required checks on master, each able to refuse the merge, and nothing on this host runs any of them:
+        check — runs the repository's own verification of the working tree on the merge path's runner: …
         classify-gate — captures screenshots in CI's pinned container and classifies …
+        llmlint — runs the repository's own verification of the working tree on the merge path's runner: …
 ```
 
-That file records every required check against the command the identity's gate in
-`config/onevcs.rules.yml` runs for it, and an identity it does not classify is
-reported as unknown rather than covered. Keeping the two in step is the point of
-adding a check to a gate rather than to the declaration:
-`test_every_declared_gate_command_is_in_the_rule_gate` fails when a gate stops naming
-a tier the merge path requires — and
-`test_each_gate_runs_its_repositorys_whole_bar_against_the_comparison_base` runs every
-gate for real against a fixture command surface, so which tiers it reaches, in what
-order, and against which comparison base are observed rather than read — and
+Since onevcs 0.11.0 that list is *every* required check rather than the leftovers
+after a local gate: this host front-runs nothing, so nothing here can be the whole
+bar and the audit stops implying it might be. The reason beside each check says
+what that check is, which is what tells an operator which of them is the verdict on
+their tree. An identity the file does not classify is reported as unknown rather
+than as covered.
 `test_the_declared_required_checks_match_each_repositorys_branch_protection` asks
 GitHub what is really required, so a check added or newly required upstream is found
-here rather than by a blocked change request. Both live in
-`tests/e2e/test_repo_registry_apply_e2e.py`.
+here rather than by a blocked change request, and
+`test_the_resolved_policy_is_publication_and_approvals_and_nothing_else` reads the
+policy back off `onevcs` so a gate reintroduced into the rules file fails here. Both
+live in `tests/e2e/test_repo_registry_apply_e2e.py`.
 
 Lifecycle dispatch and `just repo-recover` repeat this audit and refuse before
-starting any work when coverage is missing or unknown, because neither runs the
-gate itself any more. They inspect the **execution** checkout rather than an
+starting any work when coverage is missing or unknown, because nothing here runs a
+verifier of its own. They inspect the **execution** checkout rather than an
 arbitrary alias: every publishing push originates in one of its worktrees, and
 Git resolves hooks through the shared common directory, so its `pre-push` is the
 hook that will actually run. Both judge against the run's *effective* workflow, so
@@ -484,45 +493,56 @@ Before publication, `onevcs` fetches `origin` and merges the current change base
 into the dispatched branch. A sync conflict that the bounded resolve-and-requeue
 cannot converge aborts before any push, as `FailureKind::SyncConflict`.
 
-**`onevcs` recognises three kinds of gate, and runs exactly one of them itself.**
-The rules file the identity matches names which (`gate:` on the matching rule):
+**`onevcs` runs no gate of its own.** onevcs 0.11.0 removed the concept: there is no
+`gate:` on a rule, no `GateKind`, no `gate.rs`, and no `gate-started` / `gate-verdict`
+pair on a session's stream. The verifier is the repository's own merge path, and
+`onevcs` hands it the one thing it cannot work out for itself.
 
-| Gate | Who runs it | When the verdict arrives |
+**Which merge path an identity has is detected, not declared.** `store::Coverage` is
+the answer and it has exactly three values:
+
+| Coverage | What verifies a change | When the verdict arrives |
 | --- | --- | --- |
-| `{command: [...]}` | `onevcs`, directly — no shell, no `{base}` substitution | Before the push, in the publication worktree |
-| `{kind: pre-push}` | git, at the publishing push | As push output |
-| `{kind: checks}` | the host, on the change request | After the change request exists |
+| `PrePushHook(path)` | git, running that executable hook at the publishing push | As push output |
+| `RequiredChecks` | the host, on the change request | After the change request exists |
+| `None` | nothing | Never — and this is warned about, loudly |
 
-Only the first is `onevcs`'s own invocation, and only it emits the `gate-started` /
-`gate-verdict` pair described below; `gate::own_command` returns nothing for the
-other two, so the verify step is a no-op and nothing is bracketed. **Every rule in
-`config/onevcs.rules.yml` on this host currently names a `command:` gate**, so the
-first row is what a lifecycle publication here actually does. Which gate a given
-identity gets is routing and belongs to that file, not here.
+`store::merge_path_coverage` is the one source of that answer, and three callers read
+it rather than each deciding for themselves: `onevcs register` warns on it, `onevcs
+repos --audit-gates` reports it (`Coverage::describe`), and `onevcs recover`'s
+`attests_nothing` refuses a recovery whose identity names no complete bar *and* whose
+merge path covers nothing — because an attestation with nothing behind it attests
+nothing. `just integrate` prints that same warning before the train advances a base,
+in the same words, because an operator who learns afterwards that nothing will judge
+what the train landed has already landed it.
 
-Whichever runs, it is handed the comparison identity as environment —
+Whatever verifies it is handed the comparison identity as environment —
 `ONEVCS_COMPARISON_REMOTE` and `ONEVCS_COMPARISON_BASE`, the remote and base this
-change is being published onto. A gate left to discover its own base resolves the
-repository default, which for a stacked change is not the base the push is
-publishing onto; see [One judged diff, one verdict](#one-judged-diff-one-verdict).
+change is being published onto. A judging process left to discover its own base
+resolves the repository default, which for a stacked change is not the base the push
+is publishing onto; see [One judged diff, one verdict](#one-judged-diff-one-verdict).
 
-A `command:` gate that exits non-zero is `Ruling::Rejected` and the publication ends
-`PublishOutcome::Failed { kind: Gate, .. }`, which the node settles as
-`publication-failed` with `onevcs: <command> rejected "<branch>"` for its detail. A
-`pre-push` rejection is not distinguished from any other refused push: git cannot
-tell an arbitrary hook rejection from a transport rejection, so `onevcs` reports what
-git said per ref, as `Error::PushRejected` rather than as a gate failure — a
-different word from the gate's, and one a further attempt could answer, so the node
-is dispatched again onto that same branch before it settles `push-rejected`. What
-the hook wrote is not inline; it is the artifact `record_push` stored a moment
-earlier, because it is a run of the repository's whole verification.
+**The failure vocabulary keeps the word `gate` and no longer keeps the tier.**
+`FailureKind::Gate` is still a variant, deliberately: the contract fixes this
+vocabulary across the three libraries that route on it, so a variant is not renamed
+because the tier behind it went away. What it means now is narrower — a publication
+refused by something that judged it where no narrower kind says which, such as the
+repository's own `commit-msg` hook turning down the composed subject, or a host that
+took a merge and then reported it unperformed. The narrower kinds are where a merge
+path's own refusals land: a `pre-push` rejection is `Error::PushRejected`, because git
+cannot tell an arbitrary hook rejection from a transport rejection and `onevcs` reports
+what git said per ref — a word a further attempt could answer, so the node is
+dispatched again onto that same branch before it settles `push-rejected`. What the
+hook wrote is not inline; it is the artifact `record_push` stored, because it is a run
+of the repository's whole verification. `ChecksFailed` and `ChecksUnsettled` are what
+the *host's* checks reported.
 
-There is no gate-skipping switch, and no plan key that names or overrides a gate. The
-`Node` schema is `deny_unknown_fields`, so `recorded_gate`, `verify_cmd`,
-`skip_verify`, and `no_identity_gate` are not "accepted and ignored" — a plan
-carrying any of them is **refused while it loads**. `verify_via_ci` was the one
+There is no plan key that names or overrides a verifier, and there never was a
+gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
+`recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
+"accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.10.1 and is refused **by its own name**, at every schema version and on a live
+v0.11.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -530,11 +550,12 @@ now the merge-path verification of a `change-auto` node — watched to their
 conclusion, settling the node `checks-failed` when one concludes red and
 `checks-unsettled` when the bound elapses with one still outstanding.
 
-`just integrate` runs the same gate per candidate, because each candidate
-fast-forwards the *local* base before the single optional push; skipping it would let
-unverified commits reach the local base. A candidate its gate rejects is skipped with
-the reason `gate-failed` and the train moves on — that word is the train's, and it is
-not a node outcome.
+`just integrate` runs no gate per candidate either — it has none to run. Each
+candidate fast-forwards the *local* base before the single optional push, and what
+judges that push is the same `pre-push` hook a publication meets. A candidate the
+train leaves where it was is `Status::Skipped(reason)`, and `gate-failed` is one of
+the reasons that word can carry — that word is the train's, and it is not a node
+outcome.
 
 This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
@@ -551,18 +572,24 @@ origin, and `just sync <branch>` names one rather than the registered base.
 
 ### Where a merge-path verdict is preserved
 
-A `command:` gate's run is written twice, and the second copy is the point:
+What the publishing push wrote is written twice, and the second copy is the point:
 
-* as an event **artifact** — `stream::store_artifact("log", …)` on the
-  `gate-verdict` event, reachable through `onevcs artifact`; and
-* into **`<run root>/gate-logs/<branch with `/` flattened>/`**, one file per
-  invocation, `gate-0001.log` upward in the order they were claimed, named on the
-  same event as `preserved_log`.
+* as an event **artifact** — `stream::store_artifact("log", …)` on the `push`
+  event, reachable through `onevcs artifact`; and
+* into **`<run root>/gate-logs/<branch with `/` flattened>/`** by
+  `merge_path::preserve_log`, one file per invocation, `gate-0001.log` upward in the
+  order they were claimed, named on the same event as `preserved_log`.
 
-The durable copy exists because the run does not. The gate runs inside a worktree that
+That directory keeps its name on purpose now that no gate writes into it. It is an
+**on-disk layout** rather than a symbol: `sweep` decides whether a run root may be
+reclaimed by whether a verdict was ever recorded under it, and every run root an
+earlier build left behind carries this directory. Renaming it would leave each of
+those answering that nothing judged it — the answer that keeps a workspace forever.
+
+The durable copy exists because the run does not. The push runs inside a worktree that
 is removed as soon as the workstream settles, and a run root is retained only while
-recovery may still need it — so a *passing* gate used to leave nothing readable once
-the work landed, while the *failure* it superseded stayed on disk. A branch whose 16:55
+recovery may still need it — so a *passing* merge path used to leave nothing readable
+once the work landed, while the *failure* it superseded stayed on disk. A branch whose 16:55
 rejection was recoverable and whose 17:48 pass was not is what this closed. Both
 verdicts land in the same place by the same mechanism, whichever driver published: a
 lifecycle node, `just repo-recover`, `just publish-branch`, or `just integrate`.
@@ -573,20 +600,21 @@ starts from the highest the branch has ever reached rather than the first free g
 the directory reads in the order the attempts happened, and a number another writer
 already claimed is never written over — a retry beside the recovery of what it
 replaced is exactly that race. Retention keeps the newest **10**
-(`gate::PRESERVED_LOG_ATTEMPTS`) and prunes the rest, so a branch that re-pushes
-through a red gate all night cannot grow the directory without end. Contents are
+(`merge_path::PRESERVED_LOG_ATTEMPTS`) and prunes the rest, so a branch that re-pushes
+through a red merge path all night cannot grow the directory without end. Contents are
 passed through `stream::redact` before they are written.
 
-A publication that fails *before* any gate ruled — a base that moved, a fetch or a
-worktree that could not be built — preserves no log, because none was produced. Its
+A publication that fails *before* the merge path ruled — a base that moved, a fetch or
+a worktree that could not be built — preserves no log, because none was produced. Its
 whole account is the `reason` on `PublishOutcome::Failed`, which reaches the node as
 its settlement detail.
 
-Three things a reader may arrive looking for are not here: there is no
+Four things a reader may arrive looking for are not here: there is no
 `merge-gate-coverage` event recorded before a dispatch, no `verification-finished`
-event bracketing a gated push, and no `gate_log` on a node's artifacts. `gate-started`
-and `gate-verdict` on the session's own stream are the whole record, and a node result
-carries no artifact paths at all.
+event bracketing the push, no `gate_log` on a node's artifacts, and — since onevcs
+0.11.0 — no `gate-started` or `gate-verdict` event at all, because nothing here runs a
+tier to bracket. The `push` event on the session's own stream is the whole record, and
+a node result carries no artifact paths at all.
 
 ### Keeping a process that outlives its launcher
 
@@ -707,9 +735,10 @@ refetches; expect it to invalidate every cached run.
 
 **The cached green for exactly that content, base commit, and judge configuration
 is authoritative, and the worker's gate is where it is paid for.**
-The merge-path gate looks up the same key and replays what the worker cleared —
-this identity's `command:` gate, which is `just gate`, and the `pre-push` hook the
-publishing push then runs, which is the same recipe again. That is the only
+The merge path looks up the same key and replays what the worker cleared — the
+`pre-push` hook the publishing push runs, which is `just gate`, the same recipe the
+worker ran. Until onevcs 0.11.0 this identity also had a `command:` gate resolving to
+that recipe a third time, which is the duplication the removal ended. That is the only
 assignment consistent with the invariant that *a dispatched change is not done until
 its own gate is green*: an agent can only clear findings it was shown, so a verdict
 that first appears after the agent has settled can neither be cleared nor appealed.
@@ -761,14 +790,14 @@ rebuilt by a squash merge carrying only the comparison identity a publishing pus
 does, both cut from one clone — and counts how many times the judge was rolled for
 one content and one base. For a green the answer has to be once. Run it against the
 fingerprint as it stood before `2ba9685` and it is twice: the merge path re-judges
-work that had already been cleared. The failed-gate journey asserts the other
-half — a red is rolled again on the merge path and still rejected — so the cost of
+work that had already been cleared. The failing-verdict journey asserts the other
+half — a red is rolled again on the merge path and still refused — so the cost of
 the trade is stated by the suite rather than assumed. The three invalidations are
 asserted across the two paths for the same reason, because a fix that made them
 agree by hashing less would replay a verdict for a tree nobody judged. The
-publishing push those verdicts gate is not restaged there;
-`tests/e2e/test_gate_verdict_consistency_e2e.py` already drives it through the real
-lifecycle against its own miniature gate.
+publishing push those verdicts decide is not restaged there;
+`tests/e2e/test_publish_branch_e2e.py` drives it through the real verb against a
+real `pre-push` hook, which since onevcs 0.11.0 is the only verifier in that path.
 
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
@@ -834,12 +863,12 @@ split at those seams rather than at convenient ones:
   commits here touch nothing else, so most commits replay them.
 - **`orchestrator:test-checkouts`** runs the tests marked
   `@pytest.mark.reads_checkouts` and is **uncached**, because there is no key that
-  would be right. Its subject is the registered checkouts of the *other* repositories
-  this host routes — today, reconciling which of them run cargo-nextest against the
-  gate argv `config/onevcs.rules.yml` gives each one — and those live outside the
-  workspace, so no `nx.json` glob could name one and a memo would describe whatever
-  they looked like when it was recorded. It is seconds of work. A host holding none
-  of those checkouts reconciles nothing and says so.
+  would be right. Its subject is the *other* repositories this host routes — today,
+  reconciling the required checks each merge path really declares against the
+  inventory `config/merge-path-checks.json` keeps of them — and those live outside
+  the workspace, so no `nx.json` glob could name one and a memo would describe
+  whatever they required when it was recorded. It is seconds of work. A host that
+  cannot reach them reconciles nothing and says so.
 - **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
   whole workspace with `docs/**` and `**/*.md` removed.
 
@@ -1020,12 +1049,13 @@ lands it after a reconcile.
   back to merging directly if the repo disallows it), `change-direct` (merge it
   ourselves), `change-open` (open the change request and stop).
 
-  **What `onevcs` watches follows the merge policy, and never the gate the policy
-  names.** That is the correction onevcs 0.10.0 made, and the old rule is worth
-  knowing because it silently did nothing here: watching used to happen only where
-  the resolved gate was `{kind: checks}`, and every rule on this host names a
-  `command:` gate — so the host's required checks were observed for no repository at
-  all. Now a `change-direct` publication calls `await_checks` before asking for the
+  **What `onevcs` watches follows the merge policy, and never a gate.** That is the
+  correction onevcs 0.10.0 made, and the old rule is worth knowing because it silently
+  did nothing here: watching used to happen only where the resolved gate was
+  `{kind: checks}`, and every rule on this host then named a `command:` gate — so the
+  host's required checks were observed for no repository at all. onevcs 0.11.0 removed
+  the gate concept outright, so there is no longer a resolved kind for this to have
+  keyed on either way. Now a `change-direct` publication calls `await_checks` before asking for the
   merge it is about to perform itself, and a `change-auto` one arms auto-merge
   inside a watch that ends at the merge the host performs. Only required checks
   count (`statusCheckRollup.isRequired`), each transition is emitted as an
@@ -1124,8 +1154,8 @@ branch validator before any Git command; a plan that explicitly combines
 - a merge conflict aborts before child dispatch/publication as `stack-conflict`,
   cleans its unpublished local synthetic branch, and causes descendants to skip.
 
-The child PR body lists dependency PR links and stack bases. Its final gate runs
-against the complete stack, but the PR diff against its stack base is child-only.
+The child PR body lists dependency PR links and stack bases. Its merge path judges
+the complete stack, but the PR diff against its stack base is child-only.
 
 ### Diff-derived PR descriptions
 
@@ -1219,7 +1249,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.10.1.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.11.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1296,9 +1326,9 @@ lives. The branch and its commits are preserved; the worktree is the session's a
 goes when the session does.
 
 **A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.10.1 has no notion
-of one and `onevcs` 0.10.0 has none to open — and no gate runs, on a local or a remote
-identity, until the last step has settled and the publication starts. A pause is
+pause on either engine at the adopted versions — `onepipeline` v0.11.0 has no notion
+of one and `onevcs` 0.11.0 has none to open — and nothing is published, on a local or
+a remote identity, until the last step has settled and the publication starts. A pause is
 purely local branch state.
 
 **`attest` takes a node id, and it folds that node to `done`.** This is the part
@@ -1452,7 +1482,7 @@ has settled is read with `just results` and `just telemetry`.
 Every branch this harness can leave behind has a `onevcs` verb that lands it. That
 is the whole point of routing version control through `onevcs`: an agent that finds
 its documented path missing improvises with raw `git` or `gh`, and improvised
-publication is how a change reaches a base branch without its gate. So the table is
+publication is how a change reaches a base branch with nothing having ruled on it. So the table is
 exhaustive by construction — **no branch state here requires raw `git` or `gh`.**
 
 | The branch is… | Verb | What it does |
@@ -1516,15 +1546,18 @@ Before any mutation, integration resolves the supplied checkout back to its
 canonical registry entry. Remote and unregistered repositories reject normal
 integration and `--push` with exit 2; there is no routine bypass.
 
-Each permitted candidate fetches the selected remote, merges current
-`<remote>/<base>` (then earlier train candidates) in its own worktree, and runs
-the gate under the comparison identity `onevcs` exports, so the gate and the
-publishing push judge the same diff. Unlike the lifecycle's own gate runs, this
-one is kept even with `--push`: every candidate fast-forwards the local base
-*before* the single push, so the pre-push hook does not stand between an
-unverified candidate and the local base, and an aggregate rejection could not say
-which branch of the train caused it. A passing branch fast-forwards the local
-base. Conflicts and gate failures are reported as skips. `--push` updates the
+Each permitted candidate fetches the selected remote and merges current
+`<remote>/<base>` (then earlier train candidates) in its own worktree, under the
+comparison identity `onevcs` exports, so the candidate and the publishing push are
+resolved against the same diff. **The train runs no verifier of its own** — onevcs
+0.11.0 left it none to run — so what judges the work is the `pre-push` hook at the
+single push, and the train says so before it starts: when
+`store::merge_path_coverage` answers `Coverage::None` it warns, in the same words
+`onevcs register` uses, that what it is about to land is unproven. It warns
+*before* rather than after, because an operator who learns afterwards that nothing
+will judge what the train landed has already landed it. A permitted branch
+fast-forwards the local base. Conflicts and per-candidate refusals are reported as
+skips. `--push` updates the
 remote only when the base advanced. The base and candidate worktrees must be
 clean.
 
@@ -1549,7 +1582,7 @@ the publication checkout is still never worked in) and, when the work was done
 somewhere the identity does not know about, accepts `--execution-checkout PATH`.
 A branch found nowhere names every checkout that was searched.
 
-A publication that its gate rejected does not publish the work, and does not discard
+A publication its merge path refused does not publish the work, and does not discard
 it either. The branch outlives the run: `PublishOutcome::Failed` carries a `retained`
 naming whether it was `handed-back` to a registered checkout of the identity or
 `refused` by it, and the node's settlement names the branch. An operator inspects it
@@ -1566,18 +1599,20 @@ unattested marker, and it refuses everything else by name:
 - **A marker written under a prefix this host is not configured with** is refused as
   unreadable rather than read or ignored; `trailer_prefix` in the rules file is the
   one source of that spelling.
-- **An identity that "names no complete bar and its merge path runs no gate"** is
-  refused before anything is written: `attests_nothing` fires when the *stored*
-  identity gate is `<no-op>`, the rules file's gate is `{kind: pre-push}`, and the
-  source checkout carries no executable `pre-push` hook. Its message names both ways
-  to give the identity a bar.
+- **An identity that "names no complete bar and nothing on its merge path verifies
+  one"** is refused before anything is written: `attests_nothing` fires when the
+  *stored* identity gate is `<no-op>` **and** `store::merge_path_coverage` answers
+  `Coverage::None`. It reads no rules file — the gate it used to consult there is
+  gone — and its message names both ways to give the identity a bar: an executable
+  `pre-push` hook in the source checkout, or a host whose required checks judge its
+  change requests.
 - **A branch whose subjects will not compose a publication subject** is refused
   before the attestation is written, so `--title` is offered on the branch as the
   operator left it.
 
 Only then does it sync the change base, write the attestation, emit
 `recovery-attested`, and publish through the *same* landing path everything else
-uses — the same rules-resolved policy and the same gate. It takes no option that
+uses — the same rules-resolved policy and the same merge path. It takes no option that
 overrides that policy: `just repo-recover` forwards `--repo` and `--title` (plus the
 `--body-file` this repository drafts for it), and there is no base or type to pass.
 Recovery cuts its own run root under `~/.onevcs/workspaces/`, with a clone sharing
@@ -1727,14 +1762,13 @@ raw `git`, which is the point — see [which verb lands which branch
 state](#which-verb-lands-which-branch-state).
 
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
-it skips a candidate for incomplete provenance. A recovery under a `command:` gate
-preserves that run under its own run root's
+it skips a candidate for incomplete provenance. A recovery whose publishing push a
+`pre-push` hook judges preserves what that hook wrote under its own run root's
 [`gate-logs/`](#where-a-merge-path-verdict-is-preserved), named as `preserved_log`
-on the `gate-verdict` event, so consecutive attempts on one branch are comparable
-instead of reading alike. An identity whose gate is `{kind: pre-push}` or
-`{kind: checks}` runs nothing `onevcs` owns, so it emits no verdict and preserves no
-log — a `pre-push` rejection is whatever git printed at the push, and required
-checks decide afterwards.
+on the `push` event, so consecutive attempts on one branch are comparable instead of
+reading alike. An identity verified by the host's required checks preserves no log,
+because nothing local produced one: those checks decide after the change request
+exists, and `EventKind::ChangeCheck` events are where they are read.
 
 A branch can nevertheless be complete and unpublished: the agent finishes and
 commits, then publication fails at push because of the environment. For example,
@@ -1809,9 +1843,11 @@ Switch identity type only between runs, by editing the rule that matches the
 repository; a team repository publishes remotely. Finish or recover active
 publication first.
 
-Switch the identity gate the same way, and between runs. A gate template may use
-`{base}` for the comparison ref, and because the policy is resolved from the rule
-rather than stored per alias, the change reaches every alias at once.
+There is no identity gate to switch. onevcs 0.11.0 removed the rules gate, so what
+verifies a change is the repository's own merge path and changing that means changing
+the repository — its `pre-push` hook, or its branch protection — rather than anything
+here. The registry's own detected `gate` column is a description of a checkout, not a
+policy; re-register the checkout to move it.
 
 ## Auto mode without approvals — and why bypass
 
@@ -1856,7 +1892,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.10.1 — so every number in it was a
+journey it named are absent from `onepipeline` v0.11.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

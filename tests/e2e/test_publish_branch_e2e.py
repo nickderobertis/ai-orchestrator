@@ -86,15 +86,17 @@ NON_RELEASING_TITLE = "docs: describe the finished work"
 #: why a `--title` is what the two journeys below actually vary.
 BRANCH_SUBJECT = "feat: finish the work"
 
-#: One pipe buffer on Linux, which is the size a gate had to exceed on stderr to wedge
-#: the reader this host used to work around. Both streams are driven past it below.
+#: One pipe buffer on Linux, which is the size a verifier had to exceed on stderr to
+#: wedge the reader this host used to work around. Both streams are driven past it.
 PIPE_BUFFER = 64 * 1024
 #: Lines per stream, and their width. 8000 x ~48 bytes is ~375 KiB each way — several
 #: buffers, so the ordering of the reads matters rather than being incidental.
 LOUD_LINES = 8000
-#: A gate that is loud on both pipes and then succeeds. Written without quotes of any
-#: kind because `_publication` renders the argv through `repr` and swaps `'` for `"`.
-LOUD_GATE = (
+#: A `pre-push` hook that is loud on both pipes and then succeeds. The tier this used
+#: to be written against was the identity gate, which onevcs 0.11.0 removed; the
+#: property is not the tier's, it is the reader's, and the merge path's own verifier is
+#: what `onevcs` now reads both pipes of.
+LOUD_HOOK = (
     f"n=0; while [ $n -lt {LOUD_LINES} ]; do "
     "echo loud-gate-stdout-line-payload-padding-0123456789; "
     "echo loud-gate-stderr-line-payload-padding-0123456789 >&2; "
@@ -226,18 +228,36 @@ def _just(
     )
 
 
-def _publication(tmp_path: Path, *, gate: list[str], subject_policy: bool = False) -> Publication:
-    """A registered repository whose identity publishes locally under `gate`.
+def _publication(
+    tmp_path: Path,
+    *,
+    pre_push: str | None = None,
+    retired_gate: list[str] | None = None,
+    subject_policy: bool = False,
+) -> Publication:
+    """A registered repository that publishes locally, and whatever verifies it.
 
     `local-direct` deliberately: it is the one published policy that opens no change
     request, so the whole journey completes against a bare origin on disk with no
     network and no GitHub. The policy is written as the rules file's `default`,
     because a path origin has no host, owner, or name for a `match` to select on.
 
-    `subject_policy` gives the repository a `commit-msg` hook arranged exactly the way
-    `just bootstrap` arranges this repository's own — tracked under `.githooks/`, named
-    by `core.hooksPath` — so a publication here meets a repository that states a subject
-    policy rather than one that states none.
+    `pre_push` is the body of an executable `pre-push` hook, which is **the verifier**
+    for a `local-direct` identity: `store::merge_path_coverage` reports exactly this
+    hook, and git runs it at the publishing push. It is arranged the way `just
+    bootstrap` arranges this repository's own — tracked under `.githooks/`, named by
+    `core.hooksPath` — because that is the arrangement `onevcs` carries into the
+    disposable clone a publication works in.
+
+    `retired_gate` writes a **version 2** rules file naming that gate, which is the one
+    thing this fixture can do that proves a negative. onevcs 0.11.0 removed the gate
+    concept and accepts an unmigrated file by ignoring it, so a gate that would have
+    refused the publication outright on 0.10.0 lets it through here — and the sentinel
+    it would have written is absent. Anything else writes the migrated `version: 3`
+    file, which cannot name a gate at all.
+
+    `subject_policy` gives the repository a `commit-msg` hook arranged the same way, so
+    a publication here meets a repository that states a subject policy.
     """
     home = tmp_path / "onevcs-home"
     home.mkdir()
@@ -245,35 +265,63 @@ def _publication(tmp_path: Path, *, gate: list[str], subject_policy: bool = Fals
     _git("init", "-q", "-b", BASE, str(seed), cwd=tmp_path)
     (seed / "README.md").write_text("seed\n", encoding="utf-8")
     subjects_seen = _write_subject_policy(tmp_path, seed) if subject_policy else None
+    if pre_push is not None:
+        _write_pre_push(seed, pre_push)
     _git("add", "-A", cwd=seed)
     _git("commit", "-q", "-m", "init", cwd=seed)
     origin = tmp_path / "origin.git"
     _git("clone", "-q", "--bare", str(seed), str(origin), cwd=tmp_path)
     checkout = tmp_path / "checkout"
     _git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
-    if subject_policy:
-        # What `just bootstrap` does here, and the only half of the arrangement a clone
-        # does not inherit: the tracked directory arrives with the content, the config
-        # naming it does not.
+    if subject_policy or pre_push is not None:
+        # What `just bootstrap` does here: the tracked directory arrives with the
+        # content, the config naming it does not. Measured while writing these
+        # journeys, and worth knowing because it is *not* what the arrangement rests
+        # on — `onevcs` gives the publication clone the lender's `core.hooksPath` **or**
+        # its tracked `.githooks/`, so the hooks are reached with this config unset too.
+        # It is set anyway, because the point of the fixture is to be the arrangement a
+        # real checkout has rather than the minimum that happens to work.
         _git("config", "core.hooksPath", ".githooks", cwd=checkout)
-    # A command gate is argv `onevcs` runs directly — no shell — so the verdict under
-    # test is this list's own exit status.
-    (home / "rules.yml").write_text(
-        "version: 2\n"
+    policy = (
+        "version: 3\n"
         "trailer_prefix: Orchestrator-\n"
         "rules: []\n"
         "default:\n"
         "  publication: local-direct\n"
         "  approvals: none\n"
-        "  gate:\n"
-        f"    command: {gate!r}\n".replace("'", '"'),
-        encoding="utf-8",
     )
+    if retired_gate is not None:
+        policy = (
+            "version: 2\n"
+            "trailer_prefix: Orchestrator-\n"
+            "rules: []\n"
+            "default:\n"
+            "  publication: local-direct\n"
+            "  approvals: none\n"
+            "  gate:\n"
+            f"    command: {retired_gate!r}\n".replace("'", '"')
+        )
+    (home / "rules.yml").write_text(policy, encoding="utf-8")
     environment = dict(os.environ)
     environment["ONEVCS_HOME"] = str(home)
     registered = _just("register-repo", str(checkout), environment=environment)
     assert registered.returncode == 0, registered.stderr + registered.stdout
     return Publication(checkout, origin, environment, subjects_seen)
+
+
+def _write_pre_push(seed: Path, body: str) -> None:
+    """Install the tracked `pre-push` hook that verifies a `local-direct` publication.
+
+    Tracked under `.githooks/` rather than written into `.git/hooks/`, because that is
+    the arrangement that survives the clone: `onevcs` carries the lender's
+    `core.hooksPath` into the disposable clone a publication is built in, and a hook
+    written into one checkout's `.git/hooks/` reaches nothing.
+    """
+    hooks = seed / ".githooks"
+    hooks.mkdir(exist_ok=True)
+    hook = hooks / "pre-push"
+    hook.write_text(f"#!/usr/bin/env bash\nset -uo pipefail\n{body}\n", encoding="utf-8")
+    hook.chmod(hook.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _write_subject_policy(tmp_path: Path, seed: Path) -> Path:
@@ -365,7 +413,7 @@ def test_publish_branch_lands_a_complete_branch_on_its_base(tmp_path: Path) -> N
     than from the command's own report, because a verb that said it published and
     pushed nothing is exactly the failure an operator would discover later.
     """
-    publication = _publication(tmp_path, gate=["true"])
+    publication = _publication(tmp_path)
     _finished_branch(publication.checkout)
 
     before = _git("rev-list", "--count", BASE, cwd=publication.origin).strip()
@@ -400,15 +448,20 @@ def test_publish_branch_lands_a_complete_branch_on_its_base(tmp_path: Path) -> N
     assert landed in published.stdout, published.stdout
 
 
-def test_publish_branch_refuses_a_branch_its_identity_gate_rejects(tmp_path: Path) -> None:
-    """A red gate stops the publication, and the base is left exactly as it was.
+def test_publish_branch_refuses_a_branch_the_repositorys_own_merge_path_rejects(
+    tmp_path: Path,
+) -> None:
+    """The merge path stops the publication, and the base is left exactly as it was.
 
-    The recovery path, and the reason the verb is worth routing through at all: the
-    whole point of not reaching for `gh pr create` by hand is that this path runs the
-    repository's own gate first. A refusal that had already advanced the base would be
-    worse than no gate, so what is asserted is the base, not the exit status alone.
+    The recovery path, and the reason the verb is worth routing through at all. What
+    runs the repository's verification is no longer `onevcs` — 0.11.0 removed the tier
+    it ran itself — it is the repository's own `pre-push` hook, which git runs at the
+    publishing push and which `store::merge_path_coverage` reports as this identity's
+    verifier. A refusal that had already advanced the base would be worse than no
+    verifier at all, so what is asserted is the base, not the exit status alone.
     """
-    publication = _publication(tmp_path, gate=["false"])
+    ran = tmp_path / "the-hook-ran"
+    publication = _publication(tmp_path, pre_push=f'touch {ran}\necho "{HOOK_REFUSAL}" >&2\nexit 1')
     _finished_branch(publication.checkout)
     before = _git("rev-parse", BASE, cwd=publication.origin).strip()
 
@@ -421,9 +474,61 @@ def test_publish_branch_refuses_a_branch_its_identity_gate_rejects(tmp_path: Pat
     )
 
     assert refused.returncode != 0, refused.stdout
-    assert _git("rev-parse", BASE, cwd=publication.origin).strip() == before, (
-        "the base moved even though the gate rejected the branch"
+    # The refusal has to be *this* one. A publication can fail for reasons that are not
+    # the merge path at all, and a journey satisfied by any non-zero status would keep
+    # passing if the hook stopped being reached.
+    assert ran.exists(), (
+        "the publishing push never reached the repository's own `pre-push` hook, so "
+        f"whatever refused this branch was not its merge path:\n{refused.stdout[-2000:]}"
     )
+    assert _git("rev-parse", BASE, cwd=publication.origin).strip() == before, (
+        "the base moved even though the merge path rejected the branch"
+    )
+
+
+def test_a_gate_the_previous_release_would_have_run_is_ignored_and_the_branch_lands(
+    tmp_path: Path,
+) -> None:
+    """The removal, demonstrated on a real publication rather than from a version string.
+
+    This is the one shape of journey that can prove a negative here. The rules file is
+    `version: 2` and names a gate that **writes a sentinel file and then fails**. On
+    onevcs 0.10.0 that gate is resolved (`rules check` prints it), run in the
+    publication worktree, and its non-zero status refuses the publication outright —
+    which is exactly what `test_publish_branch_refuses_a_branch_its_identity_gate_rejects`
+    used to assert on this fixture. On 0.11.0 the concept is gone: the file still loads,
+    the gate is reported once as ignored, the branch lands, and the sentinel does not
+    exist — so nothing ran it, rather than something running it and disregarding the
+    answer.
+
+    The sentinel is what makes this evidence instead of inference. A gate spelled
+    `["false"]` that stopped refusing would be consistent with the gate running and its
+    verdict being dropped; a gate that never wrote its file did not run.
+    """
+    sentinel = tmp_path / "the-gate-ran"
+    publication = _publication(
+        tmp_path,
+        retired_gate=["bash", "-c", f"touch {sentinel}; exit 1"],
+    )
+    _finished_branch(publication.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(publication.checkout),
+        environment=publication.environment,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    assert not sentinel.exists(), (
+        "the retired gate ran: onevcs 0.11.0 must not invoke a `gate:` a version 2 "
+        f"rules file still names\n{published.stdout}{published.stderr}"
+    )
+    assert PUBLISHED_FILE in _git("ls-tree", "--name-only", BASE, cwd=publication.origin), (
+        f"the branch never reached the origin's {BASE} behind an ignored gate:\n{published.stdout}"
+    )
+    assert "version 3 removed" in published.stderr, published.stderr
 
 
 def test_publishing_an_already_published_branch_changes_nothing_and_says_so(
@@ -437,7 +542,7 @@ def test_publishing_an_already_published_branch_changes_nothing_and_says_so(
     neither: the second run succeeds, reports that the base already carries the
     content, and leaves the base on exactly the commit the first run put it on.
     """
-    publication = _publication(tmp_path, gate=["true"])
+    publication = _publication(tmp_path)
     _finished_branch(publication.checkout)
     first = _just(
         "publish-branch",
@@ -464,30 +569,40 @@ def test_publishing_an_already_published_branch_changes_nothing_and_says_so(
     )
 
 
-def test_publish_branch_lands_a_branch_whose_gate_is_loud_on_both_pipes(tmp_path: Path) -> None:
-    """The gate this host stopped silencing: far past one pipe buffer, on both streams.
+def test_publish_branch_lands_a_branch_whose_merge_path_is_loud_on_both_pipes(
+    tmp_path: Path,
+) -> None:
+    """The output this host stopped silencing: far past one pipe buffer, on both streams.
 
     `config/onevcs.rules.yml` used to prepend `env NEXTEST_STATUS_LEVEL=fail` to nine
-    gates, because an `onevcs` before 0.2.10 read a gate child's stdout to EOF before
-    it read stderr at all: a gate that filled the 64 KiB stderr buffer wedged there
-    forever and was reported as a *rejected* gate, twice failing complete work here.
-    Retiring that wrapper is a claim about this stack rather than about cargo-nextest,
-    so it is proven the way the defect appeared — by publishing behind a gate that is
-    genuinely loud on both pipes, with nothing suppressing it.
+    gates, because an `onevcs` before 0.2.10 read a verifying child's stdout to EOF
+    before it read stderr at all: a child that filled the 64 KiB stderr buffer wedged
+    there forever and was reported as a *rejection*, twice failing complete work here.
 
-    `LOUD_LINES` is asserted rather than assumed: the argv is run directly first, so a
-    payload that quietly stopped exceeding the buffer would fail here instead of
+    The gate that used to be the loud child is gone — onevcs 0.11.0 removed the tier —
+    and the property was never the tier's. It is the reader's, and the child `onevcs`
+    reads both pipes of on a `local-direct` publication is now the merge path's own
+    verifier: the `pre-push` hook git runs at the publishing push, whose output
+    `record_push` stores. So it is proven the way the defect appeared, against the
+    process that is really there.
+
+    `LOUD_LINES` is asserted rather than assumed: the hook body is run directly first,
+    so a payload that quietly stopped exceeding the buffer would fail here instead of
     turning this into a journey that proves nothing.
     """
-    gate = ["bash", "-c", LOUD_GATE]
     direct = subprocess.run(
-        gate, text=True, capture_output=True, timeout=e2e_timeout(120), check=False
+        ["bash", "-c", LOUD_HOOK],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
     )
     assert direct.returncode == 0, direct.stderr[-2000:]
     assert len(direct.stderr.encode()) > PIPE_BUFFER, len(direct.stderr.encode())
     assert len(direct.stdout.encode()) > PIPE_BUFFER, len(direct.stdout.encode())
 
-    publication = _publication(tmp_path, gate=gate)
+    ran = tmp_path / "the-hook-ran"
+    publication = _publication(tmp_path, pre_push=f"touch {ran}\n{LOUD_HOOK}")
     _finished_branch(publication.checkout)
 
     published = _just(
@@ -499,14 +614,20 @@ def test_publish_branch_lands_a_branch_whose_gate_is_loud_on_both_pipes(tmp_path
     )
 
     assert published.returncode == 0, published.stderr[-2000:] + published.stdout[-2000:]
+    # Without this the journey would pass on a hook nothing ever reached, which is the
+    # one way "a loud verifier still publishes" could be true of nothing at all.
+    assert ran.exists(), (
+        "the publishing push never reached the repository's own `pre-push` hook, so "
+        f"nothing loud was read:\n{published.stdout[-2000:]}"
+    )
     assert PUBLISHED_FILE in _git("ls-tree", "--name-only", BASE, cwd=publication.origin), (
-        f"the loud gate's branch never reached the origin's {BASE}:\n{published.stdout}"
+        f"the loud merge path's branch never reached the origin's {BASE}:\n{published.stdout}"
     )
 
 
 def test_publish_branch_refuses_a_branch_that_is_not_there(tmp_path: Path) -> None:
     """A branch the checkout cannot reach is named in the refusal, not guessed at."""
-    publication = _publication(tmp_path, gate=["true"])
+    publication = _publication(tmp_path)
     _finished_branch(publication.checkout)
 
     refused = _just(
@@ -545,7 +666,7 @@ def test_publish_branch_refuses_a_subject_the_repositorys_own_hook_turns_down(
     rather than the refusal alone. A refusal that had already advanced the base is the
     failure this whole routing exists to prevent.
     """
-    publication = _publication(tmp_path, gate=["true"], subject_policy=True)
+    publication = _publication(tmp_path, subject_policy=True)
     _finished_branch(publication.checkout)
     before = _git("rev-parse", BASE, cwd=publication.origin).strip()
 
@@ -589,7 +710,7 @@ def test_publish_branch_lands_a_subject_the_repositorys_own_hook_accepts(
     the presence of a policy — and a hook that refused everything, or an `onevcs` that
     refused any repository stating a policy at all, fails here.
     """
-    publication = _publication(tmp_path, gate=["true"], subject_policy=True)
+    publication = _publication(tmp_path, subject_policy=True)
     _finished_branch(publication.checkout)
 
     published = _just(
@@ -616,14 +737,14 @@ def test_publish_branch_lands_a_subject_the_repositorys_own_hook_accepts(
     )
 
 
-def _hosted(tmp_path: Path, *, answers: list[str], gate: list[str] | None = None) -> Hosted:
+def _hosted(tmp_path: Path, *, answers: list[str], pre_push: str | None = None) -> Hosted:
     """A registered identity whose rules open a change request, with the drafter live.
 
     `local-direct` above is enough to prove a branch lands; it opens no change request,
     so it can say nothing about the description one carries. This is the other policy —
     `change-open` — and everything below the remote host stays real: the branch is
-    pushed with real git into the same throwaway bare origin, the identity's gate is a
-    real command `onevcs` runs, and the body is drafted by the real
+    pushed with real git into the same throwaway bare origin, that push is judged by a
+    real `pre-push` hook when one is asked for, and the body is drafted by the real
     `graphs/pr-author.yaml` through the real `oneagentgraph`.
 
     Two things are substituted, both external and both at their published seam. The
@@ -637,25 +758,28 @@ def _hosted(tmp_path: Path, *, answers: list[str], gate: list[str] | None = None
     seed = tmp_path / "seed"
     _git("init", "-q", "-b", BASE, str(seed), cwd=tmp_path)
     (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    if pre_push is not None:
+        _write_pre_push(seed, pre_push)
     _git("add", "-A", cwd=seed)
     _git("commit", "-q", "-m", "init", cwd=seed)
     origin = tmp_path / "origin.git"
     _git("clone", "-q", "--bare", str(seed), str(origin), cwd=tmp_path)
     checkout = tmp_path / "checkout"
     _git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
-    # A reviewed path behind a real command gate: `change-open` opens the change
-    # request and stops, which is the state whose description is under test. The gate is
-    # argv `onevcs` runs directly — no shell — so the verdict is that list's own exit
-    # status, and a journey about what a *rejected* branch costs states its own.
+    if pre_push is not None:
+        _git("config", "core.hooksPath", ".githooks", cwd=checkout)
+    # A reviewed path: `change-open` opens the change request and stops, which is the
+    # state whose description is under test. The rules name no verifier — onevcs 0.11.0
+    # removed the concept — so what can refuse this branch before the change request
+    # exists is the publishing push, and a journey about what a *refused* branch costs
+    # states its own hook.
     (home / "rules.yml").write_text(
-        "version: 2\n"
+        "version: 3\n"
         "trailer_prefix: Orchestrator-\n"
         "rules: []\n"
         "default:\n"
         "  publication: change-open\n"
-        "  approvals: required\n"
-        "  gate:\n"
-        f"    command: {gate or ['true']!r}\n".replace("'", '"'),
+        "  approvals: required\n",
         encoding="utf-8",
     )
 
@@ -1103,17 +1227,23 @@ def test_publish_branch_forwards_an_option_the_wrapper_does_not_know_and_drafts_
     assert _drafting_turns(hosted) == [], "a drafting turn was spent on an unreadable list"
 
 
-def test_a_branch_its_gate_rejects_has_already_paid_for_its_body(tmp_path: Path) -> None:
-    """The accepted cost, proven rather than assumed: the turn is spent before the gate.
+def test_a_branch_its_merge_path_refuses_has_already_paid_for_its_body(
+    tmp_path: Path,
+) -> None:
+    """The accepted cost, proven rather than assumed: the turn is spent before the push.
 
-    The body is an argument to `onevcs` and `onevcs` is what runs the identity's gate,
-    so drafting cannot wait for a verdict that has not been asked for yet. What that
-    buys a branch the gate then rejects is nothing, and this is the journey that says so
-    out loud — it is the trade `docs/repo-lifecycle.md` documents, and a reader who
-    doubts it can run this. Anyone moving drafting behind the gate will fail here, which
-    is the point: that change is a different repository's design and would be noticed.
+    The body is an argument to `onevcs` and `onevcs` is what pushes, so drafting cannot
+    wait for a verdict nothing has asked for yet. What that buys a branch the merge path
+    then refuses is nothing, and this is the journey that says so out loud — it is the
+    trade `docs/repo-lifecycle.md` documents, and a reader who doubts it can run this.
+    Anyone moving drafting behind the push will fail here, which is the point: that
+    change is a different repository's design and would be noticed.
     """
-    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})], gate=["false"])
+    hosted = _hosted(
+        tmp_path,
+        answers=[json.dumps({"body": DRAFTED_BODY})],
+        pre_push='echo "the merge path refuses this branch" >&2; exit 1',
+    )
     _finished_branch(hosted.checkout)
 
     refused = _just(
@@ -1127,11 +1257,11 @@ def test_a_branch_its_gate_rejects_has_already_paid_for_its_body(tmp_path: Path)
 
     assert refused.returncode != 0, refused.stdout
     assert len(_drafting_turns(hosted)) == 1, (
-        f"the rejected branch spent {len(_drafting_turns(hosted))} drafting turns; one is "
-        "what being drafted before the gate costs"
+        f"the refused branch spent {len(_drafting_turns(hosted))} drafting turns; one is "
+        "what being drafted before the push costs"
     )
     assert _opened_change_requests(hosted) == [], (
-        "a change request was opened for a branch the identity's gate rejected"
+        "a change request was opened for a branch its merge path refused"
     )
 
 

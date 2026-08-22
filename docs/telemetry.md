@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.10.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.11.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -86,7 +86,7 @@ session stream:
 | --- | --- |
 | `setup` | `session-opened`, `fetch`, `commit-preserved`, `lock-acquired`, `recovery-attested` |
 | `lock_wait` | `lock-wait` |
-| `gate` | `gate-started` |
+| `gate` | `gate-started` (reachable only from a store an older release wrote) |
 | `publication_wait` | `gate-verdict`, `push`, `change-opened`, `change-check`, `merge-queued`, `change-merged`, `merge-completed`, `sync-conflict` |
 
 A session's last record is what it is doing until the next one, and a kind this build
@@ -107,16 +107,23 @@ interval was attributed to it. It is not evidence that judging took no time.
 
 ### What `gate` actually reads on this host
 
-`gate` is the span from `onevcs`'s `gate-started` to its `gate-verdict`. Those
-events are emitted **only where the resolved policy names a `{command: [...]}`
-gate** — `gate::own_command` returns nothing for `{kind: pre-push}` and
-`{kind: checks}`, so `onevcs`'s verify step is a no-op and no span opens.
+**`gate` is served absent by every run this stack now produces, and that is the
+adoption rather than a fault.** The bucket is filled from `onevcs`'s `gate-started`
+and `gate-verdict` events, and onevcs 0.11.0 emits neither — it removed the tier
+that emitted them. onepipeline keeps the bucket because the contract fixes the
+eight, and it is still filled when the run being read was recorded by an older
+`onevcs`. The `fix86-llmlint` breakdown above is one of those: 21m28s, 42% of its
+wall clock, recorded when this host still ran a gate of its own.
 
-**Every rule in `config/onevcs.rules.yml` on this host currently names a `command:`
-gate**, so `gate` is populated for new runs and is often the largest bucket after
-`agent`: the `fix86-llmlint` run above spent 21m28s — 42% of its wall clock — there.
-It reads `0` for a run whose nodes published nothing, and it would read `0` for an
-identity routed to `{kind: pre-push}`, whose cost would land in
+So on a run recorded today that cost has not vanished, it has moved. What verifies
+a change is the repository's own merge path, and its wall time is the
+publication's: the `pre-push` hook git runs at the publishing push lands in
+`publication_wait`, and so does waiting on a host's required checks. **Read a
+present `gate` as evidence the run predates the adoption**, and read `agent`
+against `publication_wait` where the old advice said `agent` against `gate`.
+
+The paragraph below is kept for reading those older runs. It described an
+identity routed to `{kind: pre-push}`, whose cost landed in
 `publication_wait` where `git push` runs the hook, or to `{kind: checks}`, whose
 cost falls outside the run entirely because the host decides after the node settled.
 That routing is the rules file's to change; this paragraph only says what follows
@@ -142,10 +149,12 @@ counters; `surfaces_read` is what resets the planner-update pacemaker.
 ## Finding an optimization target
 
 1. Run `just telemetry --breakdown` and start with the largest `WALL`.
-2. Compare `agent` with `gate`. A run that is mostly `agent` is prompt, context, or
-   turn-count work; one that is mostly `gate` is paying for the repository's own
-   bar, and `just lint-llm-diff`'s cached verdict is the lever there rather than
-   anything in this view.
+2. Compare `agent` with `publication_wait`. A run that is mostly `agent` is prompt,
+   context, or turn-count work; one that is mostly `publication_wait` is paying for
+   the repository's own bar at the merge path, and `just lint-llm-diff`'s cached
+   verdict is the lever there rather than anything in this view. On a run recorded
+   before onevcs 0.11.0 that second bucket is `gate` instead; see [What `gate`
+   actually reads on this host](#what-gate-actually-reads-on-this-host).
 3. A large `scheduling` bucket on a wide graph is the frontier waiting — on a
    decision point, on a person, or on concurrency. Compare it with the graph's
    `concurrency` and with `just status`, which names what each node is waiting for.
@@ -169,22 +178,24 @@ counters; `surfaces_read` is what resets the planner-update pacemaker.
 4. A large `scheduling` bucket means the graph was not working. `just status` is
    where that is diagnosed, not here — it names the in-flight dispatches, the
    surfaces waiting unread, and whether anything is driving the run at all.
-5. **For a failed gate, read the node's settlement detail and the session's own
-   `gate-verdict`.** The detail is `onevcs: <command> rejected "<branch>"`, and the
-   verdict event carries the command, the verdict, the output, a `preserved_log`
-   path that outlives the run's worktree, and the whole run again as an artifact
-   (`onevcs artifact`). The read API serves the same run as a `verification` span
+5. **For a refused publication, read the node's settlement detail and the session's
+   own `push` event.** The detail carries `onevcs`'s own reason, and that event
+   carries the merge path's output, a `preserved_log` path that outlives the run's
+   worktree, and the whole run again as an artifact (`onevcs artifact`). On a run
+   recorded before onevcs 0.11.0 the same evidence hangs off `gate-verdict` and the
+   detail reads `onevcs: <command> rejected "<branch>"`. The read API serves the same run as a `verification` span
    whose `detail.output_tail` is the tail of it and whose `detail.artifact_id`
    opens the rest — see [Seeing the supervisory
    tier](#seeing-the-supervisory-tier). There is no `merge-gate-coverage` or
    `verification-finished` *event*, and no `artifacts.gate_log` on the node
    result.
-6. **For a failure that never reached a gate** — a base advanced under the
-   publication, a fetch or a worktree that could not be built — there is no gate
-   span and no preserved log, because none was produced. The whole account is the
-   same settlement detail, carrying `onevcs`'s own reason. Those two no longer settle
-   alike: a rejected gate is terminal and settles `publication-failed`, while a base
-   that moved under the publication is `sync-conflict` — a word of its own, reached
+6. **For a failure that never reached the merge path** — a base advanced under the
+   publication, a fetch or a worktree that could not be built — there is no
+   preserved log, because none was produced. The whole account is the same
+   settlement detail, carrying `onevcs`'s own reason. Those two no longer settle
+   alike: a refusal by something that judged the publication is terminal and settles
+   `publication-failed`, while a base that moved under the publication is
+   `sync-conflict` — a word of its own, reached
    only after the node was dispatched again on that branch. The detail is still where
    each of them says what happened.
 

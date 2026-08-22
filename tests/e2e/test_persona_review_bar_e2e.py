@@ -3,7 +3,8 @@
 `personas/crozier/crozier-corpus.yaml` demanded `just gate` be fully green before a
 fixture change was done, and crozier has no `gate` recipe: its deterministic tier is
 `check` and its judged tier is a separate `lint-llm-diff`, which is the pair
-`config/onevcs.rules.yml` resolves for crozier's merge path. That is the failure this
+crozier's merge path requires of it — the two required checks
+`config/merge-path-checks.json` inventories for that identity. That is the failure this
 persona's proof clause was corrected for, and it is not a failure of the file — it is a
 failure of what a *supervisor* is told. A worker never sees that bar and cannot argue
 with it, so finished, gate-green work is failed against a recipe nobody can run.

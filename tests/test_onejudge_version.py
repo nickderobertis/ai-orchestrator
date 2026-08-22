@@ -297,7 +297,7 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # *linked* version by `tests/test_linked_libraries.py`, so the two gates meet
         # on this one sentence: this one dates it to the adopted onepipeline, that one
         # holds the number in it to what that release's wheel actually resolved.
-        "at v{version} and its lock still resolves 0.10.0",
+        "at v{version} and its lock still resolves 0.11.0",
         # What a bodyless change request now says about itself. Phrased against the
         # adopted release rather than the one it arrived in, for the reason the
         # repo-lifecycle entry below records.

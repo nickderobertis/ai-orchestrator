@@ -25,9 +25,9 @@
 #     when its drafting graph produces nothing. A branch that could not be described is
 #     still a branch that has to land.
 #
-# **The turn is spent before the gate**, because the body is an argument to `onevcs`
-# and the verb is what runs the identity's gate — so a branch the gate then rejects has
-# paid for a body nothing used. `docs/repo-lifecycle.md` has why that is accepted.
+# **The turn is spent before the push**, because the body is an argument to `onevcs`
+# and the verb is what pushes — so a branch the merge path then refuses has paid for a
+# body nothing used. `docs/repo-lifecycle.md` has why that is accepted.
 #
 # Reading the branch and `--repo` out of the argument list is what drafting needs, and
 # a list this cannot read that way is landed exactly as it is today: the point is that
@@ -41,7 +41,7 @@
 # is forwarded whole and landed with no body rather than refused.
 #
 # llmlint: ignore-file[tool_output_is_signal] What the verb verified and where it
-# published the branch — the gate verdict, the merge path taken, and the change
+# published the branch — the merge path's verdict, the route taken, and the change
 # request's URL — is the product an operator runs this for, and the drafter's own
 # one-line ending on stderr is what says why a change request opened with no body.
 set -euo pipefail
