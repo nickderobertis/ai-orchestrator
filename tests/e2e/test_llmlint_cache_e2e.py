@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import copy_checkout, requires_workspace_install
+from nx_workspace import WORKSPACE_INSTALL_MARKS, copy_checkout
 
 ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
@@ -57,7 +57,7 @@ pytestmark = [
         reason="llmlint resolves the judge configuration this cache key is built from; "
         "run 'just setup-llmlint'",
     ),
-    requires_workspace_install,
+    *WORKSPACE_INSTALL_MARKS,
     # Copying the whole tree is this journey's premise, and the tree includes
     # its prose: this belongs to the whole-workspace tier by construction.
     pytest.mark.reads_docs,

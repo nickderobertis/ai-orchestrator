@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from nx_workspace import copy_checkout, copy_working_tree, requires_workspace_install
+from nx_workspace import copy_checkout, copy_working_tree, shares_workspace_install
 from waits import timeout as e2e_timeout
 
 # Deliberately no module-level tier mark. Most of this file drives `just` recipes
@@ -1051,7 +1051,7 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
     assert (checkout / "node_modules/.bin/nx").is_file()
 
 
-#: One real journey carrying `requires_workspace_install`, run inside the fresh
+#: One real journey carrying `shares_workspace_install`, run inside the fresh
 #: worktree below. It reaches Nx through the real `just` recipes, so it is exactly
 #: the shape that used to skip there — and a skip is what made a worker's own
 #: `pytest` say something different from the gate's.
@@ -1240,7 +1240,7 @@ def test_a_freshly_created_worktree_provisions_its_python_environment_from_the_l
         _run("git", "worktree", "remove", "--force", str(worktree))
 
 
-@requires_workspace_install
+@shares_workspace_install
 @pytest.mark.reads_docs
 def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path) -> None:
     """A committed lockfile decides, and one that has to move stops the run.
@@ -1273,7 +1273,7 @@ def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path
     assert lockfile.read_bytes() == before
 
 
-@requires_workspace_install
+@shares_workspace_install
 @pytest.mark.reads_docs
 def test_a_caller_that_provides_the_python_environment_is_not_synced_over(
     tmp_path: Path,
@@ -1304,7 +1304,7 @@ def test_a_caller_that_provides_the_python_environment_is_not_synced_over(
     assert not (checkout / ".venv").exists()
 
 
-@requires_workspace_install
+@shares_workspace_install
 @pytest.mark.reads_docs
 def test_a_caller_that_asks_uv_to_sync_gets_the_environment_it_named(tmp_path: Path) -> None:
     """`UV_NO_SYNC=0` is how uv is asked to sync, so it must not skip provisioning.

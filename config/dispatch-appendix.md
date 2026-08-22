@@ -14,17 +14,37 @@ alone, about two minutes a roll. The complete gate is `complete_gate` below, and
 over the **finished** tree to confirm rather than as the loop that finds your findings.
 What that "once" does and does not license is the paragraph after next.
 
-**Define the complete gate once, before you start, and never spell it out again.** Both of
-its parts vary by repository — the base branch is not always `main`, and `just gate` already
-runs the judged tier in some repositories while in others that tier is a separate step — so
-both live in one definition and everything below calls it:
+**Define the complete gate once, before you start, and never spell it out again.** Every
+part of it varies by repository — the base branch is not always `main`, the recipe that is
+the full bar is not always called `gate`, and that recipe already runs the judged tier in
+some repositories while in others that tier is a separate step — so all of it lives in one
+definition and everything below calls it. **Derive both values before you run anything;
+neither is a fixed string, and the second one is the one workers get wrong:**
 
     BASE=origin/master   # confirm it: git remote show origin | sed -n 's/.*HEAD branch: /origin\//p'
-    complete_gate() { just bootstrap && just gate && just lint-llm-diff "$BASE"; }
+    GATE=gate            # confirm it: just --list — take the recipe whose own description is
+                         # this repository's full bar, whatever it is called
+    complete_gate() { just bootstrap && just "$GATE" && just lint-llm-diff "$BASE"; }
 
-It has to run as **one invocation**. A worker that runs the parts separately is failed for
-never having run the gate end to end, however green each part was on its own — which is why
-nothing below ever names a part of the chain instead of the whole of it.
+A repository with no `gate` recipe is ordinary rather than broken, and substituting is what
+you are meant to do: crozier has none, and its `check` is described by its own `just --list`
+as *"Full quality gate. Fails on any issue."* — so `GATE=check` there, and a dispatch that
+insisted on `just gate` would have run nothing at all.
+
+**Nothing outside the repository answers which recipe that is.** `config/onevcs.rules.yml`
+carried a per-identity `gate:` command until **onevcs 0.11.0 removed the concept** — a rule
+is `{publication, approvals}` now and a `gate:` key is refused by name — so it is no longer
+an answer. `just repos`'s gate column is not one either: it is the registry's own detection
+from the origin and the checkout, and it prints `just gate` for repositories that have no
+such recipe. The repository's own `just --list` is what decides.
+
+It has to run as **one invocation**, over the tree you are reporting on. That is the whole
+of what is being checked — that the chain ran end to end in one command, not that your
+report echoes this file's spelling of it. A report that **names the command you
+substituted** (`just bootstrap && just check && just lint-llm-diff origin/master`) has
+satisfied the rule, and is the better report, because it says what actually ran. What fails
+is running the parts separately, however green each was on its own — which is why nothing
+below ever names a part of the chain instead of the whole of it.
 
 **"Once" is a rule against looping, not a per-dispatch budget.** The reason to run the
 complete gate exactly once is that it is a ~28-minute way to learn something the judged

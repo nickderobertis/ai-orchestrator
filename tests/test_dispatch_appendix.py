@@ -15,6 +15,13 @@ complete gate is **named once**, and every worked example that runs or waits on 
 runs that name and never a part of the chain behind it. A future edit is free to change
 what the chain is; it is not free to leave two passages disagreeing about it again.
 
+The same file failed a second node the opposite way: it spelled the gate recipe as a
+bare `just gate`, and the judge read that as the literal to check a report against, so
+work that had run crozier's real bar — `just check`, crozier having no `gate` recipe —
+was failed for naming it. The gate slot is therefore held as a substitution the reader
+derives, and the file is required to say that what is checked is the one invocation
+rather than the name in it.
+
 The cheap-iteration rule is held the same way — by position rather than by phrasing —
 because the cost of burying it is measured: one node lost about 84 minutes looping on
 the whole gate to learn its lint findings, after the rule had already been written down.
@@ -46,6 +53,26 @@ BACKGROUNDED = re.compile(r"\(\s*(?P<command>[^()]*?)\s*\)\s*&")
 #: the cheap loop, and nowhere near a sentinel: the whole failure was a sentinel that
 #: named two of these instead of the gate they compose into.
 CHAIN_STEP = re.compile(r"\bjust +(?:bootstrap|gate|lint-llm-diff)\b")
+
+#: The gate slot of the chain, as a substitution rather than as a literal recipe name.
+#: `just "$GATE"` matches; `just gate` deliberately does not.
+SUBSTITUTED = re.compile(r"just\s+\"?\$\{?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\}?\"?")
+
+#: A literal gate recipe name standing in the chain where a substitution belongs. This
+#: is the defect itself: a name that does not exist in every repository, handed over as
+#: though it were fixed.
+BARE_GATE = re.compile(r"just\s+(?:gate|check)\b")
+
+#: An assignment in the setup block a reader substitutes into, with whatever trails it.
+#: `BASE` has always carried a `# confirm it:` derivation; the gate slot now must too.
+ASSIGNMENT = re.compile(r"^ +(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<rest>.*)$", re.MULTILINE)
+
+#: What a derivation looks like: the reader is shown the command that answers it.
+DERIVATION = re.compile(r"confirm it:", re.I)
+
+#: The report the judge is handed says what actually ran, which in a repository whose
+#: full bar is not called `gate` is not the template's own spelling.
+SUBSTITUTION_SATISFIES = re.compile(r"names?\s+the\s+command\s+you\s+substituted", re.I)
 
 #: The two halves of the "once" rule, matched on their load-bearing words rather than
 #: on a sentence — the same way everything else here is held, so that a reword is free
@@ -82,15 +109,27 @@ def test_the_complete_gate_is_defined_exactly_once(appendix: str) -> None:
 
 
 def test_the_definition_composes_every_step_of_the_chain(appendix: str) -> None:
-    """A definition that dropped a step would be the same defect, moved."""
+    """A definition that dropped a step would be the same defect, moved.
+
+    The middle step is asserted as a *slot* rather than as a name, because the recipe
+    that is a repository's full bar is not always called `gate` — which is the whole
+    subject of :func:`test_the_gate_recipe_is_derived_rather_than_handed_over_as_a_fixed_name`.
+    What has to survive is that the chain still has three steps and that the gate is one
+    of them; what it is called is the reader's to derive.
+    """
     chain = DEFINITION.search(appendix)
     assert chain is not None, f"{APPENDIX} no longer defines `complete_gate`"
 
-    for step in ("just bootstrap", "just gate", "just lint-llm-diff"):
+    for step in ("just bootstrap", "just lint-llm-diff"):
         assert step in chain["chain"], (
             f"{APPENDIX}'s complete gate no longer composes {step!r}, so a worker that "
             f"runs it has not run what this file calls complete:\n{chain['chain']}"
         )
+    assert SUBSTITUTED.search(chain["chain"]), (
+        f"{APPENDIX}'s complete gate no longer runs the repository's own gate recipe at "
+        f"all, so a worker that runs it has not run what this file calls complete:\n"
+        f"{chain['chain']}"
+    )
 
 
 def test_every_worked_example_waits_on_the_whole_chain(appendix: str) -> None:
@@ -173,4 +212,95 @@ def test_the_appendix_asks_for_the_bar_to_be_stated_as_criteria(appendix: str) -
         assert demand in appendix, (
             f"{APPENDIX} no longer asks for {demand!r} as an acceptance criterion, so a "
             "node that omits it is judged on the bar's own reading of it instead"
+        )
+
+
+def test_the_gate_recipe_is_derived_rather_than_handed_over_as_a_fixed_name(
+    appendix: str,
+) -> None:
+    """The defect above, asserted as a shape: a derived value, not a name.
+
+    Only the base ref carried a `# confirm it:` derivation, so the gate recipe beside it
+    read as fixed. What that derivation says is free to change; handing over a name
+    again is not.
+    """
+    chain = DEFINITION.search(appendix)
+    assert chain is not None, f"{APPENDIX} no longer defines `complete_gate`"
+
+    named = BARE_GATE.search(chain["chain"])
+    assert named is None, (
+        f"{APPENDIX} puts {named.group(0)!r} in the complete gate as a fixed name. The "
+        "recipe that is a repository's full bar is not always called `gate` — crozier's "
+        "is `check` — and a bare name here is both a command that may not exist and a "
+        "literal a judge compares a report against, which has already failed finished work"
+    )
+
+    substituted = [
+        found["name"] for found in SUBSTITUTED.finditer(chain["chain"]) if found["name"] != "BASE"
+    ]
+    assert substituted, (
+        f"{APPENDIX}'s complete gate names no substitution for the gate recipe "
+        f"({chain['chain']!r}); a worker in a repository without that recipe is left to "
+        "guess whether it may deviate from this file"
+    )
+
+    derived = {
+        found["name"] for found in ASSIGNMENT.finditer(appendix) if DERIVATION.search(found["rest"])
+    }
+    for name in substituted:
+        assert name in derived, (
+            f"{APPENDIX} substitutes ${name} into the complete gate but never shows how "
+            f"to derive it. `BASE` carries a `# confirm it:` command and that asymmetry "
+            f"is what made the other slot read as fixed"
+        )
+
+
+def test_what_the_judge_checks_is_one_invocation_and_not_a_recipe_name(
+    appendix: str,
+) -> None:
+    """Both halves: the rule against running the parts separately, and its actual subject.
+
+    The rule is unchanged — the chain runs end to end, in one command, over the finished
+    tree. What is stated now is what it was always about: that the chain *ran*, not that
+    the report echoes this file's own spelling of it. A report naming the command the
+    worker substituted is the better report, because it says what actually ran.
+    """
+    assert "one invocation" in appendix, (
+        f"{APPENDIX} no longer requires the complete gate to run as one invocation, which "
+        "is the rule the substitution must not be read as relaxing"
+    )
+    assert AGAINST_LOOPING.search(appendix), (
+        f"{APPENDIX} no longer says the complete gate runs over the finished tree"
+    )
+    assert SUBSTITUTION_SATISFIES.search(appendix), (
+        f"{APPENDIX} no longer says that a report naming the substituted command satisfies "
+        "the one-invocation rule — without it the template's own spelling reads as the "
+        "literal to check a report against, which is how correct work was failed"
+    )
+
+
+def test_the_appendix_says_what_does_not_answer_which_recipe_is_the_gate(
+    appendix: str,
+) -> None:
+    """The two authorities a reader would otherwise reach for, both wrong, named here.
+
+    `config/onevcs.rules.yml` carried a per-identity `gate:` until onevcs 0.11.0 removed
+    the concept, so it is no longer an answer at all. `just repos`'s gate column is the
+    registry's own detection from the origin and the checkout, and it prints `just gate`
+    for repositories that have no such recipe. The repository's own `just --list` is what
+    decides, and this file is now the only place a dispatch learns that.
+    """
+    paragraphs = [block for block in appendix.split("\n\n") if "onevcs.rules.yml" in block]
+    assert paragraphs, (
+        f"{APPENDIX} no longer says that `config/onevcs.rules.yml` does not answer which "
+        "recipe is a repository's gate; onevcs 0.11.0 removed the `gate:` key and a reader "
+        "who does not know that reaches for a file that decides nothing"
+    )
+    paragraph = paragraphs[0]
+    for authority in ("just repos", "just --list"):
+        assert authority in paragraph, (
+            f"{APPENDIX} names `config/onevcs.rules.yml` as no answer but says nothing "
+            f"about {authority!r} in the same breath. Both wrong authorities and the one "
+            "right one belong together, or a reader talked out of the first falls into "
+            "the second"
         )

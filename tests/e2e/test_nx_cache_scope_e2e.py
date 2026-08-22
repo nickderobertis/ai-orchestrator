@@ -54,13 +54,13 @@ from nx_inputs import (
     CODE_SCOPED,
     COVERAGE_SCOPED,
 )
-from nx_workspace import copy_checkout, requires_workspace_install
+from nx_workspace import WORKSPACE_INSTALL_MARKS, copy_checkout
 
 from orchestrator.root import REPO_ROOT
 
 # Copying the whole tree is this journey's premise, and the tree includes its
 # prose: these belong to the whole-workspace tier by construction.
-pytestmark = [requires_workspace_install, pytest.mark.reads_docs]
+pytestmark = [*WORKSPACE_INSTALL_MARKS, pytest.mark.reads_docs]
 
 CACHE_HIT = "read the output from the cache"
 # The suite reads this file directly — tests/test_smoke_selector.py holds its
