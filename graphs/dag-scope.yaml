@@ -79,6 +79,17 @@ members:
   # the run-level task — and it opens by interpolating `{task}` back in, because a
   # member that replaced the composed task is otherwise told nothing about the run.
   #
+  # `../personas/check-in.yaml` is named below for the LABEL alone. A single-sided
+  # `kind: oneharness` member has no onejudge base config to layer a persona delta
+  # over, so neither that file's `system_prompt` nor its `user.persona` reaches this
+  # turn: the `task` below is the whole of what the model is given, and the persona
+  # file is the catalog entry naming the role. That is why the reporting discipline
+  # this member is held to — the heredoc the update travels in, and the bound an
+  # elapsed time is compared against before anything is called a hang — is stated
+  # here and not only there. `tests/e2e/test_path_dispatched_personas_e2e.py` holds
+  # the label-only arrangement and `tests/e2e/test_supervisory_prompt_discipline_e2e.py`
+  # reads this task out of a real launch.
+  #
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
   # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
   # launcher identity —
@@ -108,8 +119,47 @@ members:
       {task}
 
       Report current progress on that run, for the planner supervising it. Read it
-      with the read-only views, send exactly one
-      `onepipeline surface <run-id> --kind check-in --message <text>` naming the run
+      with the read-only views, send exactly one `onepipeline surface` naming the run
       above, and exit. Never send `onepipeline reply`: live graph edits belong to the
       monitor member, which watches the whole run, and to the planner.
+
+      Put the update in a quoted heredoc, never in a command-line word:
+
+          onepipeline surface <run-id> --kind check-in --message "$(cat <<'UPDATE'
+          <your update, punctuated however you like, backticks and dollar signs
+          included>
+          UPDATE
+          )"
+
+      The verb takes its text as an argument, so prose written onto the command line
+      is parsed by the shell before the verb ever sees it: inside double quotes bash
+      performs command substitution on backticks and on `$(...)`, so an update that
+      quotes a command name runs that command in the launch directory and splices its
+      output into what the planner reads. That is measured rather than feared — an
+      update naming a command was read back with the command replaced by its own
+      output, after spending twenty-five minutes of a shared host's CPU on work
+      nobody requested. A heredoc whose delimiter is single-quoted expands nothing in
+      its body. Do not simplify it back to passing the text as a plain argument
+      word, and do not build it up in a double-quoted shell variable first.
+
+      Never call anything a hang until you have compared its elapsed time against a
+      bound you located and can name — the timeout the command itself declares, the
+      member's configured deadline, the node's turn budget. Three escalations from
+      this member in one session were false for want of that comparison: 3m25s into a
+      360s bound is a bounded wait, not a stall, and that command completed on its
+      own at 360.068s. Report elapsed against the bound, or not at all; if you cannot
+      find a bound, say that you could not find one rather than inferring a hang from
+      elapsed time alone.
+
+      Read an absence of events beside a live heartbeat as generation, not silence.
+      The views print `alive Ns ago` for a streaming dispatch, and a model
+      mid-generation records nothing while staying alive, so "no turn activity for
+      over two minutes" with a live heartbeat is a model thinking. Two neighbouring
+      readings failed the same way and are worth the same care: no matching process
+      is not no work, because a command whose output is captured to a log file runs
+      with nothing on a terminal to show it — three named processes were in fact
+      running — and text that renders oddly in a status view is usually the renderer
+      rather than the thing it renders, as a report of a "malformed edit command"
+      turned out to be newlines flattened for display. Say what you measured and what
+      you measured it against.
     schedule: {every: 1800, resettable: true}
