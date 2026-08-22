@@ -1,0 +1,17 @@
+{
+  "run_id": "triage-by-root-cause-2",
+  "plan": "scratch/plans/triage-by-root-cause.plan.json",
+  "dir": "/home/nick/projects/ai-orchestrator",
+  "graph": "/home/nick/projects/ai-orchestrator/graphs/dag-scope.yaml",
+  "graph_run": "dag-scope-1787317190392-2313514",
+  "node_graph": "/home/nick/projects/ai-orchestrator/graphs/node-scope.yaml",
+  "pr_author_graph": "/home/nick/projects/ai-orchestrator/graphs/pr-author.yaml",
+  "launcher": "claude-code",
+  "session": "8fb3ecd6-4173-4e91-9068-be4a9354add1",
+  "pid": 2313512,
+  "host": "U-17UN402ICR95C",
+  "started": "Fri Aug 21 12:59:50 2026",
+  "started_at": "2026-08-21T12:59:50.345Z",
+  "heartbeat_interval": 1800,
+  "adoptions": 0
+}

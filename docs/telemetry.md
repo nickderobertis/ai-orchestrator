@@ -210,7 +210,7 @@ served them.
    that is a different fix from a dead driver.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.6.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.6.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because that crate has no registered checkout
    on this host and its CLI dumps no schema, so a bump is what re-opens this
    paragraph: `timeline_schema_version` 6, spans of kind `run`, `dispatch`, `node`,
@@ -234,19 +234,20 @@ served them.
    is the mistake this paragraph most invites.** The reader declares none of it, so
    each list is the set of values *observed*, and a value missing from one is
    unmeasured rather than impossible. What is held rather than observed is what
-   `tests/e2e/test_dag_ui_serving_e2e.py` serves five checked-in runs to assert: every
+   `tests/e2e/test_dag_ui_serving_e2e.py` serves six checked-in runs to assert: every
    span kind above except `human-wait`, each one's fields and parentage, the `waiting`,
-   `settled`, and `finished` phases, both the `open` and `merged` publication statuses,
-   and both supervisory `agent_role`s. The fifth of those runs is **derived rather than
-   recorded**, and the only one here that is: `dag-ui-truth` is the sole run on this
+   `surfacing`, `settled`, and `finished` phases, both the `open` and `merged`
+   publication statuses, and both supervisory `agent_role`s. One of those runs is
+   **derived rather than recorded**, and the only one here that is: `dag-ui-truth` is
+   the sole run on this
    host whose *monitor* member ever completed a turn — which is what makes an
    `orchestrator` label exist at all — and it is 8.9MB of journal whose worker
    transcripts quote an `llmlint: ignore` directive the linter then reads as a real
    one, so the whole run cannot be checked in. `dag-ui-truth-monitor-slice` is the six
    events of its dag-scope graph, kept verbatim; the fixture's own docstring records
-   what was dropped and the one field rewritten. Four values are still observed and
-   unheld: `deciding`, `surfacing` and `conflict` off `dag-ui-truth` and `issue-27`,
-   and `human-wait` off `pr-author-body`. A bump re-measures those four by hand against
+   what was dropped and the one field rewritten. Three values are still observed and
+   unheld: `deciding` and `conflict` off `dag-ui-truth` and `issue-27`, and
+   `human-wait` off `pr-author-body`. A bump re-measures those three by hand against
    this host's runs root; everything else fails the gate on its own.
    **The listing is the live runs, and a settled one leaves it.** `GET /api/v2/runs`
    carried every run read here whose `phase` was `waiting` or `surfacing` and none
@@ -264,21 +265,36 @@ served them.
    measured on, so a pin bump fails the gate and re-opens it. Reconciling the fields
    themselves needs a registered checkout of that crate or a schema verb on its CLI,
    and is tracked as follow-up. -->
-3. **What 0.6.1 changed, and what is still missing.** Serving the same runs from
-   0.5.0 and 0.6.1 side by side is what dates this section, and the delta is the
-   reason the pin moved. On `dag-ui-truth` the older release served **no `worker`
-   rollup at all** and left the monitor's `dispatch` span with a null `agent_role`,
-   so the tier this section is about was invisible in the one view built to show it;
-   0.6.1 serves 26 worker rollups for that run and labels that dispatch
-   `orchestrator`, and `issue-27` reproduces the same thing at 0 against 42. **Span
-   bounds moved with them, so a duration read off the older release is not
-   comparable.** 0.5.0 opened a `publication` span per session and never closed the
-   superseded ones — 26 of them on `dag-ui-truth` against 0.6.1's 8, the 18 dropped
-   all open-ended and status-less — and bounded the survivors by the node that
-   started the work rather than by the publication: `publication.workspace-staleness`
-   ran 20:24:50Z to never at 0.5.0 and runs 11:54:16Z to 12:07:15Z at 0.6.1. The
-   `pr-author` rollups moved the same way, from the node's dispatch window onto the
-   drafting turn itself.
+3. **What 0.6.2 changed, and what is still missing.** Serving the same runs from
+   0.6.1 and 0.6.2 side by side is what dates this section, and the delta is the
+   reason the pin moved. **Nothing in the timeline paragraph above moved with it** —
+   every value it names re-measures identically across the 104 runs in this host's
+   runs root that serve a timeline at all. So the release number in that paragraph
+   moved over prose that did not, which is a re-measurement rather than a skipped one.
+   What moved is the **conversation route**,
+   `GET /api/v2/runs/{run}/conversations/{conversation}`, which is where the view
+   reads a dispatch's transcript: on 0.6.1 an operator opening a settled dispatch was
+   shown its tool calls and nothing else.
+   Comparing every conversation those runs carry, 20 differ between the two releases.
+   On 0.6.1 each of them was served **one turn with no reply text at all** — a turn
+   with a null `assistant`, a null `model`, and, in place of that turn's own usage, a
+   copy of the whole dispatch's totals; 0.6.2 serves none, and gives every turn its
+   own five figures and its own model. **The accounting is the half worth keeping,
+   because it is the half a reader cannot eyeball.** That extra turn was added on top
+   of the turns already accounting for the dispatch, so per-turn figures a view adds
+   up overstated it on all 20: on 17 of them 0.6.2's now sum *exactly* to what the
+   dispatch's report records, and on 14 of those 17 the 0.6.1 sum was exactly double
+   it — `dag-ui-conversation` read $38.85 against a report of $19.43. The other three
+   overstate by less than double only because that release was **also dropping turns
+   whole**, which is the same defect seen from the other side: `triage-by-root-cause-5`
+   serves 20 turns carrying reply text against 0.6.1's 3, and
+   `orchestrator-adopt-and-sweep` 16 against 5.
+   That route needs something no other section here does, and it is why one fixture
+   under `tests/fixtures/timeline-runs/` is checked in **with its `reports/`
+   directory**: a run's events record that a turn happened, while what the agent said,
+   what its tools observed, and what the turn cost live in the dispatch's report. A
+   fixture without one serves empty turns at every release, so it can neither show
+   this defect nor show it fixed.
    What is still absent is not the read API's to supply: there is no
    `runs/<run-id>/supervisory/` capture, no `conversation-turn` event, and no
    `history-write-failed` event on the adopted stack; the bounded local capture this

@@ -98,6 +98,34 @@ MERGED_RUN = "gate-parity-2"
 #: * Rewritten: one field, `labels["onepipeline.run_id"]`, to this fixture's own id, so
 #:   a reader cannot mistake six events for the run they came from.
 SUPERVISING_RUN = "dag-ui-truth-monitor-slice"
+#: A sixth, and the only one here checked in **with its `reports/` directory**, which is
+#: what makes it the one that can hold the conversation view to anything. Every other
+#: fixture carries `events.jsonl` alone, and a run's events record that a turn happened;
+#: they do not carry what the agent said, what its tools observed, or what the turn cost.
+#: All three live in the dispatch's report, so a fixture without one serves a transcript
+#: of empty turns at every release and can no more show this defect than show it fixed.
+#:
+#: Recorded verbatim — no field is rewritten and nothing is dropped but the run's
+#: `driver.log`, its empty `dispatches/`, and its `channel/` supervisory queue, none of
+#: which any route read here opens. It was chosen out of every run on this host for two
+#: properties nothing else combined: its report quotes no `llmlint: ignore` directive, so
+#: the judged tier cannot read the fixture's own transcript as a real suppression (the
+#: hazard that keeps `dag-ui-truth` out of this directory), and its second turn is one
+#: its supervisor asked for and the agent answered, so the release's whole delta is
+#: visible in a two-turn conversation.
+REPORTED_RUN = "triage-by-root-cause-2"
+#: That run's worker dispatch, whose two report turns the conversation route serves.
+REPORTED_CONVERSATION = "node-scope-1787317190418-2313512.worker"
+#: The five figures a turn accounts for itself with. Named rather than inlined because
+#: the assertion below is that a turn carries *all* of them, and a list that drifted
+#: shorter would weaken that into whichever ones still happened to be served.
+TURN_USAGE_FIGURES = (
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "costUsd",
+)
 #: The timeline schema `docs/telemetry.md` documents for the adopted release. Restated
 #: here rather than read from the response, because reading it from the response is what
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
@@ -476,6 +504,72 @@ def test_the_monitors_dispatch_is_labelled_orchestrator(served_recorded: Served)
     assert [event["kind"] for event in dispatch["events"]] == ["turn-completed"]
 
 
+def test_a_dispatchs_report_turns_carry_their_own_text_tools_and_usage(
+    served_recorded: Served,
+) -> None:
+    """The conversation view, which is the whole of what this release was adopted for.
+
+    The operator's report was that the view showed them no assistant text, no tool
+    output, and no token or cost figures — so what is asserted is each of those three,
+    per turn, off the route the view reads them from.
+
+    Three of the assertions below fail on 0.6.1 and they fail separately, which is why
+    they are made together rather than as one summary check. On that release this
+    dispatch's second turn is served with a null `assistant`, both turns are served
+    with a null `model`, and the second turn carries — instead of its own usage — a
+    copy of the whole dispatch's totals. So a reader saw one turn's reply where there
+    were two, and adding the turns up billed the dispatch's every token twice:
+    $2.29377 + $3.190103 against a report that records $3.190103 spent.
+
+    The rest pass on both releases and are here to keep the three honest: a route that
+    404s, a transcript belonging to another node, or a turn count that moved would each
+    make the three vacuous rather than failing.
+
+    The cost identity is the assertion worth keeping longest, because it is the only
+    one a wrong answer cannot satisfy by accident. Text and figures merely being
+    *present* would pass on totals attributed to the wrong turn; per-turn costs adding
+    up to exactly what the report says the dispatch cost cannot.
+    """
+    status, body, _ = served_recorded.get(
+        f"/api/v2/runs/{REPORTED_RUN}/conversations/{REPORTED_CONVERSATION}"
+    )
+
+    assert status == 200, body
+    served = json.loads(body)
+    # The dispatch this transcript belongs to, so a conversation cannot be read as
+    # some other node's: the view titles the panel from it.
+    assert served["attribution"]["runId"] == REPORTED_RUN
+    assert served["attribution"]["agentRole"] == "worker"
+    turns = served["conversation"]["turns"]
+    assert len(turns) == 2, turns
+
+    for position, turn in enumerate(turns):
+        assert turn["assistant"], (
+            f"turn {position} was served with no assistant text ({turn['assistant']!r}); "
+            "this is the operator's own report — the view has only the tool calls to show"
+        )
+        assert turn["model"], f"turn {position} names no model: {turn['model']!r}"
+        missing = [figure for figure in TURN_USAGE_FIGURES if turn["usage"].get(figure) is None]
+        assert not missing, f"turn {position} accounts for itself without {missing}"
+
+    # The tool observations, which are half of what a transcript is for: a call whose
+    # output is null renders as a command nobody has the result of.
+    observed = [tool for turn in turns for tool in turn["tools"] if tool.get("output")]
+    assert observed, "no tool call was served with its output"
+
+    # And the identity that makes the figures above trustworthy rather than merely
+    # present. Rounded to the millionth because these are floats summed out of a JSON
+    # document, which is far tighter than the doubling it exists to catch.
+    per_turn = sum(turn["usage"]["costUsd"] for turn in turns)
+    reported = json.loads(served_recorded.get(f"/api/v2/runs/{REPORTED_RUN}")[1])
+    dispatch_total = reported["run"]["usage"]["total"]["cost_usd"]
+
+    assert round(per_turn, 6) == round(dispatch_total, 6), (
+        f"the turns account for ${per_turn} against the ${dispatch_total} this run's "
+        "report records — a view adding these up tells the operator the wrong number"
+    )
+
+
 def test_a_settled_run_keeps_its_timeline_but_leaves_the_listing(
     served_recorded: Served,
 ) -> None:
@@ -492,10 +586,16 @@ def test_a_settled_run_keeps_its_timeline_but_leaves_the_listing(
 
     # The split is on the phase rather than on which fixtures happen to be checked in,
     # so adding one to this root does not quietly change what this journey claims.
-    assert set(listed_runs) == {RECORDED_RUN, SUPERVISING_RUN}, listed_runs
+    assert set(listed_runs) == {RECORDED_RUN, SUPERVISING_RUN, REPORTED_RUN}, listed_runs
     assert not {"settled", "finished"} & set(listed_runs.values()), listed_runs
     for absent in (SETTLED_RUN, SUPERVISED_RUN, MERGED_RUN):
         assert absent not in listed_runs, listed_runs
+
+    # `surfacing` was one of the phases `docs/telemetry.md` recorded having observed
+    # and being unable to hold, for want of a run carrying one. The fixture checked in
+    # for the conversation view carries it, so it is held here rather than left to the
+    # by-hand re-measurement that paragraph asks a bump for.
+    assert listed_runs[REPORTED_RUN] == "surfacing", listed_runs
 
     # Gone from the listing, still served in full by id.
     status, body, _ = served_recorded.get(f"/api/v2/runs/{SETTLED_RUN}/timeline?scope=run")

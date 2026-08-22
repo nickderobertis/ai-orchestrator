@@ -1,0 +1,33 @@
+{
+  "schema_version": 3,
+  "run_id": "triage-by-root-cause-2",
+  "state": "failed",
+  "ok": false,
+  "nodes": [
+    {
+      "id": "basis",
+      "status": "failed",
+      "outcome": "task-failed"
+    },
+    {
+      "id": "slice-followups",
+      "status": "skipped"
+    },
+    {
+      "id": "slice-issue24",
+      "status": "skipped"
+    },
+    {
+      "id": "slice-session",
+      "status": "skipped"
+    },
+    {
+      "id": "synthesize",
+      "status": "skipped"
+    },
+    {
+      "id": "audit",
+      "status": "skipped"
+    }
+  ]
+}
