@@ -1,0 +1,17 @@
+{
+  "run_id": "observatory-report-join",
+  "plan": "scratch/plans/observatory-report-join.plan.json",
+  "dir": "/home/nick/projects/ai-orchestrator",
+  "graph": "/home/nick/projects/ai-orchestrator/graphs/dag-scope.yaml",
+  "graph_run": "dag-scope-1787351208706-3812706",
+  "node_graph": "/home/nick/projects/ai-orchestrator/graphs/node-scope.yaml",
+  "pr_author_graph": "/home/nick/projects/ai-orchestrator/graphs/pr-author.yaml",
+  "launcher": "claude-code",
+  "session": "fd23858f-b533-5403-9052-00a924c91080",
+  "pid": 3812706,
+  "host": "U-17UN402ICR95C",
+  "started": "Fri Aug 21 22:26:48 2026",
+  "started_at": "2026-08-21T21:24:13.548Z",
+  "heartbeat_interval": 1800,
+  "adoptions": 1
+}

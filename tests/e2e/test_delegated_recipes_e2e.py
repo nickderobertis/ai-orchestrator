@@ -232,6 +232,15 @@ DELEGATIONS = (
     Delegation("host", (), "uv run onepipeline host"),
     Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
     Delegation("results", ("run-1",), "uv run onepipeline results run-1"),
+    Delegation("transcript", ("run-1",), "uv run onepipeline transcript run-1"),
+    # The optional node operand, which is what turns a whole run's transcript into one
+    # dispatch's. `tests/e2e/test_transcript_recipe_e2e.py` proves the narrowing against
+    # a recorded run; this row is what proves the recipe passes the operand at all.
+    Delegation(
+        "transcript",
+        ("run-1", "node-a"),
+        "uv run onepipeline transcript run-1 node-a",
+    ),
     Delegation("goals", (), "uv run onepipeline goals"),
     Delegation(
         "telemetry", ("run-1", "--breakdown"), "uv run onepipeline telemetry run-1 --breakdown"

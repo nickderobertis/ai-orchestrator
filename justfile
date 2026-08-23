@@ -353,6 +353,17 @@ goals *args:
 results *args:
     @./scripts/onepipeline.sh results "$@"
 
+# Read one run's dispatched turns: `just transcript <run-id> [node]`.
+#
+# The read that reaches a settled dispatch's own evidence, which the `planner`
+# profile every other manager view defaults to leaves out. On the adopted
+# onepipeline it renders each turn's tool *calls* and one blank line per tool
+# result; the outputs are in `runs/<run-id>/events.jsonl`, which is the
+# authoritative record either way. See AGENTS.md's "Command surface".
+# llmlint: ignore[tool_output_is_signal] the requested per-turn transcript is this viewing command's product.
+transcript *args:
+    @./scripts/onepipeline.sh transcript "$@"
+
 # Register a repository checkout alias. Type and workflow come from the rules file
 # the identity matches rather than from flags here; `onevcs` detects the gate the
 # checkout itself carries, which is a different thing and not the routing.

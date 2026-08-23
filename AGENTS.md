@@ -139,7 +139,25 @@ node's **landing is dated to the moment it settled** — nothing in the run re-r
 it, so `just results` and `just status` render a change that merged an hour later
 as not landed *as of that settlement*. The re-read is `just work-status
 <change-url|session|branch|commit>`, and it is the only thing that answers where a
-piece of work is now. A worker
+piece of work is now — but **read its `decided by:` line before its `landed:`
+line**, because only one tier of the four is a record. `a recorded landing`, `the
+change request's number in the base`, and `a landing trailer on the base` each name
+the commit that is their evidence and each answers `yes`; `content comparison` is
+the only tier that answers `no` or `unknown`, and it is a comparison rather than a
+record, so treat **both** of its answers as unknown and confirm against the change
+request before acting. It is wrong by construction under squash-merge: the squash is
+not an ancestor of the branch, so any later commit on the base makes the trees
+differ. Measured 2026-08-23 — oneagentgraph PR #73 merged as `aaa7c3b`, and four
+references to it (the branch, both session tokens, and the change request URL) each
+answered `landed: no`, `decided by: content comparison`, because the branch's own
+`Orchestrator-Landed-Commit:` record sat on a *second* run clone of that branch name
+and the verb read the superseded one. Two copies under one name is what a **retry**
+leaves, so this fires precisely on retried nodes, and `no` is the dangerous answer:
+it closes the question and invites re-dispatching work that already merged. Do not
+try to settle it with `git diff main...branch` either — that measures from the fork
+point, so a landed squash-merged branch still reports its full insertion count and
+reads as proof the work is missing. Only the files' presence on the base, or the
+squash commit's own stat, answers. A worker
 dispatched without a worktree does the work in whatever checkout it can see, and
 the empty session branch the node watched is then a truthful report about the
 wrong directory — settle it only once you have looked. But a worker dispatched
@@ -151,9 +169,24 @@ node's branch. So a task need not tell a lifecycle worker where to commit; that
 paragraph is redundant and a planner may drop it from its templates without
 re-deriving this. `tests/e2e/test_worker_start_directory_e2e.py` is what keeps it
 answered — it launches a lifecycle node for real and reads the directory out of
-the run's own journal. **That worktree belongs to the dispatch, not to the node or
-the branch**: every dispatch cuts its own, so a retry, a requeue, or a resumed pin
-runs in a *different* directory from the one before it. The live directory is
+the run's own journal. **Redundant is the mild half of that.** A brief that says
+anything about where the work goes is one wording slip from telling the worker to
+leave the branch it was given, and the worker obeys: a task that read *"Work from
+`main` … do not resume onto `<branch>`"* — meaning only "ignore the stranded
+commits" — was read as the instruction it looks like. The dispatch cut a fresh
+branch from `origin/main`, committed there, and reported the commit and a green
+gate. The session branch stayed empty, the node settled `done (no-changes)`, the
+worktree was reaped, and that object does not exist today: roughly thirty minutes
+of correct, gate-green work gone, reported as though there had been none to do. So
+a lifecycle task says **commit on the branch the session opened**, or says nothing
+at all about it — never a phrase that could be read as an instruction to cut one,
+and never a base branch by name. Say what to *ignore* in terms of the content to
+leave behind. The same rule is stated where briefs are written, in
+[`personas/planner.yaml`](personas/planner.yaml).
+
+**That worktree belongs to the dispatch, not to the node or the branch**: every
+dispatch cuts its own, so a retry, a requeue, or a resumed pin runs in a
+*different* directory from the one before it. The live directory is
 whatever the dispatch's own record names — the `session-opened` the run's journal
 carries for it, or the `worktree:` line `just work-status` renders for that
 session — never a path remembered from an earlier dispatch, which is how a
@@ -178,14 +211,17 @@ and that binary carries the registry path of every crate it was compiled against
 
 ```sh
 strings -a "$(readlink -f "$(command -v onepipeline)")" \
-  | grep -oE '(onevcs|oneagentgraph|onejudge)-[0-9]+\.[0-9]+\.[0-9]+' | sort -u
+  | grep -oE '(onevcs|oneagentgraph|onejudge|oneharness[a-z-]*)-[0-9]+\.[0-9]+\.[0-9]+' \
+  | sort -u
 ```
 
-On the adopted release that answers `oneagentgraph-0.3.6`, `onejudge-0.5.0`, and
-`onevcs-0.11.0`. A second published source says the same without `strings`, without
-a network and without a clone: the same wheel ships a CycloneDX SBOM under its
-`dist-info/sboms/` declaring one version per linked crate, and
-`tests/test_linked_libraries.py` — whose docstring records where that lives and
+On the adopted release that answers `oneagentgraph-0.3.6`, `oneharness-core-0.8.0`,
+`oneharness-core-0.10.1`, `onejudge-0.5.0`, and `onevcs-0.11.0` — two of them for one
+crate, which is the answer no pin in `config/` can give and the reason the table
+above sends `oneharness` to a different gate. A second published source says the
+same without `strings`, without a network and without a clone: the same wheel ships
+a CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked
+crate, and `tests/test_linked_libraries.py` — whose docstring records where that lives and
 why — reads it on every gate run to hold this repository's prose to it.
 
 **Read the locks after that measurement, and in this order.** `git show
@@ -284,6 +320,21 @@ a sibling pin behind is a failing check rather than a silent divergence, and the
 manager verbs stay on the same `onevcs` a dispatch publishes through. That is a
 narrower guarantee than it sounds and worth stating exactly: it makes the two
 *agree*, and it is the SBOM that decides which value they agree on.
+
+**`config/oneharness.version` is the one pin that cannot be reconciled that way,
+and that is a property of the build rather than a hole in the gate.** The crate
+beside it is `oneharness-core`, and the adopted engine links **two** releases of it
+into one binary: `oneagentgraph` 0.3.6 brings `oneharness-core` 0.10.1 and
+`onejudge` 0.5.0 brings `oneharness-core` 0.8.0. No single pin can name that, so
+this one names neither — it is the `oneharness` **CLI** the wrapper scripts and
+`just smoke` spawn, and 0.10.2 is a release of a different artifact from either core
+the engine links. Read a dated oneharness claim accordingly: the wrapper's
+behaviour, the fallback chain, and the smoke are the CLI's, while a turn a
+*dispatch* runs goes through whichever linked core its member's engine carries. What
+holds it is `tests/test_linked_libraries.py`, and it is written to the two-version
+reality rather than as an equality — it reads the SBOM's own dependency edges and
+fails when either core moves, when a dependent stops bringing its own, or when a
+third appears.
 
 A divergence is allowed only where the linked release is not installable, and only
 as a **declared** one naming both versions, so the next bump fails on it rather than
@@ -681,7 +732,22 @@ and, where a fix is unambiguous and inside its
 it. A finding it or the pacemaker calls a **rule violation** quotes the file and line
 that rule comes from; what neither can ground that way is an **observation**, and its
 own supervisor sends it back until it is one. See [A finding names the rule it is
-grounded in](docs/orchestration.md#a-finding-names-the-rule-it-is-grounded-in). None of these roles authors target-project content; dispatch implementation and
+grounded in](docs/orchestration.md#a-finding-names-the-rule-it-is-grounded-in).
+**A quiet monitor is a working monitor**, and this is the one place the watch
+invariant below does not apply: both supervisory roles are now told to report
+findings rather than intentions and to end a turn that found nothing with no prose
+at all, because every turn they produce prose on becomes a planner update. One run
+queued twenty-eight, twenty-four of them content-free — fourteen variants of "I'll
+identify the active run, then attach to its detailed stream" — and a worker's
+blocking question sat unread behind that pile for fifteen minutes with the frontier
+stopped. So read an absence of surfaces as an absence of findings, and read the
+run's own state for whether anything is watching. They are also required to pass a
+surface's text through a single-quoted heredoc rather than a command-line word:
+bash substitutes backticks and `$(...)` inside double quotes, and a finding that
+quoted a command ran it — twenty-five minutes of this host's CPU, with the
+surface's own text mutating into that command's output.
+
+None of these roles authors target-project content; dispatch implementation and
 research to workers.
 
 Require each worker to prove its own change with `just gate`. Review surfaced gate
@@ -930,7 +996,14 @@ whose run root is already taken rather than by predicting the `<name>-2`
 `onepipeline` would mint instead. That refusal is what lets the recipe also hand
 that id to its dispatch as `ONEPIPELINE_RUN_ID`, the run whose channel a blocking
 question goes to — without it, a detached planner's questions would queue on a live
-run belonging to somebody else's workstream.
+run belonging to somebody else's workstream. A third thing about it is a
+difference from `just orchestrate` worth knowing before you go looking for a
+watcher: **`just plan` names `--dag-graph off`**, so a planning run has no monitor
+attached. A monitor watches the run for drift from the plan, and a planning run's
+plan is its own output, so there is nothing yet to compare it against; the journal,
+the ownership row, the surfaces and the DAG UI place are `onepipeline start`'s own
+and arrive either way. A caller who names a graph keeps it, exactly as `just
+orchestrate` keeps a caller's own.
 
 **`just check-plan <plan.json>` reads a plan against the bar each of its nodes will
 actually be judged against**, and is the cheap read to make before launching one. It
@@ -1067,8 +1140,41 @@ run anywhere else it answers across every registered identity. Run from this
 repository root — a registered checkout — it lists ai-orchestrator branches and no
 onepipeline ones. So an empty or short result is never "nothing to recover"
 anywhere; read the first line, which names the scope it just answered at, and ask
-again from outside any registered checkout for the cross-identity view. Every one of these views is
-read-only and safe beside live work.
+again from outside any registered checkout for the cross-identity view.
+
+**A run's journal is where a dispatch's own evidence lives, and it is the first
+place to look when a settled node's evidence appears missing.**
+`runs/<run-id>/events.jsonl` records every dispatched turn as `turn-activity`
+events — each tool call **and the output it returned** — labelled with the run, the
+node, the persona and the member that produced them, and it is written beside the
+run rather than inside the dispatch, so it outlives both the turn and the worktree
+a sweep later reclaims. Nothing a manager reads by default shows it: `just
+channel-next` and `just monitor` read through the `planner` profile, which omits
+worker turns deliberately. So a node can settle `failed` for want of evidence that
+was on disk the whole time, and one did — `adopt-and-retire-gate` settled on its
+judge's verdict that the dispatch had produced no installed-binary measurement,
+while 490 `turn-activity` events sat in its journal and four of them carried that
+measurement's own output verbatim. Three reads reach them: `just monitor <run-id>
+--filter monitor` for the detailed stream, `--all` to bypass profiles entirely, and
+**`just transcript <run-id> [node]`**, which renders one run's dispatched turns on
+their own.
+
+**What `just transcript` renders on the release this host has is the calls without
+their outputs.** Measured on the adopted onepipeline 0.11.0 against a recorded run:
+each turn prints one `tool_call` line per call, carrying the tool's name and a
+truncated argument string, and one **blank** `tool_result` line per result — the
+renderer prints the payload's `detail`, and a `tool_result` payload carries its
+content in `output` instead. The turn's own assistant text is not rendered either.
+Upstream fixed that in onepipeline 0.12.1 (`fix: make the transcript carry tool
+outputs and the telemetry buckets balance`), which reaches this host only when
+`config/onepipeline.version` moves — so until that adoption, read the verb as an
+index of what a dispatch did and `events.jsonl` as the record of what came back.
+The journal is the authoritative one before and after.
+`tests/e2e/test_transcript_recipe_e2e.py` drives the recipe against a recorded run
+and holds both halves of that reading, so the day the render changes is the day
+this paragraph fails rather than the day somebody notices.
+
+Every one of these views is read-only and safe beside live work.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command, or the equivalent `onepipeline attest RUN REFERENCE`. Keep
 operational
@@ -1138,10 +1244,17 @@ environment, `cwd`/`root`/`exe`, open descriptors, or memory mappings — past a
 age that only covers the gap between creating a directory and first naming it.
 `--dry-run` inspects without removing and `--min-age-hours` moves the conservative
 threshold, and each reaches **both** verbs, because an age floor that meant one thing
-to one family and another to the next would be worse than no floor. Session setup
-runs it automatically. The recipe was named `sweep-scratch` while the first verb was
-the whole of it; a publication workspace is not scratch, so the name now names the
-composition and `sweep-scratch` is gone rather than kept as a misleading synonym.
+to one family and another to the next would be worse than no floor. **The recipe
+passes 4 hours when you name none**, against the 24 both verbs default to: at 24 the
+composed sweep reclaimed 0 B on this host where 4 reclaimed 23.9 GB, because a host
+running several dispatches churns workspaces and scratch hourly and almost nothing
+provably dead is ever a day old. Lowering it weakens no proof — neither verb removes
+anything on age alone. The reasoning and the measurements ruling out the obvious
+alternative explanations are in `scripts/sweep.sh` beside the number, so moving it is
+an argument with those rather than with taste. Session setup runs it automatically.
+The recipe was named `sweep-scratch` while the first verb was the whole of it; a
+publication workspace is not scratch, so the name now names the composition and
+`sweep-scratch` is gone rather than kept as a misleading synonym.
 Neither verb's report is rewritten — each names its own families, its own retentions,
 and its own reason for each. It is **quiet on success**: a sweep that examined every
 family and left nothing to act on is one line naming those families, and the two
@@ -1160,6 +1273,20 @@ non-zero so the gap shows in the status as well as the report; and the pre-adopt
 every directory under it is a *registered* git worktree whose lender still lists it
 and whose branch can still hold unpublished work, so land or discard that branch
 (`just recoverable` names the verb) and then `git worktree remove` it in the lender.
+**The host scratch root is the second reported-never-reclaimed family, and it is the
+one that filled this disk.** `$TMPDIR`, or `/tmp`: `oneagentgraph` writes the family
+it owns there and reaches nothing else, `onevcs` writes nothing there at all, and
+every other directory under it belongs to neither verb — a private `nx` install per
+`bunx nx`, a copy of Nx's native binary per workspace root, a pytest run directory
+per session, onejudge's own scratch. It reached 139 GB of a 169 GB device, took `/`
+to 2 MB free, and stopped every dispatch on this host while every sweep that day
+reported success. The trailer now names it with its size, its entry count, and its
+largest three name groups with trailing ids folded together — because the producer
+was 3,646 directories of one `nx` cache, which reads as an unrelated long tail in any
+per-directory listing. Nothing here removes any of it: doing so means implementing
+the proof both verbs already have, which is their work rather than this wrapper's.
+`docs/orchestration.md` records what the trailer leaves out of that measurement and
+why.
 
 The processes that are *meant* to outlive their launcher — the driver `just
 orchestrate` starts, and the dispatches and publications it forks — are the
@@ -1170,6 +1297,25 @@ Dead lifecycle runs form a separate bounded recovery history: retain the newest
 worktree only after claiming its free occupancy lease and rejecting a live
 recorded owner; dirty adopted work becomes an incomplete-step commit and must
 pass the ordinary merge path before publication.
+
+**What prunes that history is `onevcs session open`, and on the linked 0.11.0 it
+does not ask whether a run root is in use.** Reclaiming is its *first* act, and the
+proof it accepts is an exclusive take on the root's occupancy lease — which no
+`onevcs` verb holds past its own command, so a root three hours into a dispatch is
+as takeable as one created a second ago. On 2026-08-22 three dispatches of one run
+were destroyed within 90 seconds of launch by the next sibling's `session open`.
+`scripts/hold-run-lease.sh`, run first by session setup, holds that same shared
+lease for as long as the session is live and **narrows the window to the dispatch's
+first few seconds rather than closing it** — and takes no lease at all for a
+dispatch that fell through to codex, which fires no `SessionStart` hook. Two things
+follow for a manager. Concurrent lifecycle dispatch on one identity is not yet safe,
+and the upstream fix — `reclaim` consulting the session record it already has rather
+than the lease — is specified in
+[`docs/run-root-reclamation.md`](docs/run-root-reclamation.md). And **read a spawn
+failure naming a missing `claude` as a possible deleted run root**: `ENOENT` from a
+spawn also means the child's working directory is gone, the message names only the
+binary, and its suggestion sends the reader to PATH — which is where hours went. The
+binary exists; check the run root.
 
 `just smoke` spends one real agent-harness turn in a throwaway directory and
 verifies exact prompt delivery plus a successful, fully accounted oneharness
@@ -1461,7 +1607,19 @@ what is on it. The pre-push
 gate guards every push. Never force-push or rewrite history on the registered base.
 
 `core.hooksPath` activates the whole directory, so that same `just bootstrap` step
-also activates **`.githooks/commit-msg`**, which holds the *subject*. This
+also activates two more. **`.githooks/post-checkout`** marks whatever git just
+checked out trusted for every claude-code identity a dispatch can run as — both
+alternate subscriptions and the primary. It is the hook rather than an `onevcs`
+interface because git fires `post-checkout` exactly where a directory appears, and
+`onevcs` gives a disposable clone the lender's `core.hooksPath`; claude-code keys
+`hasTrustDialogAccepted` on the exact project path and honours no parent entry, so
+without it every dispatch began untrusted, discarded its `permissions.allow`, and
+blocked on an approval that cannot arrive non-interactively — **which reads from
+outside as an identity with quota left doing nothing**, and is worth suspecting when
+one does. It never fails and never speaks, because a non-zero `post-checkout` fails
+the command that ran it and would break every `git worktree add` this host makes;
+session setup makes the same call where a diagnostic reaches somebody who can act on
+it. **`.githooks/commit-msg`** holds the *subject*. This
 repository's product is its tracked source — config, personas, scripts, docs — so
 every commit changes the deliverable, and the hook takes that to its conclusion: a
 subject must be a Conventional Commit within onevcs's 120-character publication

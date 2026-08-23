@@ -132,6 +132,18 @@ system_prompt: |
   it: three nodes tried, and one resorted to a raw `git push`. Reserve
   publish-and-report for a **direct** node, which has no closeout behind it.
 
+  **Never tell a lifecycle worker which branch to work on.** It already starts in
+  the worktree the lifecycle cut for its own session branch, so the only correct
+  wordings are "commit on the branch the session opened" and silence — and silence
+  is the safer default. Anything that names a branch or a base reads as an
+  instruction to cut one. A task that said *"Work from `main` … do not resume onto
+  `<branch>`"*, meaning only "ignore the stranded commits", was read as written: the
+  worker branched from `origin/main`, committed thirty minutes of gate-green work
+  there, and reported the commit. The session branch stayed empty, the node settled
+  `done (no-changes)`, and the reaped worktree took the commit with it. Say what to
+  ignore in terms of the *content* to leave behind, never in terms of a branch to
+  work from.
+
   ## Asking the manager
 
   Ask the manager at any fork that could change a key outcome or substantially

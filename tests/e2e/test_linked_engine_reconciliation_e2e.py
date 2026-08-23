@@ -1,7 +1,9 @@
 """What a provisioned worktree's engine binary actually links, end to end.
 
 `config/onepipeline.version` is the pin that decides what a *dispatch* runs, because
-`onepipeline` links `oneagentgraph`, `onevcs`, and `onejudge` as Rust libraries. Every
+`onepipeline` links `oneagentgraph`, `onevcs`, and `onejudge` as Rust libraries — and,
+through `oneagentgraph` and `onejudge`, two releases of `oneharness-core`, the crate
+that runs the turn itself and the one no `config/*.version` here can name. Every
 other reading of that question is a claim about it: a `Cargo.toml` requirement permits
 versions a build never resolved, a `Cargo.lock` describes what a release *would* link,
 and even the wheel's own SBOM is a statement the wheel makes about itself. The binary
@@ -17,11 +19,12 @@ reads the engine it installed:
   pins against without a network or a clone;
 * the `config/*.version` pins the provisioning was driven from.
 
-All three have to name one release per crate. The unit gate holds the last two
-together on this checkout; what only a journey can prove is that the wheel's
-declaration is true of the binary it shipped — which is the one step where a rebuild,
-a repair, or an install from somewhere else parts a host from every lockfile
-describing it, and the step no document can check itself.
+All three have to agree on what is linked — one release per crate for the three
+that have one, and both releases of `oneharness-core` for the one that does not. The
+unit gate holds the last two together on this checkout; what only a journey can prove
+is that the wheel's declaration is true of the binary it shipped — which is the one
+step where a rebuild, a repair, or an install from somewhere else parts a host from
+every lockfile describing it, and the step no document can check itself.
 """
 
 from __future__ import annotations
@@ -32,7 +35,12 @@ import subprocess
 from pathlib import Path
 
 from provisioning import run_setup, setup_repo
-from test_linked_libraries import DECLARED_DIVERGENCES, RECONCILED_PINS
+from test_linked_libraries import (
+    DECLARED_DIVERGENCES,
+    LINKED_HARNESS_CORES,
+    RECONCILED_PINS,
+    UNRECONCILABLE_PIN,
+)
 
 from orchestrator.root import REPO_ROOT
 
@@ -40,9 +48,15 @@ from orchestrator.root import REPO_ROOT
 #: path of every dependency, and `<name>-<version>` is the directory component of it.
 #: The same expression `AGENTS.md` hands an operator, applied to the bytes directly so
 #: this journey needs no binutils to answer a question about a file it already has.
+#: `oneharness-core` is in here beside the three reconciled crates and is not one of
+#: them: the engine links two releases of it at once, so it has no pin to reconcile
+#: against and is checked binary-against-SBOM only. Sorted longest-first so
+#: `oneharness-core` is tried before any prefix of it could swallow the hyphen.
+LINKED_CRATES = (*sorted(RECONCILED_PINS), UNRECONCILABLE_PIN.crate)
 LINKED_IN_BINARY = re.compile(
-    rb"\b(" + b"|".join(crate.encode() for crate in sorted(RECONCILED_PINS)) + rb")"
-    rb"-([0-9]+\.[0-9]+\.[0-9]+)\b"
+    rb"\b("
+    + b"|".join(crate.encode() for crate in sorted(LINKED_CRATES, key=len, reverse=True))
+    + rb")-([0-9]+\.[0-9]+\.[0-9]+)\b"
 )
 
 #: Where PEP 770 puts a wheel's SBOMs, and the engine distribution that ships one.
@@ -58,8 +72,13 @@ def _linked_in_binary(executable: Path) -> dict[str, set[str]]:
     return carried
 
 
-def _linked_in_sbom(venv: Path) -> dict[str, str]:
-    """Every crate release the installed engine wheel *declares* it links."""
+def _declared_in_sbom(venv: Path) -> dict[str, set[str]]:
+    """Every crate release the installed engine wheel *declares* it links, as a set.
+
+    Sets rather than one version each, because one crate here is legitimately linked
+    twice and a reader that collapsed it would drop it silently — which is how
+    `oneharness-core` stayed outside every reconciliation on this host.
+    """
     sboms = sorted(
         venv.glob(f"lib/*/site-packages/{ENGINE_DISTRIBUTION}-*.dist-info/{SBOM_DIRECTORY}/*.json")
     )
@@ -68,13 +87,13 @@ def _linked_in_sbom(venv: Path) -> dict[str, str]:
     declared: dict[str, set[str]] = {}
     for component in document["components"]:
         declared.setdefault(component["name"], set()).add(component["version"])
-    return {crate: versions.pop() for crate, versions in declared.items() if len(versions) == 1}
+    return declared
 
 
 def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
     tmp_path: Path,
 ) -> None:
-    """One release per crate in the binary and the wheel, reconciled against `config/`.
+    """The binary and the wheel agree on every linked crate, reconciled against `config/`.
 
     The binary and its own SBOM must agree outright: a wheel describing something the
     executable it shipped does not carry is the case no lockfile can report. A pin is
@@ -98,7 +117,25 @@ def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
     assert reported.stdout.strip() == f"onepipeline {adopted}"
 
     carried = _linked_in_binary(engine.resolve())
-    declared = _linked_in_sbom(repo / ".venv")
+    all_declared = _declared_in_sbom(repo / ".venv")
+    declared = {
+        crate: next(iter(versions))
+        for crate, versions in all_declared.items()
+        if len(versions) == 1
+    }
+
+    # The crate no pin can name, checked first because it is the one this reconciliation
+    # used to drop: the wheel declares two releases of it and the binary has to carry
+    # exactly those two. `tests/test_linked_libraries.py` says which dependent brings
+    # which; what only a provisioned binary can say is that both are really in it.
+    core = UNRECONCILABLE_PIN.crate
+    expected = {resolved.core for resolved in LINKED_HARNESS_CORES}
+    assert carried.get(core) == expected == all_declared.get(core), (
+        f"the provisioned onepipeline {adopted} carries {core} {sorted(carried.get(core, ()))}, "
+        f"its own SBOM declares {sorted(all_declared.get(core, ()))}, and this repository is "
+        f"written against {sorted(expected)}. A dispatched turn runs one of these and "
+        f"`config/{UNRECONCILABLE_PIN.pin}.version` names neither"
+    )
 
     for crate, version_file in sorted(RECONCILED_PINS.items()):
         assert carried.get(crate) == {declared[crate]}, (

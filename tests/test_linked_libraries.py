@@ -128,6 +128,38 @@ def _linked_version(crate: str) -> str:
     return declared.pop()
 
 
+def _linked_by_dependent(crate: str) -> tuple[LinkedCore, ...]:
+    """Who brings `crate` into the adopted engine, and at which release each one does.
+
+    The SBOM carries a `dependencies` graph beside its component list, and it is the
+    only published thing that answers this: the component list says a crate is linked
+    twice and cannot say *why*, which for a crate linked twice is the whole of the
+    answer.
+    """
+    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
+    sboms = [entry for entry in (distribution.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
+    document = json.loads(Path(str(distribution.locate_file(sboms[0]))).read_text("utf-8"))
+    components = {component["bom-ref"]: component for component in document["components"]}
+    brought: list[LinkedCore] = []
+    for edge in document.get("dependencies", ()):
+        for depended in edge.get("dependsOn", ()):
+            if components.get(depended, {}).get("name") != crate:
+                continue
+            dependent = components.get(edge["ref"])
+            assert dependent is not None, (
+                f"{ENGINE_DISTRIBUTION}'s SBOM has {edge['ref']} depending on {crate} and "
+                "declares no component for it, so nothing here can name what brought it in"
+            )
+            brought.append(
+                LinkedCore(
+                    dependent=dependent["name"],
+                    dependent_version=dependent["version"],
+                    core=components[depended]["version"],
+                )
+            )
+    return tuple(sorted(brought))
+
+
 #: Per-crate claims about what the adopted engine links, as crate → file → the sentence
 #: that file must spell for the *measured* version. Same shape as the pin drift gates in
 #: `tests/test_onejudge_version.py` and a different source: those hold a sentence to a
@@ -297,6 +329,74 @@ RECONCILED_PINS = {
     "onejudge": "onejudge.version",
 }
 
+
+class UnreconcilablePin(NamedTuple):
+    """A CLI pin here whose crate the adopted engine links at **more than one** version.
+
+    Such a pin can never join `RECONCILED_PINS`, because there is no single release
+    for it to equal. Both spellings are named because they differ, and that near-miss
+    is exactly why this crate went ungated while its three siblings did not:
+    `_linked_versions()` is keyed on `oneharness-core` and nothing was looking for a
+    file called `oneharness-core.version`.
+    """
+
+    #: The stem of `config/<pin>.version`, which is a CLI release.
+    pin: str
+    #: The crate the engine links beside it, which is a different artifact.
+    crate: str
+
+
+class LinkedCore(NamedTuple):
+    """One dependent of that crate, and the release of it that dependent brings in.
+
+    A dependent's own version is part of the identity rather than context: a build
+    where `oneagentgraph` moved but still resolved 0.10.1 is a different build, and
+    a declaration that could not tell the two apart would go stale silently.
+    """
+
+    #: The crate that depends on it, as the SBOM names it.
+    dependent: str
+    #: That dependent's own release.
+    dependent_version: str
+    #: The core release it resolves.
+    core: str
+
+
+class ProseClaim(NamedTuple):
+    """A sentence some document must spell, against a fact measured elsewhere."""
+
+    #: The document, relative to the repository root.
+    relative_path: str
+    #: The sentence, as a format template over that measurement's own fields.
+    template: str
+
+
+UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
+
+#: What each dependent resolves that crate at in the adopted engine. The whole set
+#: rather than a version, and rather than a floor, because the fact worth gating is
+#: the *shape*: one binary carrying two majors of the turn-running engine at once,
+#: one per dependent. An equality against a single value — the way the three crates
+#: above are gated — would have to pick one of the two and would be wrong about the
+#: other on the day it landed. This fails when either core moves, when a dependent
+#: stops bringing its own, or when a third dependent appears.
+LINKED_HARNESS_CORES = (
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.6", core="0.10.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.5.0", core="0.8.0"),
+)
+
+#: Where an operator meets that two-version reality, and the sentence that has to
+#: name both halves of it. Prose rather than only a comment for the reason the
+#: divergence below has prose: the person who reads `config/oneharness.version` and
+#: concludes the dispatched turn runs 0.10.2 is making the same mistake the whole of
+#: this module is about. One fragment, spelled once per dependent, with every number
+#: in it interpolated — a sentence that hardcoded the *dependent's* version would go
+#: stale the day oneagentgraph moved without this gate saying so.
+HARNESS_CORE_PROSE = ProseClaim(
+    relative_path="AGENTS.md",
+    template="`{dependent}` {dependent_version} brings `{crate}` {core}",
+)
+
 #: The pins that may not be reconciled today, each with the measured pair it was
 #: declared against. A divergence is permitted only where the linked release is not
 #: installable from PyPI at all — never as a convenience, and never as "not yet
@@ -330,24 +430,50 @@ def _pinned_cli(version_file: str) -> str:
     return (REPO_ROOT / "config" / version_file).read_text(encoding="utf-8").strip()
 
 
-def test_every_linked_crate_with_a_cli_pin_here_is_reconciled() -> None:
-    """A pin added beside a linked crate joins this gate rather than going unread.
+def test_every_cli_pin_beside_a_linked_crate_is_reconciled_or_declared_unreconcilable() -> None:
+    """A `config/<tool>.version` beside a linked crate is held to it, or says why not.
 
     The hole this closes is the one the module docstring's two incidents came
     through: a `config/<tool>.version` that nothing compares against the engine's own
     resolution reads as authoritative while a dispatch runs something else entirely.
+
+    Asked from the *pin* side rather than the crate side, which is a widening and not
+    a restatement. Crate-side, a pin only joined when the crate's name and the file's
+    stem matched exactly — so `config/oneharness.version` sat beside a linked
+    `oneharness-core` and was found by nothing, which is how the one pin here whose
+    crate is linked twice went ungated while its three siblings did not. Matching a
+    pin to `<pin>` or `<pin>-*` is what catches that near-miss, and a crate it finds
+    has to be reconciled or be the declared unreconcilable one.
     """
     linked = _linked_versions()
-    pinnable = {
-        crate: f"{crate}.version"
-        for crate in linked
-        if (REPO_ROOT / "config" / f"{crate}.version").is_file()
+    pins = sorted(path.stem for path in (REPO_ROOT / "config").glob("*.version"))
+    covered = {
+        pin: sorted(crate for crate in linked if crate == pin or crate.startswith(f"{pin}-"))
+        for pin in pins
     }
 
-    assert pinnable == RECONCILED_PINS, (
-        f"{ENGINE_DISTRIBUTION} links {sorted(pinnable)} and this gate reconciles "
-        f"{sorted(RECONCILED_PINS)}; a crate in one and not the other is a pin nothing "
-        "holds to what the engine resolved"
+    unreconciled = {
+        pin: crates
+        for pin, crates in covered.items()
+        if crates and pin not in RECONCILED_PINS and pin != UNRECONCILABLE_PIN.pin
+    }
+    assert not unreconciled, (
+        f"{ENGINE_DISTRIBUTION} links {unreconciled} and nothing here holds those pins to "
+        "it; reconcile each against the engine's own resolution, or — where the crate is "
+        "linked at more than one version — declare it as UNRECONCILABLE_PIN is"
+    )
+    assert covered.get(UNRECONCILABLE_PIN.pin) == [UNRECONCILABLE_PIN.crate], (
+        f"config/{UNRECONCILABLE_PIN.pin}.version was declared unreconcilable because the "
+        f"engine links {UNRECONCILABLE_PIN.crate} beside it, and it now sits beside "
+        f"{covered.get(UNRECONCILABLE_PIN.pin)}; re-read whether the pin can join "
+        "RECONCILED_PINS after all"
+    )
+    assert {pin: crates[0] for pin, crates in covered.items() if pin in RECONCILED_PINS} == {
+        pin: pin for pin in RECONCILED_PINS
+    }, (
+        f"a pin in RECONCILED_PINS no longer names a crate of its own name: {covered}. "
+        "Reconciliation compares one release to one release, so a pin whose crate is "
+        "gone or renamed is holding nothing"
     )
 
 
@@ -402,4 +528,59 @@ def test_the_declared_divergence_is_explained_where_an_operator_meets_it() -> No
             f"{relative_path} states the {crate} divergence {written.count(sentence)} "
             f"times, not once; it must say {sentence!r} so the operator who meets two "
             "disagreeing version files is told which one governs a dispatch"
+        )
+
+
+def test_the_engine_links_one_oneharness_core_per_dependent() -> None:
+    """Two cores in one binary, one per dependent — asserted as the pair, not a value.
+
+    The turn-running engine is the one crate here that a single number cannot describe:
+    `oneagentgraph` and `onejudge` each resolve their own `oneharness-core`, so the
+    adopted engine carries both at once and `config/oneharness.version` — a release of
+    the *CLI*, a different artifact from either — names neither of them.
+
+    Gated as the whole mapping because every cheaper shape is wrong in a way that
+    matters. An equality against one value has to pick a core and is silently wrong
+    about the other. A floor passes a build that dropped a dependent's core entirely.
+    A bare "there are two" passes a build where both moved. What an operator needs to
+    be told is which dependent brings which, because that is what says whether a fix
+    landing in `oneharness` reaches a dispatched member's agent side, its judge side,
+    or neither.
+    """
+    brought = _linked_by_dependent(UNRECONCILABLE_PIN.crate)
+
+    assert brought == tuple(sorted(LINKED_HARNESS_CORES)), (
+        f"the adopted engine resolves {UNRECONCILABLE_PIN.crate} as {brought}, and this "
+        f"repository is written against {LINKED_HARNESS_CORES}. Re-read what a dispatched "
+        f"turn runs through — `config/{UNRECONCILABLE_PIN.pin}.version` answers for the CLI "
+        "and not for this — and update the pin table's oneharness row in the same change"
+    )
+    cores = {resolved.core for resolved in brought}
+    assert len(cores) > 1, (
+        f"the adopted engine now links one {UNRECONCILABLE_PIN.crate} ({sorted(cores)}), so "
+        f"the reason config/{UNRECONCILABLE_PIN.pin}.version cannot be reconciled has gone "
+        "away: move it into RECONCILED_PINS and retire UNRECONCILABLE_PIN rather than "
+        "keeping a two-version gate over one version"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_two_linked_oneharness_cores_are_named_where_an_operator_meets_them() -> None:
+    """The prose naming both is held to the pair this host measures.
+
+    Same reason the declared divergence has prose: the failure is a manager reading one
+    version file and concluding a fix is in force. `config/oneharness.version` is the
+    most inviting of the six to read that way, because it is the only one whose number
+    matches neither thing a dispatch runs.
+    """
+    claim = HARNESS_CORE_PROSE
+    brought = _linked_by_dependent(UNRECONCILABLE_PIN.crate)
+    written = " ".join((REPO_ROOT / claim.relative_path).read_text(encoding="utf-8").split())
+
+    for resolved in brought:
+        stated = claim.template.format(crate=UNRECONCILABLE_PIN.crate, **resolved._asdict())
+        assert written.count(stated) == 1, (
+            f"{claim.relative_path} states {stated!r} {written.count(stated)} times, not "
+            f"once; the adopted engine links {brought}, and an operator meeting two "
+            "disagreeing oneharness numbers has to be told which one a dispatched turn runs"
         )
