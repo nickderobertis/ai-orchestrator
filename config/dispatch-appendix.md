@@ -63,13 +63,52 @@ for it *before* the judged tier, to discover findings, which is the whole cost a
 with `http://127.0.0.1:43xx/... is already used`, and both runs lose. Two publications
 raced this way on 2026-08-18 and each burned 13 minutes to reach that error.
 
-**Wait on a gate with a sentinel file, never a `pgrep` pattern that matches your own
-poll.** `pgrep -f "just gate"` matches the shell running the loop, so the loop never
-exits. That has wedged four workers here. Background `complete_gate` itself — the whole
-chain, so what you waited on is the same command the paragraphs above call complete:
+**`pgrep -f` matches full command lines, and one of them is yours.** It matches its pattern
+against every process's whole argv and excludes exactly one process — itself — never the
+shell that invoked it. So any pattern naming the thing you are waiting for is, by
+construction, a substring of the command line of the shell doing the waiting: `until !
+pgrep -f "just gate"` matches its own loop and never exits, and so does the same loop
+written against `llmlint-judge.sh`, `scripts/fetch-corpus.sh`, or `publish-branch`. That is
+a defect in the polling mechanism rather than a fact about gates, so it applies to every
+wait you write.
+
+That has wedged four workers here, and then two more workers and the manager itself in one
+night: seven instances of one defect. A crozier corpus audit waited in `until ! pgrep -f
+'scripts/fetch-corpus.sh'` with no fetch running at all — the only two matches were its own
+polling shell and the manager's diagnostic shell — and waited until it was interrupted. A
+`check-plan-bar-conflict` dispatch waited on `! pgrep -f "llmlint-judge.sh"`, whose negation
+could never become true, and was cancelled and killed; its replacement then reached for
+`pkill -f` against three patterns, which is not a wait at all but the same self-match with a
+signal attached, and is refused below. And the manager, an hour after instructing a worker
+about this, guarded a launch with `pgrep -f "publish-branch" && echo ABORT || launch`, whose
+pattern was a literal substring of the launching shell's own command line: it aborted
+unconditionally and then reported a publish as RUNNING that did not exist. That last one is
+the evidence that matters most — a rule its own author reproduces an hour after issuing it
+is a rule whose wording is the problem rather than its reader.
+
+**Wait with a sentinel file.** Background `complete_gate` itself — the whole chain, so what
+you waited on is the same command the paragraphs above call complete — and poll for a file
+only that command can write:
 
     ( complete_gate > /tmp/gate.log 2>&1; echo $? > /tmp/gate.exit ) &
     until [ -f /tmp/gate.exit ]; do sleep 20; done
+
+**To ask whether a process is running at all, match the executable, not the command line.**
+`pgrep -x onepipeline` matches process *names* exactly — the binary, not its arguments — so
+the shell doing the asking, whose own name is `bash`, cannot match it however the pattern
+is spelled. Where the binary name is not distinctive enough to identify what you mean
+(`just`, `node` and `python` run everything), read the process table instead and drop the
+one self-match that form has:
+
+    ps -eo pid,args | grep -v grep | grep 'lint-llm-diff'
+
+Both of those are **reads**, which is the point. `pkill -f` is never the answer on this
+host: it is the same self-match with a signal attached — the pattern is a substring of the
+killing shell's own command line — with the added hazard that an unscoped pattern kill
+knows nothing about whose process it matched, and several managers share this host. The
+replacement for the worker killed above reached for `pkill -f "just gate"`, `pkill -f "just
+check"` and `pkill -f "nx run"` while another manager's run was live. Read to learn what is
+running, report what you find, and never kill by pattern.
 
 **One sentinel and one log per invocation, and look before you launch one.** That pair is a
 shape rather than two literal paths. Several dispatches run on this host at once and they

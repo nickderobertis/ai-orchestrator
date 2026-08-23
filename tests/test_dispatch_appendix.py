@@ -22,6 +22,16 @@ was failed for naming it. The gate slot is therefore held as a substitution the 
 derives, and the file is required to say that what is checked is the one invocation
 rather than the name in it.
 
+A third passage failed the same way with a different subject. The rule on waiting for a
+gate named `pgrep -f "just gate"` as its trap, so it read as advice about gates while the
+defect is in the polling mechanism — and readers who had read it wedged against
+`scripts/fetch-corpus.sh`, `llmlint-judge.sh` and `publish-branch` instead. Seven instances
+are now recorded in it: four workers before one night, and two workers and the manager
+during it, the manager an hour after instructing a worker about the rule. Which is why what
+is asserted below is the mechanism (`pgrep -f` matches whole command lines and
+excludes only its own process) together with the self-match-proof check the old text
+answered nowhere.
+
 The cheap-iteration rule is held the same way — by position rather than by phrasing —
 because the cost of burying it is measured: one node lost about 84 minutes looping on
 the whole gate to learn its lint findings, after the rule had already been written down.
@@ -84,6 +94,33 @@ SUBSTITUTION_SATISFIES = re.compile(r"names?\s+the\s+command\s+you\s+substituted
 AGAINST_LOOPING = re.compile(r"over\s+the\s+\*\*finished\*\*\s+tree", re.IGNORECASE)
 NOT_A_BUDGET = re.compile(r"not\s+a\s+per-dispatch\s+budget", re.IGNORECASE)
 STALE_GREEN = re.compile(r"predates\s+your\s+last\s+edit", re.IGNORECASE)
+
+#: Where the polling rule is stated at all: the passage that first reaches for a
+#: pattern match against a process. Matched on `pgrep -f` rather than on a heading,
+#: because the heading is the part that was wrong — it named gates, and the defect is
+#: in the mechanism.
+POLLING = re.compile(r"pgrep\s+-f")
+
+#: The mechanism, as the two facts that make every such wait self-matching: the
+#: pattern is matched against whole command lines, and the only process excluded from
+#: the match is `pgrep`'s own — never the shell that invoked it. Held with `\s+`
+#: between words because this file is hard-wrapped.
+MATCHES_COMMAND_LINES = re.compile(r"full\s+command\s+lines?", re.IGNORECASE)
+EXCLUDES_ONLY_ITSELF = re.compile(r"excludes[^.]*?\bitself\b", re.IGNORECASE | re.DOTALL)
+
+#: The check the old text answered nowhere: how to ask whether something is running,
+#: in a form that cannot match the shell asking. `pgrep -x` matches the executable
+#: name, and the `ps` fallback drops the one self-match its own pipeline has.
+BY_EXECUTABLE = re.compile(r"pgrep\s+-x\b")
+PS_FALLBACK = re.compile(r"ps\s+-eo[^\n]*\|\s*grep\s+-v\s+grep")
+
+#: The pattern kill, refused: it is the same self-match with a signal attached, and on
+#: a host several managers share it knows nothing about whose process it matched.
+NEVER_PATTERN_KILL = re.compile(r"pkill\s+-f[^.]*?\bnever\b|\bnever\b[^.]*?pkill\s+-f", re.I)
+
+#: The sentinel wait's naming rule, which the rewrite had to leave standing: one
+#: sentinel and one log per invocation, on a host whose dispatches share `/tmp`.
+PER_INVOCATION = re.compile(r"one\s+log\s+per\s+invocation", re.IGNORECASE)
 
 
 @pytest.fixture(scope="module")
@@ -304,3 +341,71 @@ def test_the_appendix_says_what_does_not_answer_which_recipe_is_the_gate(
             "right one belong together, or a reader talked out of the first falls into "
             "the second"
         )
+
+
+def test_the_polling_rule_is_about_pgrep_rather_than_about_gates(appendix: str) -> None:
+    """The rule stated as the mechanism, which is the only form that transfers.
+
+    It was written as advice about waiting on a *gate*, and readers who had read it
+    walked into the same trap against other patterns: a worker wedged on
+    `scripts/fetch-corpus.sh`, another on `llmlint-judge.sh`, and the manager an hour
+    after issuing the rule on `publish-branch`. None of those is a gate, and every one
+    of them is the same defect — `pgrep -f` matches against whole command lines and
+    excludes only its own process, so the pattern naming what you are waiting for is by
+    construction inside the command line of the shell doing the waiting.
+
+    Asserted where the file first reaches for `pgrep -f`, so a future edit that puts
+    the gate-only wording back has to put it somewhere this cannot see, rather than
+    merely reword the sentence.
+    """
+    introduced = POLLING.search(appendix)
+    assert introduced is not None, f"{APPENDIX} no longer says anything about `pgrep -f`"
+
+    paragraphs = [block for block in appendix.split("\n\n") if POLLING.search(block)]
+    stated = "\n\n".join(paragraphs[:1])
+
+    assert MATCHES_COMMAND_LINES.search(stated), (
+        f"{APPENDIX} introduces `pgrep -f` without saying it matches full command "
+        "lines, which is the whole reason a wait on one matches its own poll; stated "
+        "as a fact about gates instead, it has failed to transfer three times"
+    )
+    assert EXCLUDES_ONLY_ITSELF.search(stated), (
+        f"{APPENDIX} no longer says `pgrep` excludes only itself. Excluding itself is "
+        "what makes the rule look safe — the shell doing the waiting is the parent, and "
+        "nothing excludes that"
+    )
+
+
+def test_the_appendix_gives_a_self_match_proof_way_to_ask_what_is_running(
+    appendix: str,
+) -> None:
+    """The half the old text answered nowhere, and a pattern kill refused by name.
+
+    Telling a reader not to wait on `pgrep -f` leaves them with a real need — is this
+    thing running at all? — and the old paragraph answered it with nothing, so readers
+    reached for the broken form anyway. `pgrep -x` matches the executable name, which a
+    polling shell called `bash` cannot collide with; `ps -eo pid,args | grep -v grep` is
+    the fallback where the binary name identifies nothing. Both are reads: `pkill -f` is
+    the same self-match with a signal attached, and one worker reached for it against
+    three patterns while another manager's run was live on this host.
+    """
+    assert BY_EXECUTABLE.search(appendix), (
+        f"{APPENDIX} gives no self-match-proof way to test whether a process is "
+        "running. `pgrep -x` matches the executable name rather than the command line, "
+        "so the shell asking cannot match itself; without it a reader talked out of "
+        "`pgrep -f` has nothing to reach for and reaches for it anyway"
+    )
+    assert PS_FALLBACK.search(appendix), (
+        f"{APPENDIX} names no fallback for a binary whose name is not distinctive "
+        "(`just`, `node`, `python` run everything), where `pgrep -x` cannot answer; the "
+        "`ps -eo pid,args | grep -v grep` form is what drops that pipeline's own match"
+    )
+    assert NEVER_PATTERN_KILL.search(appendix), (
+        f"{APPENDIX} does not refuse `pkill -f`, which is this same self-match with a "
+        "signal attached and knows nothing about whose process it matched — on a host "
+        "several managers share, that is a worker killing somebody else's run"
+    )
+    assert PER_INVOCATION.search(appendix), (
+        f"{APPENDIX} no longer names one sentinel and one log per invocation, which the "
+        "rewrite of the polling rule had to leave standing"
+    )
