@@ -126,6 +126,10 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: onevcs}
     publication: change-auto
     approvals: none
