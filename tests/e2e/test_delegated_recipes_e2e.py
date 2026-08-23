@@ -158,17 +158,21 @@ DELEGATIONS = (
     # carries is a path this recipe generated rather than one the caller typed. Both
     # of its own flags are absorbed here — `--name` decides that path and `--max-turns`
     # goes into the node — and everything else reaches `onepipeline start` untouched.
+    #
+    # `--dag-graph off` is the observer default it adds, and it is the whole of what a
+    # planning launch differs from a bare `onepipeline start` by: the journal, the
+    # ownership row, the surfaces and the DAG UI place are all that verb's own, and an
+    # observer would only add a monitor comparing the run against the plan it has not
+    # written yet.
     Delegation(
         "plan",
         (BRIEF,),
-        "uv run onepipeline start scratch/plans/cursor-shape.plan.json"
-        " --dag-graph graphs/dag-scope.yaml",
+        "uv run onepipeline start scratch/plans/cursor-shape.plan.json --dag-graph off",
     ),
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        "uv run onepipeline start scratch/plans/listing-api.plan.json"
-        " --dag-graph graphs/dag-scope.yaml --detach",
+        "uv run onepipeline start scratch/plans/listing-api.plan.json --detach --dag-graph off",
     ),
     # The joined spelling of both, which is a separate parsing path: `--name=` decides
     # the plan path this line names, and `--max-turns=` is absorbed rather than
@@ -176,8 +180,22 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        "uv run onepipeline start scratch/plans/listing-api.plan.json"
-        " --dag-graph graphs/dag-scope.yaml --detach",
+        "uv run onepipeline start scratch/plans/listing-api.plan.json --detach --dag-graph off",
+    ),
+    # A caller who names an observer keeps it, in either spelling and including their
+    # own `off`: the flag refuses to be given twice, so the default is added only when
+    # neither spelling was typed.
+    Delegation(
+        "plan",
+        (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
+        "uv run onepipeline start scratch/plans/cursor-shape.plan.json"
+        " --dag-graph graphs/dag-scope.yaml",
+    ),
+    Delegation(
+        "plan",
+        (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
+        "uv run onepipeline start scratch/plans/cursor-shape.plan.json"
+        " --dag-graph=graphs/other.yaml --detach",
     ),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and

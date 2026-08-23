@@ -147,10 +147,14 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   from the repository root.
 
   Attaching it is **opt-in**: `--dag-graph <REF>` ships defaulting to `off`,
-  because no agent is required to run a plan. `just orchestrate` names this file
-  so every run on this host gets a watcher, and passes a caller's own
-  `--dag-graph` — including `off` — through untouched. There is no environment
-  variable for it; the flag is the only way to move it.
+  because no agent is required to run a plan. `just orchestrate` names this file so
+  every run **it** launches gets a watcher, and passes a caller's own `--dag-graph` —
+  including `off` — through untouched. `just plan` names `off` instead, and keeps a
+  caller's own the same way: a planning run's output *is* the plan, so a monitor
+  attached to one watches it for drift from a document that does not exist yet, and
+  the journal, ownership row, surfaces, and DAG UI place it would otherwise be
+  credited with are all `onepipeline start`'s own. There is no environment variable
+  for either; the flag is the only way to move it.
 
   The document declares **schema 4**, for two fields. `check-in` carries its own
   `task`, which needs 3; that task opens with `{task}`, which `oneagentgraph`

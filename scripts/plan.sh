@@ -30,14 +30,23 @@
 #     consumes one — a planner's blocking question is answered there or not at all.
 #
 # It is one node and no `repo`: planning authors no target-project content, so
-# nothing is published and no lifecycle worktree is cut. Everything else is
-# `just orchestrate`'s path exactly — `onepipeline start` with this host's dag-scope
-# graph — so the run gets a journal, an ownership row, planner surfaces, and a place
-# in the DAG UI.
+# nothing is published and no lifecycle worktree is cut. The journal, the ownership
+# row, the planner surfaces, and the run's place in the DAG UI are `onepipeline
+# start`'s own — the ledger it writes and the channel it serves — so this launch gets
+# every one of them exactly as any other launch does, and an agent graph produces
+# none of them. What a dag-scope graph adds is the two observer members and nothing
+# else: the monitor that compares a run against its plan, and the `check-in`
+# pacemaker.
+#
+# So this recipe launches on `--dag-graph off`, which is also `onepipeline start`'s
+# own shipped default and is named here to state the intent rather than to inherit
+# it. A planning run's **output is the plan**, so a monitor attached to one is
+# comparing the run against a document that does not exist yet — the one run on this
+# host where watching it that way can say least. A caller who wants an observer names
+# one and keeps it, per flag, exactly as `just orchestrate` keeps a caller's own.
 #
 # `--name` and `--max-turns` are consumed here; every other flag is passed to
-# `onepipeline start` untouched. `--dag-graph` is refused rather than passed on,
-# because this recipe always names one and the flag cannot be given twice.
+# `onepipeline start` untouched, `--dag-graph` included.
 set -euo pipefail
 
 #: Where a generated plan is written, under the gitignored scratch root. Kept in the
@@ -49,9 +58,17 @@ PLAN_DIRECTORY="scratch/plans"
 #: The persona ref the one node carries. A path, deliberately — see the header.
 PLANNER_PERSONA="../personas/planner.yaml"
 
-#: The dag-scope graph every run on this host is watched by, exactly as
-#: `just orchestrate` names it.
-DAG_GRAPH="graphs/dag-scope.yaml"
+#: The observer this launch attaches when the caller names none: nothing — see the
+#: header for why a planning run in particular is the wrong run to watch that way.
+#: Named rather than left to `onepipeline start`'s own default of `off`, so the
+#: recipe's intent is in the launch it composes and a release that moved that default
+#: cannot silently attach a monitor to every plan.
+DEFAULT_DAG_GRAPH="off"
+
+#: How that default is recognized as already named, so it is added only when the
+#: caller named neither spelling: `--dag-graph` refuses to be given twice, and
+#: appending one over the caller's own would refuse the launch outright.
+DAG_GRAPH_FLAG="--dag-graph"
 
 #: The one node's id. It is what `just status` and the DAG UI label the dispatch.
 NODE_ID="plan"
@@ -174,10 +191,6 @@ while [ $# -gt 0 ]; do
             [ -n "$max_turns" ] || fail "--max-turns was given no value" "give it a whole number of turns, or omit it for the persona's own budget"
             shift
             ;;
-        --dag-graph | --dag-graph=*)
-            fail "this recipe always launches on $DAG_GRAPH, and --dag-graph cannot be given twice" \
-                "drop the flag, or write the plan yourself and launch it with 'just orchestrate'"
-            ;;
         *)
             # Forwarded unvalidated, deliberately: every other flag is `onepipeline
             # start`'s, and it is the one thing that knows its own surface. A copy of
@@ -187,6 +200,20 @@ while [ $# -gt 0 ]; do
             # llmlint: ignore[boundary_inputs_validated] `onepipeline start` validates its own surface; restating it here is the drift this repository gates against.
             forwarded+=("$1")
             shift
+            ;;
+    esac
+done
+
+# The observer default, composed from what was forwarded rather than consumed out of
+# it: a caller's `--dag-graph` — either spelling, and including their own `off` —
+# reaches `onepipeline start` as they typed it, and this adds one only when they named
+# neither.
+observer=("$DAG_GRAPH_FLAG" "$DEFAULT_DAG_GRAPH")
+for argument in ${forwarded[@]+"${forwarded[@]}"}; do
+    case "$argument" in
+        "$DAG_GRAPH_FLAG" | "$DAG_GRAPH_FLAG"=*)
+            observer=()
+            break
             ;;
     esac
 done
@@ -255,10 +282,11 @@ echo "plan: wrote $plan; answer this planner's questions with: just channel-next
 # planner's identity is established: a run launched without it records `unknown`,
 # and `just runs --mine` and `just stop` then disown it.
 #
-# A caller's own flags reach `onepipeline start` as they were typed. That verb is the
+# A caller's own flags reach `onepipeline start` as they were typed, with this
+# recipe's observer default after them and only when they named none. That verb is the
 # one thing that knows its own surface, and a copy of its flag list here would both be
 # the drift `tests/test_cli_surface_drift.py` exists to catch and turn a pass-through
 # into a version pin.
 # llmlint: ignore[boundary_inputs_validated] `onepipeline start` validates its own surface; restating it here is the drift this repository gates against.
 # llmlint: ignore[tool_output_is_signal] This is `just orchestrate`'s attached launch with a plan written first: streaming the run as it goes is what a manager stays attached for, and the one line this script owns — the plan it wrote and the command that answers the planner — is printed above.
-exec "$script_dir/onepipeline.sh" start "$plan" --dag-graph "$DAG_GRAPH" ${forwarded[@]+"${forwarded[@]}"}
+exec "$script_dir/onepipeline.sh" start "$plan" ${forwarded[@]+"${forwarded[@]}"} ${observer[@]+"${observer[@]}"}

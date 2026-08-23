@@ -173,10 +173,12 @@ The browser view cannot deep-link to a page until that is settled.
 #: bearing on, since what a *worker* is given is settled by the launching process rather
 #: than by who is watching.
 #:
-#: The journeys that ask keep it, and that is not symmetry: `just plan` always names this
-#: host's graph and refuses `--dag-graph`, so a watched run is the shape a real question
-#: is asked on, and the monitor reading the same channel is part of what an answer has to
-#: get past.
+#: The `just plan` journeys below name none either, and not by a choice of their own:
+#: that recipe launches on `--dag-graph off`, because a planning run's output is the very
+#: plan a monitor would be comparing it against. So every ask measured here is asked on an
+#: unwatched run — which is the shape a planner is actually launched in, and is a claim
+#: about the channel in its own right: a blocking question is served by `onepipeline`
+#: itself, and an answer never had to get past an observer to reach the asker.
 #:
 #: Dropping it used to change the environment as well — below onepipeline 0.8.1 the run
 #: id reached a dispatch only by leaking out of an *attached* driver's own process after

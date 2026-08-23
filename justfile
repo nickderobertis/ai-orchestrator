@@ -185,6 +185,11 @@ orchestrate *args:
 # `scripts/onepipeline.sh`'s, for `start` and `adopt` alike — but the run id is: this
 # recipe owns the plan's `name`, so it refuses one already taken rather than letting
 # the engine mint a different id than the one it printed.
+#
+# Unlike `just orchestrate` it names `--dag-graph off`: the ledger, the surfaces and
+# the DAG UI place are `onepipeline start`'s own, so what an observer would add to a
+# planning run is a monitor watching it for drift from the plan it is what writes. A
+# caller who names one keeps it, exactly as `just orchestrate` keeps a caller's own.
 [doc('Launch a planner on a manager-written brief as a one-node plan, under a run id this launch guarantees is its own.')]
 plan *args:
     @./scripts/plan.sh "$@"

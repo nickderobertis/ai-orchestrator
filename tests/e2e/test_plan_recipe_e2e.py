@@ -10,8 +10,13 @@ a plan file. What that hands to a recipe is the one shape nobody can check by ey
   than reading the plan and believing it;
 * `ORCHESTRATOR_ASK_MANAGER` in the launch environment, without which the planner
   cannot stop at a decision fork and must guess;
-* and the watch command printed, because a question nobody reads is a question that
-  times out into a synthesized verdict.
+* the watch command printed, because a question nobody reads is a question that
+  times out into a synthesized verdict;
+* and no observer graph, which is the one of the four that is a *choice* rather than
+  a shape. The journal, the ownership row, the surfaces and the DAG UI place are
+  `onepipeline start`'s own and hold whether or not an agent watches — so what a
+  dag-scope graph would add to a planning run is a monitor comparing it against the
+  plan it has not written yet. A caller who names one keeps it.
 
 Nothing validates a `onepipeline` plan document — there is no `--dry-run` and no
 validate verb, and `oneagentgraph validate` checks a graph rather than a plan — so
@@ -31,7 +36,13 @@ from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict, cast
 
 import pytest
-from fake_backend import ENVIRONMENT_KEYS_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
+from fake_backend import (
+    DISPATCHED_MEMBER,
+    ENVIRONMENT_KEYS_ENV,
+    JUDGE_CONFIG_NAME,
+    MEMBER_OF_CONFIG,
+    PROMPT_LOG_ENV,
+)
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -111,6 +122,12 @@ class Planned(NamedTuple):
     plan: PlanDocument
     #: Every harness turn the run reached, as the fake backend recorded it.
     turns: list[TurnRecord]
+    #: What the run recorded of itself on the ledger, under the id the launch printed.
+    run_root: Path
+    #: `just runs --mine`, read by the session that launched it, while it is on the
+    #: ledger. Captured here rather than in a test because it is a claim about this
+    #: launch: what a *later* read reports is a claim about the ledger's retention.
+    listed: str
 
 
 class PlanNode(TypedDict, total=False):
@@ -209,6 +226,8 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         assert launch.returncode == 0, f"the launch failed:\n{launch.stdout}\n{launch.stderr}"
         assert generated.is_file(), f"`just plan` wrote no plan at {generated}"
         assert turns.is_file(), f"the launch reached no harness turn, so {turns} is absent"
+        listing = _just("runs", "--mine", environment=environment, seconds=120)
+        assert listing.returncode == 0, f"the ledger could not be read:\n{listing.stderr}"
         return Planned(
             launch=launch,
             # `cast` rather than a validating read: the recipe writes this document and
@@ -219,6 +238,8 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
                 cast(TurnRecord, json.loads(line))
                 for line in turns.read_text(encoding="utf-8").splitlines()
             ],
+            run_root=Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN,
+            listed=listing.stdout + listing.stderr,
         )
     finally:
         _just("stop", RUN, environment=environment, seconds=60)
@@ -228,6 +249,18 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
 def _worker_turns(planned: Planned) -> list[TurnRecord]:
     """Every turn that served the dispatched node's own member, either side of it."""
     return [turn for turn in planned.turns if "/members/worker/" in (turn["config"] or "")]
+
+
+def _member(turn: TurnRecord) -> str | None:
+    """Which member of which graph took a turn, read the way the backend reads it.
+
+    `oneagentgraph` names every member's scratch after it and pins that member's
+    configs inside it, so the recorded `--config` is what says whose turn this is — and
+    it is the only thing that does: an observer's monitor reaches the same stand-in
+    through the same branch as a dispatched worker.
+    """
+    named = MEMBER_OF_CONFIG.search(turn["config"] or "")
+    return None if named is None else named.group(1)
 
 
 def _side(turn: TurnRecord) -> str:
@@ -362,6 +395,226 @@ def test_the_launch_prints_the_command_that_answers_this_planners_questions(
     )
 
 
+@pytest.mark.xdist_group("plan-recipe")
+def test_a_planning_run_records_itself_with_no_observer_watching_it(planned: Planned) -> None:
+    """The launch attaches no observer, and is on the ledger in full regardless.
+
+    Both halves are one claim, because the first was long justified by denying the
+    second: this recipe named `graphs/dag-scope.yaml` on every planning run, and said
+    it did so "so the run gets a journal, an ownership row, planner surfaces, and a
+    place in the DAG UI". None of those comes from an agent graph — they are the
+    ledger `onepipeline start` writes and the channel it serves, and `--dag-graph`
+    ships defaulting to `off` precisely because no agent is required to run a plan.
+    What the graph adds is the two observer members, and a planning run is the run
+    they can say least about: its **output is the plan**, so a monitor watching it is
+    comparing it against a document that does not exist yet.
+
+    So the run's own record is read for all four, and the turns are read for who took
+    them. Nothing else distinguishes an observed run from an unobserved one — a
+    monitor member reaches the same stand-in as the dispatch, and a launch that
+    quietly attached one would still settle.
+    """
+    took_turns = {_member(turn) for turn in planned.turns}
+    assert took_turns == {DISPATCHED_MEMBER}, (
+        f"a planning run took turns as {sorted(str(member) for member in took_turns)}; "
+        f"only the dispatched {DISPATCHED_MEMBER!r} may, and an observer member here is "
+        "watching the run for drift from a plan the run is what writes"
+    )
+
+    assert planned.run_root.is_dir(), (
+        f"the launch printed run {RUN} and the ledger has no run under it at "
+        f"{planned.run_root}, so the id a manager was told to watch is not this run's"
+    )
+    journal = planned.run_root / "events.jsonl"
+    assert journal.is_file() and journal.stat().st_size > 0, (
+        f"the run recorded no journal at {journal}"
+    )
+    recorded = json.loads((planned.run_root / "launch.json").read_text(encoding="utf-8"))
+    assert recorded["run_id"] == RUN, recorded
+    assert recorded.get("graph") is None, (
+        f"the launch recorded {recorded.get('graph')!r} as its observer graph; a planning "
+        "run is launched with none"
+    )
+    assert recorded.get("session") == LAUNCHING_SESSION, (
+        f"the run is owned by {recorded.get('session')!r} rather than by the session that "
+        f"launched it, so `just runs --mine` and `just stop` disown it: {recorded}"
+    )
+    assert RUN in planned.listed, (
+        f"`just runs --mine` does not name run {RUN}, so it has no ownership row the "
+        f"launching session can act on:\n{planned.listed}"
+    )
+
+
+class Observer(NamedTuple):
+    """One caller-named observer: what was typed, and what the launch must record."""
+
+    what: str
+    #: The run this case launches under, which is also the plan it writes.
+    run: RunId
+    #: What the caller types after the brief.
+    arguments: tuple[str, ...]
+    #: The graph the launch record must then name, relative to this checkout, or
+    #: `None` where the caller asked for no observer at all.
+    named: str | None
+
+
+#: The observer a caller may name, and what the launch must then record as its graph.
+#: Both spellings, and both directions: naming this host's monitor graph is the reason
+#: the flag reaches the launch at all, and naming `off` is the spelling that used to be
+#: refused for contradicting a default it agreed with.
+OBSERVERS = (
+    Observer(
+        "this host's monitor graph",
+        RunId("plan-recipe-observer-graph"),
+        ("--dag-graph", "graphs/dag-scope.yaml"),
+        "graphs/dag-scope.yaml",
+    ),
+    Observer("no observer, joined", RunId("plan-recipe-observer-off"), ("--dag-graph=off",), None),
+)
+
+
+@pytest.mark.parametrize("observer", OBSERVERS, ids=lambda row: row.run)
+def test_a_caller_who_names_an_observer_launches_with_the_one_they_named(
+    tmp_path: Path, observer: Observer
+) -> None:
+    """`--dag-graph` is the caller's to state, in either direction and either spelling.
+
+    It was refused outright, on the grounds that the recipe always named one itself and
+    the flag cannot be given twice — so an operator who wanted a planning run watched,
+    or who wanted to say `off` explicitly, was told to write the plan by hand instead.
+    Now the recipe adds its default only when neither spelling was typed.
+
+    Read from the run's own launch record rather than from the command line: the record
+    is what the driver kept, resolved to an absolute path by the crate that accepted the
+    flag, which is proof the flag arrived and was understood.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    generated = PLAN_DIRECTORY / f"{observer.run}.plan.json"
+    environment = _environment(tmp_path)
+
+    # `--detach` because what is under test is the launch, not the run it drives: the
+    # record is written by the time the launch record is printed, and an attached one
+    # would pay for a whole watched planning dispatch to read the same field.
+    launch = _just(
+        "plan",
+        str(brief),
+        "--name",
+        observer.run,
+        "--detach",
+        *observer.arguments,
+        environment=environment,
+    )
+    try:
+        assert launch.returncode == 0, (
+            f"`just plan {' '.join(observer.arguments)}` was refused:\n"
+            f"{launch.stdout}\n{launch.stderr}"
+        )
+        recorded = json.loads(
+            (Path(environment["ONEPIPELINE_RUNS_DIR"]) / observer.run / "launch.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        expected = None if observer.named is None else str(REPO_ROOT / observer.named)
+        assert recorded.get("graph") == expected, (
+            f"the caller named {observer.what} and the launch recorded "
+            f"{recorded.get('graph')!r} as its observer graph"
+        )
+    finally:
+        _just("stop", observer.run, environment=environment, seconds=60)
+        generated.unlink(missing_ok=True)
+
+
+class Malformed(NamedTuple):
+    """One `--dag-graph` that names no graph, and the refusal it must produce."""
+
+    what: str
+    #: The run it would have launched under, and the plan it writes on the way.
+    run: RunId
+    #: What the caller types after the brief.
+    arguments: tuple[str, ...]
+    #: A fragment of the refusal, which is `onepipeline start`'s own here rather than
+    #: this recipe's — the two spellings are refused at different depths and this is
+    #: what says which one answered.
+    refusal: str
+
+
+#: The two spellings that name no graph at all: a valueless `--dag-graph`, which is a
+#: mistyped observer, and an empty joined one, which is what a shell writes when it
+#: expands a variable to nothing — the same pair `--name` and `--max-turns` are each
+#: guarded against above. Measured rather than predicted: the first is refused by the
+#: argument parser before the run exists, and the second resolves its empty ref to the
+#: launch directory and dies when the driver cannot read a graph out of it.
+MALFORMED = (
+    Malformed(
+        "a valueless observer",
+        RunId("plan-recipe-observer-valueless"),
+        ("--dag-graph",),
+        "a value is required for '--dag-graph <REF>'",
+    ),
+    Malformed(
+        "an empty observer",
+        RunId("plan-recipe-observer-empty"),
+        ("--dag-graph=",),
+        "cannot read",
+    ),
+)
+
+
+@pytest.mark.parametrize("malformed", MALFORMED, ids=lambda row: row.run)
+def test_an_observer_that_names_no_graph_refuses_the_launch(
+    tmp_path: Path, malformed: Malformed
+) -> None:
+    """A `--dag-graph` that names nothing ends the launch, rather than taking the default.
+
+    This is the half of the pass-through that has to be measured rather than reasoned
+    about. The recipe used to refuse every `--dag-graph` itself; now it forwards one,
+    so what becomes of a spelling that names nothing is `onepipeline start`'s answer
+    and not this recipe's. The failure a planner would never notice is a typo absorbed
+    into an ordinary unwatched launch — the run id printed, the plan written, and the
+    observer the caller asked for silently not there — so what is asserted is that the
+    launch fails and that nothing was dispatched under it.
+
+    The plan is written before the launch is made, by design, so a refused launch
+    leaves one behind at the path the next launch would read; the teardown takes it.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    generated = PLAN_DIRECTORY / f"{malformed.run}.plan.json"
+    environment = _environment(tmp_path)
+    turns = tmp_path / "turns.jsonl"
+    environment[PROMPT_LOG_ENV] = str(turns)
+
+    launch = _just(
+        "plan",
+        str(brief),
+        "--name",
+        malformed.run,
+        "--detach",
+        *malformed.arguments,
+        environment=environment,
+    )
+    try:
+        assert launch.returncode != 0, (
+            f"`just plan {' '.join(malformed.arguments)}` launched {malformed.what}:\n"
+            f"{launch.stdout}\n{launch.stderr}"
+        )
+        reported = launch.stderr + launch.stdout
+        assert malformed.refusal in reported, (
+            f"{malformed.what} was refused for some other reason:\n{reported}"
+        )
+        assert not turns.exists(), (
+            f"a refused launch dispatched a turn anyway:\n{turns.read_text(encoding='utf-8')}"
+        )
+    finally:
+        _just("stop", malformed.run, environment=environment, seconds=60)
+        generated.unlink(missing_ok=True)
+
+
 @pytest.mark.reads_docs
 def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: Path) -> None:
     """The example this repository ships is the recipe's own output, not a hand-written copy.
@@ -414,8 +667,6 @@ REFUSALS = (
     Refusal("an empty budget", ("--max-turns=",), "--max-turns was given no value"),
     Refusal("a turn budget that is not one", ("--max-turns", "soon"), "not a positive whole"),
     Refusal("a name the engine would rewrite", ("--name", "cursor.shape"), "is not a run id"),
-    Refusal("a second dag graph", ("--dag-graph", "off"), "cannot be given twice"),
-    Refusal("a second dag graph, joined", ("--dag-graph=off",), "cannot be given twice"),
 )
 
 
