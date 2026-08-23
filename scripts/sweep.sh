@@ -23,9 +23,10 @@
 # not accept the same numbers, so narrowing it here would refuse invocations they take.
 set -euo pipefail
 
-# llmlint: ignore[tool_output_is_signal] `--help` is a question and this is its
-# answer, so exiting 0 with more than a line is the whole of what the path is for.
-# The two options and the shape of a report are what an operator came here to read.
+# `--help` is a question and this is its answer, so exiting 0 with more than a line is
+# the whole of what the path is for. The two options and the shape of a report are what
+# an operator came here to read.
+# llmlint: ignore[tool_output_is_signal] --help answers a question; reason above.
 usage() {
   cat <<'USAGE'
 Usage: just sweep [--dry-run] [--min-age-hours HOURS]
@@ -35,12 +36,17 @@ two published verbs that own them: `oneagentgraph sweep` and `onevcs sweep`.
 
   --dry-run                Report what would be reclaimed and remove nothing.
   --min-age-hours HOURS    Leave anything written inside this many hours alone.
-                           Both verbs default to 24 and mean the same thing by it.
+                           This recipe passes 4 when you name none, and both verbs
+                           mean the same thing by it. Their own default is 24, which
+                           on this host reclaimed nothing at all.
 
 A sweep that examined every family and left nothing to act on says so in one line.
 A verb that failed, or a family neither of them examined, prints both reports and the
 trailer naming what was left unlooked-at. `--dry-run` always prints them: it removes
 nothing, so those reports are the answer it was asked for.
+
+The host scratch root — $TMPDIR, or /tmp — is one of those families. It is measured
+and named there, and nothing here removes anything under it.
 USAGE
 }
 
@@ -52,10 +58,18 @@ die() {
   exit 2
 }
 
-# A bare `just sweep` forwards nothing, so every expansion of this list below
-# has to survive it being empty.
+#: The floor this recipe passes when the caller names none, in hours. Two measured
+#: constraints: a whole number, because `oneagentgraph sweep` refuses a fractional hour
+#: where `onevcs sweep` takes one; and 4 rather than the 24 they default to, because at
+#: 24 the composed sweep reclaimed 0 B on this host while `--min-age-hours 4` reclaimed
+#: 23.9 GB. Why, and what it is not, is docs/orchestration.md, "The recorded run".
+DEFAULT_MIN_AGE_HOURS=4
+
+# A bare `just sweep` forwards nothing of the caller's, so every expansion of this
+# list below has to survive it holding only the default above.
 forwarded=()
 dry_run=0
+min_age_given=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -67,12 +81,14 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || die '--min-age-hours needs a number of hours after it'
       [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "--min-age-hours takes a number of hours, not '$2'"
       forwarded+=("$1" "$2")
+      min_age_given=1
       shift 2
       ;;
     --min-age-hours=*)
       [[ ${1#*=} =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
         die "--min-age-hours takes a number of hours, not '${1#*=}'"
       forwarded+=("$1")
+      min_age_given=1
       shift
       ;;
     -h | --help)
@@ -84,6 +100,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+# Named rather than left to the verbs' own default, so that the number an operator
+# reads back in either report is the one this recipe chose and the reasoning above is
+# reachable from it.
+[ "$min_age_given" -ne 0 ] || forwarded+=(--min-age-hours "$DEFAULT_MIN_AGE_HOURS")
 
 # Captured rather than streamed: constraint 4 cannot be decided until both verbs have
 # answered. Only stdout is held — an error belongs to the operator the instant the verb
@@ -132,10 +153,11 @@ fi
 # and whose branch can still hold unpublished work. Named and measured, nothing more.
 legacy_worktrees="${AI_ORCHESTRATOR_HOME:-$HOME/.ai-orchestrator}/worktrees"
 if [ -d "$legacy_worktrees" ]; then
-  # Constraint 3, at the one place that can breach it: this root belongs to other
-  # checkouts and is the likeliest here to be unreadable, and it is measured last, so
-  # a `find` or `du` that aborted would discard both verbs' reports and this trailer
-  # for a bare errno. Each number degrades to a phrase instead.
+  # Constraint 3, at one of the two places that can breach it: this root belongs to
+  # other checkouts and is the likeliest here to be unreadable, and both measurements
+  # here run *after* both verbs have swept, so a `find` or `du` that aborted would
+  # discard both reports and this trailer for a bare errno. Each number degrades to a
+  # phrase instead.
   legacy_incomplete=0
   if ! legacy_count="$(find "$legacy_worktrees" -mindepth 1 -maxdepth 1 -type d 2>/dev/null |
     wc -l)"; then
@@ -163,6 +185,180 @@ if [ -d "$legacy_worktrees" ]; then
   )")
 fi
 
+#: The prefix `oneagentgraph` puts on every directory of the family it owns under the
+#: host scratch root. Measured on the adopted release rather than assumed: a directory
+#: beside them without it is counted in that family's directory total and then judged
+#: by nothing — neither reclaimed nor retained with a reason — so it belongs to no verb
+#: this recipe composes, and the numbers below leave the prefixed ones out.
+ONEAGENTGRAPH_SCRATCH_PREFIX='oneagentgraph-'
+
+#: A `uv` lock, of which this recipe's own is always one: `uv run` takes one in
+#: `$TMPDIR` on its way to each verb, so no sweep can observe a root without one, and
+#: the pattern cannot tell that one from another `uv`'s. Counting them would leave this
+#: family non-empty on every host that has ever swept and take the one-line form with
+#: it. The *count* is the whole of the exclusion: nothing is taken out of the size to
+#: match, and a real lock has no bytes to take. The entry below says both, because an
+#: exclusion an operator cannot see turns a count of part of the root into the root's.
+UV_LOCK_TRANSIENT='uv-*.lock'
+
+#: How many name groups the entry below names. Three, because one hides the shape of
+#: the tail and a screenful is the skimming this trailer is rationed to avoid: on this
+#: host the first is 91% of the root on its own, and the second and third are what say
+#: whether the rest is one more producer or ten thousand small ones.
+SCRATCH_NAMED_GROUPS=3
+
+#: The one measurement of that root: its size on the first line, then the largest name
+#: groups under it. One `awk` rather than a pipeline per number because the walk above
+#: is the expensive part and this reads its output twice for nothing otherwise — and
+#: because a `head` closing a pipe early is a SIGPIPE this script would exit on.
+# shellcheck disable=SC2016 # `$1` and `$2` below are awk fields, not shell
+# parameters: expanding them here would hand awk an empty program.
+SCRATCH_MEASUREMENT='
+function human(kib) {
+  if (kib < 1024) return sprintf("%d KiB", kib)
+  if (kib < 1048576) return sprintf("%.1f MiB", kib / 1024)
+  if (kib < 1073741824) return sprintf("%.1f GiB", kib / 1048576)
+  return sprintf("%.1f TiB", kib / 1073741824)
+}
+
+# A trailing id is what makes 3589 directories of one producer read as 3589 producers,
+# and on this host that producer is 91% of the root. So fold one off the end while the
+# tail looks like an id — four or more characters after a separator, carrying a digit —
+# and stop while three characters of name are left, so a name that is all id keeps
+# itself rather than collapsing into every other one.
+function stem(name,   previous, tail) {
+  do {
+    previous = name
+    if (match(name, /[-._][0-9A-Za-z]+$/) && RSTART > 3) {
+      tail = substr(name, RSTART + 1)
+      if (length(tail) >= 4 && tail ~ /[0-9]/) name = substr(name, 1, RSTART - 1)
+    }
+  } while (name != previous)
+  return name
+}
+
+BEGIN { FS = "\t" }
+
+{
+  size = $1 + 0
+  name = $2
+  if (name == root) { total = size; next }
+  sub(/^.*\//, "", name)
+  if (index(name, prefix) == 1) { owned += size; next }
+  key = stem(name)
+  grouped[key] += size
+  members[key] += 1
+  if (!(key in example)) example[key] = name
+}
+
+END {
+  family = total - owned
+  print human(family < 0 ? 0 : family)
+  # A group at a time, largest first, ties broken by name so that one root measured
+  # twice reports the same way twice.
+  for (rank = 0; rank < groups; rank++) {
+    best = ""
+    for (key in grouped) {
+      if (best == "" || grouped[key] > grouped[best]) best = key
+      else if (grouped[key] == grouped[best] && key < best) best = key
+    }
+    if (best == "") break
+    if (members[best] > 1)
+      printf "      %s and %d more like it — %s\n", example[best], members[best] - 1, human(grouped[best])
+    else
+      printf "      %s — %s\n", example[best], human(grouped[best])
+    delete grouped[best]
+  }
+}
+'
+
+# The host scratch root: whatever is under it that `oneagentgraph` did not prefix is a
+# family neither verb examines. Measured and named, never touched — proving one of
+# these dead is the non-reference test both verbs already implement.
+scratch_root="${TMPDIR:-/tmp}"
+
+# The whole entry, or nothing at all when this root holds nothing the verbs above did
+# not already own. A function for the early return: threading "no such family" back
+# through the measurements as an empty string is what prints `0 KiB across  entries`.
+scratch_root_entry() {
+  [ -d "$scratch_root" ] || return 0
+
+  local incomplete=0 partial=0 count size measured largest
+  # Every top-level entry, files as well as directories: a loose file fills a device
+  # as well as a directory does, and the account this family is reported for was taken
+  # in entries. What `oneagentgraph` prefixed is out because a verb above examined it.
+  # The size is the whole root's less that family, so a loose file is in both numbers
+  # even though `du -d 1` lists no file for it to be a name group.
+  if ! count="$(find "$scratch_root" -mindepth 1 -maxdepth 1 \
+    ! -name "$ONEAGENTGRAPH_SCRATCH_PREFIX*" ! -name "$UV_LOCK_TRANSIENT" \
+    2>/dev/null | wc -l)"; then
+    count='an unreadable number of'
+    incomplete=1
+  elif [ "$count" -eq 0 ]; then
+    # The root exists and holds nothing this recipe's verbs did not examine or write,
+    # so there is no family to report — the same silence the pre-adoption worktree root
+    # keeps when it is not on this host at all.
+    return 0
+  fi
+
+  # One walk answers both the size and the shape: `-x` keeps it off anything mounted
+  # under the root, and `-d 1` lists each top-level directory beside the total, which
+  # is what the name groups below are built from.
+  measured="$(du -kx -d 1 -- "$scratch_root" 2>/dev/null)" || partial=1
+  # A root this sweep could not list is a root whose total cannot be trusted either:
+  # `du` reports what it could reach, and reporting that as the family's size would
+  # understate exactly the family this trailer exists to stop understating.
+  if [ "$incomplete" -ne 0 ] || [ -z "$measured" ]; then
+    size='an unmeasurable size'
+    largest=''
+    incomplete=1
+  else
+    largest="$(printf '%s\n' "$measured" | awk \
+      -v root="$scratch_root" \
+      -v prefix="$ONEAGENTGRAPH_SCRATCH_PREFIX" \
+      -v groups="$SCRATCH_NAMED_GROUPS" \
+      "$SCRATCH_MEASUREMENT")"
+    size="$(printf '%s\n' "$largest" | head -n 1)"
+    largest="$(printf '%s\n' "$largest" | tail -n +2)"
+    [ "$partial" -eq 0 ] || size="at least $size"
+  fi
+
+  printf '%s' "$scratch_root — $size across $count entries, and no verb here examines"
+  printf ' any of it.'
+  if [ -n "$largest" ]; then
+    printf '\n%s' "$largest"
+    printf '\n    Those are its largest by name, each trailing id folded into the name'
+    printf '\n    in front of it. What oneagentgraph prefixes %s is left' \
+      "$ONEAGENTGRAPH_SCRATCH_PREFIX"
+    printf '\n    out of every number here: that family is its own and was judged above.'
+  fi
+  # The one thing under this root in neither list unless it is named here. Constraint 4
+  # rations the sections, so this is one sentence and it is unconditional: a reader who
+  # sees the family at all sees what its numbers leave out.
+  printf '\n    A %s is out of that count: uv run holds one here for the length' \
+    "$UV_LOCK_TRANSIENT"
+  printf '\n    of one command, so every sweep would otherwise count its own. Its'
+  printf '\n    bytes stay in the size above, and a real one has none.'
+  printf '\n    Nothing here reclaims any of it, and nothing here writes to it. Both'
+  printf '\n    verbs remove a directory only once they can prove no live process names'
+  printf '\n    it, and neither owns this root — so what is under it is yours to read'
+  printf '\n    and remove by hand, after checking that what wrote it has finished.'
+  if [ "$partial" -ne 0 ] && [ "$incomplete" -eq 0 ]; then
+    printf '\n    Part of this root could not be read, so that size is a floor and not'
+    printf '\n    a total: the family is at least this large.'
+  fi
+  if [ "$incomplete" -ne 0 ]; then
+    printf '\n    A number above is missing rather than zero, because this sweep could'
+    printf '\n    not get it: check the root with ls -ld and re-run. A disk-usage'
+    printf '\n    account that silently leaves this family out is the failure the'
+    printf '\n    trailer exists to prevent.'
+  fi
+  return 0
+}
+
+scratch_entry="$(scratch_root_entry)"
+[ -z "$scratch_entry" ] || unexamined+=("$scratch_entry")
+
 # The long form: each verb's report as it wrote it, then the trailer neither can.
 print_sections() {
   printf '=== oneagentgraph sweep — the scratch a dispatch leaves behind ===\n'
@@ -187,20 +383,21 @@ print_sections() {
 
 # Constraint 4, as its three cases.
 if [ "$dry_run" -ne 0 ]; then
-  # llmlint: ignore[tool_output_is_signal] `--dry-run` removes nothing, so these
-  # reports are the only thing it produces: a rehearsal reduced to one line answers
-  # none of the question — which candidates, in which family, retained for what
-  # reason — that the flag exists to ask.
+  # `--dry-run` removes nothing, so these reports are the only thing it produces: a
+  # rehearsal reduced to one line answers none of the question — which candidates, in
+  # which family, retained for what reason — that the flag exists to ask.
+  # llmlint: ignore[tool_output_is_signal] a rehearsal is its report; reason above.
   print_sections
 elif [ "${#unexamined[@]}" -ne 0 ] ||
   [ "$oneagentgraph_status" -ne 0 ] ||
   [ "$onevcs_status" -ne 0 ]; then
-  # llmlint: ignore[tool_output_is_signal] Exiting 0 here does not mean there was
-  # nothing to report. A family neither verb examined is the sweep working and saying
-  # what it could not reach, and that is the operator's next action; going quiet
-  # would hide the family that has actually filled this host's disk. Nor may it exit
-  # non-zero to earn the right to speak: an unreached family is not a failed sweep,
-  # and the status a caller branches on is not free to move.
+  # Exiting 0 here does not mean there was nothing to report. A family neither verb
+  # examined is the sweep working and saying what it could not reach, and that is the
+  # operator's next action; going quiet would hide the family that has actually filled
+  # this host's disk. Nor may it exit non-zero to earn the right to speak: an unreached
+  # family is not a failed sweep, and the status a caller branches on is not free to
+  # move.
+  # llmlint: ignore[tool_output_is_signal] an unreached family is the answer; above.
   print_sections
 else
   printf 'just sweep: nothing to act on — every family examined: %s; %s.\n' \

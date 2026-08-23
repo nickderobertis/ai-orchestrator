@@ -12,9 +12,15 @@ CLI itself is doubled, at the boundary below the seam under test: each engine is
 proven in its own repository, and running a real `onepipeline start` here would
 launch agents.
 
-llmlint: ignore-file[e2e_not_mocked] The published CLIs are the boundary these
-wrappers delegate *to*, so a double there is what makes the delegation observable;
-the recipes, the wrapper scripts, and the shell they run in are all real.
+llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage] The published CLIs are
+the boundary these wrappers delegate *to*, so a double there is what makes the
+delegation observable; the recipes, the wrapper scripts, and the shell they run in are
+all real. The recorded argv is the whole subject here rather than a private detail —
+what a recipe *promises* is the verb it reaches and the arguments it reaches it with,
+and no user-visible result can distinguish `oneagentgraph sweep --min-age-hours 4`
+from `oneagentgraph sweep` on a host where both find nothing. What each verb then does
+with those arguments is proven against the real verb in the journeys that own it, and
+for this recipe that is `tests/e2e/test_sweep_e2e.py`.
 """
 
 from __future__ import annotations
@@ -236,12 +242,15 @@ DELEGATIONS = (
     # The one recipe here that reaches two verbs. Both are named because a sweep that
     # silently dropped one would report a clean host while a family filled the disk,
     # and both carry the options, because an age floor that meant one thing to one
-    # family and another to the next would be worse than no floor.
+    # family and another to the next would be worse than no floor. The floor is on
+    # every row, the bare one included: both verbs default to 24 hours, which on this
+    # host reclaimed nothing at all, so the recipe passes its own 4 and each verb has
+    # to be told. Moving that default is a deliberate edit to these rows.
     Delegation(
         "sweep",
         ("--dry-run",),
-        "uv run oneagentgraph sweep --dry-run",
-        then=("uv run onevcs sweep --dry-run",),
+        "uv run oneagentgraph sweep --dry-run --min-age-hours 4",
+        then=("uv run onevcs sweep --dry-run --min-age-hours 4",),
     ),
     Delegation(
         "sweep",
@@ -252,8 +261,8 @@ DELEGATIONS = (
     Delegation(
         "sweep",
         (),
-        "uv run oneagentgraph sweep",
-        then=("uv run onevcs sweep",),
+        "uv run oneagentgraph sweep --min-age-hours 4",
+        then=("uv run onevcs sweep --min-age-hours 4",),
     ),
     Delegation("validate-personas", (), "uv run oneagentgraph persona validate personas"),
     Delegation("register-repo", ("/checkout",), "uv run onevcs register /checkout"),
@@ -409,6 +418,11 @@ def _run(
     # own is 41 GB: pointing it at a path inside the throwaway checkout keeps these
     # journeys off it.
     environment["AI_ORCHESTRATOR_HOME"] = str(checkout / "ai-orchestrator-home")
+    # The same, for the other root it reports on. This host's `/tmp` is 83 GiB across
+    # 26,624 entries and walking it costs ~30s, which every row here would pay.
+    scratch = checkout / "scratch-root"
+    scratch.mkdir(exist_ok=True)
+    environment["TMPDIR"] = str(scratch)
     environment.pop("ONEPIPELINE_RUNS_DIR", None)
     # This suite is itself run from inside a dispatch, whose real status directory and
     # history store would otherwise reach the recipe under test. Each journey states

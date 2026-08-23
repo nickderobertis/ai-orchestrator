@@ -1357,12 +1357,30 @@ unused. A short minimum age covers only the gap between creating a directory and
 first instant a process names it, and `--min-age-hours` governs the scratch that has
 no such proof behind it.
 
+**The recipe passes four hours when you name none, rather than the twenty-four both
+verbs default to.** That is a choice this composition makes and states in its own
+`--help`, and the reasoning is in `scripts/sweep.sh` beside the number so that moving
+it is an argument with the measurement rather than with taste. In short: at
+twenty-four the composed sweep reclaimed 0 B on this host while `--min-age-hours 4`
+reclaimed 23.9 GB, because a host running several dispatches churns publication
+workspaces and dispatch scratch hourly and almost nothing provably dead is ever a day
+old. A floor that never fires is how a device reaches 100% with 2 MB free while every
+sweep reports success. Lowering it weakens no proof — neither verb removes anything
+on age alone, and `onevcs` still keeps its bounded recovery history — and the value
+has to be a whole number of hours, because `oneagentgraph sweep` refuses a fractional
+one where `onevcs sweep` takes it. It is *not* GNU `find`'s `-mtime` truncation,
+which is the obvious suspicion and is ruled out by measurement: `-mtime +1` means "at
+least two days" and skips the whole 24-48h band, but a directory 30 hours old is
+reclaimed by each verb at `--min-age-hours 24`, and `oneagentgraph` quotes the floor
+it applied in seconds. The floor was long, not truncated.
+
 What that covers is narrower than it once was, and the difference is operational.
 `oneagentgraph sweep` examines the two families it owns, `runs` and `temp`. The
 families it does not — a private `nx` install per `bunx nx` invocation, a copy of
 Nx's native binary per workspace root, a run directory per pytest session, and
 onejudge's own scratch — are the *volume* ones, appearing because dispatches are
-running, and nothing reclaims them now. Neither does anything reclaim the
+running, and nothing reclaims them now. They share one root, `$TMPDIR` or `/tmp`, and
+the trailer measures and names it for exactly that reason. Neither does anything reclaim the
 **processes** a finished dispatch left running, which reparenting to init puts
 outside every tree walk; the engines that start them own keeping them alive and
 reaping them. `just sweep` says the same at the seam an operator touches.
@@ -1407,6 +1425,28 @@ inside one, and three cases are worth reading rather than inferring:
   — land or discard that branch first (`just recoverable` names the verb for it),
   then remove the tree with `git worktree remove` in the lender. A root that cannot
   be walked or measured is still named, without the number it could not get.
+- **The host scratch root is reported, never reclaimed, and it is the one that
+  filled this disk.** `$TMPDIR` — `/tmp` unless something set it — is where
+  `oneagentgraph` writes the family it owns and reaches nothing else, and where
+  `onevcs` writes nothing at all, so every other directory under it is neither
+  verb's. It reached 139 GB of a 169 GB device, taking `/` to 2 MB free and stopping
+  every dispatch on this host, while every sweep that day reported success. The
+  trailer names it with its size, its entry count, and its largest three name groups
+  with each trailing id folded into the name in front of it — because the producer
+  that filled it was 3,646 directories of one `nx` cache, which reads as a long tail
+  of unrelated small ones in any per-directory listing. The count is of entries
+  rather than of directories because that is what fills a device and what the
+  reclamation was accounted in — 11,127 of 60,208 entries, for 48 GB. Exactly two
+  things are left out of it, and both are named: what `oneagentgraph` prefixed, since
+  a verb above examined it and nothing may be counted in two families at once, and
+  the lock `uv` takes in this root on the way to each verb, which is the recipe's own
+  and would otherwise make this family non-empty on every host that has ever swept —
+  taking the one-line form with it. A loose file is in both numbers, though `du`
+  lists no file for it to be a name group. Nothing here removes any of it:
+  promoting the root to a *reclaimed* family means implementing the proof both verbs
+  already have, which is their work and not this wrapper's. A root that cannot be
+  walked is still named, without the number it could not get, and a root only partly
+  readable reports its size as a floor rather than as a total.
 - **The trailer restates each verb's family names** rather than pointing back at a
   report an operator has to scroll through. That restatement is held against what
   the installed verbs report examining, in `tests/e2e/test_sweep_e2e.py`, so a

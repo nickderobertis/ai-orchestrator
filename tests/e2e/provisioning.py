@@ -120,6 +120,13 @@ def run_setup(
     ).stdout.strip()
     shared_cache = _shared_uv_cache()
     _carry_asdf_versions(tmp_path)
+    # The sweep session setup runs measures the host scratch root as well as the
+    # families the two verbs own, so isolating `HOME` no longer isolates all of it:
+    # without this, every journey here would walk this host's real 83 GiB `/tmp` and
+    # report on it. `TMPDIR` is where `oneagentgraph` writes its own scratch too, so
+    # one redirect keeps both halves inside `tmp_path`.
+    scratch_root = tmp_path / "tmp"
+    scratch_root.mkdir(exist_ok=True)
     return subprocess.run(
         ["bash", str(repo / "scripts" / "session-setup.sh")],
         text=True,
@@ -130,6 +137,7 @@ def run_setup(
             "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
             "HOME": str(tmp_path),
             "PATH": path or os.environ["PATH"],
+            "TMPDIR": str(scratch_root),
             # A shared cache and a suite that corrupts what it installed cannot both
             # be hardlinks. uv installs by linking out of its cache, so the test
             # below that rewrites an installed `METADATA` to prove version drift is

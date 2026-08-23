@@ -4,6 +4,9 @@ Nothing here is doubled. The recipe, the wrapper, and both published verbs are t
 ones; what makes that safe is isolation rather than substitution — `ONEAGENTGRAPH_STATE_DIR`,
 `TMPDIR`, and `ONEVCS_HOME` put every family this run judges inside `tmp_path`, and
 `AI_ORCHESTRATOR_HOME` does the same for the legacy worktree root the trailer reports on.
+`TMPDIR` carries twice as much weight as it used to: it is both where `oneagentgraph`
+writes the family it owns and the host scratch root the trailer now measures, so a
+journey that let it point at the real `/tmp` would report on 83 GiB of this host.
 
 A sweep with nothing to act on is one line, so several journeys below rehearse with
 `--dry-run` first and then sweep for real: the rehearsal is where the reports are read,
@@ -27,6 +30,7 @@ import os
 import re
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -38,8 +42,8 @@ from orchestrator.root import REPO_ROOT
 WRAPPER = REPO_ROOT / "scripts" / "sweep.sh"
 
 
-def _declared_families(constant: str) -> tuple[str, ...]:
-    """The families the trailer claims for one verb, read out of the wrapper itself.
+def _declared(constant: str) -> str:
+    """One constant's value, read out of the wrapper itself.
 
     Read rather than restated, because a restatement would let the wrapper and this
     module drift apart while both stayed green — and it is the wrapper's claim, not
@@ -48,8 +52,13 @@ def _declared_families(constant: str) -> tuple[str, ...]:
     for line in WRAPPER.read_text().splitlines():
         name, separator, value = line.partition("=")
         if name == constant and separator:
-            return tuple(family.strip() for family in value.strip("'").split(","))
+            return value.strip("'")
     raise AssertionError(f"{WRAPPER.name} declares no {constant}")
+
+
+def _declared_families(constant: str) -> tuple[str, ...]:
+    """The families the trailer claims for one verb, as the wrapper declares them."""
+    return tuple(family.strip() for family in _declared(constant).split(","))
 
 
 #: The families each verb owns, as the trailer claims them. Held against what the
@@ -75,13 +84,41 @@ SECTIONS = (
     "=== just sweep — what this run looked at ===",
 )
 
+#: The floor the recipe passes when the caller names none. It is the recipe's own
+#: choice rather than either verb's default, so the journeys below ask both verbs
+#: whether they take it and whether they then apply it.
+RECIPE_DEFAULT_AGE = re.compile(r"This recipe passes (\d+) when you name none")
+
 #: The one number the composed help restates that neither verb owns: the age floor
-#: both of them default to. Matched against what each installed verb declares, below.
-DEFAULT_AGE_CLAIM = re.compile(r"Both verbs default to (\d+) ")
+#: both of them default to when nobody passes one. Matched against what each installed
+#: verb declares, below.
+DEFAULT_AGE_CLAIM = re.compile(r"Their own default is (\d+),")
 
 #: The prefix `oneagentgraph` gives the scratch it writes under `TMPDIR`. A directory
-#: without it is not in the `temp` family and is not a candidate.
+#: without it is not in the `temp` family and is not a candidate — which is what makes
+#: everything else under that root the family the trailer reports on and nothing
+#: reclaims.
 TEMP_FAMILY_PREFIX = "oneagentgraph-"
+
+#: A real `uv` lock, of the shape `uv run` takes in that root on the way to each verb —
+#: so no sweep can observe a root without one. A lock is the only thing besides an
+#: examined family left out of the count, and the journeys below hold every part of
+#: that: this one out of the count, any other loose file in it, this one's bytes still
+#: in the size, and the exclusion named in the report rather than only in the source.
+UV_LOCK_TRANSIENT = "uv-eff31e9f3b703349.lock"
+
+#: The pattern the wrapper excludes, as the wrapper declares it. The report has to name
+#: this: an exclusion an operator cannot read is a count of part of the root reading as
+#: a count of the root, which is the all-clear-shaped answer the trailer exists to stop
+#: giving one root up.
+UV_LOCK_PATTERN = _declared("UV_LOCK_TRANSIENT")
+
+#: An entry under the host scratch root shaped like the one that really fills this
+#: host: `nx` writes one of these per invocation, never reuses one, and never removes
+#: one, and 3,646 of them were 75 GiB of the 83 GiB in `/tmp` while every sweep
+#: reported success. The trailing id is what makes them read as thousands of unrelated
+#: producers, and folding it is what the trailer's name groups are for.
+NX_CACHE_FAMILY = "nx-native-file-cache-"
 
 #: The file the sweeper's ownership proof consults, and the two facts it records: the
 #: owner's pid and the kernel's start token for it. A recycled pid is why the token is
@@ -117,6 +154,18 @@ HOLDER = textwrap.dedent(
 )
 
 
+def _age(path: Path, hours: float) -> None:
+    """Move `path` and everything under it that many hours into the past.
+
+    Both verbs judge an age floor from what is on disk, so a journey about the floor
+    has to move the disk rather than the clock: nothing here is allowed to substitute
+    either verb's idea of now.
+    """
+    when = time.time() - hours * 3600
+    for target in (path, *path.rglob("*")):
+        os.utime(target, (when, when))
+
+
 def _git(*arguments: str, cwd: Path | None = None) -> None:
     """One git command, with an identity so a commit works under any host config."""
     subprocess.run(
@@ -150,13 +199,39 @@ class Host:
             "AI_ORCHESTRATOR_HOME": str(self.worktrees.parent),
         }
 
-    def scratch(self, name: str, *, held: bool) -> Path:
+    def scratch(self, name: str, *, held: bool, age_hours: float = 0, payload: int = 4096) -> Path:
         """One `temp`-family directory, with an owner that is either alive or gone."""
         directory = self.temp / f"{TEMP_FAMILY_PREFIX}{name}"
         directory.mkdir()
-        (directory / "payload").write_bytes(b"\0" * 4096)
+        (directory / "payload").write_bytes(b"\0" * payload)
         if not held:
             (directory / OWNER_LOCK).write_text(DEAD_OWNER)
+        if age_hours:
+            _age(directory, age_hours)
+        return directory
+
+    def loose_file(self, name: str, *, payload: int = 4096) -> Path:
+        """One file directly under the host scratch root, belonging to no verb here.
+
+        `uv` writes one of these — `uv-<hash>.lock` — into this root on the way to
+        every sweep, so this is not a hypothetical shape.
+        """
+        path = self.temp / name
+        path.write_bytes(b"\0" * payload)
+        return path
+
+    def unowned(self, name: str, *, payload: int = 4096) -> Path:
+        """One entry under the host scratch root that no verb this recipe composes owns.
+
+        Deliberately unprefixed: measured on the adopted release, `oneagentgraph`
+        counts a directory beside its own in the `temp` family's directory total and
+        then judges it by nothing — neither reclaiming it nor retaining it with a
+        reason — so an entry shaped like this belongs to no sweeper here. That is the
+        whole of what the trailer's new family is made of.
+        """
+        directory = self.temp / name
+        directory.mkdir()
+        (directory / "payload").write_bytes(b"\0" * payload)
         return directory
 
     def _lender(self) -> Path:
@@ -167,7 +242,14 @@ class Host:
             _git("commit", "--quiet", "--allow-empty", "-m", "lender", cwd=lender)
         return lender
 
-    def workspace(self, session: str, *, finished: bool, family: str = "publications") -> Path:
+    def workspace(
+        self,
+        session: str,
+        *,
+        finished: bool,
+        family: str = "publications",
+        age_hours: float = 0,
+    ) -> Path:
         """One run root shaped as `onevcs` cuts one — really, not just in outline.
 
         A tree that merely looks the part is retained: onevcs proves a workspace is its
@@ -184,6 +266,8 @@ class Host:
             gate = root / "gate-logs" / session
             gate.mkdir(parents=True)
             (gate / "gate-0001.log").write_text("gate passed\n")
+        if age_hours:
+            _age(root, age_hours)
         return root
 
     def legacy_worktree(self, name: str) -> Path:
@@ -274,9 +358,15 @@ def test_a_directory_a_live_process_holds_survives_a_real_sweep(host: Host) -> N
 def test_the_report_names_every_family_examined_and_every_family_it_could_not(
     host: Host,
 ) -> None:
-    """Each family appears in exactly one of the two lists, so neither can hide one."""
+    """Each family appears in exactly one of the two lists, so neither can hide one.
+
+    Every family this recipe knows about is on this host at once: the two each verb
+    owns, the pre-adoption worktree root, and the host scratch root. The verbs' four
+    are claimed as examined and the other two as not, and no name is in both lists.
+    """
     host.workspace("onevcs-s-aaaaaaaaaaaa", finished=False)
     host.legacy_worktree("nickderobertis__llmlint")
+    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
 
     result = sweep(host, "--dry-run")
 
@@ -285,6 +375,8 @@ def test_the_report_names_every_family_examined_and_every_family_it_could_not(
         assert family in examined(result.stdout), f"{family} is in neither list"
         assert family not in not_examined(result.stdout), f"{family} is in both lists"
     assert str(host.worktrees) in not_examined(result.stdout)
+    assert str(host.temp) in not_examined(result.stdout)
+    assert str(host.temp) not in examined(result.stdout), "the scratch root is in both lists"
 
 
 def test_the_families_the_trailer_claims_are_the_families_the_verbs_examined(
@@ -368,10 +460,231 @@ def test_a_family_neither_verb_examined_keeps_both_reports_and_the_trailer(
     assert not dead.exists(), "the families the verbs do own went unswept"
 
 
+def test_the_host_scratch_root_is_named_in_the_trailer_with_what_it_measured(
+    host: Host,
+) -> None:
+    """The family that actually fills this host, measured and named and left alone.
+
+    Neither verb reaches it: `oneagentgraph` owns only what it prefixed under this
+    root and `onevcs` keeps its workspaces elsewhere, so before this the root was in
+    neither list — and a `0 B reclaimed` beside 139 GB of it read as an all-clear. The
+    claims here are what an operator needs in order to act: a size, a count that
+    leaves the prefixed family out rather than double-counting it, and the largest
+    name group with its trailing ids folded, since the one that filled this disk was
+    3,646 directories of one producer and hid inside a total as a long tail.
+
+    It sweeps for real rather than rehearsing, because the other half of the claim is
+    that nothing here removed or rewrote any of it while the families the verbs do own
+    were reclaimed around it.
+    """
+    grouped = [
+        host.unowned(f"{NX_CACHE_FAMILY}{token}", payload=64 * 1024)
+        for token in ("3a91b2c", "7f0d415", "c21e9a8")
+    ]
+    alone = host.unowned("node-compile-cache")
+    dead = host.scratch("dead", held=False)
+
+    result = sweep(host, "--min-age-hours", "0")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(
+        rf"{re.escape(str(host.temp))} — \d+ KiB across 4 entries, "
+        r"and no verb here examines any of it\.",
+        entry,
+    ), entry
+    assert re.search(rf"{NX_CACHE_FAMILY}\w+ and 2 more like it — [\d.]+ [KMGT]iB", entry), entry
+    assert re.search(r"node-compile-cache — [\d.]+ KiB", entry), entry
+    assert f"A {UV_LOCK_PATTERN} is out of that count" in entry, entry
+    for directory in [*grouped, alone]:
+        assert (directory / "payload").exists(), f"{directory} was reclaimed by this recipe"
+    assert not dead.exists(), "the family the verbs do own went unswept beside it"
+
+
+def test_what_oneagentgraph_owns_is_left_out_of_both_of_the_numbers(host: Host) -> None:
+    """Nothing is counted in two families at once, which is what the trailer is for.
+
+    A root holding one directory of each: an owned one four thousand times the size of
+    the other, still on disk because this is a rehearsal. A count that included it
+    would say two entries, and a size that included it would be reported in MiB — so
+    the family would be reported as unexamined while a verb above reported examining
+    it, which is the one outcome the two lists exist to rule out.
+    """
+    host.scratch("owned", held=True, payload=4 * 1024 * 1024)
+    host.unowned("node-compile-cache")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(rf"{re.escape(str(host.temp))} — \d+ KiB across 1 entries", entry), entry
+
+
+def test_the_trailer_names_the_three_largest_name_groups_and_stops(host: Host) -> None:
+    """Three groups, largest first, and the rest deliberately unnamed.
+
+    A screenful of groups is the skimming the trailer is rationed against, and one
+    group hides whether the rest of the root is a second producer or ten thousand small
+    ones — so the count is three and the order is by size. Five groups are on this root
+    and the two smallest have to be absent, which is the half of the rule that a
+    listing printing everything would still pass.
+    """
+    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c", payload=256 * 1024)
+    host.unowned(f"{NX_CACHE_FAMILY}7f0d415", payload=256 * 1024)
+    host.unowned("node-compile-cache", payload=512 * 1024)
+    host.unowned("nds-audit", payload=192 * 1024)
+    host.unowned("xwin-cache", payload=128 * 1024)
+    # Not `pytest-of-nick`, which is the shape this host really carries but is also in
+    # the path of every temporary directory pytest hands this journey.
+    host.unowned("bun-install", payload=64 * 1024)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    groups = [line.strip() for line in entry.splitlines() if line.startswith(" " * 6)]
+    assert len(groups) == 3, groups
+    assert groups[0].startswith(NX_CACHE_FAMILY), groups
+    assert "and 1 more like it" in groups[0], groups
+    assert groups[1].startswith("node-compile-cache — "), groups
+    assert groups[2].startswith("nds-audit — "), groups
+    assert "xwin-cache" not in entry, "the trailer named more groups than it rations"
+    assert "bun-install" not in entry
+
+
+def test_a_loose_file_is_in_both_numbers_even_though_it_is_in_no_name_group(
+    host: Host,
+) -> None:
+    """A loose file fills a device as well as a directory does, so it is in the account.
+
+    The name groups are built from `du -d 1`, which lists directories, so a root filled
+    by one enormous file is in no group — and that is the whole of what it is missing
+    from. It moves the count, which is of entries, and it moves the size, which is the
+    root's. A family reported as one directory and a few KiB while a 4 MiB file sat
+    beside it would be an account of part of the root reading as an account of the
+    root, which is the failure this trailer exists to prevent one root up.
+
+    It is also proof of the other half of criterion one: this sweep measures the file
+    and does not touch it. Nothing here writes to this root or removes anything under
+    it, so the file is still on disk, at its own length, afterwards.
+    """
+    host.unowned("node-compile-cache", payload=4096)
+    loose = host.loose_file("core.20260823", payload=4 * 1024 * 1024)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(rf"{re.escape(str(host.temp))} — \d+(\.\d+)? MiB across 2 entries", entry), (
+        entry
+    )
+    assert re.search(r"node-compile-cache — \d+ KiB", entry), entry
+    assert "core.20260823" not in entry, "a loose file is in the numbers, not in a group"
+    assert loose.stat().st_size == 4 * 1024 * 1024, "a file this recipe only measures moved"
+
+
+def test_the_lock_left_out_of_the_count_is_named_as_left_out_rather_than_dropped(
+    host: Host,
+) -> None:
+    """The exclusion is disclosed where an operator reads it, not only in the source.
+
+    A `uv-*.lock` is out of the count, and that is right: `uv run` holds one in this
+    root for the length of each verb it runs, so counting it would leave the family
+    non-empty on every host that has ever swept. But an exclusion nobody can see turns
+    a count of part of the root into an account of the root, which is the same
+    all-clear-shaped answer this trailer exists to stop giving one root up. So the
+    report names it and says why, and both halves are held here: the lock is still out
+    of the count, and the count now says so.
+
+    It is out of the count and of nothing else, which is the other half of what the
+    report has to get right: the size is the root's less the family a verb above
+    examined, so a lock's bytes are in it. A real one has none, and the lock below is
+    given 4 MiB precisely so that a size which quietly dropped them would report KiB
+    here and fail.
+
+    The root also holds however many locks the recipe's own two `uv run`s take on their
+    way past, every one of them out of the count too, which is why the count is of the
+    single directory beside them.
+    """
+    host.unowned("node-compile-cache")
+    lock = host.loose_file(UV_LOCK_TRANSIENT, payload=4 * 1024 * 1024)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(rf"{re.escape(str(host.temp))} — \d+(\.\d+)? MiB across 1 entries", entry), (
+        entry
+    )
+    assert f"A {UV_LOCK_PATTERN} is out of that count" in entry, entry
+    assert "bytes stay in the size above" in entry, entry
+    assert lock.stat().st_size == 4 * 1024 * 1024, "a file this recipe only measures moved"
+
+
+def test_a_scratch_root_holding_only_examined_scratch_and_this_recipes_lock_is_quiet(
+    host: Host,
+) -> None:
+    """The quiet form survives the new family, and is quiet for the right reason.
+
+    A root whose every entry either belongs to a verb that examined it or was written
+    by this recipe on its way there leaves nothing for an operator to do, so it is not
+    a family and the sweep stays one line. Reporting it anyway would put a section in
+    front of a reader at every dispatch start, and what a reader learns to skim past is
+    the trailer that names the family nothing looked at — which is the whole thing this
+    rationing protects.
+
+    The lock file below is the reason the count has an exclusion at all, and it is what
+    `uv run` really leaves here on the way to each verb rather than a shape invented
+    for this journey: counted, this family would be non-empty on every host that has
+    ever run the recipe and the one line below would be unreachable rather than
+    rationed. It is the *only* exclusion — the journey above puts an ordinary loose
+    file in the same root and it moves the count.
+    """
+    dead = host.scratch("dead", held=False)
+    loose = host.loose_file(UV_LOCK_TRANSIENT)
+
+    result = sweep(host, "--min-age-hours", "0")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [SHORT_FORM]
+    assert str(host.temp) not in result.stdout
+    assert loose.exists(), "a file this recipe only measures was removed"
+    assert not dead.exists(), "the one line came from a sweep that reclaimed nothing"
+
+
+def test_the_floor_this_recipe_passes_by_default_is_one_both_verbs_apply(
+    host: Host,
+) -> None:
+    """The default is the recipe's own, and both verbs have to take it and obey it.
+
+    Both verbs default to 24 hours, and on this host that reclaimed 0 B while four
+    hours reclaimed 23.9 GB: the families churn hourly, so a floor nothing is ever
+    older than never fires, and a sweep that never fires reports success while the
+    device fills. So the recipe names four rather than leaving the verbs to their own
+    default — and a number only one of them accepts, or applies differently, would be
+    worse than no default at all. Every claim here is read from behaviour: a
+    directory either side of the floor, in each verb's own families.
+    """
+    inside = host.scratch("inside", held=False, age_hours=3)
+    outside = host.scratch("outside", held=False, age_hours=5)
+    kept = host.workspace("onevcs-s-aaaaaaaaaaaa", finished=True, age_hours=3)
+    swept = host.workspace("onevcs-s-bbbbbbbbbbbb", finished=True, age_hours=5)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert f"would reclaim {outside}" in result.stdout
+    assert f"{inside} was written" in result.stdout
+    assert "inside this sweep's 14400s floor" in result.stdout
+    assert "keeping anything written inside the last 4 hour(s)" in result.stdout
+    assert f"{swept} — " in result.stdout.partition("Retained:")[0]
+    assert f"{kept} — it was written 3 hour(s) ago" in result.stdout
+
+
 @pytest.mark.parametrize(
     ("arguments", "floor"),
     [
-        ((), "24 hour(s)"),
+        ((), "4 hour(s)"),
         (("--min-age-hours", "0"), "0 second(s)"),
         (("--min-age-hours=0",), "0 second(s)"),
     ],
@@ -384,7 +697,9 @@ def test_the_age_floor_means_one_thing_across_every_family(
 
     The `oneagentgraph` half is read from its decision rather than from its echo: a
     directory whose owner is gone is inside the default floor and outside a zero one, so
-    the same scratch is retained under one and reclaimed under the other.
+    the same scratch is retained under one and reclaimed under the other. The default
+    row is this recipe's own four hours rather than the verbs' twenty-four; what makes
+    that a floor both of them take, and apply, is the journey above.
     """
     dead = host.scratch("dead", held=False)
 
@@ -517,19 +832,25 @@ def test_the_other_verb_still_sweeps_when_oneagentgraph_is_the_one_that_fails(
     assert dead.exists(), "the refused verb swept anyway"
 
 
-def test_the_default_age_the_composed_help_claims_is_the_one_both_verbs_declare(
+def test_the_two_age_floors_the_composed_help_claims_are_the_ones_the_verbs_have(
     host: Host,
 ) -> None:
-    """The help restates a floor neither verb owns, so both are asked whether it is theirs.
+    """The help states a floor of its own and one of theirs, and both are asked.
 
-    `--min-age-hours` is forwarded rather than interpreted here, so that number is a
-    claim about two other repositories' defaults, and a release that moved either one
-    would leave an operator reading a floor no verb has. The age journey above cannot
-    catch that: it reads the *echo* of the default from one verb and its *behaviour*
-    from the other, and neither of those is the number this help prints.
+    `--min-age-hours` is forwarded rather than interpreted here, so the help makes two
+    claims about two other repositories: that they still default to twenty-four when
+    nobody passes one — the number this recipe's own default is chosen against — and
+    that each of them takes the number it passes instead. `oneagentgraph sweep` refuses
+    a fractional hour where `onevcs sweep` takes one, so a default only one of them
+    accepts is a half-sweep at every bare invocation, and it would be this recipe that
+    caused it. Neither claim is observable from the age journeys above, which read one
+    verb's echo and the other's behaviour rather than what either declares.
     """
-    claimed = DEFAULT_AGE_CLAIM.search(sweep(host, "--help").stdout)
-    assert claimed is not None, "the composed help no longer claims a shared default age"
+    help_text = sweep(host, "--help").stdout
+    theirs = DEFAULT_AGE_CLAIM.search(help_text)
+    assert theirs is not None, "the composed help no longer claims a shared default age"
+    ours = RECIPE_DEFAULT_AGE.search(help_text)
+    assert ours is not None, "the composed help no longer names the floor it passes"
 
     for verb in ("oneagentgraph", "onevcs"):
         declared = subprocess.run(
@@ -542,9 +863,23 @@ def test_the_default_age_the_composed_help_claims_is_the_one_both_verbs_declare(
             stdin=subprocess.DEVNULL,
             timeout=e2e_timeout(120),
         )
-        assert f"[default: {claimed.group(1)}]" in declared.stdout, (
-            f"{verb} sweep no longer defaults to the {claimed.group(1)} hours "
+        assert f"[default: {theirs.group(1)}]" in declared.stdout, (
+            f"{verb} sweep no longer defaults to the {theirs.group(1)} hours "
             "just sweep --help tells an operator both verbs do"
+        )
+        taken = subprocess.run(
+            ["uv", "run", verb, "sweep", "--dry-run", "--min-age-hours", ours.group(1)],
+            cwd=REPO_ROOT,
+            env=host.environment,
+            check=False,
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=e2e_timeout(120),
+        )
+        assert taken.returncode == 0, (
+            f"{verb} sweep refuses the {ours.group(1)} hours this recipe passes when "
+            f"the caller names none: {taken.stderr}"
         )
 
 
@@ -631,6 +966,64 @@ def test_a_legacy_root_whose_size_cannot_be_measured_keeps_the_count_it_could_ge
         result.stdout
     )
     assert "check the root with ls -ld" in not_examined(result.stdout)
+
+
+@needs_unprivileged
+def test_a_scratch_root_this_sweep_cannot_read_is_still_named_and_nothing_is_lost(
+    host: Host,
+) -> None:
+    """The measurement that fails must not take the sweep with it.
+
+    This root is walked last, after both verbs have already swept and after the
+    trailer's other measurement, so under `set -euo pipefail` a `find` or `du` that
+    cannot read it would abort the run *there* — discarding both reports, the trailer,
+    and the other family it names, and leaving the operator a bare errno. So each
+    number degrades to a phrase, the root is still named, and the exit still belongs
+    to the verbs.
+    """
+    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
+    host.temp.chmod(0o333)
+    try:
+        result = sweep(host, "--dry-run")
+    finally:
+        host.temp.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        f"{host.temp} — an unmeasurable size across an unreadable number of entries"
+        in not_examined(result.stdout)
+    )
+    assert "check the root with ls -ld" in not_examined(result.stdout)
+    for section in SECTIONS:
+        assert section in result.stdout, "a failed measurement cost a verb its report"
+    for family in ONEVCS_FAMILIES:
+        assert family in examined(result.stdout), "a failed measurement cost a verb its report"
+
+
+@needs_unprivileged
+def test_a_scratch_root_this_sweep_can_only_partly_read_reports_a_floor_not_a_total(
+    host: Host,
+) -> None:
+    """A partial total is not a total, and the difference is the point of the number.
+
+    The root itself lists, so the count answers and the size is as much of it as this
+    sweep could reach. Printing that as *the* size would understate exactly the family
+    the trailer exists to stop understating, so it is reported as a floor and says so.
+    """
+    unreadable = host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
+    (unreadable / "inner").mkdir()
+    (unreadable / "inner").chmod(0o000)
+    try:
+        result = sweep(host, "--dry-run")
+    finally:
+        (unreadable / "inner").chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert re.search(
+        rf"{re.escape(str(host.temp))} — at least [\d.]+ [KMGT]iB across 1 entries",
+        not_examined(result.stdout),
+    ), not_examined(result.stdout)
+    assert "the family is at least this large" in not_examined(result.stdout)
 
 
 @pytest.mark.parametrize(
