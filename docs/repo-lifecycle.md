@@ -868,7 +868,10 @@ split at those seams rather than at convenient ones:
   inventory `config/merge-path-checks.json` keeps of them — and those live outside
   the workspace, so no `nx.json` glob could name one and a memo would describe
   whatever they required when it was recorded. It is seconds of work. A host that
-  cannot reach them reconciles nothing and says so.
+  cannot reach *any* of them reconciles nothing and skips, saying so; a host that
+  reached some and not others **fails**, naming each identity it could not read and
+  the diagnostic `gh` returned for it, because a partial verification reported as a
+  green is the one outcome this tier exists to prevent.
 - **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
   whole workspace with `docs/**` and `**/*.md` removed.
 

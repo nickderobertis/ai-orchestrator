@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
@@ -378,6 +379,30 @@ def required_checks(key: RepoIdentity) -> tuple[frozenset[str], str | None]:
     return frozenset(), diagnostic.splitlines()[-1] if diagnostic else "gh reported no diagnostic"
 
 
+#: How this gate names an identity it could not read while it could read others. A
+#: partial read is the failure the gate exists to make loud, so the phrase is a
+#: constant rather than a spelling: the journey below drives the real gate and asserts
+#: against this, so the two cannot part company.
+PARTIALLY_READ = "was not read, so this run verified nothing about that identity"
+#: How it names a run that could read nothing at all, which is the one deliberate
+#: skip. Same reason for being a constant.
+NOTHING_READ = "no branch protection could be read at all"
+
+
+def unread_report(key: RepoIdentity, diagnostic: str) -> str:
+    """One identity nobody could read, with what `gh` said about it.
+
+    The diagnostic rides along because it is what separates the three cases an
+    operator has to act on differently — an expired credential, a rate limit, and a
+    repository that was renamed or made private — and re-running the gate to learn
+    which one it was costs another fifteen API calls and answers no faster.
+    """
+    return (
+        f"{key}: {MERGE_PATHS[key].branch}'s branch protection {PARTIALLY_READ} "
+        f"— gh said: {diagnostic}"
+    )
+
+
 @pytest.mark.reads_checkouts
 def test_the_declared_required_checks_match_each_repositorys_branch_protection() -> None:
     """The drift gate: the declaration, against the merge paths that own the fact.
@@ -391,8 +416,20 @@ def test_the_declared_required_checks_match_each_repositorys_branch_protection()
     This is why the tier is uncached, for the same reason the recipe reconciliation
     is: its input is other repositories' branch protection, which no `nx.json` key
     covers, and a memoized green would be a verdict on whatever they required when it
-    was recorded. GitHub being unreachable is reported as unknown rather than as a
-    pass — the probe skips, and only an answer that disagrees fails.
+    was recorded.
+
+    **An identity this run could not read fails it.** It used to be filed away and
+    skipped over, which made a partial verification indistinguishable from a whole
+    one: on 2026-08-23 a dispatch ran the complete gate over its tree at 03:31Z and
+    got exit 0, and its publishing push eight minutes later ran this same uncached
+    tier over that same tree and was refused, naming an onetaskgraph drift the first
+    run had silently declined to ask about. The declaration this file guards says the
+    same thing about itself — *"nothing is claimed by omission"* — and an identity
+    nobody asked about is the largest omission available here.
+
+    The one case that stays a skip is a run that could read *nothing*, which is a
+    report about this host rather than about the inventory; it is decided explicitly
+    below rather than fallen into, and says so in its own message.
     """
     if shutil.which("gh") is None:
         pytest.skip("gh is not installed, so this host cannot read any branch protection")
@@ -406,22 +443,232 @@ def test_the_declared_required_checks_match_each_repositorys_branch_protection()
         else:
             unread[key] = failure
     if not answered:
-        pytest.skip(f"no branch protection could be read at all: {unread}")
+        # The deliberate half of the rule: with nothing readable there is no partial
+        # verification for a green to overstate, and a host with no network or no
+        # credentials cannot be asked to verify other repositories. Every diagnostic
+        # still travels, because "the token expired" and "every repository was
+        # renamed" reach this line the same way and are not the same problem.
+        pytest.skip(
+            f"{NOTHING_READ}, so none of the {len(MERGE_PATHS)} routed identities was "
+            "verified: "
+            + "; ".join(f"{key}: {diagnostic}" for key, diagnostic in sorted(unread.items()))
+        )
 
     drifted = {
         key: (contexts ^ MERGE_PATHS[key].required)
         for key, contexts in answered.items()
         if contexts != MERGE_PATHS[key].required
     }
-    assert not drifted, "\n".join(
+    complaints = [
         f"{key}: config/merge-path-checks.json and {MERGE_PATHS[key].branch}'s branch "
         f"protection disagree about {sorted(difference)} — inventory each one under "
         "`checks` with the reason saying what that check is, or drop it if it no longer "
         "gates the merge"
         for key, difference in drifted.items()
+    ] + [unread_report(key, diagnostic) for key, diagnostic in sorted(unread.items())]
+    assert not complaints, "\n".join(
+        [
+            f"{len(answered)} of {len(MERGE_PATHS)} routed identities were read:",
+            *complaints,
+        ]
     )
-    if unread:
-        pytest.skip(f"branch protection could not be read for {unread}")
+
+
+GATE = test_the_declared_required_checks_match_each_repositorys_branch_protection.__name__
+#: What the substituted `gh` says before the line carrying its reason, so the journey
+#: below proves the report carries the *diagnostic* rather than whatever `gh` happened
+#: to print first. Real `gh` prefaces an auth failure the same way.
+GH_PREAMBLE = "gh: this request was not answered"
+
+
+def write_fake_gh(directory: Path) -> None:
+    """Install a `gh` that answers branch protection for some identities and not others.
+
+    The remote host is the one thing here that cannot be real: driving the gate against
+    GitHub would need a repository whose protection this suite could break on purpose.
+    Everything above it is real — the real `gh` argv, the real probe, the real gate
+    function under a real pytest — and what this program decides is only which
+    identities the API answers for. It answers each readable one with exactly what
+    `config/merge-path-checks.json` declares, so the readable half of a partial read
+    contributes no drift of its own and the failure under test is the only one.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    fake = directory / "gh"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "argv = sys.argv[1:]\n"
+        # `gh api repos/<owner>/<name>/branches/<branch>/protection --jq <expr>`
+        "route = argv[1].split('/') if len(argv) > 1 and argv[0] == 'api' else []\n"
+        "if len(route) < 3:\n"
+        "    sys.stderr.write(f'fake gh: nothing here answers {argv}\\n')\n"
+        "    raise SystemExit(1)\n"
+        "key = 'github.com/' + route[1] + '/' + route[2]\n"
+        "unreadable = dict(\n"
+        "    pair.split('=', 1)\n"
+        "    for pair in os.environ['FAKE_GH_UNREADABLE'].split(';')\n"
+        "    if pair\n"
+        ")\n"
+        "if key in unreadable:\n"
+        f"    sys.stderr.write({GH_PREAMBLE!r} + '\\n')\n"
+        "    sys.stderr.write(unreadable[key] + '\\n')\n"
+        "    raise SystemExit(1)\n"
+        "declared = list(json.loads(\n"
+        "    open(os.environ['FAKE_GH_CHECKS'], encoding='utf-8').read()\n"
+        ")['identities'][key]['checks'])\n"
+        "drifted = dict(\n"
+        "    pair.split('=', 1)\n"
+        "    for pair in os.environ['FAKE_GH_NEWLY_REQUIRED'].split(';')\n"
+        "    if pair\n"
+        ")\n"
+        "if key in drifted:\n"
+        "    declared.append(drifted[key])\n"
+        "sys.stdout.write(''.join(context + '\\n' for context in declared))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+
+def drive_the_gate(
+    tmp_path: Path,
+    unreadable: dict[RepoIdentity, str],
+    newly_required: dict[RepoIdentity, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real gate, under a real pytest, against that substituted remote host.
+
+    `newly_required` is a check that repository started requiring after the inventory
+    was written, which is the drift the gate has always been for: it is here so the
+    two kinds of complaint can be driven together.
+    """
+    binaries = tmp_path / "bin"
+    write_fake_gh(binaries)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{Path(__file__).resolve()}::{GATE}",
+            # `-rs` because a skip's reason is half of what is asserted here, and a
+            # quiet run prints only the dot.
+            "-rs",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_UNREADABLE": ";".join(
+                f"{key}={diagnostic}" for key, diagnostic in unreadable.items()
+            ),
+            "FAKE_GH_NEWLY_REQUIRED": ";".join(
+                f"{key}={context}" for key, context in (newly_required or {}).items()
+            ),
+            "FAKE_GH_CHECKS": str(MERGE_PATH_CHECKS),
+        },
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_an_identity_nobody_could_read_fails_the_drift_gate(tmp_path: Path) -> None:
+    """The regression: a partial read is a failure, and it names what went unasked.
+
+    One identity refusing to answer while the rest do used to remove that identity
+    from the comparison and leave the tier green, which is how a tree that had just
+    passed the complete gate was refused eight minutes later by the same tier run
+    from the `pre-push` hook. The diagnostic is asserted because an operator reading
+    this has to tell an expired credential from a renamed repository, and re-running
+    the gate to find out is fifteen more API calls and no faster.
+    """
+    unreadable = "github.com/nickderobertis/onetaskgraph"
+    diagnostic = "gh: Not Found (HTTP 404)"
+
+    driven = drive_the_gate(tmp_path, {unreadable: diagnostic})
+
+    assert driven.returncode != 0, driven.stdout + driven.stderr
+    assert "1 failed" in driven.stdout
+    assert unreadable in driven.stdout
+    assert PARTIALLY_READ in driven.stdout
+    assert diagnostic in driven.stdout
+    # The preamble is what `gh` said first and the diagnostic is what it said last;
+    # reporting the first line would name the outage without naming its reason.
+    assert GH_PREAMBLE not in driven.stdout
+    assert f"{len(MERGE_PATHS) - 1} of {len(MERGE_PATHS)} routed identities were read" in (
+        driven.stdout
+    )
+    # The other identities answered exactly what the inventory declares, so nothing
+    # here is drift and none of them is named: an operator reading this failure is
+    # reading one problem. Asserted per identity rather than against the drift wording,
+    # which pytest also echoes back as the source of the assertion that failed.
+    assert not [key for key in MERGE_PATHS if key != unreadable and key in driven.stdout]
+    assert NOTHING_READ not in driven.stdout
+
+
+def test_drift_and_an_unread_identity_are_reported_by_one_run(tmp_path: Path) -> None:
+    """Both kinds of complaint reach the operator from the same run.
+
+    The drift the gate has always caught and the unread identity it used to swallow
+    are now one report, which is the point of aggregating them: a run that named the
+    drift and then skipped over the unread identity would send an operator back for
+    a second fifteen-call round to learn the other half.
+    """
+    unreadable = "github.com/nickderobertis/onetaskgraph"
+    diagnostic = "gh: Not Found (HTTP 404)"
+    drifting = "github.com/nickderobertis/crozier"
+    newly_required = "coverage-floor"
+
+    driven = drive_the_gate(tmp_path, {unreadable: diagnostic}, {drifting: newly_required})
+
+    assert driven.returncode != 0, driven.stdout + driven.stderr
+    assert f"{len(MERGE_PATHS) - 1} of {len(MERGE_PATHS)} routed identities were read" in (
+        driven.stdout
+    )
+    assert f"{drifting}: config/merge-path-checks.json" in driven.stdout
+    assert f"['{newly_required}']" in driven.stdout
+    assert unread_report(unreadable, diagnostic) in driven.stdout
+
+
+def test_drift_alone_still_fails_with_the_inventory_it_disagrees_with(tmp_path: Path) -> None:
+    """The gate's original job, unchanged: everything read, one repository moved."""
+    drifting = "github.com/nickderobertis/crozier"
+    newly_required = "coverage-floor"
+
+    driven = drive_the_gate(tmp_path, {}, {drifting: newly_required})
+
+    assert driven.returncode != 0, driven.stdout + driven.stderr
+    assert f"{len(MERGE_PATHS)} of {len(MERGE_PATHS)} routed identities were read" in driven.stdout
+    assert f"{drifting}: config/merge-path-checks.json" in driven.stdout
+    assert f"['{newly_required}']" in driven.stdout
+    assert PARTIALLY_READ not in driven.stdout
+
+
+def test_a_host_that_can_read_nothing_at_all_still_skips(tmp_path: Path) -> None:
+    """The stated exception: no answers anywhere is a report about this host.
+
+    It is a skip because there is no partial verification for a green to overstate,
+    and the message says which case the reader is in — with every identity's own
+    diagnostic, since a token that expired and a network that is gone arrive here the
+    same way.
+    """
+    diagnostic = "gh: To get started with GitHub CLI, please run: gh auth login"
+
+    driven = drive_the_gate(tmp_path, dict.fromkeys(MERGE_PATHS, diagnostic))
+
+    assert driven.returncode == 0, driven.stdout + driven.stderr
+    assert "1 skipped" in driven.stdout
+    assert NOTHING_READ in driven.stdout
+    assert f"none of the {len(MERGE_PATHS)} routed identities was verified" in driven.stdout
+    assert diagnostic in driven.stdout
+
+
+def test_every_identity_answering_the_declaration_still_passes(tmp_path: Path) -> None:
+    """The green path this change must not have moved: all read, all agreeing."""
+    driven = drive_the_gate(tmp_path, {})
+
+    assert driven.returncode == 0, driven.stdout + driven.stderr
+    assert "1 passed" in driven.stdout
 
 
 def test_every_ruled_identity_declares_what_its_merge_path_requires() -> None:
