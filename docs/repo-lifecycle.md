@@ -311,12 +311,17 @@ resume/override path. An active branch or occupied worktree is never reset or
 forcibly removed: inspect the reported path and recover that run, or remove it
 manually only after confirming its owner is gone.
 
-Every process working in a run root holds a **shared** occupancy lease on it for
-its lifetime, so a re-dispatch that rejoins a run under way is protected too rather
-than only its first process. Abandoned run directories are reclaimed by the next
-run on the same identity, and only when all three hold: no one holds that shared
-lease, the recorded owning process is provably gone, and the clone has no commit
-that never reached origin. The newest **3** dead runs holding unpublished work
+A process working in a run root holds a **shared** occupancy lease on it for the
+duration of the `onevcs` command it is running: `open`, `adopt`, `close` and the
+publication paths each take one and drop it as they return. **Nothing holds one in
+between**, which is most of a dispatch's life. Abandoned run directories are
+reclaimed by the next `session open` on the same identity, and that decision reads
+exactly two things: nobody holds the shared lease *at that instant*, and the clone
+has no commit that never reached origin. It does **not** consult the session record,
+so the run root of a dispatch that is working right now is reclaimable — which
+destroyed three dispatches here on 2026-08-22. The mechanism, the mitigation this
+repository takes at every session start, and the upstream fix are
+[A dispatch's run root, and what may delete it](run-root-reclamation.md). The newest **3** dead runs holding unpublished work
 are kept, matching pytest's useful bounded failure history. A retry or recovery
 for one of their branches claims the dead run's occupancy lease and adopts its
 exact worktree, including uncommitted files; a held lease or live recorded owner

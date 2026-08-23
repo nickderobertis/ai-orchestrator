@@ -1101,3 +1101,139 @@ def test_every_symbol_a_document_calls_gone_is_still_gone(
             "them now has it. That denial is the stale claim — re-read the engine and "
             "correct the paragraph carrying it"
         )
+
+
+#: The script that holds a dispatch's run-root occupancy lease, and the journey that
+#: proves it. Both restate `onevcs`'s own answer to "is this session's owner still
+#: running", because they run where no `onevcs` is installed yet.
+RUN_LEASE_SCRIPT = REPO_ROOT / "scripts" / "hold-run-lease.sh"
+RUN_LEASE_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_run_root_lease_e2e.py"
+
+#: `/proc/<pid>/stat`, split at the last `)`, and the index into what follows.
+#: `onevcs` reads `fields.get(19)`; each copy here indexes the same list its own way,
+#: so the gate reads the index rather than the expression around it.
+ONEVCS_STAT_FIELD = re.compile(r"fields\s*\.\s*get\((\d+)\)")
+SHELL_STAT_FIELD = re.compile(r"printf[^\n]*fields\[(\d+)\]")
+PYTHON_STAT_FIELD = re.compile(r"rsplit\(\"\)\", 1\)\[1\]\.split\(\)\[(\d+)\]")
+
+#: How `onevcs` spells a run root's occupancy-lease identity, which decides which
+#: lock file guards which directory.
+ONEVCS_LEASE_IDENTITY = re.compile(r'format!\("run:\{\}", run_root\.display\(\)\)')
+
+
+def test_the_run_root_lease_reads_the_process_identity_onevcs_records() -> None:
+    """The lease holder's liveness test is `onevcs`'s, and this is what says so.
+
+    `scripts/hold-run-lease.sh` holds a run root's lease only while the session that
+    cut it is live, and it decides that the way `Record::liveness` does: the owner's
+    pid *and* that process's creation identity, which on Linux is field 22 of
+    `/proc/<pid>/stat`. It reads that field itself rather than asking `onevcs`,
+    because it runs before a dispatched worktree has an `onevcs` to ask — so the copy
+    is deliberate and this is the gate that keeps it honest.
+
+    The journey is read too. It writes the value the script compares against, so two
+    matching local copies would agree with each other while both disagreed with the
+    engine — which is the exact shape of a green test proving nothing.
+    """
+    engine = _source(ONEVCS, "workspace.rs")
+    declared = ONEVCS_STAT_FIELD.search(engine)
+    assert declared is not None, (
+        f"{ONEVCS.crate} {ONEVCS.ref} no longer reads a numbered field out of "
+        "/proc/<pid>/stat in workspace.rs, so what `process_started` means by a "
+        "process's creation identity has moved; re-read it and correct both copies"
+    )
+    for path, pattern in (
+        (RUN_LEASE_SCRIPT, SHELL_STAT_FIELD),
+        (RUN_LEASE_JOURNEY, PYTHON_STAT_FIELD),
+    ):
+        copied = pattern.search(path.read_text("utf-8"))
+        assert copied is not None, (
+            f"{path.name} no longer indexes /proc/<pid>/stat in the shape this gate "
+            "reconciles; it holds a run root's lease on that answer, so update the "
+            "gate and the copy together"
+        )
+        assert copied.group(1) == declared.group(1), (
+            f"{path.name} reads field {copied.group(1)} of /proc/<pid>/stat while "
+            f"{ONEVCS.crate} {ONEVCS.ref} reads field {declared.group(1)}. A lease "
+            "keyed on the wrong field either protects a dead run root forever or lets "
+            "go of a live one"
+        )
+
+
+def test_the_run_root_lease_takes_the_lock_onevcs_guards_that_run_root_with() -> None:
+    """The lease identity is `onevcs`'s spelling, and a lock nobody else takes is no lease.
+
+    `reclaim` skips a run root whose occupancy lease is held, and the lease it asks
+    about is `run:<run root>`. The holder derives its lock path from that same string;
+    if the two ever spell it differently the holder takes a lock of its own and the
+    reclaimer deletes the directory anyway, with every log line here still saying the
+    lease is held.
+    """
+    assert ONEVCS_LEASE_IDENTITY.search(_source(ONEVCS, "workspace.rs")) is not None, (
+        f"{ONEVCS.crate} {ONEVCS.ref} no longer spells a run root's occupancy-lease "
+        'identity "run:<path>"; scripts/hold-run-lease.sh builds its lock path from '
+        "that string, so re-read `occupancy_identity` and correct it"
+    )
+    assert 'f"run:{run_root}"' in RUN_LEASE_SCRIPT.read_text("utf-8"), (
+        f"{RUN_LEASE_SCRIPT.name} no longer builds its lock path from the lease "
+        f"identity {ONEVCS.crate} uses, so the lock it holds is not the one `reclaim` "
+        "asks about"
+    )
+
+
+#: Every field of `onevcs`'s session record `scripts/hold-run-lease.sh` reads. It reads
+#: the record directly because it runs before a dispatched worktree has an `onevcs` to
+#: ask, so the field names are a copy of somebody else's schema.
+RUN_LEASE_RECORD_FIELDS = ("token", "worktree", "run_root", "state", "owner_pid", "owner_started")
+
+#: The `Lifecycle` variant the script requires before it will hold a lease, and the
+#: rename that decides how `serde` writes it into the record.
+RUN_LEASE_OPEN_STATE = "open"
+LIFECYCLE_RENAME = re.compile(r'#\[serde\(rename_all = "([a-z-]+)"\)\]\s*pub enum Lifecycle')
+
+
+def test_the_run_root_lease_reads_the_session_record_fields_onevcs_writes() -> None:
+    """The lease holder's view of a session record is `onevcs`'s, and this says so.
+
+    A renamed field would not fail the script: it would decline, saying the record
+    names no run root, and a dispatch would go on working in a directory nothing was
+    holding — with the log line for it reading like an ordinary "nothing to hold here".
+    That is a silence, so it is gated rather than left to be noticed.
+    """
+    declared = _source(ONEVCS, "workspace.rs")
+    read = RUN_LEASE_SCRIPT.read_text("utf-8")
+    for field in RUN_LEASE_RECORD_FIELDS:
+        assert f"pub {field}:" in declared, (
+            f"{ONEVCS.crate} {ONEVCS.ref} no longer declares `{field}` on its session "
+            f"record, and {RUN_LEASE_SCRIPT.name} reads it to decide which run root to "
+            "hold a lease on; re-read the record and correct the reader"
+        )
+        assert f'"{field}"' in read, (
+            f"{RUN_LEASE_SCRIPT.name} no longer reads `{field}` from the session record, "
+            "so this gate is reconciling a field nothing uses; update it with the reader"
+        )
+
+
+def test_the_run_root_lease_requires_the_state_onevcs_writes_for_an_open_session() -> None:
+    """`open` is `Lifecycle::Open` as `serde` spells it, and the rename decides that.
+
+    The script holds a lease only for a session whose recorded state is this word. A
+    rename here would make every session look finished to it, which is the failure that
+    silently returns every live run root to the reclaimer.
+    """
+    rename = LIFECYCLE_RENAME.search(_source(ONEVCS, "session.rs"))
+    assert rename is not None, (
+        f"{ONEVCS.crate} {ONEVCS.ref} no longer renames its `Lifecycle` variants for "
+        f"serialization, so what {RUN_LEASE_SCRIPT.name} should compare a recorded "
+        "state against is no longer decided where this gate reads it"
+    )
+    # `Open` is one word, so lowercase and kebab-case spell it identically; either is
+    # this word, and a rename to anything else is not.
+    assert rename.group(1) in ("lowercase", "kebab-case"), (
+        f"{ONEVCS.crate} {ONEVCS.ref} renames `Lifecycle` as {rename.group(1)!r}, which "
+        f"no longer writes `Open` as {RUN_LEASE_OPEN_STATE!r}"
+    )
+    assert f'!= "{RUN_LEASE_OPEN_STATE}"' in RUN_LEASE_SCRIPT.read_text("utf-8"), (
+        f"{RUN_LEASE_SCRIPT.name} no longer requires a recorded state of "
+        f"{RUN_LEASE_OPEN_STATE!r}, so this gate reconciles a comparison it does not make"
+    )

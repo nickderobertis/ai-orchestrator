@@ -48,18 +48,25 @@ def _shared_uv_cache() -> str | None:
 def setup_repo(
     tmp_path: Path,
     *,
+    repo: Path | None = None,
     adopted_onejudge: str = ONEJUDGE_VERSION,
     adopted_oneharness: str = ONEHARNESS_VERSION,
     dependency_oneharness: str = ONEHARNESS_VERSION,
     adopted_published: Mapping[str, str] | None = None,
 ) -> Path:
-    repo = tmp_path / "repo"
+    """A worktree session setup can be run in, at `tmp_path/repo` unless one is named.
+
+    `repo` is for the journey whose subject is *where* a dispatch runs: a session
+    worktree `onevcs` really cut, which no fixture can choose the path of. Everything
+    else is identical, so that journey provisions the same tree as every other one.
+    """
+    repo = repo if repo is not None else tmp_path / "repo"
     scripts = repo / "scripts"
     config = repo / "config"
     package = repo / "orchestrator"
-    scripts.mkdir(parents=True)
-    config.mkdir()
-    package.mkdir()
+    scripts.mkdir(parents=True, exist_ok=True)
+    config.mkdir(exist_ok=True)
+    package.mkdir(exist_ok=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, repo / name)
@@ -78,6 +85,10 @@ def setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
+    # The first thing session setup runs, before any provisioning: a dispatch's run
+    # root is reclaimable by a sibling from the moment it exists, so a fixture without
+    # this script would provision a tree no real session start could reproduce.
+    shutil.copy2(REPO_ROOT / "scripts" / "hold-run-lease.sh", scripts / "hold-run-lease.sh")
     # The sweep session setup runs is a composition of two published verbs rather
     # than one of them, so the wrapper that composes them is part of a repo this
     # script can be run in. `HOME` above already points every family it judges inside

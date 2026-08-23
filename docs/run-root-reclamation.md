@@ -1,0 +1,178 @@
+# A dispatch's run root, and what may delete it
+
+On 2026-08-22 three dispatches of one run were destroyed within 90 seconds of launch,
+and every one of them was reported as a missing `claude` binary. This is what
+happened, what this repository does about it, and what has to be fixed upstream
+before concurrent lifecycle dispatch on one identity is safe.
+
+## What deletes it
+
+`onevcs session open` reclaims run roots as its first act. Reading the release the
+adopted `onepipeline` links — `onevcs` v0.11.0, whose working checkout on this host
+is `/home/nick/.ai-orchestrator/repos/nickderobertis__onevcs`; the line numbers below
+are the tag's, and the tip of `main` has since moved them:
+
+- `crates/onevcs/src/workspace.rs:620`, inside `pub fn open`, calls `reclaim(&runs)`
+  on the identity's whole `runs` directory before this session's own root is created.
+- `crates/onevcs/src/workspace.rs:1228`, `fn reclaim`, decides each root's fate at
+  `:1243`: `lock::try_exclusive(&occupancy_identity(&run_root))`. The comment above it
+  calls an exclusive take *"the proof that nothing is working in here"*. A root that
+  cannot be taken exclusively is skipped; one that can is either removed outright when
+  its clone holds no unpublished commit, or kept only if it is among the newest
+  `RETAINED_DEAD_RUNS` (3) that do.
+
+The lease that take is contending for is a `flock(2)` on
+`<state root>/locks/<sha256("run:<run root>")>.lock`, and **nothing holds it while a
+dispatch works**. `open` takes it shared at `workspace.rs:628`, immediately after
+creating the run root, and drops it at `:680` as it returns — after the clone, the
+worktree and the session record are written. `adopt`, `close` and the publication
+paths each take it the same way, for the duration of that one command. So a session's
+root is unheld from the moment `open` returns until some other verb touches it, which
+for a dispatch is the whole time the agent is working in there.
+
+That makes the exposure larger than "a startup window". A root created moments
+earlier is reclaimable because it has no lease *yet*; a root three hours into a
+dispatch is reclaimable because it has no lease *any more*. Both are the same
+condition, and it is the normal state of a live dispatch.
+
+Measured on this host rather than inferred. While the dispatch that wrote this
+document was working in it, `onevcs` reported its own session as live —
+
+```
+s-dac3c89cfc70	open	live	pid=1710617	onevcs/s-dac3c89cfc70	…/runs/s-dac3c89cfc70/worktree
+```
+
+— pid 1710617 being the `onepipeline start` driver, and an exclusive take on that run
+root's lock file succeeded on the first attempt. `onevcs` already knew the session was
+live; the reclaimer never asked.
+
+The consequence is what the incident looked like. Six ai-orchestrator sessions opened
+between 20:25:42Z and 20:26:31Z; the three oldest were reclaimed and the two newest
+survived. A session branch that has not committed yet has no unpublished commit, so
+those roots did not even reach the retention list — they were removed outright.
+
+## It is not the sweep
+
+An earlier reading blamed `scripts/session-setup.sh` running `just sweep` at dispatch
+startup. That reading is wrong, and two independent pieces of evidence rule it out.
+
+`onevcs sweep` says what it answers for, and it is not this: *"This answers for the
+publication and recovery workspaces onevcs owns under `~/.onevcs/workspaces`, and for
+nothing else on this host."* And `just sweep --dry-run` on this host names each
+identity's run root explicitly as a family it holds back —
+
+```
+…/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4 — the per-run
+lifecycle clone root, which `onevcs session open` keeps as a bounded recovery history
+so a dead run's branch stays reachable; this verb does not reach into it
+```
+
+— and reported `Reclaimed: none`. The sweep is the verb that was *observed running*
+during the incident, because session setup runs it; the verb that deletes run roots is
+`session open`, which every dispatch also runs and which nothing logs.
+
+## What this repository does about it
+
+`scripts/hold-run-lease.sh`, run first by `scripts/session-setup.sh`, takes that same
+shared occupancy lease on this dispatch's run root and keeps holding it. Nothing new
+is invented: a shared lease is already what `reclaim` reads as *somebody is working in
+here*, and every other `onevcs` verb takes the lease shared too, so a held lease
+blocks reclamation and nothing else.
+
+It holds while the session is live by `onevcs`'s own definition — the record's state
+is `open` and the process that opened it is that same process, still running — and
+lets go the moment that stops being true. The holder also dies with its lock, since
+the OS releases `flock` on process death.
+
+**It narrows the window; it does not close it.** The run root exists from the instant
+`open` creates it, and this script cannot run until the dispatch's agent has started
+inside the worktree and fired its `SessionStart` hook — a clone, a worktree cut and an
+agent launch later. What was an exposure lasting the dispatch's entire life becomes
+one lasting its first few seconds. That is a real reduction and not a fix.
+
+Two further limits, stated rather than discovered later:
+
+- It is wired to the Claude Code `SessionStart` hook, so a dispatch that falls through
+  to `codex` runs no such hook and takes no lease.
+- It protects the run root only. A session whose record is stale — its owner gone —
+  is deliberately left reclaimable.
+
+`tests/e2e/test_run_root_lease_e2e.py` drives all of it against the real `onevcs`:
+the deletion reproduced without the lease, the root surviving with it, the lease
+released with its session — and released again when that session is handed to a
+different owner — and a real `session-setup.sh` taking it inside a real session
+worktree.
+
+It reads the session record directly rather than asking `onevcs session holders`,
+which answers the same question, because a freshly cut worktree has no `.venv` yet:
+there is no `onevcs` on its PATH for most of the window this covers. That makes the
+record's field names, the `open` state, the `/proc` field `Record::liveness` reads,
+and the `run:<path>` lease identity four copies of another crate's contracts, so
+`tests/test_engine_contracts.py` reconciles each of them against the `onevcs` release
+`onepipeline` links. A renamed field would otherwise not fail this script — it would
+decline, saying the record names no run root, and the dispatch would work on unheld
+behind a line that reads like an ordinary "nothing to hold here".
+
+## The bounded recovery history still prunes
+
+This must not buy a live dispatch's safety with a disk that fills up, so the
+retention was tested rather than reasoned about.
+`test_the_lease_is_released_with_its_session_so_a_dead_run_root_still_prunes` opens a
+real session, holds its lease, kills the owning process, waits for the lease to be
+released, and then requires the next `onevcs session open` to delete that root. It
+does. Nothing in `reclaim` is modified, `RETAINED_DEAD_RUNS` is untouched, and a run
+root whose owner is gone is exactly as reclaimable as it was before.
+
+## The upstream fix
+
+**File:** `crates/onevcs/src/workspace.rs`. **Function:** `fn reclaim` (v0.11.0
+`:1228`), at the `lock::try_exclusive` decision on `:1243`.
+
+**The protection it should use:** a session record. `reclaim` should skip any run root
+named by a record whose `state` is `Lifecycle::Open` and whose `liveness()` is
+`Liveness::Live`, and only then fall through to the lease test it makes today. Both
+halves already exist and need no new concept:
+
+- `workspace::all()` (`:464`) returns every session record on the host, so the run
+  roots to protect are a lookup rather than a scan.
+- `Record::liveness()` (`:359`) already answers *is the process that opened this
+  session that same process, still running*, guarding against pid reuse with the
+  recorded creation identity.
+- `fn held_by` in `crates/onevcs/src/vcs.rs:576` already composes exactly these two
+  tests for the same purpose — it reports `Holding::OwnerRunning` when the record is
+  live and falls back to `lock::is_occupied` when it is not. `reclaim` asking the
+  question that function already asks would make the two agree.
+
+The lease is a per-command occupancy signal and outlives no command, which the
+`held_by` doc comment states in as many words; using it alone as the proof that a
+directory is abandoned is what loses this race. The record is the durable one, and it
+is written before `open` drops the lease — so there is no instant at which a run root
+is unprotected under the record rule.
+
+A second, cheaper guard is worth having beside it and is not a substitute: `reclaim`
+removes a directory it did not create in this process and reports nothing. An event on
+the session stream naming each reclaimed root would have made the incident legible in
+minutes instead of hours.
+
+## The diagnostic that sent the diagnosis the wrong way
+
+Both destroyed dispatches reported, on all five identities:
+
+```
+failed to spawn `claude`: No such file or directory (os error 2). Suggestion: check
+the binary exists and is executable (try `oneharness detect`)
+```
+
+Both binaries existed and `oneharness detect` found them. `ENOENT` from a spawn also
+means the child's **working directory** does not exist — which is what had happened,
+the run root having been deleted — and the message names only the binary while its
+suggestion sends the reader to PATH and the harness install.
+
+**This repository cannot correct it.** The text belongs to `oneharness-core`:
+`crates/oneharness-core/src/io/runner.rs:490` in `fn run_job_supervised`, and again at
+`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.10.2 binary on
+this host, and a dispatch reaches the same crate as a linked library rather than
+through any script here, so nothing on this side of the boundary is in a position to
+rewrite it. The fix belongs there: when the job named a `cwd` (set at `runner.rs:457`)
+and the spawn failed with `NotFound`, say which of the two was missing — the check is
+one `Path::is_dir` on a path the runner already holds.

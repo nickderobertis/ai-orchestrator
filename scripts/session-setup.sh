@@ -20,6 +20,12 @@
 #      can run in dispatched worktrees.
 #   6. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
+# Before any of that it runs `scripts/hold-run-lease.sh`, which holds this
+# dispatch's run-root occupancy lease against a sibling `onevcs session open`
+# reclaiming the directory the dispatch is working in. It is first because the
+# exposure starts the moment the worktree exists, and provisioning is minutes long.
+# See docs/run-root-reclamation.md.
+#
 # `set -e` is omitted so optional tool failures do not prevent the remaining
 # setup steps. Missing or unusable onejudge, oneharness, published-tool, or bun
 # binaries are different: the script finishes the other setup work, then exits
@@ -365,6 +371,16 @@ persist_session_env() {
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
+
+# First, and never fatal: an unheld lease costs a dispatch its working directory,
+# and a failure to take one must not cost it its toolchain as well.
+# llmlint: ignore[changed_behavior_has_e2e] The `||` guards a script that handles and
+# reports every failure of its own and always exits 0, so reaching this branch means
+# bash could not read `scripts/hold-run-lease.sh` at all — a worktree missing a
+# tracked file, which is not a state a journey builds without also breaking the
+# session setup it is driving. What the call itself does is driven end to end by
+# `tests/e2e/test_run_root_lease_e2e.py`.
+bash "$SCRIPT_DIR/hold-run-lease.sh" "$REPO_ROOT" || log "run-root lease unavailable; continuing session setup"
 
 toolchain_failed=0
 install_project_dependencies || toolchain_failed=1
