@@ -34,14 +34,18 @@ from orchestrator.criteria_guard import (
     CriteriaError,
     block_scalar,
     builtin_persona,
+    builtin_persona_names,
     check,
     check_appendix,
+    check_changes_allowed,
     check_demands,
     check_plan,
     criteria_block,
+    criteria_items,
     dispatched_nodes,
     field,
     main,
+    permitting_roles,
     resolve_bar,
     yaml_fragment,
 )
@@ -591,6 +595,173 @@ def test_the_command_separates_an_unreadable_plan_from_a_refused_one(
 
     assert main([str(malformed)]) == 2
     assert "cannot read" in capsys.readouterr().err
+
+
+#: A bar in the shape a role that may not touch the tree states one. Synthetic, so
+#: that what these journeys attribute a refusal to is the pairing rather than any one
+#: release's wording; `test_the_shipped_researcher_is_the_role_this_refuses` is where
+#: the same check meets the real `researcher` bar the engine ships.
+FORBIDS = Bar("a read-only role", "Accept it when no project files were changed.")
+
+
+def test_each_criterion_is_read_on_its_own_with_the_lines_it_wraps_to() -> None:
+    """The conflict is a property of one criterion, so the block is split into them.
+
+    Read whole, a path named in a read-only criterion would pair with a verb from the
+    criterion after it, and a sound plan would be refused for a sentence nobody wrote.
+    """
+    block = (
+        "\n- The answer cites `docs/x.md`\n  and the line it rests on.\n"
+        "- Confirmed facts are separated from inferences.\n\n"
+        "- The report names its sources.\n\n"
+    )
+
+    assert list(criteria_items(block)) == [
+        "- The answer cites `docs/x.md`\n  and the line it rests on.",
+        "- Confirmed facts are separated from inferences.",
+        "- The report names its sources.",
+    ]
+
+
+def test_a_bar_that_forbids_changes_under_criteria_that_require_one_is_refused() -> None:
+    """The plan that could not have succeeded, refused for the reason it could not.
+
+    Both halves have to reach the author: which demand the persona's bar makes, and
+    which criterion contradicts it. Naming only the persona leaves them guessing at
+    which of several criteria to move.
+    """
+    with pytest.raises(CriteriaError) as refused:
+        check_changes_allowed(
+            "- `docs/fern-limitations.md` gains a row for each limitation.", "probe", FORBIDS
+        )
+
+    reported = str(refused.value)
+    assert "a read-only role forbids this dispatch changing project files" in reported
+    assert "no project files were changed" in reported
+    assert "require `docs/fern-limitations.md` to change" in reported
+
+
+def test_the_refusal_names_a_persona_whose_bar_would_permit_the_work() -> None:
+    """A refusal that does not say what to name instead is a refusal to work around.
+
+    The names are resolved out of the engine binary rather than listed here, so what
+    is offered is a role that would really dispatch and really permit the edit.
+    """
+    with pytest.raises(CriteriaError) as refused:
+        check_changes_allowed("- `AGENTS.md` gains a paragraph.", "probe", FORBIDS)
+
+    assert "`docs-writer`" in str(refused.value)
+    assert set(permitting_roles()) == set(SHIPPED_ROLES) - {"researcher"}
+
+
+def test_the_shipped_researcher_is_the_role_this_refuses() -> None:
+    """The measurement the check rests on, taken against the binary a dispatch runs.
+
+    `researcher` is not named anywhere in the check — what refuses it is its own bar,
+    read out of the `oneagentgraph` `onepipeline` links. A release that dropped the
+    file-modification clause would stop the refusal here with nothing to edit, which
+    is the point: the clause is invisible from `personas/`, so a list of names here
+    would be a copy of one release's roles.
+    """
+    with pytest.raises(CriteriaError, match="modified project files"):
+        check_changes_allowed("- `docs/x.md` gains a row.", "probe", resolve_bar("researcher"))
+
+    for permitted in permitting_roles():
+        check_changes_allowed("- `docs/x.md` gains a row.", "probe", resolve_bar(permitted))
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    (
+        pytest.param("- The answer cites `docs/x.md` for every claim it makes.", id="cited"),
+        pytest.param("- The report names `orchestrator/labels.py` and its line.", id="named"),
+        pytest.param("- A new section of the answer separates fact from inference.", id="no-path"),
+        pytest.param("- The finding covers docs/x.md and is added to the answer.", id="unquoted"),
+    ),
+)
+def test_a_read_only_node_that_merely_names_a_file_is_left_alone(
+    criterion: str, appendix: Path
+) -> None:
+    """The false refusal this check is written to avoid, in the shapes it would take.
+
+    Naming a file is what a role forbidden to touch the tree is *for*, and an unquoted
+    path is deliberately missed: `and/or` is a path by any looser reading, and a plan
+    refused for a sound criterion is one that gets worked around.
+
+    Read through `check_plan` under the real shipped `researcher`, whose count is the
+    observable answer: a check that only declined to raise would pass just as well if
+    it had stopped looking, and a synthetic bar would prove it against nothing.
+    """
+    node = _plan(persona="researcher", task=_task(f"{COMPLETE}\n{criterion}"))
+
+    assert check_plan(node) == 1
+
+
+def test_a_bar_that_permits_changes_never_reads_the_criteria_at_all(appendix: Path) -> None:
+    """Neither half is a fault alone: an editing criterion is right for an editing bar."""
+    editing = _task(f"{COMPLETE}\n- `docs/x.md` gains a row.")
+
+    assert check_plan(_plan(persona="engineer", task=editing)) == 1
+
+
+#: An engine declaring one role that may not touch the tree and one that may, so the
+#: correction the refusal offers has exactly one name to give.
+ONE_ROLE_PERMITS = (
+    b"\nname: reader\nuser:\n  persona: 'no project files were changed'\n"
+    b"\nname: writer\nuser:\n  persona: 'edit whatever the task needs'\n"
+)
+
+
+def test_a_role_the_engine_declares_twice_is_passed_over_rather_than_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name that cannot be resolved is not a name to offer, and not a second failure.
+
+    The author is being told which persona to name; turning the engine's packaging
+    into the refusal they read would send them somewhere they cannot act.
+    """
+    monkeypatch.setattr(
+        criteria_guard,
+        "_engine_bytes",
+        lambda: (
+            b"\nname: twice\nuser:\n  persona: 'x'\n\nname: twice\nuser:\n  persona: 'x'\n"
+            + ONE_ROLE_PERMITS
+        ),
+    )
+
+    assert builtin_persona_names() == ("twice", "reader", "writer")
+    assert permitting_roles() == ("writer",)
+
+
+def test_the_remedy_offers_the_roles_this_engine_really_ships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The correction is the engine's own answer, not a list written here."""
+    monkeypatch.setattr(criteria_guard, "_engine_bytes", lambda: ONE_ROLE_PERMITS)
+
+    with pytest.raises(CriteriaError) as refused:
+        check_changes_allowed("- `docs/x.md` gains a row.", "probe", FORBIDS)
+
+    reported = str(refused.value)
+    assert "name a persona whose bar permits the edit (`writer`)" in reported
+    assert "`reader`" not in reported
+
+
+def test_an_engine_whose_every_role_forbids_changes_says_so_rather_than_offering_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal still has to be actionable when there is no persona to point at."""
+    monkeypatch.setattr(
+        criteria_guard,
+        "_engine_bytes",
+        lambda: b"\nname: reader\nuser:\n  persona: 'no project files were changed'\n",
+    )
+
+    with pytest.raises(CriteriaError) as refused:
+        check_changes_allowed("- `docs/x.md` gains a row.", "probe", FORBIDS)
+
+    assert "none of the shipped roles does" in str(refused.value)
+    assert "move the editing into a node of its own" in str(refused.value)
 
 
 def test_the_tracked_appendix_is_where_the_guard_reads_it_from() -> None:

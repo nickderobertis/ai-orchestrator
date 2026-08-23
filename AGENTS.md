@@ -950,6 +950,21 @@ text was gitignored scratch propagated by copy-paste, which is why it contradict
 itself about the complete gate for long enough to fail a node. Rebuild a task's
 appendix from that file rather than from an older builder's copy.
 
+**It also refuses the one pairing no wording of the criteria rescues**: a resolved bar
+that forbids the dispatch changing project files, under criteria that require a
+tracked file to change. The judge is then required to fail the work the task is
+required to produce, and that is not hypothetical — three nodes of one plan carried
+`persona: researcher` while their tasks were to edit a document, and the first settled
+`task-failed` with the judge citing a file that does not exist, costing a run and a
+relaunch. `researcher` reads like the right role for a node whose job is measurement,
+and its *"no project files were changed"* clause is invisible from `personas/`, which
+is not where a bare name resolves; the refusal names the node, that clause, the
+criterion that contradicts it, and a shipped role whose bar does not carry it. It
+reads both halves out of the resolved bar and the criteria rather than off a list of
+persona names, and it is written to **miss** a criterion that names its file in prose
+rather than to refuse a sound plan — a false refusal blocks correct work and gets
+worked around, which is worse than the gap.
+
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking
 question to its manager over the run's own channel instead of guessing at a

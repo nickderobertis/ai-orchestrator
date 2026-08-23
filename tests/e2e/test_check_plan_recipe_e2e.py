@@ -501,3 +501,131 @@ def test_a_plan_that_cannot_be_read_is_not_reported_as_a_refusal(tmp_path: Path)
     assert unreadable.returncode == 2, unreadable.stdout + unreadable.stderr
     assert "cannot read" in unreadable.stderr, unreadable.stderr
     assert "just orchestrate" in unreadable.stderr, unreadable.stderr
+
+
+def _research_task(criteria: str) -> str:
+    """A node whose job is measurement, carrying the real appendix like any other."""
+    return (
+        "## What\n\nMeasure which limitations the corpus actually demonstrates.\n\n"
+        "## Why\n\nThe user cannot tell which limitations are real.\n\n"
+        f"## Acceptance criteria\n\n{criteria}\n\n"
+        f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
+    )
+
+
+#: The pairing that could not have succeeded, in the shape it was launched in:
+#: `persona: researcher`, whose shipped bar refuses the work outright if the agent
+#: changed any project file, under criteria that require a tracked document to gain a
+#: row. The judge was required to fail the work the task was required to produce, and
+#: it settled `task-failed` citing a file that does not exist.
+RESEARCH_REQUIRES_AN_EDIT = (
+    "- `docs/fern-limitations.md` gains a row for every limitation the corpus names.\n"
+    "- A journey reads that document back end to end.\n"
+    "- The dispatch closes with a completion report naming the evidence it verified."
+)
+
+#: The same node written as the question that bar is for. Same persona, same file
+#: named in the same criterion — what differs is that nothing here requires the tree
+#: to change, and refusing this would be the false refusal that gets worked around.
+RESEARCH_ANSWERS_A_QUESTION = (
+    "- The answer cites `docs/fern-limitations.md` and the line each claim rests on.\n"
+    "- Confirmed facts are separated from inferences, traced end to end.\n"
+    "- The dispatch closes with a completion report naming the evidence it verified."
+)
+
+#: The same read-only node with the two halves of the conflict scattered across
+#: *different* criteria: the path is named by one that only reads it, and the word
+#: asserting something changed belongs to the next one, about the report. Read as one
+#: block this pairs, and a plan nobody wrote a fault into would be refused; the
+#: refusal is a property of a single criterion, which is what keeps this accepted.
+RESEARCH_NAMES_A_PATH_AND_A_CHANGE_IN_DIFFERENT_CRITERIA = (
+    "- The answer cites `docs/fern-limitations.md` and the line each claim rests on.\n"
+    "- A new section of the report separates confirmed facts from inferences.\n"
+    "- That report is traced end to end against the corpus it was read from."
+)
+
+
+def test_a_node_whose_bar_forbids_the_edit_its_criteria_require_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The contradiction refused at the seam, for the cost of a `check-plan` run.
+
+    Every part of the message is load-bearing, because the fix is only obvious once
+    all of it is there: which node, which persona's bar refuses, the clause it
+    refuses under, the criterion that contradicts it, and a persona that would not.
+    """
+    refused = _check_plan(
+        _with_node(
+            _plan(tmp_path, STATES_ITS_BAR),
+            persona="researcher",
+            task=_research_task(RESEARCH_REQUIRES_AN_EDIT),
+        )
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    reported = refused.stderr
+    assert "route:" in reported, reported
+    assert "researcher" in reported, reported
+    assert "modified project files" in reported, reported
+    assert "docs/fern-limitations.md" in reported, reported
+    assert "`docs-writer`" in reported, reported
+
+
+def test_the_same_read_only_node_asking_a_question_is_accepted(tmp_path: Path) -> None:
+    """The other half, and the half that keeps the check worth having.
+
+    A read-only role naming the file it read is what that role is for, so the pairing
+    — not the persona, and not the path — has to be what decides.
+    """
+    accepted = _check_plan(
+        _with_node(
+            _plan(tmp_path, STATES_ITS_BAR),
+            persona="researcher",
+            task=_research_task(RESEARCH_ANSWERS_A_QUESTION),
+        )
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_an_editing_node_under_a_bar_that_permits_it_is_accepted(tmp_path: Path) -> None:
+    """The pairing's other permitted combination, driven through the real recipe.
+
+    Criteria that require a tracked file to change are what most nodes of most plans
+    state, and the `engineer` bar this checkout's engine ships makes no demand against
+    them — so the check has to be silent here or it refuses ordinary implementation
+    work. Same criteria as the refused journey above; only the bar differs.
+    """
+    accepted = _check_plan(
+        _with_node(
+            _plan(tmp_path, STATES_ITS_BAR),
+            persona="engineer",
+            task=_research_task(RESEARCH_REQUIRES_AN_EDIT),
+        )
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_a_path_read_in_one_criterion_is_not_paired_with_a_change_in_the_next(
+    tmp_path: Path,
+) -> None:
+    """The false refusal the split prevents, refused or accepted by the real recipe.
+
+    This is the shape a sound read-only plan most often has — it names the document
+    it read, and it says the report gains a section — so a check that paired those
+    two across criteria would refuse ordinary research and be worked around. Nothing
+    but the recipe's own exit status can say which way this lands.
+    """
+    accepted = _check_plan(
+        _with_node(
+            _plan(tmp_path, STATES_ITS_BAR),
+            persona="researcher",
+            task=_research_task(RESEARCH_NAMES_A_PATH_AND_A_CHANGE_IN_DIFFERENT_CRITERIA),
+        )
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout

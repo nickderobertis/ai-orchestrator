@@ -177,8 +177,14 @@
     },
     "github.com/nickderobertis/onetaskgraph": {
       "branch": "main",
-      "note": "Registered before the repository has any CI: its `main` declares no required checks yet, so nothing can refuse a merge to it, and this inventory is empty because that is the truth rather than because it is unrecorded. The build's foundation change makes six checks required, and the node that lands it corrects this entry in the same run.",
-      "checks": {}
+      "checks": {
+        "check (macos-latest)": "other-os",
+        "check (ubuntu-latest)": "tree-verdict",
+        "check (windows-latest)": "other-os",
+        "deny": "network-advisory",
+        "llmlint": "tree-verdict",
+        "pr-title": "pull-request"
+      }
     },
     "github.com/nickderobertis/onevcs": {
       "branch": "main",

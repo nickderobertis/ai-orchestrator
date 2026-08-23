@@ -21,6 +21,18 @@ The first pair is what the criteria checks below refuse. The second pair is what
 node has to be *stated* as a criterion, so the judge checks a criterion the author
 wrote instead of one it reconstructed.
 
+A third shape is worse than either, because no wording of the criteria rescues it:
+a bar that forbids the dispatch changing project files, under a task that requires
+one to change. The judge is then *required* to fail the work the task is *required*
+to produce. Three nodes of one plan named ``persona: researcher`` while their tasks
+were to edit a document; the first settled ``task-failed`` with the judge citing a
+file that does not exist, which is what that contradiction looks like from the
+outside, and it cost a run and a relaunch. :func:`check_changes_allowed` refuses the
+pairing by name. It reads the resolved bar and the criteria rather than a list of
+role names — ``researcher`` reads like the right role for a node whose job is
+measurement, and its file-modification clause is invisible from ``personas/``,
+which is not where a bare name resolves.
+
 Resolving that bar is the part that cannot be guessed. A plan node's ``persona`` is
 a **name**, and a name resolves to a role compiled into ``oneagentgraph`` rather
 than to anything in this repository's ``personas/`` directory — so the file a
@@ -265,6 +277,23 @@ def builtin_persona(name: str) -> str | None:
     return fragment
 
 
+_SHIPPED_NAME = re.compile(rb"\nname: (?P<name>[A-Za-z][\w-]*)\n")
+
+
+def builtin_persona_names() -> tuple[str, ...]:
+    """Every role name the linked `oneagentgraph` ships, in the order it declares them.
+
+    Read out of the same binary :func:`builtin_persona` lifts a role from, so a
+    release that adds, drops, or renames one is followed here with nothing to edit.
+    That matters for one caller only — the refusal below has to offer a persona that
+    would actually dispatch — and offering a name from a list written here would be
+    offering whatever was shipped on the day it was written.
+    """
+    return tuple(
+        dict.fromkeys(found["name"].decode() for found in _SHIPPED_NAME.finditer(_engine_bytes()))
+    )
+
+
 def _reviewing(fragment: str) -> tuple[str | None, str | None, bool]:
     """A fragment's review contract, its own completion bar, and whether it replaces."""
     return (
@@ -424,6 +453,151 @@ DEMANDS = (
 )
 
 
+#: How a review bar says this dispatch may not change the repository. Matched against
+#: the *resolved* bar rather than against a persona name, so a role whose wording
+#: moves upstream moves this with it and a role that stops saying it stops being
+#: refused. The shipped `researcher` says it twice — once as a review instruction
+#: ("Refuse the work if the agent modified project files instead of only answering
+#: the question") and once as its own completion bar ("no project files were
+#: changed") — and either alone is the whole conflict. Every alternative carries its
+#: own negation or refusal, so a bar *granting* the licence ("may modify project
+#: files") is not read as withholding it.
+FORBIDS_CHANGES = re.compile(
+    r"\bno (?:\w+ )?files? (?:were|was|are|is) (?:changed|modified|edited|touched)\b"
+    r"|\brefuse[^.]*\b(?:modif|chang|edit|touch)\w* "
+    r"(?:any |the )?(?:project|repository|repo|source|tracked) files\b"
+    r"|\bwithout (?:changing|modifying|editing|touching) "
+    r"(?:any |the )?(?:project|repository|repo|source|tracked) files\b",
+    re.I,
+)
+
+#: A backticked token shaped like a file or directory path. Shape is all this reads —
+#: nothing here asks git whether the path exists or is tracked, because a plan is
+#: checked against repositories this checkout has never seen. Backticks are the whole
+#: of the precision: unquoted, `and/or` is a path and `e.g.` is a file, and this check
+#: refuses a plan outright — so it is written to **miss** a criterion that names its
+#: file in prose rather than to refuse a sound one. That trade is deliberate; a false
+#: refusal blocks correct work and gets worked around, which is worse than the gap.
+QUOTED_PATH = re.compile(r"`(?P<path>[\w.@+-]+(?:/[\w.@+-]*)+|[\w@+-]+\.[A-Za-z]\w{0,7})`")
+
+#: One word that asserts something changed. Word-level and nothing more — what ties it
+#: to a path is :func:`check_changes_allowed` requiring both inside one criterion, and
+#: no grammar here says the path is the thing that changed. Reading-only verbs are
+#: deliberately absent: "the answer cites `docs/x.md`" and "the report names
+#: `orchestrator/y.py`" are what a role forbidden to touch the tree is for, and
+#: neither may be read as a demand to edit it.
+CHANGE_WORD = re.compile(
+    r"\b(?:add(?:s|ed|ing)?|updat(?:e|es|ed|ing)|edit(?:s|ed|ing)?|creat(?:e|es|ed|ing)"
+    r"|modif(?:y|ies|ied|ying)|remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)"
+    r"|renam(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|introduc(?:e|es|ed|ing)"
+    r"|extend(?:s|ed|ing)?|gain(?:s|ed|ing)?|writ(?:e|es|ing|ten)|rewrit(?:e|es|ten)"
+    r"|commit(?:s|ted|ting)?|chang(?:e|es|ed|ing)|new)\b",
+    re.I,
+)
+
+_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+
+
+def criteria_items(block: str) -> Iterator[str]:
+    """Each criterion of ``block`` on its own, with any continuation lines it wraps to.
+
+    One criterion is the unit the conflict below is read at. Searching the whole block
+    would pair a path named in one criterion with a verb belonging to another — "the
+    answer cites `docs/x.md`" beside "a new section of the report" is not a demand to
+    edit that file, and refusing it would be exactly the false refusal this check is
+    written to avoid.
+    """
+    current: list[str] = []
+    for line in block.splitlines():
+        if _BULLET.match(line) and current:
+            yield "\n".join(current)
+            current = []
+        if line.strip():
+            current.append(line)
+        elif current:
+            yield "\n".join(current)
+            current = []
+    if current:
+        yield "\n".join(current)
+
+
+def permitting_roles() -> tuple[str, ...]:
+    """The shipped roles whose bar does **not** forbid this dispatch changing the tree.
+
+    Resolved rather than listed, for the same reason the conflict itself is: a name
+    offered as the correction has to be one whose bar really permits the work. A role
+    the binary declares twice cannot be resolved at all, and is passed over rather
+    than turned into an unrelated refusal — the plan's author is being told which
+    persona to name, not audited on the engine's packaging.
+    """
+    permitted = []
+    for name in builtin_persona_names():
+        try:
+            bar = resolve_bar(name)
+        # tests/test_criteria_guard.py covers this with substituted engine bytes, and no
+        # recipe journey can: what decides it is what the installed binary declares, and
+        # `uv run` puts this checkout's `.venv/bin` on the child's PATH, so the engine
+        # the guard resolves is there whatever PATH a caller sets.
+        # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
+        except CriteriaError:
+            continue
+        if FORBIDS_CHANGES.search(bar.text) is None:
+            permitted.append(name)
+    return tuple(permitted)
+
+
+def _corrections() -> str:
+    """The `persona:` values that would resolve this conflict, said as one remedy.
+
+    One sentence whatever the engine ships, rather than a remedy per cardinality: an
+    engine declaring no permitting role at all is a real state — a plan is checked
+    against whichever release this host installed — and it deserves the same sentence
+    with an empty list rather than a second message nothing here can drive.
+    """
+    permitted = ", ".join(f"`{name}`" for name in permitting_roles())
+    # tests/test_criteria_guard.py covers the empty list with substituted engine bytes,
+    # and no recipe journey can: this checkout's installed binary ships four permitting
+    # roles, and `uv run` puts `.venv/bin` — where that binary is — on the child's PATH,
+    # so a journey could only ever drive the list this release happens to have.
+    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
+    return (
+        f"name a persona whose bar permits the edit "
+        f"({permitted or 'none of the shipped roles does'}), or move the editing into "
+        f"a node of its own"
+    )
+
+
+def _condensed(criterion: str) -> str:
+    """``criterion`` as the one line an error message can quote it on."""
+    return " ".join(criterion.split())
+
+
+def check_changes_allowed(block: str, node_id: str, bar: Bar) -> None:
+    """Raise :class:`CriteriaError` if the bar forbids the change the criteria require.
+
+    Neither half is a fault on its own, and that is why this is checked as a pairing:
+    a bar that refuses any change to the tree is exactly right for a node that only
+    answers a question, and a criterion asserting a file changed is exactly right for
+    a node that edits one. Together they describe a node no worker can settle.
+    """
+    forbidden = FORBIDS_CHANGES.search(bar.text)
+    if forbidden is None:
+        return
+    for criterion in criteria_items(block):
+        path = QUOTED_PATH.search(criterion)
+        changed = CHANGE_WORD.search(criterion)
+        if path is None or changed is None:
+            continue
+        raise CriteriaError(
+            f"{node_id}: {bar.source} forbids this dispatch changing project files "
+            f"({_condensed(forbidden.group(0))!r}), and its criteria require "
+            f"`{path['path']}` to "
+            f"change ({_condensed(criterion)!r}). The judge is then required to fail the "
+            f"work the task is required to produce, so no worker can settle this node — "
+            f"{_corrections()}."
+        )
+
+
 def criteria_block(task: str) -> str:
     """The task's ``## Acceptance criteria`` block, and nothing after it."""
     return _split(task)[1]
@@ -486,6 +660,7 @@ def check(task: str, node_id: str, bar: Bar) -> None:
                 f"put the command in '## Additional info' and say that running the pieces "
                 f"separately is fine."
             )
+    check_changes_allowed(block, node_id, bar)
     check_demands(prose, block, node_id, bar)
 
 
