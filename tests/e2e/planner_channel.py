@@ -31,7 +31,7 @@ from orchestrator.root import REPO_ROOT
 #: The correlation token `scripts/ask-manager.sh` mints and asks the manager to echo.
 #: A reply that does not carry it is somebody else's answer arriving at the asking
 #: call, so echoing it is what makes an answer this question's.
-TOKEN = re.compile(r"ask-manager-token:[0-9a-f]+")
+TOKEN = re.compile(r"ask-manager-token:[0-9a-f]{24}(?![0-9a-f])")
 
 #: How long a manager keeps looking for a question to answer. Load-scaled like every
 #: other hang guard here, because the manager is played by a thread driving real `just`
@@ -39,11 +39,22 @@ TOKEN = re.compile(r"ask-manager-token:[0-9a-f]+")
 MANAGER_PATIENCE_SECONDS = 120
 
 
+class Surface(TypedDict):
+    """One planner surface, narrowed to the two fields a manager acts on.
+
+    `blocking` is the one that decides what they do about it: a question they have to
+    answer, or a note telling them a listener re-armed and needs nothing.
+    """
+
+    message: str
+    blocking: bool
+
+
 class SurfaceRead(TypedDict):
     """`onepipeline next`'s answer, narrowed to what a manager reads off it."""
 
     status: str
-    surface: dict[str, str] | None
+    surface: Surface | None
 
 
 def just(
@@ -66,8 +77,14 @@ def ruling(message: str) -> str:
     return json.dumps({"version": 1, "completion": True, "message": message})
 
 
-def next_surface(run: str, environment: dict[str, str]) -> str | None:
-    """Read the run's next unread surface, exactly as a manager reads one.
+def next_surface_record(run: str, environment: dict[str, str]) -> Surface | None:
+    """Read the run's next unread surface whole, exactly as a manager reads one.
+
+    Whole rather than just its text, because `onepipeline next` reports `blocking` per
+    surface and that is a thing a manager acts on: it is the difference between a
+    question they must answer and a note telling them somebody is listening. A journey
+    counting how many questions one ask put in front of them reads it here, through the
+    verb a manager uses, rather than out of the run's journal.
 
     A read that FAILS is raised rather than reported as an empty queue. The two are
     opposite states and look identical from a polling loop: treating a refusal as
@@ -83,7 +100,12 @@ def next_surface(run: str, environment: dict[str, str]) -> str | None:
         return None
     # `cast` rather than a validating read: `onepipeline next` owns this schema and
     # `SurfaceRead` states the part a manager consumes.
-    surface = cast(SurfaceRead, json.loads(handed.stdout))["surface"]
+    return cast(SurfaceRead, json.loads(handed.stdout))["surface"]
+
+
+def next_surface(run: str, environment: dict[str, str]) -> str | None:
+    """The text of the run's next unread surface, for a caller that wants only that."""
+    surface = next_surface_record(run, environment)
     return None if surface is None else surface["message"]
 
 
@@ -107,6 +129,7 @@ def answer_each(
     answers: list[Callable[[str], str]],
     *,
     seconds: float = MANAGER_PATIENCE_SECONDS,
+    seen: list[Surface] | None = None,
 ) -> list[subprocess.CompletedProcess[str]]:
     """Read surfaces until a question appears, then reply. Once per answer.
 
@@ -127,7 +150,10 @@ def answer_each(
         while token is None:
             if time.monotonic() >= limit:
                 raise AssertionError(f"run {run} never surfaced a question carrying a token")
-            message = next_surface(run, environment)
+            surface = next_surface_record(run, environment)
+            if surface is not None and seen is not None:
+                seen.append(surface)
+            message = None if surface is None else surface["message"]
             found = None if message is None else TOKEN.search(message)
             if found is not None:
                 token = found.group(0)
@@ -264,6 +290,7 @@ class Manager:
     ) -> None:
         self._failures: list[BaseException] = []
         self._answers: list[subprocess.CompletedProcess[str]] = []
+        self._surfaces: list[Surface] = []
         self._thread = threading.Thread(
             target=self._play, args=(run, environment, answers, seconds), daemon=True
         )
@@ -277,9 +304,21 @@ class Manager:
         seconds: float,
     ) -> None:
         try:
-            self._answers.extend(answer_each(run, environment, answers, seconds=seconds))
+            self._answers.extend(
+                answer_each(run, environment, answers, seconds=seconds, seen=self._surfaces)
+            )
         except BaseException as error:  # noqa: BLE001 - re-raised by `checked` below
             self._failures.append(error)
+
+    @property
+    def surfaces(self) -> list[Surface]:
+        """Every surface this manager read, for a journey counting what one ask raised.
+
+        Read after `checked`. A manager stops reading once they have answered, so a
+        journey wanting all of them drains whatever is still queued afterwards and adds
+        it to this — which together is every surface, each seen through `channel-next`.
+        """
+        return list(self._surfaces)
 
     @property
     def answers(self) -> list[subprocess.CompletedProcess[str]]:

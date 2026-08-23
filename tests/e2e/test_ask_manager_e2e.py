@@ -22,10 +22,12 @@ in principle: the plan's frontier is a human gate, so nothing is ever dispatched
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from collections.abc import Iterator
@@ -33,7 +35,16 @@ from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict, cast
 
 import pytest
-from planner_channel import MANAGER_PATIENCE_SECONDS, TOKEN, Manager, next_surface, ruling
+from planner_channel import (
+    MANAGER_PATIENCE_SECONDS,
+    TOKEN,
+    Manager,
+    Surface,
+    next_surface,
+    next_surface_record,
+    reply,
+    ruling,
+)
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -148,6 +159,69 @@ def _just(
     )
 
 
+#: The two argv words a `channel serve` is recognised by, matched consecutively and
+#: always followed by the run id. Whole words rather than a substring search, and never
+#: without the run: this host runs several dispatches at once, so the only processes a
+#: journey may look at — let alone signal — are the ones it started itself. A
+#: `pgrep -f "channel serve"` matches a sibling's server, and matches the polling shell
+#: that typed the pattern.
+SERVE_ARGV = ("channel", "serve")
+
+#: How long a reaped server is given to actually be gone before it is called a leak.
+#: A signalled process is not gone the instant `communicate` returns for its parent, and
+#: the failure this guards is a server that outlives the *suite* by minutes.
+SURVIVOR_GRACE_SECONDS = 15
+
+
+def _serving(run: RunId) -> list[int]:
+    """Every live `onepipeline channel serve` for exactly this run, by pid.
+
+    Read out of `/proc` rather than by shelling out to `pgrep`, for the same reason the
+    match is `channel serve <this run>` and not a substring: `pgrep -f "channel serve"`
+    would match a sibling dispatch's server, and this suite has no business knowing one
+    is there — still less signalling it.
+    """
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            words = (entry / "cmdline").read_bytes().decode("utf-8", "replace").split("\0")
+        except OSError:
+            # It exited between the listing and the read, which is the one thing this
+            # is looking for anyway.
+            continue
+        for at in range(len(words) - 2):
+            if tuple(words[at : at + 2]) == SERVE_ARGV and words[at + 2] == run:
+                found.append(int(entry.name))
+                break
+    return found
+
+
+def _no_survivors(run: RunId) -> None:
+    """Kill any `channel serve` this run left behind, then fail because it was there.
+
+    Asserted per run rather than trusted to `_reaped`, because a test that exits while
+    its child lives still passes: without this, a journey that grows a new way to end an
+    ask reports the leak on somebody's process table instead of here. Killing before
+    failing keeps the report from being the only thing the guard achieves.
+    """
+    limit = deadline(SURVIVOR_GRACE_SECONDS)
+    while (survivors := _serving(run)) and time.monotonic() < limit:
+        time.sleep(0.2)
+    for pid in survivors:
+        # Gone between the scan and here is the outcome this wants, not a problem.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    assert not survivors, (
+        f"run {run}'s journey exited while {len(survivors)} 'onepipeline channel serve' "
+        f"process(es) it started were still running (pid(s) {survivors}, now killed). An "
+        f"ask must be ended with `_reaped`, which signals the whole process group; "
+        f"signalling the wrapper alone orphans its server to init and pins the directory "
+        f"it was started in."
+    )
+
+
 @pytest.fixture
 def asked(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Asked]:
     """A launched run whose frontier is a human gate, so its channel outlives the launch.
@@ -202,6 +276,10 @@ def asked(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Asked]:
         yield Asked(environment, run)
     finally:
         _just("stop", run, environment=environment, seconds=60)
+        # After the stop, deliberately: ending the run is what releases a server still
+        # blocked on its reply window, so asking before it would report a leak that was
+        # about to clear itself.
+        _no_survivors(run)
 
 
 def _ask(
@@ -211,7 +289,11 @@ def _ask(
     overrides: dict[str, str] | None = None,
     stdin: str | None = None,
 ) -> subprocess.Popen[str]:
-    """Start the real wrapper the way a dispatched agent runs it."""
+    """Start the real wrapper the way a dispatched agent runs it.
+
+    Always in a session of its own, so that the wrapper and the `channel serve` it
+    starts are one process group `_reaped` can end in one signal.
+    """
     environment = dict(asked.environment)
     environment["ONEPIPELINE_RUN_ID"] = asked.run
     environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(window)
@@ -224,6 +306,7 @@ def _ask(
         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     if stdin is not None and asking.stdin is not None:
         asking.stdin.write(stdin)
@@ -238,13 +321,36 @@ def _ask(
     return asking
 
 
+def _reaped(
+    asking: subprocess.Popen[str],
+    *,
+    sending: int = signal.SIGKILL,
+    seconds: float = 60,
+) -> tuple[str, str]:
+    """End one ask and everything it started, and do not return until they are gone.
+
+    The group rather than the process, always: `channel serve` is a child of the
+    wrapper, so signalling the wrapper alone leaves the server running, reparented to
+    init and pinning its working directory until its reply window elapses.
+
+    The group is named by `asking.pid` directly rather than through `os.getpgid`, which
+    `start_new_session` in `_ask` is what makes valid. The lookup would race a wrapper
+    that has just exited, and its answer would then be this test runner's own group —
+    the one group that must never be signalled here.
+    """
+    # A group already gone is the state this is for; the pipes are still drained below,
+    # because draining them is also what reaps the wrapper.
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(asking.pid, sending)
+    return asking.communicate(timeout=e2e_timeout(seconds))
+
+
 def _finish(asking: subprocess.Popen[str], *, seconds: float = 180) -> tuple[int, str, str]:
     """Wait for one wrapper invocation and hand back what it reported."""
     try:
         out, err = asking.communicate(timeout=e2e_timeout(seconds))
     except subprocess.TimeoutExpired:
-        asking.kill()
-        out, err = asking.communicate()
+        out, err = _reaped(asking)
         raise AssertionError(f"the wrapper never returned:\n{out}\n{err}") from None
     return asking.returncode, out, err
 
@@ -468,6 +574,95 @@ def test_a_ruling_addressed_to_another_reader_is_re_asked_rather_than_returned(
     assert TOKEN.sub("", out).strip() == ANSWER, out
 
 
+def _drained(asked: Asked) -> list[Surface]:
+    """Every surface still queued, read the way a manager reads one, until none is left."""
+    rest: list[Surface] = []
+    while (surface := next_surface_record(asked.run, asked.environment)) is not None:
+        rest.append(surface)
+    return rest
+
+
+def _stranded_answer(asked: Asked, question: str) -> str:
+    """Leave one manager's answer on the channel with nobody to claim it, and name its token.
+
+    The shape run `issue-28` produced: an ask is killed while it waits — as an agent's
+    two-minute tool deadline killed one there, against a fifty-minute reply window — and
+    the manager answers afterwards, into a rendezvous nobody is at. The whole process
+    group goes, because the wrapper's `channel serve` child is the thing waiting and an
+    orphan of it would claim that answer and throw it away, which is a different state.
+    """
+    # The long window deliberately: the seed has to be killed while waiting rather than
+    # time out on its own, since a wrapper that gave up leaves the channel differently.
+    seed = _ask(asked, question, window=ANSWERED_WINDOW_SECONDS)
+    found = TOKEN.search(_waited_for_question(asked, seed, named=f"the seed question {question!r}"))
+    assert found is not None, f"the seed question {question!r} reached the manager with no token"
+    assert seed.poll() is None, (
+        f"the seed ask {question!r} was over before this journey could end it, so what "
+        f"follows is not the state the defect needs"
+    )
+    # `SIGTERM` rather than the default kill, because this one is imitating a specific
+    # death: the tool deadline that ended the ask on run `issue-28`. What it must not
+    # leave behind is an orphaned `channel serve`, which would claim the stale answer
+    # below and throw it away — a different state from the one being seeded.
+    _reaped(seed, sending=signal.SIGTERM)
+    stale = reply(asked.run, asked.environment, ruling(f"answered too late {found.group(0)}"))
+    assert stale.returncode == 0, (
+        f"the channel refused the answer to a question whose reader had gone, so no stale "
+        f"ruling was left on it and nothing after this is about the defect:\n"
+        f"{stale.stderr}{stale.stdout}"
+    )
+    return found.group(0)
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arms(
+    asked: Asked,
+) -> None:
+    """A foreign-token ruling re-arms a listener, so one ask blocks a manager once.
+
+    The seed is ordinary and is what run `issue-28` did: an ask outlives its agent's tool
+    deadline and is killed while waiting, so its manager's answer — echoing that ask's
+    token — is left with no reader. The next ask draws it milliseconds after asking.
+
+    A wrapper that answered that by asking again queued a second *blocking* question, and
+    that duplicate is what made the defect self-sustaining: the manager answers both
+    copies, one listener is left to claim an answer, and the orphan poisons the ask after
+    it. Asserted here is that the ask still returns the manager's answer, that it really
+    did re-arm rather than skipping this path, and that exactly one surface blocks.
+    """
+    seeded = _stranded_answer(asked, "Which base does this branch merge to?")
+
+    asking = _ask(asked, "Should the listing be paginated?", window=ANSWERED_WINDOW_SECONDS)
+    manager = Manager(asked.run, asked.environment, [lambda token: ruling(f"{ANSWER} {token}")])
+
+    status, out, err = _finish(asking)
+    manager.checked(asker_said=err)
+
+    assert status == 0, f"the wrapper did not survive a stale ruling on the channel:\n{err}"
+    assert TOKEN.sub("", out).strip() == ANSWER, out
+
+    # Every surface, each seen through `just channel-next`: the ones the manager read on
+    # their way to answering, plus whatever was still queued once the ask was over.
+    raised = [
+        (found.group(0), surface)
+        for surface in [*manager.surfaces, *_drained(asked)]
+        if (found := TOKEN.search(surface["message"])) is not None and found.group(0) != seeded
+    ]
+    assert len(raised) > 1, (
+        f"the ask drew the stale ruling and never re-armed, so it never reached the path "
+        f"this journey is about and its single surface proves nothing about it: {raised}"
+    )
+    assert len({token for token, _ in raised}) == 1, (
+        f"these surfaces did not all come from one ask, so counting them says nothing "
+        f"about what one ask does: {raised}"
+    )
+    assert len([surface for _, surface in raised if surface["blocking"]]) == 1, (
+        f"one ask put more than one blocking question in front of the manager, which is "
+        f"the duplication itself: every copy has to be answered, and the answer nobody is "
+        f"left to claim is what poisons the ask after it: {raised}"
+    )
+
+
 @pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_frame_the_channel_refuses_is_fatal_rather_than_retried(asked: Asked) -> None:
     """A refused submission is a cause to report, not a condition to wait out.
@@ -518,8 +713,7 @@ def test_the_wrapper_sets_a_reply_window_longer_than_the_published_default(asked
             )
             time.sleep(0.5)
     finally:
-        asking.kill()
-        asking.communicate()
+        _reaped(asking)
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
@@ -540,8 +734,7 @@ def test_the_question_reaches_the_manager_as_the_surface_they_read(asked: Asked)
         assert TOKEN.search(message) is not None, message
         assert "just channel-reply" in message, message
     finally:
-        asking.kill()
-        asking.communicate()
+        _reaped(asking)
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
@@ -557,8 +750,7 @@ def test_a_question_of_several_words_reaches_the_manager_whole(asked: Asked) -> 
     try:
         assert "Should the cursor be opaque?" in _waited_for_question(asked, asking)
     finally:
-        asking.kill()
-        asking.communicate()
+        _reaped(asking)
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
@@ -585,8 +777,7 @@ def test_an_explicitly_named_onepipeline_is_the_one_that_reaches_the_manager(
     try:
         assert "Which release answered this?" in _waited_for_question(asked, asking)
     finally:
-        asking.kill()
-        asking.communicate()
+        _reaped(asking)
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
@@ -618,8 +809,7 @@ def test_the_question_can_be_piped_in_or_read_from_a_file(asked: Asked, tmp_path
         try:
             assert question in _waited_for_question(asked, asking, named=named), question
         finally:
-            asking.kill()
-            asking.communicate()
+            _reaped(asking)
 
 
 class Refusal(NamedTuple):
@@ -1082,3 +1272,48 @@ def test_a_question_that_cannot_be_encoded_is_refused_before_the_channel_is_reac
     assert status != 0, out
     assert out == "", out
     assert "could not be encoded" in err and "just bootstrap" in err, err
+
+
+#: An `od` that answers in uppercase. The wrapper matches a reply against `[0-9a-f]`,
+#: so a token minted in this shape is one its own classifier could never recognise —
+#: which is the failure worth driving rather than a garbled read, because every ruling
+#: would then read as carrying no token and put the question back.
+UPPERCASE_OD = """#!/usr/bin/env bash
+echo " AA BB CC DD EE FF AA BB CC DD EE FF"
+"""
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_a_token_the_classifier_could_not_match_is_refused_before_anything_is_asked(
+    asked: Asked, tmp_path: Path
+) -> None:
+    """The minted token is checked against the shape replies are matched against.
+
+    Non-emptiness is not enough. `TOKEN_PATTERN` is what decides whether a drawn ruling
+    is this question's, so a token outside that shape is invisible to the wrapper's own
+    classifier: every answer would read as carrying no token, and the question would go
+    back as a second blocking surface on every attempt. That is the duplication this
+    wrapper exists to prevent, arriving silently.
+
+    Driven by putting an `od` on PATH that answers in uppercase, which is a real
+    variation between coreutils and the busybox and locale-affected builds a container
+    can carry. The refusal must land *before* the channel is reached, so the manager
+    never sees a question no reply of theirs could answer.
+    """
+    # llmlint: ignore[e2e_not_mocked] The wrapper is real; a malformed mint is the input.
+    _stand_in(tmp_path / "bin", "od", UPPERCASE_OD)
+
+    asking = _ask(
+        asked,
+        "Which way?",
+        overrides={"PATH": f"{tmp_path / 'bin'}{os.pathsep}{asked.environment['PATH']}"},
+    )
+    status, out, err = _finish(asking)
+
+    assert status != 0, out
+    assert out == "", f"a question carrying an unmatchable token still printed:\n{out}"
+    assert "lowercase hex digits" in err, err
+    assert next_surface(asked.run, asked.environment) is None, (
+        "the question was put to the manager carrying a token no reply of theirs could "
+        "echo, so answering it could only have re-asked it"
+    )

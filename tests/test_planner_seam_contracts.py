@@ -68,6 +68,23 @@ TEMPLATE_LIST = re.compile(
 )
 SPAN = re.compile(r"`(##[^`]+)`")
 
+#: The wrapper's one declaration of a correlation token's wire shape, and the manager
+#: side's. The shell builds its pattern from the prefix, so both halves are read: a
+#: prefix that drifted would classify every foreign answer as this question's own.
+SHELL_TOKEN_PREFIX = re.compile(r"TOKEN_PREFIX='(?P<prefix>[^']+)'")
+SHELL_TOKEN_PATTERN = re.compile(r'TOKEN_PATTERN="\$\{TOKEN_PREFIX\}(?P<rest>[^"]+)"')
+PYTHON_TOKEN = re.compile(r'TOKEN = re\.compile\(r"(?P<pattern>[^"]+)"\)')
+
+#: How many random bytes the wrapper mints a token from, and how many hex digits its
+#: pattern then requires. Two hex digits per byte, so a pattern that stopped matching
+#: what `od` produces would recognize no token at all.
+SHELL_TOKEN_BYTES = re.compile(r"TOKEN_BYTES=(?P<bytes>[0-9]+)")
+PATTERN_DIGITS = re.compile(r"\[0-9a-f\]\{(?P<digits>[0-9]+)\}")
+
+#: The manager side of the channel, which plays a manager for every journey that drives
+#: a real question, and holds the token shape it echoes back.
+MANAGER_SIDE = REPO_ROOT / "tests" / "e2e" / "planner_channel.py"
+
 #: Each script's declaration of what a run id may be. Read from both rather than
 #: written here: this gate's whole job is that the two agree, and a third copy in the
 #: test would be one more thing to keep current.
@@ -162,4 +179,57 @@ def test_every_input_the_wrapper_requires_is_one_a_launch_is_measured_for() -> N
     assert required <= measured, (
         f"{ASK_SCRIPT.name} requires {sorted(required - measured)} of the environment a "
         f"launch builds, and {LAUNCH_JOURNEYS.name} measures no launch shape for it"
+    )
+
+
+def test_both_ends_of_the_channel_agree_what_a_correlation_token_looks_like() -> None:
+    """The wrapper's classifier and the manager it is answered by read one token shape.
+
+    The wrapper now decides more than whether an answer is its own with this: a ruling
+    echoing *somebody else's* token means its question is still pending and only needs
+    listening to again, while one echoing none means its surface was spent and the
+    question has to go back. So a pattern that drifted from the minted shape would not
+    merely fail to match — it would read every foreign answer as tokenless and put a
+    duplicate question in front of the manager, which is the defect the split exists to
+    prevent. The manager side is compared too, because a journey whose manager echoed a
+    shape the wrapper no longer recognizes would prove the opposite of what it asserts.
+    """
+    shell = ASK_SCRIPT.read_text(encoding="utf-8")
+    prefix = SHELL_TOKEN_PREFIX.search(shell)
+    rest = SHELL_TOKEN_PATTERN.search(shell)
+    echoed = PYTHON_TOKEN.search(MANAGER_SIDE.read_text(encoding="utf-8"))
+    assert prefix is not None, f"{ASK_SCRIPT.name} declares no TOKEN_PREFIX"
+    assert rest is not None, f"{ASK_SCRIPT.name} declares no TOKEN_PATTERN built from it"
+    assert echoed is not None, f"{MANAGER_SIDE.name} declares no TOKEN"
+
+    recognized = f"{prefix.group('prefix')}{rest.group('rest')}"
+    assert recognized == echoed.group("pattern"), (
+        f"{ASK_SCRIPT.name} classifies a token as {recognized!r} while {MANAGER_SIDE.name} "
+        f"echoes {echoed.group('pattern')!r}; the wrapper would read another ask's answer "
+        "as tokenless and ask its question a second time"
+    )
+
+
+def test_the_token_pattern_requires_exactly_what_the_wrapper_mints() -> None:
+    """The shape a token is recognized by is the shape a token is made in.
+
+    `od -An -N<bytes> -tx1` yields two hex digits per byte, and the classifier requires a
+    fixed count of them. Were the two to drift, the wrapper would recognize no token at
+    all — every answer, its own included, would read as somebody else's — so the count is
+    derived from the byte width here rather than trusted twice.
+    """
+    shell = ASK_SCRIPT.read_text(encoding="utf-8")
+    width = SHELL_TOKEN_BYTES.search(shell)
+    pattern = SHELL_TOKEN_PATTERN.search(shell)
+    assert width is not None, f"{ASK_SCRIPT.name} declares no TOKEN_BYTES"
+    assert pattern is not None, f"{ASK_SCRIPT.name} declares no TOKEN_PATTERN"
+    digits = PATTERN_DIGITS.search(pattern.group("rest"))
+    assert digits is not None, (
+        f"{ASK_SCRIPT.name}'s TOKEN_PATTERN no longer requires a fixed number of hex "
+        f"digits, so it accepts a truncated token as a whole one: {pattern.group('rest')!r}"
+    )
+
+    assert int(digits.group("digits")) == int(width.group("bytes")) * 2, (
+        f"{ASK_SCRIPT.name} mints {width.group('bytes')} bytes of token but recognizes "
+        f"{digits.group('digits')} hex digits; it would not recognize its own token"
     )

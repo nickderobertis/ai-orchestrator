@@ -41,14 +41,35 @@
 #   1. An answer is a ruling only when it carries a boolean `completion`. The live
 #      edit above carries none, so it is refused rather than returned as prose.
 #   2. Every question carries a minted correlation token, and only a ruling whose
-#      `message` echoes it is this question's. A ruling addressed to somebody else is
-#      re-asked, up to `MAX_ATTEMPTS`, rather than handed back.
+#      `message` echoes it is this question's. One that does not is never handed back:
+#      it re-arms a listener or puts the question back — the split below decides which
+#      — up to `MAX_ATTEMPTS`.
 #
 # The token is the general remedy and needs no engine change: a reply routed to the
 # wrong reader cannot echo a token it never saw. It also bounds the blast radius of
 # the timeout check drifting — if a future release rewords that `reason`, the
 # synthesized ruling stops matching the token and is re-asked and then refused,
 # instead of being returned as an answer.
+#
+# **Whether the question goes back depends on which token the stray ruling echoes.** A
+# ruling echoing a *foreign* token is another ask's answer outliving its asker, so this
+# question's own surface was never touched and is still pending: the wrapper re-arms
+# behind a **non-blocking** note and leaves the manager one question. A ruling echoing
+# none is this question's surface answered without the echo, so it is spent and the
+# question must go back as a blocking surface.
+#
+# Two measurements force that split rather than a simpler rule. `channel serve` has no
+# listen-only mode — every frame it accepts queues a surface, including one with an
+# empty `message` and one carrying an unknown `kind`, while a frame with no `message`
+# is refused outright — so waiting again always queues something. And a run stops
+# accepting replies once nothing *blocking* is pending, refusing with `run '<id>' has
+# settled, so nothing will ever read a reply to it`, so a listener behind a non-blocking
+# surface alone could never be answered.
+#
+# Both halves matter because a duplicate blocking question is self-sustaining. An ask
+# killed while waiting leaves its manager's answer with nobody to claim it; the next ask
+# draws that stale ruling and queues a second blocking copy; the manager answers both,
+# and the copy nobody claimed is the stale ruling the ask after it draws.
 #
 # **The reply window is set here rather than by the caller.** `serve`'s own default is
 # ~30 seconds (29.8s measured), which is a supervisor's cadence and not a manager's:
@@ -79,9 +100,11 @@ set -euo pipefail
 #: wedged question is not immortal.
 DEFAULT_TIMEOUT_SECONDS=3000
 
-#: How many times one question is put to the channel. Every attempt past the first is
-#: a ruling that was somebody else's answer, so this bounds the reply-binds-to-reader
-#: defect rather than a slow manager: a timeout ends the loop on its first occurrence.
+#: How many rulings one question will look at before it gives up. The first attempt is
+#: the question; each one after it either re-arms a listener over the still-pending
+#: question or puts the question back, by the split below. So this bounds the
+#: reply-binds-to-reader defect rather than a slow manager: a timeout ends the loop on
+#: its first occurrence.
 MAX_ATTEMPTS=4
 
 #: The `reason` `onepipeline channel serve` synthesizes for its own timeout. Matched
@@ -96,17 +119,41 @@ TIMEOUT_REASON="the channel timed out waiting for a verdict"
 #: with, which is somebody else's to write, so both are checked here.
 SAFE_REFERENCE='^[A-Za-z0-9_][A-Za-z0-9_.-]*$'
 
-# Builds the one line `channel serve` reads. Compact separators are stated rather
-# than left to the default so the requirement is visible at the place it is met; a
-# message carrying newlines still leaves one physical line, because JSON escapes them.
+#: What a correlation token looks like on the wire. One source for the three uses that
+#: would otherwise drift apart: the token this question mints, the pattern that decides
+#: a drawn ruling echoes *somebody else's*, and `tests/e2e/planner_channel.py`'s `TOKEN`,
+#: which is what a manager is played by. `tests/test_planner_seam_contracts.py`
+#: reconciles this with that one, because a classifier reading a shape the minter stopped
+#: producing would call every foreign answer this question's own.
+TOKEN_PREFIX='ask-manager-token:'
+TOKEN_BYTES=12
+TOKEN_PATTERN="${TOKEN_PREFIX}[0-9a-f]{24}(?![0-9a-f])"
+
+#: What the minted half must look like for `TOKEN_PATTERN` to match the token this
+#: question puts on the wire. Computed from `TOKEN_BYTES` rather than restated, so it
+#: cannot drift from the minting; `tests/test_planner_seam_contracts.py` holds
+#: `TOKEN_PATTERN`'s own digit count to that same source.
+TOKEN_SHAPE="^[0-9a-f]{$((TOKEN_BYTES * 2))}\$"
+
+# Builds both lines `channel serve` reads, in one call: the blocking question on
+# stdin, then the non-blocking re-arm note from `argv[1]`. Compact separators are
+# stated rather than left to the default so the requirement is visible at the place it
+# is met; a message carrying newlines still leaves one physical line, because JSON
+# escapes them.
+#
+# Both come from one invocation deliberately. Encoding them separately gave the second
+# a failure path of its own that no journey could reach — a broken interpreter fails on
+# the first frame and never gets to the second — so the two are one success or one
+# refusal.
 FRAME_PROGRAM='
 import json, os, sys
 
-frame = {"kind": "planner-question", "message": sys.stdin.read(), "blocking": True}
 node = os.environ.get("ORCHESTRATOR_ASK_MANAGER_NODE", "")
-if node:
-    frame["node"] = node
-sys.stdout.write(json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + "\n")
+for message, blocking in ((sys.stdin.read(), True), (sys.argv[1], False)):
+    frame = {"kind": "planner-question", "message": message, "blocking": blocking}
+    if node:
+        frame["node"] = node
+    sys.stdout.write(json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + "\n")
 '
 
 # Decides what the channel handed back, and is the only thing that may call it an
@@ -116,11 +163,19 @@ sys.stdout.write(json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + 
 #   0  this question's answer, on stdout
 #   10 the channel answered its own timeout
 #   11 not a ruling at all, excerpt on stdout
-#   12 a ruling addressed to another reader, excerpt on stdout
+#   12 another ask's answer, left on the channel; mine is still pending
+#   13 a ruling with no token at all, so this question's own surface was consumed
+#
+# 12 and 13 are both "not mine", and they are split because the repair differs. A
+# ruling echoing a *different* `ask-manager-token` is another invocation's answer that
+# outlived its asker, so this question is still pending and only needs listening to
+# again. A ruling echoing none was the manager answering this very surface without the
+# echo, which consumed it — and a run with no blocking surface left pending stops
+# accepting replies at all, so that case has to put the question back.
 CLASSIFY_PROGRAM='
-import json, sys
+import json, re, sys
 
-timeout_reason, token = sys.argv[1], sys.argv[2]
+timeout_reason, token, foreign = sys.argv[1], sys.argv[2], sys.argv[3]
 raw = sys.stdin.read()
 excerpt = " ".join(raw.split())[:200]
 try:
@@ -136,7 +191,8 @@ if answer.get("reason") == timeout_reason:
 message = answer.get("message")
 if not isinstance(message, str) or token not in message:
     sys.stdout.write(excerpt)
-    sys.exit(12)
+    somebody_elses = isinstance(message, str) and re.search(foreign, message)
+    sys.exit(12 if somebody_elses else 13)
 sys.stdout.write(message)
 '
 
@@ -229,10 +285,18 @@ window="${ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS:-$DEFAULT_TIMEOUT_SECONDS}"
 # The correlation token, minted per question rather than per attempt: a re-ask is the
 # same question, and a manager who answers the first surface late must still be heard.
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when /dev/urandom or the tools that read it stop working on the host the suite itself runs on.
-minted=$(od -An -N12 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || minted=""
+minted=$(od -An -N"$TOKEN_BYTES" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || minted=""
 [ -n "$minted" ] || fail "no correlation token could be minted from /dev/urandom" \
     "check that /dev/urandom is readable in this environment, then retry"
-token="ask-manager-token:$minted"
+# Checked against the shape the classifier matches, not merely for being non-empty. A
+# token `TOKEN_PATTERN` does not match makes every ruling read as carrying no token,
+# which puts this question back as a second blocking surface — the duplication the
+# whole wrapper exists to prevent, arriving silently and on every ask.
+# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
+[[ "$minted" =~ $TOKEN_SHAPE ]] || fail \
+    "the correlation token minted here is '$minted', which is not the $((TOKEN_BYTES * 2)) lowercase hex digits a reply is matched against" \
+    "check that the 'od' and 'tr' first on this PATH behave as coreutils' do, then ask again"
+token="$TOKEN_PREFIX$minted"
 
 asked="$question
 
@@ -243,16 +307,46 @@ reply's message, so your answer is matched to this question rather than to anoth
 reader: $token
 
 A reply on this channel is claimed by whichever reader reaches it next, so an answer
-that does not carry the token is treated as somebody else's and the question is asked
-again."
+that does not carry the token is treated as somebody else's and a listener re-arms."
+
+# What a re-arm says, and why it is deliberately not the question a second time. The
+# question is already pending as this run's one blocking surface and stays the thing to
+# answer; this only reports that somebody is listening for that answer again. The token
+# still rides along, because a manager who answers here anyway has to be matched to the
+# question rather than to another reader — but nothing here asks them to.
+rearmed="A listener re-armed on run $run. This note needs no answer of its own.
+
+An agent's blocking question is already pending on this channel and is still the surface
+to answer. The listener waiting for that answer was handed a ruling addressed to another
+reader instead — a reply here is claimed by whichever reader reaches one next — so it is
+waiting again, and it is what will receive the answer to the pending question.
+
+Answer the question, not this note. If you answer here regardless, include this token
+verbatim so your answer is matched to that question rather than to another reader:
+$token"
 
 # Each helper is checked rather than left to `set -e`, which would exit with whatever
 # the helper printed and no repair — the one shape of failure this wrapper exists to
-# not have. `|| frame=""` keeps the status from ending the script before the cause
+# not have. `|| frames=""` keeps the status from ending the script before the cause
 # beneath it can be said.
-frame=$(printf '%s' "$asked" | "$python" -c "$FRAME_PROGRAM") || frame=""
-[ -n "$frame" ] || fail "the question could not be encoded as a channel frame by $python" \
-    "restore the pinned toolchain with 'just bootstrap', then ask again"
+frames=$(printf '%s' "$asked" | "$python" -c "$FRAME_PROGRAM" "$rearmed") || frames=""
+# Split in the shell rather than by two more helpers: a helper here would need a check
+# of its own for the same reason, and there is nothing to check when nothing is run.
+# The `case` is what makes a single line a refusal — without it a one-line answer would
+# leave both halves set to that line, and the emptiness check below would pass it.
+newline=$'\n'
+frame=""
+rearm=""
+case "$frames" in
+    *"$newline"*)
+        frame="${frames%%"$newline"*}"
+        rearm="${frames#*"$newline"}"
+        ;;
+esac
+if [ -z "$frame" ] || [ -z "$rearm" ]; then
+    fail "the question could not be encoded as a channel frame by $python" \
+        "restore the pinned toolchain with 'just bootstrap', then ask again"
+fi
 
 # The trap is armed before the second file is made, so a half-made pair is still
 # cleaned up: `mktemp` that succeeds once and fails once would otherwise leak the
@@ -270,9 +364,10 @@ if ! served_out=$(mktemp) || ! served_err=$(mktemp); then
 fi
 
 attempt=1
+serving="$frame"
 while true; do
     serve_status=0
-    printf '%s\n' "$frame" \
+    printf '%s\n' "$serving" \
         | ONEPIPELINE_REPLY_TIMEOUT_SECONDS="$window" "$onepipeline" channel serve "$run" \
             >"$served_out" 2>"$served_err" || serve_status=$?
     if [ "$serve_status" -ne 0 ]; then
@@ -289,9 +384,10 @@ while true; do
         "check with 'just status $run' whether the run settled while this was waiting, which leaves nobody to answer"
 
     classify_status=0
-    classified=$("$python" -c "$CLASSIFY_PROGRAM" "$TIMEOUT_REASON" "$token" <"$served_out") || classify_status=$?
+    classified=$("$python" -c "$CLASSIFY_PROGRAM" "$TIMEOUT_REASON" "$token" "$TOKEN_PATTERN" <"$served_out") || classify_status=$?
     case "$classify_status" in
         0)
+            # llmlint: ignore[tool_output_is_signal] The manager's answer IS this wrapper's output, and a decision at a fork is prose that arrives as many lines. Abridging it here would hand a dispatched agent a truncated ruling to act on, which is the one failure this whole wrapper exists to prevent; test_the_wrapper_answers_with_the_managers_message_and_nothing_else pins the message whole and nothing else on stdout.
             printf '%s\n' "$classified"
             exit 0
             ;;
@@ -305,12 +401,25 @@ while true; do
             fail "the planner channel handed back something that is not a ruling: $classified" \
                 "a ruling is a JSON object carrying a boolean 'completion'; a live graph edit routed here looks like this, so ask again once the edit has landed"
             ;;
-        12)
+        12 | 13)
+            # llmlint: ignore[changed_behavior_has_e2e] This bound is driven to exhaustion end to end by test_a_run_whose_channel_keeps_answering_other_readers_is_given_up_on, which reaches it through 13. Reaching the same bound through 12 alone is not drivable against a real channel: it needs several orphaned answers waiting at once, and a run stops accepting replies the moment nothing blocking is pending — measured, the second `onepipeline reply` is refused with `run '<id>' has settled` — so a channel holds at most one.
             if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
                 fail "the last $MAX_ATTEMPTS rulings on run $run's channel were answers to other readers, the most recent being: $classified" \
                     "ask the manager to include the token this question carries verbatim in their reply's message, then ask again"
             fi
             attempt=$((attempt + 1))
+            if [ "$classify_status" -eq 12 ]; then
+                # Another ask's answer, outliving the asker it was meant for. This
+                # question's own blocking surface was never touched and is still the one
+                # thing in front of the manager, so re-arm as a listener and leave it
+                # the only question they see.
+                serving="$rearm"
+            else
+                # This question's surface was answered without the echo, so it is spent.
+                # Nothing blocking is left pending, and a run in that state refuses every
+                # further reply — so the question goes back, or nobody can answer at all.
+                serving="$frame"
+            fi
             ;;
         *)
             # Reachable only when the judging helper itself could not run — a broken

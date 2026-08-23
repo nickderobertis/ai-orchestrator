@@ -524,8 +524,69 @@ hands it over, `just channel-reply RUN` answers — with one requirement the sur
 states in its own text: **the reply's `message` must repeat the correlation token
 verbatim.** A reply here is [claimed by whichever reader reaches it
 next](#a-planner-writes-a-reply-once), so a ruling that does not echo the token is
-somebody else's answer arriving at this call, and the question is asked again rather
-than answered by it. Nothing else is handed back either: a reply that is not a
+somebody else's answer arriving at this call, and a listener re-arms rather than
+handing it over.
+
+**What it does about that depends on the token the stray ruling carries**, and the
+difference is worth knowing because one of the two puts a second question in front of
+you. A ruling echoing *another* ask's token is an answer that outlived the asker it was
+meant for; this question's own blocking surface was never touched and is still the one
+thing to answer, so the wrapper re-arms behind a **non-blocking** note that says so and
+asks to be left alone — you answer the question, and the re-armed listener receives it.
+A ruling echoing **no** token is this question's own surface answered without the echo:
+that surface is spent, and a run with nothing blocking pending refuses every further
+reply (`run '<id>' has settled, so nothing will ever read a reply to it`), so the
+question is put back as a blocking surface or nobody could answer at all.
+
+The split exists because a duplicate blocking question is self-perpetuating. On run
+`issue-28` a re-ask queued one, the manager answered both copies, only one listener was
+left to claim an answer, and the orphaned one was then drawn — milliseconds after
+asking — by the next question put to that channel, which doubled in turn.
+
+**The wrapper is mitigating this, not fixing it, and the fix is onepipeline's.** Two
+things in that crate produce the duplication between them, and both are stated here
+against the source at tag **v0.11.0** — the release
+[`config/onepipeline.version`](../config/onepipeline.version) adopts and therefore the
+one a dispatch runs. Line numbers are that tag's, which is immutable; the function
+names are what to search by if a later release moves them.
+
+*A reply is bound to the next reader, never to the surface it answers.*
+`wait_for_reply` (`src/driver.rs:1918`) hands back whatever `ChannelState::claim_reply`
+(`src/channel.rs:594`) gives it, and that is a cursor over `replies.jsonl` —
+`self.replies().into_iter().find(|queued| queued.id >= claimed_through && …)` — so the
+oldest unclaimed reply goes to whoever polls next regardless of which question it
+answers. Nothing could correlate the two even in principle: `Reply`
+(`src/channel.rs:173`) carries a version, an author, `completion`, `message`, `reason`
+and `commands` — and no surface id. `ChannelState::answer` (`src/channel.rs:532`)
+records none against the reply it queues either, clearing `pending` wholesale at
+`:534`. That absence is the whole reason a correlation token had to be invented in a
+shell wrapper. **The upstream change
+is to carry the answered surface's id on `Reply` and `QueuedReply` and to have
+`claim_reply` pass over a reply whose id is not the caller's own pending surface** —
+which also retires the token, since a reply that cannot reach the wrong reader needs no
+echo to be recognized. That id has to be an optional, defaulted field: `Reply` is
+`#[serde(deny_unknown_fields)]` at `src/channel.rs:172`, so a reply written by anything
+older carries none and must still be claimable, and a reply carrying none must still
+serialize without it.
+
+*A listener cannot wait without asking again.* `serve` (`src/driver.rs:1814`) loops over
+its stdin frames at `:1819` and calls `channel.push(Surface { … })` at `:1850` for every
+frame it accepts, and `ChannelState::push` (`src/channel.rs:482`) appends
+unconditionally at `:491`. The single exception is the pacemaker's, `retain`ing away a
+superseded `source::CHECK_IN` at `:486`-`:490` — a proposal frame, which is what an ask
+is, has no such path. So there is no listen-only mode: waiting again necessarily
+queues another surface. **The upstream change is a frame that waits on the reply queue
+without pushing one** — the `ObserverFrame` at `src/driver.rs:1898` is where it would
+be declared, and `serve`'s body is where the `push` would become conditional on it.
+
+*What the mitigation does and does not prevent.* It prevents the observed defect: a
+stray ruling no longer puts a second **blocking** question in front of the manager, so
+the self-sustaining loop above is broken and one ask is one question to answer. It does
+not prevent a second **surface** — the re-arm is still a `push`, of a non-blocking note,
+because of the paragraph above — and it does not prevent a reply from reaching the wrong
+reader in the first place, which is what the token detects rather than avoids.
+
+Nothing else is handed back to the asking agent either: a reply that is not a
 ruling — a ruling carries a boolean `completion`, and a live graph edit routed here
 does not — and the ruling `channel serve` synthesizes at exit 0 for its own timeout
 are both refused, with the reason on stderr and nothing on stdout. The window that
