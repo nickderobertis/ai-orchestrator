@@ -1301,7 +1301,11 @@ launch, `just publish-branch`, and `just repo-recover`. The two landing verbs go
 through `scripts/land-branch.sh`, which reads the branch and `--repo` out of the
 arguments, drafts through the same graph out of band, and appends `--body-file` to
 what it forwards; an argument list it cannot read that way lands exactly as it did
-before. Two escapes, in the order they win: a caller's own `--body` or `--body-file`
+before. **A `--repo` that is not a directory is put back to `onevcs resolve`**, so the
+alias `just repos` lists — the form an operator actually types — is drafted for rather
+than refused; while it was not, every alias-form landing opened its change request with
+an empty description behind a message that read like a refusal. Two escapes, in the
+order they win: a caller's own `--body` or `--body-file`
 is forwarded untouched and spends no turn, and `--no-draft` skips drafting and is
 consumed here rather than forwarded, because `onevcs` has no such option. It is the
 escape for a bulk landing. **The turn is spent before the push** — the body is an

@@ -92,6 +92,10 @@ class Delegation(NamedTuple):
     #: The further command lines a recipe that composes several verbs must produce,
     #: in order, after the one above. Empty for every recipe that reaches exactly one.
     then: tuple[str, ...] = ()
+    #: The command lines a recipe reads *before* the one it delegates to, in order.
+    #: Separate from `then` so that a read which started landing something would show
+    #: up as the ordering it is rather than as a second delegation.
+    before: tuple[str, ...] = ()
 
     @property
     def invocation(self) -> tuple[str, ...]:
@@ -244,10 +248,13 @@ DELEGATIONS = (
     # The published flag is spelled differently; the recipe keeps the spelling the
     # planner doctrine names and the wrapper absorbs the difference.
     Delegation("repos", ("--audit-gate-coverage",), "uv run onevcs repos --audit-gates"),
+    # The lookup in front of both landing rows is the drafter's, not the verb's: a
+    # `--repo` that is not a directory may still be a registered alias.
     Delegation(
         "repo-recover",
         ("claude/work", "--repo", "/checkout"),
         "uv run onevcs recover claude/work --repo /checkout",
+        before=("uv run onevcs resolve /checkout",),
     ),
     # The third landing verb, and the one that closes the gap the other two left: a
     # complete branch no session holds had neither an incomplete marker for `recover`
@@ -256,6 +263,7 @@ DELEGATIONS = (
         "publish-branch",
         ("claude/work", "--repo", "/checkout"),
         "uv run onevcs publish-branch claude/work --repo /checkout",
+        before=("uv run onevcs resolve /checkout",),
     ),
     # Both optional flags reach the verb. That they arrive as the *words* they were
     # typed as is a separate claim this trace cannot make — it joins argv with spaces —
@@ -273,13 +281,14 @@ DELEGATIONS = (
         ),
         "uv run onevcs publish-branch claude/work --repo /checkout "
         "--title Add the thing --policy change-open",
+        before=("uv run onevcs resolve /checkout",),
     ),
     # The two escapes from drafting, which are the recipe's own additions to the verb's
     # argument list rather than `onevcs` options. `--no-draft` is consumed here — the
     # verb has no such option and would refuse the whole invocation — and a caller's own
     # body is forwarded untouched. That no turn is spent for either is a claim this
     # trace cannot make; `tests/e2e/test_publish_branch_e2e.py` makes it against a real
-    # drafting seam.
+    # drafting seam. What it does say is that neither spends the checkout lookup either.
     Delegation(
         "publish-branch",
         ("claude/work", "--repo", "/checkout", "--no-draft"),
@@ -417,7 +426,11 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     result = _run(checkout, trace, *delegation.invocation)
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [delegation.published, *delegation.then]
+    assert trace.read_text().splitlines() == [
+        *delegation.before,
+        delegation.published,
+        *delegation.then,
+    ]
 
 
 #: Records argv one word per line rather than as one joined string. The shared trace
@@ -456,6 +469,12 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
+        # The drafter's checkout lookup. A word of it reaching the invocation below
+        # would be a wrapper rewriting what the caller typed.
+        "run",
+        "onevcs",
+        "resolve",
+        "/checkout",
         "run",
         "onevcs",
         "publish-branch",

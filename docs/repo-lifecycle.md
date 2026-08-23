@@ -1192,6 +1192,19 @@ the branch and `--repo` out of the arguments, hands them to the drafter, and app
 way — an option it does not know the shape of, or no `--repo` — lands exactly as it
 did before, with no body and no refusal.
 
+**`--repo` names a checkout however `onevcs` lets one be named**, and the drafter
+takes a directory. So a value that is not a directory is put back to the registry with
+`onevcs resolve`, and the checkout that answers — an alias's, an identity's, an
+origin's — is the tree the branch is drafted from. Nothing about the forwarded
+arguments changes: what the verb receives is what the caller typed. Being stricter here
+than the verb was not free while it lasted. `just repos` lists an alias per checkout and
+that is the form an operator types, so every alias-form landing met the drafter's `is
+not a directory` refusal, spent no turn, and opened its change request with an empty
+description while the landing itself succeeded — a message that read like a refusal in
+front of a PR nobody knew was bodyless until a person opened it. A value the registry
+does not know either keeps that ending exactly, because a refusal `onevcs` itself would
+not make is the one thing this wrapper may not add.
+
 Two escapes, in the order they win. A caller who passed `--body` or `--body-file` has
 already decided what the change request says, so it is forwarded untouched and no turn
 is spent. `--no-draft` skips drafting; it is this wrapper's own option, consumed rather

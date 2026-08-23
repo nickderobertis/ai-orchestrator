@@ -34,6 +34,12 @@
 # adding a drafter never turns a working invocation into a refusal. `onevcs` remains
 # the one thing that judges the arguments.
 #
+# **`--repo` may name a registered alias**, which `onevcs` takes and the drafter — which
+# reads a directory — cannot, so a value that is not a directory is put back to the
+# registry with `onevcs resolve`. A value the registry does not know either lands with
+# no body, by the rule above: this wrapper adds no refusal `onevcs` would not make.
+# `docs/repo-lifecycle.md` has what being stricter than the verb cost while it lasted.
+#
 # llmlint: ignore-file[boundary_inputs_validated] This is a passthrough: `onevcs` is the
 # one thing that judges these arguments, and a second opinion here would refuse
 # invocations the verb accepts — the failure this wrapper must not introduce. What it
@@ -53,6 +59,25 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
 }
 readonly script_dir
 readonly DRAFTER="$script_dir/draft-pr-body.sh"
+
+#: The interpreter that reads `onevcs resolve`'s answer. This checkout's own where it
+#: has one, as `scripts/draft-pr-body.sh` picks it for the same read: a landing runs
+#: from a checkout whose environment is already synced, and a host python is the
+#: fallback rather than the choice.
+python="$script_dir/../.venv/bin/python3"
+[ -x "$python" ] || python=python3
+readonly python
+
+#: Reads the checkout out of one `onevcs resolve` answer. The field is
+#: `publication_checkout`, which is the directory the named repository is published
+#: from — for an alias, the checkout that alias names.
+readonly RESOLVE_PROGRAM='
+import json, sys
+
+report = json.load(sys.stdin)
+checkout = report.get("publication_checkout") if isinstance(report, dict) else None
+sys.stdout.write(checkout if isinstance(checkout, str) else "")
+'
 
 #: The options `onevcs publish-branch` and `onevcs recover` take a separate value for.
 #: Needed to find the first positional — the branch — without mistaking an option's
@@ -166,6 +191,20 @@ land() {
 if [ "$drafting" -eq 0 ] || [ "$caller_has_body" -eq 1 ] || [ "$readable" -eq 0 ] ||
   [ -z "$branch" ] || [ -z "$checkout" ]; then
   land
+fi
+
+# What `--repo` named, as a directory the drafter can read the branch from. Asked of
+# `onevcs` because the registry is what maps an alias — or an identity key, or an origin
+# URL — to a checkout, and the layout it keeps them under is not this repository's to
+# reproduce. Asked below the drafting guard rather than in the reading loop, so a landing
+# that drafts nothing spends no subprocess on a value nothing will use.
+if [ ! -d "$checkout" ]; then
+  # Silent on both halves: an unregistered value is `onevcs`'s own refusal on stderr and
+  # nothing for the reader to parse, and the operator's ending is the drafter's one-line
+  # diagnostic naming the value they typed. A second line would report the fault twice.
+  if resolved=$({ uv run onevcs resolve "$checkout" | "$python" -c "$RESOLVE_PROGRAM"; } 2>/dev/null); then
+    [ -z "$resolved" ] || checkout="$resolved"
+  fi
 fi
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the host's temporary directory cannot be created at all; driving it would mean breaking the filesystem the suite itself runs on.

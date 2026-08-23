@@ -29,6 +29,7 @@ import signal
 import stat
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1225,6 +1226,136 @@ def test_publish_branch_forwards_an_option_the_wrapper_does_not_know_and_drafts_
         f"`onevcs` never answered the option the wrapper forwarded:\n{helped.stdout}"
     )
     assert _drafting_turns(hosted) == [], "a drafting turn was spent on an unreadable list"
+
+
+def _listed_alias(hosted: Hosted) -> str:
+    """The alias `just repos` lists this checkout under — the form an operator copies.
+
+    Read out of the listing rather than written here: the listing is the whole of what
+    an operator has to go on, so a release that derived a different alias changes what
+    these journeys drive rather than leaving them asserting a name nothing lists.
+    """
+    listed = _just("repos", environment=hosted.environment)
+    assert listed.returncode == 0, listed.stderr + listed.stdout
+    for line in listed.stdout.splitlines():
+        if not line.startswith("  "):
+            continue
+        alias, _, path = line.strip().partition("\t")
+        if path and Path(path).resolve() == hosted.checkout.resolve():
+            return alias
+    raise AssertionError(f"`just repos` lists no alias for {hosted.checkout}:\n{listed.stdout}")
+
+
+@pytest.mark.parametrize(
+    ("recipe", "branch", "prepare"),
+    [
+        pytest.param("publish-branch", FINISHED_BRANCH, _finished_branch, id="publish-branch"),
+        pytest.param("repo-recover", INCOMPLETE_BRANCH, _incomplete_branch, id="repo-recover"),
+    ],
+)
+def test_a_landing_drafts_when_repo_names_the_alias_just_repos_lists(
+    tmp_path: Path,
+    recipe: str,
+    branch: str,
+    prepare: Callable[[Path], object],
+) -> None:
+    """An alias is a checkout's name here, so a landing that gets one still drafts.
+
+    `onevcs` takes an alias wherever it takes a `--repo` and an operator types the one
+    `just repos` printed, so while this wrapper only stat'd that value every alias-form
+    landing met the drafter's `is not a directory` refusal, spent no turn, and opened
+    its change request with an empty description — behind a message that read like a
+    refusal, in front of a landing that succeeded.
+
+    Both recipes are driven because both are this one wrapper given a different verb.
+    What is asserted is the description the host was asked to open the change request
+    with, since that is the thing that was lost, and the alias is checked against the
+    recipes' own working directory: were it a path there, this would prove nothing.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    prepare(hosted.checkout)
+    alias = _listed_alias(hosted)
+    assert not (REPO_ROOT / alias).exists(), (
+        f"the checkout these recipes run from holds a {alias!r} of its own, so `--repo "
+        f"{alias}` would be read as a path and this journey would prove nothing"
+    )
+
+    landed = _just(
+        recipe,
+        branch,
+        "--repo",
+        alias,
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    assert landed.returncode == 0, landed.stderr + landed.stdout
+    opened = _opened_change_requests(hosted)
+    assert len(opened) == 1, f"the host was asked to open {len(opened)} change requests"
+    assert opened[0].body == DRAFTED_BODY, (
+        f"the alias-form landing opened its change request with {opened[0].body!r}; the "
+        f"drafting turn answered {DRAFTED_BODY!r}"
+    )
+
+
+#: A `--repo` this registry answers to nothing: not a directory of the checkout the
+#: recipes run from, and not a registered alias, identity, or origin.
+UNKNOWN_REPO = "no-such-checkout"
+
+
+def test_publish_branch_lands_with_no_body_when_repo_names_neither_directory_nor_alias(
+    tmp_path: Path,
+) -> None:
+    """A `--repo` nothing resolves is `onevcs`'s to judge, exactly as before.
+
+    The lookup that makes an alias work must not become a second opinion on the
+    argument, so a value neither side knows keeps today's ending: one drafter line, no
+    turn, nothing from the wrapper, and the verb's own answer as the exit status. That
+    verb is run directly beside the recipe because an exit status asserted against a
+    number would pass on a wrapper that had started deciding these itself.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+    direct = subprocess.run(
+        ["uv", "run", "onevcs", "publish-branch", FINISHED_BRANCH, "--repo", UNKNOWN_REPO],
+        cwd=REPO_ROOT,
+        env=hosted.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert direct.returncode != 0, direct.stdout + direct.stderr
+
+    landed = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        UNKNOWN_REPO,
+        environment=hosted.environment,
+        timeout=600,
+    )
+
+    said = landed.stderr + landed.stdout
+    assert landed.returncode == direct.returncode, (
+        f"the wrapper exited {landed.returncode} where the verb it forwards to exits "
+        f"{direct.returncode}; an unresolvable `--repo` is the verb's to answer\n{said}"
+    )
+    # The verb was reached with the value the caller typed, rather than something the
+    # lookup substituted for it: `onevcs`'s own refusal names it back.
+    assert UNKNOWN_REPO in said, f"`onevcs` never answered the value the caller typed:\n{said}"
+    diagnosed = [line for line in landed.stderr.splitlines() if line.startswith("draft-pr-body:")]
+    assert len(diagnosed) == 1, (
+        f"the operator was given {len(diagnosed)} drafting diagnostics for one unresolvable "
+        f"`--repo`; the ending is one line\n{landed.stderr}"
+    )
+    assert "land-branch:" not in landed.stderr, (
+        f"the wrapper refused a `--repo` of its own accord:\n{landed.stderr}"
+    )
+    assert _drafting_turns(hosted) == [], "a drafting turn was spent on a checkout nothing names"
+    assert _opened_change_requests(hosted) == [], (
+        "a change request was opened for a landing the verb itself refused"
+    )
 
 
 def test_a_branch_its_merge_path_refuses_has_already_paid_for_its_body(
