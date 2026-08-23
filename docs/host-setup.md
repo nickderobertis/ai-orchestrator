@@ -19,8 +19,9 @@ pass](#5-the-trust-marking-pass-order-matters) apply.
    discarded tree rather than reconciled with the one that is there (every
    `scripts/nx.sh` already reconciles),
 3. `scripts/nx.sh run-many -t bootstrap` — each project's own setup,
-4. `git config core.hooksPath .githooks` — activates the pre-push `just gate` and
-   the `commit-msg` subject policy, since the setting names the whole directory,
+4. `git config core.hooksPath .githooks` — activates the pre-push `just gate`, the
+   `commit-msg` subject policy, and the `post-checkout` mark that makes a freshly
+   created worktree trusted, since the setting names the whole directory,
 5. `git config receive.denyCurrentBranch updateInstead` — lets a local-mode
    lifecycle push land in this non-bare checkout.
 
@@ -39,9 +40,9 @@ idempotent. It:
   `~/.local/bin/codex`;
 - wires allowlister's codex `repo-write` PreToolUse hook — **only if allowlister is
   already installed** (see [step 6](#6-install-allowlister-nothing-automates-this));
-- marks this checkout trusted in both alternate Claude config directories —
-  **only if those configs already exist** (see [step
-  5](#5-the-trust-marking-pass-order-matters));
+- marks this checkout trusted in every Claude config directory a dispatch can run
+  under — both alternates and the primary — **only if that config already exists**
+  (see [step 5](#5-the-trust-marking-pass-order-matters));
 - persists the session's `PATH` (and `LLMLINT_ONEHARNESS_BIN`) into Claude Code's
   session env file, creating its parent directory when the config directory is new;
 - hands off to `scripts/setup-llmlint.sh`, which installs `llmlint-cli` with
@@ -59,7 +60,7 @@ exactly what the rest of this document is.
 | `git` | every checkout, worktree, clone, and merge in the lifecycle |
 | `just` | the whole command surface; session setup itself shells to `just sweep` |
 | `uv` | installs the pinned onejudge/oneharness into `.venv` and llmlint via `uv tool` |
-| `jq` | the only tool that can mark the alternate Claude workspaces trusted |
+| `jq` | the only tool that can mark the Claude workspaces trusted |
 | `gh` | GitHub publication (PRs, checks) and repository-type inference (`gh api user --jq .login`) |
 | `node` / `npm` | how the codex CLI and bun are installed |
 
@@ -70,8 +71,8 @@ Two of those fail quietly enough to call out:
   until a dispatch stalls on a trust dialog:
 
   ```
-  session-setup: cannot mark alternate Claude workspaces trusted: jq is unavailable
-  session-setup: alternate Claude workspace trust setup failed; continuing
+  claude-workspace-trust: jq is unavailable; install jq or add it to PATH, then retry
+  session-setup: Claude workspace trust setup failed for ~/.claude-alt/.claude.json; continuing
   ```
 
 - **`npm`.** `bun` is a required dependency, so its absence does fail session setup
@@ -126,10 +127,12 @@ quota that role loses once everything ahead of it is exhausted. Log in to all fi
 | `codex` | `codex login` |
 | `codex:alternate` | `CODEX_HOME="$HOME/.codex-alt" codex login` |
 
-The **primary** Claude identity is the only one whose trust dialog you answer
-interactively: session setup marks trust for the two alternates with `jq` and never
-touches `$HOME/.claude`. Accept it for the checkout root when you first run `claude`
-there.
+Session setup marks trust for all three with `jq`, the primary included: it is last
+on every chain, so a checkout it does not trust blocks the candidate that runs once
+both alternate subscriptions are spent. The primary's configuration is
+`$HOME/.claude.json` — the file claude-code keeps when nothing sets
+`CLAUDE_CONFIG_DIR`, which is what `oneharness.toml`'s primary variant unsets — and it
+is marked exactly like the two directories the alternates name.
 
 Leaving one unauthenticated is safe but not free of consequence — it reports
 `auth` and falls through to the next candidate, costing that role the quota rather
@@ -139,7 +142,7 @@ probe in [step 8](#8-verify-the-host).
 
 ## 5. The trust-marking pass (order matters)
 
-`scripts/session-setup.sh` marks both alternates' `.claude.json` — but only a
+`scripts/session-setup.sh` marks every dispatch identity's `.claude.json` — but only a
 config file **that already exists**, and it is the login in step 4 that creates it.
 So the session doing the authenticating is always too early, and one explicit pass
 afterwards is required:
@@ -149,22 +152,39 @@ cd ~/projects/ai-orchestrator
 just session-setup
 ```
 
-Verify both alternates, keyed on the checkout root:
+Verify all three identities, keyed on the checkout root:
 
 ```sh
-for dir in "$HOME/.claude-alt" "$HOME/.claude-alt2"; do
+for config in "$HOME/.claude-alt/.claude.json" "$HOME/.claude-alt2/.claude.json" \
+  "$HOME/.claude.json"; do
   jq -r --arg root "$HOME/projects/ai-orchestrator" \
-    '.projects[$root].hasTrustDialogAccepted' "$dir/.claude.json"
+    '.projects[$root].hasTrustDialogAccepted' "$config"
 done
 ```
 
-Both lines must print `true`. `null` means the pass has not run since that config
-directory was created — rerun the command above. (Session setup marks the git
+All three lines must print `true`. `null` means the pass has not run since that
+configuration was created — rerun the command above. (Session setup marks the git
 common directory's parent and the repository root, which are the same path in the
 canonical checkout.)
 
-Every dispatch marks its own clone, worktree, and result the same way, so this file
-is on the hot path of the whole harness and nothing else prunes it. Two properties
+A dispatch's own worktree is marked earlier than any of this, and it has to be.
+claude-code reads the trust decision as it starts, so nothing running from inside
+that session — session setup included — can mark the directory in time for the
+session it is running in: claude-code discards `permissions.allow` and the turn
+blocks on an approval that cannot arrive non-interactively. What that looks like in
+the history is an identity with quota left doing nothing, and it was measured here as
+`claude-code:alternate2` spending 206,547 ms and 0 tokens against a five-hour window
+at 45%. `.githooks/post-checkout` closes it by marking the directory as git creates
+it, which for a dispatch is the `git worktree add` `onevcs` runs before the dispatch
+exists — through the same implementation as everything else in this section, and
+without a registration for the parent, which claude-code was measured not to honour
+for its children. It never speaks and never fails: git fails the command that ran a
+non-zero `post-checkout` hook, so an absent, unreadable, or already-correct
+configuration is a silent success there rather than a broken branch switch.
+
+Every dispatch marks its own clone, worktree, and result the same way, in each of
+those files, so they are on the hot path of the whole harness and nothing else prunes
+them. Two properties
 keep it from becoming one: marking paths that are already trusted decides from a
 parse and never rewrites the file, and a mark that does write first drops every
 entry whose workspace is gone. Only an entry that records **nothing but** its trust
@@ -352,7 +372,7 @@ just gate
 - [ ] `gh auth login`; global git `user.name` and `user.email`
 - [ ] canonical checkout **and** isolated safety clone; `just bootstrap` in the canonical one
 - [ ] all five harness identities logged in
-- [ ] one `just session-setup` **after** the alternate logins; both
+- [ ] one `just session-setup` **after** the Claude logins; all three
       `hasTrustDialogAccepted` values `true`
 - [ ] allowlister installed and its codex hook wired
 - [ ] registry rebuilt with checkout **paths**; `just repos --audit-gate-coverage` reviewed

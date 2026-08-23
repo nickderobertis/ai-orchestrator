@@ -65,8 +65,8 @@ export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 # shellcheck source=scripts/claude-alt-config-dir.sh
 source "$SCRIPT_DIR/claude-alt-config-dir.sh"
 # Session setup resolves this fixed sibling path through SCRIPT_DIR at runtime.
-# shellcheck source=scripts/alternate-claude-workspace-trust.sh
-source "$SCRIPT_DIR/alternate-claude-workspace-trust.sh"
+# shellcheck source=scripts/claude-workspace-trust.sh
+source "$SCRIPT_DIR/claude-workspace-trust.sh"
 # The shared resolver is also used by fail-fast wrappers and enables `set -e`;
 # session setup deliberately continues after optional setup failures.
 set +e
@@ -393,27 +393,21 @@ fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
-alternate_config_paths=()
-if resolve_claude_alt_config_dir session-setup; then
-  # Both alternate subscriptions are dispatch identities, so both need this
-  # checkout marked trusted; `mark_alternate_claude_trust` tolerates a config
-  # that is not there yet, which is the state of one nobody has logged into.
-  alternate_config_paths=(
-    "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json"
-    "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR/.claude.json"
-  )
-else
-  log "alternate Claude config resolution failed; continuing"
-fi
+# All three claude-code identities are dispatch identities, so all three need this
+# checkout marked trusted; `claude_trust_config_paths` names each one and reports
+# whichever it could not, and `mark_claude_config_trust` tolerates a config that is
+# not there yet, which is the state of one nobody has logged into.
+claude_config_paths=()
+mapfile -t claude_config_paths < <(claude_trust_config_paths session-setup)
 managed_checkout_root="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 if [ -n "$managed_checkout_root" ]; then
   managed_checkout_root="$(dirname "$managed_checkout_root")"
 else
   managed_checkout_root="$REPO_ROOT"
 fi
-for alternate_config_path in ${alternate_config_paths[@]+"${alternate_config_paths[@]}"}; do
-  mark_alternate_claude_trust "$alternate_config_path" "$managed_checkout_root" "$REPO_ROOT" \
-    || log "alternate Claude workspace trust setup failed; continuing"
+for claude_config_path in ${claude_config_paths[@]+"${claude_config_paths[@]}"}; do
+  mark_claude_config_trust "$claude_config_path" "$managed_checkout_root" "$REPO_ROOT" \
+    || log "Claude workspace trust setup failed for $claude_config_path; continuing"
 done
 persist_session_env
 

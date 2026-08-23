@@ -133,8 +133,8 @@ def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.Complet
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (test_repo / "scripts" / "alternate-claude-workspace-trust.sh").write_text(
-        (REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh").read_text(encoding="utf-8"),
+    (test_repo / "scripts" / "claude-workspace-trust.sh").write_text(
+        (REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_adopted_version_files(test_repo / "config")
@@ -188,7 +188,7 @@ chmod +x "$HOME/.local/node/bin/bun"
     )
 
 
-def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_path: Path) -> None:
+def test_claude_trust_is_idempotent_and_preserves_other_config(tmp_path: Path) -> None:
     config = tmp_path / "alternate" / ".claude.json"
     config.parent.mkdir()
     config.write_text(
@@ -202,7 +202,7 @@ def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_pat
     )
     script = REPO_ROOT / "scripts" / "session-setup.sh"
     roots = (tmp_path / "checkout", tmp_path / "worktrees")
-    command = 'source "$1"; mark_alternate_claude_trust "$2" "$3" "$4"'
+    command = 'source "$1"; mark_claude_config_trust "$2" "$3" "$4"'
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
 
     first = subprocess.run(
@@ -232,7 +232,37 @@ def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_pat
         assert data["projects"][str(root)] == {"hasTrustDialogAccepted": True}
 
 
-TRUST_SCRIPT = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
+TRUST_SCRIPT = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
+
+
+def _every_identity_config(home: Path) -> tuple[Path, ...]:
+    """Ask the helper where each dispatch identity's configuration lives under `home`.
+
+    Asked rather than restated, so a test never registers trust somewhere no identity
+    reads: which configurations there are is the helper's answer, and a test that spelled
+    them itself would keep passing after the helper stopped naming one.
+    """
+    named = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; source "$2"; claude_trust_config_paths journey',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"),
+            str(TRUST_SCRIPT),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+    )
+    assert named.returncode == 0, named.stderr
+    configs = tuple(Path(line) for line in named.stdout.split())
+    assert len(configs) == 3, named.stdout
+    for config in configs:
+        config.parent.mkdir(parents=True, exist_ok=True)
+    return configs
+
+
 #: One synthetic project entry per registered workspace, carrying the session state a
 #: real one accumulates. State is what makes an entry worth keeping, so these are never
 #: prune candidates and the measurement below is about the passes, not about pruning.
@@ -273,7 +303,7 @@ def _mark_trust(
         [
             "bash",
             "-c",
-            'source "$1"; shift; mark_alternate_claude_trust "$@"',
+            'source "$1"; shift; mark_claude_config_trust "$@"',
             "test-trust",
             str(TRUST_SCRIPT),
             str(config),
@@ -295,7 +325,7 @@ def _large_config(config: Path, entries: int, **projects: dict[str, object]) -> 
     )
 
 
-def test_alternate_claude_trust_leaves_an_already_trusted_config_untouched(
+def test_claude_trust_leaves_an_already_trusted_config_untouched(
     tmp_path: Path,
 ) -> None:
     """Marking what is already trusted must cost a parse, not a rewrite.
@@ -327,9 +357,7 @@ def test_alternate_claude_trust_leaves_an_already_trusted_config_untouched(
 
 
 @pytest.mark.parametrize("entries", [4, 20_000])
-def test_alternate_claude_trust_writes_a_new_workspace_in_one_pass(
-    tmp_path: Path, entries: int
-) -> None:
+def test_claude_trust_writes_a_new_workspace_in_one_pass(tmp_path: Path, entries: int) -> None:
     """Adding a workspace writes the configuration once, whatever it already holds."""
     config = tmp_path / ".claude.json"
     _large_config(config, entries)
@@ -352,7 +380,7 @@ def test_alternate_claude_trust_writes_a_new_workspace_in_one_pass(
     assert len(projects) == entries + len(roots)
 
 
-def test_alternate_claude_trust_drops_entries_whose_workspaces_are_gone(tmp_path: Path) -> None:
+def test_claude_trust_drops_entries_whose_workspaces_are_gone(tmp_path: Path) -> None:
     """A registered workspace that no longer exists leaves no entry behind.
 
     Nothing else prunes this file, and the e2e suite alone registers hundreds of
@@ -404,7 +432,7 @@ def _stale_entry_config(config: Path) -> str:
     return gone
 
 
-def test_alternate_claude_trust_keeps_an_entry_it_cannot_prove_is_gone(tmp_path: Path) -> None:
+def test_claude_trust_keeps_an_entry_it_cannot_prove_is_gone(tmp_path: Path) -> None:
     """An unreadable ancestor is not evidence that a workspace was removed.
 
     A failed lookup and an absent path are the same answer from `test`, and treating
@@ -432,7 +460,7 @@ def test_alternate_claude_trust_keeps_an_entry_it_cannot_prove_is_gone(tmp_path:
     assert projects[str(live)]["hasTrustDialogAccepted"] is True
 
 
-def test_alternate_claude_trust_reports_what_the_decision_pass_could_not_do(
+def test_claude_trust_reports_what_the_decision_pass_could_not_do(
     tmp_path: Path,
 ) -> None:
     """A jq that fails for its own reasons must not read as a malformed file."""
@@ -452,7 +480,7 @@ def test_alternate_claude_trust_reports_what_the_decision_pass_could_not_do(
     assert config.read_text(encoding="utf-8") == "{}"
 
 
-def test_alternate_claude_trust_refuses_a_decision_pass_that_decided_nothing(
+def test_claude_trust_refuses_a_decision_pass_that_decided_nothing(
     tmp_path: Path,
 ) -> None:
     """A zero exit from something called `jq` is not a decision about this file."""
@@ -468,7 +496,7 @@ def test_alternate_claude_trust_refuses_a_decision_pass_that_decided_nothing(
     assert config.read_text(encoding="utf-8") == "{}"
 
 
-def test_alternate_claude_trust_reports_a_refused_stale_entry_temporary(tmp_path: Path) -> None:
+def test_claude_trust_reports_a_refused_stale_entry_temporary(tmp_path: Path) -> None:
     """The second temporary is the stale-entry list, and it can fail on its own."""
     config = tmp_path / ".claude.json"
     gone = _stale_entry_config(config)
@@ -493,7 +521,7 @@ exec /usr/bin/mktemp "$@"
     }
 
 
-def test_alternate_claude_trust_reports_an_unwritable_stale_entry_list(tmp_path: Path) -> None:
+def test_claude_trust_reports_an_unwritable_stale_entry_list(tmp_path: Path) -> None:
     """A stale-entry list that cannot be written must fail the call, not the config."""
     config = tmp_path / ".claude.json"
     gone = _stale_entry_config(config)
@@ -532,7 +560,7 @@ printf '%s\\n' "$path"
         (signal.SIGHUP, -signal.SIGHUP),
     ],
 )
-def test_alternate_claude_trust_leaves_no_temporary_when_it_is_killed(
+def test_claude_trust_leaves_no_temporary_when_it_is_killed(
     tmp_path: Path, sent: signal.Signals, observed: int
 ) -> None:
     """A dispatch killed mid-write leaves nothing beside the configuration.
@@ -559,7 +587,7 @@ sleep 60
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" "$3"',
+            'source "$1"; mark_claude_config_trust "$2" "$3"',
             "test-trust",
             str(TRUST_SCRIPT),
             str(config),
@@ -591,7 +619,7 @@ sleep 60
     assert json.loads(config.read_text(encoding="utf-8")) == {"theme": "dark", "projects": {}}
 
 
-def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
+def test_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{broken", encoding="utf-8")
     script = REPO_ROOT / "scripts" / "session-setup.sh"
@@ -600,7 +628,7 @@ def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; mark_claude_config_trust "$2" /checkout',
             "test-trust",
             str(script),
             str(config),
@@ -616,7 +644,7 @@ def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("content", ["[]", '{"projects":[]}'])
-def test_alternate_claude_trust_rejects_invalid_config_shape(tmp_path: Path, content: str) -> None:
+def test_claude_trust_rejects_invalid_config_shape(tmp_path: Path, content: str) -> None:
     config = tmp_path / ".claude.json"
     config.write_text(content, encoding="utf-8")
 
@@ -624,9 +652,9 @@ def test_alternate_claude_trust_rejects_invalid_config_shape(tmp_path: Path, con
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; mark_claude_config_trust "$2" /checkout',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             str(config),
         ],
         text=True,
@@ -639,7 +667,7 @@ def test_alternate_claude_trust_rejects_invalid_config_shape(tmp_path: Path, con
     assert config.read_text(encoding="utf-8") == content
 
 
-def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) -> None:
+def test_concurrent_claude_trust_updates_both_survive(tmp_path: Path) -> None:
     """Two dispatches marking their own worktrees at once both land.
 
     Real workspaces, because that is what a dispatch marks and because a registration
@@ -647,8 +675,8 @@ def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) 
     """
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
-    script = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
-    command = 'source "$1"; mark_alternate_claude_trust "$2" "$3"'
+    script = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
+    command = 'source "$1"; mark_claude_config_trust "$2" "$3"'
     roots = (tmp_path / "first-concurrent-worktree", tmp_path / "second-concurrent-worktree")
     for root in roots:
         root.mkdir()
@@ -670,12 +698,12 @@ def test_concurrent_alternate_claude_trust_updates_both_survive(tmp_path: Path) 
     assert all(projects[str(root)]["hasTrustDialogAccepted"] is True for root in roots)
 
 
-def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_alive(
+def test_claude_trust_releases_lock_while_sourcing_caller_remains_alive(
     tmp_path: Path,
 ) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
-    script = REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"
+    script = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -685,7 +713,7 @@ def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_aliv
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" "$3"; echo READY; read -r',
+            'source "$1"; mark_claude_config_trust "$2" "$3"; echo READY; read -r',
             "test-trust",
             str(script),
             str(config),
@@ -704,7 +732,7 @@ def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_aliv
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" "$3"',
+            'source "$1"; mark_claude_config_trust "$2" "$3"',
             "test-trust",
             str(script),
             str(config),
@@ -729,7 +757,7 @@ def test_alternate_claude_trust_releases_lock_while_sourcing_caller_remains_aliv
     assert caller.stderr.read() == ""
 
 
-def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
+def test_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
     script = REPO_ROOT / "scripts" / "session-setup.sh"
@@ -738,7 +766,7 @@ def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
         [
             "bash",
             "-c",
-            'source "$1"; PATH=/missing; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; PATH=/missing; mark_claude_config_trust "$2" /checkout',
             "test-trust",
             str(script),
             str(config),
@@ -752,7 +780,7 @@ def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
     assert "jq is unavailable" in result.stderr
 
 
-def test_alternate_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
+def test_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
     tools = tmp_path / "tools"
@@ -763,9 +791,9 @@ def test_alternate_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
         [
             "bash",
             "-c",
-            'source "$1"; PATH="$3"; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; PATH="$3"; mark_claude_config_trust "$2" /checkout',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             str(config),
             str(tools),
         ],
@@ -783,16 +811,16 @@ def test_alternate_claude_trust_reports_missing_flock(tmp_path: Path) -> None:
     ("function", "message"),
     [
         (
-            "mark_alternate_claude_trust",
+            "mark_claude_config_trust",
             "configuration path and at least one workspace path are required",
         ),
         (
-            "mark_alternate_claude_workspaces",
+            "mark_claude_workspaces",
             "caller name and at least one workspace path are required",
         ),
     ],
 )
-def test_alternate_claude_trust_requires_function_arguments(
+def test_claude_trust_requires_function_arguments(
     tmp_path: Path, function: str, message: str
 ) -> None:
     result = subprocess.run(
@@ -801,7 +829,7 @@ def test_alternate_claude_trust_requires_function_arguments(
             "-c",
             'source "$1"; "$2"',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             function,
         ],
         text=True,
@@ -816,11 +844,11 @@ def test_alternate_claude_trust_requires_function_arguments(
 @pytest.mark.parametrize(
     ("function", "first_argument"),
     [
-        ("mark_alternate_claude_trust", "/config"),
-        ("mark_alternate_claude_workspaces", "test-caller"),
+        ("mark_claude_config_trust", "/config"),
+        ("mark_claude_workspaces", "test-caller"),
     ],
 )
-def test_alternate_claude_trust_requires_workspace_argument(
+def test_claude_trust_requires_workspace_argument(
     tmp_path: Path, function: str, first_argument: str
 ) -> None:
     result = subprocess.run(
@@ -829,7 +857,7 @@ def test_alternate_claude_trust_requires_workspace_argument(
             "-c",
             'source "$1"; "$2" "$3"',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             function,
             first_argument,
         ],
@@ -842,19 +870,24 @@ def test_alternate_claude_trust_requires_workspace_argument(
     assert "at least one workspace path" in result.stderr
 
 
-def test_alternate_claude_trust_standalone_resolves_configs_and_marks_roots(
+def test_claude_trust_standalone_resolves_every_identity_config_and_marks_roots(
     tmp_path: Path,
 ) -> None:
-    configs = (tmp_path / ".claude-alt", tmp_path / ".claude-alt2")
-    for config_dir in configs:
-        config_dir.mkdir()
-        (config_dir / ".claude.json").write_text("{}", encoding="utf-8")
+    """All three dispatch identities, because the chain falls through to all three.
+
+    The primary is last on every harness chain, so a host that trusted only the two
+    alternates would meet an untrusted directory exactly when both of those
+    subscriptions are exhausted — the moment the fallback exists for.
+    """
+    configs = _every_identity_config(tmp_path)
+    for config in configs:
+        config.write_text("{}", encoding="utf-8")
     roots = (tmp_path / "clone", tmp_path / "worktree")
 
     result = subprocess.run(
         [
             "bash",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             *(str(root) for root in roots),
         ],
         text=True,
@@ -863,17 +896,27 @@ def test_alternate_claude_trust_standalone_resolves_configs_and_marks_roots(
     )
 
     assert result.returncode == 0, result.stderr
-    for config_dir in configs:
-        projects = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))["projects"]
+    for config in configs:
+        projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
         for root in roots:
-            assert projects[str(root)]["hasTrustDialogAccepted"] is True
+            assert projects[str(root)]["hasTrustDialogAccepted"] is True, (
+                f"{config} does not record {root} as trusted"
+            )
 
 
-def test_alternate_claude_trust_standalone_resolution_failure_is_nonfatal(
+def test_claude_trust_standalone_resolution_failure_still_marks_the_primary(
     tmp_path: Path,
 ) -> None:
+    """A misconfigured alternate override costs the alternates and nothing else.
+
+    It cannot reach the primary's path, which is `HOME` alone, so failing that
+    identity too would trade two marked configurations for none.
+    """
+    primary = tmp_path / ".claude.json"
+    primary.write_text("{}", encoding="utf-8")
+
     result = subprocess.run(
-        ["bash", str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"), "/root"],
+        ["bash", str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"), "/root"],
         text=True,
         capture_output=True,
         env={
@@ -886,9 +929,38 @@ def test_alternate_claude_trust_standalone_resolution_failure_is_nonfatal(
     assert result.returncode == 0
     assert "alternate Claude config resolution failed" in result.stderr
     assert "continuing" in result.stderr
+    projects = json.loads(primary.read_text(encoding="utf-8"))["projects"]
+    assert projects["/root"]["hasTrustDialogAccepted"] is True
 
 
-def test_alternate_claude_trust_standalone_continues_to_second_config(
+def test_claude_trust_standalone_unlocatable_primary_still_marks_the_alternates(
+    tmp_path: Path,
+) -> None:
+    """The other half of the same rule, from the side that cannot name the primary."""
+    alternates = (tmp_path / "alternate", tmp_path / "alternate2")
+    for alternate in alternates:
+        alternate.mkdir()
+        (alternate / ".claude.json").write_text("{}", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"), "/root"],
+        text=True,
+        capture_output=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternates[0]),
+            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(alternates[1]),
+        },
+    )
+
+    assert result.returncode == 0
+    assert "the primary Claude config cannot be named" in result.stderr
+    for alternate in alternates:
+        projects = json.loads((alternate / ".claude.json").read_text(encoding="utf-8"))["projects"]
+        assert projects["/root"]["hasTrustDialogAccepted"] is True
+
+
+def test_claude_trust_standalone_continues_to_second_config(
     tmp_path: Path,
 ) -> None:
     configs = (tmp_path / "alternate", tmp_path / "alternate2")
@@ -900,7 +972,7 @@ def test_alternate_claude_trust_standalone_continues_to_second_config(
     result = subprocess.run(
         [
             "bash",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             "/worktree",
         ],
         text=True,
@@ -919,9 +991,9 @@ def test_alternate_claude_trust_standalone_continues_to_second_config(
     assert projects["/worktree"]["hasTrustDialogAccepted"] is True
 
 
-def test_alternate_claude_trust_standalone_reports_missing_resolver(tmp_path: Path) -> None:
-    script = tmp_path / "alternate-claude-workspace-trust.sh"
-    script.write_bytes((REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh").read_bytes())
+def test_claude_trust_standalone_reports_missing_resolver(tmp_path: Path) -> None:
+    script = tmp_path / "claude-workspace-trust.sh"
+    script.write_bytes((REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_bytes())
 
     result = subprocess.run(
         ["bash", str(script), "/worktree"],
@@ -935,39 +1007,55 @@ def test_alternate_claude_trust_standalone_reports_missing_resolver(tmp_path: Pa
     assert "restore scripts/claude-alt-config-dir.sh" in result.stderr
 
 
-@pytest.mark.parametrize(
-    ("script_name", "message"),
-    [
-        (
-            "alternate-claude-workspace-trust.sh",
-            "alternate-claude-workspace-trust: cannot resolve its script directory",
-        ),
-        (
-            "claude-workspace-trust.sh",
-            "claude-workspace-trust: cannot resolve its script directory",
-        ),
-    ],
-)
 def test_claude_trust_entry_point_reports_script_directory_resolution_failure(
-    tmp_path: Path, script_name: str, message: str
+    tmp_path: Path,
 ) -> None:
     tools = tmp_path / "tools"
     _write_executable(tools / "dirname", "#!/bin/sh\nprintf '/missing/script-directory\\n'\n")
 
     result = subprocess.run(
-        ["bash", str(REPO_ROOT / "scripts" / script_name), "/worktree"],
+        ["bash", str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"), "/worktree"],
         text=True,
         capture_output=True,
         env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
     )
 
     assert result.returncode != 0
-    assert message in result.stderr
+    assert "claude-workspace-trust: cannot resolve its script directory" in result.stderr
     assert "restore directory access, then retry" in result.stderr
 
 
+@pytest.mark.parametrize("config_path", ["", "relative/.claude.json", "-not-a-path"])
+def test_claude_trust_rejects_an_invalid_configuration_path(
+    tmp_path: Path, config_path: str
+) -> None:
+    """The configuration path reaches the lock, jq, `chmod`, and the atomic replace.
+
+    A relative one writes where nothing reads, and one beginning with `-` is read as an
+    option by whichever of those tools it reaches — so it is refused before any of them
+    is handed it, and refused whether or not a file happens to be there.
+    """
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_claude_config_trust "$2" /checkout',
+            "test-trust",
+            str(TRUST_SCRIPT),
+            config_path,
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 2
+    assert "configuration path must be a nonempty absolute path" in result.stderr
+    assert sorted(path.name for path in tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize("root", ["", "relative/worktree"])
-def test_alternate_claude_trust_rejects_invalid_workspace_path(tmp_path: Path, root: str) -> None:
+def test_claude_trust_rejects_invalid_workspace_path(tmp_path: Path, root: str) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
 
@@ -975,9 +1063,9 @@ def test_alternate_claude_trust_rejects_invalid_workspace_path(tmp_path: Path, r
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" "$3"',
+            'source "$1"; mark_claude_config_trust "$2" "$3"',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             str(config),
             root,
         ],
@@ -992,7 +1080,7 @@ def test_alternate_claude_trust_rejects_invalid_workspace_path(tmp_path: Path, r
 
 
 @pytest.mark.parametrize("recorded", [True, "trusted", 7, None, ["trusted"]])
-def test_alternate_claude_trust_normalizes_a_requested_entry_that_is_not_an_object(
+def test_claude_trust_normalizes_a_requested_entry_that_is_not_an_object(
     tmp_path: Path, recorded: object
 ) -> None:
     """A requested root recorded as something other than an object still gets marked.
@@ -1027,7 +1115,7 @@ def test_alternate_claude_trust_normalizes_a_requested_entry_that_is_not_an_obje
 
 
 @pytest.mark.parametrize("root", ["", "relative/worktree"])
-def test_alternate_claude_trust_rejects_an_invalid_workspace_without_a_config(
+def test_claude_trust_rejects_an_invalid_workspace_without_a_config(
     tmp_path: Path, root: str
 ) -> None:
     """An absent configuration is not a reason to accept a path this can never mark.
@@ -1054,7 +1142,7 @@ def test_alternate_claude_trust_rejects_an_invalid_workspace_without_a_config(
         ("temporary-file", "cannot create a temporary file"),
     ],
 )
-def test_alternate_claude_trust_reports_filesystem_failures(
+def test_claude_trust_reports_filesystem_failures(
     tmp_path: Path, failure: str, message: str
 ) -> None:
     config = tmp_path / ".claude.json"
@@ -1073,9 +1161,9 @@ def test_alternate_claude_trust_reports_filesystem_failures(
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; mark_claude_config_trust "$2" /checkout',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             str(config),
         ],
         text=True,
@@ -1088,7 +1176,7 @@ def test_alternate_claude_trust_reports_filesystem_failures(
     assert config.read_text(encoding="utf-8") == "{}"
 
 
-def test_alternate_claude_trust_tolerates_config_removed_under_lock(tmp_path: Path) -> None:
+def test_claude_trust_tolerates_config_removed_under_lock(tmp_path: Path) -> None:
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
     tools = tmp_path / "tools"
@@ -1098,9 +1186,9 @@ def test_alternate_claude_trust_tolerates_config_removed_under_lock(tmp_path: Pa
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; mark_claude_config_trust "$2" /checkout',
             "test-trust",
-            str(REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh"),
+            str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"),
             str(config),
         ],
         text=True,
@@ -1116,7 +1204,7 @@ def test_alternate_claude_trust_tolerates_config_removed_under_lock(tmp_path: Pa
     assert not config.exists()
 
 
-def test_alternate_claude_trust_reports_jq_update_failure(tmp_path: Path) -> None:
+def test_claude_trust_reports_jq_update_failure(tmp_path: Path) -> None:
     """The pass that writes the update names the workspaces it could not add."""
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
@@ -1138,7 +1226,7 @@ exec /usr/bin/jq "$@"
     assert "cannot add /checkout" in result.stderr
 
 
-def test_alternate_claude_trust_reports_cleanup_failure(tmp_path: Path) -> None:
+def test_claude_trust_reports_cleanup_failure(tmp_path: Path) -> None:
     """A failed call that cannot clear its own temporary says so and fails."""
     config = tmp_path / ".claude.json"
     config.write_text("{}", encoding="utf-8")
@@ -1157,9 +1245,7 @@ def test_alternate_claude_trust_reports_cleanup_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("failure", ["chmod", "final-mv"])
-def test_alternate_claude_trust_preserves_config_when_replacement_fails(
-    tmp_path: Path, failure: str
-) -> None:
+def test_claude_trust_preserves_config_when_replacement_fails(tmp_path: Path, failure: str) -> None:
     config = tmp_path / ".claude.json"
     original = b'{"theme":"dark"}'
     config.write_bytes(original)
@@ -1186,7 +1272,7 @@ exec /usr/bin/chmod "$@"
         [
             "bash",
             "-c",
-            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            'source "$1"; mark_claude_config_trust "$2" /checkout',
             "test-trust",
             str(REPO_ROOT / "scripts" / "session-setup.sh"),
             str(config),
@@ -1210,26 +1296,6 @@ exec /usr/bin/chmod "$@"
     }[failure]
     assert expected_diagnostic in result.stderr
     assert [path for path in tmp_path.glob(".claude.json.trust.*") if path.suffix != ".lock"] == []
-
-
-def test_legacy_claude_trust_source_loads_helper_and_reports_when_missing(
-    tmp_path: Path,
-) -> None:
-    legacy = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
-    success = subprocess.run(
-        ["bash", "-c", 'source "$1"; type mark_alternate_claude_trust', "test", str(legacy)],
-        text=True,
-        capture_output=True,
-    )
-    assert success.returncode == 0, success.stderr
-
-    isolated = tmp_path / "scripts"
-    isolated.mkdir()
-    copied = isolated / legacy.name
-    copied.write_bytes(legacy.read_bytes())
-    failure = subprocess.run(["bash", str(copied)], text=True, capture_output=True)
-    assert failure.returncode != 0
-    assert "restore scripts/alternate-claude-workspace-trust.sh" in failure.stderr
 
 
 def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(
@@ -1351,6 +1417,31 @@ def test_full_setup_accepts_an_absent_second_alternate_config(tmp_path: Path) ->
     assert data["projects"][str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
 
 
+def test_full_setup_trusts_its_dispatch_checkout_in_the_primary_config(
+    tmp_path: Path,
+) -> None:
+    """The primary subscription dispatches here too, and it is the last resort.
+
+    Its configuration is the one claude-code keeps when nothing sets
+    `CLAUDE_CONFIG_DIR`, which is what the primary variant unsets, so an unmarked
+    checkout there blocks the candidate that runs when the alternates are spent.
+    """
+    configs = _every_identity_config(tmp_path)
+    for config in configs:
+        config.write_text('{"theme":"dark"}', encoding="utf-8")
+
+    result = _run_full_setup_without_bun(tmp_path)
+
+    assert result.returncode == 1
+    repo = str(tmp_path / "repo")
+    for config in configs:
+        data = json.loads(config.read_text(encoding="utf-8"))
+        assert data["theme"] == "dark"
+        assert data["projects"][repo] == {"hasTrustDialogAccepted": True}, (
+            f"{config} does not record {repo} as trusted"
+        )
+
+
 def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> None:
     alternate = tmp_path / "alternate"
     alternate.mkdir()
@@ -1362,7 +1453,7 @@ def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> N
     )
 
     assert result.returncode == 1
-    assert "alternate Claude workspace trust setup failed; continuing" in result.stderr
+    assert f"Claude workspace trust setup failed for {config}; continuing" in result.stderr
     assert "bun is required" in result.stderr
 
 
@@ -1375,7 +1466,8 @@ def test_full_setup_continues_after_alternate_config_resolution_failure(
 
     assert result.returncode == 1
     assert "alternate Claude config path must be absolute" in result.stderr
-    assert "alternate Claude config resolution failed; continuing" in result.stderr
+    assert "alternate Claude config resolution failed" in result.stderr
+    assert "continuing" in result.stderr
     assert "bun is required" in result.stderr
 
 
@@ -1426,8 +1518,8 @@ def _run_full_setup_without_bun(
         (REPO_ROOT / "scripts" / "claude-alt-config-dir.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (scripts / "alternate-claude-workspace-trust.sh").write_text(
-        (REPO_ROOT / "scripts" / "alternate-claude-workspace-trust.sh").read_text(encoding="utf-8"),
+    (scripts / "claude-workspace-trust.sh").write_text(
+        (REPO_ROOT / "scripts" / "claude-workspace-trust.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
