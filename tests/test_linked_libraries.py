@@ -47,12 +47,18 @@ class Release(NamedTuple):
     patch: int
 
     @classmethod
-    def parse(cls, declared: str) -> Release:
-        """Read a release the SBOM declares, rejecting anything that is not one."""
+    def parse(cls, declared: str, source: str = f"{ENGINE_DISTRIBUTION}'s SBOM") -> Release:
+        """Read a release from `source`, rejecting anything that is not one.
+
+        `source` is named by the caller because this model is shared: the SBOM is
+        where the versions this module orders come from, and a `config/*.version` pin
+        is where another gate's come from. A failure that named the wrong one would
+        send a reader to a file that is not the one carrying the bad value.
+        """
         parts = declared.split(".")
         assert len(parts) == 3 and all(part.isdigit() for part in parts), (
-            f"{ENGINE_DISTRIBUTION}'s SBOM declares the version {declared!r}, which is not "
-            "one this gate can order against a floor"
+            f"{source} declares the version {declared!r}, which is not one this gate "
+            "can order against a floor"
         )
         return cls(*(int(part) for part in parts))
 

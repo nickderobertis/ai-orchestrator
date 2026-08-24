@@ -356,6 +356,126 @@ them, not the copy a dispatch runs. Re-dating them to the linked release is
 follow-up work, and until it happens a claim that reads "onejudge 0.4.0 writes …"
 is a claim nothing here has re-taken against the copy that writes it.
 
+## Sequencing a node behind a release
+
+**All of this ships upstream and none of it is in force here.** The releases that
+carry it are newer than the ones `config/` pins, so read this section as what a plan
+will be able to say once those pins move — never as a measurement of what a run does
+on this host, because no such measurement has been taken and moving those pins is a
+separate piece of work. What carries each half, what this host actually pins, and what
+adoption would take are the last paragraph.
+
+A **release target** is one artifact a repository publishes: a crate, a wheel, an npm
+package, a browser bundle. A repository has a *set* of them on cadences that need not
+coincide, so a consumer has to say which one it consumes — this repository installs
+`onepipeline`'s wheel while `onepipeline` itself links `onevcs`'s crate, and "the
+crate is out" and "the wheel is out" are different waits. Per onevcs's own
+`docs/contract.md`, that declaration lives in a document under `onevcs`'s state root
+rather than in the registry or the rules file — deliberately, so an older `onevcs`
+sharing a host is handed a byte-identical registry whether or not a target is
+configured — and four verbs read it: `onevcs release targets`, `release latest`,
+`release status`, and `release acknowledge`.
+
+**Two release styles, because they are two different waits obtained two different
+ways.** An *automated* target carries a **probe** — a script checked into the released
+repository, or a one-liner configured on the host — and is answered by running it
+under a bounded timeout: a version on its stdout is a release, no output is "no
+release yet", and anything else is *not answered*. A **human-step** target carries **no
+probe at all**, because the release is something a person does, and is answered only
+by an explicit record somebody writes afterwards: `onevcs release acknowledge`,
+naming the landed reference, the target, and the version. That records the version
+against the landing commit with a timestamp and an actor. Repeating it with the same
+version is a safe no-op — it succeeds, changes nothing, and re-reports the original
+timestamp and actor, so a retried command and a second person doing the same thing
+are both harmless — while a **conflicting version is refused**, naming the version
+already recorded,
+until `--supersede` explicitly supersedes it and keeps the replaced one in that
+record's own history. The style is the shape of the configuration rather than a label
+on it: a human-step target naming a probe, and an automated one naming an action, each
+fail to load.
+
+Nothing on this host would be the second kind. Every repository here releases
+automatically through release-plz, so `human-step` is a member of the vocabulary
+nothing here uses — worth recording rather than omitting, because the first one
+somebody configures behaves unlike everything else in this document: it is a wait on a
+colleague.
+
+**Two adoption modes, resolved over exactly four rungs.** A node adopts a dependency
+either `fast` — launch now, against the branch that carries the work — or `published`
+— launch only once the release carrying that work exists. Which mode a node gets is
+decided in this order and no other: the node's own `adoption` field, then the
+repository rung, then the global rung, then `fast`. There is no fifth rung, no
+plan-level tier, and no run-only override, so a plan that wants a mode says so on the
+node or in the repository's own declaration. `onepipeline`'s
+`docs/contract-divergences.md` entry 40 specifies those two node fields — `adoption`,
+and `consumes`, which names the target per **dependency node id** rather than per
+repository, because two nodes in one repository can legitimately want different
+targets — and its `src/release.rs` is where the chain is implemented. A repository
+that declares **no** release targets releases nothing, so a dependency landing there
+earns no reference row and no hold whatever mode its dependents resolve to; that is
+every repository on a host that has configured none, this one included, and it is why
+a plan naming neither field gets exactly the run it gets today.
+
+**Under fast adoption the framework writes the reference block, so a task must not.**
+A dependency landing outside the node's own repository gains a row naming that
+dependency, its repository, its branch, the landing commit, and the release target, in
+a trailing `## Cross-repository references` block appended to that node's rendered
+task by the same rendering that appends `## Planner context`. When those releases
+arrive the node is sent one `context` note naming the versions — into the live turn
+where the dispatch has a controllable one and onto its next dispatch where it does
+not — framed as observed state and adding no acceptance criteria. So a task must
+**not** instruct a worker to go and find and pin a dependency's commit: that
+instruction competes with a block the framework has already written and a note it
+will deliver, the two answers disagree, and the worker follows the one in its task.
+
+**Under published adoption the node does not launch at all** until every such
+dependency answers released. The hold is absolute — no timeout, no deadline, no retry
+budget, and no automatic degrade to fast adoption — and it **never fails the node**.
+What it does instead is raise a **non-blocking planner surface** naming what it awaits,
+for how long, and in which style, repeated on its own interval so the wait cannot go
+silent. That surface is a decision put to you rather than a report: keep waiting, flip
+that node to fast adoption by live edit, or stop the run.
+
+**A human-step wait is a wait on a person, and reads that way.** The scheduler does
+nothing different for one — the same indefinite hold, never failing — and what differs
+is where the answer comes from and what is reported: the surface carries the action
+somebody has to perform, and the run sits there until they perform it and acknowledge
+it. **Nothing in this harness performs a human release step, prompts anybody for one,
+or acknowledges one on anybody's behalf.** A manager reading one of those surfaces is
+the person who has to act, or find who will.
+
+**A probe is not a gate.** It answers what version is out there; it never rules on a
+change, never refuses a publication, and never stands between a branch and its merge
+path. The host-run verifier onevcs 0.11.0 removed is not coming back under another
+name — [what that cost](#what-this-repo-is) is the section this document opens with.
+
+**"Not answered" is not "not released", and a held node stays held on the first.** A
+probe that timed out, failed to spawn, or printed something unusable has said nothing
+about the world, and treating it as evidence that a release has not happened is the
+single most damaging thing this could get wrong. **Awaiting a human step is a third
+answer** and is folded into neither: reported as an unanswered probe it would read as
+a broken tool, where the truth is a healthy wait on a colleague; reported as "not
+released" it would claim a probe answered when none ran.
+
+**What carries each half, what this host pins, and what adoption would take.** The
+release-targets surface — those four verbs and the `release-probed` /
+`release-acknowledged` / `release-observed` event kinds — is **onevcs 0.13.0**
+(https://github.com/nickderobertis/onevcs/pull/78). The view that shows which release
+carried each landed node, and every release event, is **onepipeline-ui 0.6.3**
+(https://github.com/nickderobertis/onepipeline-ui/pull/36). The adoption modes merged
+as https://github.com/nickderobertis/onepipeline/pull/113 and are carried by the first
+`onepipeline` release cut after it — that release was not yet published when this was
+written, so take its number from the registry rather than from here. **None of the
+three is adopted.** `config/onevcs.version` reads 0.11.0, `config/onepipeline.version`
+reads 0.11.0, and `config/onepipeline-ui.version` reads 0.6.2 — each cut before the
+change that carries its half — and no `just` recipe wraps `onevcs release`, because
+nothing here has yet had a reason to run one. Putting it in force is: move those pins
+the way [the pin table above](#which-pin-governs-a-dispatch) requires, remembering that
+the `onevcs` a *dispatch* would resolve a release over is the linked one rather than
+the CLI pin; declare at least one release target for at least one repository; and only
+then write a plan that names a mode. Until all three, a node's `adoption` field is a
+field nothing on this host reads.
+
 ## What "agent" means here
 
 In this repo, an **agent** (or **subagent**) is a **dispatched onejudge process** —

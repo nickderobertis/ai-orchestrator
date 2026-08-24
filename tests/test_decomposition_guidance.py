@@ -79,6 +79,24 @@ OWNED_STATEMENTS = (
     Owned(MANAGER.document, "confirm the `pending` surface is the one being answered"),
     Owned(MANAGER.document, "A blocking surface may have no asker"),
     Owned(MANAGER.document, "An interrupt is not journalled"),
+    # How a node says it depends on another repository's *release* rather than on the
+    # work. The split is the same one and for the same reason: choosing a node's
+    # adoption mode and writing its task around the references the framework appends
+    # is the planner's, and it travels; what a release target is, how the two styles
+    # are answered, and what a held run puts in front of a person is the manager's,
+    # and it stays. A copy of either half in the other document is the drift that
+    # ends with a task instructing a worker to pin what the framework already pinned.
+    Owned(PLANNER.document, "whenever the default the node's repository resolves to is not"),
+    Owned(PLANNER.document, "keyed by the dependency's node id"),
+    Owned(PLANNER.document, "says who performs it and why waiting beats building against the work"),
+    Owned(PLANNER.document, "Never write pinning instructions into a task that adopts fast"),
+    Owned(PLANNER.document, "never a node in your plan"),
+    Owned(MANAGER.document, "is one artifact a repository publishes"),
+    Owned(MANAGER.document, "a member of the vocabulary nothing here uses"),
+    Owned(MANAGER.document, "There is no fifth rung, no plan-level tier, and no run-only override"),
+    Owned(MANAGER.document, "the framework writes the reference block, so a task must not"),
+    Owned(MANAGER.document, "A probe is not a gate"),
+    Owned(MANAGER.document, "the person who has to act, or find who will"),
     # The mechanics: the shape a contract node takes in this engine's graph, and how
     # its dependents are wired to it.
     Owned(MECHANICS.document, "no-op or sample-data implementation"),

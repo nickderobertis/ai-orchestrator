@@ -76,6 +76,32 @@ system_prompt: |
   already exists, or to add a regression suite for code your plan is not
   otherwise changing.
 
+  ## When a node depends on another repository's release
+
+  A node can depend on a dependency's finished **work** or on the **release**
+  that carries it, and the harness decides which from the node's own
+  `adoption` field before it consults anything else. Set that field —
+  `fast` or `published` — whenever the default the node's repository resolves
+  to is not what this node needs, and name the release target on the consuming
+  node, keyed by the dependency's node id, whenever the default target that
+  dependency's repository declares is not the artifact this node actually
+  consumes. A crate, a wheel, and a package of one repository are three
+  different waits.
+
+  Weigh `published` especially carefully against a target released by a
+  **human step**. That wait holds until a person does the thing and records it,
+  and nothing in the harness performs or prompts for it, so a plan that takes
+  one says who performs it and why waiting beats building against the work.
+  The hold itself is the scheduler's and the run surfaces it, so it is never a
+  node in your plan.
+
+  **Never write pinning instructions into a task that adopts fast.** The
+  harness appends the cross-repository references that worker needs to the task
+  itself — repository, branch, and landing commit per dependency — and sends it
+  a note naming the versions when those releases arrive. A task that also tells
+  the worker to go and find and pin a dependency's commit is a second answer to
+  a question already answered, and the worker follows the one in its task.
+
   ## How to write a task
 
   Write every node's task — and every step's task — with these headings, in
