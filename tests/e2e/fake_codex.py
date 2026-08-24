@@ -7,7 +7,7 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Six environment variables steer it, and each exists because a journey has to
+Seven environment variables steer it, and each exists because a journey has to
 tell one outcome from another deterministically:
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
@@ -29,6 +29,11 @@ tell one outcome from another deterministically:
   *in flight*: signalling a caller and hoping the turn had started is a race whose
   failure mode is a green test, and the attempt log is the only moment a journey can
   prove the provider was reached. Absent, a launch answers immediately.
+* ``FAKE_CODEX_FAIL_AFTER_TURN`` — the launch emits its whole billed turn and
+  *then* exits non-zero saying something no classifier recognizes. It is the
+  counterpart of ``FAKE_CODEX_UNAVAILABLE_ATTEMPTS``: both leave a failure nothing
+  can name, and they differ only in whether the provider has anything to show for
+  itself, which is the one reading a chain publishes rather than derives.
 * ``FAKE_CODEX_PROMPT_LOG`` names a file this appends one JSON record to per
   launch, carrying the prompt the provider was actually given. It is how a journey
   reads the prompt of a turn nothing else can observe: since oneagentgraph 0.2.18 a
@@ -167,6 +172,12 @@ def main() -> int:
         return 1
     for event in turn(launches):
         print(json.dumps(event), flush=True)
+    if os.environ.get("FAKE_CODEX_FAIL_AFTER_TURN") == "1":
+        # The turn above is complete and accounted for, so this exit is a failure
+        # with work behind it — the case a chain must never spend another
+        # identity's quota on, whatever the exit code fails to explain.
+        print("fake_codex: the provider answered and then failed", file=sys.stderr)
+        return 1
     return 0
 
 

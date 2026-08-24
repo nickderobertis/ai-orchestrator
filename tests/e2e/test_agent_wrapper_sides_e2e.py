@@ -17,6 +17,14 @@ the side, that role must be exactly the role of the side it selected, and a turn
 no config is the agent side running from this repository's own agent config. A role that
 disagrees, is unrecognized, or is absent stops the turn rather than resolving to either
 side — so no config a caller names can route a side without declaring it is that side.
+Knowing the side is also what lets the judge branch rewrite the history labels it
+inherited — it is the one place that knows the `agent_role` a dispatch stamped names the
+worker rather than this turn — so the last journeys here are about what that rewrite
+hands on. It is a trust boundary in the direction `orchestrator/labels.py` does not
+cover: that module validates the labels this repository *writes*, while these arrive in
+the environment from whatever invoked the wrapper, and oneharness refuses a whole turn
+over one it cannot use.
+
 These journeys drive the real
 wrapper with the real `oneharness` CLI and read the command it resolved, so what is
 asserted is the routing a real turn would run under. `--print-command` is what makes
@@ -104,6 +112,10 @@ def _base_environment() -> dict[str, str]:
         "ORCHESTRATOR_AGENT_STATUS_DIR",
         "ONEHARNESS_HARNESSES",
         "ONEHARNESS_MODEL",
+        # The dispatch running this suite stamps its own history labels, and the
+        # journeys below are about which labels a turn inherits — so the ambient
+        # value is dropped rather than merged into theirs.
+        "ONEHARNESS_HISTORY_LABELS",
     ):
         inherited.pop(named, None)
     # The wrapper puts the project venv ahead of everything, but it resolves plain
@@ -126,9 +138,17 @@ class PlannedCandidate(TypedDict):
 
 
 class PrintedCommand(TypedDict):
-    """What `oneharness run --print-command` answers: the candidate chain it resolved."""
+    """What `oneharness run --print-command` answers.
+
+    The candidate chain it resolved, and the layers it resolved that chain from.
+    `config_files` names each source that contributed to the effective config, in
+    order, with the literal `"environment"` standing for the environment variables —
+    so it is the read that says whether a turn carried an inherited
+    `ONEHARNESS_HISTORY_LABELS` at all by the time oneharness saw it.
+    """
 
     results: list[PlannedCandidate]
+    config_files: list[str]
 
 
 def _planned(completed: subprocess.CompletedProcess[str]) -> list[PlannedCandidate]:
@@ -551,3 +571,148 @@ def test_an_implicit_agent_config_declaring_the_agent_role_still_takes_its_turn(
     resolved = _resolved(completed)
     assert resolved["model"] == WORKER_MODEL, resolved
     assert resolved["harness_id"] == SHARED_IDENTITY, resolved
+
+
+#: Label shapes a hand-set `ONEHARNESS_HISTORY_LABELS` can carry, one per rule of the
+#: contract `orchestrator/labels.py` validates on the way *out*. Each is refused by the
+#: real CLI at startup, which the control below drives rather than assumes: that is what
+#: makes "the turn ran" evidence that the pair never reached oneharness.
+UNUSABLE_LABELS = {
+    "a-value-past-the-length-limit": "over.long=" + "x" * 300,
+    "a-value-carrying-a-control-character": "control=first\tsecond",
+    "a-key-the-contract-does-not-admit": "malformed key=value",
+    "a-word-that-is-not-a-pair-at-all": "noequals",
+}
+
+#: Labels that locate a turn in the graph. These are contract-clean and are not the
+#: side's own, so the judge branch has to keep them: dropping the variable wholesale
+#: would lose the run and node a history record is later filtered by.
+LOCATING_LABELS = ("run=r-adopt-oneharness-cli", "node=adopt-oneharness-cli")
+
+#: The one valid label the judge branch drops on purpose. A dispatch stamps `agent_role`
+#: naming the worker it dispatched, and env beats a project file, so leaving it in place
+#: records every supervisor session under its worker's role.
+INHERITED_SIDE_LABEL = "agent_role=worker"
+
+
+def _judge_turn(member_scratch: Path, *inherited: str) -> subprocess.CompletedProcess[str]:
+    """One judge-side turn that inherits exactly `inherited` as its history labels.
+
+    Nothing else this side reads is set. `ORCHESTRATOR_JUDGE_HARNESSES` in particular is
+    left alone: the wrapper applies it by exporting `ONEHARNESS_HARNESSES`, which is an
+    environment config override of its own and would put the `environment` layer into
+    every one of these turns whatever became of the labels.
+    """
+    return _wrapper(
+        "--config",
+        str(member_scratch / JUDGE_CONFIG_NAME),
+        "--print-command",
+        "--prompt",
+        "supervise this turn",
+        environment={"ONEHARNESS_HISTORY_LABELS": ",".join(inherited)},
+    )
+
+
+def _layers(completed: subprocess.CompletedProcess[str]) -> list[str]:
+    """The config layers oneharness resolved this turn from, refusing a turn that failed."""
+    assert completed.returncode == 0, completed.stderr
+    printed = cast(PrintedCommand, json.loads(completed.stdout))
+    return printed["config_files"]
+
+
+@pytest.mark.parametrize("unusable", list(UNUSABLE_LABELS.values()), ids=list(UNUSABLE_LABELS))
+def test_the_real_cli_will_not_start_a_turn_carrying_an_unusable_history_label(
+    member_scratch: Path, unusable: str
+) -> None:
+    """The control the two journeys below rest on: each shape really does stop a turn.
+
+    `orchestrator/labels.py` is the validating *writer* of this contract, so a label it
+    produced is always usable. What arrives in `ONEHARNESS_HISTORY_LABELS` need not have
+    come from it — a hand-set environment, a wrapper somebody wrote, an operator
+    exporting one to tag a manual probe — and oneharness refuses the whole invocation
+    rather than dropping the pair. That refusal is a config-override error raised before
+    any candidate is planned, so it costs the turn outright.
+
+    Without this, "the wrapper's turn resolved" would be equally consistent with the
+    labels having been harmless all along, and the journeys below would prove nothing.
+    """
+    refused = subprocess.run(
+        [
+            "oneharness",
+            "run",
+            "--config",
+            str(member_scratch / JUDGE_CONFIG_NAME),
+            "--print-command",
+            "--prompt",
+            "supervise this turn",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **_base_environment(),
+            "ONEHARNESS_HISTORY_LABELS": ",".join((*LOCATING_LABELS, unusable)),
+        },
+        text=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode == 2, (
+        f"oneharness started a turn carrying {unusable!r}, so this shape is not the "
+        f"unusable label these journeys take it for:\n{refused.stdout}"
+    )
+    assert "history label" in refused.stderr, refused.stderr
+
+
+def test_the_judge_side_does_not_pass_an_unusable_inherited_label_through(
+    member_scratch: Path,
+) -> None:
+    """The wrapper rewrites this variable, so it owns what its rewrite hands on.
+
+    The judge branch drops `agent_role` and re-exports the rest, which means it composes
+    the value oneharness then reads. A rewrite that carried an inherited pair the
+    contract does not admit would hand the CLI a list it refuses to start on — turning a
+    label somebody set by hand into a supervisor turn that never happens, on a side whose
+    failure reads as the worker's.
+
+    Nothing valid is left here, so nothing survives: the turn resolves with no
+    `environment` layer at all. That is the pair of readings this asserts — every
+    unusable pair gone, and `agent_role` gone with them, since a single survivor of
+    either kind would put the layer back.
+    """
+    inheriting_nothing = _layers(_judge_turn(member_scratch))
+    assert "environment" not in inheriting_nothing, (
+        "a turn inheriting no labels already resolves an environment layer, so this "
+        f"reading cannot say anything about the labels: {inheriting_nothing}"
+    )
+
+    completed = _judge_turn(member_scratch, *UNUSABLE_LABELS.values(), INHERITED_SIDE_LABEL)
+
+    assert "environment" not in _layers(completed), (
+        "the judge branch handed oneharness an inherited label list, but every pair it "
+        f"inherited was either unusable or its own side's: {_layers(completed)}"
+    )
+
+
+def test_the_judge_side_keeps_the_inherited_labels_that_locate_the_turn(
+    member_scratch: Path,
+) -> None:
+    """The other half: dropping the bad pairs must not throw the good ones away.
+
+    A rewrite that unset the variable whenever anything in it was unusable would pass the
+    journey above while losing the run and node a history record is filtered by — the
+    labels that make `just history` answer *which node produced this session*. So the
+    same environment plus two clean locating labels has to resolve with the environment
+    layer present, and it has to resolve at all: the turn exiting zero is what says no
+    unusable pair rode along with them, because the control above shows one would have
+    stopped it.
+    """
+    completed = _judge_turn(
+        member_scratch, *UNUSABLE_LABELS.values(), INHERITED_SIDE_LABEL, *LOCATING_LABELS
+    )
+
+    assert "environment" in _layers(completed), (
+        "the judge branch dropped every inherited label rather than only the ones it "
+        f"had to, so the turn no longer says which node it supervises: {_layers(completed)}"
+    )

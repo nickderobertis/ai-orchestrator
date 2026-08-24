@@ -358,16 +358,39 @@ dated oneharness claim accordingly: the wrapper's behaviour, the fallback chain,
 the smoke are the CLI's, while a turn a *dispatch* runs goes through whichever
 linked core its member's engine carries.
 
-**That this pin currently reads `0.10.2`, and one of the two linked cores is also
-`0.10.2`, is a coincidence and nothing more.** They are two artifacts published from
-one repository on their own cadences; the CLI reached that number by its own route
-and the core reached it by `oneagentgraph` 0.3.9's resolution. Nothing keeps them
-equal, they were 0.10.2 against 0.10.1 one adoption ago, and a reader who takes the
-match as evidence that the pin names the linked core is making the exact mistake
-this paragraph is about. Read the pin as the CLI's release whatever number it wears,
-and take the linked cores from the measurement below rather than from it. The two
-part again the moment `config/oneharness.version` moves, which is a sibling node's
-to do, not this one's.
+**How this pin's number compares with either linked core's is not evidence about
+anything, in either direction.** They are separate artifacts published from one
+repository on their own cadences, and what tells them apart is what each one *is* —
+this pin is the release `scripts/session-setup.sh` installs as the `oneharness-cli`
+wheel and `scripts/oneharness-agent.sh` and `just smoke` then spawn; a linked core is
+a Rust library compiled into the engine binary by whichever dependent resolved it,
+and reaches this host only through a dispatched member's turn. No comparison of
+version strings can establish that, so do not try to read one off the numbers. They
+have already been equal and unequal within three adoptions: `0.10.2` against `0.10.1`,
+then `0.10.2` against `0.10.2`, and `0.10.3` against `0.10.2` today. Read the pin as
+the CLI's release whatever number it wears, and take the linked cores from the SBOM
+read this document already makes — that one goes to the engine wheel, which is the
+only artifact that knows.
+
+**One thing the adopted CLI changed is operator-visible, and it decides how you read
+a stopped chain.** A fallback chain has always stopped at a candidate whose failure it
+could not classify — spending the next identity's quota on a failure nothing explains
+is the one thing it must not do — but through 0.10.2 it reported that stop with the
+sentence a genuine task failure gets, `ran but did not succeed`. From 0.10.3 a
+candidate that showed nothing for itself says so instead: *failed with nothing to show
+for it — no tool call, no billed usage, and no cause it could classify — so the chain
+stopped there and tried no candidate after it*, with `fallback.stopped_without_work`
+and `results[].work` of `none` carrying the same reading into the report and the
+history record. Name the two rather than counting them, because which is which is the
+whole reading. *Nothing to show for it* is the **untried chain**: that candidate
+produced no tool call and no billed token, so an unrecognised startup refusal at the
+front of the chain — a quota or an auth problem the classifier could not name — is
+still the thing to look for, and every identity behind it is untouched. `ran but did
+not succeed` survives as its opposite, and on 0.10.3 it is what a candidate that
+*produced* something gets: a genuine task failure, or an unclassifiable one with
+`results[].work` of `done` and billed usage behind it, which is work re-running would
+spend twice. Both still stop the chain, and this is the CLI's own summary, so it
+reaches a wrapper-spawned turn and `just smoke` rather than a dispatched member's.
 
 What holds all of it is `tests/test_linked_libraries.py`, and it is written to the
 two-version reality rather than as an equality — it reads the SBOM's own dependency

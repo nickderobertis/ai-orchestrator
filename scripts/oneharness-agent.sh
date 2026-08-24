@@ -26,7 +26,7 @@
 # same seam, applied the same way and on the same two branches. Each is applied
 # twice, because the two mechanisms cover different ground: `--model` on this
 # branch's own `oneharness run` is the only one that beats the `model` a config pins
-# for the selected harness (oneharness 0.10.2 lets that config value beat
+# for the selected harness (oneharness 0.10.3 lets that config value beat
 # ONEHARNESS_MODEL), and the exported ONEHARNESS_MODEL is what carries the side's
 # choice to everything it subsequently runs. That precedence is a fact about one
 # release, so config/oneharness.version owns the literal above and
@@ -234,8 +234,17 @@ apply_side_model() {
         echo "oneharness-agent: $model_variable '$model_value': $harness_variable '$harness_value' spans $families, and one model cannot name a model of each; narrow $harness_variable to identities of a single harness, then retry" >&2
         return 2
     fi
+    # llmlint: ignore-block[boundary_inputs_validated] The pairing is validated above —
+    # an identity this side's config does not configure, and one spanning two harness
+    # families, are both refused before this point. The model *value* is deliberately
+    # not, and that asymmetry is the design: an identity selects credentials and
+    # environment routing only this repository configures, while a model name belongs to
+    # the provider the operator named in the same breath, where an unknown one fails
+    # loudly rather than quietly running something else. It crosses no shell boundary
+    # here — argv element and exported value, never a word this script expands.
     side_model=(--model "$model_value")
     export ONEHARNESS_MODEL="$model_value"
+    # llmlint: ignore-end[boundary_inputs_validated]
 }
 
 # Whether one `key=value` pair satisfies oneharness's history-label contract: a key

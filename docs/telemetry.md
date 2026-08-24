@@ -147,7 +147,14 @@ after the 0.10.2/0.5.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
-this paragraph whenever either pin moves. `dispatches`,
+this paragraph whenever either pin moves. That re-check has since been made for the
+0.10.3/0.5.1 upgrade, and the measurement above stands rather than being retaken: one
+turn spent on each binary with everything else held differs by exactly two added keys
+— `results[].work` and `fallback.stopped_without_work`, both of which say something
+about a failure nothing could classify — while every `usage` field keeps its name, its
+type, and its value. Nothing an accounting reader reads is renamed, retyped, or
+re-meant, which is why the boundary sentence still names the pair these records were
+written under. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 

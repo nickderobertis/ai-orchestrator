@@ -33,10 +33,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict, cast, get_args
 
 from mock_oneharness import main as _mock_oneharness_main
 from waits import timeout
@@ -51,6 +52,15 @@ FAKE_CODEX = REPO_ROOT / "tests" / "e2e" / "fake_codex.py"
 #: The answer `fake_codex.py` returns, and therefore the evidence that the second
 #: candidate really ran rather than the first one's empty result being reported.
 FALLBACK_ANSWER = "smoke-ok"
+
+
+#: The closed vocabulary oneharness publishes a work reading in.
+Work = Literal["done", "none"]
+#: The history schema version a record declares once it carries one. A record with
+#: no reading to carry declares less, which is what keeps it legible to a reader
+#: that has never heard of the field — asserted as the relation below as well, so a
+#: renumbered contract fails here rather than silently becoming untested.
+WORK_EVIDENCE_SCHEMA_VERSION = "1.7"
 
 
 class Accounting(TypedDict):
@@ -102,6 +112,31 @@ ZERO_WORK_REJECTION: Rejection = {
     "total_cost_usd": 0.0,
     "modelUsage": {},
 }
+
+
+class Answer(TypedDict):
+    """A Claude Code terminal record for a turn that ran and answered."""
+
+    type: str
+    subtype: str
+    result: str
+    usage: Accounting
+    total_cost_usd: float
+    modelUsage: dict[str, ModelAccounting]
+
+
+#: What the identity *behind* a refusing one answers if the chain ever reaches it.
+#: A success rather than a second refusal, so a chain that wrongly moved past a
+#: candidate is a visible answer in the report rather than another stop that looks
+#: like the one being asserted on.
+UNREACHED_ANSWER: Answer = {
+    "type": "result",
+    "subtype": "success",
+    "result": "second-identity-ran",
+    "usage": {"input_tokens": 900, "output_tokens": 120},
+    "total_cost_usd": 0.04,
+    "modelUsage": {"claude-sonnet-5": {"inputTokens": 900, "outputTokens": 120}},
+}
 #: The identical rejection from a turn that had already been paid for. This is the
 #: boundary the fall-through must not cross: the record says exactly the same thing
 #: about the failure and something entirely different about what it cost.
@@ -121,6 +156,27 @@ class Candidate:
     failure_kind: str | None
     text: str | None
     output_tokens: int
+    #: What this candidate has to show for itself when nothing classified its
+    #: failure: `"none"` when the harness recorded no tool call and no billed
+    #: usage, `"done"` when it did, and `None` on every other outcome. oneharness
+    #: publishes it only for an unclassified failure, which is the one reading a
+    #: consumer cannot derive. The vocabulary is closed, so a third token is a
+    #: contract change this journey should refuse rather than carry.
+    work: Work | None
+
+
+@dataclass(frozen=True)
+class Persisted:
+    """One `type: "run"` line the harness wrote to its own history store.
+
+    The report a caller reads and the record a *later* reader reads are two
+    surfaces, and only the second one has to stay legible to a reader older than
+    the writer — which is this host's situation, since the `oneagentgraph` that
+    judges the smoke links a `oneharness-core` behind the CLI it spawns.
+    """
+
+    schema_version: str
+    work: Work | None
 
 
 @dataclass(frozen=True)
@@ -137,9 +193,55 @@ class Turn:
     #: The candidates actually attempted, by harness id. A candidate the chain
     #: never reached is absent — which is how "its quota was never touched" is read.
     attempted: Mapping[str, Candidate]
+    #: Whether the chain stopped at a candidate that showed nothing for itself.
+    stopped_without_work: bool
+    #: What each candidate's own history record says, by harness id.
+    persisted: Mapping[str, Persisted]
 
 
-def _read_turn(completed: subprocess.CompletedProcess[str]) -> Turn:
+def _read_history(history_dir: Path) -> dict[str, Persisted]:
+    """Every run line the harness persisted, by harness id.
+
+    The store also holds an index whose lines wrap a record in an envelope naming
+    no harness of its own, so only `type: "run"` lines are read — the same rule the
+    smoke's own verdict is read under.
+    """
+    persisted: dict[str, Persisted] = {}
+    for path in sorted(history_dir.rglob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            if record.get("type") != "run":
+                continue
+            persisted[record["harness_id"]] = Persisted(
+                schema_version=record["schema_version"],
+                work=_work(record.get("work")),
+            )
+    return persisted
+
+
+def _work(value: object) -> Work | None:
+    """The work reading a record carries, refusing one this journey never measured.
+
+    The vocabulary is the harness's, and every assertion below is written against
+    the two tokens it publishes today. A third would make those assertions describe
+    a contract nobody re-read, so it fails here — at the boundary the value crosses
+    — rather than passing through as a string that happens not to match.
+    """
+    if value is None:
+        return None
+    assert value in get_args(Work), (
+        f"unmeasured work reading {value!r}: the harness publishes a token this "
+        "journey has not been re-read against"
+    )
+    return cast(Work, value)
+
+
+def _schema(persisted: Persisted) -> tuple[int, ...]:
+    """A history record's declared schema version, ordered."""
+    return tuple(int(part) for part in persisted.schema_version.split("."))
+
+
+def _read_turn(completed: subprocess.CompletedProcess[str], history_dir: Path) -> Turn:
     """Model the one report the turn printed, refusing anything that is not one.
 
     onejudge parses this process's stdout as exactly one report, whichever candidate
@@ -163,19 +265,32 @@ def _read_turn(completed: subprocess.CompletedProcess[str]) -> Turn:
                 failure_kind=result["failure_kind"],
                 text=result["text"],
                 output_tokens=result["usage"]["output_tokens"],
+                work=_work(result["work"]),
             )
             for result in report["results"]
         },
+        stopped_without_work=fallback["stopped_without_work"],
+        persisted=_read_history(history_dir),
     )
 
 
-def _agent_turn(tmp_path: Path, oneharness_bin: str, rejection: Rejection) -> Turn:
-    """Run one agent-side turn whose first candidate answers with `rejection`."""
+def _wrapper_turn(tmp_path: Path, oneharness_bin: str, selection: Mapping[str, str]) -> Turn:
+    """Run one agent-side turn through the real wrapper, chain and classifier.
+
+    `selection` is the only thing a journey varies, and it is an environment: which
+    identities the chain names and in what order, which provider binary stands in
+    for each, and what that provider then does. Everything else is built from
+    nothing here, so no pin the surrounding dispatch exported can reach it.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     oneharness = bin_dir / "oneharness"
     if not oneharness.exists():
         oneharness.symlink_to(MOCK_ONEHARNESS)
+    # One store per turn, so a journey that spends two of them reads each one's own
+    # records rather than whichever wrote last — and so no journey here touches the
+    # store a real turn on this host writes to.
+    history_dir = Path(tempfile.mkdtemp(prefix="history-", dir=tmp_path))
     return _read_turn(
         subprocess.run(
             [
@@ -194,17 +309,50 @@ def _agent_turn(tmp_path: Path, oneharness_bin: str, rejection: Rejection) -> Tu
                 "HOME": str(tmp_path / "home"),
                 "PYTHONPATH": str(REPO_ROOT / "tests" / "e2e"),
                 "REAL_ONEHARNESS_BIN": oneharness_bin,
-                # Narrowed to plain ids so the shipped responder can name the
-                # candidate it replaces, exactly as the other real-CLI journeys
-                # narrow it. The order, the `fallback` run mode and the classifier
-                # all stay the agent config's own.
-                "MOCK_HARNESSES": "claude-code",
-                "ONEHARNESS_HARNESSES": "claude-code,codex",
-                "MOCK_STDOUT": json.dumps(rejection),
-                "ONEHARNESS_BIN_CODEX": str(FAKE_CODEX),
+                "ONEHARNESS_HISTORY_DIR": str(history_dir),
+                **selection,
             },
             timeout=timeout(60),
-        )
+        ),
+        history_dir,
+    )
+
+
+def _agent_turn(tmp_path: Path, oneharness_bin: str, rejection: Rejection) -> Turn:
+    """Run one agent-side turn whose first candidate answers with `rejection`."""
+    return _wrapper_turn(
+        tmp_path,
+        oneharness_bin,
+        {
+            # Narrowed to plain ids so the shipped responder can name the
+            # candidate it replaces, exactly as the other real-CLI journeys
+            # narrow it. The order, the `fallback` run mode and the classifier
+            # all stay the agent config's own.
+            "MOCK_HARNESSES": "claude-code",
+            "ONEHARNESS_HARNESSES": "claude-code,codex",
+            "MOCK_STDOUT": json.dumps(rejection),
+            "ONEHARNESS_BIN_CODEX": str(FAKE_CODEX),
+        },
+    )
+
+
+def _codex_first_turn(tmp_path: Path, oneharness_bin: str, provider: Mapping[str, str]) -> Turn:
+    """Run a turn whose first candidate is codex, with `provider` steering it.
+
+    The identity behind it is the shipped responder rather than a second stand-in,
+    so "the chain never reached it" is read off a candidate that would have
+    answered — see `UNREACHED_ANSWER`.
+    """
+    return _wrapper_turn(
+        tmp_path,
+        oneharness_bin,
+        {
+            "MOCK_HARNESSES": "claude-code",
+            "ONEHARNESS_HARNESSES": "codex,claude-code",
+            "MOCK_STDOUT": json.dumps(UNREACHED_ANSWER),
+            "ONEHARNESS_BIN_CODEX": str(FAKE_CODEX),
+            **provider,
+        },
     )
 
 
@@ -245,3 +393,126 @@ def test_the_same_429_after_billed_work_still_stops_the_chain(
     # The next identity was never reached, so its quota was never touched.
     assert "codex" not in turn.attempted
     assert FALLBACK_ANSWER not in turn.stdout
+
+
+def test_a_candidate_that_never_started_stops_the_chain_and_says_so(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The other reason a chain stops, and the one that used to be unreadable.
+
+    A candidate whose provider refused to start leaves a failure no classifier
+    recognizes: no `failure_kind`, no tool call, no billed token. The chain stops
+    there — deliberately, since a failure it cannot explain is not one it may spend
+    the next identity's quota on — but through the previous pin the report said only
+    that the candidate `ran but did not succeed`, which is the sentence a genuine
+    task failure gets. An operator reading it saw a task failure and the untried
+    rest of the chain hidden behind it.
+
+    The adopted release publishes the reading the fall-through verdict already
+    consulted: `work` on the candidate, `stopped_without_work` on the chain, and a
+    summary sentence that names which of the two stops this was. Nothing about the
+    routing moves with it, which is what the untouched second identity here proves.
+    """
+    turn = _codex_first_turn(
+        tmp_path,
+        oneharness_bin,
+        {
+            # The attempt log is what makes the refusal deterministic: the provider
+            # counts its own launches and this is the first.
+            "FAKE_CODEX_ATTEMPT_LOG": str(tmp_path / "attempts.log"),
+            "FAKE_CODEX_UNAVAILABLE_ATTEMPTS": "1",
+        },
+    )
+
+    assert turn.exit_code == 1
+    assert turn.ran == "codex"
+    assert turn.fell_through == ()
+    # Nothing classified it, so `failure_kind` cannot answer and `work` is what does.
+    assert turn.attempted["codex"].failure_kind is None
+    assert turn.attempted["codex"].work == "none"
+    assert turn.stopped_without_work
+    # The chain really did stop: the identity behind it was never asked, so its
+    # answer is nowhere in the report.
+    assert "claude-code" not in turn.attempted
+    assert UNREACHED_ANSWER["result"] not in turn.stdout
+    # And the operator is told which of the two stops this was, in the summary the
+    # supervisor quotes rather than only in a field it would have to go looking for.
+    assert "nothing to show for it" in turn.stderr, turn.stderr
+    # The reading survives the turn: a later reader gets it off the record too,
+    # rather than only out of the report the caller happened to be holding.
+    assert turn.persisted["codex"].work == "none"
+
+
+def test_the_same_unclassified_failure_with_work_behind_it_reads_as_work_done(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The boundary of the reading above, and the reason it is published at all.
+
+    This candidate fails exactly as unaccountably as the one before it — same
+    absent `failure_kind`, same stopped chain, same untried identity behind it —
+    and differs only in having answered and been billed first. Under the previous
+    pin the two were one report; here they are told apart by `work` alone, and by
+    which summary sentence oneharness prints. A reading that collapsed them would
+    invite re-running work somebody already paid for.
+    """
+    turn = _codex_first_turn(
+        tmp_path,
+        oneharness_bin,
+        {
+            "FAKE_CODEX_ATTEMPT_LOG": str(tmp_path / "attempts.log"),
+            "FAKE_CODEX_FAIL_AFTER_TURN": "1",
+        },
+    )
+
+    assert turn.exit_code == 1
+    assert turn.ran == "codex"
+    assert turn.fell_through == ()
+    assert turn.attempted["codex"].failure_kind is None
+    # The turn was answered and billed, so the failure has work behind it.
+    assert turn.attempted["codex"].work == "done"
+    assert turn.attempted["codex"].output_tokens == 1
+    assert not turn.stopped_without_work
+    # Same stop, and the identity behind it is untouched either way.
+    assert "claude-code" not in turn.attempted
+    assert UNREACHED_ANSWER["result"] not in turn.stdout
+    # And the operator gets the sentence that still means what it says.
+    assert "ran but did not succeed" in turn.stderr, turn.stderr
+    assert turn.persisted["codex"].work == "done"
+
+
+def test_only_a_record_that_carries_a_work_reading_declares_the_newer_schema(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The compatibility half of the adoption, and the reason it holds here.
+
+    This host runs a reader older than its writer: the `oneagentgraph` the smoke
+    judges by links a `oneharness-core` behind the `oneharness` CLI that writes the
+    record. That is safe only because a record declares the version its *contents*
+    need — so a turn with nothing new to say stays legible to a reader that has
+    never heard of the new field, and only a record actually carrying one asks for
+    a newer reader.
+
+    Asserted as the relation rather than as two literals: the numbers are the
+    harness's to choose and will move again, while "carrying the reading is what
+    costs a version" is the guarantee an older reader depends on.
+    """
+    without_reading = _codex_first_turn(
+        tmp_path,
+        oneharness_bin,
+        {"FAKE_CODEX_ATTEMPT_LOG": str(tmp_path / "answered.log")},
+    )
+    with_reading = _codex_first_turn(
+        tmp_path,
+        oneharness_bin,
+        {
+            "FAKE_CODEX_ATTEMPT_LOG": str(tmp_path / "failed.log"),
+            "FAKE_CODEX_FAIL_AFTER_TURN": "1",
+        },
+    )
+
+    # The first turn simply succeeded, so there was no unclassified failure to read.
+    assert without_reading.exit_code == 0
+    assert without_reading.persisted["codex"].work is None
+    assert with_reading.persisted["codex"].work == "done"
+    assert with_reading.persisted["codex"].schema_version == WORK_EVIDENCE_SCHEMA_VERSION
+    assert _schema(with_reading.persisted["codex"]) > _schema(without_reading.persisted["codex"])

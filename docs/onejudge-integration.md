@@ -174,20 +174,51 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.10.2 is
-the adopted release: it puts a pre-spawn/post-spawn hook pair on `RunControls`, so a
+`config/oneharness.version` release and rejects a stale binary. Version 0.10.3 is
+the adopted release, and unlike the three behind it — which a **CLI** consumer cannot
+observe at all, as the paragraph after this one says — this one is visible here: it
+stops a candidate that never started reading as one that ran. A
+fallback chain stops at a failure it cannot classify — that is the routing, and 0.10.3
+does not change it — but until this release the report said only that the candidate
+`ran but did not succeed`, which is the same sentence a genuine task failure gets.
+Measured here on both binaries, one spawn-refusing candidate, everything else held:
+
+```
+$ oneharness run --config <codex-chain.toml> --prompt hi     # provider exits 3, says nothing
+  0.10.2: fallback harness `codex` ran but did not succeed (see results[].status ...)
+          report 0.8 — fallback {"ran":"codex","fell_through":[]}, no work reading
+  0.10.3: fallback harness `codex` failed with nothing to show for it — no tool call,
+          no billed usage, and no cause it could classify — so the chain stopped
+          there and tried no candidate after it (see results[].work and ...)
+          report 0.9 — fallback {..., "stopped_without_work": true}, work "none"
+```
+
+Both are additive: `results[].work` (`done` / `none`) is published only on a failure
+`failure_kind` could not name, `fallback.stopped_without_work` only where such a
+candidate is the one a chain stopped at, and the history record carries the same
+reading at schema 1.7 — declared only on a record that *has* one, which is what keeps
+an older reader whole. That matters here because there is one: the `oneagentgraph`
+this host's [smoke](#the-record-a-fallback-chain-is-judged-by) judges by links a
+`oneharness-core` a release behind the CLI it spawns. Adoption spent a real turn
+proving the pair — the chain fell through `claude-code:alternate` on quota, passed via
+`claude-code:alternate2`, and that older reader read the record the 0.10.3 CLI wrote.
+Nothing about that rests on an adopter remembering to check: the pre-push hook selects
+`just smoke` for any diff touching `config/oneharness.version`, so the next bump proves
+the same pairing on a real turn or does not reach the remote.
+
+It succeeds 0.10.2, which puts a pre-spawn/post-spawn hook pair on `RunControls`, so a
 library **embedder** owns the harness child a run starts rather than losing it to the
 process tree. That is not an abstract capability here — it is the compile floor
 `oneagentgraph` 0.2.18 names for converting a single-sided member's turn from a
 spawned `oneharness` CLI into `oneharness_core::io::run::run_supervised`, which is
 why this repository's own paid-model substitution had to grow a second seam (see
 [Testing against a harness without a paid model](#testing-against-a-harness-without-a-paid-model)).
-It succeeds 0.10.0, which **bounds a control socket's address at construction**:
+Behind it, 0.10.0 **bounds a control socket's address at construction**:
 `sockaddr_un.sun_path` is 108 bytes on Linux and 104 on the BSD lineage, `bind`
 past it fails with `ENAMETOOLONG`, and a session name one byte too long had turned
 every controlled dispatch on a host into an unreachable run. That release is why a
 dispatched worker here now reports a control address rather than a reason it could
-not have one — measured on a real launch, below. Behind it, 0.9.0 refuses a
+not have one — measured on a real launch, below. Behind that, 0.9.0 refuses a
 contradictory option pair (`{all: true, harnesses: ["codex"]}`) instead of dropping
 one half and running the other, so a turn nobody asked for cannot be billed and
 reported as a success. Each of those three is a major bump for a Rust consumer
@@ -448,7 +479,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.10.2, a config's per-harness `model` **beats** the variable, while the `--model`
+0.10.3, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -565,7 +596,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.10.2, confirmed against the binary:
+candidate it ended up running — through oneharness 0.10.3, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -672,7 +703,12 @@ short backoff between attempts.
 This is the half of the check the host can break while nothing is wrong with the
 launch path: under a concurrent e2e load, oneharness has reported `fallback harness
 … ran but did not succeed` for a harness that started and then died, and the same
-command passed standalone moments before and after. Since the pre-push hook selects
+command passed standalone moments before and after. On the adopted release that
+symptom can arrive under the other summary sentence instead — a contended candidate
+that died before a tool call or a billed token now reads as having `nothing to show
+for it`, since which of the two is printed turns on `fallback.stopped_without_work`
+rather than on the cause. Both are the same host condition and neither is a launch
+defect. Since the pre-push hook selects
 this smoke whenever the pushed diff touches `scripts/`, the worker generating that
 load is usually the one whose publication it blocks. Nothing is relaxed by
 retrying: a launch path that is genuinely broken fails every attempt and still
@@ -708,7 +744,10 @@ record carries work the provider already billed for (see
 another describes something the chain does not do, and fails the smoke as an
 unclassified candidate failure. A chain whose *every* candidate refused fails too,
 naming each identity and its reason so the operator knows which subscription to
-restore.
+restore. A candidate that stopped the chain having shown *nothing* for itself is
+still an unclassified candidate failure and still fails; what the adopted release
+changed is that oneharness now says which of the two stops it was, rather than
+handing the operator the sentence a real task failure gets.
 
 A candidate's own word for what became of it is checked rather than believed. These
 records are read back out of a store nothing in the smoke wrote, and each one
@@ -1235,6 +1274,9 @@ member would otherwise have gone straight to a paid subscription. What is still 
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
 at `tests/e2e/fake_codex.py` — every config in this repository names `codex` first, so
 pinning that identity's binary is what keeps a suite run off a subscription. The two
-do not collide: measured against oneharness 0.10.1, a harness selected with
-`--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
-two-party path is unaffected by the second pin.
+do not collide: re-measured against the adopted oneharness 0.10.3, a harness selected
+with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
+two-party path is unaffected by the second pin. Held on both halves rather than on the
+one that matters — the same chain without `--mock-harness` runs the pinned binary — so
+a release that started honouring the pin under the mock is a difference this reading
+would show rather than one it would absorb.
