@@ -13,6 +13,11 @@ and the only thing arranged is that the model endpoint is a port nothing listens
 unreachable endpoint is the same terminal shape as the quota refusal that cost this host
 its monitor for a day, and it is the half a check can produce on demand: offline, in
 under a second, with no paid account and no credential of this host's in reach.
+
+The filter bounds a transcript whether or not a failure can be proven inside it, so the
+other shape lives here too — `without_the_frames_that_prove_the_loss`, which is that same
+real transcript cut back to the frames that prove nothing, which is what all 26 of this
+host's oversized surfaces were.
 """
 
 from __future__ import annotations
@@ -132,6 +137,48 @@ def capture(oneharness_bin: str, codex_bin: str, home: Path, root: Path) -> Lost
         transcript=transcript,
         frames=tuple(json.loads(line) for line in transcript.splitlines() if line.strip()),
     )
+
+
+def without_the_frames_that_prove_the_loss(transcript: str) -> str:
+    """The same real transcript, minus the two frames that say the turn was lost.
+
+    The other half of what reaches this channel, and by far the commoner half: all 26 of
+    the oversized surfaces measured on this host on 2026-08-24 were `status: completed`
+    with `error: null`, so nothing in any of them proved a failure and every one was
+    republished as the monitor's own words. Capturing one directly is what this cannot
+    do offline — a turn that completes needs a reachable provider and a paid account —
+    so the shape is reached the other way, by removing from a real transcript the two
+    frames whose absence is the whole of the difference.
+
+    Every line that survives is the producer's own bytes, in its own order, so the
+    handshake this reads an identity out of and the bookkeeping that makes up the bulk
+    are exactly what the binary wrote. Line-wise rather than frame-wise for that reason:
+    re-serializing would make the size the surface reports this function's rather than
+    the producer's.
+    """
+    kept = [
+        line
+        for line in transcript.splitlines()
+        if line.strip() and not _proves_the_loss(json.loads(line))
+    ]
+    assert kept, f"nothing of the transcript survived: {transcript}"
+    return "\n".join(kept)
+
+
+def _proves_the_loss(frame: dict[str, Any]) -> bool:
+    """Whether this one frame is a frame `scripts/channel-serve.py` reads as proof.
+
+    The filter's own two shapes, matched the way the filter matches them, and stated
+    here as the producer emits them rather than imported from it: a turn whose terminal
+    status is `failed`, and an error notification.
+    `tests/test_lost_turn_wire_contract.py` is what holds both to the producer, so this
+    restatement drifting is a failure there rather than a green here.
+    """
+    match frame:
+        case {"method": "error"} | {"params": {"turn": {"status": "failed"}}}:
+            return True
+        case _:
+            return False
 
 
 def protocol_schema(codex_bin: str, home: Path, out: Path) -> dict[str, Any]:

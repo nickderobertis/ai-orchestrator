@@ -361,10 +361,42 @@ turn and raises it as a named failure instead, under its own kind:
 The identity is the actionable half — this host's two codex identities hold separate
 quotas — and it is read out of the transcript's own opening frame, compared against
 `ORCHESTRATOR_CODEX_ALT_HOME`. A transcript that names no harness says so rather than
-guessing at one. Only a turn the filter can *prove* was lost is reclassified: a
-terminal turn status of `failed`, or an error frame. Anything else, including an
-observation that quotes one of those frames, is still raised verbatim under
-`monitor`.
+guessing at one. Only a turn the filter can *prove* was lost is named as a failure: a
+terminal turn status of `failed`, or an error frame. That vocabulary is deliberately
+never widened, because widening it is how the next harness's fourth shape outruns the
+classifier and a planner is sent to the wrong quota.
+
+**A transcript no failure can be proven inside is bounded all the same**, and it is by
+far the commoner shape. Measured on 2026-08-24: 26 oversized surfaces on this host, every
+one `status: completed` with `error: null`, so nothing was provable about any of them and
+all 26 were raised as the monitor's own words — 176.1 MB of protocol carrying zero
+model-authored characters, a 3.6 GB journal holding one 699 MB event line, and a
+read-only `just runs` that needed 5.7 GB of RSS. So the bound is placed on what *is*
+provable: what tells a transcript from prose is that every non-blank line of it parses as
+a JSON object, which is the same test with no harness's vocabulary in it, and both
+answers it identifies are bounded:
+
+| | |
+| --- | --- |
+| kind | `monitor-transcript` |
+| message | ``monitor answered with a machine transcript rather than an observation: 4787 characters from codex, and nothing in it says the turn failed. It is not repeated here — read it with `just monitor rc-fixes-brief --filter monitor`.`` |
+
+It claims nothing about *why*, because nothing here proves a failure and a guessed cause
+is worse than none. What it does name is the three things that keep a withheld
+observation one command away rather than lost: whose output it was, how much of it
+arrived, and where the full text is read. There is no size floor and no `jsonrpc` or
+`method` check — a 300-character transcript published as the monitor's prose is the same
+category error as a 1.87 MB one, just cheaper, and enumerating one known protocol is
+exactly what the next harness's shape would outrun. The cost is accepted: a monitor
+answer that genuinely consists only of JSON object lines is bounded too, and is readable
+at the command the line names.
+
+**An observation written as prose is untouched** and still raised verbatim under
+`monitor`, including one that quotes protocol frames inside it — a prose line does not
+parse as a JSON object. `tests/e2e/test_lost_turn_wire_contract_e2e.py` drives both
+bounded surfaces onto a real published channel with the real `codex` transcript behind
+them, and reads each back out of `runs/<run-id>/channel/queue.json` where a manager reads
+one.
 
 It raises the surface **non-blocking**. A blocking one would hold the run at
 `awaiting-planner` on every monitor turn — ending the attached launch's

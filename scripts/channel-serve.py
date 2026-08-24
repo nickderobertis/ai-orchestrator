@@ -35,17 +35,28 @@ out of what the frame itself carries:
   this file stands and re-takes the measurement rather than trusting this paragraph.
 * **What to surface.** The last assistant message of the conversation is what the
   monitor just said, which is the thing the planner is being asked to answer —
-  **unless the turn failed**, because then it is not something the monitor said at
-  all. A turn the agent side lost writes its own machine transcript into that
-  message: measured off this host's `runs/rc-fixes-brief` channel, fifteen
-  JSON-RPC frames and 21,531 characters, most of it the prompt echoed back, ending
-  in `method: error` and a `turn/completed` whose `status` is `failed`. Twenty of
-  those queued unread on one run. A planner may not filter the unread-surface line
-  — a blocking surface produces no other signal until it is read — so a transcript
-  raised verbatim is simultaneously unreadable and undroppable. Such a turn is
-  recognised and surfaced as what it is: a short line naming the failure and the
-  harness identity it happened on, under its own kind, with the transcript left
-  where the run already keeps it.
+  **unless it is a machine transcript**, because then it is not something the
+  monitor said at all. A turn the agent side lost writes its harness's own stream
+  into that message: measured off this host's `runs/rc-fixes-brief` channel,
+  fifteen JSON-RPC frames and 21,531 characters, most of it the prompt echoed back,
+  ending in `method: error` and a `turn/completed` whose `status` is `failed`.
+  Twenty of those queued unread on one run. A planner may not filter the
+  unread-surface line — a blocking surface produces no other signal until it is
+  read — so a transcript raised verbatim is simultaneously unreadable and
+  undroppable.
+
+  **A transcript no failure can be proven inside is the same defect and arrives far
+  more often.** Measured across this host's 26 oversized surfaces on 2026-08-24:
+  every one `status: completed` with `error: null`, so `lost_turn_error` proved
+  nothing about any of them and all 26 were republished as the monitor's own words —
+  176.1 MB of protocol, carrying zero model-authored characters. The bound is
+  therefore placed on what is *provable*: `transcript_frames` already tells a machine
+  transcript from prose without guessing at any harness's vocabulary, and both
+  answers it identifies are surfaced as a bounded line under a kind of their own,
+  with the transcript left where the run already keeps it. What that costs is
+  accepted deliberately — a monitor answer that genuinely consists only of JSON
+  object lines is bounded too, and is one command away rather than lost, because the
+  line names where the full text is read.
 
 The surface is raised **non-blocking**. Blocking it would hold the run at
 `awaiting-planner` on every monitor turn, which would end the attached launch's
@@ -177,6 +188,13 @@ SURFACE_KIND = "monitor"
 #: the kinds a run has queued: it is what an operator who may not filter that line can
 #: read off it without opening one.
 SURFACE_KIND_OF_A_FAILED_TURN = "monitor-failed"
+
+#: And the kind a machine transcript carrying no provable failure is raised under. A
+#: third kind rather than either of the other two, for the same reason `monitor-failed`
+#: is not a worded `monitor`: an operator reading the kinds a run has queued is being
+#: told two different things — a turn that was lost, and a turn that produced protocol
+#: where its words go without saying it failed — and only one of them names a quota.
+SURFACE_KIND_OF_A_TRANSCRIPT = "monitor-transcript"
 
 #: How much of a failure's cause may reach the surface message. The cause is the one
 #: part of the line copied out of somebody else's transcript, so it is the one part
@@ -529,9 +547,12 @@ def lost_turn_error(frames: list[TranscriptFrame]) -> TurnError | None:
     still a turn nobody took, which is why the empty record and the `None` are different
     answers rather than one falsy one.
 
-    Recognising only a failure — never "this looks like a transcript" — is deliberate.
-    Anything this cannot prove was lost is surfaced verbatim exactly as before, so a
-    real observation is never swallowed by a classifier that guessed.
+    Recognising only a failure — never "this looks like a transcript" — is deliberate
+    and unchanged: widening this vocabulary is how the next harness's fourth shape
+    outruns the classifier, and a cause guessed at sends a planner to the wrong quota.
+    What a transcript it cannot prove was lost gets is not a guess and not a republished
+    dump either — see `machine_transcript_surface`, which bounds it without claiming
+    anything about why it arrived.
     """
     for frame in reversed(frames):
         match frame:
@@ -608,13 +629,44 @@ def failed_turn_surface(
     )
 
 
+def machine_transcript_surface(
+    frames: list[TranscriptFrame], spoken: str, run: RunId
+) -> ObserverFrame:
+    """One machine transcript, named rather than transcribed, claiming no failure.
+
+    The sibling of `failed_turn_surface` for the answer `lost_turn_error` could not
+    prove anything about, and the same three things a planner acts on: which identity's
+    output this was, how much of it arrived, and the one command that reads all of it.
+    What it deliberately does *not* say is why — nothing here proves the turn failed, so
+    naming a cause would be a guess, and the transcript's own frames are one command
+    away for whoever wants one.
+
+    Composed rather than copied, exactly like the failure line: every part of it is this
+    filter's own words, a count, an identity out of a fixed vocabulary, or the run id
+    `SAFE_RUN_ID` already checked, so nothing on the far side of the boundary decides
+    how long it is.
+    """
+    return ObserverFrame(
+        kind=SURFACE_KIND_OF_A_TRANSCRIPT,
+        message=(
+            f"monitor answered with a machine transcript rather than an observation: "
+            f"{len(spoken)} characters from {identity_in(frames)}, and nothing in it "
+            f"says the turn failed. It is not repeated here — read it with "
+            f"`just monitor {run} --filter monitor`."
+        ),
+        blocking=False,
+    )
+
+
 def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
     """Turn one supervisor frame into the surface the planner is asked to answer.
 
-    What the conversation ends in decides which surface that is. A turn the monitor
-    spoke in is raised verbatim, as the planner's question is the monitor's own words.
-    A turn its agent side lost ends in that harness's transcript instead, and is raised
-    as a named failure under its own kind — see `lost_turn_error`.
+    What the conversation ends in decides which of three surfaces that is, and
+    `transcript_frames` draws the first line: a turn the monitor spoke in is prose, and
+    is raised verbatim, as the planner's question is the monitor's own words. Anything
+    that is a machine transcript is bounded, because republishing one is what put
+    176.1 MB of protocol on this channel — as a named failure where `lost_turn_error`
+    can prove the turn was lost, and as a named transcript where it cannot.
     """
     messages = frame.get("messages")
     if not isinstance(messages, list):
@@ -638,10 +690,12 @@ def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
         )
     said = spoken[-1]
     frames = transcript_frames(said)
-    lost = None if frames is None else lost_turn_error(frames)
-    if frames is not None and lost is not None:
-        return failed_turn_surface(lost, frames, said, run)
-    return ObserverFrame(kind=SURFACE_KIND, message=said, blocking=False)
+    if frames is None:
+        return ObserverFrame(kind=SURFACE_KIND, message=said, blocking=False)
+    lost = lost_turn_error(frames)
+    if lost is None:
+        return machine_transcript_surface(frames, said, run)
+    return failed_turn_surface(lost, frames, said, run)
 
 
 def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:

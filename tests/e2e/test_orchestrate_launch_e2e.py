@@ -2278,6 +2278,10 @@ def test_the_channel_filter_relays_a_ruling_whole_including_fields_it_does_not_k
 #: The kind `scripts/channel-serve.py` raises a turn its agent side lost under.
 SURFACE_KIND_OF_A_LOST_TURN = "monitor-failed"
 
+#: And the kind it raises a machine transcript no failure can be proven inside under —
+#: the shape all 26 of this host's oversized surfaces were.
+SURFACE_KIND_OF_A_TRANSCRIPT = "monitor-transcript"
+
 #: The ceiling the surface's composition may not exceed, for any transcript, identity,
 #: and run id these journeys drive through it. The raw transcript it replaces was 21,531
 #: characters.
@@ -2533,28 +2537,30 @@ def test_the_channel_filter_bounds_a_cause_its_harness_did_not_bound(
     assert "`just monitor serve-e2e --filter monitor`" in named, named
 
 
-def test_the_channel_filter_leaves_anything_it_cannot_prove_was_lost_alone(
+def test_the_channel_filter_leaves_an_observation_written_as_prose_alone(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """What the monitor said is raised verbatim under its own kind, exactly as before.
+    """What the monitor said in prose is raised verbatim, exactly as before.
 
-    The complement of the journeys above, and the thing recognising a failure must not
-    cost: the filter reclassifies only what it can *prove* was lost, so everything else
-    is the planner's question in the monitor's own words. The three cases are the ones a
-    careless classifier swallows — an observation that quotes the very frame the
-    classifier keys on, a stream that is every bit as machine-shaped and reports a turn
-    that finished, and a transcript one of whose lines is not an object at all.
+    The complement of the journeys above, and the thing bounding a transcript must not
+    cost: prose is the planner's question in the monitor's own words, so it reaches them
+    whole. The two cases are the ones a careless classifier swallows — an observation
+    that quotes the very frame the classifier keys on, and one whose closing line is a
+    JSON value that is not an object. Both are prose by the only test that draws the
+    line without guessing at a vocabulary: a prose line does not parse as a JSON object.
     """
     environment = _environment(tmp_path, oneharness_bin)
+    # `onepipeline channel serve` is a published CLI this repository delegates to, doubled
+    # at that boundary and nowhere above it: what is under test here is the surface the
+    # real filter *sends*, and the published verb neither hands one back nor answers it
+    # without a live planner. `tests/e2e/test_lost_turn_wire_contract_e2e.py` crosses the
+    # real verb, on a real transcript.
+    # llmlint: ignore[e2e_not_mocked] The published channel is doubled at its own boundary.
     captured = _capturing_channel(tmp_path, environment)
     left_alone = {
         "an observation that quotes a failed turn": (
             "node api's dispatch died to its provider. Its last frame was "
             '{"method": "turn/completed", "params": {"turn": {"status": "failed"}}} — retry it?'
-        ),
-        "a transcript of a turn that finished": _transcript(
-            {"result": {"codexHome": "/home/nick/.codex"}},
-            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
         ),
         "a transcript one of whose lines is not an object": (
             _transcript({"method": "error", "params": {"error": {"code": "quotaLost"}}})
@@ -2571,6 +2577,122 @@ def test_the_channel_filter_leaves_anything_it_cannot_prove_was_lost_alone(
             "message": said,
             "blocking": False,
         }, f"{case}: {raised}"
+
+
+def test_the_channel_filter_bounds_a_transcript_it_cannot_prove_was_lost(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A machine transcript carrying no provable failure is bounded too, not republished.
+
+    This is the shape that actually filled this channel. All 26 oversized surfaces
+    measured on this host were `status: completed` with `error: null`, so nothing in any
+    of them could be *proven* lost and all 26 were raised as the monitor's own words —
+    176.1 MB of protocol carrying zero model-authored characters. The three branches
+    below are the ones a real transcript lands on: a turn that finished, a stream with no
+    terminal frame at all, and one whose failure-shaped frame carries a status the filter
+    does not read as lost. Each has to arrive under its own kind as a line, naming the
+    identity, the size, and the command that reads the full text.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    # `onepipeline channel serve` is a published CLI this repository delegates to, doubled
+    # at that boundary and nowhere above it: what is under test here is the surface the
+    # real filter *sends*, and the published verb neither hands one back nor answers it
+    # without a live planner. `tests/e2e/test_lost_turn_wire_contract_e2e.py` crosses the
+    # real verb, on a real transcript.
+    # llmlint: ignore[e2e_not_mocked] The published channel is doubled at its own boundary.
+    captured = _capturing_channel(tmp_path, environment)
+    opening = {"result": {"codexHome": "/home/nick/.codex"}}
+    unproven = {
+        "a transcript of a turn that finished": _transcript(
+            opening,
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        ),
+        "a stream that stops before any terminal frame": _transcript(
+            opening,
+            {"method": "thread/started", "params": {"thread": {"id": "01a01a5d"}}},
+        ),
+        "a turn whose status is not one the filter reads as lost": _transcript(
+            opening,
+            {"method": "turn/completed", "params": {"turn": {"status": "cancelled"}}},
+        ),
+    }
+    for case, said in unproven.items():
+        relayed = _serve(_frame_ending_in(said), environment)
+
+        assert relayed.returncode == 0, f"{case}: {relayed.stderr}"
+        surface = json.loads(captured.read_text(encoding="utf-8"))
+        assert surface["kind"] == SURFACE_KIND_OF_A_TRANSCRIPT, f"{case}: {surface}"
+        assert surface["blocking"] is False, f"{case}: {surface}"
+        named = surface["message"]
+        assert len(named) <= NAMED_FAILURE_LIMIT, f"{case}: {len(named)} is not a line: {named}"
+        assert f"{len(said)} characters from codex" in named, f"{case}: {named}"
+        assert "`just monitor serve-e2e --filter monitor`" in named, f"{case}: {named}"
+        assert said not in named, f"the transcript reached the surface message: {named}"
+        for buried in ("turn/completed", "codexHome"):
+            assert buried not in named, f"{case}: the transcript leaked into {named}"
+
+
+def test_the_channel_filter_names_which_identity_a_bounded_transcript_came_from(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The alternate codex identity is named as itself here too, not as `codex`.
+
+    A bounded transcript withholds text a planner may want, so the line has to say whose
+    output it is withholding: this host's two codex identities hold separate quotas and
+    keep separate transcripts, and `ORCHESTRATOR_CODEX_ALT_HOME` is what tells them
+    apart. A transcript naming no home at all says so rather than guessing at one.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    # `onepipeline channel serve` is a published CLI this repository delegates to, doubled
+    # at that boundary and nowhere above it: what is under test here is the surface the
+    # real filter *sends*, and the published verb neither hands one back nor answers it
+    # without a live planner. `tests/e2e/test_lost_turn_wire_contract_e2e.py` crosses the
+    # real verb, on a real transcript.
+    # llmlint: ignore[e2e_not_mocked] The published channel is doubled at its own boundary.
+    captured = _capturing_channel(tmp_path, environment)
+    finished = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
+    named_by = {
+        "codex:alternate": _transcript(
+            {"result": {"codexHome": environment["ORCHESTRATOR_CODEX_ALT_HOME"]}}, finished
+        ),
+        "an unidentified harness": _transcript(finished),
+    }
+    for identity, said in named_by.items():
+        relayed = _serve(_frame_ending_in(said), environment)
+
+        assert relayed.returncode == 0, f"{identity}: {relayed.stderr}"
+        surface = json.loads(captured.read_text(encoding="utf-8"))
+        assert surface["kind"] == SURFACE_KIND_OF_A_TRANSCRIPT, f"{identity}: {surface}"
+        assert f"{len(said)} characters from {identity}," in surface["message"], surface["message"]
+
+
+def test_a_bounded_transcript_still_never_answers_for_the_planner(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Bounding the transcript changes nothing about who rules on the run.
+
+    The same guarantee `test_a_named_failure_still_never_answers_for_the_planner` makes
+    of the failure line, made of the surface that now stands where a republished
+    transcript used to: onejudge reads this stdout as the planner's ruling, so a
+    fabricated `{"completion": ...}` on a path whose channel cannot be reached would
+    continue or settle a run nobody ruled on.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    frame = _frame_ending_in(
+        _transcript(
+            {"result": {"codexHome": "/home/nick/.codex"}},
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        )
+    )
+    environment[ONEPIPELINE_BIN] = str(tmp_path / "no-such-onepipeline")
+
+    refused = _serve(frame, environment)
+
+    assert refused.returncode != 0, f"an unreachable channel was answered: {refused.stdout}"
+    assert "could not run" in refused.stderr, refused.stderr
+    assert "just bootstrap" in refused.stderr, refused.stderr
+    assert "Traceback" not in refused.stderr, refused.stderr
+    assert "completion" not in refused.stdout, refused.stdout
 
 
 def test_a_named_failure_still_never_answers_for_the_planner(
