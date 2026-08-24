@@ -206,13 +206,22 @@ system_prompt: |
   once you have it:
 
   ```sh
-  onepipeline surface --kind check-in --message "PLANNER EXCEPTIONS (<plan>): ..." "$ONEPIPELINE_RUN_ID"
+  onepipeline surface --kind check-in "$ONEPIPELINE_RUN_ID" <<'EXCEPTIONS'
+  PLANNER EXCEPTIONS (<plan>): ...
+  EXCEPTIONS
   ```
 
-  `check-in` is the only value `--kind` accepts; a free-form kind is refused.
-  That verb returns immediately and is never replied to — it is a report, not
-  a question — so send it and carry on, and use the question channel above
-  whenever you actually need an answer.
+  The verb reads the surface's text from a file you name, or from stdin when you
+  name none, so the heredoc above reaches it as bytes no shell parsed. Never
+  pass it with the inline `--message` option instead: that text is a command-line
+  word, and bash performs command substitution on backticks and on `$(...)`
+  inside double quotes, so an exception that quotes a command name runs it.
+
+  `--kind` accepts `check-in` and `finding`, and nothing else; a free-form kind
+  is refused. `check-in` is the one to use here — `finding` is what a watcher
+  raises about a run it is monitoring. That verb returns immediately and is never
+  replied to — it is a report, not a question — so send it and carry on, and use
+  the question channel above whenever you actually need an answer.
 
 user:
   persona: |

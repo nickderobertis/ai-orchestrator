@@ -221,10 +221,14 @@ DELEGATIONS = (
     Delegation(
         "channel-reply", ("run-1", "reply.json"), "uv run onepipeline reply run-1 reply.json"
     ),
+    # The text is handed over on the verb's stdin rather than as `--message`, so no
+    # prose this recipe was given is ever a command-line word — the hazard the two
+    # supervisory members are told about at length.
     Delegation(
         "channel-surface",
         ("run-1", "a status update"),
-        "uv run onepipeline surface --kind check-in --message a status update run-1",
+        "uv run onepipeline surface --kind check-in run-1",
+        then=("stdin a status update",),
     ),
     Delegation("stop", ("run-1", "--force"), "uv run onepipeline stop run-1 --force"),
     Delegation("runs", ("--mine",), "uv run onepipeline runs --mine"),
@@ -796,12 +800,13 @@ def test_a_surface_with_no_text_is_read_from_stdin(
     result = _run(checkout, trace, *invocation, stdin="a long update\nover two lines\n")
 
     assert result.returncode == 0, result.stderr
-    # The trace records one line per argument break, so a multi-line message arrives
-    # as the two lines it was piped in as — which is the point: the whole update
-    # reaches the CLI rather than its first line.
+    # The whole update reaches the CLI rather than its first line, and it reaches it on
+    # stdin: the trace records the command line, then one `stdin` line per line piped
+    # through to the verb.
     assert trace.read_text().splitlines() == [
-        "uv run onepipeline surface --kind check-in --message a long update",
-        "over two lines run-1",
+        "uv run onepipeline surface --kind check-in run-1",
+        "stdin a long update",
+        "stdin over two lines",
     ]
 
 

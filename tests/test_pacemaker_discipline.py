@@ -53,9 +53,14 @@ class Rule(NamedTuple):
 #: shortest span that cannot survive the rule being dropped.
 RULES = (
     Rule(
-        name="a surface message travels in a heredoc whose delimiter is single-quoted",
-        graph="--message \"$(cat <<'UPDATE'",
-        persona="--message \"$(cat <<'UPDATE'",
+        name="the update is handed to the verb as bytes on its stdin",
+        graph="onepipeline surface --kind check-in <run-id> <<'UPDATE'",
+        persona="onepipeline surface --kind check-in <run-id> <<'UPDATE'",
+    ),
+    Rule(
+        name="and the inline `--message` form is refused by name, not merely unused",
+        graph="inline `--message`",
+        persona="inline `--message`",
     ),
     Rule(
         name="and the instruction says why, so it cannot be simplified back",

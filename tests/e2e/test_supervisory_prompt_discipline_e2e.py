@@ -83,13 +83,25 @@ WATCH_ROLE = "Actively monitor one executing tracked graph"
 #: back in, so any distinctive text proves the expansion.
 PACEMAKER_TASK = "onepipeline run `supervisory-prompt-probe`."
 
-#: The safe form a surface message must travel in, as both members are told to write it.
-#: The single-quoted heredoc delimiter is the whole of the protection: bash performs no
-#: expansion of any kind inside such a body, so no prose the agent writes can be
-#: executed. Two delimiters because each member names its own, and neither is
-#: interchangeable with a double-quoted argument.
-SAFE_MESSAGE_FORM = "--message \"$(cat <<'"
-HEREDOC_DELIMITERS = {MONITOR_MEMBER: "<<'FINDING'", PACEMAKER_MEMBER: "<<'UPDATE'"}
+#: The byte-carrying form each member is told to raise a surface through: the verb
+#: reading its text off stdin, with a single-quoted heredoc delimiter so the shell
+#: expands nothing on the way there. Per member, because each names its own kind and
+#: its own delimiter, and neither is interchangeable with a command-line word.
+BYTE_CARRYING_FORM = {
+    MONITOR_MEMBER: "onepipeline surface --kind finding <run-id> <<'FINDING'",
+    PACEMAKER_MEMBER: "onepipeline surface --kind check-in <run-id> <<'UPDATE'",
+}
+
+#: The form the incident was measured on, which no member may be told to use again.
+#: Held separately from the count below because a prompt could carry this while also
+#: carrying the safe form, and that is exactly how the defect came back the first time.
+SUBSTITUTING_FORM = '--message "$(cat'
+
+#: Every mention of the inline option a member's prompt is allowed to make: the one in
+#: the sentence forbidding it. The count equality below is what keeps a prompt from
+#: offering it as an alternative alongside the safe form.
+INLINE_OPTION = "--message"
+INLINE_OPTION_PROHIBITION = "reach for the inline `--message`"
 
 #: The reason the instruction has to carry, so a later editor cannot restore the
 #: substituting form as a simplification without first contradicting it.
@@ -108,12 +120,28 @@ SILENT_TURN = "with no prose at all"
 BOUND_RULE = "compared its elapsed time against a bound you located and can name"
 HEARTBEAT_RULE = "absence of events beside a live heartbeat as generation"
 
-#: What this node may not have changed, asserted from the same effective prompts: the
-#: monitor's edit allowlist and the pacemaker's prohibition on issuing an edit at all.
-#: A prompt edit that quietly widened either would be a change to what these agents may
-#: *do*, which is a different decision from what they are told to report.
-MONITOR_ALLOWLISTED_OPS = ("`context`", "`retry`", "`cancel`", "`requeue`", "`add`")
-MONITOR_ALLOWLIST_CLAUSE = "You may issue exactly these five ops"
+#: The structured route the monitor is told to report a finding through, and the two
+#: properties that make it different from every other op it may issue. Read out of the
+#: effective prompt, because a route stated only in `personas/orchestrator.yaml` is a
+#: route that may never have reached the model.
+FINDING_OP_ENVELOPE = '{"op":"finding","message":"issue: ..."}'
+FINDING_MUTATES_NOTHING = "It mutates no graph"
+FINDING_RAISES_ONE_SURFACE = "queues no second `monitor applied an edit` surface"
+
+#: The monitor's edit allowlist and the pacemaker's prohibition on issuing an edit at
+#: all, asserted from the same effective prompts. The allowlist moved with the adopted
+#: engine — `finding` joined it — so what is held here is that the six the engine
+#: really accepts are the six the model is offered, and that the four it refuses are
+#: still named as refusals.
+MONITOR_ALLOWLISTED_OPS = (
+    "`context`",
+    "`retry`",
+    "`cancel`",
+    "`requeue`",
+    "`add`",
+    "`finding`",
+)
+MONITOR_ALLOWLIST_CLAUSE = "You may issue exactly these six ops"
 PACEMAKER_EDIT_PROHIBITION = "Never send `onepipeline reply`"
 
 
@@ -323,38 +351,80 @@ def pacemaker_prompt(
     yield cast(str, report["prompt"])
 
 
+def _assert_surface_text_travels_as_bytes(member: str, prompt: str) -> None:
+    """One member's prompt hands the engine a surface's text rather than a shell word.
+
+    The same four properties for each member, because the incident and the protection
+    are the same: the verb reads the text from a file it is named or from stdin when it
+    is named none, so a single-quoted heredoc on that stdin is prose the shell never
+    parsed. The inline option survives for text a person typed, which is why the
+    prohibition has to be present rather than the option merely unused.
+    """
+    flat = _flat(prompt)
+
+    assert BYTE_CARRYING_FORM[member] in flat, (
+        f"the {member} is no longer told to hand a surface's text to the verb as "
+        f"bytes on its stdin, so its prose is shell input again:\n{prompt}"
+    )
+    assert SUBSTITUTING_FORM not in flat, (
+        f"the {member} is told to build a surface message with command substitution "
+        f"again, which is the exact form the incident was measured on:\n{prompt}"
+    )
+    # Every mention, not merely one: an instruction that also offers the inline form is
+    # an instruction to use the inline form, and that is how this came back before.
+    assert flat.count(INLINE_OPTION) == flat.count(INLINE_OPTION_PROHIBITION), (
+        f"the {member}'s prompt mentions `{INLINE_OPTION}` somewhere other than the "
+        f"sentence forbidding it, so the unsafe form is on offer again:\n{prompt}"
+    )
+    assert SUBSTITUTION_REASON in flat, (
+        "the instruction no longer says why, so a later editor can restore the "
+        f"substituting form as a simplification:\n{prompt}"
+    )
+
+
 @pytest.mark.xdist_group("supervisory-prompts")
-def test_the_monitor_is_told_to_send_a_surface_message_through_a_quoted_heredoc(
+def test_the_monitor_is_told_to_hand_a_surface_message_over_as_bytes(
     monitor_prompt: str,
 ) -> None:
     """The monitor's own prose can no longer be executed by the shell that surfaces it.
 
-    `onepipeline surface` takes its text as an argument, so an instruction to pass a
-    finding as a command-line word is an instruction to hand agent-authored prose to
-    bash: inside double quotes backticks and `$(...)` are command substitution. This
-    host measured the consequence — a surface quoting a command name was read back with
-    that command replaced by its own output, having spent twenty-five minutes of a
-    shared host's CPU on work nobody requested, with the mutation as the only trace.
+    `onepipeline surface`'s inline `--message` takes its text as an argument, so an
+    instruction to pass a finding that way is an instruction to hand agent-authored
+    prose to bash: inside double quotes backticks and `$(...)` are command
+    substitution. This host measured the consequence — a surface quoting a command name
+    was read back with that command replaced by its own output, having spent
+    twenty-five minutes of a shared host's CPU on work nobody requested, with the
+    mutation as the only trace. The verb now reads its text from a file or from stdin,
+    so the protection is the form rather than a quoting rule the model has to apply.
+    """
+    _assert_surface_text_travels_as_bytes(MONITOR_MEMBER, monitor_prompt)
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitor_is_told_the_structured_way_to_report_a_finding(
+    monitor_prompt: str,
+) -> None:
+    """The `finding` op, and the two properties that make it worth preferring.
+
+    A finding raised as an op is deliberate rather than the residue of a turn having
+    produced prose, which is the whole of what this host's twenty-eight-surface run
+    cost. Both properties are stated because both are why it does not add to that pile:
+    it compiles to no graph mutation, and it is the one op on the allowlist that raises
+    no second `monitor applied an edit` surface beside itself.
     """
     flat = _flat(monitor_prompt)
 
-    assert SAFE_MESSAGE_FORM in flat, (
-        "the monitor is no longer told to send a surface message through a quoted "
-        f"heredoc, so its findings are shell input again:\n{monitor_prompt}"
+    assert FINDING_OP_ENVELOPE in flat, (
+        "the monitor is no longer told how to report a finding as a structured op, so "
+        f"its only route is prose a turn happened to produce:\n{monitor_prompt}"
     )
-    assert HEREDOC_DELIMITERS[MONITOR_MEMBER] in flat, (
-        "the heredoc the monitor is told to use no longer has a single-quoted "
-        f"delimiter, which is the whole of what stops the expansion:\n{monitor_prompt}"
+    assert FINDING_MUTATES_NOTHING in flat, (
+        "the monitor is no longer told the `finding` op mutates no graph, which is "
+        f"what makes it safe to reach for on any observation:\n{monitor_prompt}"
     )
-    # Every mention, not merely one: an instruction that also offers the argument form
-    # is an instruction to use the argument form, and that is how this came back.
-    assert flat.count("--message") == flat.count(SAFE_MESSAGE_FORM), (
-        "the monitor's prompt still passes a surface message some other way than "
-        f"through the quoted heredoc:\n{monitor_prompt}"
-    )
-    assert SUBSTITUTION_REASON in flat, (
-        "the instruction no longer says why, so a later editor can restore the "
-        f"substituting form as a simplification:\n{monitor_prompt}"
+    assert FINDING_RAISES_ONE_SURFACE in flat, (
+        "the monitor is no longer told a `finding` raises no second `monitor-edit` "
+        f"surface, so it may report the same observation twice:\n{monitor_prompt}"
     )
 
 
@@ -384,7 +454,7 @@ def test_the_monitor_is_told_to_report_findings_rather_than_narrate_intent(
 
 
 @pytest.mark.xdist_group("supervisory-prompts")
-def test_the_pacemaker_is_told_to_send_its_update_through_a_quoted_heredoc(
+def test_the_pacemaker_is_told_to_hand_its_update_over_as_bytes(
     pacemaker_prompt: str,
 ) -> None:
     """The same defect, in the member whose prose actually executed a command here.
@@ -394,24 +464,7 @@ def test_the_pacemaker_is_told_to_send_its_update_through_a_quoted_heredoc(
     `kind: oneharness` member layers no persona, so the `task` below is the whole of
     what the model is given and the only copy that can be relied on.
     """
-    flat = _flat(pacemaker_prompt)
-
-    assert SAFE_MESSAGE_FORM in flat, (
-        "the pacemaker is no longer told to send its update through a quoted heredoc, "
-        f"so its update text is shell input again:\n{pacemaker_prompt}"
-    )
-    assert HEREDOC_DELIMITERS[PACEMAKER_MEMBER] in flat, (
-        "the heredoc the pacemaker is told to use no longer has a single-quoted "
-        f"delimiter, which is the whole of what stops the expansion:\n{pacemaker_prompt}"
-    )
-    assert flat.count("--message") == flat.count(SAFE_MESSAGE_FORM), (
-        "the pacemaker's prompt still passes its update some other way than through "
-        f"the quoted heredoc:\n{pacemaker_prompt}"
-    )
-    assert SUBSTITUTION_REASON in flat, (
-        "the instruction no longer says why, so a later editor can restore the "
-        f"substituting form as a simplification:\n{pacemaker_prompt}"
-    )
+    _assert_surface_text_travels_as_bytes(PACEMAKER_MEMBER, pacemaker_prompt)
 
 
 @pytest.mark.xdist_group("supervisory-prompts")
@@ -442,14 +495,15 @@ def test_the_pacemaker_is_told_to_measure_a_bound_before_calling_anything_a_hang
 def test_neither_members_action_space_moved_with_its_reporting_discipline(
     monitor_prompt: str, pacemaker_prompt: str
 ) -> None:
-    """What these agents may *do* is unchanged by what they were told about reporting.
+    """What these agents may *do* matches what the engine really allows them.
 
-    The two are separate decisions and only one of them was made here. The monitor's
-    five ops are the engine's allowlist restated to the model it bounds, and the
-    pacemaker is forbidden the edit verb outright because it takes one finitely
-    deadlined turn and exits — an edit it issued would be answered after it had stopped
-    watching. A prompt edit that widened either would be invisible in the prose it
-    shipped beside.
+    The monitor's six ops are the engine's allowlist restated to the model it bounds —
+    `tests/e2e/test_orchestrate_launch_e2e.py` is what drives the engine's own refusal
+    of the four outside it — and the pacemaker is forbidden the edit verb outright
+    because it takes one finitely deadlined turn and exits, so an edit it issued would
+    be answered after it had stopped watching. A prompt that offered an op the engine
+    refuses, or withheld one it accepts, would be invisible in the prose it shipped
+    beside.
     """
     flat_monitor = _flat(monitor_prompt)
 

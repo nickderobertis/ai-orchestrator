@@ -777,8 +777,8 @@ and more than one mechanism satisfies it:
    out-of-band poll on `just status` that emits on state change, a scheduled
    wake-up. The invariant is what is named here; the tool is yours to pick.
 5. **The watch must emit on the unread-surface line specifically.** This is a
-   HARD REQUIREMENT: the `N planner update(s) waiting, unread for T` line that
-   `just runs` and `just status` add per affected run has to reach you, and
+   HARD REQUIREMENT: the `N planner update(s) waiting (…kinds…), unread for T` line
+   that `just runs` and `just status` add per affected run has to reach you, and
    filtering it out as noise is
    forbidden. A manager watch that filtered it went silent while 26 updates queued
    and one blocking question was asked three times, with every other indicator
@@ -801,6 +801,19 @@ detail:
 - **A blocking surface may have no asker.** A `channel serve` that timed out exits
   without withdrawing its surface, so `awaiting-planner` does not prove anybody is
   still waiting for the answer.
+
+**A blocking surface is handed out first, and reading past it no longer clears
+it.** `just channel-next` hands out any blocking surface ahead of every
+non-blocking one, however much older those are, so a worker's question can no
+longer sit behind a pile of observations. And once one is pending, reading the
+non-blocking surfaces behind it leaves it pending: only a *verdict* answers it. So
+a manager who reads a queue down does not accidentally consume the question, and
+`pending` staying put across several reads is the mechanism working rather than a
+stuck queue. Measured on a real run: with a blocking surface queued fourth behind
+three older non-blocking ones, the first read handed out the blocking one, and
+three further reads handed out the others while `pending` stayed on it throughout.
+Nothing changed about what a queue-jumping surface *is*: everything the monitor and
+the pacemaker raise is still non-blocking by construction.
 - **Steer a running dispatch with a `context` edit, never with `oneagentgraph
   interrupt` by hand.** These are not alternatives: a `context` edit *is* an
   interrupt against that dispatch's control socket, wrapped so the lever's own events
@@ -835,9 +848,12 @@ without the settle-and-return contract the foreground launch has. Do **not**
 background a launch by hand to watch it; that is
 what the foreground default replaced. Rebuilding run state
 from `events.jsonl`, `ps`, or `git log` in a run clone instead is the omission
-the read-only views now prevent: `just runs` and `just status` name every unread
-surface, how stale it is, and the `just channel-next` that reads it, so an update
-nobody read can no longer hide behind a row that says only `ACTIVE`. Rendering a
+the read-only views now prevent: `just runs` and `just status` name how many
+surfaces are unread, **which kinds** they are, how stale the oldest is, and the read
+that consumes them, so an update nobody read can no longer hide behind a row that
+says only `ACTIVE`. The command they name is the published verb — `onepipeline next
+<run>`, which is what `just channel-next <run>` calls — and the kind breakdown is
+what separates a pile of `monitor` narration from the one `finding` inside it. Rendering a
 surface in `monitor` is not reading it — only `channel-next` consumes one.
 
 **Runs are owned.** Several managers share this host, each supervising its own
@@ -915,11 +931,22 @@ queued twenty-eight, twenty-four of them content-free — fourteen variants of "
 identify the active run, then attach to its detailed stream" — and a worker's
 blocking question sat unread behind that pile for fifteen minutes with the frontier
 stopped. So read an absence of surfaces as an absence of findings, and read the
-run's own state for whether anything is watching. They are also required to pass a
-surface's text through a single-quoted heredoc rather than a command-line word:
-bash substitutes backticks and `$(...)` inside double quotes, and a finding that
-quoted a command ran it — twenty-five minutes of this host's CPU, with the
-surface's own text mutating into that command's output.
+run's own state for whether anything is watching. They are also required to hand a
+surface's text to the engine as **bytes** — the `finding` op in a reply envelope,
+or the `surface` verb reading a single-quoted heredoc off stdin — rather than as a
+command-line word: bash substitutes backticks and `$(...)` inside double quotes,
+and a finding that quoted a command ran it, twenty-five minutes of this host's CPU
+with the surface's own text mutating into that command's output. That incident is
+why the form is what it is, and it is now closed at the verb rather than by a
+quoting rule an agent has to get right: the text is read from a file the verb is
+named, or from stdin when it is named none, and the inline `--message` is kept only
+as the form for text a person typed. **The monitor's structured way of reporting is
+the `finding` op**, which is on its allowlist beside `retry`, `requeue`, `cancel`,
+`context`, and `add`: it carries a required non-empty `message`, an optional `id`
+naming a node the graph has, and a `blocking` flag defaulting to false. It compiles
+to a `finding-raised` operation that mutates no graph, and it is the one op that
+raises no second `monitor applied an edit` surface beside the finding itself — so a
+finding arrives once rather than twice.
 
 None of these roles authors target-project content; dispatch implementation and
 research to workers.

@@ -205,11 +205,19 @@ class PromptRecord(TypedDict):
     system: str
 
 
-class Surface(TypedDict):
-    """The fields of a handed-out surface this suite reads. `onepipeline` owns the rest."""
+class Surface(TypedDict, total=False):
+    """The fields of a handed-out surface this suite reads. `onepipeline` owns the rest.
 
-    kind: str
-    message: str
+    `kind` and `message` are on every surface; `source` names who raised it and
+    `blocking` whether the run is held on it. `workstream` is present only when the
+    surface was raised about a node, which is itself a claim these journeys make.
+    """
+
+    kind: Required[str]
+    message: Required[str]
+    source: str
+    blocking: bool
+    workstream: str
 
 
 class StreamedEvent(TypedDict):
@@ -243,6 +251,8 @@ class EditCommand(TypedDict, total=False):
     deps: list[str]
     dependents: str
     node: PlanNode
+    message: str
+    blocking: bool
 
 
 class ReplyEnvelope(TypedDict, total=False):
@@ -1280,8 +1290,8 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
 #: Every op the monitor may issue, and what an already-settled graph answers each with.
 #: The refusal is the graph's, not an authority verdict, which is the distinction under
 #: test: these four are refused for what the node is, and the four below for who asked.
-#: `add` is the fifth allowed op and applies even here, so it is exercised on a run of
-#: its own rather than against this settled one.
+#: `add` and `finding` are the two of the six that still apply to a settled graph, so
+#: each is exercised on a run of its own rather than against this settled one.
 MONITOR_OPS_ON_A_SETTLED_GRAPH = (
     RefusedOnTheGraph(
         {"op": "context", "id": "research", "note": "n"}, "nothing will read the note"
@@ -1358,8 +1368,8 @@ def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_autho
     unproven: an in-allowlist op must not be refused for *who asked*. This run has
     settled, so each of these four is refused for what the node now is — and the
     refusal wording is the distinction, because an authority refusal and a state
-    refusal read alike to a monitor that only checks the exit status. `add` is the
-    fifth and is exercised separately below, since it is the one that still applies.
+    refusal read alike to a monitor that only checks the exit status. `add` and
+    `finding` are exercised separately below, since they are the two that still apply.
     """
     refused = _monitor_reply(
         launched,
@@ -1469,6 +1479,247 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
         )
     finally:
         _just("stop", "monitor-edit-e2e", environment=environment, seconds=60)
+
+
+class RefusedFinding(NamedTuple):
+    """A `finding` the engine refuses on its own contents, and how it words the refusal.
+
+    Named rather than positional because the two halves are different claims — what a
+    monitor sent, and what the engine told it — and because a finding is refused for
+    what it *carries* rather than for who asked or what the graph is, which is what
+    separates these from `OPS_THE_MONITOR_MAY_NOT_ISSUE` and
+    `MONITOR_OPS_ON_A_SETTLED_GRAPH`.
+    """
+
+    command: EditCommand
+    refusal: str
+
+
+#: A finding with nothing in it reports nothing, and one filed against a node the run
+#: does not have files it nowhere.
+FINDING_REFUSALS = (
+    RefusedFinding(
+        {"op": "finding", "message": ""},
+        "a finding carries what was found: this one has an empty message",
+    ),
+    RefusedFinding(
+        {"op": "finding", "message": "seen", "id": "nosuch"},
+        "cannot raise a finding about node 'nosuch', which this run does not have",
+    ),
+)
+
+
+def _reply(
+    environment: dict, run: str, envelope: ReplyEnvelope
+) -> subprocess.CompletedProcess[str]:
+    """Send one envelope on a run's channel, through the recipe an author really uses."""
+    return subprocess.run(
+        ["just", "channel-reply", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+def _read_one(environment: dict, run: str) -> Surface | None:
+    """The next surface the run hands out, read the way a planner reads one.
+
+    `channel-next` is the only consumer, so this is what a manager working a queue down
+    actually sees — and reading it that way is what lets a claim about *absence* be made
+    about the planner's own view rather than about a file behind it.
+    """
+    read = _just("channel-next", run, environment=environment, seconds=60)
+    assert read.returncode == 0, read.stderr
+    return cast(SurfaceRead, json.loads(read.stdout))["surface"]
+
+
+def _drain(environment: dict, run: str) -> Iterator[Surface]:
+    """Each surface in turn, so a caller can read the run's state between two reads."""
+    for _ in range(MOST_SURFACES_A_SETTLED_RUN_QUEUES):
+        handed = _read_one(environment, run)
+        if handed is None:
+            return
+        yield handed
+
+
+#: What `just status` prefixes a consumed-but-unanswered blocking surface with.
+AWAITING_A_DECISION = "waiting for planner decision"
+
+
+def _awaiting_a_decision(environment: dict, run: str) -> list[str]:
+    """The lines `just status` renders for surfaces it has handed out and is holding.
+
+    A pending blocking surface's one planner-facing signal: `waiting for planner
+    decision: <kind> — <message>`, which is what a manager sees while a question is
+    outstanding. Measured on a real run rather than restated from the crate.
+    """
+    shown = _just("status", run, environment=environment, seconds=60)
+    assert shown.returncode == 0, shown.stderr
+    return [line.strip() for line in shown.stdout.splitlines() if AWAITING_A_DECISION in line]
+
+
+def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The structured way a monitor reports, and the two properties that distinguish it.
+
+    `personas/orchestrator.yaml` offers `finding` beside the five ops that change the
+    graph, and tells the monitor both of the things asserted here — so a release that
+    moved either would leave that persona teaching something the engine no longer does.
+    It adds no node, and unlike every other op the monitor may issue it raises *no*
+    `monitor-edit` surface beside itself: the finding is the report, and a second
+    surface would double every observation in the one line a planner may not filter.
+    Both are read through the planner's own views — the surfaces off `channel-next`,
+    the graph off `results` — because those are where a monitor's report is either
+    visible or not. A run of its own, since draining a queue consumes it.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    run = "monitor-finding-e2e"
+    environment = _environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "monitor-finding.plan.json"
+    plan.write_text(
+        json.dumps({"schema_version": 2, "name": run, "tasks": [_node(id="only")]}),
+        encoding="utf-8",
+    )
+    launch = _just("orchestrate", str(plan), environment=environment)
+    try:
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+
+        for refused_finding in FINDING_REFUSALS:
+            refused = _reply(
+                environment,
+                run,
+                {"version": 1, "author": "monitor", "commands": [refused_finding.command]},
+            )
+            assert refused.returncode != 0, refused.stdout
+            reported = refused.stderr + refused.stdout
+            assert "is not an op the monitor may issue" not in reported, (
+                f"a `finding` was refused for who asked rather than for what it "
+                f"carried:\n{reported}"
+            )
+            assert refused_finding.refusal in reported, reported
+
+        said = "issue: the finding op reached the engine"
+        applied = _reply(
+            environment,
+            run,
+            {
+                "version": 1,
+                "author": "monitor",
+                "commands": [{"op": "finding", "message": said, "id": "only"}],
+            },
+        )
+        assert applied.returncode == 0, applied.stderr + applied.stdout
+
+        handed = list(_drain(environment, run))
+        raised = [surface for surface in handed if surface["message"] == said]
+        assert len(raised) == 1, (
+            f"the `finding` op did not reach the planner as exactly one surface: {handed}"
+        )
+        assert raised[0]["kind"] == "finding", raised[0]
+        assert raised[0]["source"] == "monitor", raised[0]
+        assert raised[0]["workstream"] == "only", (
+            f"a finding naming a node is no longer filed against that workstream: {raised[0]}"
+        )
+        assert raised[0]["blocking"] is False, (
+            f"a finding is an observation, and must not stop the frontier: {raised[0]}"
+        )
+
+        # The half a one-surface assertion would miss. `monitor-edit` is what every
+        # other in-allowlist op queues, so its absence from the whole drained queue is
+        # the claim: the persona tells the model a finding arrives once, and this is
+        # what makes that true.
+        assert "monitor-edit" not in [surface["kind"] for surface in handed], (
+            f"the engine raised a `monitor-edit` surface beside the finding, so every "
+            f"observation now costs the planner two surfaces: {handed}"
+        )
+
+        # And that the report changed nothing it was reporting on. `results` is the
+        # planner's per-node view, so a graph that gained a node shows up here.
+        outcomes = _just("results", run, environment=environment, seconds=60)
+        assert outcomes.returncode == 0, outcomes.stderr
+        named = [line.split()[0] for line in outcomes.stdout.splitlines()[1:] if line.strip()]
+        assert named == ["only"], (
+            f"the `finding` op changed the graph, which is what makes it safe to reach "
+            f"for on any observation:\n{outcomes.stdout}"
+        )
+    finally:
+        _just("stop", run, environment=environment, seconds=60)
+
+
+def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pending(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A worker's question can no longer sit behind a pile of observations.
+
+    Both halves of the ordering `AGENTS.md` tells a manager to rely on. Every surface
+    the monitor and the pacemaker raise is non-blocking by construction, so this run
+    queues those and then one blocking finding *last*: the first read must hand out the
+    blocking one anyway. And once it is handed out, reading the non-blocking surfaces
+    behind it must leave it awaiting a decision — only a verdict answers it — because a
+    manager draining a queue must not consume the question by accident. Read through
+    `just status`, which is where a manager sees an outstanding question, rather than
+    through the file behind it.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    run = "blocking-first-e2e"
+    environment = _environment(tmp_path, oneharness_bin)
+    plan = tmp_path / "blocking-first.plan.json"
+    plan.write_text(
+        json.dumps({"schema_version": 2, "name": run, "tasks": [_node(id="only")]}),
+        encoding="utf-8",
+    )
+    launch = _just("orchestrate", str(plan), environment=environment)
+    try:
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+
+        def _raise(message: str, *, blocking: bool) -> None:
+            sent = _reply(
+                environment,
+                run,
+                {
+                    "version": 1,
+                    "author": "monitor",
+                    "commands": [{"op": "finding", "message": message, "blocking": blocking}],
+                },
+            )
+            assert sent.returncode == 0, sent.stderr + sent.stdout
+
+        _raise("observation queued first", blocking=False)
+        _raise("observation queued second", blocking=False)
+        asked = "question queued last, and read first"
+        _raise(asked, blocking=True)
+
+        first = _read_one(environment, run)
+        assert first is not None, "the run handed out no surface at all"
+        assert first["message"] == asked, (
+            f"`channel-next` handed out a non-blocking surface while a blocking one was "
+            f"queued behind two of them, so a worker's question can be buried again: "
+            f"{first}"
+        )
+
+        read_past = 0
+        for surface in _drain(environment, run):
+            read_past += 1
+            assert _awaiting_a_decision(environment, run) == [
+                f"{AWAITING_A_DECISION}: finding — {asked}"
+            ], (
+                f"reading the non-blocking surface {surface['message']!r} cleared the "
+                f"question the run is holding, so a manager draining the queue consumed "
+                f"it"
+            )
+        assert read_past >= 2, (
+            f"only {read_past} surface(s) were left to read past the question, so this "
+            "run cannot show that reading past one leaves it standing"
+        )
+    finally:
+        _just("stop", run, environment=environment, seconds=60)
 
 
 #: The judge side `graphs/dag-scope.yaml` gives the monitor: the filter that makes the

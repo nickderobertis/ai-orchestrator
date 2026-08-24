@@ -250,8 +250,31 @@ the [pacemaker](#the-planner-update-pacemaker), each raising a non-blocking surf
 with the same verb:
 
 ```sh
-onepipeline surface RUN --kind check-in --message "Node X failed its gate; retry with a corrected fixture?"
+onepipeline surface --kind check-in RUN <<'UPDATE'
+Node X failed its gate; retry with a corrected fixture?
+UPDATE
 ```
+
+**The verb takes the surface's text as bytes.** It reads them from a `FILE`
+argument, or from stdin when none is named; `--message TEXT` is the inline form,
+kept for text a person typed and refused beside a `FILE` — `the argument
+'--message <TEXT>' cannot be used with '[FILE]'`. Which matters because the two
+callers that raise most of these surfaces are agents whose own prose is the input:
+a message written onto the command line is parsed by the shell first, and a finding
+that quoted a command name has run it here. So both supervisory members are told to
+use the byte-carrying form — see [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)
+and the `check-in` task in [`graphs/dag-scope.yaml`](../graphs/dag-scope.yaml).
+
+`--kind` accepts **`check-in` and `finding`**, and refuses anything else by naming
+both: `invalid value 'whatever' for '--kind <KIND>' [possible values: check-in,
+finding]`. `check-in` is the pacemaker's word — it also resets the pacemaker's
+clock through `oneagentgraph reset-timer RUN check-in` — and `finding` is something
+a watcher saw and decided the planner should know, raised deliberately rather than
+as the side effect of a turn having happened. That is the CLI's own restriction and
+not the queue's: `kind` on a queued surface is a free-form string, which is how
+`scripts/channel-serve.py` raises `monitor`, `monitor-failed`, `monitor-transcript`
+and `monitor-completion`, and how the engine raises `monitor-edit` and
+`edit-rejected`.
 
 The planner reads it with `just channel-next RUN`, which hands out each queued
 surface once, along with the events it was raised against:
@@ -836,17 +859,31 @@ that is actively executing work.
 Surfaces nobody has read yet are reported separately, because they are the state a
 planner who never attached is blind to: the row above says only `ACTIVE`, and the
 `planner-surfaced` record they would look for is written on delivery, which has not
-happened. Both views therefore add one line per affected run naming how many
-surfaces are queued, how stale the oldest one is, and the command that reads them:
+happened. Both views therefore add one line per affected run, under that run's own
+row, naming four things: how many surfaces are queued, **what kinds they are**, how
+stale the oldest one is, and the read that consumes them. The line itself is quoted
+in [`AGENTS.md`](../AGENTS.md), which owns the rule that a manager's watch may never
+filter it.
 
-```
-* harness-fixes-cont  [mine]  1/4 done  ACTIVE
-    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont
-```
+Two of those four are worth knowing before reading one. The kind breakdown is what
+makes the line worth reading rather than counting — a pile of `monitor` narration
+and the one `finding` inside it are different situations, and the count alone cannot
+tell them apart. And the read it names is the **published verb**, `onepipeline next
+<run>`, because the engine renders its own spelling rather than this host's; `just
+channel-next <run>` is the same call.
 
 The queue is `channel/queue.json` beside the durable `channel/surfaces.jsonl`; a
 surface that has been consumed and is awaiting an answer is not part of it, and is
-reported by the wait above instead. A run reported `DRIVER DEAD` or `PARKED` keeps
+reported by the wait above instead.
+
+**It is not read in queue order.** A blocking surface is handed out ahead of every
+non-blocking one, however much older those are, so a worker's question cannot sit
+behind a pile of observations — the failure this ordering was added for. And once a
+blocking surface is `pending`, reading the non-blocking surfaces behind it leaves it
+pending: only a verdict answers it, so reading a queue down never consumes the
+question. Measured on a real run — a blocking surface queued fourth was handed out
+first, and three further reads handed out the older non-blocking ones while
+`pending` stayed on it throughout. A run reported `DRIVER DEAD` or `PARKED` keeps
 the line saying why it stopped rather than an invitation to read updates nothing
 will follow up on.
 
@@ -923,6 +960,7 @@ The accepted commands are:
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
 | `context` | `id`; `note` | Attach one planner note to the node's next dispatch, without cancelling or restarting anything. |
+| `finding` | `message`; optional `id`, `blocking` | Raise what the author saw as a planner surface of kind `finding`. Compiles to a `finding-raised` operation and mutates no graph. `message` may not be empty; `id`, when given, must name a node the run has and files the surface against that workstream; `blocking` defaults to false. |
 
 #### Who issued an edit, and what that bounds
 
@@ -933,9 +971,14 @@ default) or `monitor`. It is not decoration: the engine records it on the
 [monitor](#the-agent-graphs-a-run-launches) applies is reported as the monitor's
 without the monitor also having to report it.
 
+`finding` is the exception, and deliberately so: it raises the finding's own
+surface and **no** `monitor-edit` surface beside it, because there is no edit to
+report — the surface *is* the report, and queueing a second one would double every
+observation in the one line a planner may not filter.
+
 It is also a bound. `author: monitor` may issue exactly `add`, `retry`, `cancel`,
-`requeue`, and `context`; the engine refuses the rest by name and says why, and
-refuses a completion verdict from a monitor the same way:
+`requeue`, `context`, and `finding`; the engine refuses the rest by name and says
+why, and refuses a completion verdict from a monitor the same way:
 
 ```
 onepipeline: refused: 'drop' is not an op the monitor may issue: removing work from
@@ -945,7 +988,10 @@ instead
 
 `drop` and `reparent` are decomposition decisions, `attest` belongs to the person
 who took the action, and whether the run is finished is the planner's verdict
-rather than an observation. Each refusal names the available action, because the
+rather than an observation. A `finding` is refused only on its own contents: an
+empty message with `a finding carries what was found: this one has an empty
+message`, and an `id` the run does not have with `cannot raise a finding about node
+'nosuch', which this run does not have; it has: research`. Each refusal names the available action, because the
 monitor's escalation path is exactly what it is meant to reach for. That bound is
 stated to the model in [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)
 and enforced by the engine, and

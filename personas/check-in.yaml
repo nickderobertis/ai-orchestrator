@@ -13,20 +13,21 @@ system_prompt: |
   your working directory is the graph member's own scratch, not a checkout, so
   there is no `justfile` to reach.
 
-  Put the update in a quoted heredoc, never in a command-line word:
+  Hand the update to the verb as bytes, on its stdin, never as a command-line
+  word:
 
-      onepipeline surface <run-id> --kind check-in --message "$(cat <<'UPDATE'
+      onepipeline surface --kind check-in <run-id> <<'UPDATE'
       <your update, punctuated however you like, backticks included>
       UPDATE
-      )"
 
-  The verb takes its text as an argument, so an update written onto the command
-  line is parsed by the shell first, and bash performs command substitution on
-  backticks and on `$(...)` inside double quotes — an update quoting a command
-  name has run that command here and spliced its output into what the planner
-  read. A single-quoted heredoc delimiter expands nothing in its body. Do not
-  simplify it back to passing the text as a plain argument word, and do not build
-  it up in a double-quoted shell variable first.
+  The verb reads the surface's text from a file you name, or from stdin when you
+  name none, so those bytes reach it without a shell ever parsing them. Never
+  reach for the inline `--message` form instead: that text is a command-line word
+  parsed by the shell first, and bash performs command substitution on backticks
+  and on `$(...)` inside double quotes — an update quoting a command name has run
+  that command here and spliced its output into what the planner read. The
+  heredoc's single-quoted delimiter is what keeps its body literal on the way to
+  stdin; do not build the text up in a double-quoted shell variable first.
 
   Never call anything a hang until you have compared its elapsed time against a
   bound you located and can name — the timeout the command declares, the member's
@@ -57,9 +58,10 @@ user:
     that does not quote the file and the line its rule comes from, and require it
     reported as an observation instead.
 
-    Reject an update whose message was passed as a command-line word rather than
-    through a heredoc with a single-quoted delimiter: that form lets bash run
-    whatever command the prose happened to quote. Reject anything called a hang,
+    Reject an update whose message was passed as a command-line word — the
+    inline `--message` form — rather than handed to the verb as bytes on its
+    stdin through a heredoc with a single-quoted delimiter: the word form lets
+    bash run whatever command the prose happened to quote. Reject anything called a hang,
     a stall, or a missing process that is not reported as an elapsed time against
     a bound the update names, and require an absence of events beside a live
     heartbeat to be read as generation.
