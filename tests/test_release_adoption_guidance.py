@@ -342,6 +342,15 @@ def test_the_section_dates_the_adoption_modes_to_the_release_that_carried_them()
     indistinguishable from a measurement. The release exists now, so the requirement
     inverts: the change request stays — it is the durable reference and the only thing
     that says *what* the release carried — and the version joins it.
+
+    Held against `RELEASE_MODES_FLOOR` rather than against `config/onepipeline.version`,
+    and the difference is a correction rather than a refactor. This read the adopted pin
+    while the two happened to be one number, so the adoption that moved the pin past the
+    carrying release demanded a *false* sentence: it required the section to call the
+    adopted release "the first release cut after" change request 113, which onepipeline
+    0.14.0 is not. A release something arrived in never moves; the pin above it does, and
+    `test_the_pin_that_puts_a_half_in_force_is_at_or_past_its_floor` is what holds the
+    two together.
     """
     prose = flat(section())
     assert "https://github.com/nickderobertis/onepipeline/pull/113" in prose, (
@@ -349,36 +358,46 @@ def test_the_section_dates_the_adoption_modes_to_the_release_that_carried_them()
         "that carries the adoption modes; the release number alone says which build has "
         "them and not what they are"
     )
-    modes = _adopted("onepipeline.version")
-    assert flat(f"onepipeline {modes}, the first release cut after it") in prose, (
+    assert flat(f"onepipeline {RELEASE_MODES_FLOOR}, the first release cut after it") in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer ties the adoption modes "
-        f"to onepipeline {modes} and to being the first release cut after change "
-        "request 113; one without the other leaves a reader unable to check either"
+        f"to onepipeline {RELEASE_MODES_FLOOR} and to being the first release cut after "
+        "change request 113; one without the other leaves a reader unable to check either"
     )
 
 
 @pytest.mark.reads_docs
 def test_no_sentence_leaves_the_shared_version_to_disambiguate_itself() -> None:
-    """`0.13.0` is two adoptions this cycle, so the section names the tool as well.
+    """One number is two claims here, so the section names the tool as well.
 
-    `config/onepipeline.version` and `config/onevcs.version` carry the same number for
-    the first time. A reader who meets a bare `0.13.0` in a paragraph about release
-    adoption cannot tell whether it is the engine CLI's claim or the version-control
-    CLI's, and this section makes one of each within three sentences of the other.
+    Both floors are the same number and both pins are the same number, so a reader who
+    meets a bare version in a paragraph about release adoption cannot tell whether it is
+    the engine CLI's claim or the version-control CLI's, and this section makes one of
+    each within three sentences of the other.
+
+    The floors are interpolated rather than spelled, which is the half that came due when
+    the pins moved past them: these literals read `0.13.0` while that was *both* the
+    carrying release and the adopted pin, and a reader could not tell which of the two a
+    sentence meant. Now they differ, and each assertion names the one it is about.
     """
     prose = flat(section())
-    assert "the **version-control CLI** at onevcs 0.13.0" in prose, (
+    assert f"the **version-control CLI** at onevcs {RELEASE_SURFACE_FLOOR}" in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says which tool carries "
-        "the release-targets surface; with both pins at one number the tool is the only "
-        "thing that distinguishes the claim"
+        "the release-targets surface; with both floors at one number the tool is the "
+        "only thing that distinguishes the claim"
     )
-    assert "the **engine CLI** at onepipeline 0.13.0" in prose, (
+    assert f"the **engine CLI** at onepipeline {RELEASE_MODES_FLOOR}" in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says which tool carries "
-        "the adoption modes; with both pins at one number the tool is the only thing "
+        "the adoption modes; with both floors at one number the tool is the only thing "
         "that distinguishes the claim"
     )
-    assert "Those two numbers are equal and are about different tools" in prose, (
-        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer warns that the two pins "
-        "read one number this cycle; a reader who has not been told will infer one "
-        "adoption from two"
+    assert "Those two carrying numbers are equal and are about different tools" in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer warns that the two "
+        "carrying releases read one number; a reader who has not been told will infer "
+        "one adoption from two"
+    )
+    assert "the release that carried the capability" in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer tells a reader that a "
+        "carrying release and an adopted pin are different numbers. They were equal "
+        "while this section was written and are not now, which is exactly when an "
+        "unqualified number starts being read as the wrong one of the two"
     )

@@ -41,7 +41,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.13.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.14.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -163,7 +163,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.13.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.14.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -360,7 +360,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.13.0 in the judge command's own environment on a real
+  measured against onepipeline 0.14.0 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -515,7 +515,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.13.0 answers `{"reply":0,"state":"applied"}` and records
+a real run on onepipeline 0.14.0 answers `{"reply":0,"state":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
 it applies it a **second** time. The same measurement, re-submitted, comes back
@@ -559,9 +559,13 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/e2e/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.13.0**, composed where the
+node dispatch of a run carries it as of onepipeline 0.14.0**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
-Below that release only the **attached** shape did, and by accident of process rather
+That names the release in force rather than the one it arrived in —
+`executor::dispatch_env` has composed the pair since
+https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
+release number, because this page is held to naming the adopted one alone.
+Below *that* release only the **attached** shape did, and by accident of process rather
 than by design — an attached driver starts its observer graph in its own process, and
 the export leaked from there into every dispatch it made afterwards, which is why a
 launch passing `--dag-graph off` carried nothing even attached. Every `just plan`
@@ -2150,7 +2154,7 @@ and `note`, and omitting it means `auto`:
 Live delivery is `oneagentgraph interrupt` against **the dispatch's own control
 socket**, so it reaches a node only once something of that dispatch has reported a
 member; before then there is no turn to address and `auto` falls through to the next
-dispatch. The three modes and the two endings above are read from onepipeline 0.13.0,
+dispatch. The three modes and the two endings above are read from onepipeline 0.14.0,
 where `Deliver` is still `auto` / `live` / `next` and `Delivery` still `live` /
 `deferred`. That they *work* was measured on a live run under an earlier release and
 has not been re-taken since: a note sent to a worker three hours into its dispatch
