@@ -410,17 +410,22 @@ and its gates intact, so declaring one is an entry rather than a rewrite.
 
 ## Sequencing a node behind a release
 
-**The surface and the modes are in force here; nothing on this host uses them.**
-Those are two different sentences and the distinction is the whole of this section.
-`config/onevcs.version` and `config/onepipeline.version` now carry the releases that
-add the four `onevcs release` verbs and the two plan-node fields, and both were driven
-on this host's installed binaries rather than read off a change request. But **no
-repository registered here declares a release target**, and a repository that declares
-none releases nothing as far as this mechanism is concerned — so a dependency landing
-anywhere still earns no reference row and no hold, and a plan naming neither field gets
-exactly the run it got before the pins moved. Read every behaviour below as one this
-host can now perform, and none of them as one it currently performs. What was measured,
-what is still unadopted, and what a target would take are the last two paragraphs.
+**The surface, the modes, and the view are in force here; nothing on this host uses
+them.** Those are two different sentences and the distinction is the whole of this
+section. `config/onevcs.version`, `config/onepipeline.version`, and
+`config/onepipeline-ui.version` now carry the releases that add the four `onevcs
+release` verbs, the two plan-node fields, and the rendering of what each one answered,
+and all three were driven on this host's installed binaries rather than read off a
+change request. But **no repository registered here declares a release target**, and a
+repository that declares none releases nothing as far as this mechanism is concerned —
+so a dependency landing anywhere still earns no reference row and no hold, and a plan
+naming neither field gets exactly the run it got before the pins moved. Read every
+behaviour below as one this host can now perform, and none of them as one it currently
+performs. **The view is the one where that distinction is invisible**, because a
+surface with nothing to render looks exactly like a surface that is not there: an
+operator opening a node in the DAG Observatory today sees no release row, and that is
+the absence of a declared target rather than the absence of the release. What was
+measured and what a target would take are the last two paragraphs.
 
 A **release target** is one artifact a repository publishes: a crate, a wheel, an npm
 package, a browser bundle. A repository has a *set* of them on cadences that need not
@@ -527,11 +532,18 @@ CLI** at onepipeline 0.13.0, the first release cut after it:
 different tools; nothing here should be read off the number alone. The view that shows
 which release carried each landed node, and every release event, is **onepipeline-ui
 0.6.3** (https://github.com/nickderobertis/onepipeline-ui/pull/36), and
-`config/onepipeline-ui.version` reads 0.6.2 — so that third half is the one still
-unadopted, and the `adopt-dag-ui` sibling node of this plan is what moves it, rather
-than anything standing about this host.
+`config/onepipeline-ui.version` reads 0.6.3 — a release with **two** artifacts, the
+`onepipeline-api-cli` wheel behind `just telemetry-server` and the `onepipeline-ui` npm
+bundle behind `just dag-ui`, which move together or serve one release's view against
+another's data. What that third half changes on this host is almost nothing, and saying
+so is the point: with no target declared there is no release event in any run, so the
+only thing the *reader* answers differently is a bumped `timeline_schema_version`,
+re-measured with the rest of that shape in
+[`docs/telemetry.md`](docs/telemetry.md#seeing-the-supervisory-tier). Everything else
+the release adds is a field that stays absent and a view that stays unrendered until
+something declares a target.
 
-Three things were driven rather than read. The pinned `onevcs --help` lists a
+Four things were driven rather than read. The pinned `onevcs --help` lists a
 `release` verb group whose four subcommands are `targets`, `latest`, `status`, and
 `acknowledge`; `onevcs release targets ai-orchestrator` answers `adoption: fast`,
 `default target: none`, `targets: none`, and `release latest` on the same repository
@@ -543,7 +555,15 @@ registry either way — and **this host does not have one**. And a plan node's t
 reach the engine's own loader: `onepipeline start` refuses `adoption: "bogus"` with
 *unknown variant `bogus`, expected `fast` or `published`*, and refuses a `consumes` key
 that is not a dependency with *node 'b': `consumes` names 'nosuch', which is not one of
-this node's deps* — both before anything is dispatched.
+this node's deps* — both before anything is dispatched. And the view was driven as the
+pair an operator starts and opened the way an operator opens it: `just telemetry-server`
+and `just dag-ui` over a runs root of recorded runs, in a browser, which renders the
+run's goal, its counters and its failed node — and **no release row**, in either the
+Overall or the Graph view, with no span those runs serve carrying a release either.
+That is a statement about those runs rather than about this host: they are checked-in
+fixtures and can never grow a release event. What fires the day this host declares a
+target is the journey that asks every registered identity, not the one that renders a
+frozen tree.
 
 **So what remains is configuration, not adoption.** Putting the mechanism to work is:
 write a `releases.yml` declaring at least one target for at least one repository — and

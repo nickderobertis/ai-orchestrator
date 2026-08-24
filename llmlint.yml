@@ -86,6 +86,28 @@ rules:
         - "justfile"
         - "**/project.json"
         - "config/*.version"
+        # These four and `config/*.version` above are five faces of one dependency
+        # pin: a bump is written as a manifest line and mechanically restated in that
+        # manifest's lockfile, so one change reaches this rule at up to five sites.
+        # None of them is application source — a pin adopts behaviour rather than
+        # adding any this repository implements, which is the reasoning
+        # `config/*.version` was already excluded on, and excluding one face while
+        # leaving the others is the inconsistency rather than the fix. What a bundle
+        # bump adopts also cannot be exercised from here: a release state renders only
+        # from a release event, a run carries one only where a repository declares a
+        # release target, and no repository registered on this host declares one. What
+        # *is* provable is proven — `tests/e2e/test_dag_ui_serving_e2e.py` drives the
+        # adopted bundle through a real browser and asserts the empty release row
+        # deliberately, so the absence is gated rather than merely unproven. The
+        # exclusion is per-rule, so every other rule still judges these files
+        # normally: `pyproject.toml`'s coverage floor in particular stays gated by
+        # `tests/test_coverage_gate.py`, which none of this touches. Revisit the whole
+        # set the day a release target is declared here, when that data becomes
+        # suppliable.
+        - "package.json"
+        - "bun.lock"
+        - "uv.lock"
+        - "pyproject.toml"
         - "scripts/check-dag-state-contract.py"
         - "scripts/check-nx-cache.sh"
         - "scripts/check-oneharness-ui-contract.sh"

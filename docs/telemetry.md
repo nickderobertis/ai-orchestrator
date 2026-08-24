@@ -233,13 +233,13 @@ served them.
    that is a different fix from a dead driver.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.6.2**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.6.3**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because that crate has no registered checkout
    on this host and its CLI dumps no schema, so a bump is what re-opens this
-   paragraph: `timeline_schema_version` 6, spans of kind `run`, `dispatch`, `node`,
+   paragraph: `timeline_schema_version` 7, spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
-   which read `waiting`, `deciding`, `surfacing`, `settled`, and `finished` across the
+   which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here; no run read served the `dispatching` this paragraph used to name.
    **The dispatch tier is two span kinds, and confusing them is the easy mistake.** A
    **`dispatch`** span is one supervisory conversation, parented on the *run*, with an
@@ -268,10 +268,16 @@ served them.
    transcripts quote an `llmlint: ignore` directive the linter then reads as a real
    one, so the whole run cannot be checked in. `dag-ui-truth-monitor-slice` is the six
    events of its dag-scope graph, kept verbatim; the fixture's own docstring records
-   what was dropped and the one field rewritten. Three values are still observed and
-   unheld: `deciding` and `conflict` off `dag-ui-truth` and `issue-27`, and
-   `human-wait` off `pr-author-body`. A bump re-measures those three by hand against
-   this host's runs root; everything else fails the gate on its own.
+   what was dropped and the one field rewritten. Two values are still observed and
+   unheld, and both re-measured on 0.6.3: `conflict` off `issue-27` and
+   `pr-author-body`, and `human-wait` off `pr-author-body`. **The third one is gone,
+   and the way it went is the warning.** `deciding` was read off `dag-ui-truth` and
+   `issue-27` and is served by neither now — they answer `surfacing` and `waiting`, on
+   0.6.2 and 0.6.3 alike, so the release did not take it. A `run` span's `phase` is
+   the run's *current* state rather than a record of the states it passed through, so
+   a phase only a live run exhibits cannot be re-measured off a finished one at all.
+   Re-measure the two by hand against those named runs on a bump; do not go looking
+   for a phase a stopped run can no longer be in.
    **The listing is the live runs, and a settled one leaves it.** `GET /api/v2/runs`
    carried every run read here whose `phase` was `waiting` or `surfacing` and none
    whose phase was `settled` or `finished` — but a settled run's timeline is still
@@ -288,13 +294,23 @@ served them.
    measured on, so a pin bump fails the gate and re-opens it. Reconciling the fields
    themselves needs a registered checkout of that crate or a schema verb on its CLI,
    and is tracked as follow-up. -->
-3. **What 0.6.2 changed, and what is still missing.** Serving the same runs from
-   0.6.1 and 0.6.2 side by side is what dates this section, and the delta is the
-   reason the pin moved. **Nothing in the timeline paragraph above moved with it** —
-   every value it names re-measures identically across the 104 runs in this host's
-   runs root that serve a timeline at all. So the release number in that paragraph
-   moved over prose that did not, which is a re-measurement rather than a skipped one.
-   What moved is the **conversation route**,
+3. **What 0.6.3 changed here, and it is one number.** Serving the same runs from
+   0.6.2 and 0.6.3 side by side is what dates this section. The whole delta is
+   `timeline_schema_version` 6 becoming 7: on the six runs checked in under
+   `tests/fixtures/timeline-runs/` and on `dag-ui-truth`, `issue-27`, and
+   `pr-author-body` from this host's own runs root, every other byte of the timeline
+   response is identical, and the conversation route is byte-identical too. That is
+   what the release *adds* rather than what it changes — 0.6.3 renders which release
+   carried each landed node, and no run on this host has a release event in it,
+   because no repository registered here declares a release target. So a reader who
+   opens a node and finds no release row is looking at an undeclared target, not an
+   unadopted release. `tests/e2e/test_dag_ui_serving_e2e.py` holds the rendering half —
+   a browser opened on a real recorded run draws no release row from data that has
+   none — and `tests/e2e/test_release_adoption_in_force_e2e.py` holds the half about
+   this host, by asking every registered identity whether it declares a target.
+4. **What 0.6.2 changed, and what is still missing.** Kept because it is the release
+   that made the transcript a view worth opening, and the accounting defect it fixed
+   is the kind a reader cannot eyeball. What moved is the **conversation route**,
    `GET /api/v2/runs/{run}/conversations/{conversation}`, which is where the view
    reads a dispatch's transcript: on 0.6.1 an operator opening a settled dispatch was
    shown its tool calls and nothing else.
@@ -302,10 +318,11 @@ served them.
    On 0.6.1 each of them was served **one turn with no reply text at all** — a turn
    with a null `assistant`, a null `model`, and, in place of that turn's own usage, a
    copy of the whole dispatch's totals; 0.6.2 serves none, and gives every turn its
-   own five figures and its own model. **The accounting is the half worth keeping,
-   because it is the half a reader cannot eyeball.** That extra turn was added on top
-   of the turns already accounting for the dispatch, so per-turn figures a view adds
-   up overstated it on all 20: on 17 of them 0.6.2's now sum *exactly* to what the
+   own five figures and its own model — as does 0.6.3, whose answers on this route
+   are byte-identical to 0.6.2's on every run compared above. **The accounting is the
+   half worth keeping, because it is the half a reader cannot eyeball.** That extra
+   turn was added on top of the turns already accounting for the dispatch, so per-turn
+   figures a view adds up overstated it on all 20: on 17 of them 0.6.2's now sum *exactly* to what the
    dispatch's report records, and on 14 of those 17 the 0.6.1 sum was exactly double
    it — `dag-ui-conversation` read $38.85 against a report of $19.43. The other three
    overstate by less than double only because that release was **also dropping turns

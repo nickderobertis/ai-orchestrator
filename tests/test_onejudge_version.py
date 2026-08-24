@@ -359,6 +359,12 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
 #: which `scripts/session-setup.sh` installs `onepipeline-api-cli` from.
 ADOPTED_READ_API_CLAIMS = {
     "docs/telemetry.md": ("**`onepipeline-api` {version}**, the release",),
+    # The view's own half of the same release, which has the same problem one layer
+    # further out: what the bundle renders is a per-release fact nothing here can
+    # reconcile, and a bundle renders nothing at all when the data behind it is
+    # absent — so a stale claim about it is invisible from the browser as well as
+    # from the source. Naming the release is what makes a bump re-open the paragraph.
+    "docs/dag-ui.md": ("**`onepipeline-ui` {version}**, the release",),
 }
 
 

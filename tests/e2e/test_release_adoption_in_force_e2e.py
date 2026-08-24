@@ -1,14 +1,14 @@
 """Prove, against the installed artifacts, what release adoption does and does not do here.
 
 `AGENTS.md`'s "Sequencing a node behind a release" used to describe a mechanism no
-release this host installed contained. Two of its three halves are now adopted, and
+release this host installed contained. All three of its halves are adopted now, and
 the section makes a narrower and more dangerous pair of claims in their place: that
 this host **can** perform them, and that nothing here **does**. Both are invisible from
 a run — a host that declares no release target executes a plan identically whether the
 mechanism is present or absent — so both are driven here rather than asserted.
 
-Four things are measured, against the two copies that would have to carry them and
-the loader that reads a plan:
+Five things are measured, against the copies that would have to carry them and the
+loader that reads a plan:
 
 * the `onevcs` CLI the manager verbs run, which is `config/onevcs.version` and which
   has to carry the `release` verb group for a target to be configurable at all;
@@ -18,7 +18,13 @@ the loader that reads a plan:
   through and what an engine resolving a node's adoption mode calls — read out of the
   engine binary itself, because that is the artifact that runs;
 * the plan loader, which has to read `adoption` and `consumes` and refuse a bad value
-  of each before anything is dispatched.
+  of each before anything is dispatched;
+* the read API `just telemetry-server` runs, which is the third half's own artifact
+  and the one a claim about the view rests on.
+
+The view half is measured further in `tests/e2e/test_dag_ui_serving_e2e.py`, because
+what a view does is what it serves: that journey starts both recipes on one origin
+and reads the release surface out of the bundle a browser would have got.
 
 The day the pins move under any of it, this journey fails and the section comes due.
 
@@ -44,6 +50,8 @@ from test_release_adoption_guidance import (
     IN_FORCE_UNUSED,
     RELEASE_MODES_FLOOR,
     RELEASE_SURFACE_FLOOR,
+    RELEASE_VIEW_FLOOR,
+    flat,
     section,
 )
 from waits import timeout as e2e_timeout
@@ -66,6 +74,10 @@ ONEVCS = ("uv", "run", "onevcs")
 #: The engine binary a dispatch runs, installed by `scripts/python-install.sh` into
 #: this checkout's own environment.
 ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+#: How the recipes reach the read API, which is the view half's own artifact: the same
+#: `uv run` `scripts/telemetry-server.sh` ends in, so this measures the copy an
+#: operator would serve rather than whatever else is on PATH.
+READ_API = ("uv", "run", "onepipeline-api")
 
 #: This repository, as `onevcs` resolves it. Asked about itself rather than about a
 #: sibling because it is the one identity this checkout is guaranteed to be inside.
@@ -314,11 +326,42 @@ def test_the_plan_loader_reads_consumes_against_the_nodes_own_dependencies(
     )
 
 
+def test_the_read_api_the_view_is_served_from_is_the_adopted_release() -> None:
+    """The third half is two artifacts of one release, and this is the one with a CLI.
+
+    `config/onepipeline-ui.version` names a release published as both a wheel and an
+    npm package, and only the wheel can be asked its own version. The bundle half is
+    read where it is served, in `tests/e2e/test_dag_ui_serving_e2e.py`, which is the
+    only place a bundle can honestly be asked anything.
+    """
+    adopted = (REPO_ROOT / "config" / "onepipeline-ui.version").read_text("utf-8").strip()
+    assert Release.parse(adopted, "config/onepipeline-ui.version") >= RELEASE_VIEW_FLOOR, (
+        f"config/onepipeline-ui.version reads {adopted}, below the {RELEASE_VIEW_FLOOR} "
+        f"that carries the view; {GUIDANCE_SECTION!r} in AGENTS.md says all three "
+        "halves of release adoption are in force here"
+    )
+
+    reported = subprocess.run(
+        [*READ_API, "--version"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert reported.returncode == 0, reported.stderr
+    assert reported.stdout.strip() == f"onepipeline-api {adopted}", (
+        "the read API `just telemetry-server` runs is not the one "
+        f"config/onepipeline-ui.version pins: {reported.stdout.strip()!r}"
+    )
+
+
 def test_the_section_says_so_in_the_words_this_journey_measures() -> None:
     """The measurement is only worth taking while the prose makes the claim it checks."""
-    assert IN_FORCE_UNUSED in section(), (
-        f"{GUIDANCE_SECTION!r} no longer opens by saying the surface and the modes are "
-        "in force here while nothing on this host uses them. That sentence is what the "
+    assert IN_FORCE_UNUSED in flat(section()), (
+        f"{GUIDANCE_SECTION!r} no longer opens by saying the surface, the modes, and "
+        "the view are in force here while nothing on this host uses them. That "
+        "sentence is what the "
         "measurements above exist to keep true; without it a reader cannot tell a "
         "capability this host has from one it is using"
     )

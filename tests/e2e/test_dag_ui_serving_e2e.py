@@ -130,7 +130,43 @@ TURN_USAGE_FIGURES = (
 #: here rather than read from the response, because reading it from the response is what
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
-TIMELINE_SCHEMA_VERSION = 6
+TIMELINE_SCHEMA_VERSION = 7
+
+#: The word every one of the adopted view's release surfaces is built out of — its
+#: heading, all three wait states, and the row naming what a node adopted. Matched as
+#: the bare word rather than as the four rendered labels on purpose: mirroring upstream
+#: wording here would make this gate vacuous the day upstream reworded it, since the
+#: assertion is an *absence* and a label nobody renders any more is absent for the wrong
+#: reason. The word is broader than the labels and owned by nobody.
+RELEASE_ON_THE_PAGE = "release"
+#: One viewport, not the matrix `just dag-ui-screens` photographs at. The reflow
+#: defects that matrix exists to catch are a different question from whether the
+#: adopted bundle renders a runs root at all, and this is the second one — so it pays
+#: for one desktop render rather than five.
+RENDER_VIEWPORT = (1440, 900)
+#: What the app is waited on before its rendered text is read, per view. Waiting on a
+#: *rendered string* rather than on the network is the whole point: this bundle answers
+#: `networkidle` while it still says "Loading execution history…", so a journey that
+#: waited on the network would assert against a spinner and pass at any release.
+RENDER_SETTLED = {"overall": "WALL TIME", "graph": "task-failed"}
+#: The browser driver, kept in this module rather than in `scripts/` deliberately: it
+#: is test machinery for reading a rendered page, not a command this repository offers
+#: an operator, and a script under `scripts/` would owe a journey of its own.
+#:
+#: Playwright is the workspace's own devDependency and reports where it installed its
+#: browser, so nothing here hardcodes a cache path.
+RENDER_DRIVER = """
+const { chromium } = require('playwright');
+const [url, width, height, settled] = process.argv.slice(2);
+const browser = await chromium.launch({ args: ['--no-sandbox'] });
+const page = await browser.newPage({
+  viewport: { width: Number(width), height: Number(height) },
+});
+await page.goto(url, { timeout: 30000 });
+await page.getByText(settled, { exact: false }).first().waitFor({ timeout: 30000 });
+process.stdout.write(await page.evaluate(() => document.body.innerText));
+await browser.close();
+"""
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -648,6 +684,99 @@ def test_the_served_bundle_is_the_adopted_release(served: Served) -> None:
         f"adopted {ADOPTED_UI.adopted_version} — run 'just bootstrap' and restart 'just dag-ui'"
     )
     assert served.get("/")[1] == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
+
+
+def _rendered(served: Served, tmp_path: Path, run: str, view: str) -> str:
+    """The text a browser shows for one view of `run`, from the bundle this pair serves.
+
+    A real browser against the real proxy, because every cheaper stand-in answers a
+    different question: the served bytes say what was shipped, and only a rendered page
+    says what an operator is shown.
+    """
+    driver = tmp_path / "render.js"
+    driver.write_text(RENDER_DRIVER, encoding="utf-8")
+    width, height = RENDER_VIEWPORT
+    rendered = subprocess.run(
+        [
+            "bun",
+            str(driver),
+            f"{served.base}/?run={urllib.parse.quote(run)}&view={view}",
+            str(width),
+            str(height),
+            RENDER_SETTLED[view],
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    return rendered.stdout
+
+
+def test_the_adopted_bundle_renders_a_real_runs_root_in_a_browser(
+    served_recorded: Served, tmp_path: Path
+) -> None:
+    """`just dag-ui` and `just telemetry-server`, opened the way an operator opens them.
+
+    Everything else here reads bytes off the wire, which cannot tell a bundle that
+    renders from one that throws on its first frame and leaves an empty root — a
+    failure that serves 200s the whole way down. So one desktop viewport is driven
+    through a real browser against a real recorded run, and what is asserted is the
+    text on the page: the run's own name and goal, the counters the Overall view is
+    read for, and, in the Graph view, the node with the outcome that failed it.
+    """
+    overall = _rendered(served_recorded, tmp_path, RECORDED_RUN, "overall")
+
+    assert RECORDED_RUN in overall, overall
+    assert "Clear the three judged findings" in overall, overall
+    for counter in ("STATUS", "NODES", "WALL TIME", "TURNS"):
+        assert counter in overall, f"the Overall view rendered no {counter}: {overall}"
+    assert "driver-dead" in overall, overall
+
+    graph = _rendered(served_recorded, tmp_path, RECORDED_RUN, "graph")
+
+    assert "gate-fix-findings-2" in graph, graph
+    assert "task-failed" in graph, graph
+
+
+# llmlint: ignore[changed_behavior_has_e2e] no run on this host can carry a release event
+def test_a_run_carrying_no_release_event_renders_no_release_row(
+    served_recorded: Served, tmp_path: Path
+) -> None:
+    """The adopted view's release surface, on data that has nothing to put in it.
+
+    `onepipeline-ui` 0.6.3 renders which release carried a landed node and what a held
+    node awaits. None of the recorded runs served here carries a release event, so the
+    correct rendering is no release row at all — and a bundle that drew one anyway,
+    from a field it had misread, would be showing an operator something untrue about
+    where their work is.
+
+    **This is a statement about these runs, not about this host.** They are checked-in
+    fixtures and can never grow a release event, so declaring a release target here
+    would not move it. The gate that fires on *that* is
+    `tests/e2e/test_release_adoption_in_force_e2e.py::test_nothing_on_this_host_declares_a_release_target`,
+    which asks every registered identity rather than reading a frozen tree.
+    """
+    for view in ("overall", "graph"):
+        rendered = _rendered(served_recorded, tmp_path, RECORDED_RUN, view)
+        assert RELEASE_ON_THE_PAGE not in rendered.lower(), (
+            f"the {view} view of {RECORDED_RUN} rendered {RELEASE_ON_THE_PAGE!r}, but "
+            "that run carries no release event, so there is nothing for a release "
+            f"surface to be about: {rendered}"
+        )
+
+    # And the layer under it, which a rendered page cannot distinguish: a view showing
+    # no release row because the data has none looks exactly like one that dropped it.
+    for run in (RECORDED_RUN, SETTLED_RUN, MERGED_RUN, REPORTED_RUN):
+        status, body, _ = served_recorded.get(f"/api/v2/runs/{run}/timeline?scope=run")
+        assert status == 200, body
+        carrying = [span for span in json.loads(body)["spans"] if span.get("release") is not None]
+        assert not carrying, (
+            f"{run} serves {len(carrying)} span(s) carrying a release, so the premise "
+            "above is gone and the rendered assertion is measuring the wrong thing"
+        )
 
 
 def test_the_served_reader_links_the_engine_the_adopted_wheel_links(served: Served) -> None:

@@ -1,20 +1,22 @@
 """What this repository says about sequencing a node behind a dependency's release.
 
-Two of the three halves are now adopted and the third is not, and that asymmetry is
-the whole hazard. A section that described an unadopted mechanism could go stale one
-way — the day a pin moved past it. This one can go stale **both** ways: a pin moving
-past the view floor makes its "still unadopted" half wrong, and a pin regressing below
-either adopted floor makes its "in force" half wrong. Neither would be contradicted by
-a run, because a host that configures no release target gets the same run either way.
-So the claims are enumerated here against the section that owns them, and each pin the
-section names is reconciled against `config/` and against the floor carrying its half.
+All three halves are adopted now, and the hazard that leaves is the quieter one. While
+one was outstanding this file read in both directions — a pin moving forward past a
+section that denied it, and a pin regressing under one that asserted it — and only the
+second is left. Nothing about it is self-correcting: a host that configures no release
+target gets an identical run whether these releases are installed or not, so a bad
+revert would leave every measured claim here describing a build this host no longer
+has, with no run contradicting it. So the claims are enumerated here against the
+section that owns them, and each pin the section names is reconciled against `config/`
+and against the floor carrying its half.
 
 `tests/test_decomposition_guidance.py` is the other half and answers a different
 question: *which* document may say a thing. This one answers whether the manager's
 document still says all of it, and whether what it says about this host is still
 true. `tests/e2e/test_release_adoption_in_force_e2e.py` is the third: it drives the
 installed artifacts, which is the only thing that can prove what this host can and
-cannot do rather than assert it.
+cannot do rather than assert it, and `tests/e2e/test_dag_ui_serving_e2e.py` is where
+the view half of that is driven, because a view is proved by serving it.
 """
 
 from __future__ import annotations
@@ -34,8 +36,12 @@ from orchestrator.root import REPO_ROOT
 #:
 #: It states both halves in one line deliberately. "In force" and "in use" are the two
 #: things a reader of this section most needs kept apart, and a sentence that said only
-#: one of them would be read as the other.
-IN_FORCE_UNUSED = "**The surface and the modes are in force here; nothing on this host uses them.**"
+#: one of them would be read as the other. The view joined the other two when
+#: `config/onepipeline-ui.version` moved, and it is the half that most needs the
+#: sentence: a surface with nothing to render is indistinguishable from an absent one.
+IN_FORCE_UNUSED = (
+    "**The surface, the modes, and the view are in force here; nothing on this host uses them.**"
+)
 
 #: The release that added `onevcs release` and the release-target document behind it,
 #: as https://github.com/nickderobertis/onevcs/pull/78. Declared here and read by the
@@ -148,27 +154,41 @@ REQUIRED_CLAIMS = (
 FORBIDDEN_VOCABULARY = "deploy target"
 
 #: The three pins the section names as fact, and the release that carries each one's
-#: half of the capability. Declared as floors rather than as equalities, and read in
-#: **both** directions now that the three no longer agree: the two adopted halves are
-#: true while their pins are *at or past* their floors, and the unadopted one is true
-#: while its pin is *below* its own. A move in either direction turns the section from
-#: accurate into wrong with nothing else on this host reporting it.
+#: half of the capability. Declared as floors rather than as equalities: each half is
+#: true while its pin is *at or past* the release that carries it, and a regression
+#: turns the section from accurate into wrong with nothing else on this host reporting
+#: it — a host declaring no release target runs identically either way.
 CAPABILITY_FLOORS: dict[str, Release] = {
     "onevcs.version": RELEASE_SURFACE_FLOOR,
     "onepipeline.version": RELEASE_MODES_FLOOR,
     "onepipeline-ui.version": RELEASE_VIEW_FLOOR,
 }
 
-#: Which of those pins the section claims is in force, and which it claims is not.
-#: Split out rather than inferred from a comparison, because the point of the gate is
-#: that the *prose* and the *pins* agree: inferring the claim from the pin would make
-#: the assertion vacuously true whatever the section says.
-ADOPTED_PINS = ("onevcs.version", "onepipeline.version")
-UNADOPTED_PIN = "onepipeline-ui.version"
+#: Which pins the section claims are in force. Listed rather than inferred from
+#: `CAPABILITY_FLOORS` because the point of the gate is that the *prose* and the pins
+#: agree: inferring the claim from the pin would make the assertion vacuously true
+#: whatever the section says. All three now, which is the whole of the mechanism.
+ADOPTED_PINS = ("onevcs.version", "onepipeline.version", "onepipeline-ui.version")
 
-#: The plan node that owns the unadopted half, named in the section so its gap reads
-#: as a scheduled piece of work rather than a standing property of this host.
-UNADOPTED_OWNER = "`adopt-dag-ui`"
+#: The pin whose half was outstanding until the view was adopted, and is named here
+#: because the wording it leaves behind is what the gate below refuses.
+VIEW_PIN = "onepipeline-ui.version"
+#: How this section used to say the view was not adopted, and who owed it. Kept
+#: verbatim rather than described: a gate that matched a paraphrase would fire on
+#: honest prose, and these are the exact strings a reader would take at face value.
+RETIRED_GAP_WORDING = (
+    "that third half is the one still unadopted",
+    "`adopt-dag-ui`",
+)
+
+#: What the section has to say about a view that is installed and renders nothing.
+#: Two phrases rather than one because they are two different mistakes to prevent:
+#: the first stops an empty view reading as an unadopted one, the second stops the
+#: section claiming this host renders release information it has none of.
+VIEW_RENDERS_NOTHING = (
+    "an operator opening a node in the DAG Observatory today sees no release row",
+    "the absence of a declared target rather than the absence of the release",
+)
 
 
 def _text(relative_path: str) -> str:
@@ -185,8 +205,14 @@ def section() -> str:
     return prose.split(f"\n{GUIDANCE_SECTION}\n", 1)[1].split("\n## ", 1)[0]
 
 
-def _flat(prose: str) -> str:
-    """Collapse every run of whitespace, so a claim may be quoted as one line."""
+def flat(prose: str) -> str:
+    """Collapse every run of whitespace, so a claim may be quoted as one line.
+
+    Public because `tests/e2e/test_release_adoption_in_force_e2e.py` reads a sentence
+    from here and has to compare it the same way: a claim that spans a wrapped line
+    would otherwise have to be quoted with the document's own line breaks in it, which
+    makes reflowing a paragraph a failing gate about nothing.
+    """
     return " ".join(prose.split())
 
 
@@ -201,7 +227,7 @@ def _adopted(version_file: str) -> str:
 def test_the_section_makes_every_claim_a_reader_cannot_run_the_mechanism_to_learn(
     claim: Claim,
 ) -> None:
-    assert _flat(claim.phrase) in _flat(section()), (
+    assert flat(claim.phrase) in flat(section()), (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says {claim.subject}: the "
         f"phrase {claim.phrase!r} is gone. Nothing on this host runs this mechanism, so "
         "a claim dropped from here is not recoverable by reading a run"
@@ -230,7 +256,7 @@ def test_the_pin_the_section_names_is_the_pin_this_checkout_carries(version_file
     second question a beat too late. Restating it is only honest while it is checked.
     """
     adopted = _adopted(version_file)
-    assert _flat(f"`config/{version_file}` reads {adopted}") in _flat(section()), (
+    assert flat(f"`config/{version_file}` reads {adopted}") in flat(section()), (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} does not say that "
         f"`config/{version_file}` reads {adopted}, which it does. Re-date the section "
         "in the same change that moved the pin, or it reads as a claim about a host "
@@ -241,15 +267,17 @@ def test_the_pin_the_section_names_is_the_pin_this_checkout_carries(version_file
 @pytest.mark.reads_docs
 @pytest.mark.parametrize("version_file", ADOPTED_PINS)
 def test_the_pin_that_puts_a_half_in_force_is_at_or_past_its_floor(version_file: str) -> None:
-    """The section claims two halves are in force; a pin below its floor ends that.
+    """The section claims all three halves are in force; a pin below its floor ends that.
 
-    The direction this gate reads was reversed by the adoption it exists across, and
+    The direction this gate reads was reversed by the adoptions it exists across, and
     the reversal is the point: while these were unadopted the hazard was a pin moving
     *forward* past a section that denied it, and now it is a pin moving *back* under a
     section that asserts it. A regression here is not hypothetical — a bad revert of
     `config/onepipeline.version` would leave every measured claim in this section
     describing a binary this host no longer has, with no run contradicting it, because
-    a host that declares no release target runs identically either way.
+    a host that declares no release target runs identically either way. The view pin
+    is the one where even an operator could not tell: it renders nothing here at
+    either release.
     """
     floor = CAPABILITY_FLOORS[version_file]
     adopted = _adopted(version_file)
@@ -262,38 +290,47 @@ def test_the_pin_that_puts_a_half_in_force_is_at_or_past_its_floor(version_file:
 
 
 @pytest.mark.reads_docs
-def test_the_half_that_is_not_adopted_is_still_the_half_that_is_not_adopted() -> None:
-    """The one pin below its floor, and the sentence that has to move with it.
+def test_no_sentence_survives_that_the_view_is_the_half_nobody_adopted() -> None:
+    """The gap this section used to name, and the wording that outlived it.
 
-    The mirror of the gate above, and the one that comes due first: `adopt-dag-ui` is
-    a live sibling of the plan this section was rewritten under, and the moment it
-    lands, this section's "that third half is the one still unadopted" stops being
-    true. Failing here is that node arriving, not a defect — the fix is to re-take the
-    sentence rather than to relax this.
+    Two gates stood here while `config/onepipeline-ui.version` was below its floor: one
+    refusing a pin at or past it, and one requiring the section to name the plan node
+    that would move it. Both came due the moment that node landed, and what replaces
+    them is the failure they were really guarding against — not a missing pin, but a
+    sentence left behind saying the view is unadopted or owed by somebody. That reads
+    as a standing property of this host, and it is the one thing about this section a
+    reader cannot check by running anything.
     """
-    floor = CAPABILITY_FLOORS[UNADOPTED_PIN]
-    adopted = _adopted(UNADOPTED_PIN)
-    assert Release.parse(adopted, f"config/{UNADOPTED_PIN}") < floor, (
-        f"config/{UNADOPTED_PIN} reads {adopted}, at or past the {floor} that carries "
-        f"the view. {GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} calls that half the one "
-        f"still unadopted and names {UNADOPTED_OWNER} as the node that would move it; "
-        "re-take both sentences against what the view now does on this host"
-    )
+    prose = flat(section())
+    for stale in RETIRED_GAP_WORDING:
+        assert stale not in prose, (
+            f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} still says {stale!r}. "
+            f"config/{VIEW_PIN} reads {_adopted(VIEW_PIN)}, at or past the "
+            f"{CAPABILITY_FLOORS[VIEW_PIN]} that carries the view, so every half of "
+            "release adoption is in force here and no sentence may say otherwise"
+        )
 
 
 @pytest.mark.reads_docs
-def test_the_unadopted_half_is_owned_by_a_node_rather_than_left_standing() -> None:
-    """A gap with no owner reads as a property of the host. This one has an owner.
+def test_the_section_says_what_the_adopted_view_changes_on_a_host_with_no_target() -> None:
+    """A view with nothing to render looks exactly like a view that is not there.
 
-    Written as its own gate rather than folded into the claim list because it is the
-    difference between "this host does not have the view" and "this host does not have
-    the view yet, and here is what changes that" — and only the second is true.
+    The specific harm this guards is a reader opening the DAG Observatory, finding no
+    release row on any node, and concluding the adoption did not happen — or its
+    mirror, somebody writing here that this host shows which release carried a landed
+    node, which it cannot, because nothing declares a target for it to show. Only the
+    *kind* of change is held here: the release's one observable effect on this host is
+    a bumped timeline schema version, and that number lives in `docs/telemetry.md`
+    beside the shape it belongs to rather than in a second copy here.
     """
-    assert UNADOPTED_OWNER in _flat(section()), (
-        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer names {UNADOPTED_OWNER} "
-        f"as what moves config/{UNADOPTED_PIN}. A gap named with no owner reads as a "
-        "standing property of this host rather than as scheduled work"
-    )
+    prose = flat(section())
+    for phrase in VIEW_RENDERS_NOTHING:
+        assert flat(phrase) in prose, (
+            f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says {phrase!r}. "
+            "Without it a reader who finds no release row in the view cannot tell an "
+            "unadopted release from an undeclared target, which is the whole of what "
+            "this half of the section is for"
+        )
 
 
 @pytest.mark.reads_docs
@@ -306,14 +343,14 @@ def test_the_section_dates_the_adoption_modes_to_the_release_that_carried_them()
     inverts: the change request stays — it is the durable reference and the only thing
     that says *what* the release carried — and the version joins it.
     """
-    prose = _flat(section())
+    prose = flat(section())
     assert "https://github.com/nickderobertis/onepipeline/pull/113" in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer names the change request "
         "that carries the adoption modes; the release number alone says which build has "
         "them and not what they are"
     )
     modes = _adopted("onepipeline.version")
-    assert _flat(f"onepipeline {modes}, the first release cut after it") in prose, (
+    assert flat(f"onepipeline {modes}, the first release cut after it") in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer ties the adoption modes "
         f"to onepipeline {modes} and to being the first release cut after change "
         "request 113; one without the other leaves a reader unable to check either"
@@ -329,7 +366,7 @@ def test_no_sentence_leaves_the_shared_version_to_disambiguate_itself() -> None:
     adoption cannot tell whether it is the engine CLI's claim or the version-control
     CLI's, and this section makes one of each within three sentences of the other.
     """
-    prose = _flat(section())
+    prose = flat(section())
     assert "the **version-control CLI** at onevcs 0.13.0" in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says which tool carries "
         "the release-targets surface; with both pins at one number the tool is the only "

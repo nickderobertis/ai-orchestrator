@@ -73,6 +73,35 @@ half installed at `config/onepipeline-ui.version`, and the reader answering link
 the engine the adopted wheel links. So a bump that installs one release and
 serves another fails there instead of being noticed by a person.
 
+### What the adopted view renders, and what it has nothing to render
+
+**`onepipeline-ui` 0.6.3**, the release `config/onepipeline-ui.version` pins, is the
+one that shows which release carried each landed node, alongside every release event.
+Opening a node whose dependency was adopted `published` shows what it waited on and
+the versions that arrived; opening one held shows what it is held on, whether that is
+an automated probe or a person's release step.
+
+**On this host it renders none of that, and that is not a defect in the view.** No
+repository registered here declares a release target, so no run holds a release event
+and no node has a release to show. The consequence worth internalising is that this
+surface fails *silently* in the direction of looking absent: an operator sees no
+release row whether the release is unadopted or the target is undeclared, and the two
+are indistinguishable from the browser. Declaring a target is a `releases.yml` under
+`$ONEVCS_HOME`, and nothing on this host writes one.
+
+What the *reader* answers differently is one number — `timeline_schema_version`, which
+0.6.3 serves at 7 where 0.6.2 served 6, with every other byte of the timeline and
+conversation responses identical on the runs compared.
+`tests/e2e/test_dag_ui_serving_e2e.py` holds this in a browser: it opens one desktop
+viewport on the pair over a real recorded run and asserts that the page renders — the
+run's goal, its counters, its failed node — and that no release row is on it, in either
+view, with no span the read API serves carrying a release either. Read that as a check
+on the *bundle*, which must not draw a row from data that has none; the runs behind it
+are checked-in fixtures and cannot grow a release event. What fails the day a
+repository here declares a target is
+`tests/e2e/test_release_adoption_in_force_e2e.py`, which asks every registered
+identity — and that is when this page comes due.
+
 ### Which release *writes* what it reads
 
 Those two pins say which reader answers. Neither says whether there is anything to
