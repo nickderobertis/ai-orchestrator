@@ -74,6 +74,12 @@ TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
 LIFECYCLE = REPO_ROOT / "docs" / "repo-lifecycle.md"
 TELEMETRY = REPO_ROOT / "docs" / "telemetry.md"
 ONEJUDGE_INTEGRATION = REPO_ROOT / "docs" / "onejudge-integration.md"
+#: The manager's own document, which quotes one engine constant: how much of a tool
+#: output `just transcript` prints. It is here rather than in an e2e journey because
+#: no run this host has recorded produced an output past that ceiling — driving it
+#: would mean writing synthetic records into a recorded journal, which is a producer
+#: this repository does not have standing in for one it does.
+MANAGER = REPO_ROOT / "AGENTS.md"
 
 #: The heading the outcome table sits under. A heading rather than a line number, so
 #: a reflow above it cannot silently move this gate onto some other table.
@@ -397,6 +403,14 @@ def _wire_spelling(variant: str, rename_all: str | None) -> str:
 
 
 CONSTANTS = (
+    Constant(
+        "transcript tool-output ceiling",
+        ONEPIPELINE,
+        "event.rs",
+        re.compile(r"pub const MAX_PAYLOAD_TEXT_BYTES: usize = (\d+);"),
+        MANAGER,
+        "an output is bounded at {value} characters",
+    ),
     Constant(
         "boundary attempts",
         ONEPIPELINE,

@@ -297,7 +297,14 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # *linked* version by `tests/test_linked_libraries.py`, so the two gates meet
         # on this one sentence: this one dates it to the adopted onepipeline, that one
         # holds the number in it to what that release's wheel actually resolved.
-        "at v{version} and its lock still resolves 0.11.0",
+        #
+        # The two halves now read the same number — `config/onepipeline.version` and
+        # `config/onevcs.version` both say 0.13.0 for the first time — so the sentence
+        # names the tool beside each one and this template stops at the word `onevcs`.
+        # A template that ran on into the number would be satisfied by either gate's
+        # value and would stop telling the two apart on exactly the adoption where
+        # that matters most.
+        "at v{version} and its lock still resolves onevcs",
         # What a bodyless change request now says about itself. Phrased against the
         # adopted release rather than the one it arrived in, for the reason the
         # repo-lifecycle entry below records.
@@ -431,12 +438,16 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
 #: * **onevcs** needs its own entry because the two onevcs versions in play are
 #:   deliberately different things: `config/onevcs.version` installs the **CLI** the
 #:   manager verbs run, while a dispatched session publishes through the onevcs
-#:   `onepipeline` links. They read 0.8.0 alike today and have not always — the
+#:   `onepipeline` links. They read 0.13.0 alike today and have not always — the
 #:   linked copy was 0.4.2 while the pin was several releases past it — so a claim
 #:   about one is never a claim about the other, and mistaking the CLI pin for the
 #:   version in force has already produced a wrong diagnosis here. The linked copy
 #:   is measured rather than restated, by `tests/test_linked_libraries.py`;
 #:   `AGENTS.md` names the 0.5.0 that carried no `commit-msg` code at all.
+#:
+#:   0.13.0 is also `config/onepipeline.version` this cycle, which is why the gated
+#:   sentence in `AGENTS.md` spells the tool — `the adopted **onevcs 0.13.0**` — and
+#:   why no sentence anywhere should leave that number to disambiguate itself.
 ADOPTED_SIBLING_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
     "oneagentgraph": {
         "personas/README.md": (

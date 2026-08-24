@@ -1,23 +1,24 @@
 """What this repository says about sequencing a node behind a dependency's release.
 
-The capability is upstream and adopted by nothing here, which is the whole hazard.
-Prose describing a mechanism no pin on this host reads has nothing to hold it true:
-it cannot be measured, it will not be contradicted by a run, and the day somebody
-moves a pin it silently changes from "documented, not adopted" to "wrong". So the
-claims are enumerated here against the section that owns them, and the three pins the
-section names are reconciled against `config/` rather than restated by hand.
+Two of the three halves are now adopted and the third is not, and that asymmetry is
+the whole hazard. A section that described an unadopted mechanism could go stale one
+way — the day a pin moved past it. This one can go stale **both** ways: a pin moving
+past the view floor makes its "still unadopted" half wrong, and a pin regressing below
+either adopted floor makes its "in force" half wrong. Neither would be contradicted by
+a run, because a host that configures no release target gets the same run either way.
+So the claims are enumerated here against the section that owns them, and each pin the
+section names is reconciled against `config/` and against the floor carrying its half.
 
 `tests/test_decomposition_guidance.py` is the other half and answers a different
 question: *which* document may say a thing. This one answers whether the manager's
 document still says all of it, and whether what it says about this host is still
-true. `tests/e2e/test_release_adoption_not_in_force_e2e.py` is the third: it drives
-the installed artifacts, which is the only thing that can prove the "not in force"
-claim rather than assert it.
+true. `tests/e2e/test_release_adoption_in_force_e2e.py` is the third: it drives the
+installed artifacts, which is the only thing that can prove what this host can and
+cannot do rather than assert it.
 """
 
 from __future__ import annotations
 
-import re
 from typing import NamedTuple
 
 import pytest
@@ -27,16 +28,25 @@ from test_linked_libraries import Release
 from orchestrator.root import REPO_ROOT
 
 #: The sentence the section opens with, and the one every claim below is written
-#: under. `tests/e2e/test_release_adoption_not_in_force_e2e.py` measures it against the
+#: under. `tests/e2e/test_release_adoption_in_force_e2e.py` measures it against the
 #: installed artifacts and reads it from here, so the prose and the measurement cannot
 #: come to be about two different claims.
-NOT_IN_FORCE = "**All of this ships upstream and none of it is in force here.**"
+#:
+#: It states both halves in one line deliberately. "In force" and "in use" are the two
+#: things a reader of this section most needs kept apart, and a sentence that said only
+#: one of them would be read as the other.
+IN_FORCE_UNUSED = "**The surface and the modes are in force here; nothing on this host uses them.**"
 
 #: The release that added `onevcs release` and the release-target document behind it,
 #: as https://github.com/nickderobertis/onevcs/pull/78. Declared here and read by the
-#: journey as well: it is the one version this repository has to know to say that the
-#: capability is not in force, and two declarations of it could disagree.
+#: journey as well: it is the one version this repository has to know to say whether
+#: the surface is in force, and two declarations of it could disagree.
 RELEASE_SURFACE_FLOOR = Release(0, 13, 0)
+#: The release that carries the adoption modes — https://github.com/nickderobertis/onepipeline/pull/113
+#: merged, and this is the first `onepipeline` release cut after it. It had no number
+#: when this section was written, which is why the section named the change request;
+#: now it has one, and the section names both.
+RELEASE_MODES_FLOOR = Release(0, 13, 0)
 #: The release that added the view showing which release carried each landed node, and
 #: every release event, as https://github.com/nickderobertis/onepipeline-ui/pull/36.
 RELEASE_VIEW_FLOOR = Release(0, 6, 3)
@@ -111,6 +121,24 @@ REQUIRED_CLAIMS = (
     Claim(
         "awaiting a human step is a third answer", "**Awaiting a human step is a third\nanswer**"
     ),
+    # The half that is a measurement of this host rather than a description of a
+    # mechanism. Each of these was driven against an installed binary, and each is
+    # what a reader needs in order to tell "this host can do it" from "this host does
+    # it" — which is the one distinction this whole section now turns on.
+    Claim(
+        "no repository here declares a target",
+        "no\nrepository registered here declares a release target",
+    ),
+    Claim(
+        "a target-less repository releases nothing",
+        "a repository that declares\nnone releases nothing as far as this mechanism is concerned",
+    ),
+    Claim("the release-targets document's path", "`$ONEVCS_HOME/releases.yml`"),
+    Claim("this host has no such document", "**this host does not have one**"),
+    Claim("the verbs were driven", "answers `adoption: fast`"),
+    Claim("the modes reach the loader", "unknown variant `bogus`, expected `fast` or `published`"),
+    Claim("a bad consumes key is refused", "which is not one of\nthis node's deps"),
+    Claim("what remains is configuration", "**So what remains is configuration, not adoption.**"),
 )
 
 #: The vocabulary decided for this workstream: these repositories publish artifacts
@@ -119,23 +147,28 @@ REQUIRED_CLAIMS = (
 #: travels and would carry a second word into repositories this document never reaches.
 FORBIDDEN_VOCABULARY = "deploy target"
 
-#: The three pins the section names as fact, and — where there is one to name — the
-#: release that carries that pin's half of the capability. Declared as floors rather
-#: than as equalities: what makes the section's "none of the three is adopted" claim
-#: true is that each pin is *below* the release carrying its half, and what makes it
-#: worth gating is that a pin moving past one turns the section from accurate into
-#: wrong with nothing else on the host reporting it.
-#:
-#: `onepipeline` has no floor on purpose. Its half merged as change request 113 and
-#: the release carrying it had not been cut when this was written, so a floor here
-#: would be an invented version number. The engine's own SBOM is what answers for it,
-#: in the journey named in this module's docstring, which reads the `onevcs` that
-#: engine links rather than a number nobody has published.
-CAPABILITY_FLOORS: dict[str, Release | None] = {
+#: The three pins the section names as fact, and the release that carries each one's
+#: half of the capability. Declared as floors rather than as equalities, and read in
+#: **both** directions now that the three no longer agree: the two adopted halves are
+#: true while their pins are *at or past* their floors, and the unadopted one is true
+#: while its pin is *below* its own. A move in either direction turns the section from
+#: accurate into wrong with nothing else on this host reporting it.
+CAPABILITY_FLOORS: dict[str, Release] = {
     "onevcs.version": RELEASE_SURFACE_FLOOR,
-    "onepipeline.version": None,
+    "onepipeline.version": RELEASE_MODES_FLOOR,
     "onepipeline-ui.version": RELEASE_VIEW_FLOOR,
 }
+
+#: Which of those pins the section claims is in force, and which it claims is not.
+#: Split out rather than inferred from a comparison, because the point of the gate is
+#: that the *prose* and the *pins* agree: inferring the claim from the pin would make
+#: the assertion vacuously true whatever the section says.
+ADOPTED_PINS = ("onevcs.version", "onepipeline.version")
+UNADOPTED_PIN = "onepipeline-ui.version"
+
+#: The plan node that owns the unadopted half, named in the section so its gap reads
+#: as a scheduled piece of work rather than a standing property of this host.
+UNADOPTED_OWNER = "`adopt-dag-ui`"
 
 
 def _text(relative_path: str) -> str:
@@ -206,51 +239,109 @@ def test_the_pin_the_section_names_is_the_pin_this_checkout_carries(version_file
 
 
 @pytest.mark.reads_docs
-@pytest.mark.parametrize(
-    "version_file", sorted(name for name, floor in CAPABILITY_FLOORS.items() if floor)
-)
-def test_the_pin_that_would_put_this_in_force_has_not_moved(version_file: str) -> None:
-    """The section claims none of this is adopted; a pin at or past its floor ends that.
+@pytest.mark.parametrize("version_file", ADOPTED_PINS)
+def test_the_pin_that_puts_a_half_in_force_is_at_or_past_its_floor(version_file: str) -> None:
+    """The section claims two halves are in force; a pin below its floor ends that.
 
-    A failure here is not a defect in the pin — adopting is the point — it is this
-    section coming due. Everything in it is written as upstream behaviour rather than
-    as a measurement of this host, and the moment a pin reaches its floor that framing
-    is what has to change, along with the sentence naming the pin's value.
+    The direction this gate reads was reversed by the adoption it exists across, and
+    the reversal is the point: while these were unadopted the hazard was a pin moving
+    *forward* past a section that denied it, and now it is a pin moving *back* under a
+    section that asserts it. A regression here is not hypothetical — a bad revert of
+    `config/onepipeline.version` would leave every measured claim in this section
+    describing a binary this host no longer has, with no run contradicting it, because
+    a host that declares no release target runs identically either way.
     """
     floor = CAPABILITY_FLOORS[version_file]
-    assert floor is not None
     adopted = _adopted(version_file)
-    assert Release.parse(adopted, f"config/{version_file}") < floor, (
-        f"config/{version_file} reads {adopted}, at or past the {floor} that carries "
-        f"its half of release adoption. {GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} "
-        "says none of this is in force here and that no measurement of it exists on "
-        "this host; both sentences "
-        "are now due, and so is the pin value the section names"
+    assert Release.parse(adopted, f"config/{version_file}") >= floor, (
+        f"config/{version_file} reads {adopted}, below the {floor} that carries its "
+        f"half of release adoption. {GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} says "
+        "that half is in force here and quotes measurements taken against it; both "
+        "are now false, and so is the pin value the section names"
     )
 
 
 @pytest.mark.reads_docs
-def test_the_section_dates_the_unreleased_half_without_inventing_a_version() -> None:
-    """The one half with no version to name, and the sentence that must not acquire one.
+def test_the_half_that_is_not_adopted_is_still_the_half_that_is_not_adopted() -> None:
+    """The one pin below its floor, and the sentence that has to move with it.
 
-    Its change request is merged and the release carrying it was not published when
-    this was written. A number written here would be a guess, and a guess in this
-    document is indistinguishable from a measurement — so the section names the change
-    request and says where the number comes from instead.
+    The mirror of the gate above, and the one that comes due first: `adopt-dag-ui` is
+    a live sibling of the plan this section was rewritten under, and the moment it
+    lands, this section's "that third half is the one still unadopted" stops being
+    true. Failing here is that node arriving, not a defect — the fix is to re-take the
+    sentence rather than to relax this.
+    """
+    floor = CAPABILITY_FLOORS[UNADOPTED_PIN]
+    adopted = _adopted(UNADOPTED_PIN)
+    assert Release.parse(adopted, f"config/{UNADOPTED_PIN}") < floor, (
+        f"config/{UNADOPTED_PIN} reads {adopted}, at or past the {floor} that carries "
+        f"the view. {GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} calls that half the one "
+        f"still unadopted and names {UNADOPTED_OWNER} as the node that would move it; "
+        "re-take both sentences against what the view now does on this host"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_unadopted_half_is_owned_by_a_node_rather_than_left_standing() -> None:
+    """A gap with no owner reads as a property of the host. This one has an owner.
+
+    Written as its own gate rather than folded into the claim list because it is the
+    difference between "this host does not have the view" and "this host does not have
+    the view yet, and here is what changes that" — and only the second is true.
+    """
+    assert UNADOPTED_OWNER in _flat(section()), (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer names {UNADOPTED_OWNER} "
+        f"as what moves config/{UNADOPTED_PIN}. A gap named with no owner reads as a "
+        "standing property of this host rather than as scheduled work"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_section_dates_the_adoption_modes_to_the_release_that_carried_them() -> None:
+    """The half that had no version to name now has one, and names both.
+
+    While the release was uncut the section named the change request alone and this
+    gate refused a version beside it, because a guess in this document is
+    indistinguishable from a measurement. The release exists now, so the requirement
+    inverts: the change request stays — it is the durable reference and the only thing
+    that says *what* the release carried — and the version joins it.
     """
     prose = _flat(section())
     assert "https://github.com/nickderobertis/onepipeline/pull/113" in prose, (
         f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer names the change request "
-        "that carries the adoption modes; it is the only durable reference there is "
-        "until the release carrying it is published"
+        "that carries the adoption modes; the release number alone says which build has "
+        "them and not what they are"
     )
-    assert "carried by the first `onepipeline` release cut after it" in prose, (
-        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says which release "
-        "carries the adoption modes in a form that survives the release being cut"
+    modes = _adopted("onepipeline.version")
+    assert _flat(f"onepipeline {modes}, the first release cut after it") in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer ties the adoption modes "
+        f"to onepipeline {modes} and to being the first release cut after change "
+        "request 113; one without the other leaves a reader unable to check either"
     )
-    invented = re.search(r"`onepipeline` release cut after it[^.]*?\b0\.\d+\.\d+", prose)
-    assert invented is None, (
-        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} names a version for the onepipeline "
-        f"half ({invented.group(0) if invented else ''}); take it from the registry when "
-        "the release exists, and re-date the whole section at the same time"
+
+
+@pytest.mark.reads_docs
+def test_no_sentence_leaves_the_shared_version_to_disambiguate_itself() -> None:
+    """`0.13.0` is two adoptions this cycle, so the section names the tool as well.
+
+    `config/onepipeline.version` and `config/onevcs.version` carry the same number for
+    the first time. A reader who meets a bare `0.13.0` in a paragraph about release
+    adoption cannot tell whether it is the engine CLI's claim or the version-control
+    CLI's, and this section makes one of each within three sentences of the other.
+    """
+    prose = _flat(section())
+    assert "the **version-control CLI** at onevcs 0.13.0" in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says which tool carries "
+        "the release-targets surface; with both pins at one number the tool is the only "
+        "thing that distinguishes the claim"
+    )
+    assert "the **engine CLI** at onepipeline 0.13.0" in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer says which tool carries "
+        "the adoption modes; with both pins at one number the tool is the only thing "
+        "that distinguishes the claim"
+    )
+    assert "Those two numbers are equal and are about different tools" in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer warns that the two pins "
+        "read one number this cycle; a reader who has not been told will infer one "
+        "adoption from two"
     )

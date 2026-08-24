@@ -49,13 +49,23 @@ MULTI_NODE_RUN = "observatory-report-join"
 MULTI_NODE_NODES = ("report-transcript-join", "report-transcript-join-2")
 
 #: A distinctive fragment of the tool *call* the fixture keeps — the worker measuring
-#: what its own engine binary links. Present in the payload's `detail`, which is the
-#: key the renderer prints.
+#: what its own engine binary links. Present in the payload's `detail`.
 CALL_FRAGMENT = "LINKED CRATES"
 
 #: A distinctive fragment of the *output* that call returned. It is in the same event,
 #: under `output`, and it is the answer the judge said the dispatch never produced.
+#: The version in it is the one the *recorded run* measured, and is deliberately not
+#: derived from `config/`: this is a fixture of a run that happened, so re-deriving it
+#: from today's pins would make the fixture stop being a recording.
 RESULT_FRAGMENT = "onevcs-0.11.0"
+
+#: What the renderer does with an output too large to print whole is stated in
+#: `AGENTS.md` and gated by `tests/test_engine_contracts.py`, against `onepipeline`'s
+#: own `MAX_PAYLOAD_TEXT_BYTES` and the three notes its renderer writes. It is not
+#: driven here on purpose: no run this host has recorded produced an output past that
+#: ceiling, so reaching one would mean writing synthetic records into a recorded
+#: journal — a producer this repository does not have, standing in for one it does.
+#: What this journey drives is the fixture as it was recorded.
 
 
 @pytest.fixture
@@ -153,23 +163,22 @@ def test_the_recipe_names_a_run_or_node_it_has_nothing_for(runs_root: Path) -> N
     assert RECORDED_NODE in no_node.stderr
 
 
-def test_the_rendered_result_lines_are_blank_while_the_journal_holds_the_output(
+def test_the_rendered_result_lines_carry_the_output_the_journal_holds(
     runs_root: Path,
 ) -> None:
-    """The measured render on the adopted engine: every call, and no output at all.
+    """The measured render on the adopted engine: every call, and the answer it returned.
 
-    On onepipeline 0.11.0 the renderer prints a `turn-activity` payload's `detail`, and
-    a `tool_result` payload carries its content in `output` instead — so every result
-    renders as a bare `tool_result` line with nothing after it. Upstream fixed that in
-    onepipeline 0.12.1 (`fix: make the transcript carry tool outputs and the telemetry
-    buckets balance`); this host reaches it only when `config/onepipeline.version`
-    moves.
+    This journey used to hold the opposite, and holding it is what made the change
+    visible. Through onepipeline 0.11.0 the renderer printed a `turn-activity`
+    payload's `detail`, and a `tool_result` payload carries its content under `output`
+    and no `detail` at all — so every result rendered as a bare `tool_result` line with
+    nothing after it, and a manager reading this verb for a dispatch's evidence saw the
+    questions and none of the answers. onepipeline 0.12.1 fixed it and 0.13.0 carries
+    that fix; this asserts what the adopted engine really prints for the fixture.
 
-    So this assertion is deliberately the *wrong* behaviour, held in place: it is what
-    `AGENTS.md` tells a manager to expect, and the day the pin moves is the day both
-    have to change together. Failing here on that adoption is the point — the
-    alternative is prose describing a render this host stopped having, which is the
-    class of defect the whole issue behind this journey is about.
+    Held as the equality it is rather than as "not blank", so a later release that
+    truncated, elided, or summarized the output fails here rather than passing on a
+    line that merely has something after the kind.
     """
     outputs = _recorded_outputs(runs_root)
     assert outputs, "the recorded fixture must carry a tool result for this to be about one"
@@ -181,15 +190,22 @@ def test_the_rendered_result_lines_are_blank_while_the_journal_holds_the_output(
     rendered = _transcript(RECORDED_RUN, runs_root=runs_root)
 
     assert rendered.returncode == 0, rendered.stderr
-    assert "tool_result" in rendered.stdout, "a result the journal has must at least be listed"
-    assert RESULT_FRAGMENT not in rendered.stdout, (
-        "`just transcript` now renders tool outputs. That is the upstream fix arriving: "
-        "re-read AGENTS.md's paragraph on what the verb renders, which still tells a "
-        "manager the outputs are missing, and update it and this journey together"
+    assert RESULT_FRAGMENT in rendered.stdout, (
+        "`just transcript` renders no tool outputs. AGENTS.md tells a manager this verb "
+        "carries them, and the whole incident behind this fixture is a node failed for "
+        f"want of evidence its own journal held: {rendered.stdout!r}"
     )
-    for line in rendered.stdout.splitlines():
-        if line.strip().startswith("tool_result"):
-            assert line.strip() == "tool_result", (
-                f"a rendered result line carries something after the kind: {line!r}. If the "
-                "engine started rendering outputs, update AGENTS.md in the same change"
-            )
+    result_lines = [
+        line.strip().removeprefix("tool_result").strip()
+        for line in rendered.stdout.splitlines()
+        if line.strip().startswith("tool_result")
+    ]
+    assert result_lines, "a result the journal has must at least be listed"
+    # Whole, not merely present: the journal's own text with control characters
+    # replaced by spaces, which is the one transformation the renderer applies.
+    expected = {" ".join(output.split()) for output in outputs}
+    assert {" ".join(line.split()) for line in result_lines} == expected, (
+        "a rendered result line is not the output the journal holds. If the engine "
+        f"started bounding or summarizing these, update AGENTS.md in the same change: "
+        f"{result_lines!r}"
+    )

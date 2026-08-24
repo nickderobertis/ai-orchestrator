@@ -187,7 +187,7 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
     "onevcs": {
         # The retry floor: a dispatched session publishes through the linked onevcs, so
         # the CLI pin beside it is not the version in force.
-        "AGENTS.md": ("its lock still resolves {version}",),
+        "AGENTS.md": ("its lock still resolves onevcs {version}",),
         # Which onevcs the engine-behaviour claims in that document were read at. Every
         # one of them is about the copy a *dispatched* node publishes through, so the
         # linked version is the only one that answers for them — and `DRAIN_SECONDS`
@@ -387,8 +387,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: other on the day it landed. This fails when either core moves, when a dependent
 #: stops bringing its own, or when a third dependent appears.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.6", core="0.10.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.5.0", core="0.8.0"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.9", core="0.10.2"),
+    LinkedCore(dependent="onejudge", dependent_version="0.5.1", core="0.8.0"),
 )
 
 #: Where an operator meets that two-version reality, and the sentence that has to
@@ -407,25 +407,30 @@ HARNESS_CORE_PROSE = ProseClaim(
 #: declared against. A divergence is permitted only where the linked release is not
 #: installable from PyPI at all — never as a convenience, and never as "not yet
 #: looked at", because both read identically from here a release cycle later.
-DECLARED_DIVERGENCES = {
-    "onejudge": Divergence(
-        linked="0.5.0",
-        pinned="0.4.0",
-        because=(
-            "onejudge v0.5.0 is tagged and the PyPI `onejudge` distribution stops at "
-            "0.4.0, so `scripts/session-setup.sh` has nothing to install; the pin "
-            "moves the moment that release is on the registry"
-        ),
-    )
-}
+#:
+#: **Empty, and kept.** The one entry this carried was `onejudge`, pinned at 0.4.0
+#: against a linked 0.5.0 because the tag was published and the PyPI distribution was
+#: not. Both halves of that ground went at once: the registry now carries `onejudge`
+#: 0.5.0 and 0.5.1, and the adopted engine links 0.5.1, so there is nothing left to
+#: except and the entry is retired rather than re-dated. What stays is the escape
+#: hatch — `Divergence`, this registry, and the two tests that read it — because the
+#: next adoption that meets an uninstallable linked release needs to declare one
+#: without first rebuilding the machinery to do it in.
+DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 
-#: Where the one divergence is explained to an operator, and the sentence naming
-#: both of its versions. Prose rather than only a comment, because the person who
-#: meets this is a manager reading why two version files disagree, and the numbers
-#: in that explanation go stale the same way every other restated measurement does.
+#: Where a divergence is explained to an operator, and the sentence naming both of
+#: its versions. Prose rather than only a comment, because the person who meets this
+#: is a manager reading why two version files disagree, and the numbers in that
+#: explanation go stale the same way every other restated measurement does.
+#:
+#: The template survives the registry being empty on purpose: it is parametrized over
+#: the declaration rather than over a version literal, so a re-declared divergence
+#: gets its prose gate back with no test to rewrite. What is *also* gated, below, is
+#: that an empty registry leaves no such paragraph behind — an explanation of a
+#: divergence that no longer exists is exactly the stale claim these gates are for.
 DIVERGENCE_PROSE = (
     "AGENTS.md",
-    "onepipeline 0.11.0 links the `onejudge` crate {linked}, and PyPI carries no "
+    "links the `onejudge` crate {linked}, and PyPI carries no "
     "`onejudge` {linked} — the tag is published and the distribution is not — so "
     "`config/onejudge.version` stays at {pinned}",
 )
@@ -521,6 +526,9 @@ def test_the_declared_divergence_is_explained_where_an_operator_meets_it() -> No
     concluding a fix is in force. So the explanation names both numbers, and this
     fails when either moves — which is the prompt to re-read the paragraph rather
     than to inherit it.
+
+    With no divergence declared this asserts nothing, and the test below is the half
+    that then does the work.
     """
     relative_path, template = DIVERGENCE_PROSE
     stated = {
@@ -534,6 +542,36 @@ def test_the_declared_divergence_is_explained_where_an_operator_meets_it() -> No
             f"{relative_path} states the {crate} divergence {written.count(sentence)} "
             f"times, not once; it must say {sentence!r} so the operator who meets two "
             "disagreeing version files is told which one governs a dispatch"
+        )
+
+
+@pytest.mark.reads_docs
+def test_no_divergence_is_explained_that_this_host_no_longer_has() -> None:
+    """A retired divergence takes its paragraph with it.
+
+    The other direction of the gate above, and the one that comes due on an adoption
+    rather than on a bump: prose explaining why two version files disagree, left
+    standing after they stopped disagreeing, tells a manager to distrust a pin that is
+    now correct. That is worse than the stale claim it replaced, because it reads as
+    a deliberate exception somebody thought about.
+
+    Written against the *shape* of the explanation rather than against the retired
+    onejudge numbers, so it also catches a future divergence whose registry entry was
+    removed and whose paragraph was not.
+    """
+    relative_path, template = DIVERGENCE_PROSE
+    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
+    # The invariant half of the template — everything up to the first interpolation —
+    # is what a paragraph explaining any divergence has to spell.
+    shape = template.split("{", 1)[0].strip()
+
+    for crate in RECONCILED_PINS:
+        if crate in DECLARED_DIVERGENCES:
+            continue
+        assert shape not in written, (
+            f"{relative_path} still explains a divergence for {crate}, and "
+            f"DECLARED_DIVERGENCES has none: config/{RECONCILED_PINS[crate]} equals what "
+            "the adopted engine linked. Delete the paragraph rather than re-dating it"
         )
 
 

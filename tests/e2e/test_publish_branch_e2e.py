@@ -59,9 +59,12 @@ HOOK_REFUSAL = "this repository does not release from that type"
 #: How the adopted onevcs refuses a subject the repository turns down, quoted to the
 #: words that make it 0.6.1's refusal and not the release before it, re-measured on
 #: every adoption since — which is what this journey is for. Kept phrased against the
-#: *arrival* rather than the pin: 0.7.0 is adopted now and changed nothing here, and a
-#: bump that had to retype this number would invite retyping it without re-reading which
-#: release the words belong to.
+#: *arrival* rather than the pin: the adopted onevcs is several releases past it and has
+#: changed nothing here, and a bump that had to retype this number would invite retyping
+#: it without re-reading which release the words belong to. The pin is deliberately not
+#: named: this journey drives whichever onevcs `config/onevcs.version` installs, so the
+#: release under test is that one and re-stating its number here would be a second
+#: source for it.
 #:
 #: The discriminator is load-bearing and was measured both ways. Below 0.6.1 the hook was
 #: still *reached* — a clone carries `core.hooksPath`, and git runs the hook itself on the
@@ -650,9 +653,10 @@ def test_publish_branch_refuses_a_subject_the_repositorys_own_hook_turns_down(
 ) -> None:
     """`onevcs` puts the subject it would land to the repository's `commit-msg` hook.
 
-    New at onevcs 0.6.1 (#51) and carried unchanged by the adopted 0.7.0, and narrower
-    than it first looks — measured against both releases rather than read off the
-    changelog. `commit-msg` appears nowhere
+    New at onevcs 0.6.1 (#51) and carried unchanged by every adopted release since,
+    which is what running this against the installed CLI on each bump establishes. It is
+    narrower than it first looks — measured against both releases rather than read off
+    the changelog. `commit-msg` appears nowhere
     in 0.5.0's sources, but the hook was reached there anyway: a clone carries
     `core.hooksPath`, so git ran it on the squash commit a publication writes, from the
     far side of a gate run and a merge, and reported it as `invalid input: git commit

@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.11.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.13.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -61,7 +61,12 @@ fix86-llmlint  WALL 50m22s
 ```
 
 `WALL` is the run's elapsed time, not summed work. The **eight buckets are a closed
-set and sum exactly to it** — and the set below is reconciled against
+set and sum exactly to it** — re-taken on the adopted engine over this host's own
+runs root, where all **133** recorded runs balance to the millisecond, which is worth
+saying because it is an invariant the crate documented before it upheld it:
+onepipeline 0.12.1 is the release that made emitted bucket totals match wall time in
+both directions, and beneath it this sentence was a claim about the contract rather
+than about a run. The set below is reconciled against
 `onepipeline`'s own `BucketName` enum by
 `tests/test_engine_contracts.py`, so a bucket the engine adds or renames
 fails here rather than leaving this table quietly short of one: a bucket named by a free string could be added without
@@ -138,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.10.2/0.4.0 upgrade (`config/oneharness.version` and
+after the 0.10.2/0.5.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check

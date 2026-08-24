@@ -13,14 +13,18 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.11.0**
+that source on every `just check` rather than restated: **`onepipeline` v0.13.0**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.11.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.13.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **0.11.0** as well at this
-pair of pins; the two are separate pins that have coincided before and will diverge
-again, so where a claim depends on which copy runs it this document says so. Re-read the source before trusting a claim
+the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.13.0** as well at
+this pair of pins; the two are separate pins that have coincided before and will
+diverge again, so where a claim depends on which copy runs it this document says so.
+**Read `0.13.0` here with the tool beside it and never on its own**: this adoption is
+the first in which `config/onepipeline.version` and `config/onevcs.version` carry the
+same number, so an unqualified `0.13.0` no longer says which of the engine CLI and
+the version-control CLI a sentence is about. Re-read the source before trusting a claim
 here against a later pin; that is the discipline this section exists to replace, and
 the sentences it replaced described a Python implementation that was deleted when
 those crates were extracted.
@@ -59,6 +63,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `checks-unsettled` | The bound on watching the host elapsed with the change still outstanding, and the budget is spent. |
 | `failed` | `push-rejected` | The publishing push was refused by the merge path, and the budget is spent. |
 | `failed` | `sync-conflict` | The base moved under the publication and the bounded resolve-and-requeue did not converge, and the budget is spent. |
+| `failed` | `pushed-unverified` | The publishing push **reached the remote** and the merge path could not then be read, and the budget is spent. The one failure word whose work is already on the origin: its reason names both the commit it landed at and what stopped the read, and a further attempt re-reads that path rather than re-pushing. |
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
 | `failed` | `no-agent-progress` | Every boundary attempt was spent and the agent produced nothing. |
@@ -95,19 +100,24 @@ table above rather than a word to look for and never find.
 
 ### What a failed publication actually settles
 
-`onevcs` distinguishes seven failures and `onepipeline` now keeps the distinction
+`onevcs` distinguishes eight failures and `onepipeline` now keeps the distinction
 that decides what happens next. `PublishOutcome::Failed` carries a `kind` — `gate`,
 `invalid`, `sync-conflict`, `not-implemented`, `checks-failed`, `checks-unsettled`,
-or `push-rejected`, which the CLI reports as exit 1 for the four verification
-failures, 2 for `invalid`, 3 for `sync-conflict`, and 70 for `not-implemented` — a
-human-readable `reason`, and a `retained` saying whether the branch was
+`push-rejected`, or `pushed-unverified`, which the CLI reports as exit 1 for the five
+verification failures, 2 for `invalid`, 3 for `sync-conflict`, and 70 for
+`not-implemented` — a human-readable `reason`, and a `retained` saying whether the branch was
 `handed-back` to a registered checkout or `refused` by it.
 
-`onepipeline`'s `vcs::failure_of` sorts those seven kinds into two, arm by arm
-rather than by a wildcard, and the sort **is** the routing. Four of them are
-`Preserving` — `checks-failed`, `checks-unsettled`, `push-rejected`, and
-`sync-conflict` — because their fix is more work on the same branch, and each
-settles under its own word. The other three are terminal: `gate` ran on the tree as
+`onepipeline`'s `vcs::failure_of` sorts those eight kinds into two, arm by arm
+rather than by a wildcard, and the sort **is** the routing. Five of them are
+`Preserving` — `checks-failed`, `checks-unsettled`, `push-rejected`,
+`sync-conflict`, and `pushed-unverified` — because their fix is more work on the same
+branch, and each settles under its own word. `pushed-unverified` is the newest and the
+one whose shape differs: onevcs 0.12.0 added it so that a push which **reached the
+remote** behind an unreadable merge path stops reading as work that never landed.
+Widening the vocabulary rather than adding a clause to the three beside it is
+deliberate on onevcs's part and is the reason a fifth word exists at all — a router
+branches on the *kind*, so only a kind can stop that state routing as a refusal. The other three are terminal: `gate` ran on the tree as
 it stands and said no, `invalid` was refused at a trust boundary, and
 `not-implemented` has nothing behind it, so all three settle the residual
 `publication-failed` — the word every publication failure used to settle on, kept
@@ -547,7 +557,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.11.0 and is refused **by its own name**, at every schema version and on a live
+v0.13.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1124,8 +1134,14 @@ A lifecycle node is an `agent` node in a plan with a `repo` and either a
 `id`, `kind`, `task`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
 `context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
 `merge_policy`, `base_branch`, `branch`, `title`, `body`, `execution_checkout`,
-`steps`, `resume` — and
-anything else is refused while the plan loads. `stack_bases` is a pre-adoption
+`steps`, `resume`, `adoption`, `consumes` — and
+anything else is refused while the plan loads. The last two arrived with onepipeline
+0.13.0 and are release adoption's half of the schema: `adoption` is `fast` or
+`published`, and `consumes` names a release target per **dependency node id**. Both
+are validated at load — `adoption: "bogus"` is refused with `unknown variant
+`bogus`, expected `fast` or `published``, and a `consumes` key that is not one of the
+node's own `deps` is refused naming the node and the key — and both resolve to
+today's behaviour on a host that declares no release targets, which this one is. `stack_bases` is a pre-adoption
 field held only in `tests/fixtures/legacy-runs/`; a plan that writes one is refused,
 and so is `verify_via_ci`, which this schema once accepted. Independent top-level nodes run
 concurrently, and a node whose dependency failed is skipped. Cross-repository dependencies only schedule. A
@@ -1270,7 +1286,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.11.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.13.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1347,8 +1363,8 @@ lives. The branch and its commits are preserved; the worktree is the session's a
 goes when the session does.
 
 **A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.11.0 has no notion
-of one and `onevcs` 0.11.0 has none to open — and nothing is published, on a local or
+pause on either engine at the adopted versions — `onepipeline` v0.13.0 has no notion
+of one and `onevcs` 0.13.0 has none to open — and nothing is published, on a local or
 a remote identity, until the last step has settled and the publication starts. A pause is
 purely local branch state.
 
@@ -1913,7 +1929,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.11.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.13.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

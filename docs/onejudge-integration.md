@@ -77,7 +77,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.11.0,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.13.0,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -928,8 +928,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.11.0,
-> `oneagentgraph` 0.3.6, nor `onevcs` 0.11.0. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.13.0,
+> `oneagentgraph` 0.3.9, nor `onevcs` 0.13.0. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1134,9 +1134,12 @@ dispatch a stamp belongs to, while this caller created the path it matches.
 - **A dispatched lifecycle member starts in its own worktree**, and the launch's
   journal is where that is read. `onevcs` appends `session-opened` naming the
   worktree it cut for the node's branch; `oneagentgraph` appends `member-started`
-  naming the directory it started that node's `worker` member in; against the
-  adopted onepipeline 0.3.1 the two are the same path, and the `--cwd` oneharness
-  is handed for that member's agent turns is that path again. Measured, not
+  naming the directory it started that node's `worker` member in; measured on
+  onepipeline 0.3.1 the two are the same path, and the `--cwd` oneharness
+  is handed for that member's agent turns is that path again — and
+  `tests/e2e/test_worker_start_directory_e2e.py` re-takes that on every gate run
+  against whatever release is adopted, so the number dates the first reading rather
+  than naming the copy in force. Measured, not
   inferred: a lifecycle dispatch of this repository ran `pwd` as its first action
   and got
   `/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/runs/s-cec0174198d8/worktree`,
@@ -1210,7 +1213,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.4.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.4.0/docs/protocol.md)),
+([onejudge v0.5.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.5.1/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
