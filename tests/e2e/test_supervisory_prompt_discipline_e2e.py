@@ -88,7 +88,7 @@ PACEMAKER_TASK = "onepipeline run `supervisory-prompt-probe`."
 #: expands nothing on the way there. Per member, because each names its own kind and
 #: its own delimiter, and neither is interchangeable with a command-line word.
 BYTE_CARRYING_FORM = {
-    MONITOR_MEMBER: "onepipeline surface --kind finding <run-id> <<'FINDING'",
+    MONITOR_MEMBER: "onepipeline surface --kind finding \"$ONEPIPELINE_RUN_ID\" <<'FINDING'",
     PACEMAKER_MEMBER: "onepipeline surface --kind check-in <run-id> <<'UPDATE'",
 }
 
@@ -128,6 +128,65 @@ FINDING_OP_ENVELOPE = '{"op":"finding","message":"issue: ..."}'
 FINDING_MUTATES_NOTHING = "It mutates no graph"
 FINDING_RAISES_ONE_SURFACE = "queues no second `monitor applied an edit` surface"
 
+#: The environment variable a launch names its run to an observer member in, and the
+#: placeholder it replaced. Both are read out of the monitor's prompt: naming the
+#: variable is what tells the member which run is its own, and the placeholder is what
+#: it had instead — a literal `<run-id>` in every command, which a monitor could only
+#: fill in by inferring which of this host's concurrent runs it was watching. It
+#: inferred wrong, and edited a node of one run citing an edit attached to another's.
+RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
+RUN_ID_PLACEHOLDER = "<run-id>"
+
+#: How every command in that prompt has to spell the run, so a read, a reply, and a
+#: surface all reach the run the launch bound the member to.
+BOUND_RUN_WORD = '"$ONEPIPELINE_RUN_ID"'
+
+#: The verbs whose examples take it. Each one is a different way to be wrong about
+#: which run is the subject: reading somebody else's stream, replying on their
+#: channel, or surfacing a finding onto it.
+RUN_SCOPED_COMMANDS = (
+    "onepipeline monitor",
+    "onepipeline status",
+    "onepipeline results",
+    "onepipeline reply",
+    "onepipeline surface",
+)
+
+#: The bound on what the member may act on, and the permission that bound deliberately
+#: does not take away. Both, because a rule that only forbade would cost the finding a
+#: cross-run conflict is: it is visible to nobody but a reader who read both runs.
+EDIT_IS_ABOUT_THIS_RUN = {
+    MONITOR_MEMBER: "Every edit you issue is about",
+    "review": "reject an edit whose subject is any other run",
+}
+FINDING_NAMES_ITS_RUN = {
+    MONITOR_MEMBER: "A finding about any other run names that run",
+    "review": "finding about any other run to name that run by id",
+}
+READING_ANOTHER_RUN_IS_ALLOWED = {
+    MONITOR_MEMBER: "Reading another run is allowed",
+    "review": "Reading another run is not the violation",
+}
+
+#: The grounding guard this change had to leave standing: a claimed rule violation
+#: quotes the file and the line its rule comes from. It is a separate protection —
+#: about inventing the rule rather than about mistaking the run — and a rewrite of
+#: this prose that dropped it would look like a tidy-up.
+GROUNDING_GUARD = {
+    MONITOR_MEMBER: "Quote the file and the line it comes from",
+    "review": "Reject a claimed rule violation that does not quote the file and the line",
+}
+
+#: Where `oneagentgraph` writes each member's effective onejudge config, named by this
+#: journey so it reads this launch's own and never a concurrent dispatch's.
+GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
+
+#: The top-level key that opens the supervisor half of a onejudge config. Split on
+#: rather than parsed, because the workspace installs no YAML reader and the two halves
+#: have to be told apart: a rule stated only to the agent is advice, and one stated only
+#: to the reviewer is enforced against an agent nobody told.
+REVIEW_SIDE = "\nuser:\n"
+
 #: The monitor's edit allowlist and the pacemaker's prohibition on issuing an edit at
 #: all, asserted from the same effective prompts. The allowlist moved with the adopted
 #: engine — `finding` joined it — so what is held here is that the six the engine
@@ -153,6 +212,23 @@ class Recorded(NamedTuple):
     prompt: str
 
 
+class Monitored(NamedTuple):
+    """Both halves of what one launch really told its monitor.
+
+    They arrive by different routes and only one of them is a prompt. The agent's role
+    is composed into a system prompt a turn carries, so it is read off the turn; the
+    reviewing bar is `user.persona`, which this member's judge side is a command rather
+    than a model — so it never appears in any turn, and the merged config
+    `oneagentgraph` wrote for the member is the only place a launch's own copy of it
+    exists.
+    """
+
+    #: The monitor's effective system prompt, off its first agent turn.
+    system: str
+    #: The `user:` half of the effective onejudge config the launch composed.
+    review_bar: str
+
+
 def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     """The environment both launches get, with the paid provider substituted twice."""
     environment = dict(os.environ)
@@ -171,6 +247,10 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     # Keeps this journey's graph scratch and history out of the host's, so it never
     # reads or reclaims a live dispatch's.
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    # Where the merged base ⊕ persona config is written. Named rather than left to the
+    # state home above, because this journey globs for one member's copy of it and a
+    # path it chose is the only one it can be sure belongs to its own launch.
+    environment[GRAPH_STATE_ENV] = str(tmp_path / "graph")
     return environment
 
 
@@ -203,8 +283,8 @@ def _flat(prompt: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def monitor_prompt(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[str]:
-    """The monitor's effective system prompt, off a run launched through the real recipe.
+def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Monitored]:
+    """What one run launched through the real recipe really told its monitor, both sides.
 
     Everything between `just orchestrate` and the model is real here: the driver, the
     observer graph, `oneagentgraph`, the onejudge conversation, and the base config the
@@ -244,7 +324,28 @@ def monitor_prompt(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
             f"the monitoring role arrived on a member other than `{MONITOR_MEMBER}` of "
             f"{DAG_SCOPE_GRAPH}: {watching[0].config}"
         )
-        yield watching[0].system
+        # The merged config, which is where this launch's own copy of the reviewing bar
+        # is: the monitor's judge side is `scripts/channel-serve.py`, so no turn of the
+        # run carries that prose and the two files it is merged from each hold half of
+        # it.
+        # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
+        composed = sorted(
+            Path(environment[GRAPH_STATE_ENV]).glob(
+                f"dag-scope-*/members/{MONITOR_MEMBER}/onejudge.yaml"
+            )
+        )
+        assert composed, (
+            f"the launch wrote no effective config for the `{MONITOR_MEMBER}` member "
+            f"under {environment[GRAPH_STATE_ENV]}, so what its reviewing side was "
+            f"given cannot be read at all:\n{launch.stdout}\n{launch.stderr}"
+        )
+        effective = composed[0].read_text(encoding="utf-8")
+        _, separator, review_bar = effective.partition(REVIEW_SIDE)
+        assert separator, (
+            f"the effective config for `{MONITOR_MEMBER}` carries no `user:` block, so "
+            f"the launch composed no reviewing bar at all:\n{effective}"
+        )
+        yield Monitored(system=watching[0].system, review_bar=review_bar)
     finally:
         subprocess.run(
             ["just", "stop", SHIPPED_RUN],
@@ -254,6 +355,12 @@ def monitor_prompt(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
             timeout=e2e_timeout(60),
             check=False,
         )
+
+
+@pytest.fixture(scope="module")
+def monitor_prompt(monitored: Monitored) -> str:
+    """The monitor's effective system prompt alone, for the journeys that read one."""
+    return monitored.system
 
 
 def _shipped_pacemaker_member() -> str:
@@ -398,6 +505,84 @@ def test_the_monitor_is_told_to_hand_a_surface_message_over_as_bytes(
     so the protection is the form rather than a quoting rule the model has to apply.
     """
     _assert_surface_text_travels_as_bytes(MONITOR_MEMBER, monitor_prompt)
+
+
+def _assert_bound_to_the_run_it_observes(side: str, prose: str) -> None:
+    """One side of the monitor is told which run is its own, and bounded to it.
+
+    The same four properties on both sides, because the failure needs only one of them
+    missing: an agent told nothing keeps guessing, and a reviewer told nothing accepts
+    the guess. Which run a supervisory agent is watching is not a detail it can infer
+    on this host — several managers supervise several runs at once, and their events,
+    directories and status views interleave — and the one that inferred it applied a
+    live edit to a node of this run citing an edit that was attached to a different
+    manager's.
+    """
+    flat = _flat(prose)
+
+    assert RUN_ID_ENV in flat, (
+        f"the monitor's {side} side no longer names {RUN_ID_ENV}, so nothing tells this "
+        f"member which of the host's concurrent runs is its own:\n{prose}"
+    )
+    assert RUN_ID_PLACEHOLDER not in flat, (
+        f"the monitor's {side} side addresses its run as the literal "
+        f"{RUN_ID_PLACEHOLDER!r} again, which a member can only fill in by inferring "
+        f"which run it is watching:\n{prose}"
+    )
+    assert EDIT_IS_ABOUT_THIS_RUN[side] in flat, (
+        f"the monitor's {side} side no longer bounds an edit to the observed run, so an "
+        f"edit may again be aimed at another manager's graph:\n{prose}"
+    )
+    assert FINDING_NAMES_ITS_RUN[side] in flat, (
+        f"the monitor's {side} side no longer requires a finding about another run to "
+        f"name that run, so evidence from a neighbouring workstream reads as this "
+        f"run's:\n{prose}"
+    )
+    assert READING_ANOTHER_RUN_IS_ALLOWED[side] in flat, (
+        f"the monitor's {side} side now forbids reading another run, which costs the "
+        f"one finding only a reader of both runs can make:\n{prose}"
+    )
+    assert GROUNDING_GUARD[side] in flat, (
+        f"the monitor's {side} side lost the grounding guard — a claimed rule violation "
+        f"quotes the file and the line its rule comes from — which is a separate "
+        f"protection from knowing which run it is watching:\n{prose}"
+    )
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitor_is_told_which_run_it_observes(monitored: Monitored) -> None:
+    """The launch's own `ONEPIPELINE_RUN_ID` is what every command in the prompt takes.
+
+    Read off the prompt a real launch composed rather than off `personas/orchestrator.yaml`,
+    because a role stated in a file the launch does not merge is a role no model is
+    given — and this member's prompt is `config/onejudge.base.yaml` merged with that
+    persona, which exists nowhere until a launch composes it.
+    """
+    _assert_bound_to_the_run_it_observes(MONITOR_MEMBER, monitored.system)
+
+    flat = _flat(monitored.system)
+    unbound = [
+        verb
+        for verb in RUN_SCOPED_COMMANDS
+        if f"{verb} {BOUND_RUN_WORD}" not in flat and f"--kind finding {BOUND_RUN_WORD}" not in flat
+    ]
+    assert not unbound, (
+        f"the monitor's prompt shows {unbound} without the run the launch bound it to, "
+        f"so those examples name whichever run the member decides it is watching:"
+        f"\n{monitored.system}"
+    )
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitors_reviewing_side_holds_it_to_that_same_run(monitored: Monitored) -> None:
+    """The bar the planner rules against is bound to the same run, and read from a launch.
+
+    This half reaches no model at all: the monitor's judge side is
+    `scripts/channel-serve.py`, which raises `user.persona` to the live manager as its
+    own surface. So it is what a *person* is asked to rule on, and a bar that still said
+    `<run-id>` would ask them to accept an edit aimed anywhere.
+    """
+    _assert_bound_to_the_run_it_observes("review", monitored.review_bar)
 
 
 @pytest.mark.xdist_group("supervisory-prompts")

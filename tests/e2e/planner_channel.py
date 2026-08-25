@@ -21,7 +21,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from typing import TypedDict, cast
+from typing import Protocol, TypedDict, cast
 
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -123,6 +123,46 @@ def reply(run: str, environment: dict[str, str], envelope: str) -> subprocess.Co
     )
 
 
+def reply_unguarded(
+    run: str, environment: dict[str, str], envelope: str
+) -> subprocess.CompletedProcess[str]:
+    """Put one envelope on the channel through the engine, past the recipe's own guard.
+
+    `just channel-reply` refuses an envelope the run's pending blocking question
+    provably cannot use, which is what stops a manager sending one — and that refusal is
+    what makes this second route necessary rather than redundant. The wrapper's own
+    classifier is the last line of defence for an envelope that reached the channel some
+    other way: a monitor's reply, an older tool, or a release that has gone back to
+    routing by arrival order. Proving it needs an envelope on the channel that the
+    recipe would not have sent, and this is the only honest way to put one there.
+    """
+    return subprocess.run(
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "reply", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=envelope,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+class Send(Protocol):
+    """How a manager puts one envelope on this run's channel.
+
+    A seam rather than a fixed call, because there are two routes and a journey's
+    subject decides which it needs: `reply` is the recipe a manager types, and
+    `reply_unguarded` is the engine underneath it, for the one journey whose subject is
+    an envelope the recipe refuses to send. Every other caller takes the recipe and
+    never learns there are two.
+    """
+
+    def __call__(
+        self, run: str, environment: dict[str, str], envelope: str
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
 def answer_each(
     run: str,
     environment: dict[str, str],
@@ -130,6 +170,7 @@ def answer_each(
     *,
     seconds: float = MANAGER_PATIENCE_SECONDS,
     seen: list[Surface] | None = None,
+    send: Send | None = None,
 ) -> list[subprocess.CompletedProcess[str]]:
     """Read surfaces until a question appears, then reply. Once per answer.
 
@@ -144,6 +185,7 @@ def answer_each(
     routed an envelope, as opposed to inferring it from who blocked afterwards.
     """
     limit = deadline(seconds)
+    sending = reply if send is None else send
     answered: list[subprocess.CompletedProcess[str]] = []
     for compose in answers:
         token = None
@@ -159,7 +201,7 @@ def answer_each(
                 token = found.group(0)
                 break
             time.sleep(0.2)
-        sent = reply(run, environment, compose(token))
+        sent = sending(run, environment, compose(token))
         assert sent.returncode == 0, f"the channel refused this reply:\n{sent.stderr}{sent.stdout}"
         answered.append(sent)
     return answered
@@ -287,12 +329,13 @@ class Manager:
         answers: list[Callable[[str], str]],
         *,
         seconds: float = MANAGER_PATIENCE_SECONDS,
+        send: Send | None = None,
     ) -> None:
         self._failures: list[BaseException] = []
         self._answers: list[subprocess.CompletedProcess[str]] = []
         self._surfaces: list[Surface] = []
         self._thread = threading.Thread(
-            target=self._play, args=(run, environment, answers, seconds), daemon=True
+            target=self._play, args=(run, environment, answers, seconds, send), daemon=True
         )
         self._thread.start()
 
@@ -302,10 +345,18 @@ class Manager:
         environment: dict[str, str],
         answers: list[Callable[[str], str]],
         seconds: float,
+        send: Send | None,
     ) -> None:
         try:
             self._answers.extend(
-                answer_each(run, environment, answers, seconds=seconds, seen=self._surfaces)
+                answer_each(
+                    run,
+                    environment,
+                    answers,
+                    seconds=seconds,
+                    seen=self._surfaces,
+                    send=send,
+                )
             )
         except BaseException as error:  # noqa: BLE001 - re-raised by `checked` below
             self._failures.append(error)

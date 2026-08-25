@@ -95,6 +95,28 @@
 #       run does not have, and that refusal is fatal here rather than retried.
 set -euo pipefail
 
+# Resolved before anything else, because the shared rule below is a file beside this
+# one and two of the constants under it are built from what it declares. Reported
+# through `echo` rather than `fail`, which is not defined yet: a wrapper that cannot
+# find its own checkout has nothing to ask through either.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
+if ! script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) ||
+    ! root=$(CDPATH='' cd -- "$script_dir/.." && pwd); then
+    echo "ask-manager: this wrapper could not resolve the checkout it was run from; run it by its path inside a checkout, so the onepipeline it asks through is that checkout's" >&2
+    exit 2
+fi
+
+# What a reply must carry to be a ruling this may act on, declared once and read by
+# `just channel-reply` too — see scripts/ask-manager-contract.sh for why a second copy
+# would be worse than no check at all.
+contract_helper="$script_dir/ask-manager-contract.sh"
+if [ ! -f "$contract_helper" ] || [ ! -r "$contract_helper" ]; then
+    echo "ask-manager: required helper is not a readable regular file: $contract_helper; restore it from the repository or run 'just bootstrap', then ask again" >&2
+    exit 2
+fi
+# shellcheck source=scripts/ask-manager-contract.sh
+. "$contract_helper"
+
 #: The reply window this wrapper sets for itself, in seconds. Fifty minutes: long
 #: enough that a manager who stepped away still gets to answer, short enough that a
 #: wedged question is not immortal.
@@ -111,23 +133,16 @@ MAX_ATTEMPTS=4
 #: exactly, because a substring would also swallow a manager who wrote about a timeout.
 TIMEOUT_REASON="the channel timed out waiting for a verdict"
 
-#: What a run id may be before it is passed to `channel serve` as an argv word and
-#: resolved as the `runs/<run-id>/` directory, and what a node id may be before it is
-#: put into the frame the engine resolves against that run's graph. The same superset
-#: `scripts/channel-serve.py` checks, and for the same reason: it refuses only what
-#: those uses cannot survive. Both come from the environment a dispatch was started
-#: with, which is somebody else's to write, so both are checked here.
-SAFE_REFERENCE='^[A-Za-z0-9_][A-Za-z0-9_.-]*$'
-
-#: What a correlation token looks like on the wire. One source for the three uses that
+#: What a correlation token looks like on the wire. The prefix is
+#: `scripts/ask-manager-contract.sh`'s, sourced above, because `just channel-reply` now
+#: recognizes a pending question by it too; the rest is here, for the three uses that
 #: would otherwise drift apart: the token this question mints, the pattern that decides
 #: a drawn ruling echoes *somebody else's*, and `tests/e2e/planner_channel.py`'s `TOKEN`,
 #: which is what a manager is played by. `tests/test_planner_seam_contracts.py`
 #: reconciles this with that one, because a classifier reading a shape the minter stopped
 #: producing would call every foreign answer this question's own.
-TOKEN_PREFIX='ask-manager-token:'
 TOKEN_BYTES=12
-TOKEN_PATTERN="${TOKEN_PREFIX}[0-9a-f]{24}(?![0-9a-f])"
+TOKEN_PATTERN="${ASK_MANAGER_TOKEN_PREFIX}[0-9a-f]{24}(?![0-9a-f])"
 
 #: What the minted half must look like for `TOKEN_PATTERN` to match the token this
 #: question puts on the wire. Computed from `TOKEN_BYTES` rather than restated, so it
@@ -160,6 +175,11 @@ for message, blocking in ((sys.stdin.read(), True), (sys.argv[1], False)):
 # answer. Exit codes rather than a printed verdict, so the shell branches on a status
 # and stdout stays the manager message on the one path that has one.
 #
+# Whether an answer is a ruling at all is `scripts/ask-manager-contract.sh`'s to say,
+# embedded above rather than restated: `just channel-reply` refuses an envelope this
+# would discard, and a second copy of the condition is what would let the two ends
+# disagree about which replies are usable.
+#
 #   0  this question's answer, on stdout
 #   10 the channel answered its own timeout
 #   11 not a ruling at all, excerpt on stdout
@@ -172,20 +192,16 @@ for message, blocking in ((sys.stdin.read(), True), (sys.argv[1], False)):
 # again. A ruling echoing none was the manager answering this very surface without the
 # echo, which consumed it — and a run with no blocking surface left pending stops
 # accepting replies at all, so that case has to put the question back.
-CLASSIFY_PROGRAM='
+CLASSIFY_PROGRAM="$ASK_MANAGER_RULING_SOURCE"'
 import json, re, sys
 
 timeout_reason, token, foreign = sys.argv[1], sys.argv[2], sys.argv[3]
 raw = sys.stdin.read()
 excerpt = " ".join(raw.split())[:200]
-try:
-    answer = json.loads(raw)
-except json.JSONDecodeError:
+if ruling_refusal(raw) is not None:
     sys.stdout.write(excerpt)
     sys.exit(11)
-if not isinstance(answer, dict) or not isinstance(answer.get("completion"), bool):
-    sys.stdout.write(excerpt)
-    sys.exit(11)
+answer = json.loads(raw)
 if answer.get("reason") == timeout_reason:
     sys.exit(10)
 message = answer.get("message")
@@ -204,13 +220,6 @@ fail() {
 usage() {
     echo "usage: ask-manager.sh <question-text> | --file <path> | (question on stdin)" >&2
 }
-
-# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
-if ! script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) ||
-    ! root=$(CDPATH='' cd -- "$script_dir/.." && pwd); then
-    fail "this wrapper could not resolve the checkout it was run from" \
-        "run it by its path inside a checkout, so the onepipeline it asks through is that checkout's"
-fi
 
 python="$root/.venv/bin/python3"
 [ -x "$python" ] || python=python3
@@ -268,13 +277,13 @@ run="$ONEPIPELINE_RUN_ID"
 [ -n "${run//[[:space:]]/}" ] || fail "ONEPIPELINE_RUN_ID is set but blank, so it names no run" \
     "export the run id 'just runs' lists for this workstream, or unset it if this is not running under one"
 # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
-[[ "$run" =~ $SAFE_REFERENCE ]] || fail "ONEPIPELINE_RUN_ID is '$run', which this wrapper will not pass to 'channel serve' as a run" \
+[[ "$run" =~ $ASK_MANAGER_SAFE_REFERENCE ]] || fail "ONEPIPELINE_RUN_ID is '$run', which this wrapper will not pass to 'channel serve' as a run" \
     "a run id is one word of letters, digits, '_', '.', and '-'; check it against the runs 'just runs' lists"
 
 node="${ORCHESTRATOR_ASK_MANAGER_NODE:-}"
 if [ -n "$node" ]; then
     # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
-    [[ "$node" =~ $SAFE_REFERENCE ]] || fail "ORCHESTRATOR_ASK_MANAGER_NODE is '$node', which this wrapper will not put in a frame as a node" \
+    [[ "$node" =~ $ASK_MANAGER_SAFE_REFERENCE ]] || fail "ORCHESTRATOR_ASK_MANAGER_NODE is '$node', which this wrapper will not put in a frame as a node" \
         "a node id is one word of letters, digits, '_', '.', and '-'; check it against the nodes 'just status $run' lists, or unset it to ask about the run as a whole"
 fi
 
@@ -296,7 +305,7 @@ minted=$(od -An -N"$TOKEN_BYTES" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') ||
 [[ "$minted" =~ $TOKEN_SHAPE ]] || fail \
     "the correlation token minted here is '$minted', which is not the $((TOKEN_BYTES * 2)) lowercase hex digits a reply is matched against" \
     "check that the 'od' and 'tr' first on this PATH behave as coreutils' do, then ask again"
-token="$TOKEN_PREFIX$minted"
+token="$ASK_MANAGER_TOKEN_PREFIX$minted"
 
 asked="$question
 

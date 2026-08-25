@@ -55,6 +55,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
 )
 from planner_channel import PersistentManager, just, ruling
+from scratch_identity import seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -153,6 +154,12 @@ ASK_WINDOW_SECONDS = int(e2e_timeout(ANSWERED_SECONDS * 2))
 #: the two beside each other left that module's wrapper waiting past its own deadline.
 #: What has to be serialized is driving a channel, not driving this file's channels.
 LAUNCH_GROUP = "ask-manager-channel"
+
+#: The two checkouts the node `just plan` writes names, as `scripts/plan.sh` defaults
+#: them. Each launch below seeds a scratch pair under exactly these names, so the
+#: recipe's own defaults resolve against a registry of the journey's own.
+PUBLICATION_ALIAS = "ai-orchestrator"
+EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
 #: The brief a `just plan` launch is made from. Written to a temporary directory rather
 #: than taken from `examples/`, so these journeys read none of this repository's prose
@@ -607,6 +614,14 @@ def _planned(tmp_path: Path, oneharness_bin: str, run: RunId, *detached: str) ->
     """
     turns, record = tmp_path / "turns.jsonl", tmp_path / "asked.json"
     environment = _environment(tmp_path, oneharness_bin, turns, record=record)
+    # The plan this recipe writes is a lifecycle node naming the two checkouts it
+    # defaults to, so the launch opens a real `onevcs` session — and it may never be
+    # this host's, whose registry a session reclaims run roots under. Seeded under those
+    # two alias names rather than overridden per launch: what these journeys drive is
+    # the recipe as an operator types it, and a `--repo` here would be proving a flag.
+    environment["ONEVCS_HOME"] = str(
+        seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS).home
+    )
     brief = tmp_path / f"{run}.md"
     brief.write_text(BRIEF, encoding="utf-8")
     generated = PLAN_DIRECTORY / f"{run}.plan.json"

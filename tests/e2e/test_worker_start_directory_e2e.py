@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
-from conftest import git
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
+from scratch_identity import seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -85,27 +85,6 @@ LAUNCHER_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: The scratch identity's policy: merged in the local checkout. It names no verifier
-#: because onevcs 0.11.0 removed the concept, and this repository never had one to
-#: name here anyway. The publication path is not this journey's subject — the
-#: worker reports without changing anything, so nothing is ever published — but a
-#: registered checkout that matched no rule fails `just repos-apply` outright.
-RULES = """version: 3
-trailer_prefix: Orchestrator-
-rules:
-  - match: {path: "*"}
-    publication: local-direct
-    approvals: none
-default:
-  publication: local-direct
-  approvals: none
-"""
-
-#: The committer this journey's own seed commit carries. `tests/conftest.py` exports
-#: one per test, and the launch fixture below is module-scoped, so it is set up
-#: before that function-scoped fixture has run.
-GIT_IDENTITY = ("-c", "user.email=test@example.com", "-c", "user.name=ai-orchestrator-test")
-
 
 class Placement(TypedDict):
     """The one payload field both journal records this journey reads carry."""
@@ -140,42 +119,6 @@ class Launched(NamedTuple):
     journal: list[JournalEvent]
     #: Every turn the fake backend served, as it was pinned.
     turns: list[TurnRecord]
-
-
-def _seed_identity(root: Path) -> tuple[Path, Path]:
-    """A bare origin with one commit on `main`, and the two clones of it to register."""
-    origin = root / "origin.git"
-    seed = root / "seed"
-    git("init", "-q", "--bare", "-b", "main", str(origin))
-    git("init", "-q", "-b", "main", str(seed))
-    (seed / "README.md").write_text("seed\n", encoding="utf-8")
-    git("add", "-A", cwd=seed)
-    git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=seed)
-    git("remote", "add", "origin", str(origin), cwd=seed)
-    git("push", "-q", "origin", "main", cwd=seed)
-    publication = root / "publication"
-    execution = root / EXECUTION_ALIAS
-    git("clone", "-q", str(origin), str(publication))
-    git("clone", "-q", str(origin), str(execution))
-    return publication, execution
-
-
-def _register(root: Path, home: Path, checkouts: tuple[Path, ...]) -> None:
-    """Bring a scratch registry up to a scratch configuration, through the real recipe."""
-    manifest = root / "onevcs.checkouts"
-    manifest.write_text("".join(f"{path}\n" for path in checkouts), encoding="utf-8")
-    rules = root / "onevcs.rules.yml"
-    rules.write_text(RULES, encoding="utf-8")
-    applied = subprocess.run(
-        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
-        cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": str(home)},
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(120),
-        check=False,
-    )
-    assert applied.returncode == 0, f"repos-apply failed:\n{applied.stdout}\n{applied.stderr}"
 
 
 def _plan(root: Path, publication: Path) -> Path:
@@ -214,10 +157,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     root = tmp_path_factory.mktemp("worker-start-directory")
-    home = root / "onevcs"
-    home.mkdir()
-    publication, execution = _seed_identity(root)
-    _register(root, home, (publication, execution))
+    identity = seeded(root, execution=EXECUTION_ALIAS)
 
     environment = dict(os.environ)
     for name in LAUNCHER_ENVIRONMENT:
@@ -225,7 +165,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     # Every root this run writes under, so its registry, its worktrees, its ledger,
     # and its graph scratch are all this journey's and none of them the host's.
-    environment["ONEVCS_HOME"] = str(home)
+    environment["ONEVCS_HOME"] = str(identity.home)
     environment["ONEPIPELINE_RUNS_DIR"] = str(root / "runs")
     environment["XDG_STATE_HOME"] = str(root / "state")
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
@@ -235,7 +175,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment[PROMPT_LOG_ENV] = str(prompt_log)
 
     launch = subprocess.run(
-        ["just", "orchestrate", str(_plan(root, publication))],
+        ["just", "orchestrate", str(_plan(root, identity.publication))],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -262,6 +202,9 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
 
 def _started(journal: list[JournalEvent], member: str) -> list[str]:
     """Every directory the journal records a `member` having been started in."""
+    # Which is why this question belonged to the journal at all — the module docstring
+    # above names both records and why they are the source.
+    # llmlint: ignore[tests_mirror_real_usage] No view reports a member's start directory.
     return [
         event["payload"]["worktree"]
         for event in journal

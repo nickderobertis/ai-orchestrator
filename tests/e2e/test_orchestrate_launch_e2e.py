@@ -143,8 +143,10 @@ SURFACE_KIND_OF_A_MONITOR = "monitor"
 #: The read the monitor's persona tells it to make: the `monitor` profile, which carries
 #: each dispatched worker's turns as well as the pipeline's own node events. The whole
 #: command rather than the profile name, because naming `monitor` alone would also match
-#: the member, the recipe, and the verb.
-DETAILED_STREAM_COMMAND = "onepipeline monitor <run-id> --filter monitor"
+#: the member, the recipe, and the verb — and with the run spelled as the variable the
+#: launch exports, because that is what binds the read to this run rather than to
+#: whichever one the member inferred it was watching.
+DETAILED_STREAM_COMMAND = 'onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter monitor'
 
 #: A launching session the journey states rather than inherits. The suite runs
 #: inside a dispatch whose own harness session would otherwise decide these
@@ -3139,7 +3141,16 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
             seconds=120,
         )
         reported = refused.stderr + refused.stdout
-        reached_downstream_boundary = "dag-scope.yaml" in reported or "session holders" in reported
+        # Three markers, one per boundary a loaded plan can next reach on this host:
+        # the absent agent graph, a stale session holder, and the repository preflight
+        # refusing to work an identity another session holds. That last one is not a
+        # weaker signal than the others — it is preflight, which runs only on a plan the
+        # launcher has already accepted — and it is the one a lifecycle plan naming this
+        # repository reaches whenever a run of it is live, which is most of the time.
+        reached_downstream_boundary = any(
+            marker in reported
+            for marker in ("dag-scope.yaml", "session holders", "concurrent project work refused")
+        )
         assert reached_downstream_boundary, f"{origin} was not accepted as a plan:\n{reported}"
 
 

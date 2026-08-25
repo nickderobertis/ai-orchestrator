@@ -176,8 +176,9 @@ orchestrate *args:
     @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else defaults=(); for pair in "--dag-graph graphs/dag-scope.yaml" "--pr-author-graph graphs/pr-author.yaml"; do read -r flag ref <<<"$pair"; named=; for argument in "$@"; do if [[ "$argument" == "$flag" || "$argument" == "$flag"=* ]]; then named=1; break; fi; done; [[ -n "$named" ]] || defaults+=("$flag" "$ref"); done; ./scripts/onepipeline.sh start "$@" ${defaults[@]+"${defaults[@]}"}; fi
 
 # Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
-# [--max-turns N] [<onepipeline start flags>]`. Those two flags are the recipe's own;
-# everything else reaches `onepipeline start` untouched.
+# [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct]
+# [<onepipeline start flags>]`. Those five flags are the recipe's own; everything else
+# reaches `onepipeline start` untouched.
 #
 # It writes the one-node plan rather than asking a manager to remember its shape;
 # `scripts/plan.sh` states what has to be right about that shape and why. The
@@ -185,6 +186,19 @@ orchestrate *args:
 # `scripts/onepipeline.sh`'s, for `start` and `adopt` alike — but the run id is: this
 # recipe owns the plan's `name`, so it refuses one already taken rather than letting
 # the engine mint a different id than the one it printed.
+#
+# The node it writes is a **lifecycle** node, so the planner works in a worktree cut
+# from the registered `ai-orchestrator-isolated` safety clone rather than in this
+# shared checkout — which the self-dispatch rule in `AGENTS.md` forbids authoring in,
+# and which a direct planner dispatch cut a branch in, committed to, and left checked
+# out, failing a finished publication and destroying a manager's plan files. `--repo`
+# and `--execution-checkout` name a different registered pair.
+#
+# `--direct` keeps the old shape for a planning dispatch that must cut no worktree at
+# all. It is a working directory nobody owns exclusively, so such a dispatch **may
+# write only to gitignored paths, may not commit, and may not leave the checkout on
+# any branch but its base**; nothing enforces that, which is why the recipe says it on
+# every launch that takes the flag.
 #
 # Unlike `just orchestrate` it names `--dag-graph off`: the ledger, the surfaces and
 # the DAG UI place are `onepipeline start`'s own, so what an observer would add to a
@@ -222,9 +236,16 @@ channel-next *args:
 # `just channel-reply <run-id> [FILE]` — the envelope is read from FILE, or from
 # stdin when none is named. It carries a legacy verdict, versioned live graph
 # edits, or both.
+#
+# It reaches `onepipeline reply` through `scripts/channel-reply.sh`, which forwards
+# the caller's own arguments and adds exactly one refusal: an envelope the run's
+# pending blocking question provably cannot use. `delivered` is a transport receipt
+# and not a receipt that anybody could read the reply — three envelopes omitting
+# `completion` were each reported delivered and each discarded by the asking
+# wrapper, leaving a planner blocked for thirty-five minutes with nothing to say so.
 # llmlint: ignore[tool_output_is_signal] channel-reply validates the reply and names transport/rendezvous failures so the planner can reattach and retry.
 channel-reply *args:
-    @./scripts/onepipeline.sh reply "$@"
+    @./scripts/channel-reply.sh "$@"
 
 # Raise a non-blocking planner status update: `just channel-surface <run-id> [TEXT]`.
 channel-surface *args:

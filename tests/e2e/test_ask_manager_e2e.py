@@ -43,6 +43,7 @@ from planner_channel import (
     next_surface,
     next_surface_record,
     reply,
+    reply_unguarded,
     ruling,
 )
 from waits import deadline
@@ -50,8 +51,12 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: The wrapper under test, run as an agent runs it.
+#: The wrapper under test, run as an agent runs it, and the file beside it that
+#: declares what a usable ruling is. A checkout holding one without the other is not a
+#: checkout the wrapper can run in — it refuses, naming the missing helper — so the
+#: journeys that stand a wrapper up somewhere else stand up both.
 ASK_MANAGER = REPO_ROOT / "scripts" / "ask-manager.sh"
+ASK_MANAGER_FILES = (ASK_MANAGER, REPO_ROOT / "scripts" / "ask-manager-contract.sh")
 
 #: The stand-in for the paid model, and the provider binary beneath it. Neither is
 #: reached by these runs — a human gate dispatches nothing — and both are named for
@@ -527,10 +532,17 @@ def test_a_ruling_carrying_the_token_but_no_decision_is_refused(asked: Asked) ->
     reply carrying the token and no decision reaches the wrapper — measured, the channel
     hands the envelope back verbatim — and must be refused rather than returned as the
     manager's prose.
+
+    The manager here sends through the engine rather than through `just channel-reply`,
+    because that recipe now refuses this exact envelope before it is sent —
+    `test_an_envelope_the_pending_question_cannot_use_is_refused_where_it_is_sent` is
+    what holds that. The two are complementary rather than redundant: the recipe stops a
+    manager sending one, and this classifier is what still stands between an agent and
+    an envelope that reached the channel by some other route.
     """
     asking = _ask(asked, "Is the cursor opaque?", window=ANSWERED_WINDOW_SECONDS)
     undecided = [lambda token: json.dumps({"version": 1, "message": f"maybe {token}"})]
-    manager = Manager(asked.run, asked.environment, undecided)
+    manager = Manager(asked.run, asked.environment, undecided, send=reply_unguarded)
 
     status, out, err = _finish(asking)
     manager.checked(asker_said=err)
@@ -572,6 +584,201 @@ def test_a_ruling_addressed_to_another_reader_is_re_asked_rather_than_returned(
         f"the wrapper handed back a ruling that never saw its token:\n{out}"
     )
     assert TOKEN.sub("", out).strip() == ANSWER, out
+
+
+#: An envelope a manager would plausibly write and the channel would plausibly accept,
+#: and which the asking wrapper then discards: it decides nothing, so it is not a
+#: ruling. Three of exactly this shape were each reported `delivered` on this host and
+#: each read by nobody, leaving the planner that asked blocked for about thirty-five
+#: minutes while it re-asked twice.
+UNUSABLE_REPLY = json.dumps({"version": 1, "message": "yes, key it on the whole workspace"})
+
+#: Every other way an envelope can fail to be a ruling, each named by what a manager
+#: would have done to produce it. All four are one rule — the asking wrapper's own — and
+#: all four are discarded there in silence, so the refusal has to reach all four.
+UNUSABLE_REPLIES = (
+    ("no completion field", UNUSABLE_REPLY),
+    ("not JSON at all", "yes, key it on the whole workspace"),
+    ("a JSON list", json.dumps([{"completion": True}])),
+    ("a completion that is a string", json.dumps({"version": 1, "completion": "true"})),
+)
+
+#: The same decision, spelled as a ruling. What separates the two is the one field the
+#: refusal has to name.
+REQUIRED_FIELD = "completion"
+
+#: A live edit, which carries no `completion` by design and which the adopted release
+#: routes to the command path rather than to the waiting reader. It must still be sent
+#: while a question is pending: that is precisely when a manager most needs to steer,
+#: and a guard that refused it would take that away for the whole time the question is
+#: unanswered.
+LIVE_EDIT = json.dumps(
+    {
+        "version": 1,
+        "author": "planner",
+        "commands": [{"op": "context", "id": WORK_NODE, "note": "the base moved under you"}],
+    }
+)
+
+
+def _pending(asked: Asked) -> dict[str, object] | None:
+    """The surface a reply would bind to, read out of the channel's own queue.
+
+    Read from the queue rather than through `just channel-next`, deliberately: reading a
+    surface is what a manager does *to* the queue, and this asks what is still waiting
+    without touching it. The file is `onepipeline`'s, and `pending` is the object a
+    reply binds to.
+    """
+    # llmlint: ignore[tests_mirror_real_usage] Reading a surface consumes it.
+    queue = Path(asked.environment["ONEPIPELINE_RUNS_DIR"]) / asked.run / "channel" / "queue.json"
+    if not queue.is_file():
+        return None
+    # `cast` rather than a validating read: `onepipeline` owns this file's schema, and
+    # what this journey reads off it is one object under one key.
+    return cast(dict[str, object] | None, json.loads(queue.read_text(encoding="utf-8"))["pending"])
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_an_envelope_the_pending_question_cannot_use_is_refused_where_it_is_sent(
+    asked: Asked, tmp_path: Path
+) -> None:
+    """A reply the asking wrapper would discard fails loudly at the point it is sent.
+
+    `delivered` is a transport receipt and was read as a receipt that somebody could act
+    on it. This is the whole round trip of the defect and its repair, against the real
+    channel: a real question is pending, an envelope that cannot answer it is sent
+    through the real `just channel-reply`, and it must be refused — naming the field
+    that is missing — with the question still pending afterwards, so the manager's next
+    try still has something to answer. The usable reply that follows is what proves the
+    refusal is a guard rather than a wall: the same wrapper, the same question, and an
+    answer that arrives.
+    """
+    asking = _ask(asked, "Should the test key cover docs?", window=ANSWERED_WINDOW_SECONDS)
+    # Handing the blocking surface out is what opens the reply rendezvous at all, so a
+    # reply sent before it is refused for a reason that has nothing to do with this.
+    question = _waited_for_question(asked, asking)
+    token = TOKEN.search(question)
+    assert token is not None, f"the question carried no correlation token:\n{question}"
+
+    # Every unusable shape against the same question, in turn. That is the assertion
+    # rather than an economy: each refusal has to leave the question answerable, so a
+    # guard that consumed it would fail on the next shape rather than pass unnoticed.
+    for what, envelope in UNUSABLE_REPLIES:
+        refused = reply(asked.run, asked.environment, envelope)
+
+        assert refused.returncode != 0, (
+            f"an envelope with {what}, which the waiting question cannot use, was "
+            f"accepted — so it was reported delivered and read by nobody:"
+            f"\n{refused.stdout}{refused.stderr}"
+        )
+        assert REQUIRED_FIELD in refused.stderr, (
+            f"the refusal of an envelope with {what} does not name the field the "
+            f"question needs, so the manager is told only that something was wrong:"
+            f"\n{refused.stderr}"
+        )
+        still_waiting = _pending(asked)
+        assert still_waiting is not None and still_waiting.get("blocking") is True, (
+            f"refusing an envelope with {what} consumed the pending question, so "
+            f"nothing is left for a usable reply to answer: {still_waiting}"
+        )
+
+    # Through a file rather than on stdin, which is the other published shape and the
+    # one that keeps the caller's own arguments: the verb reads the file itself, so what
+    # it acts on is what is on disk rather than anything that passed through the guard.
+    written = tmp_path / "ruling.json"
+    written.write_text(ruling(f"{ANSWER} {token.group(0)}"), encoding="utf-8")
+    answered = _just("channel-reply", asked.run, str(written), environment=asked.environment)
+    assert answered.returncode == 0, (
+        f"the same question then refused a usable ruling, so this is a wall rather than "
+        f"a guard:\n{answered.stdout}{answered.stderr}"
+    )
+
+    status, out, err = _finish(asking)
+    assert status == 0, f"the wrapper never received the ruling that was accepted:\n{err}"
+    assert TOKEN.sub("", out).strip() == ANSWER, out
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_a_live_edit_still_reaches_the_graph_while_a_question_is_pending(
+    asked: Asked,
+) -> None:
+    """The guard refuses an answer that cannot answer, not everything without a verdict.
+
+    A `commands` envelope carries no `completion` and is not trying to answer anything:
+    the adopted release routes it to the command path, where it lands on the graph and
+    answers zero surfaces. Refusing it would take a manager's steering away for exactly
+    as long as a question went unanswered — so it goes through with a question pending,
+    and the verb's own answer is what says it landed.
+    """
+    asking = _ask(asked, "Which cursor shape should the route take?", window=SHORT_WINDOW_SECONDS)
+    _waited_for_question(asked, asking)
+
+    edited = reply(asked.run, asked.environment, LIVE_EDIT)
+
+    assert edited.returncode == 0, (
+        f"a live graph edit was refused while a question was pending, which is when a "
+        f"manager most needs to steer:\n{edited.stdout}{edited.stderr}"
+    )
+    assert json.loads(edited.stdout)["state"] == "applied", (
+        f"the edit reached the verb but did not land on the graph:\n{edited.stdout}"
+    )
+
+    _reaped(asking)
+
+
+def _compare_both_routes(asked: Asked, state: str) -> None:
+    """The recipe and the verb beneath it answer one envelope the same way.
+
+    Proof by comparison rather than by asserting one message: a refusal reworded
+    upstream moves both together, where an assertion about wording would go stale
+    claiming a guard was silent when it had merely stopped mattering.
+    """
+    through_the_recipe = reply(asked.run, asked.environment, UNUSABLE_REPLY)
+    through_the_engine = reply_unguarded(asked.run, asked.environment, UNUSABLE_REPLY)
+
+    assert through_the_recipe.returncode == through_the_engine.returncode, (
+        f"with {state}, the recipe answered {through_the_recipe.returncode} where the "
+        f"verb beneath it answered {through_the_engine.returncode}:"
+        f"\n{through_the_recipe.stderr}"
+    )
+    assert through_the_recipe.stdout == through_the_engine.stdout, (
+        f"with {state}, the recipe reported something the verb did not:"
+        f"\n{through_the_recipe.stdout}"
+    )
+    assert "channel-reply:" not in through_the_recipe.stderr, (
+        f"with {state}, the recipe refused a reply it has nothing to refuse against:"
+        f"\n{through_the_recipe.stderr}"
+    )
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_a_reply_with_no_blocking_question_pending_behaves_as_it_did_before(
+    asked: Asked,
+) -> None:
+    """With no question waiting, the recipe is the passthrough it always was.
+
+    Twice, because there are two ways for a run to have no question waiting and only one
+    of them is the empty case. A run this host watches always has *something* pending —
+    the monitor and the pacemaker raise a surface on every turn — and a guard that fired
+    on those would refuse a manager's replies for the whole life of every watched run,
+    which is a far larger regression than the defect it was added for.
+    """
+    assert _pending(asked) is None, "this run already has a surface pending"
+    _compare_both_routes(asked, "nothing pending")
+
+    # And with a surface pending that is not a question anybody is blocked on. This
+    # host's monitor and its pacemaker raise one on every run, so it is the ordinary
+    # state rather than a corner: a guard that fired on it would refuse a manager's
+    # replies for the whole life of every watched run.
+    raised = _just(
+        "channel-surface", asked.run, "the frontier is idle", environment=asked.environment
+    )
+    assert raised.returncode == 0, f"the run refused a status update:\n{raised.stderr}"
+    handed = next_surface_record(asked.run, asked.environment)
+    assert handed is not None and handed["blocking"] is False, (
+        f"this journey needs a non-blocking surface pending and got {handed}"
+    )
+    _compare_both_routes(asked, "a non-blocking surface pending")
 
 
 def _drained(asked: Asked) -> list[Surface]:
@@ -1071,11 +1278,7 @@ def test_a_checkout_with_no_pinned_onepipeline_is_refused_rather_than_falling_ba
     from a directory that has no `.venv`, which is exactly the state a half-restored
     checkout is in.
     """
-    detached = tmp_path / "checkout" / "scripts"
-    detached.mkdir(parents=True)
-    copied = detached / ASK_MANAGER.name
-    copied.write_bytes(ASK_MANAGER.read_bytes())
-    copied.chmod(0o755)
+    copied = _wrapper_in(tmp_path / "checkout" / "scripts")
     environment = dict(asked.environment)
     environment["ONEPIPELINE_RUN_ID"] = asked.run
     environment.pop("ONEPIPELINE_BIN", None)
@@ -1095,6 +1298,41 @@ def test_a_checkout_with_no_pinned_onepipeline_is_refused_rather_than_falling_ba
     assert "has no onepipeline at" in refused.stderr and "just bootstrap" in refused.stderr, (
         refused.stderr
     )
+
+
+def test_a_checkout_without_the_shared_contract_is_refused_rather_than_judging_alone(
+    asked: Asked, tmp_path: Path
+) -> None:
+    """The wrapper will not classify an answer with a rule it could not read.
+
+    What makes an answer a ruling is stated once, beside this wrapper, and read by the
+    recipe that sends one too. A copy of the wrapper standing without it has no rule at
+    all — and the shell it is written in fails open, so an unset condition would classify
+    every envelope the channel handed back as this question's answer. That is the one
+    failure worse than not asking, so it is named and the ask stops.
+    """
+    scripts = tmp_path / "checkout" / "scripts"
+    copied = _wrapper_in(scripts)
+    (scripts / "ask-manager-contract.sh").unlink()
+    environment = dict(asked.environment)
+    environment["ONEPIPELINE_RUN_ID"] = asked.run
+
+    refused = subprocess.run(  # noqa: S603 - the real wrapper, from a checkout missing a piece
+        [str(copied), "Which way?"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert refused.stdout == "", (
+        f"a refused ask still printed something to act on:\n{refused.stdout}"
+    )
+    assert "ask-manager-contract.sh" in refused.stderr, refused.stderr
+    assert "just bootstrap" in refused.stderr, refused.stderr
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
@@ -1159,6 +1397,20 @@ def _stand_in(directory: Path, name: str, script: str) -> Path:
     return written
 
 
+def _wrapper_in(scripts: Path) -> Path:
+    """Stand the real wrapper up in a scripts directory of its own, and hand it back.
+
+    The whole point of these journeys is a checkout that is missing something, so what
+    is present has to be exactly what a runnable one has: the wrapper and the rule file
+    it sources. Copying the wrapper alone would refuse on the helper, which is a real
+    refusal and not the one under test.
+    """
+    return [
+        _stand_in(scripts, source.name, source.read_text(encoding="utf-8"))
+        for source in ASK_MANAGER_FILES
+    ][0]
+
+
 @pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_channel_that_answers_with_nothing_is_reported_rather_than_read_as_an_answer(
     asked: Asked, tmp_path: Path
@@ -1196,7 +1448,7 @@ def test_a_toolchain_that_cannot_judge_the_answer_says_so_rather_than_falling_th
     which is what a half-restored checkout does.
     """
     checkout = tmp_path / "checkout"
-    copied = _stand_in(checkout / "scripts", ASK_MANAGER.name, ASK_MANAGER.read_text("utf-8"))
+    copied = _wrapper_in(checkout / "scripts")
     (checkout / ".venv" / "bin").mkdir(parents=True)
     (checkout / ".venv" / "bin" / "onepipeline").symlink_to(REPO_ROOT / ".venv/bin/onepipeline")
     # llmlint: ignore[e2e_not_mocked] The wrapper is real; a broken judge is the input.
@@ -1248,7 +1500,7 @@ def test_a_question_that_cannot_be_encoded_is_refused_before_the_channel_is_reac
     interpreter beside it.
     """
     checkout = tmp_path / "checkout"
-    copied = _stand_in(checkout / "scripts", ASK_MANAGER.name, ASK_MANAGER.read_text("utf-8"))
+    copied = _wrapper_in(checkout / "scripts")
     (checkout / ".venv" / "bin").mkdir(parents=True)
     (checkout / ".venv" / "bin" / "onepipeline").symlink_to(REPO_ROOT / ".venv/bin/onepipeline")
     # llmlint: ignore[e2e_not_mocked] The wrapper is real; a broken encoder is the input.

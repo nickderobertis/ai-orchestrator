@@ -38,6 +38,23 @@ TASK_TEMPLATE = REPO_ROOT / "personas" / "planner.yaml"
 CHANNEL_FILTER = REPO_ROOT / "scripts" / "channel-serve.py"
 ASK_SCRIPT = REPO_ROOT / "scripts" / "ask-manager.sh"
 
+#: The one statement of what the two ends of that channel must agree on: the reference
+#: grammar, the prefix a question of the wrapper's is recognized by, and what a reply
+#: must carry to be an answer. Both ends source it — the wrapper that asks and reads the
+#: answer, and the recipe that sends one — so each is read from here rather than from
+#: whichever consumer happens to use it most.
+CONTRACT_HELPER = REPO_ROOT / "scripts" / "ask-manager-contract.sh"
+
+#: The two scripts that read it, and the two names each has to reach it by: the shell
+#: variable holding the rule as Python source, and the program each embeds it in. Read
+#: as names rather than by importing shell, which is why this gate exists at all.
+CONTRACT_CONSUMERS = (
+    REPO_ROOT / "scripts" / "ask-manager.sh",
+    REPO_ROOT / "scripts" / "channel-reply.sh",
+)
+RULING_SOURCE_DECLARATION = "ASK_MANAGER_RULING_SOURCE='"
+RULING_SOURCE_USE = "$ASK_MANAGER_RULING_SOURCE"
+
 #: The journeys that measure what each launch shape hands a dispatch, and the shape
 #: their list of required inputs is written in. Read textually rather than imported: it
 #: is a pytest module whose import would collect fixtures, and reading a declaration is
@@ -71,8 +88,8 @@ SPAN = re.compile(r"`(##[^`]+)`")
 #: The wrapper's one declaration of a correlation token's wire shape, and the manager
 #: side's. The shell builds its pattern from the prefix, so both halves are read: a
 #: prefix that drifted would classify every foreign answer as this question's own.
-SHELL_TOKEN_PREFIX = re.compile(r"TOKEN_PREFIX='(?P<prefix>[^']+)'")
-SHELL_TOKEN_PATTERN = re.compile(r'TOKEN_PATTERN="\$\{TOKEN_PREFIX\}(?P<rest>[^"]+)"')
+SHELL_TOKEN_PREFIX = re.compile(r"ASK_MANAGER_TOKEN_PREFIX='(?P<prefix>[^']+)'")
+SHELL_TOKEN_PATTERN = re.compile(r'TOKEN_PATTERN="\$\{ASK_MANAGER_TOKEN_PREFIX\}(?P<rest>[^"]+)"')
 PYTHON_TOKEN = re.compile(r'TOKEN = re\.compile\(r"(?P<pattern>[^"]+)"\)')
 
 #: How many random bytes the wrapper mints a token from, and how many hex digits its
@@ -89,7 +106,7 @@ MANAGER_SIDE = REPO_ROOT / "tests" / "e2e" / "planner_channel.py"
 #: written here: this gate's whole job is that the two agree, and a third copy in the
 #: test would be one more thing to keep current.
 PYTHON_GRAMMAR = re.compile(r"SAFE_RUN_ID = re\.compile\(r\"(?P<pattern>[^\"]+)\"\)")
-SHELL_GRAMMAR = re.compile(r"SAFE_REFERENCE='(?P<pattern>[^']+)'")
+SHELL_GRAMMAR = re.compile(r"ASK_MANAGER_SAFE_REFERENCE='(?P<pattern>[^']+)'")
 
 #: The anchors each language spells differently for the same thing: Python's `\A`/`\Z`
 #: match the whole string, and in a bash `[[ =~ ]]` that is what `^`/`$` do. Stripping
@@ -147,14 +164,14 @@ def test_both_ends_of_the_planner_channel_check_one_reference_grammar() -> None:
     and the difference would only ever show up as a channel that would not answer.
     """
     named = PYTHON_GRAMMAR.search(CHANNEL_FILTER.read_text(encoding="utf-8"))
-    checked = SHELL_GRAMMAR.search(ASK_SCRIPT.read_text(encoding="utf-8"))
+    checked = SHELL_GRAMMAR.search(CONTRACT_HELPER.read_text(encoding="utf-8"))
     assert named is not None, f"{CHANNEL_FILTER.name} declares no SAFE_RUN_ID"
-    assert checked is not None, f"{ASK_SCRIPT.name} declares no SAFE_REFERENCE"
+    assert checked is not None, f"{CONTRACT_HELPER.name} declares no ASK_MANAGER_SAFE_REFERENCE"
 
     assert _body(named.group("pattern")) == _body(checked.group("pattern")), (
         f"{CHANNEL_FILTER.name} accepts {named.group('pattern')!r} as a run id while "
-        f"{ASK_SCRIPT.name} accepts {checked.group('pattern')!r}; one end of the channel "
-        "would refuse a run the other passed on"
+        f"{CONTRACT_HELPER.name} accepts {checked.group('pattern')!r}; one end of the "
+        "channel would refuse a run the other passed on"
     )
 
 
@@ -195,10 +212,10 @@ def test_both_ends_of_the_channel_agree_what_a_correlation_token_looks_like() ->
     shape the wrapper no longer recognizes would prove the opposite of what it asserts.
     """
     shell = ASK_SCRIPT.read_text(encoding="utf-8")
-    prefix = SHELL_TOKEN_PREFIX.search(shell)
+    prefix = SHELL_TOKEN_PREFIX.search(CONTRACT_HELPER.read_text(encoding="utf-8"))
     rest = SHELL_TOKEN_PATTERN.search(shell)
     echoed = PYTHON_TOKEN.search(MANAGER_SIDE.read_text(encoding="utf-8"))
-    assert prefix is not None, f"{ASK_SCRIPT.name} declares no TOKEN_PREFIX"
+    assert prefix is not None, f"{CONTRACT_HELPER.name} declares no ASK_MANAGER_TOKEN_PREFIX"
     assert rest is not None, f"{ASK_SCRIPT.name} declares no TOKEN_PATTERN built from it"
     assert echoed is not None, f"{MANAGER_SIDE.name} declares no TOKEN"
 
@@ -208,6 +225,56 @@ def test_both_ends_of_the_channel_agree_what_a_correlation_token_looks_like() ->
         f"echoes {echoed.group('pattern')!r}; the wrapper would read another ask's answer "
         "as tokenless and ask its question a second time"
     )
+
+
+def test_both_ends_of_the_channel_read_one_statement_of_what_a_reply_must_carry() -> None:
+    """The rule an unusable reply is refused by is the rule the asking wrapper applies.
+
+    Two processes judge the same envelope minutes apart and at opposite ends of the
+    channel: `just channel-reply` decides whether what is being sent can answer the
+    question waiting, and `scripts/ask-manager.sh` decides whether what came back is a
+    ruling it may act on. A second copy of that rule fails in the direction nobody sees
+    — an envelope the recipe waved through and the wrapper then discarded is reported
+    `delivered` and read by nobody, which is the whole failure the recipe was added to
+    close. So each consumer must *embed* the shared source rather than restate it, and
+    the token prefix a pending question is recognized by must live in one file.
+    """
+    shared = CONTRACT_HELPER.read_text(encoding="utf-8")
+    prefix = SHELL_TOKEN_PREFIX.search(shared)
+    assert prefix is not None, f"{CONTRACT_HELPER.name} declares no ASK_MANAGER_TOKEN_PREFIX"
+    assert RULING_SOURCE_DECLARATION in shared, (
+        f"{CONTRACT_HELPER.name} no longer declares {RULING_SOURCE_DECLARATION}, which is "
+        "the rule both ends of the channel embed"
+    )
+
+    grammar = SHELL_GRAMMAR.search(shared)
+    assert grammar is not None, f"{CONTRACT_HELPER.name} declares no reference grammar"
+
+    for consumer in CONTRACT_CONSUMERS:
+        written = consumer.read_text(encoding="utf-8")
+        assert '. "$contract_helper"' in written and CONTRACT_HELPER.name in written, (
+            f"scripts/{consumer.name} no longer sources {CONTRACT_HELPER.name}, so what it "
+            "treats as a usable reply is its own opinion rather than the one rule"
+        )
+        assert RULING_SOURCE_USE in written, (
+            f"scripts/{consumer.name} no longer embeds {RULING_SOURCE_USE} in the program "
+            "it judges with, so it decides usability some other way"
+        )
+
+    for what, value in (
+        ("correlation-token prefix", prefix.group("prefix")),
+        ("reference grammar", grammar.group("pattern")),
+    ):
+        restated = [
+            path.name
+            for path in sorted((REPO_ROOT / "scripts").glob("*.sh"))
+            if path != CONTRACT_HELPER and value in path.read_text(encoding="utf-8")
+        ]
+        assert not restated, (
+            f"{restated} carry their own copy of the {what}; it is "
+            f"{CONTRACT_HELPER.name}'s, and a second copy lets one end of this channel "
+            "stop agreeing with the other about what it is holding"
+        )
 
 
 def test_the_token_pattern_requires_exactly_what_the_wrapper_mints() -> None:

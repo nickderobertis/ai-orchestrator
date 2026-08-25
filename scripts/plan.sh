@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
-# [--max-turns N] [<onepipeline start flags>]`.
+# [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct]
+# [<onepipeline start flags>]`.
 #
 # The manager's job is writing the brief and reviewing what comes back, not
 # assembling a plan file by hand. So this recipe writes the plan, and the one shape
@@ -29,14 +30,42 @@
 #     monitor`: rendering a surface is not reading it, and only `channel-next`
 #     consumes one — a planner's blocking question is answered there or not at all.
 #
-# It is one node and no `repo`: planning authors no target-project content, so
-# nothing is published and no lifecycle worktree is cut. The journal, the ownership
-# row, the planner surfaces, and the run's place in the DAG UI are `onepipeline
-# start`'s own — the ledger it writes and the channel it serves — so this launch gets
-# every one of them exactly as any other launch does, and an agent graph produces
-# none of them. What a dag-scope graph adds is the two observer members and nothing
-# else: the monitor that compares a run against its plan, and the `check-in`
-# pacemaker.
+# **It is one lifecycle node, so the planner works in an isolated worktree.** That is
+# the one thing about this recipe that is not merely convenience, and it was learned
+# the expensive way. A node with no `repo` is a *direct* node, and a direct node works
+# in the launch directory — which for this recipe is the shared canonical checkout the
+# self-dispatch rule in `AGENTS.md` forbids authoring in, because concurrent
+# orchestrators use it and direct edits race them. A planner dispatched that way cut a
+# branch in the canonical checkout, committed to it, and left it checked out; a
+# finished lifecycle publication then failed at its last step because the publication
+# checkout was on that branch rather than on its base, and returning it to the base
+# deleted the manager's own plan files, which the planner had force-added onto its
+# branch from gitignored paths. So the node carries `repo` — the publication checkout
+# this repository is published from — and `execution_checkout`, the registered safety
+# clone its worktree is cut from, exactly as every other node this repository
+# dispatches does.
+#
+# Two consequences a caller should know. The planner's working directory is that
+# worktree and not this checkout, so a plan written to a gitignored path there does not
+# outlive the run — a brief wanting the plan back names a path that is committed, or
+# the manager reads it off the branch. And `--repo` / `--execution-checkout` are here
+# for a caller planning against a differently registered host, and for the journeys
+# that drive this recipe against a scratch identity rather than against this host's own
+# checkouts.
+#
+# `--direct` is the old shape, kept for a planning dispatch that must not cut a
+# worktree at all — it costs the clone, and a planner authoring nothing has no branch
+# to leave. It is a working directory nobody owns exclusively, so a dispatch launched
+# that way **may write only to gitignored paths, may not commit, and may not leave the
+# checkout on any branch but its base.** Nothing here enforces that; the last planner
+# that needed it was told so by hand, which is what this paragraph replaces.
+#
+# The journal, the ownership row, the planner surfaces, and the run's place in the DAG
+# UI are `onepipeline start`'s own — the ledger it writes and the channel it serves —
+# so this launch gets every one of them exactly as any other launch does, and an agent
+# graph produces none of them. What a dag-scope graph adds is the two observer members
+# and nothing else: the monitor that compares a run against its plan, and the
+# `check-in` pacemaker.
 #
 # So this recipe launches on `--dag-graph off`, which is also `onepipeline start`'s
 # own shipped default and is named here to state the intent rather than to inherit
@@ -45,8 +74,9 @@
 # host where watching it that way can say least. A caller who wants an observer names
 # one and keeps it, per flag, exactly as `just orchestrate` keeps a caller's own.
 #
-# `--name` and `--max-turns` are consumed here; every other flag is passed to
-# `onepipeline start` untouched, `--dag-graph` included.
+# `--name`, `--max-turns`, `--repo`, `--execution-checkout` and `--direct` are
+# consumed here; every other flag is passed to `onepipeline start` untouched,
+# `--dag-graph` included.
 set -euo pipefail
 
 #: Where a generated plan is written, under the gitignored scratch root. Kept in the
@@ -57,6 +87,26 @@ PLAN_DIRECTORY="scratch/plans"
 
 #: The persona ref the one node carries. A path, deliberately — see the header.
 PLANNER_PERSONA="../personas/planner.yaml"
+
+#: The publication repository the one node carries, and the registered safety clone its
+#: worktree is cut from. Aliases rather than paths, because `onevcs` resolves an alias
+#: through its own registry and the two hosts this repository dispatches from lay these
+#: checkouts out differently — `config/onevcs.checkouts` is where each one's path is
+#: declared, and where a host that has neither is already accounted for.
+DEFAULT_PUBLICATION_REPO="ai-orchestrator"
+DEFAULT_EXECUTION_CHECKOUT="ai-orchestrator-isolated"
+
+#: The subject a lifecycle node's change request opens under, which the plan schema
+#: requires of one and which a squash-merged publication leaves on the base branch as
+#: its only commit. It is composed rather than asked for, because the caller wrote a
+#: brief rather than a commit: `feat` because this repository releases from a plan the
+#: way it releases from any other tracked source, and the run's own name as the summary,
+#: which is the one thing about this dispatch a reader of the base would want.
+#:
+#: A planner that authors nothing commits nothing and publishes nothing, so this is
+#: usually a subject nobody ever reads — and that is the case it exists for: the node
+#: that does leave a commit must not be the one discovering there is no subject for it.
+TITLE_PREFIX="feat(plan): "
 
 #: The observer this launch attaches when the caller names none: nothing — see the
 #: header for why a planning run in particular is the wrong run to watch that way.
@@ -111,9 +161,13 @@ SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_-]*$'
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-name, brief, persona, node_id, turns = sys.argv[1:6]
+name, brief, persona, node_id, turns, repo, execution, title = sys.argv[1:9]
 task = pathlib.Path(brief).read_text(encoding="utf-8")
 node = {"id": node_id, "persona": persona, "task": task}
+if repo:
+    node["repo"] = repo
+    node["execution_checkout"] = execution
+    node["title"] = title
 if turns:
     node["max_turns"] = int(turns)
 plan = {
@@ -131,7 +185,7 @@ fail() {
 }
 
 usage() {
-    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [<onepipeline start flags>]" >&2
+    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -168,6 +222,8 @@ shift
 
 name=""
 max_turns=""
+repo="$DEFAULT_PUBLICATION_REPO"
+execution="$DEFAULT_EXECUTION_CHECKOUT"
 forwarded=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -189,6 +245,37 @@ while [ $# -gt 0 ]; do
         --max-turns=*)
             max_turns="${1#--max-turns=}"
             [ -n "$max_turns" ] || fail "--max-turns was given no value" "give it a whole number of turns, or omit it for the persona's own budget"
+            shift
+            ;;
+        --repo)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                fail "--repo was given no value" "name the checkout this plan's branch publishes from, or omit it for '$DEFAULT_PUBLICATION_REPO'"
+            fi
+            repo="$2"
+            shift 2
+            ;;
+        --repo=*)
+            repo="${1#--repo=}"
+            [ -n "$repo" ] || fail "--repo was given no value" "name the checkout this plan's branch publishes from, or omit it for '$DEFAULT_PUBLICATION_REPO'"
+            shift
+            ;;
+        --execution-checkout)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                fail "--execution-checkout was given no value" "name the safety clone the planner's worktree is cut from, or omit it for '$DEFAULT_EXECUTION_CHECKOUT'"
+            fi
+            execution="$2"
+            shift 2
+            ;;
+        --execution-checkout=*)
+            execution="${1#--execution-checkout=}"
+            [ -n "$execution" ] || fail "--execution-checkout was given no value" "name the safety clone the planner's worktree is cut from, or omit it for '$DEFAULT_EXECUTION_CHECKOUT'"
+            shift
+            ;;
+        --direct)
+            # Both together, because a node carries the pair or neither: `execution_checkout`
+            # without a `repo` names a clone nothing is cut from.
+            repo=""
+            execution=""
             shift
             ;;
         *)
@@ -234,6 +321,14 @@ if [ -n "$max_turns" ]; then
     [[ "$max_turns" =~ ^[1-9][0-9]*$ ]] || fail "--max-turns is '$max_turns', which is not a positive whole number of turns" \
         "give it a count like 40, or omit it for the persona's own budget"
 fi
+# The pair is checked after every flag has been read rather than as each is read,
+# because the flags may arrive in any order and `--direct` clears both: a `--direct`
+# followed by one of them leaves half a placement, which names a clone nothing is cut
+# from or a checkout nothing publishes to.
+if { [ -n "$repo" ] && [ -z "$execution" ]; } || { [ -z "$repo" ] && [ -n "$execution" ]; }; then
+    fail "this launch would write a node placed at repo '${repo:-none}' and execution checkout '${execution:-none}'" \
+        "a node carries both or neither: name the missing one, or pass --direct alone for a dispatch that cuts no worktree"
+fi
 
 # A run root that already exists is what makes `onepipeline` mint `<name>-2` instead,
 # so the name this recipe prints and exports would name a different — possibly live —
@@ -268,7 +363,8 @@ export_ask_manager plan || exit $?
 mkdir -p "$PLAN_DIRECTORY" || fail "the plan directory $PLAN_DIRECTORY could not be created" \
     "check that this checkout is writable, then retry"
 plan="$PLAN_DIRECTORY/$name.plan.json"
-"$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$max_turns" >"$plan" || {
+"$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$max_turns" \
+    "$repo" "$execution" "$TITLE_PREFIX$name" >"$plan" || {
     # `|| :` so a removal that fails cannot replace the diagnostic below with its own
     # exit; the partial plan is then named by that diagnostic rather than silently kept.
     rm -f "$plan" || :
@@ -276,7 +372,16 @@ plan="$PLAN_DIRECTORY/$name.plan.json"
         "restore the pinned toolchain with 'just bootstrap', then retry"
 }
 
-echo "plan: wrote $plan; answer this planner's questions with: just channel-next $name" >&2
+# One line, and the placement is in it rather than beside it: where this planner works
+# decides what a brief may ask it to leave behind, so a manager reading the receipt is
+# the reader who needs it — and a second line on a successful launch is noise the next
+# reader learns to skip.
+if [ -n "$repo" ]; then
+    placement="it works in a worktree cut from '$execution', so a plan written to a gitignored path there does not outlive the run"
+else
+    placement="--direct dispatches it into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
+fi
+echo "plan: wrote $plan; $placement; answer this planner's questions with: just channel-next $name" >&2
 
 # Through the shared wrapper rather than `uv run` directly, because that is where a
 # planner's identity is established: a run launched without it records `unknown`,

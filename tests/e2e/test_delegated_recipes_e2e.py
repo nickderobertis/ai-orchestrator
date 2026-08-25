@@ -25,6 +25,7 @@ for this recipe that is `tests/e2e/test_sweep_e2e.py`.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -55,6 +56,11 @@ WRAPPER_SCRIPTS = (
     "plan.sh",
     "ask-manager-env.sh",
     "ask-manager.sh",
+    # `just channel-reply` goes through this one, which forwards the caller's own
+    # arguments and refuses only an envelope the run's pending blocking question
+    # cannot use; the rule it judges by is the wrapper's own, in the helper beside it.
+    "channel-reply.sh",
+    "ask-manager-contract.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
     # `just repos` goes through this one, which absorbs the flag spelling and — when
@@ -187,6 +193,20 @@ DELEGATIONS = (
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
         "uv run onepipeline start scratch/plans/listing-api.plan.json --detach --dag-graph off",
+    ),
+    # The three flags that decide where the planner works are absorbed here too, in
+    # both spellings: they go into the node this recipe writes, and a copy of one
+    # reaching `onepipeline start` would be refused as an unknown argument. Which node
+    # each produces is `test_the_plan_recipe_writes_the_node_shape_it_was_asked_for`.
+    Delegation(
+        "plan",
+        (BRIEF, "--repo", "other", "--execution-checkout", "other-isolated"),
+        "uv run onepipeline start scratch/plans/cursor-shape.plan.json --dag-graph off",
+    ),
+    Delegation(
+        "plan",
+        (BRIEF, "--repo=other", "--execution-checkout=other-isolated", "--direct"),
+        "uv run onepipeline start scratch/plans/cursor-shape.plan.json --dag-graph off",
     ),
     # A caller who names an observer keeps it, in either spelling and including their
     # own `off`: the flag refuses to be given twice, so the default is added only when
@@ -475,6 +495,205 @@ def test_a_delegated_recipe_reaches_its_published_verb(
         *delegation.before,
         delegation.published,
         *delegation.then,
+    ]
+
+
+#: The plan `just plan` writes, at the path the recipe derives from the brief's name.
+GENERATED_PLAN = "scratch/plans/cursor-shape.plan.json"
+
+
+class NodeShape(NamedTuple):
+    """One way of asking for a planner, and the placement the node it writes has to have."""
+
+    what: str
+    #: What the caller types after the brief.
+    arguments: tuple[str, ...]
+    #: The `repo` and `execution_checkout` the one node must carry, or `None` for the
+    #: direct shape, which carries neither.
+    placement: tuple[str, str] | None
+    #: What the launch has to say about where this planner works. A manager reading the
+    #: receipt is the one who decides what their brief may ask it to leave behind, and
+    #: for the direct shape it is the only place the constraints are put in front of
+    #: them at the moment they apply.
+    says: str
+
+
+#: The two shapes, and the defaults. A planner works in a worktree cut from the
+#: registered safety clone unless a caller asks otherwise, because the alternative is
+#: the shared canonical checkout — where one cut a branch, committed, and left it
+#: checked out, failing a publication and destroying a manager's plan files.
+NODE_SHAPES = (
+    NodeShape(
+        "the default",
+        (),
+        ("ai-orchestrator", "ai-orchestrator-isolated"),
+        "worktree cut from 'ai-orchestrator-isolated'",
+    ),
+    NodeShape(
+        "a named pair",
+        ("--repo", "other", "--execution-checkout", "other-isolated"),
+        ("other", "other-isolated"),
+        "worktree cut from 'other-isolated'",
+    ),
+    NodeShape(
+        "--direct",
+        ("--direct",),
+        None,
+        "may write only to gitignored paths, may not commit, and may not leave the base branch",
+    ),
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("shape", NODE_SHAPES, ids=lambda row: row.what)
+def test_the_plan_recipe_writes_the_node_shape_it_was_asked_for(
+    tmp_path: Path, shape: NodeShape
+) -> None:
+    """Where the dispatched planner works is decided by the document, before any launch.
+
+    `tests/e2e/test_plan_recipe_e2e.py` drives the default shape all the way into a real
+    dispatch and reads the directory out of the run's journal; this is the cheap half —
+    the document itself, for each way of asking, with the published CLI doubled so no
+    planner is dispatched to prove a field. The direct shape must carry **neither**
+    field: `execution_checkout` without a `repo` names a clone nothing is cut from.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "plan", BRIEF, *shape.arguments)
+
+    assert result.returncode == 0, result.stderr
+    node = json.loads((checkout / GENERATED_PLAN).read_text(encoding="utf-8"))["tasks"][0]
+    placed = None if "repo" not in node else (node["repo"], node.get("execution_checkout"))
+    assert placed == shape.placement, (
+        f"`just plan {' '.join(shape.arguments)}` wrote a node placed at {placed}, so the "
+        f"planner would work somewhere other than {shape.placement}: {node}"
+    )
+    assert shape.says in result.stderr, (
+        f"the launch said nothing about where this planner works, which for the direct "
+        f"shape is where its constraints are stated at all:\n{result.stderr}"
+    )
+
+
+class ReplyShape(NamedTuple):
+    """One way of reaching `just channel-reply`, and what the recipe owes that shape."""
+
+    what: str
+    #: A wrapper script to remove from the checkout before running, or `None`.
+    without: str | None
+    #: What the caller types after the recipe name.
+    arguments: tuple[str, ...]
+    #: A fragment the refusal must carry, or `None` when the shape is forwarded.
+    refuses: str | None
+
+
+#: The shapes that are not a guarded reply, each of which has to end somewhere better
+#: than a shell error. Two are checkouts missing a piece — a guard that judged with no
+#: rule would pass every envelope, and a delegate that is not there cannot send one — and
+#: three are inputs this recipe deliberately declines to judge, because `onepipeline
+#: reply` owns its own surface and reports a usage error better than a guess here would.
+REPLY_SHAPES = (
+    ReplyShape(
+        "a checkout with no contract helper",
+        "ask-manager-contract.sh",
+        ("run-1",),
+        "ask-manager-contract.sh",
+    ),
+    ReplyShape(
+        "a checkout with no onepipeline wrapper",
+        "onepipeline.sh",
+        ("run-1",),
+        "not executable",
+    ),
+    ReplyShape("no run at all", None, (), None),
+    ReplyShape("more arguments than the verb takes", None, ("run-1", "a.json", "b.json"), None),
+    ReplyShape("an envelope file that is not there", None, ("run-1", "absent.json"), None),
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("shape", REPLY_SHAPES, ids=lambda row: row.what)
+def test_the_reply_recipe_ends_every_shape_that_is_not_a_guarded_reply(
+    tmp_path: Path, shape: ReplyShape
+) -> None:
+    """A reply the guard cannot judge reaches the verb, and a broken checkout says so.
+
+    Both halves matter for the same reason: this recipe stands between a manager and the
+    only channel they have. A missing piece has to be named — a guard with no rule would
+    wave every envelope through, which is worse than no guard, and a delegate that is not
+    there sends nothing — while an input the guard has no business judging has to go on
+    to the verb that does, whose refusal names the argument it could not take.
+    """
+    checkout, trace = _checkout(tmp_path)
+    if shape.without is not None:
+        (checkout / "scripts" / shape.without).unlink()
+
+    result = _run(checkout, trace, "channel-reply", *shape.arguments, stdin='{"completion":true}')
+
+    if shape.refuses is not None:
+        assert result.returncode != 0, f"{shape.what} was not refused:\n{result.stdout}"
+        assert shape.refuses in result.stderr, result.stderr
+        assert not trace.exists(), f"{shape.what} reached the published verb:\n{trace.read_text()}"
+    else:
+        assert result.returncode == 0, result.stderr
+        reached = trace.read_text().splitlines()
+        assert reached and reached[0].startswith("uv run onepipeline reply"), (
+            f"{shape.what} was not passed on to the verb that owns it: {reached}"
+        )
+
+
+#: A `python3` that refuses every call, for the one failure the guard cannot recover
+#: from. It stands on PATH in a checkout with no pinned interpreter beside it, which is
+#: what a half-restored checkout is.
+BROKEN_INTERPRETER = """#!/usr/bin/env bash
+exit 3
+"""
+
+
+@pytest.mark.reads_recipes
+def test_a_reply_that_cannot_be_judged_is_named_rather_than_sent_unjudged(
+    tmp_path: Path,
+) -> None:
+    """A guard that could not run says so, and the envelope does not go on regardless.
+
+    The alternative is the failure this whole recipe exists to prevent, one layer up: an
+    envelope reaching the channel with nothing having judged it, and a manager told it
+    was delivered. Driven by putting a `python3` on PATH that refuses, in a checkout with
+    no pinned interpreter beside the wrapper — which is what a half-restored checkout is.
+    """
+    checkout, trace = _checkout(tmp_path)
+    # llmlint: ignore[e2e_not_mocked] The recipe is real; a broken interpreter is the input.
+    broken = checkout / "bin" / "python3"
+    broken.write_text(BROKEN_INTERPRETER)
+    broken.chmod(0o755)
+
+    result = _run(checkout, trace, "channel-reply", "run-1", stdin='{"completion":true}')
+
+    assert result.returncode != 0, f"an unjudged reply was sent anyway:\n{result.stdout}"
+    assert "could not be judged" in result.stderr, result.stderr
+    assert "just bootstrap" in result.stderr, result.stderr
+    assert not trace.exists(), f"the reply reached the verb unjudged:\n{trace.read_text()}"
+
+
+@pytest.mark.reads_recipes
+def test_the_reply_recipe_forwards_a_piped_envelope_untouched(tmp_path: Path) -> None:
+    """A reply the recipe does not refuse reaches the verb byte for byte, on its stdin.
+
+    The refusal this recipe adds is narrow, and the way a narrow guard goes wrong is by
+    quietly widening: an envelope carrying `commands` and no `completion` is a live
+    graph edit a manager sends all run long, and it has to arrive as it was written.
+    Here there is no run and so nothing pending, which is the other half — a guard that
+    could not read a queue must forward rather than refuse, or a manager loses the
+    channel whenever the ledger is somewhere it cannot see.
+    """
+    checkout, trace = _checkout(tmp_path)
+    envelope = '{"version":1,"author":"planner","commands":[{"op":"cancel","id":"api"}]}'
+
+    result = _run(checkout, trace, "channel-reply", "run-1", stdin=f"{envelope}\n")
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline reply run-1",
+        f"stdin {envelope}",
     ]
 
 

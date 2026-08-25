@@ -25,6 +25,29 @@ manager's in [AGENTS.md](../AGENTS.md#your-loop-as-manager), the planner's in
 [`personas/planner.yaml`](../personas/planner.yaml), which is that dispatch's own
 system prompt and so travels into whatever repository it plans against.
 
+**`just plan` writes a lifecycle node**, so the planner it dispatches works in a
+worktree cut from the registered `ai-orchestrator-isolated` safety clone with the
+canonical checkout as its publication repository — the placement every other node
+this repository dispatches carries, and for the reason the [self-dispatch
+rule](../AGENTS.md#dogfooding-rule) gives: the launch directory is the shared
+canonical checkout, and a direct node works in it. One did. It cut a branch there,
+committed to it, and left it checked out; a finished lifecycle publication then
+failed at its last step because the publication checkout was on that branch rather
+than on its base, and returning it to the base deleted the manager's plan files,
+which that planner had force-added onto its branch from gitignored paths.
+
+Three consequences a manager reads rather than derives. The planner's working
+directory is that worktree, so a brief that wants the plan back names a path that is
+**committed** — a plan written to a gitignored path there does not outlive the run.
+The launch takes the identity's repository holder like any other run of this
+repository, so a `just plan` while a run of it is live is refused as concurrent
+project work rather than queued. And `--repo` / `--execution-checkout` name a
+different registered pair, while **`--direct`** is the escape for a planning dispatch
+that must cut no worktree at all: it is the old shape, it dispatches into this shared
+checkout, and such a dispatch may write only to gitignored paths, may not commit, and
+may not leave the checkout on any branch but its base. Nothing enforces that, which
+is why the recipe says it on every launch that takes the flag.
+
 The published CLIs do not know that split and nothing here renames them to it.
 Everywhere `onepipeline` and the recipes over it say *planner* — [the planner
 channel](#the-planner-channel) and its surfaces, the `planner` [read
@@ -606,6 +629,19 @@ The split exists because a duplicate blocking question is self-perpetuating. On 
 left to claim an answer, and the orphaned one was then drawn — milliseconds after
 asking — by the next question put to that channel, which doubled in turn.
 
+**An envelope that question cannot use is refused where you send it.** The wrapper acts
+only on a JSON object carrying a boolean `completion` and discards everything else with
+nothing on the channel to say so: three replies omitting it were each reported
+`delivered`, each read by nobody, and the planner that asked stayed blocked for about
+thirty-five minutes, re-asking twice. So `just channel-reply` reads the pending surface
+first — `scripts/channel-reply.sh`, judging by the same rule the wrapper applies, out of
+the one file both source — and refuses such an envelope, naming the field that is
+missing or of the wrong type and leaving the question pending for your next try. It is
+narrow deliberately: it fires only while a **blocking** surface carrying that wrapper's
+token is pending, and never on an envelope carrying `commands`, which is a live edit the
+engine routes to the command path and which you must still be able to send while a
+question waits.
+
 **The wrapper is mitigating this, not fixing it, and the fix is onepipeline's.** Two
 things in that crate produce the duplication between them, and both are stated here
 against the source at tag **v0.11.0** — the release
@@ -699,6 +735,13 @@ The command reports what happened, on stdout:
 `applied` means the reconciler answered the envelope before the command exited.
 The reply survives whether or not it did — it is durable the moment it is
 accepted — so a state that is not `applied` is not an instruction to resend.
+
+**What that state is not is a receipt that anybody could act on the reply.** It is a
+transport receipt: the engine took the envelope and handed it to whoever was waiting,
+and whether that reader can *use* it is a different question the engine does not ask.
+The one reader that provably cannot is [a dispatched agent's
+wrapper](#a-dispatched-agent-asks-its-manager), which is why `just channel-reply`
+refuses that one case before the engine ever sees it.
 
 Replies used to depend on a live rendezvous, so `channel-reply` failed with
 `channel rendezvous timed out` whenever nothing held the endpoint open — which was

@@ -43,6 +43,7 @@ from fake_backend import (
     MEMBER_OF_CONFIG,
     PROMPT_LOG_ENV,
 )
+from scratch_identity import seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -73,6 +74,21 @@ RunId = NewType("RunId", str)
 
 #: Where `scripts/plan.sh` writes what it generates, relative to this checkout.
 PLAN_DIRECTORY = REPO_ROOT / "scratch" / "plans"
+
+#: The two checkouts the generated node names, as `scripts/plan.sh` defaults them: this
+#: repository's publication checkout and the registered safety clone a planner's
+#: worktree is cut from. Every journey here seeds its own pair under these names, so the
+#: recipe's own defaults resolve — against a scratch registry, never this host's.
+#: Pointing one of these launches at the real registry would have it clone, cut a
+#: worktree, and reclaim run roots in the directories live dispatches are working in.
+PUBLICATION_ALIAS = "ai-orchestrator"
+EXECUTION_ALIAS = "ai-orchestrator-isolated"
+
+#: The `graphs/node-scope.yaml` member a dispatched plan node runs as, and the journal
+#: records that say where it was started and where its session cut a worktree.
+WORKER_MEMBER = "worker"
+MEMBER_STARTED = "member-started"
+SESSION_OPENED = "session-opened"
 
 #: This repository's planner persona, and the one sentence of each of its two sides
 #: that the dispatch is read for. Held against the file first, so a persona rewrite
@@ -114,12 +130,26 @@ SHIPPED_BRIEF = "examples/planner-brief.example.md"
 SHIPPED_PLAN = REPO_ROOT / "examples" / "single-node-planner.plan.json"
 
 
+class JournalEvent(TypedDict):
+    """One record the run appended, in the three fields this journey reads.
+
+    `onepipeline` owns the whole contract; these are stated rather than restated from
+    it, because what this journey asks the journal is one question: which directory.
+    """
+
+    kind: str
+    labels: dict[str, str]
+    payload: dict[str, str]
+
+
 class Planned(NamedTuple):
     """One `just plan` launch: how it ended, what it wrote, and the turns it reached."""
 
     launch: subprocess.CompletedProcess[str]
     #: The generated plan document, as JSON.
     plan: PlanDocument
+    #: Every event the run appended, in order.
+    journal: list[JournalEvent]
     #: Every harness turn the run reached, as the fake backend recorded it.
     turns: list[TurnRecord]
     #: What the run recorded of itself on the ledger, under the id the launch printed.
@@ -133,8 +163,8 @@ class Planned(NamedTuple):
 class PlanNode(TypedDict, total=False):
     """The one node a generated plan carries, in the fields this suite reads.
 
-    `total=False` because the absent ones are the point: a planner node carries no
-    `repo` and no `done_when`, and asserting that is asserting they are missing.
+    `total=False` because one absence is still the point: `done_when` is refused by the
+    loader outright, so a generated plan carrying one could never be launched at all.
     """
 
     id: str
@@ -142,6 +172,7 @@ class PlanNode(TypedDict, total=False):
     task: str
     max_turns: int
     repo: str
+    execution_checkout: str
     done_when: str
 
 
@@ -164,11 +195,20 @@ class TurnRecord(TypedDict):
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
-    """The environment one `just plan` launch runs in."""
+    """The environment one `just plan` launch runs in, against a registry of its own.
+
+    The identity is seeded under the two aliases the recipe defaults to, rather than the
+    defaults being overridden per launch: what is under test is the plan this recipe
+    writes when nobody tells it anything, and a journey that passed `--repo` would be
+    proving a flag instead. Seeded for every launch, refusals included, because the one
+    thing none of them may do is reach this host's own registry.
+    """
+    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
+    environment["ONEVCS_HOME"] = str(identity.home)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
@@ -228,12 +268,21 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         assert turns.is_file(), f"the launch reached no harness turn, so {turns} is absent"
         listing = _just("runs", "--mine", environment=environment, seconds=120)
         assert listing.returncode == 0, f"the ledger could not be read:\n{listing.stderr}"
+        journal = Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN / "events.jsonl"
+        assert journal.is_file(), f"the launch recorded no journal at {journal}"
         return Planned(
             launch=launch,
             # `cast` rather than a validating read: the recipe writes this document and
             # `PlanDocument` states what it promises; the subscripts below fail loudly
             # if it is not that shape, which is the assertion.
             plan=cast(PlanDocument, json.loads(generated.read_text(encoding="utf-8"))),
+            # `cast` for the same reason: `onepipeline` owns the journal's record
+            # contract, `JournalEvent` states only the three fields this journey reads,
+            # and a record missing one fails at the subscript that wanted it.
+            journal=[
+                cast(JournalEvent, json.loads(line))
+                for line in journal.read_text(encoding="utf-8").splitlines()
+            ],
             turns=[
                 cast(TurnRecord, json.loads(line))
                 for line in turns.read_text(encoding="utf-8").splitlines()
@@ -281,10 +330,10 @@ def _flattened(prose: str) -> str:
 
 
 @pytest.mark.xdist_group("plan-recipe")
-def test_the_generated_plan_is_one_direct_planner_node_carrying_the_brief_verbatim(
+def test_the_generated_plan_is_one_isolated_planner_node_carrying_the_brief_verbatim(
     planned: Planned,
 ) -> None:
-    """The document is exactly what a planner dispatch needs and nothing else.
+    """The document is exactly what a planner dispatch needs, worktree included.
 
     Every field here is one a manager would otherwise have to remember. The brief
     reaching the node **verbatim** is the load-bearing one: it is the manager's own
@@ -292,10 +341,14 @@ def test_the_generated_plan_is_one_direct_planner_node_carrying_the_brief_verbat
     recipe that reformatted or summarized it on the way would be editing the request
     between the two people it is passing between.
 
-    `repo` and `done_when` are asserted absent for different reasons. A planner
-    authors no target-project content, so a `repo` would cut a lifecycle worktree and
-    verify a gate for a change nobody makes; and `done_when` is refused by the loader
-    outright, so a generated plan carrying one could never be launched at all.
+    `repo` and `execution_checkout` are the pair that decides *where* the planner works,
+    and they are here because their absence cost real work. Without them the node is a
+    direct node, a direct node works in the launch directory, and that is the shared
+    canonical checkout `AGENTS.md` forbids authoring in: a planner dispatched that way
+    cut a branch there, committed, and left it checked out, which failed a finished
+    publication at its last step and destroyed the manager's own plan files. `done_when`
+    is still asserted absent for its own reason — the loader refuses a node carrying
+    one, so a generated plan with it could never be launched at all.
     """
     plan = planned.plan
     assert plan["schema_version"] == 2, plan
@@ -313,8 +366,57 @@ def test_the_generated_plan_is_one_direct_planner_node_carrying_the_brief_verbat
         f"compiled into the tool and this repository's file is never read"
     )
     assert node["max_turns"] == TURN_BUDGET, node
-    assert "repo" not in node, f"a planner node cut a lifecycle worktree: {node}"
+    assert node.get("repo") == PUBLICATION_ALIAS, (
+        f"the planner node names {node.get('repo')!r} as its publication checkout; with "
+        f"none it is a direct node working in the shared canonical checkout: {node}"
+    )
+    assert node.get("execution_checkout") == EXECUTION_ALIAS, (
+        f"the planner node names {node.get('execution_checkout')!r} as its execution "
+        f"checkout, so its worktree is not cut from the safety clone: {node}"
+    )
     assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
+
+
+@pytest.mark.xdist_group("plan-recipe")
+def test_the_dispatched_planner_works_in_a_worktree_and_not_in_the_launch_checkout(
+    planned: Planned,
+) -> None:
+    """The claim the plan document cannot make: where the planner was actually started.
+
+    A node naming a `repo` is only half the fix — the other half is that the dispatch
+    really lands in the worktree its session cut, and nothing in the document says so.
+    The run's own journal does: `onevcs` appends `session-opened` naming the worktree it
+    cut, `oneagentgraph` appends `member-started` naming the directory it started the
+    dispatched member in, and the launch directory is in the same journal to be excluded
+    against. That last exclusion is the incident: a planner started in the launch
+    directory is a planner in the shared canonical checkout, which is where it cut a
+    branch, committed to it, and left the checkout on it.
+    """
+    # No view reports where a member was started: `just status` carries what a node is
+    # doing and `just work-status` the session's own worktree, and neither is the
+    # directory the harness was handed. The journal is where that is recorded.
+    # llmlint: ignore[tests_mirror_real_usage] No view reports a member's start directory.
+    started = [
+        event["payload"]["worktree"]
+        for event in planned.journal
+        if event.get("kind") == MEMBER_STARTED
+        and event.get("labels", {}).get("member") == WORKER_MEMBER
+    ]
+    assert started, "the run recorded no dispatched planner at all"
+    cut = {
+        event["payload"]["worktree"]
+        for event in planned.journal
+        if event.get("kind") == SESSION_OPENED
+    }
+    assert cut, "the run opened no lifecycle session, so the planner cut no worktree"
+    assert set(started) <= cut, (
+        f"the planner was started in {sorted(set(started) - cut)}, which no session cut; "
+        f"the sessions this run opened were {sorted(cut)}"
+    )
+    assert str(REPO_ROOT) not in started, (
+        "the planner was started in the checkout the launch was made from, which "
+        "concurrent orchestrators share and this repository forbids authoring in"
+    )
 
 
 @pytest.mark.xdist_group("plan-recipe")
@@ -667,6 +769,30 @@ REFUSALS = (
     Refusal("an empty budget", ("--max-turns=",), "--max-turns was given no value"),
     Refusal("a turn budget that is not one", ("--max-turns", "soon"), "not a positive whole"),
     Refusal("a name the engine would rewrite", ("--name", "cursor.shape"), "is not a run id"),
+    # The placement flags, whose empty forms are the same shell expansion the two above
+    # guard against — and whose half-set combination is the one a caller reaches by
+    # ordering rather than by typing an empty value. Half a placement is not a smaller
+    # mistake than none: an execution checkout with no repository names a clone nothing
+    # is cut from, and a repository with no execution checkout puts the dispatch back in
+    # the shared checkout this change exists to keep it out of.
+    Refusal("an unnamed repository", ("--repo",), "--repo was given no value"),
+    Refusal("an empty repository", ("--repo=",), "--repo was given no value"),
+    Refusal("an empty separated repository", ("--repo", ""), "--repo was given no value"),
+    Refusal(
+        "an unnamed execution checkout",
+        ("--execution-checkout",),
+        "--execution-checkout was given no value",
+    ),
+    Refusal(
+        "an empty execution checkout",
+        ("--execution-checkout=",),
+        "--execution-checkout was given no value",
+    ),
+    Refusal(
+        "half a placement",
+        ("--direct", "--repo", "elsewhere"),
+        "a node carries both or neither",
+    ),
 )
 
 
