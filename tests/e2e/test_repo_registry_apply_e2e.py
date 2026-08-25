@@ -60,11 +60,12 @@ MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
 RULE_MATCH = re.compile(
     r"- match: \{host: (?P<host>[^,]+), owner: (?P<owner>[^,]+), name: (?P<name>[^}]+)\}"
 )
-#: The two identities whose policy differs from every other rule in the file, with the
-#: `(publication, approvals)` each one resolves. The rules file names both in its own
-#: comments — the one `local-direct` identity, and the one team repository.
+#: The identities whose policy differs from every other rule in the file, with the
+#: `(publication, approvals)` each one resolves. Unlike the historical golden below,
+#: this also covers identities registered after the onevcs adoption.
 POLICY_EXCEPTIONS = {
     "github.com/nickderobertis/ai-orchestrator": ("local-direct", "none"),
+    "github.com/nickderobertis/spanish-language-tutor": ("local-direct", "none"),
     "github.com/petsinc/org-apps": ("change-open", "required"),
 }
 #: What every *other* ruled identity publishes under: a single-owner `nickderobertis`
@@ -355,9 +356,16 @@ def test_the_team_repository_still_needs_a_review(applied: Applied) -> None:
     assert reported(checked.stdout, "approvals") == "required"
 
 
-def test_this_repository_still_publishes_locally(applied: Applied) -> None:
-    """The one identity that opens no change request at all, and merges in place."""
-    checked = onevcs(applied.home, "rules", "check", "github.com/nickderobertis/ai-orchestrator")
+@pytest.mark.parametrize(
+    "identity",
+    (
+        "github.com/nickderobertis/ai-orchestrator",
+        "github.com/nickderobertis/spanish-language-tutor",
+    ),
+)
+def test_local_direct_repositories_publish_locally(ruled: Path, identity: str) -> None:
+    """Local-first identities open no change request and merge in place."""
+    checked = onevcs(ruled, "rules", "check", identity)
     assert reported(checked.stdout, "publication") == "local-direct"
     assert reported(checked.stdout, "approvals") == "none"
 

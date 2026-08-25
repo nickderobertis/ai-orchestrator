@@ -47,11 +47,12 @@
 #     than nothing, because it read as verification — a `nick-derobertis-site`
 #     branch passed this file's gate, published as PR #77, and sat blocked on the
 #     required `llmlint` check that gate never ran.
-#   - **`ai-orchestrator`, the one `local-direct` identity** — opens no change
-#     request, so it has no required checks. Its verifier is its own `pre-push`
-#     hook, which `onevcs` reaches because it carries the lender's `core.hooksPath`
-#     into the disposable clone a publication works in. That hook runs `just gate`,
-#     which is literally the work this file's gate used to duplicate a second time.
+#   - **The `local-direct` identities** — open no change request, so they have no
+#     required checks. Verification instead comes from an executable `pre-push` hook,
+#     when the checkout has one, which `onevcs` reaches by carrying the lender's
+#     `core.hooksPath` into the disposable publication clone. `ai-orchestrator` has
+#     that hook; `spanish-language-tutor` does not yet, so its merge-path audit
+#     truthfully reports no coverage.
 #
 # `config/merge-path-checks.json` is the inventory of what those required checks
 # are, per identity, and `just repos --audit-gate-coverage` reports them: with
@@ -75,10 +76,10 @@ version: 3
 trailer_prefix: Orchestrator-
 
 rules:
-  # This repository's own publication path: merged in the local checkout and
-  # pushed, never through a pull request. `local-direct` is the only policy here
-  # that opens no change request, so it is the one to be most careful editing —
-  # and the only one whose verifier is a hook rather than a set of required checks.
+  # Local-first publication paths: merged in the local checkout and pushed, never
+  # through a pull request. `local-direct` is the only policy here that opens no
+  # change request, so these are the rules to be most careful editing. Their
+  # verifier is a hook, when present, rather than a set of required checks.
   - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
     publication: local-direct
     approvals: none
@@ -140,6 +141,10 @@ rules:
 
   - match: {host: github.com, owner: nickderobertis, name: screencomp}
     publication: change-auto
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: spanish-language-tutor}
+    publication: local-direct
     approvals: none
 
   # The one team repository on this host. `change-open` leaves an ordinary

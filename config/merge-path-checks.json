@@ -43,7 +43,7 @@
   "identities": {
     "github.com/nickderobertis/ai-orchestrator": {
       "branch": "main",
-      "note": "The one local-direct identity: it opens no change request, so its merge path declares no required checks at all. What verifies it is its own executable `pre-push` hook, which `onevcs` reaches through the lender's `core.hooksPath` in the clone a publication works in.",
+      "note": "A local-direct identity opens no change request, so its merge path declares no required checks at all. What verifies this repository instead is its own executable `pre-push` hook, which `onevcs` reaches through the lender's `core.hooksPath` in the clone a publication works in.",
       "checks": {}
     },
     "github.com/nickderobertis/crozier": {
@@ -230,6 +230,11 @@
         "check (windows-latest)": "other-os",
         "workflows": "judged-remotely"
       }
+    },
+    "github.com/nickderobertis/spanish-language-tutor": {
+      "branch": "main",
+      "note": "A local-direct identity opens no change request, so its merge path declares no required checks at all. Verification must instead come from an executable `pre-push` hook, but this repository has none today, so the coverage audit truthfully reports no merge-path coverage.",
+      "checks": {}
     },
     "github.com/petsinc/org-apps": {
       "branch": "main",

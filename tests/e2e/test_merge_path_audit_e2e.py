@@ -39,9 +39,12 @@ MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
 #: is the defect this whole surface was built for.
 SITE = "github.com/nickderobertis/nick-derobertis-site"
 SITE_REMOTE_CHECK = "classify-gate"
-#: The one identity that opens no pull request, so its merge path declares no required
-#: checks and the inventory has nothing to list for it.
-LOCAL_DIRECT = "github.com/nickderobertis/ai-orchestrator"
+#: The identities that open no pull request, so their merge paths declare no required
+#: checks and the inventory has nothing to list for them.
+LOCAL_DIRECT = (
+    "github.com/nickderobertis/ai-orchestrator",
+    "github.com/nickderobertis/spanish-language-tutor",
+)
 #: The identity with the most required checks nothing here runs — cross-compilation,
 #: installs of a published artifact, the pull request's own title, a hosted visual
 #: baseline — so its report is where a list rather than a single name is read.
@@ -68,7 +71,12 @@ def registry(tmp_path_factory: pytest.TempPathFactory) -> Registry:
     root = tmp_path_factory.mktemp("merge-path-audit")
     manifest = root / "checkouts"
     paths = []
-    for name in ("ai-orchestrator", "nick-derobertis-site", "llmlint"):
+    for name in (
+        "ai-orchestrator",
+        "spanish-language-tutor",
+        "nick-derobertis-site",
+        "llmlint",
+    ):
         checkout = root / "checkouts.d" / name
         checkout.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=checkout, check=True)
@@ -167,11 +175,13 @@ def test_an_identity_with_no_required_checks_is_reported_as_having_none(
     """
     audited = repos(registry.home, "repos", "--audit-gate-coverage")
 
-    report = coverage_lines(audited.stdout)[LOCAL_DIRECT]
-    assert report == [
-        f"{report[0].split(' — ')[0]} — and config/merge-path-checks.json inventories "
-        "no required check on main, so nothing recorded here can refuse a merge"
-    ]
+    reports = coverage_lines(audited.stdout)
+    for identity in LOCAL_DIRECT:
+        report = reports[identity]
+        assert report == [
+            f"{report[0].split(' — ')[0]} — and config/merge-path-checks.json inventories "
+            "no required check on main, so nothing recorded here can refuse a merge"
+        ]
 
 
 def test_an_identity_with_several_remote_checks_names_every_one_of_them(
@@ -369,10 +379,10 @@ def test_an_audit_this_filter_no_longer_recognizes_is_refused_rather_than_forwar
 def test_an_identity_heading_alone_is_still_a_recognized_audit() -> None:
     """Either shape is enough, because a registered identity may head a block with no
     checkout under it — and refusing that would fail an audit that is simply short."""
-    result = filtered(f"{LOCAL_DIRECT}\tremote\tteam\tjust gate\n", str(MERGE_PATH_CHECKS))
+    result = filtered(f"{LOCAL_DIRECT[0]}\tremote\tteam\tjust gate\n", str(MERGE_PATH_CHECKS))
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{LOCAL_DIRECT}\tremote\tteam\tjust gate\n"
+    assert result.stdout == f"{LOCAL_DIRECT[0]}\tremote\tteam\tjust gate\n"
 
 
 def test_a_host_with_nothing_registered_still_gets_its_audit(tmp_path: Path) -> None:

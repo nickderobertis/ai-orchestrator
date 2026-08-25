@@ -676,9 +676,10 @@ session's supported set is derived where its stream is opened, from what this ho
 knows about its repository, rather than named by the consumer: a `local-direct`
 identity opens no change request and so has **no Review phase**, and a repository
 declaring no release targets releases nothing and so has **no Release phase**. Both
-exclusions are live here — `ai-orchestrator` is this host's one `local-direct` identity
-and no repository registered here declares a release target, so a session of *this*
-repository supports Development and Integrate and nothing else. Every answer that
+exclusions are live here — `ai-orchestrator` and `spanish-language-tutor` are this
+host's `local-direct` identities, and no repository registered here declares a release
+target, so a session of *this* repository supports Development and Integrate and
+nothing else. Every answer that
 derivation cannot reach **widens** the set rather than narrowing it: a session this
 host keeps no record of, or one whose repository it can no longer resolve, takes all
 four, because a read that quietly left events out would be indistinguishable from a
