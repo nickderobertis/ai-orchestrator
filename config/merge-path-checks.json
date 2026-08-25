@@ -85,6 +85,21 @@
         "llmlint": "tree-verdict"
       }
     },
+    "github.com/nickderobertis/notignored": {
+      "branch": "main",
+      "checks": {
+        "cross (macos-latest)": "other-os",
+        "cross (windows-latest)": "other-os",
+        "deny": "network-advisory",
+        "gate": "tree-verdict",
+        "install (macos-latest)": "published-artifact",
+        "install (ubuntu-latest)": "published-artifact",
+        "install (windows-latest)": "published-artifact",
+        "llmlint": "tree-verdict",
+        "msrv": "judged-remotely",
+        "pr-title": "pull-request"
+      }
+    },
     "github.com/nickderobertis/oneagentgraph": {
       "branch": "main",
       "checks": {

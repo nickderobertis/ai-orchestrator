@@ -87,6 +87,12 @@ THIS_REPOSITORY = "ai-orchestrator"
 #: a plan naming neither field runs as it always did.
 DEFAULT_ADOPTION = "fast"
 
+#: How `onevcs` refuses a repository its registry does not hold. `config/onevcs.checkouts`
+#: is what this host *will* register and the registry is what it *has*, and the two part
+#: company from the moment a registration lands in `config/` until `just repos-apply`
+#: installs it — so a listed identity can be one no `onevcs` verb can resolve at all.
+NOT_REGISTERED = "is not a registered repository"
+
 
 def _onevcs(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -96,6 +102,22 @@ def _onevcs(*arguments: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         timeout=e2e_timeout(120),
         check=False,
+    )
+
+
+def _registry_identities() -> frozenset[str]:
+    """Every identity this host's `onevcs` registry actually holds.
+
+    `onevcs repos` prints one unindented `identity<TAB>…` line per repository above
+    its indented checkouts, and that listing — rather than the tracked list — is what
+    "registered here" means to every other `onevcs` verb.
+    """
+    listed = _onevcs("repos")
+    assert listed.returncode == 0, listed.stderr
+    return frozenset(
+        line.split("\t", 1)[0]
+        for line in listed.stdout.splitlines()
+        if line and not line.startswith(" ")
     )
 
 
@@ -206,6 +228,15 @@ def test_nothing_on_this_host_declares_a_release_target() -> None:
     a release target". A version of this that asked only about `ai-orchestrator` would
     pass while a sibling repository held a target and a `published` node really could
     hold — which is the state the section says does not exist.
+
+    "Registered here" is the `onevcs` registry rather than `config/onevcs.checkouts`,
+    and the difference is load-bearing between a registration landing in `config/` and
+    `just repos-apply` installing it: the tracked list names the identity, the registry
+    cannot resolve it, and no plan can dispatch against it either. Such an identity is
+    outside the claim rather than an answer this journey declined to get — but that is
+    *proven* against the registry's own listing below, not assumed from a refusal,
+    because a refusal misread is exactly how an identity that does declare a target
+    would go unasked.
     """
     identities = registered_checkouts()
     assert identities, (
@@ -214,13 +245,29 @@ def test_nothing_on_this_host_declares_a_release_target() -> None:
         "`config/onevcs.checkouts` lists"
     )
 
+    held = _registry_identities()
     declaring = {}
+    unregistered = {}
     for identity in sorted(identities):
         reported = _onevcs(RELEASE_VERB, "targets", identity, "--json")
+        if reported.returncode != 0 and NOT_REGISTERED in reported.stderr:
+            assert identity not in held, (
+                f"{identity} was refused as unregistered while `onevcs repos` lists it, "
+                f"so that refusal is about something else: {reported.stderr}"
+            )
+            unregistered[identity] = reported.stderr.strip()
+            continue
         assert reported.returncode == 0, f"{identity}: {reported.stderr}"
         declared = json.loads(reported.stdout)
         if declared["targets"] or declared["adoption"] != DEFAULT_ADOPTION:
             declaring[identity] = declared
+
+    answered = sorted(set(identities) - set(unregistered))
+    assert answered, (
+        f"this host's `onevcs` registry holds none of the {len(identities)} identities "
+        "`config/onevcs.checkouts` names, so the claim would be asserted over an empty "
+        f"set; run `just repos-apply`. Awaiting registration: {sorted(unregistered)}"
+    )
 
     assert not declaring, (
         f"these registered repositories declare a release target or a non-default "

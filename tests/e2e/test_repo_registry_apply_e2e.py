@@ -60,6 +60,20 @@ MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
 RULE_MATCH = re.compile(
     r"- match: \{host: (?P<host>[^,]+), owner: (?P<owner>[^,]+), name: (?P<name>[^}]+)\}"
 )
+#: The two identities whose policy differs from every other rule in the file, with the
+#: `(publication, approvals)` each one resolves. The rules file names both in its own
+#: comments — the one `local-direct` identity, and the one team repository.
+POLICY_EXCEPTIONS = {
+    "github.com/nickderobertis/ai-orchestrator": ("local-direct", "none"),
+    "github.com/petsinc/org-apps": ("change-open", "required"),
+}
+#: What every *other* ruled identity publishes under: a single-owner `nickderobertis`
+#: repository whose change request merges itself once its merge path passes. The
+#: golden covers this for the identities that predate the adoption; a rule written
+#: since — `llmlint` was the first, `notignored` the latest — is covered by nothing
+#: else, so a new sibling given a policy of its own fails here rather than at its
+#: first publication.
+SIBLING_POLICY = ("change-auto", "none")
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -726,6 +740,12 @@ def test_the_resolved_policy_is_publication_and_approvals_and_nothing_else(
     host writes could be silent about a gate while the engine still resolved one from
     a default, which is exactly the shape of the two wrong diagnoses this repository
     records — so what is asserted is the policy a publication would really run under.
+
+    And that it is the policy this file *declares*, matched from a rule rather than
+    fallen through to `default:`. An identity added since the migration has no row in
+    the golden to check it against, so a rule written a notch wider — or one the
+    engine never matched at all — would otherwise reach a publication before anything
+    disagreed with it.
     """
     checked = onevcs(ruled, "rules", "check", key)
     assert checked.returncode == 0, checked.stdout + checked.stderr
@@ -736,6 +756,9 @@ def test_the_resolved_policy_is_publication_and_approvals_and_nothing_else(
     assert "gate" not in fields, checked.stdout
     assert {"publication", "approvals"} <= fields, checked.stdout
     assert reported(checked.stdout, "matched").startswith("rule ")
+
+    resolved = (reported(checked.stdout, "publication"), reported(checked.stdout, "approvals"))
+    assert resolved == POLICY_EXCEPTIONS.get(key, SIBLING_POLICY), checked.stdout
 
 
 def test_a_gate_at_the_migrated_schema_version_is_refused_by_name(tmp_path: Path) -> None:

@@ -102,6 +102,10 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: notignored}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
     publication: change-auto
     approvals: none
