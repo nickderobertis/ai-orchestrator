@@ -162,11 +162,16 @@ LANDING_RETRY_HALF_CLAIMS = (
 #: same date for a different measurement. A stamp is only evidence where it is
 #: attached to the claim it stamps.
 LANDING_MEASUREMENT_STAMP = "Re-measured {date} on the pinned onevcs {release}:"
-LANDING_MEASUREMENT_DATE = "2026-08-24"
-#: The reference the measurement was taken against — the incident's own, so a later
-#: reader can re-take exactly the measurement this sentence reports.
-LANDING_MEASUREMENT_REFERENCE = "https://github.com/nickderobertis/oneagentgraph/pull/73"
-#: What that reference still answered, verbatim. Quoted rather than paraphrased: the
+LANDING_MEASUREMENT_DATE = "2026-08-25"
+#: The ref the verb was actually asked about, so a later reader re-takes exactly the
+#: measurement rather than a similar one. The incident's own change request stopped
+#: answering here on 2026-08-25 — no session record correlates it any more — and a
+#: measurement nobody can re-take is not evidence, whatever it once showed.
+LANDING_MEASUREMENT_REF = "onevcs/s-a37f615ff961"
+#: The change request that ref's work landed through, which is what makes the answer
+#: below dangerous rather than merely uncertain: it merged, and the verb still says no.
+LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgraph/pull/15"
+#: What that ref still answered, verbatim. Quoted rather than paraphrased: the
 #: whole value of the sentence is that a reader can run the verb and compare.
 LANDING_MEASUREMENT_ANSWER = "still answers `landed: no`, `decided\nby: content comparison`"
 
@@ -192,6 +197,30 @@ def section(heading: str) -> str:
         "repository explains what it measured of the adopted engines"
     )
     return prose.split(f"\n{heading}\n", 1)[1].split("\n## ", 1)[0]
+
+
+def _landing_measurement_passage() -> str:
+    """The one paragraph the landing re-measurement is reported in, flattened.
+
+    Scoped to the paragraph rather than to the document because every part of a
+    measurement has to be attached to it: a ref named in one section and an answer
+    quoted in another are two claims a reader cannot pair, and a gate satisfied by
+    them separately would pass a passage that reported neither together.
+
+    Delimited by the stamp and the next blank line, which is what a Markdown paragraph
+    is here — no heading bounds it, since the passage sits inside a long section.
+    """
+    stamp = LANDING_MEASUREMENT_STAMP.format(
+        date=LANDING_MEASUREMENT_DATE, release=_adopted("onevcs.version")
+    )
+    prose = _text(GUIDANCE_DOCUMENT)
+    paragraphs = [block for block in prose.split("\n\n") if flat(stamp) in flat(block)]
+    assert len(paragraphs) == 1, (
+        f"{GUIDANCE_DOCUMENT} carries {len(paragraphs)} paragraphs stamped {stamp!r}, "
+        "and this gate reconciles exactly one. A re-measurement reported twice is two "
+        "claims that can drift apart; reported nowhere is no measurement at all"
+    )
+    return flat(paragraphs[0])
 
 
 def _adopted(version_file: str) -> str:
@@ -222,11 +251,20 @@ def test_the_phase_section_makes_every_claim_a_reader_cannot_run_a_run_to_learn(
 @pytest.mark.reads_docs
 @pytest.mark.parametrize("version_file", sorted(PHASE_FLOORS))
 def test_the_phase_section_names_the_pin_this_checkout_carries(version_file: str) -> None:
-    """The section states both pins as fact; `config/` is where that fact lives.
+    """The section states each pin as fact; `config/` is where that fact lives.
 
     Restated in the prose because a manager deciding whether a filter may name a phase
     needs the answer in the sentence rather than in a file they would have to open,
     and restating it is only honest while something checks it.
+
+    Asserted **per pin** rather than as one `both read <version>` phrase, and that is a
+    repair rather than a loosening. The shared phrase was written on the adoption where
+    `config/onepipeline.version` and `config/onevcs.version` happened to carry the same
+    number, and it silently required them to go on doing so: on 2026-08-25 they parted
+    — 0.14.2 and 0.15.0 — and no sentence could satisfy it for both. Requiring each pin
+    to be named beside its own release says the same thing where they coincide and goes
+    on saying it where they do not, which is the case a reader most needs the prose to
+    be honest about.
     """
     adopted = _adopted(version_file)
     prose = flat(section(PHASE_SECTION))
@@ -234,10 +272,10 @@ def test_the_phase_section_names_the_pin_this_checkout_carries(version_file: str
         f"{GUIDANCE_DOCUMENT}'s {PHASE_SECTION!r} no longer names `config/{version_file}`, "
         "so a reader cannot tell which pin decides the half it carries"
     )
-    assert flat(f"both read {adopted}") in prose, (
-        f"{GUIDANCE_DOCUMENT}'s {PHASE_SECTION!r} does not say that the two pins read "
-        f"{adopted}, which they do. Re-date the section in the same change that moved "
-        "the pin, or it reads as a claim about a host that no longer exists"
+    assert flat(f"`config/{version_file}` reads {adopted}") in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {PHASE_SECTION!r} does not say that `config/{version_file}` "
+        f"reads {adopted}, which it does. Re-date the section in the same change that "
+        "moved the pin, or it reads as a claim about a host that no longer exists"
     )
 
 
@@ -286,7 +324,8 @@ def test_the_phase_section_names_both_change_requests_that_carry_it() -> None:
 def test_the_landing_passage_keeps_the_half_no_release_has_fixed(claim: Claim) -> None:
     """The squash-merge half is true at every release, and deleting it is the danger.
 
-    `crates/onevcs/src/landed.rs` is one blob at v0.11.0, v0.13.0 and v0.14.0 alike, so
+    `crates/onevcs/src/landed.rs` is one blob at v0.11.0, v0.13.0, v0.14.0 and the
+    pinned v0.15.0 alike, so
     nothing about the four tiers has moved since the incident this passage records. A
     reader who took onevcs 0.14.0's retry fix as making `content comparison`
     trustworthy would be wrong in the direction that re-dispatches merged work, which
@@ -321,31 +360,41 @@ def test_the_landing_passage_states_what_the_retry_chain_did_and_did_not_fix(
 def test_the_landing_passage_dates_its_measurement_to_the_release_it_was_taken_on() -> None:
     """A re-measurement that does not say what it ran on is a claim, not a measurement.
 
-    All four together — the release, the date, the reference, and the answer — because
-    each alone invites the wrong reading. The release without the date does not say
-    whether the measurement survived the last change under it; the date without the
-    release does not say what was running; the answer without the reference cannot be
-    re-taken by the next reader who doubts it.
-    """
-    prose = flat(_text(GUIDANCE_DOCUMENT))
-    adopted = _adopted("onevcs.version")
+    All five together and in one paragraph — the release, the date, the ref, the change
+    request, and the answer — because each alone invites the wrong reading. The release
+    without the date does not say whether the measurement survived the last change
+    under it; the date without the release does not say what was running; the answer
+    without the ref cannot be re-taken by the next reader who doubts it; and the answer
+    without the change request reads as uncertainty rather than as the verb
+    contradicting a merge that happened.
 
-    stamp = LANDING_MEASUREMENT_STAMP.format(date=LANDING_MEASUREMENT_DATE, release=adopted)
-    assert flat(stamp) in prose, (
-        f"{GUIDANCE_DOCUMENT}'s landing passage no longer says {stamp!r}. The date and "
-        f"the release are asserted as one string because {LANDING_MEASUREMENT_DATE} "
-        "appears elsewhere in this document for a different measurement, so a bare date "
-        "is satisfied by a section that is not this one"
+    In one paragraph because that is what pairs them. Asserted over the whole document,
+    each would be satisfied by an unrelated sentence elsewhere in it, and this document
+    is long enough that some of them are.
+    """
+    stamp = LANDING_MEASUREMENT_STAMP.format(
+        date=LANDING_MEASUREMENT_DATE, release=_adopted("onevcs.version")
     )
-    assert LANDING_MEASUREMENT_REFERENCE in prose, (
-        f"{GUIDANCE_DOCUMENT}'s landing passage no longer names "
-        f"{LANDING_MEASUREMENT_REFERENCE}, which is the reference the measurement was "
-        "taken against and the only way a later reader re-takes it"
+    # `_landing_measurement_passage` has already failed if the stamp is absent or
+    # doubled, so what is left to check is that the rest of the measurement is here
+    # with it rather than scattered.
+    passage = _landing_measurement_passage()
+
+    assert LANDING_MEASUREMENT_REF in passage, (
+        f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer names "
+        f"{LANDING_MEASUREMENT_REF}, which is the ref the verb was asked about and the "
+        "only way a later reader re-takes this measurement rather than a similar one"
     )
-    assert flat(LANDING_MEASUREMENT_ANSWER) in prose, (
-        f"{GUIDANCE_DOCUMENT}'s landing passage no longer quotes what that reference "
-        "answered. The verb's own words are the point: a paraphrase cannot be compared "
-        "against a fresh run of it"
+    assert LANDING_MEASUREMENT_CHANGE_REQUEST in passage, (
+        f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer names "
+        f"{LANDING_MEASUREMENT_CHANGE_REQUEST}, the change request that ref's work "
+        "landed through. Without it the quoted answer reads as uncertainty rather than "
+        "as the verb contradicting a merge that happened"
+    )
+    assert flat(LANDING_MEASUREMENT_ANSWER) in passage, (
+        f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer quotes what that "
+        "ref answered. The verb's own words are the point: a paraphrase cannot be "
+        "compared against a fresh run of it"
     )
 
 
@@ -362,7 +411,7 @@ def test_the_landing_passage_is_not_dated_to_a_release_this_host_does_not_run() 
     adopted = _adopted("onevcs.version")
     stale = [
         release
-        for release in ("0.11.0", "0.12.0", "0.13.0")
+        for release in ("0.11.0", "0.12.0", "0.13.0", "0.14.0")
         if release != adopted and flat(f"on the pinned onevcs {release}") in prose
     ]
     assert not stale, (

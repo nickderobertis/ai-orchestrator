@@ -172,32 +172,44 @@ REQUIRED_CLAIMS = (
         LOOP_SECTION,
         "where it and the notes below it disagree, the amendment wins",
     ),
+    # These seven used to hold the opposite claim — a hard one-lifecycle-dispatch-per-
+    # identity bound, and the three details a manager scheduled around it with. onevcs
+    # 0.14.1 fixed the reclamation race and this host adopted it at 0.15.0, so what a
+    # manager now has to be told is that the bound is gone, on whose authority, and what
+    # is left of it. Restated rather than deleted: a lifted constraint that nobody says
+    # was lifted goes on being obeyed, which costs exactly the parallelism it was
+    # protecting, and a lifted constraint with no release named cannot be re-checked by
+    # the next reader who doubts it.
     Claim(
-        "the bound is one dispatch per identity",
+        "the bound is lifted",
         RECLAMATION_OPENER,
-        "At most one lifecycle dispatch per repository identity is safe",
+        "the\none-dispatch-per-identity constraint this paragraph used to impose is lifted",
+    ),
+    Claim("which release fixed it", RECLAMATION_OPENER, "**onevcs 0.14.1 fixed that"),
+    Claim(
+        "which release this host adopts it at",
+        RECLAMATION_OPENER,
+        "this host adopts it at 0.15.0",
     ),
     Claim(
-        "and it is a constraint",
+        "the lift is a measurement, not a changelog reading",
         RECLAMATION_OPENER,
-        "it is a constraint rather than a\npreference",
-    ),
-    Claim("the exposure is intra-run", RECLAMATION_OPENER, "The exposure is **intra-run**"),
-    Claim("the run it was measured on", RECLAMATION_OPENER, "`adopt-engines-siblings`"),
-    Claim(
-        "one run's own concurrency reaches it",
-        RECLAMATION_OPENER,
-        "a plan whose `concurrency` is 2 reaches this with no\nsecond manager involved",
+        "Re-measured here on 2026-08-25 against both binaries",
     ),
     Claim(
-        "an uncommitted session is removed outright",
+        "what a manager may now schedule",
         RECLAMATION_OPENER,
-        "a session that has opened and not yet committed is\nremoved outright",
+        "schedule concurrent lifecycle\ndispatches on one identity freely",
     ),
     Claim(
-        "which is when a node is most exposed",
+        "the mitigation is kept rather than retired",
         RECLAMATION_OPENER,
-        "widest exactly when a\nnode has least to show for itself",
+        "**kept and still wired**",
+    ),
+    Claim(
+        "an uncommitted abandoned session is still removed outright",
+        RECLAMATION_OPENER,
+        "an abandoned session that opened and never committed is still\nremoved outright",
     ),
     Claim(
         "the mechanism is pointed at rather than restated",

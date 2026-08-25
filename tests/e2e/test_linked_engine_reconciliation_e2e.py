@@ -2,7 +2,7 @@
 
 `config/onepipeline.version` is the pin that decides what a *dispatch* runs, because
 `onepipeline` links `oneagentgraph`, `onevcs`, and `onejudge` as Rust libraries — and,
-through `oneagentgraph` and `onejudge`, two releases of `oneharness-core`, the crate
+through `oneagentgraph` and `onejudge`, `oneharness-core`, the crate
 that runs the turn itself and the one no `config/*.version` here can name. Every
 other reading of that question is a claim about it: a `Cargo.toml` requirement permits
 versions a build never resolved, a `Cargo.lock` describes what a release *would* link,
@@ -19,8 +19,10 @@ reads the engine it installed:
   pins against without a network or a clone;
 * the `config/*.version` pins the provisioning was driven from.
 
-All three have to agree on what is linked — one release per crate for the three
-that have one, and both releases of `oneharness-core` for the one that does not. The
+All three have to agree on what is linked, crate for crate — including
+`oneharness-core`, which is checked as the whole set its dependents resolve rather than
+as a single value, so this journey says the same thing whether they agree on one
+release or split over several. The
 unit gate holds the last two together on this checkout; what only a journey can prove
 is that the wheel's declaration is true of the binary it shipped — which is the one
 step where a rebuild, a repair, or an install from somewhere else parts a host from
@@ -49,7 +51,8 @@ from orchestrator.root import REPO_ROOT
 #: The same expression `AGENTS.md` hands an operator, applied to the bytes directly so
 #: this journey needs no binutils to answer a question about a file it already has.
 #: `oneharness-core` is in here beside the three reconciled crates and is not one of
-#: them: the engine links two releases of it at once, so it has no pin to reconcile
+#: them: no `config/*.version` here names that crate — `config/oneharness.version`
+#: names the CLI, a separate artifact — so it has no pin to reconcile
 #: against and is checked binary-against-SBOM only. Sorted longest-first so
 #: `oneharness-core` is tried before any prefix of it could swallow the hyphen.
 LINKED_CRATES = (*sorted(RECONCILED_PINS), UNRECONCILABLE_PIN.crate)
@@ -125,16 +128,18 @@ def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
     }
 
     # The crate no pin can name, checked first because it is the one this reconciliation
-    # used to drop: the wheel declares two releases of it and the binary has to carry
-    # exactly those two. `tests/test_linked_libraries.py` says which dependent brings
-    # which; what only a provisioned binary can say is that both are really in it.
+    # used to drop: whatever set of releases the wheel declares, the binary has to
+    # carry exactly that set. `tests/test_linked_libraries.py` says which dependent
+    # brings which; what only a provisioned binary can say is that they are really in
+    # it. Compared as sets rather than as a count, which is what let this survive the
+    # two linked cores collapsing into one without the assertion needing a word changed.
     core = UNRECONCILABLE_PIN.crate
     expected = {resolved.core for resolved in LINKED_HARNESS_CORES}
     assert carried.get(core) == expected == all_declared.get(core), (
         f"the provisioned onepipeline {adopted} carries {core} {sorted(carried.get(core, ()))}, "
         f"its own SBOM declares {sorted(all_declared.get(core, ()))}, and this repository is "
         f"written against {sorted(expected)}. A dispatched turn runs one of these and "
-        f"`config/{UNRECONCILABLE_PIN.pin}.version` names neither"
+        f"`config/{UNRECONCILABLE_PIN.pin}.version` names none of them"
     )
 
     for crate, version_file in sorted(RECONCILED_PINS.items()):

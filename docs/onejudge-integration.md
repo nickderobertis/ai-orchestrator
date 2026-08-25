@@ -77,7 +77,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.14.0,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.14.2,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -174,39 +174,49 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.10.3 is
-the adopted release, and unlike the three behind it — which a **CLI** consumer cannot
-observe at all, as the paragraph after this one says — this one is visible here: it
-stops a candidate that never started reading as one that ran. A
-fallback chain stops at a failure it cannot classify — that is the routing, and 0.10.3
-does not change it — but until this release the report said only that the candidate
-`ran but did not succeed`, which is the same sentence a genuine task failure gets.
-Measured here on both binaries, one spawn-refusing candidate, everything else held:
+`config/oneharness.version` release and rejects a stale binary. Version 0.11.0 is
+the adopted release, and what it changes reaches this host's **monitor** rather than
+its workers: a named session continued under `--control` now genuinely continues the
+same conversation, and a control mechanism whose protocol has no resume request
+refuses the continuation instead of silently opening a new conversation while the
+store, the report and the flag all read healthy. Measured on the installed binary,
+which warns at the *first* turn rather than only refusing the second:
 
 ```
-$ oneharness run --config <codex-chain.toml> --prompt hi     # provider exits 3, says nothing
-  0.10.2: fallback harness `codex` ran but did not succeed (see results[].status ...)
-          report 0.8 — fallback {"ran":"codex","fell_through":[]}, no work reading
-  0.10.3: fallback harness `codex` failed with nothing to show for it — no tool call,
-          no billed usage, and no cause it could classify — so the chain stopped
-          there and tried no candidate after it (see results[].work and ...)
-          report 0.9 — fallback {..., "stopped_without_work": true}, work "none"
+$ ONEHARNESS_HARNESSES=goose oneharness run --control --session probe --prompt hi
+  warning: session `probe` starts a NEW conversation on `goose`, and its control
+  mechanism `acp-cancel` implements no resume request — so the next
+  `--control --session probe` turn will be refused rather than silently starting
+  over. Mechanisms that continue a session under --control: claude-code, codex
+$ ONEHARNESS_HARNESSES=claude-code oneharness run --control --session probe --prompt hi
+  (no warning: `claude-control-request` is one of the two that resume)
 ```
 
-Both are additive: `results[].work` (`done` / `none`) is published only on a failure
-`failure_kind` could not name, `fallback.stopped_without_work` only where such a
-candidate is the one a chain stopped at, and the history record carries the same
-reading at schema 1.7 — declared only on a record that *has* one, which is what keeps
-an older reader whole. That matters here because there is one: the `oneagentgraph`
-this host's [smoke](#the-record-a-fallback-chain-is-judged-by) judges by links a
-`oneharness-core` a release behind the CLI it spawns. Adoption spent a real turn
-proving the pair — the chain fell through `claude-code:alternate` on quota, passed via
-`claude-code:alternate2`, and that older reader read the record the 0.10.3 CLI wrote.
-Nothing about that rests on an adopter remembering to check: the pre-push hook selects
+That naming is the reading to keep: the two mechanisms that continue are
+`claude-code`'s and `codex`'s, and every chain this repository ships names only those
+two families, so no side here was in the silently-restarting case. Read the warning as
+a guard against a *third* family being introduced rather than as a defect being fixed
+on this host.
+
+**The stopped-without-work reading arrived one release earlier and is unchanged
+here.** A fallback chain stops at a candidate whose failure it cannot classify, and
+until 0.10.3 the report said only `ran but did not succeed` — the same sentence a
+genuine task failure gets. From 0.10.3 a candidate that showed nothing for itself says
+so, with `fallback.stopped_without_work` and `results[].work` of `none` carrying the
+same reading into the report and the history record at schema 1.7. Both fields are
+additive and declared only on a record that *has* one, which is what keeps an older
+reader whole. **What is no longer true here is that there is such an older reader.**
+Through the previous adoption the `oneagentgraph` this host's
+[smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
+a release behind the CLI it spawns; measured on 2026-08-25 from both installed wheels'
+own SBOMs, `oneagentgraph-cli` 0.3.10 and `oneharness-cli` 0.11.0 are compiled against
+the **same** `oneharness-core` 0.12.0, so reader and writer are one build. Nothing
+about that rests on an adopter remembering to check: the pre-push hook selects
 `just smoke` for any diff touching `config/oneharness.version`, so the next bump proves
-the same pairing on a real turn or does not reach the remote.
+the pairing on a real turn or does not reach the remote.
 
-It succeeds 0.10.2, which puts a pre-spawn/post-spawn hook pair on `RunControls`, so a
+It succeeds 0.10.3, whose stopped-without-work reading the paragraph above keeps, and
+0.10.2 behind that, which puts a pre-spawn/post-spawn hook pair on `RunControls`, so a
 library **embedder** owns the harness child a run starts rather than losing it to the
 process tree. That is not an abstract capability here — it is the compile floor
 `oneagentgraph` 0.2.18 names for converting a single-sided member's turn from a
@@ -479,7 +489,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.10.3, a config's per-harness `model` **beats** the variable, while the `--model`
+0.11.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -596,7 +606,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.10.3, confirmed against the binary:
+candidate it ended up running — through oneharness 0.11.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -967,8 +977,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.14.0,
-> `oneagentgraph` 0.3.9, nor `onevcs` 0.14.0. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.14.2,
+> `oneagentgraph` 0.3.10, nor `onevcs` 0.15.0. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1252,7 +1262,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.5.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.5.1/docs/protocol.md)),
+([onejudge v0.5.3 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.5.3/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
@@ -1274,7 +1284,7 @@ member would otherwise have gone straight to a paid subscription. What is still 
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
 at `tests/e2e/fake_codex.py` — every config in this repository names `codex` first, so
 pinning that identity's binary is what keeps a suite run off a subscription. The two
-do not collide: re-measured against the adopted oneharness 0.10.3, a harness selected
+do not collide: re-measured against the adopted oneharness 0.11.0, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the
 one that matters — the same chain without `--mock-harness` runs the pinned binary — so

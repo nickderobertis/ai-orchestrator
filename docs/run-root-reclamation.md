@@ -2,10 +2,23 @@
 
 On 2026-08-22 three dispatches of one run were destroyed within 90 seconds of launch,
 and every one of them was reported as a missing `claude` binary. This is what
-happened, what this repository does about it, and what has to be fixed upstream
-before concurrent lifecycle dispatch on one identity is safe.
+happened, what this repository did about it, and the upstream fix that has since
+landed and been adopted here.
 
-## What deletes it
+**Read the history below as history.** `onevcs` 0.14.1 fixed this at the source —
+[`fix: prove a run root is abandoned from its session record, not from a lease nothing
+holds`](https://github.com/nickderobertis/onevcs/pull/82) — and `config/onevcs.version`
+adopted it at 0.15.0. Re-measured on this host on 2026-08-25 with both binaries and
+everything else held: a session record naming a live owner keeps its run root across a
+sibling `session open` on 0.14.1 and 0.15.0, and loses it on 0.14.0. **Concurrent
+lifecycle dispatch on one identity is no longer unsafe for this reason**, and the
+"at most one" constraint this document used to impose is lifted.
+
+Every section below is kept rather than deleted, because the reasoning is what a reader
+needs when they meet the next race of this shape — and because the mitigation is still
+wired and still driven. Which parts are historical is said where they are.
+
+## What deleted it, through onevcs 0.14.0
 
 `onevcs session open` reclaims run roots as its first act. Reading the release the
 adopted `onepipeline` links — `onevcs` v0.11.0, whose working checkout on this host
@@ -71,7 +84,14 @@ so a dead run's branch stays reachable; this verb does not reach into it
 during the incident, because session setup runs it; the verb that deletes run roots is
 `session open`, which every dispatch also runs and which nothing logs.
 
-## What this repository does about it
+## What this repository did about it, and still does
+
+**This is now a second line rather than the only one.** With the upstream fix adopted,
+a live session's run root is spared whether or not this holds a lease; what follows is
+kept because a mitigation that has stopped being load-bearing has not stopped working,
+and because it still covers the one case the record rule cannot — a run root whose
+session record cannot be read at all, which `reclaim` answers with "no live sessions"
+and falls through to the lease for.
 
 `scripts/hold-run-lease.sh`, run first by `scripts/session-setup.sh`, takes that same
 shared occupancy lease on this dispatch's run root and keeps holding it. Nothing new
@@ -98,10 +118,13 @@ Two further limits, stated rather than discovered later:
   is deliberately left reclaimable.
 
 `tests/e2e/test_run_root_lease_e2e.py` drives all of it against the real `onevcs`:
-the deletion reproduced without the lease, the root surviving with it, the lease
+the root surviving *without* the lease, which is the adopted fix and is what that
+journey's first leg now asserts; the root surviving with it; the lease
 released with its session — and released again when that session is handed to a
 different owner — and a real `session-setup.sh` taking it inside a real session
-worktree.
+worktree. That first leg asserted the deletion until 2026-08-25, and it was proven to
+discriminate before it was believed: it fails against onevcs 0.14.0 with the reclaimed
+root named, and passes against the adopted 0.15.0.
 
 It reads the session record directly rather than asking `onevcs session holders`,
 which answers the same question, because a freshly cut worktree has no `.venv` yet:
@@ -123,7 +146,19 @@ released, and then requires the next `onevcs session open` to delete that root. 
 does. Nothing in `reclaim` is modified, `RETAINED_DEAD_RUNS` is untouched, and a run
 root whose owner is gone is exactly as reclaimable as it was before.
 
-## The upstream fix
+## The upstream fix, as landed
+
+**Specified here, then landed upstream as specified.** What this section asked for is
+what `onevcs` 0.14.1 implemented: `fn reclaim` reads `run_roots_of_live_sessions()`
+once before its walk — every record whose `liveness()` is `Liveness::Live` — skips any
+run root in it, and only then falls through to the occupancy lease it tested before.
+Its own doc comment now states the rule as four conditions rather than three, and says
+the lease is the layer *behind* the record rather than a replacement for it. A session
+directory it cannot read answers with no live sessions and falls through, which is the
+gap the mitigation above still covers.
+
+The specification is kept below, unchanged, because it is the argument for why that
+shape is right and it is what a reader compares the implementation against.
 
 **File:** `crates/onevcs/src/workspace.rs`. **Function:** `fn reclaim` (v0.11.0
 `:1228`), at the `lock::try_exclusive` decision on `:1243`.
@@ -170,7 +205,7 @@ suggestion sends the reader to PATH and the harness install.
 
 **This repository cannot correct it.** The text belongs to `oneharness-core`:
 `crates/oneharness-core/src/io/runner.rs:490` in `fn run_job_supervised`, and again at
-`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.10.3 binary on
+`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.11.0 binary on
 this host, and a dispatch reaches the same crate as a linked library rather than
 through any script here, so nothing on this side of the boundary is in a position to
 rewrite it. The fix belongs there: when the job named a `cwd` (set at `runner.rs:457`)

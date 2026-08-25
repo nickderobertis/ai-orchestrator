@@ -191,6 +191,14 @@ ONEVCS = Engine("onevcs", f"v{_linked_version('onevcs')}", "crates/onevcs/src")
 #: The engine a dispatch's *graph* is, at the version onepipeline links — read for the
 #: same reason as onevcs, and never from `config/oneagentgraph.version`.
 ONEAGENTGRAPH = Engine("oneagentgraph", f"v{_linked_version('oneagentgraph')}", "src")
+#: The engine that runs a **turn**, read at the tag of the `oneharness` CLI this host
+#: pins — the one ref here that is not the crate's own, because `oneharness` tags only
+#: the CLI. That is the right ref rather than a fallback: measured 2026-08-25, the
+#: pinned CLI wheel is compiled against exactly the `oneharness-core` the engine wheel
+#: links, so the tree at `v<pin>` is the core a dispatched turn runs through. It does
+#: not make the pin the core's version — `tests/test_linked_libraries.py` gates that
+#: distinction.
+ONEHARNESS = Engine("oneharness", _pinned_tag("oneharness"), "crates/oneharness-core/src")
 
 
 class Vocabulary(NamedTuple):
@@ -965,6 +973,68 @@ def test_every_symbol_a_document_calls_current_is_still_there(
         f"{document.name} says the adopted {engine.crate} declares {symbol!r}, and "
         f"{engine.ref} does not. That is the claim to correct — a reader configuring "
         "against it gets no error, only a setting nothing reads"
+    )
+
+
+#: Where the turn engine declares the provider health block this repository's views
+#: forward. `just status` and `just runs` print `oneagentgraph health`'s JSON verbatim
+#: and that call is `oneharness_core::io::usage::report`, so every name below is
+#: oneharness's to rename and nothing on this side re-assembles it.
+HEALTH_REPORT_SOURCE = "domain/usage.rs"
+
+#: A `pub` field declaration, and the tuple-struct/enum-variant fields beside it, as
+#: the names a serialized report carries. Read as declarations rather than as bare
+#: words because a bare `plan` matches most of a crate: the whole value of this gate is
+#: that a *renamed field* fails it, and a substring search over the source would go on
+#: passing after the rename.
+DECLARED_FIELD = re.compile(r"^\s*(?:pub\s+)?([a-z_][a-z0-9_]*)\s*:\s*[A-Za-z_&<]", re.MULTILINE)
+
+#: The one numbered step of `docs/telemetry.md` that lists those names, which is the
+#: region the field claims below are read from. Scoped rather than searched over the
+#: whole document: several of these words appear elsewhere in it for unrelated reasons,
+#: so a document-wide search would go on passing after the block that names them lost
+#: one.
+HEALTH_BLOCK = re.compile(
+    r"^1\. Read the \*\*provider health block\*\*.*?(?=^\d+\. )", re.MULTILINE | re.DOTALL
+)
+
+#: Every field name that block tells an operator to read out of the report. Each is
+#: quoted there in backticks and each has to be a field the crate declares — a reader
+#: who greps a report for a name the crate renamed finds nothing and concludes the
+#: identity was not probed, which is the failure this gate is about.
+HEALTH_REPORT_FIELDS = (
+    "harness",
+    "selector",
+    "auth_mode",
+    "plan",
+    "availability",
+    "used_percent",
+    "resets_at",
+    "is_binding",
+)
+
+
+@pytest.mark.parametrize("field", HEALTH_REPORT_FIELDS)
+def test_the_health_block_fields_are_the_turn_engines_own(field: str) -> None:
+    """Both halves, as every claim here is: the document names it, the crate declares it.
+
+    The direction that bites is a *rename*. Nothing on this side of the boundary would
+    notice one: the views forward the report verbatim, so a renamed field arrives under
+    its new name and the operator following this paragraph greps for the old one, finds
+    nothing, and reads a healthy identity as an unprobed one. That is indistinguishable
+    from the probe failing, which is the reading the paragraph exists to prevent.
+    """
+    block = _region(TELEMETRY.read_text("utf-8"), HEALTH_BLOCK, "the provider health block")
+    assert f"`{field}`" in block, (
+        f"{TELEMETRY.name}'s provider health block no longer names `{field}`; drop "
+        "this entry in the same change that drops the claim"
+    )
+    declared = set(DECLARED_FIELD.findall(_source(ONEHARNESS, HEALTH_REPORT_SOURCE)))
+    assert field in declared, (
+        f"{TELEMETRY.name} tells an operator to read `{field}` out of the provider "
+        f"health block, and oneharness {ONEHARNESS.ref} declares no such field in "
+        f"{HEALTH_REPORT_SOURCE}. Re-read the crate and correct the paragraph — a "
+        "renamed field reads to that operator as an identity that was never probed"
     )
 
 

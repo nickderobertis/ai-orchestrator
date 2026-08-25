@@ -244,7 +244,7 @@ user:
 # an `assessment` for the dispatched workers it is shared with, and a persona silent
 # about a key inherits the base's. `null` is onejudge's own unset form and oneagentgraph
 # inserts it, so this overrides rather than being skipped as absent. Measured against
-# onejudge 0.5.1.
+# onejudge 0.5.3.
 #
 # It has nothing to answer anyway — this member authors no target-project content — and
 # its judge side is the planner channel, which cannot serve the `assess` op the key would

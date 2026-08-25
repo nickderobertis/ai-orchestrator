@@ -1,23 +1,36 @@
 """A live dispatch's run root survives a sibling `onevcs session open`.
 
-Every `onevcs session open` reclaims the run roots of its identity that nothing holds
-an occupancy lease on, and `open` drops the shared lease it took the moment it
-returns — so from then on nothing holds one while a dispatch works in that directory
-for hours. A sibling dispatch opening its own session deletes it. That destroyed
-three dispatches of one run on this host on 2026-08-22, and reported each as a
-missing `claude` binary; the mechanism, the evidence, and the upstream fix are
+Through onevcs 0.14.0 it did not. Every `session open` reclaimed the run roots of its
+identity that nothing held an occupancy lease on, and `open` dropped the shared lease
+it took the moment it returned — so from then on nothing held one while a dispatch
+worked in that directory for hours, and a sibling dispatch opening its own session
+deleted it. That destroyed three dispatches of one run on this host on 2026-08-22,
+and reported each as a missing `claude` binary; the mechanism and the evidence are
 `docs/run-root-reclamation.md`.
 
-`scripts/hold-run-lease.sh` is what this repository can do about it from below: take
-that same shared lease and keep holding it for as long as the session is live. These
-journeys drive it against the **real** `onevcs`, whose `reclaim` is the thing under
-test — a double would be a restatement of the belief being checked.
+**onevcs 0.14.1 fixed it upstream** — `fix: prove a run root is abandoned from its
+session record, not from a lease nothing holds`
+(https://github.com/nickderobertis/onevcs/pull/82) — and this host adopted it through
+`config/onevcs.version` 0.15.0. Measured on both binaries with everything else held,
+a session whose record names a live owner now keeps its run root across a sibling
+open, where 0.14.0 removed it.
+
+`scripts/hold-run-lease.sh` is what this repository did about it from below while that
+was outstanding: take that same shared lease and keep holding it for as long as the
+session is live. It is kept and still driven here — it is no longer the only thing
+standing between a dispatch and its directory, but a mitigation that has stopped being
+load-bearing is not the same as one that has stopped working, and this suite is what
+would say if it broke. These journeys drive it against the **real** `onevcs`, whose
+`reclaim` is the thing under test — a double would be a restatement of the belief
+being checked.
 
 The first four are one argument and are worth reading in order:
 
-1. the defect, reproduced — a live session's run root is deleted by a sibling open;
-2. the mitigation — the same sequence with the lease held leaves the root alone;
-3. the hygiene it must not cost — once the owner is gone the lease goes with it and
+1. the fix, reproduced — a live session's run root survives a sibling open with no
+   lease held at all, which is what makes the rest of this a mitigation rather than
+   a necessity;
+2. the mitigation — the same sequence with the lease held also leaves the root alone;
+3. the hygiene neither may cost — once the owner is gone the lease goes with it and
    the very next open prunes the root exactly as before;
 4. the wiring — a real `session-setup.sh`, which is what a dispatch runs at startup,
    really takes the lease.
@@ -326,27 +339,42 @@ def _sibling_opens_a_session(identity: Identity) -> None:
     assert opened.returncode == 0, f"the sibling open failed:\n{opened.stdout}\n{opened.stderr}"
 
 
-def test_a_sibling_session_open_deletes_an_unheld_live_dispatchs_run_root(
+def test_a_sibling_session_open_spares_an_unheld_live_dispatchs_run_root(
     tmp_path: Path,
 ) -> None:
-    """The defect itself, against the real binary.
+    """The fix itself, against the real binary, with no lease held at all.
 
-    Without this leg the next one proves nothing: a run root that survives a sibling
-    open would look like a working mitigation even if the reclaimer had never wanted it.
-    The record is read afterwards as well as the directory, because the two disagreeing
-    is the whole shape of the failure — `onevcs` still calls this session open and live
-    while the worktree it names is gone.
+    This leg used to assert the opposite, and flipping it is the whole news of the
+    onevcs 0.14.1 adoption: `reclaim` proves abandonment from the session record it
+    already has rather than from a lease nobody holds, so the record saying *open* with
+    a live owner is now enough to spare the directory. Driven with no lease deliberately
+    — the mitigation below holds one, and a leg that held one here could not tell the
+    fix from the workaround.
+
+    The record is read afterwards as well as the directory, because the two agreeing is
+    what makes the answer sound: the failure this replaces was `onevcs` calling a
+    session open and live while the worktree it named was gone, and a run root spared
+    beside a record that had quietly closed would be the same disagreement inverted.
     """
     identity = _identity(tmp_path)
     session = _open_session(identity)
     try:
         assert session.worktree.is_dir()
+        assert not _lease_is_held(session.lock), (
+            "this leg is the unmitigated one and something is already holding the lease "
+            "on its run root, so it would pass whether or not onevcs spares a live root"
+        )
 
         _sibling_opens_a_session(identity)
 
-        assert not session.run_root.exists(), (
-            f"{session.run_root} survived, so this host's onevcs no longer reclaims a "
-            "live run root and the mitigation below is testing nothing"
+        assert session.run_root.exists(), (
+            f"{session.run_root} was reclaimed while its session record named a live "
+            "owner. That is the 2026-08-22 defect back: the adopted onevcs is proving "
+            "abandonment from a lease nothing holds rather than from the record"
+        )
+        assert session.worktree.is_dir(), (
+            f"{session.run_root} survived but its worktree did not, so a dispatch "
+            "working there still loses the directory its child processes are running in"
         )
         record = json.loads(
             (identity.home / "sessions" / f"{session.token}.json").read_text(encoding="utf-8")

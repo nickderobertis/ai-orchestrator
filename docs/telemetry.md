@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.14.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.14.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,18 +143,21 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.10.2/0.5.1 upgrade (`config/oneharness.version` and
+after the 0.11.0/0.5.3 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
-this paragraph whenever either pin moves. That re-check has since been made for the
-0.10.3/0.5.1 upgrade, and the measurement above stands rather than being retaken: one
-turn spent on each binary with everything else held differs by exactly two added keys
-— `results[].work` and `fallback.stopped_without_work`, both of which say something
-about a failure nothing could classify — while every `usage` field keeps its name, its
-type, and its value. Nothing an accounting reader reads is renamed, retyped, or
-re-meant, which is why the boundary sentence still names the pair these records were
-written under. `dispatches`,
+this paragraph whenever either pin moves. That re-check has now been made twice
+without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
+with everything else held differed by exactly two added keys — `results[].work` and
+`fallback.stopped_without_work`, both of which say something about a failure nothing
+could classify. For this one it was re-taken on 2026-08-25 by spending a real
+`just smoke` turn on the adopted pair and reading the record it wrote: at history
+schema 1.1 the `usage` block is `input_tokens`, `output_tokens`, `cache_read_tokens`,
+`cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered and
+on the one that fell through on quota alike. Nothing an accounting reader reads is
+renamed, retyped, or re-meant, which is why the boundary sentence names the pair
+these records are written under rather than the older one they were first taken on. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 
@@ -375,15 +378,11 @@ names neither.
    `selector` naming the indirection dispatch uses
    (`scripts/claude-alt-config-dir.sh`, `scripts/codex-alt-home.sh`), its
    `auth_mode` and `plan`, and an `availability` listing every window with
-   `used_percent`, `resets_at`, and which one `is_binding`.
-   <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These field names
-   are `oneharness_core::io::usage::report`'s, and this host cannot resolve one
-   authoritative declaration for them: the adopted engine wheel's SBOM declares
-   `oneharness-core` at two versions at once (0.10.1 and 0.8.0), and the registered
-   `oneharness` checkout's tags stop at v0.9.0, so neither is fetchable to read. Every
-   other engine contract in these documents is reconciled against source; this one is
-   a restatement of a forwarded JSON shape, and gating it would mean pinning it to a
-   ref nothing here can name. Tracked as follow-up. --> Every probe there is
+   `used_percent`, `resets_at`, and which one `is_binding`. Every one of those names is
+   reconciled against `oneharness-core`'s own declaration on each `just check`, by
+   `tests/test_engine_contracts.py::test_the_health_block_fields_are_the_turn_engines_own`
+   — so a renamed field fails there rather than reaching an operator as an identity
+   that looks unprobed. Every probe there is
    free: no harness takes a model turn. A health probe that cannot run at all is
    silence rather than a failure — the block is simply absent and the rest of the
    view still reports.

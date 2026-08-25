@@ -197,6 +197,9 @@
         "check (ubuntu-latest)": "tree-verdict",
         "check (windows-latest)": "other-os",
         "deny": "network-advisory",
+        "install path (macos-latest)": "published-artifact",
+        "install path (ubuntu-latest)": "published-artifact",
+        "install path (windows-latest)": "published-artifact",
         "llmlint": "tree-verdict",
         "pr-title": "pull-request"
       }

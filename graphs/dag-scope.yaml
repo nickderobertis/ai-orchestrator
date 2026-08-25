@@ -23,7 +23,7 @@
 # six literal characters. Neither half is remembered: `tests/e2e/`'s launch suite
 # runs a member at the version declared below on every gate run and fails if `{task}`
 # reached it literally, and the range is re-read off the pinned binary at each
-# adoption, which refuses 0 and 8 by naming it. oneagentgraph 0.3.9 reads 1 through 7.
+# adoption, which refuses 0 and 8 by naming it. oneagentgraph 0.3.10 reads 1 through 7.
 version: 4
 name: dag-scope
 members:
@@ -49,7 +49,7 @@ members:
     # a filter rather than named directly. The two halves already agree on the
     # response — `serve` answers with exactly the `{completion, message, reason}`
     # object onejudge's `supervisor` op expects, and the filter passes it through
-    # untouched. They disagree on the request: onejudge 0.5.1 writes
+    # untouched. They disagree on the request: onejudge 0.5.3 writes
     # `{"op":"supervisor", …}` while `serve` reads `{kind, message, blocking?,
     # node?}`, so naming `serve` directly here is refused with `the observer emitted
     # a bad frame: unknown field 'op'` and the member dies on its first turn.
@@ -93,7 +93,7 @@ members:
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
   # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
   # launcher identity —
-  # measured against onepipeline 0.14.0 on both of that member's sides, by dumping
+  # measured against onepipeline 0.14.2 on both of that member's sides, by dumping
   # each one's whole environment on a real launch. `{task}` is still what this member
   # is written against: it is this graph's own contract rather than a per-release
   # export, and it carries the run's goal as well as its id.

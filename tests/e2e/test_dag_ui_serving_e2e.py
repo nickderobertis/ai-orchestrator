@@ -725,7 +725,20 @@ def test_the_adopted_bundle_renders_a_real_runs_root_in_a_browser(
     failure that serves 200s the whole way down. So one desktop viewport is driven
     through a real browser against a real recorded run, and what is asserted is the
     text on the page: the run's own name and goal, the counters the Overall view is
-    read for, and, in the Graph view, the node with the outcome that failed it.
+    read for, the liveness verdict the API reports for it, and, in the Graph view, the
+    node with the outcome that failed it.
+
+    **The verdict is read from the API rather than written down here**, and that is a
+    repair. This asserted the literal `driver-dead` until 2026-08-25, which was the
+    token the `onepipeline-ui` **0.6.2** bundle rendered; 0.6.3 does not contain that
+    string at all, and neither does the read API's wire vocabulary. The assertion
+    survived main's 0.6.3 bump because the worktree that ran it still had 0.6.2
+    installed — `bun install` reconciles rather than replaces, so a moved pin reached
+    the lockfile and not `node_modules`. That is the exact failure `AGENTS.md` records
+    for `onepipeline-ui` 0.3.3 under a 0.5.0 pin, met a second time. Asking the API
+    what it says and requiring the page to show *that* is a claim the next bundle bump
+    cannot quietly falsify: it fails when the view stops rendering the verdict, and it
+    does not fail when the verdict itself is spelled differently.
     """
     overall = _rendered(served_recorded, tmp_path, RECORDED_RUN, "overall")
 
@@ -733,7 +746,19 @@ def test_the_adopted_bundle_renders_a_real_runs_root_in_a_browser(
     assert "Clear the three judged findings" in overall, overall
     for counter in ("STATUS", "NODES", "WALL TIME", "TURNS"):
         assert counter in overall, f"the Overall view rendered no {counter}: {overall}"
-    assert "driver-dead" in overall, overall
+
+    status, body, _ = served_recorded.get("/api/v2/runs")
+    assert status == 200, (status, body)
+    reported = {run["run_id"]: run["state"] for run in json.loads(body)["runs"]}
+    assert RECORDED_RUN in reported, (
+        f"the read API lists no {RECORDED_RUN}, so this journey has no verdict to hold "
+        f"the rendered page to: {sorted(reported)}"
+    )
+    assert reported[RECORDED_RUN] in overall, (
+        f"the read API reports {RECORDED_RUN} as {reported[RECORDED_RUN]!r} and the "
+        f"Overall view renders no such verdict. An operator is being shown a run whose "
+        f"liveness the page does not say: {overall}"
+    )
 
     graph = _rendered(served_recorded, tmp_path, RECORDED_RUN, "graph")
 
