@@ -54,6 +54,7 @@ WRAPPER_SCRIPTS = (
     # with. Every launch takes that seam, `onepipeline.sh` included, so the helper that
     # establishes it and the wrapper it names are both part of a runnable checkout.
     "plan.sh",
+    "credentials-env.sh",
     "ask-manager-env.sh",
     "ask-manager.sh",
     # `just channel-reply` goes through this one, which forwards the caller's own

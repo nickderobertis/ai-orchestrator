@@ -1527,6 +1527,50 @@ the adopted release routes a reply by the halves it carries, so a commands-only
 envelope stays on the command path and never reaches a reader waiting for a verdict.
 A question is answered with `just channel-next` and `just
 channel-reply`, which the launch prints.
+
+**Those same launch verbs put this checkout's own credentials in that environment**,
+read from a gitignored `.env` at the repository root — the first of them is
+`GH_PROJECTS_TOKEN`, which a worker's `onetaskgraph` invocation needs. The dialect is
+`KEY=VALUE` lines with `#` comments, an optional `export ` prefix, and matching
+surrounding quotes stripped, which is onetaskgraph's own settled rule rather than a
+second spelling of `.env`: an operator who has written one of these files has written
+the other, and a value parsed with its quotes still attached fails authentication
+somewhere far away with nothing pointing back at the file.
+`scripts/credentials-env.sh` is its one source, sourced by `scripts/onepipeline.sh` on
+`start` and `adopt` and by `scripts/plan.sh`, so — exactly as with the ask seam above —
+a read-only view loads nothing and refuses nothing, because it dispatches nobody. **A
+name the process environment already defines is never overridden**, so a value exported
+for one command beats a file written once and forgotten. An absent file, an empty one,
+and a name it does not define are all ordinary; a line that is neither a comment nor
+`KEY=VALUE` is refused naming the file and the line number, rather than skipped in
+silence. No refusal, diagnostic, or log carries a value, and nothing had to be taught
+about this file for that to hold past the loader:
+`orchestrator/redaction.py` and `scripts/preserved-log.sh` hide credential-shaped
+values found in the **process environment**, which is precisely where this puts them.
+`tests/e2e/test_launch_ask_seam_e2e.py` reads a name back out of a real dispatch's own
+environment, per launch shape, and `tests/test_credential_dialect_drift.py` reconciles
+the dialect against onetaskgraph's own parser in the uncached tier — a copied shape that
+nothing reconciles is how the first version of this loader came to export
+`TOKEN="ghp_..."` with the quotes still attached.
+
+**Two credentials files exist on this host and only one of them is this
+repository's.** `$HOME/.config/onetaskgraph/secrets.env` is onetaskgraph's own
+development setup — machine-wide, outside every worktree, and not this repository's to
+manage — and onetaskgraph answers a credential name from the process environment first
+and that file second. So a name this checkout's `.env` defines arrives in the
+environment layer and therefore **wins** for anything a dispatch here runs. That
+precedence is the intent rather than an accident: a dispatch of this repository runs on
+the credentials this repository supplies, rather than inheriting whatever a developer
+happens to have configured for onetaskgraph itself — a consuming repository that had to
+depend on another repository's development setup in order to run would be the defect.
+The cost, stated plainly because somebody will meet it: the two hold the same names and
+can drift apart, and **nothing detects, reconciles, or warns about that drift**. A value
+changed in the machine-wide file and nowhere else has no effect on anything this
+repository launches, and reads as lost rather than as overridden. Knowing which file
+wins is the whole of the answer, and `scripts/credentials-env.sh` reads this checkout's
+file and nothing else — the machine-wide one is not a fallback, not a source to read
+from, and not something this repository moves or repairs.
+
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.
 `just stop <run-id>` ends a run and its whole dispatch tree, subject to the

@@ -950,7 +950,7 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
     """
     detached = tmp_path / "checkout" / "scripts"
     detached.mkdir(parents=True)
-    for name in ("plan.sh", "ask-manager-env.sh"):
+    for name in ("plan.sh", "credentials-env.sh", "ask-manager-env.sh"):
         copied = detached / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)
@@ -988,7 +988,7 @@ def _detached_recipe(tmp_path: Path) -> Path:
     """
     scripts = tmp_path / "checkout" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("plan.sh", "ask-manager-env.sh", "ask-manager.sh"):
+    for name in ("plan.sh", "credentials-env.sh", "ask-manager-env.sh", "ask-manager.sh"):
         copied = scripts / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)

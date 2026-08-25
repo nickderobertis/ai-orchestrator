@@ -54,6 +54,17 @@ fi
 # refuse on an indirection it never uses.
 case "${1:-}" in
     start | adopt)
+        credentials_helper="$script_dir/credentials-env.sh"
+        if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
+            echo "onepipeline: required helper is not a readable regular file: $credentials_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+            exit 2
+        fi
+        # shellcheck source=scripts/credentials-env.sh
+        if ! . "$credentials_helper"; then
+            echo "onepipeline: the credentials helper at $credentials_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+            exit 2
+        fi
+        export_host_credentials onepipeline || exit $?
         alt_config_helper="$script_dir/claude-alt-config-dir.sh"
         if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
             echo "onepipeline: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2

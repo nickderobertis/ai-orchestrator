@@ -81,7 +81,18 @@ INHERITED_ENVIRONMENT = (
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
+    "AI_ORCHESTRATOR_E2E_TOKEN",
 )
+
+#: A credential name of this journey's own, never one an operator configures. The
+#: checkout's `.env` is this host's real credential surface and may already define
+#: `GH_PROJECTS_TOKEN` with a live token; asserting on that name would mean either
+#: overwriting the operator's value or reading it into a test, and the loader exports
+#: the first definition of a name anyway, so a second one proves nothing. Credential
+#: shaped on purpose — it is what `orchestrator/redaction.py` would hide, so a journey
+#: that ever printed it prints `<redacted:...>` instead.
+CREDENTIAL_NAME = "AI_ORCHESTRATOR_E2E_TOKEN"
+CREDENTIAL_VALUE = "dispatch-side-projects-token"
 
 #: A run's own name on the ledger. Distinguished from the prose it is built out of,
 #: because what makes a string a run id is where it came from.
@@ -111,6 +122,39 @@ RUN_ID = Input(
     "guessing at one, so an unset one is a question that is never asked",
 )
 REQUIRED_INPUTS = (ASK_WRAPPER, RUN_ID)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def repository_credentials_file() -> Iterator[None]:
+    """Give this journey a name in the checkout's own `.env`, beside whatever is there.
+
+    The file is this host's real credential surface, so the journey **adds** a name of
+    its own and puts the original bytes back afterwards rather than replacing the file.
+    An earlier version skipped when the file already existed, which disabled this
+    journey on exactly the hosts where the feature is configured — a green run that
+    proved nothing about the thing it is named for.
+
+    Append-and-restore is also the failure-safe order: the operator's own lines are
+    never removed, so the worst an interrupted run can leave behind is one extra
+    test-only name beside them, never a lost credential.
+    """
+    credentials = REPO_ROOT / ".env"
+    original = credentials.read_bytes() if credentials.exists() else None
+    try:
+        if original is None:
+            descriptor = os.open(credentials, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(f"# e2e host credential\n{CREDENTIAL_NAME}={CREDENTIAL_VALUE}\n")
+        else:
+            with credentials.open("a", encoding="utf-8") as stream:
+                stream.write(f"\n# e2e host credential\n{CREDENTIAL_NAME}={CREDENTIAL_VALUE}\n")
+        yield
+    finally:
+        if original is None:
+            credentials.unlink(missing_ok=True)
+        else:
+            credentials.write_bytes(original)
+
 
 #: The question a dispatched agent puts, and the answer its manager gives. Compared
 #: whole, because what the wrapper owes a caller is the manager's message and nothing
@@ -270,7 +314,9 @@ def _environment(
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
     environment[PROMPT_LOG_ENV] = str(turns)
-    environment[ENVIRONMENT_KEYS_ENV] = ",".join(required.name for required in REQUIRED_INPUTS)
+    environment[ENVIRONMENT_KEYS_ENV] = ",".join(
+        [*(required.name for required in REQUIRED_INPUTS), CREDENTIAL_NAME]
+    )
     if record is not None:
         environment[ASK_QUESTION_ENV] = ASK_QUESTION
         environment[ASK_RECORD_ENV] = str(record)
@@ -744,6 +790,39 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
 
 
 @pytest.mark.xdist_group(LAUNCH_GROUP)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "orchestrate_attached",
+        "orchestrate_detached",
+        "orchestrate_adopted",
+        "plan_attached",
+        "plan_detached",
+    ],
+)
+def test_every_launch_exports_repository_credentials_onto_its_dispatch(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """Every launch shape puts this checkout's `.env` names in the environment it dispatches under.
+
+    A dispatch inherits the driver's environment, so the launching process is the last
+    place a value can reach one — and read back here from the **dispatch's** own turn
+    rather than from the launcher, because a launcher that exported a name and a
+    dispatch that received it are the two different facts, and only the second is what a
+    worker's `onetaskgraph` invocation runs on.
+
+    `cast` because the shape is parametrized: `getfixturevalue` resolves the fixture by
+    name at run time, which no static type can follow back to what it returns.
+    """
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    carried = {turn["environment"].get(CREDENTIAL_NAME) for turn in dispatch.worker}
+    assert carried == {CREDENTIAL_VALUE}, (
+        f"the dispatch of {dispatch.run} read {carried!r} for {CREDENTIAL_NAME}, rather "
+        "than the value loaded by its launcher from this checkout's .env"
+    )
+
+
+@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize("shape", ["plan_attached", "plan_detached"])
 @pytest.mark.parametrize("required", REQUIRED_INPUTS, ids=lambda row: row.name)
 def test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs(
@@ -858,6 +937,7 @@ def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_anothe
 #: touching this one.
 LAUNCH_SCRIPTS = (
     "onepipeline.sh",
+    "credentials-env.sh",
     "ask-manager-env.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
@@ -965,30 +1045,41 @@ def test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assumin
         generated.unlink(missing_ok=True)
 
 
-def test_a_plan_launch_without_the_helper_that_establishes_the_seam_writes_nothing(
+#: The helpers `scripts/plan.sh` sources before it writes anything. Each establishes
+#: environment a dispatch cannot be launched without — the seam an agent puts a question
+#: to its manager over, and this checkout's own credentials — and `plan.sh` reads both
+#: out of their helper rather than resolving either itself. So a checkout missing one is
+#: a launch that cannot establish it at all, which is a different missing piece from a
+#: helper that is there but broken, and one that would otherwise surface as a shell
+#: error naming a file the operator never asked about.
+LAUNCH_ENVIRONMENT_HELPERS = ("credentials-env.sh", "ask-manager-env.sh")
+
+
+@pytest.mark.parametrize("missing", LAUNCH_ENVIRONMENT_HELPERS)
+def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing(
+    missing: str,
     tmp_path: Path,
 ) -> None:
-    """The recipe refuses a checkout missing the helper, before it writes a plan.
+    """The recipe refuses a checkout missing either helper, before it writes a plan.
 
-    `scripts/plan.sh` reads the seam out of `scripts/ask-manager-env.sh` rather than
-    resolving the wrapper itself, so a checkout without that helper is a launch that
-    cannot establish the seam at all — a different missing piece from a wrapper that is
-    there but unrunnable, and one that would otherwise fail as a shell error naming a
-    file the operator never asked about. Driven by running the real recipe from a
-    directory holding only itself.
+    Driven by running the real recipe from a directory holding the recipe and every
+    helper but one, so the refusal proved is the one that helper's absence produces
+    rather than whichever check happens to come first.
     """
     scripts = tmp_path / "checkout" / "scripts"
     scripts.mkdir(parents=True)
     alone = scripts / "plan.sh"
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
+    for present in (helper for helper in LAUNCH_ENVIRONMENT_HELPERS if helper != missing):
+        (scripts / present).write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")
     working = tmp_path / "working"
     working.mkdir()
 
     refused = subprocess.run(  # noqa: S603 - the real recipe, from a checkout without the helper
-        [str(alone), str(brief), "--name", "launch-seam-no-helper"],
+        [str(alone), str(brief), "--name", f"launch-seam-no-{missing.removesuffix('.sh')}"],
         cwd=working,
         env=dict(os.environ),
         text=True,
@@ -999,5 +1090,111 @@ def test_a_plan_launch_without_the_helper_that_establishes_the_seam_writes_nothi
 
     assert refused.returncode != 0, refused.stdout
     assert "required helper is not a readable regular file" in refused.stderr, refused.stderr
-    assert "ask-manager-env.sh" in refused.stderr, refused.stderr
-    assert not (working / "scratch").exists(), "a plan was written for a launch that cannot ask"
+    assert missing in refused.stderr, refused.stderr
+    assert not (working / "scratch").exists(), (
+        "a plan was written for a launch that cannot establish its dispatch environment"
+    )
+
+
+def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(tmp_path: Path) -> None:
+    """A helper that is readable and then fails to load still refuses the launch, attributably.
+
+    The check before the source answers "is the file there and readable", which a corrupt
+    or half-written helper passes. Left to strict mode, what follows is a bare shell
+    syntax error naming a file the operator never asked about and no action to take —
+    beside diagnostics that name both. Driven through the real recipe, because the whole
+    point is what an operator sees when they run it.
+    """
+    scripts = tmp_path / "checkout" / "scripts"
+    scripts.mkdir(parents=True)
+    alone = scripts / "plan.sh"
+    alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
+    alone.chmod(0o755)
+    for present in ("ask-manager-env.sh", "ask-manager.sh"):
+        copied = scripts / present
+        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
+        copied.chmod(0o755)
+    (scripts / "credentials-env.sh").write_text("this is ( not valid bash\n", encoding="utf-8")
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    working = tmp_path / "working"
+    working.mkdir()
+
+    refused = subprocess.run(  # noqa: S603 - the real recipe, against a helper that cannot load
+        [str(alone), str(brief), "--name", "launch-seam-unloadable-helper"],
+        cwd=working,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "could not be loaded" in refused.stderr, refused.stderr
+    assert "credentials-env.sh" in refused.stderr, refused.stderr
+    assert not (working / "scratch").exists(), (
+        "a plan was written for a launch whose credentials helper never loaded"
+    )
+
+
+#: A credentials file the loader refuses, and the phrase its refusal carries. Both are
+#: things an operator really does — a line they typed wrongly, and a path they created as
+#: the wrong kind of thing — as opposed to a file the launcher merely cannot resolve.
+UNUSABLE_CREDENTIAL_FILES = (
+    ("malformed line", "GH_PROJECTS_TOKEN=fine\nnot-an-assignment\n", "malformed credential line"),
+    ("not a regular file", None, "is not a readable regular file"),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "written", "expected"),
+    UNUSABLE_CREDENTIAL_FILES,
+    ids=[row[0] for row in UNUSABLE_CREDENTIAL_FILES],
+)
+def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
+    label: str, written: str | None, expected: str, tmp_path: Path
+) -> None:
+    """A `.env` the loader refuses stops the plan launch, with the loader's own reason.
+
+    The launcher propagates the loader's exit status rather than carrying on, because a
+    dispatch launched without the credentials an operator placed for it fails much later
+    and somewhere else — against GitHub, with nothing pointing back at the file. Driven
+    through the real recipe over a checkout whose `.env` this journey controls, so what
+    is proved is what an operator running `just plan` would see.
+    """
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    alone = scripts / "plan.sh"
+    alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
+    alone.chmod(0o755)
+    for present in ("credentials-env.sh", "ask-manager-env.sh", "ask-manager.sh"):
+        copied = scripts / present
+        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
+        copied.chmod(0o755)
+    credentials = checkout / ".env"
+    if written is None:
+        credentials.mkdir()
+    else:
+        credentials.write_text(written, encoding="utf-8")
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    working = tmp_path / "working"
+    working.mkdir()
+
+    refused = subprocess.run(  # noqa: S603 - the real recipe, over a `.env` it must refuse
+        [str(alone), str(brief), "--name", f"launch-seam-unusable-{label.replace(' ', '-')}"],
+        cwd=working,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert expected in refused.stderr, refused.stderr
+    assert not (working / "scratch").exists(), (
+        "a plan was written for a launch whose credentials file the loader refused"
+    )

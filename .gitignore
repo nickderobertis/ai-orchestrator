@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .venv/
+# Host credentials exported onto this repository's dispatches.
+/.env
 # uv
 # (uv.lock IS committed)
 

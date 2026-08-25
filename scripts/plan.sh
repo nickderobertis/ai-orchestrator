@@ -348,6 +348,18 @@ fi
     "pass --name with a run id nothing has taken yet, or read the existing run with 'just channel-next $name'"
 export "$RUN_ID_ENV=$name"
 
+credentials_helper="$script_dir/credentials-env.sh"
+if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
+    fail "required helper is not a readable regular file: $credentials_helper" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+# shellcheck source=scripts/credentials-env.sh
+if ! . "$credentials_helper"; then
+    fail "the credentials helper at $credentials_helper is readable but could not be loaded" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+export_host_credentials plan || exit $?
+
 ask_manager_helper="$script_dir/ask-manager-env.sh"
 if [ ! -f "$ask_manager_helper" ] || [ ! -r "$ask_manager_helper" ]; then
     fail "required helper is not a readable regular file: $ask_manager_helper" \
