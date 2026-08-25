@@ -1392,10 +1392,14 @@ A consumer that finds a departure it wants — a missing field, a wrong shape, a
 better decomposition — does not change the interface. It surfaces the ordinary
 `kind: "proposal"` its dispatch already has, and the planner decides with the user
 whether to amend the contract or defer it as a follow-up. Amending it is a [live
-edit](#live-graph-edits): a `context` note carries the amendment to a node that can
-still be dispatched, `retry` replaces one already running with a task stating the
-new contract, and a surface that has to change again after its node settled is an
-`add` with the affected consumers `reparent`ed onto it.
+edit](#live-graph-edits), and which edit depends on what the node is doing: a node
+that has not started is parked with `cancel` and returned by a `requeue` whose
+`amend` restates its `task`, `retry` replaces one already running with a task stating
+the new contract, and a surface that has to change again after its node settled is an
+`add` with the affected consumers `reparent`ed onto it. A `context` note is **not**
+that lever: it is rendered as observed state that adds no acceptance criteria, so it
+tells a worker about the new contract without changing what its judge reviews
+against.
 
 The engine starts every node whose dependencies are `done`, bounded by
 `concurrency`, and keeps doing so until the graph is terminal. Lifecycle

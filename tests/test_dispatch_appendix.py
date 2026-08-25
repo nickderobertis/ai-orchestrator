@@ -36,9 +36,27 @@ The cheap-iteration rule is held the same way — by position rather than by phr
 because the cost of burying it is measured: one node lost about 84 minutes looping on
 the whole gate to learn its lint findings, after the rule had already been written down.
 
+The signalling rule is held on a different axis from the one it used to argue from. Every
+paragraph of it argued from `-f`'s self-match, and `-x` does not self-match — so a reader
+who followed that argument to `pkill -x` had followed it to a conclusion it supports. Two
+workers reached that place in one day while another manager's dispatch was live, one by
+`pkill -TERM -x just` and one by reading the table and piping pids into `kill`. What is
+asserted now is the axis that actually decides it: a process is signalled only when it was
+identified by its own PID, a PID obtained from a pattern is still a pattern kill, and the
+self-match text stays as the explanation of a wait that never ends.
+
+The instruction against running two gates concurrently is asserted **gone**, and its
+absence is held rather than left to a reviewer's memory: it rested on this repository's
+e2e configs binding fixed ports, live e2e code allocates through `_free_port()` instead,
+and two managers' judged tiers ran concurrently on 2026-08-24 and both completed. A rule
+this file states constrains every dispatch on this host, so one that has stopped being
+true is a cost paid hundreds of times over.
+
 `tests/test_criteria_guard.py` proves the guard that reads this file; here the subject
 is the file itself, which is why these belong to the tier keyed on this repository's
-prose.
+prose. `tests/e2e/test_dispatched_operational_notes_e2e.py` is the other half and reads
+the same rules out of the prompt a really dispatched worker was handed, which is where
+they either arrive or do not.
 """
 
 from __future__ import annotations
@@ -114,9 +132,35 @@ EXCLUDES_ONLY_ITSELF = re.compile(r"excludes[^.]*?\bitself\b", re.IGNORECASE | r
 BY_EXECUTABLE = re.compile(r"pgrep\s+-x\b")
 PS_FALLBACK = re.compile(r"ps\s+-eo[^\n]*\|\s*grep\s+-v\s+grep")
 
-#: The pattern kill, refused: it is the same self-match with a signal attached, and on
-#: a host several managers share it knows nothing about whose process it matched.
-NEVER_PATTERN_KILL = re.compile(r"pkill\s+-f[^.]*?\bnever\b|\bnever\b[^.]*?pkill\s+-f", re.I)
+#: The pattern kill, refused in every spelling. Held without naming a flag: `-f` alone was
+#: what the old text refused, and `pkill -x` — which does not self-match, and which takes
+#: every process of that name on the host — is the form a worker actually reached for.
+NEVER_PATTERN_KILL = re.compile(r"pkill[^.]*?\bnever\b|\bnever\b[^.]*?pkill", re.I)
+
+#: The rule the whole passage now opens with, on the axis that decides it: whose process
+#: this is, rather than how the pattern matched. Two phrases, because each is a separate
+#: way to be wrong — signalling something you only matched, and believing that resolving
+#: the match to a pid first makes it yours to signal.
+SIGNAL_ONLY_BY_PID = re.compile(r"[Nn]ever signal a process you did not identify by PID")
+PID_FROM_A_PATTERN = re.compile(r"PID you got from a pattern is\s+still a pattern kill")
+
+#: Which tool each spelling is safe in. The distinction has to be drawn on the tool rather
+#: than on the flag, because `-x` is the safer spelling for the tool that reads and the
+#: more dangerous one for the tool that signals.
+READS_VERSUS_SIGNALS = re.compile(
+    r"`pgrep` and `ps` \*\*read\*\*.*?`pkill` \*\*signals\*\*", re.DOTALL
+)
+UNSCOPED_X_KILL = re.compile(r"pkill\s+-x\s+just`\s+takes\s+every\s+`just`\s+on\s+the\s+machine")
+
+#: The positive form, which is the only thing that makes the question go away: a process
+#: you launched yourself has told you its pid.
+CAPTURED_AT_LAUNCH = re.compile(r"cmd & MYPID=\$!")
+
+#: The rule that is gone, in every form a reader would act on: the instruction itself and
+#: the fixed-port conflict it rested on. `4321` stands for the port list; the whole list is
+#: not enumerated here, because one surviving number is enough to reintroduce the reason.
+CONCURRENT_GATE_INSTRUCTION = re.compile(r"two gates at once|two concurrent gates", re.I)
+FIXED_PORT_REASON = re.compile(r"bind fixed ports|43\d\d/|is already used", re.I)
 
 #: The sentinel wait's naming rule, which the rewrite had to leave standing: one
 #: sentinel and one log per invocation, on a host whose dispatches share `/tmp`.
@@ -356,7 +400,11 @@ def test_the_polling_rule_is_about_pgrep_rather_than_about_gates(appendix: str) 
 
     Asserted where the file first reaches for `pgrep -f`, so a future edit that puts
     the gate-only wording back has to put it somewhere this cannot see, rather than
-    merely reword the sentence.
+    merely reword the sentence. That passage is now *below* the rule on signalling,
+    which is what
+    :func:`test_the_rule_on_signalling_is_stated_before_any_reasoning_about_matching`
+    holds: the self-match explains a wait that never ends, and never why somebody
+    else's process may not be killed.
     """
     introduced = POLLING.search(appendix)
     assert introduced is not None, f"{APPENDIX} no longer says anything about `pgrep -f`"
@@ -401,11 +449,85 @@ def test_the_appendix_gives_a_self_match_proof_way_to_ask_what_is_running(
         "`ps -eo pid,args | grep -v grep` form is what drops that pipeline's own match"
     )
     assert NEVER_PATTERN_KILL.search(appendix), (
-        f"{APPENDIX} does not refuse `pkill -f`, which is this same self-match with a "
-        "signal attached and knows nothing about whose process it matched — on a host "
-        "several managers share, that is a worker killing somebody else's run"
+        f"{APPENDIX} does not refuse `pkill`, which knows nothing about whose process it "
+        "matched — on a host several managers share, that is a worker killing somebody "
+        "else's run"
     )
     assert PER_INVOCATION.search(appendix), (
         f"{APPENDIX} no longer names one sentinel and one log per invocation, which the "
         "rewrite of the polling rule had to leave standing"
+    )
+
+
+def test_the_rule_on_signalling_is_stated_before_any_reasoning_about_matching(
+    appendix: str,
+) -> None:
+    """Whose process it is, stated ahead of how the pattern matched.
+
+    Order is the assertion because order is what failed. Every paragraph of the old
+    passage argued from `-f`'s self-match; `-x` does not self-match, and the same passage
+    then recommended `pgrep -x` as the careful way to ask what is running. A reader who
+    took the argument to `pkill -x` had taken it where it leads — and `pkill -x just`
+    takes every `just` on the machine, where `pkill -f 'just gate'` at least needs a
+    narrowing pattern. So the axis that decides it has to be met first, and the
+    self-match has to be met as the explanation of a wait rather than as the reason not
+    to signal.
+    """
+    signalling = SIGNAL_ONLY_BY_PID.search(appendix)
+    assert signalling is not None, (
+        f"{APPENDIX} no longer states the rule on the axis that decides it. A kill by "
+        "name knows nothing about whose work it matched, and two workers reached that "
+        "place in one day while another manager's dispatch was live"
+    )
+    matching = POLLING.search(appendix)
+    assert matching is not None, f"{APPENDIX} no longer says anything about `pgrep -f`"
+    assert signalling.start() < matching.start(), (
+        f"{APPENDIX} reasons about how a pattern matches before it says a process is "
+        "never signalled unless it was identified by its own PID. Read in that order the "
+        "self-match reads as the reason, and `pkill -x` — which does not self-match — "
+        "reads as the careful form it licenses"
+    )
+    assert PID_FROM_A_PATTERN.search(appendix), (
+        f"{APPENDIX} does not say that a PID obtained from a pattern is still a pattern "
+        "kill. One of the two workers read the process table first and piped the pids "
+        "into `kill`, which obeys every other sentence here and does the same damage"
+    )
+    assert READS_VERSUS_SIGNALS.search(appendix) and UNSCOPED_X_KILL.search(appendix), (
+        f"{APPENDIX} no longer separates the tool that reads from the tool that signals, "
+        "or no longer says what an unscoped `pkill -x` takes. `-x` is the safer spelling "
+        "for `pgrep` and the more dangerous one for `pkill`, and a reader given one rule "
+        "for both flags applies the wrong half"
+    )
+    assert CAPTURED_AT_LAUNCH.search(appendix), (
+        f"{APPENDIX} shows no way to hold a PID that was never matched at all. A rule "
+        "that only forbids leaves the reader needing a pid and reaching for a pattern to "
+        "get one; `cmd & MYPID=$!` is what makes the question not arise"
+    )
+
+
+def test_the_appendix_no_longer_forbids_running_two_gates_at_once(appendix: str) -> None:
+    """A rule this file states is paid for by every dispatch, so a stale one is deleted.
+
+    It rested on this repository's e2e configs binding fixed ports, and they do not:
+    live e2e code allocates through `_free_port()` in
+    `tests/e2e/test_dag_ui_serving_e2e.py`, the remaining `43xx` literals are recorded
+    fixtures under `tests/fixtures/`, and the port literals left in live test code are
+    rendered-command and argument-validation assertions that bind nothing. Measured
+    besides: on 2026-08-24 two managers' judged tiers ran concurrently — one node's
+    overlapping another run's whole bootstrap-gate-judge chain — and both completed.
+
+    The reason is asserted gone beside the instruction, because a reason left behind is
+    an instruction a reader reconstructs.
+    """
+    instruction = CONCURRENT_GATE_INSTRUCTION.search(appendix)
+    assert instruction is None, (
+        f"{APPENDIX} tells a worker not to run two gates concurrently "
+        f"({instruction.group(0)!r}). Nothing on this host makes that true any more, and "
+        "a rule stated here constrains every dispatch this host makes"
+    )
+    reason = FIXED_PORT_REASON.search(appendix)
+    assert reason is None, (
+        f"{APPENDIX} still offers the fixed-port conflict as a reason "
+        f"({reason.group(0)!r}); live e2e code allocates its ports through `_free_port()` "
+        "and a reader handed the reason reinstates the rule"
     )

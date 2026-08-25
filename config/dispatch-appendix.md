@@ -58,19 +58,43 @@ the tree you are actually reporting on. If it reports something, fix that and ru
 — that second run is the rule working, not a breach of it. What you may never do is reach
 for it *before* the judged tier, to discover findings, which is the whole cost above.
 
-**Never run two gates at once.** This repository's e2e configs bind fixed ports
-(4301, 4310, 4314, 4316, 4321, ...). A second concurrent gate does not queue — it fails
-with `http://127.0.0.1:43xx/... is already used`, and both runs lose. Two publications
-raced this way on 2026-08-18 and each burned 13 minutes to reach that error.
+**Never signal a process you did not identify by PID, and a PID you got from a pattern is
+still a pattern kill.** Several managers share this host, and their dispatches, drivers,
+publications and test servers run under the same few binary names — `just`, `node`,
+`python`, `onepipeline-api` — so a kill by name knows nothing about *whose* work it
+matched. The distinction is the tool rather than the pattern: `pgrep` and `ps` **read**,
+and either spelling of them is fine, `pgrep -x` included; `pkill` **signals**, and it is
+never the answer here, in any spelling. `-x` is the trap, because it reads as the careful
+one — `pkill -f 'just gate'` at least needs a narrowing pattern, while `pkill -x just`
+takes every `just` on the machine. Reading the table first and piping the pids into `kill`
+is no way around it: that is the same pattern kill with more steps.
 
-**`pgrep -f` matches full command lines, and one of them is yours.** It matches its pattern
-against every process's whole argv and excludes exactly one process — itself — never the
-shell that invoked it. So any pattern naming the thing you are waiting for is, by
-construction, a substring of the command line of the shell doing the waiting: `until !
-pgrep -f "just gate"` matches its own loop and never exits, and so does the same loop
-written against `llmlint-judge.sh`, `scripts/fetch-corpus.sh`, or `publish-branch`. That is
-a defect in the polling mechanism rather than a fact about gates, so it applies to every
-wait you write.
+Two workers reached that place from different directions on 2026-08-24, while another
+manager's dispatch had been live over an hour. One ran `pkill -TERM -x just`. The other
+ran `ps -eo pid,args | grep 'onepipeline-api serve' | awk '{print $1}' | while read pid;
+do kill "$pid"; done` — which obeys the letter of every paragraph below and does the same
+damage, because `just dag-ui` and the e2e suites both spawn that server and a pytest run's
+were alive at that moment.
+
+**The one process you may signal is one you started yourself, so capture its PID as you
+start it:**
+
+    cmd & MYPID=$!
+    kill "$MYPID"
+
+Anything you did not start belongs to somebody. Read what it is, report what you found,
+and leave it running.
+
+**A wait written against a full command line never ends, because one of those command
+lines is yours.** That is a different defect from the one above — it wedges your own
+dispatch rather than somebody else's — and it is why `pgrep -f` cannot be waited on.
+`pgrep -f` matches its pattern against every process's whole argv and excludes exactly one
+process — itself — never the shell that invoked it. So any pattern naming the thing you are
+waiting for is, by construction, a substring of the command line of the shell doing the
+waiting: `until ! pgrep -f "just gate"` matches its own loop and never exits, and so does
+the same loop written against `llmlint-judge.sh`, `scripts/fetch-corpus.sh`, or
+`publish-branch`. That is a defect in the polling mechanism rather than a fact about gates,
+so it applies to every wait you write.
 
 That has wedged four workers here, and then two more workers and the manager itself in one
 night: seven instances of one defect. A crozier corpus audit waited in `until ! pgrep -f
@@ -79,7 +103,7 @@ polling shell and the manager's diagnostic shell — and waited until it was int
 `check-plan-bar-conflict` dispatch waited on `! pgrep -f "llmlint-judge.sh"`, whose negation
 could never become true, and was cancelled and killed; its replacement then reached for
 `pkill -f` against three patterns, which is not a wait at all but the same self-match with a
-signal attached, and is refused below. And the manager, an hour after instructing a worker
+signal attached, and is refused above. And the manager, an hour after instructing a worker
 about this, guarded a launch with `pgrep -f "publish-branch" && echo ABORT || launch`, whose
 pattern was a literal substring of the launching shell's own command line: it aborted
 unconditionally and then reported a publish as RUNNING that did not exist. That last one is
@@ -102,13 +126,11 @@ one self-match that form has:
 
     ps -eo pid,args | grep -v grep | grep 'lint-llm-diff'
 
-Both of those are **reads**, which is the point. `pkill -f` is never the answer on this
-host: it is the same self-match with a signal attached — the pattern is a substring of the
-killing shell's own command line — with the added hazard that an unscoped pattern kill
-knows nothing about whose process it matched, and several managers share this host. The
-replacement for the worker killed above reached for `pkill -f "just gate"`, `pkill -f "just
-check"` and `pkill -f "nx run"` while another manager's run was live. Read to learn what is
-running, report what you find, and never kill by pattern.
+Both of those are **reads**, which is what makes `-x` safe here and forbidden the moment
+the tool signals. The replacement for the worker wedged above reached for `pkill -f "just
+gate"`, `pkill -f "just check"` and `pkill -f "nx run"` while another manager's run was
+live. Read to learn what is running, report what you found, and signal nothing you did not
+start.
 
 **One sentinel and one log per invocation, and look before you launch one.** That pair is a
 shape rather than two literal paths. Several dispatches run on this host at once and they

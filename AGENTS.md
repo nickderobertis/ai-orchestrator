@@ -905,6 +905,51 @@ and is never a command.
    running turn read is spent; a note that merely rode a dispatch lasts exactly that
    one, so state worth keeping is state attached again. See
    [Carried planner context](docs/orchestration.md#carried-planner-context).
+
+   **Which lever binds a node's judge, and which only steers its worker.** A node is
+   judged against `config/onejudge.base.yaml`'s shared clause, its resolved role, and
+   its own `task` — so the only text that changes what "done" means for it is the
+   `task`, and on the engine `config/onepipeline.version` names, the only edits that
+   reach one mid-run are `retry`, whose replacement node states the amended task, and
+   `cancel` plus a `requeue` whose `amend` is merged onto the node before it is
+   redispatched. Both end or park the dispatch that is running: **there is no lever
+   here that amends a node's bar while its worker keeps working**, and a plan that
+   needs one says so on the node before launch. A `context` note is the other lever
+   and it binds nothing. A carried one is rendered
+   into the task under `## Planner context`, above the engine's own sentence
+   *This reports observed state and adds no acceptance criteria.* — and a
+   `deliver: live` note is an interrupt against the running turn that is stored
+   nowhere, so it reaches neither that node's judge nor its next dispatch. Amend
+   whenever the correction changes what the finished tree must contain or what "done"
+   means; send a note for anything the judge has no opinion
+   about — which sentinel to poll, which run to measure, that a diagnostic is
+   unbounded, that a retry reason is stale. Getting that backwards costs the dispatch:
+   a manager ruled a change out of scope at 15:50:23Z, the worker complied and re-ran
+   its complete gate green, and the node's own judge instructed at 15:57:19Z to
+   **restore** it — reviewing against a task that never mentioned the ruling. The
+   worker then held two instructions of equal authority, and resolving it took a
+   `retry` with an amended `task`, killing a live gate-green dispatch in order to
+   change its bar.
+
+   **An amendment is criteria, so it is held to what criteria are held to.**
+   `personas/planner.yaml` tells a planner to *"State the outcome the node owes, never
+   the procedure for reaching it"*, and that rule is not the planner's alone: an
+   amendment written mid-run under time pressure is the one most likely to name a
+   mechanism, and a judge cannot tell a mechanism you preferred from a property the
+   node owes. `adopt-oneharness-cli-2` settled `task-failed` on a **green** complete
+   gate for exactly that: the amendment asked it to assert that
+   `scripts/oneharness-agent.sh` *refuses* an invalid inherited label, and the
+   implementation drops the offending pair and continues — which is better, refusing
+   would kill a dispatch over a malformed label, and dropping is what
+   `orchestrator.labels.parse_labels` already does with an inherited value. The judge
+   was right about the task and the task was wrong. So say what the finished tree must
+   contain and leave the mechanism to the worker. Put the amendment **above** the
+   operational notes the task carries — those open at `## Additional info`, and
+   `config/dispatch-appendix.md` is their one source — and open it by saying that
+   where it and the notes below it disagree, the amendment wins. Both supervisory
+   conflicts in that session traced to an instruction's authority being written down
+   nowhere.
+
    Triage follow-ups, keep the user informed at
    each milestone, and never let more than 30 minutes pass between updates. When
    a completed task published a PR, include the relevant PR link in its completion
@@ -1695,10 +1740,20 @@ were destroyed within 90 seconds of launch by the next sibling's `session open`.
 lease for as long as the session is live and **narrows the window to the dispatch's
 first few seconds rather than closing it** — and takes no lease at all for a
 dispatch that fell through to codex, which fires no `SessionStart` hook. Two things
-follow for a manager. Concurrent lifecycle dispatch on one identity is not yet safe,
-and the upstream fix — `reclaim` consulting the session record it already has rather
-than the lease — is specified in
-[`docs/run-root-reclamation.md`](docs/run-root-reclamation.md). And **read a spawn
+follow for a manager. **At most one lifecycle dispatch per repository identity is safe
+until that fix lands and this host adopts it, and it is a constraint rather than a
+preference**, because nothing else bounds it: the lease is the whole of the proof
+`reclaim` accepts, and no verb holds one while a dispatch works. Two details decide
+how you schedule around it. The exposure is **intra-run** as well as cross-manager —
+on run `adopt-engines-siblings` two sessions held the workspace under a single owner
+pid, the run's own driver, so a plan whose `concurrency` is 2 reaches this with no
+second manager involved — and a run root is retained only when its clone *already*
+holds an unpublished commit, so a session that has opened and not yet committed is
+removed outright rather than retained. The window is therefore widest exactly when a
+node has least to show for itself. The upstream fix — `reclaim` consulting the session
+record it already has rather than the lease — is specified in
+[`docs/run-root-reclamation.md`](docs/run-root-reclamation.md), which carries the
+mechanism in full. And **read a spawn
 failure naming a missing `claude` as a possible deleted run root**: `ENOENT` from a
 spawn also means the child's working directory is gone, the message names only the
 binary, and its suggestion sends the reader to PATH — which is where hours went. The

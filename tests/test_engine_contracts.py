@@ -74,6 +74,7 @@ TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
 LIFECYCLE = REPO_ROOT / "docs" / "repo-lifecycle.md"
 TELEMETRY = REPO_ROOT / "docs" / "telemetry.md"
 ONEJUDGE_INTEGRATION = REPO_ROOT / "docs" / "onejudge-integration.md"
+ORCHESTRATION = REPO_ROOT / "docs" / "orchestration.md"
 #: The manager's own document, which quotes one engine constant: how much of a tool
 #: output `just transcript` prints. It is here rather than in an e2e journey because
 #: no run this host has recorded produced an output past that ceiling — driving it
@@ -293,6 +294,24 @@ VOCABULARIES = (
         LIFECYCLE,
         re.compile(r"it has exactly three fields —\s*(.*?) — under", re.DOTALL),
         re.compile(r"`([a-z][a-z_]*)`"),
+    ),
+    Vocabulary(
+        # The live-edit protocol's own table, which is what a manager picks a lever
+        # from. Set equality is what makes `AGENTS.md`'s pairing readable: the levers
+        # it names are ops this table has, and the day the engine gains one that
+        # amends a node in place, the table — and the paragraph resting on it — come
+        # due here rather than the first time somebody types the op.
+        "onepipeline live-edit commands",
+        ONEPIPELINE,
+        "channel.rs",
+        re.compile(r"(?:#\[[^\]]*\]\s*)*pub enum Command \{.*?\n\}", re.DOTALL),
+        re.compile(r"^\s{4}([A-Z][A-Za-z]*) \{", re.MULTILINE),
+        ORCHESTRATION,
+        re.compile(
+            r"The accepted commands are:\n\n\|[^\n]*\n\|[^\n]*\n((?:\|[^\n]*\n)+)",
+            re.DOTALL,
+        ),
+        re.compile(r"^\| `([a-z]+)` \|", re.MULTILINE),
     ),
     Vocabulary(
         "onepipeline Node fields",
@@ -627,6 +646,16 @@ PRESENT_SYMBOLS: dict[Path, tuple[tuple[Engine, str], ...]] = {
         (ONEVCS, "merge_path::preserve_log"),
         (ONEVCS, 'store_artifact("log"'),
         (ONEVCS, "preserved_log"),
+    ),
+    MANAGER: (
+        # How a carried `context` note reaches a worker, quoted where a manager is told
+        # which lever binds its node's judge and which only steers the worker. The
+        # heading and the sentence under it are what make a note non-binding, and both
+        # are the engine's own words: a release that reworded either would leave the
+        # manager's document describing a note that no longer says what it claims, and
+        # the whole pairing rests on that.
+        (ONEPIPELINE, "## Planner context"),
+        (ONEPIPELINE, "This reports observed state and adds no acceptance criteria."),
     ),
 }
 
