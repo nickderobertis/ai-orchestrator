@@ -787,6 +787,40 @@ Nothing else stands between the worker's verdict and the
 merge, so a push that resolved its own base could merge work whose own gate had
 failed.
 
+That identity is a **workstream** boundary, not a dispatch boundary. Measured on
+2026-08-26 against the installed onepipeline 0.14.2 binary (which its SBOM and
+embedded crate paths both identify as linking onevcs 0.15.0), every follow-up shape
+keeps the workstream's publication base:
+
+| Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
+| --- | --- | --- | --- |
+| A later step in one lifecycle node | The base on the existing session, unchanged when the next step adopts it. | A second `session-opened` event for one token carries `reused: true` and the same `base`; for example `s-1eb70760df86` recorded `base: main` both before and after adoption. The engine exports that `Session.base` to the dispatch. | Every change on the branch since that base, including earlier steps. |
+| A retry pinned to a preserved branch | The integration/publication base supplied when the retry opens the branch, not the preserved tip or the previous attempt's starting commit. | A new `session-opened` event carries `continued: true` and its `base`. In the observed notignored chain `s-eb9396e3be58` -> `s-1d39dd1d8430` -> `s-47281e54cb6c`, every session record says `base: main` while each new worktree continues branch `onevcs/s-eb9396e3be58`. | Every change on the preserved branch since that base, including every earlier attempt. |
+| A dispatch continuing the pinned branch of a stopped run | The original session's recorded base. | Resumption emits `session-opened` with `reused: true` on the original token; `s-064f1bc2517f`, for example, retained `base: main`. `workspace::resume` returns that record rather than constructing a new comparison point. | Every change on the resumed branch since that base, including work left by the stopped dispatch. |
+
+`scripts/comparison-base.sh` then turns the exported pair into the remote-tracking
+ref (for example `origin/main`), and `scripts/llmlint-fingerprint.sh` keys the
+verdict on the commit that ref resolves to. It has no session tip, previous dispatch
+tip, or previous published branch tip from which it could select a narrower diff.
+Consequently a three-line follow-up can be failed by a judged-tier finding anywhere
+on the earlier branch surface. A worker can clear such a finding even though it is
+outside that worker's requested delta, or report the out-of-scope finding and let the
+node fail; there is no supported way today to ask this tier to judge only the
+follow-up without making the worker and publishing push ask different questions.
+
+Changing that locally would break the invariant this section records. The publishing
+path calls `merge_path::comparison_env("origin", context.target.base())`, where the
+target is the branch or change request's publication base, so it replays the
+whole-workstream question. A sound incremental design is therefore a **onevcs
+follow-up**, not a different fallback in `comparison-base.sh`: onevcs would have to
+record an immutable previously judged frontier (normally the last published branch
+tip), export that comparison commit to both the follow-up dispatch and its publishing
+push, and establish that the verdict covering the prefix from the publication base
+to that frontier is still valid. This repository would then need to accept that
+explicit commit as a comparison target and include it in the existing fingerprint.
+Without the recorded prefix verdict, narrowing merely stops the merge path from
+judging part of the tree it is about to publish.
+
 Where the key genuinely differs the hook does judge again, and its verdict is
 then the authoritative one, because it is the only judgement of the content that
 will actually land: the base advanced after the worker settled and the merge

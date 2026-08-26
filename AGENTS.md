@@ -2044,6 +2044,11 @@ of a workstream so the `pre-push` hook replays what the worker cleared instead o
 re-rolling against findings it never saw — a push that resolved its own base could
 merge work whose own gate had failed. See
 [One judged diff, one verdict](docs/repo-lifecycle.md#one-judged-diff-one-verdict).
+That base belongs to the workstream, not to one dispatch: a later lifecycle step,
+a retry continuing a preserved branch, and a stopped-run resumption are all judged
+on the branch's whole diff from its publication base. The measured session shapes,
+their evidence, and the onevcs change required before that can be narrowed soundly
+are recorded in that section.
 
 Every cached Nx target replays a recorded answer, so one rule governs the test tier
 too: a memo may stand in for a verdict on this tree only when its key covers
