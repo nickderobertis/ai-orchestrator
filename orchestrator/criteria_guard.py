@@ -495,6 +495,18 @@ CHANGE_WORD = re.compile(
     re.I,
 )
 
+#: Actions that make a named path evidence rather than an output. A change word may
+#: still occur later in the criterion while describing what that evidence is about —
+#: "read `template.md` ... describing what the branch changes" is the incident that
+#: exposed that distinction. The nearest action to the path decides which noun that
+#: action governs; ties remain changes so ambiguity cannot erase a real conflict.
+READ_WORD = re.compile(
+    r"\b(?:read(?:s|ing)?|quot(?:e|es|ed|ing)|cit(?:e|es|ed|ing)|consult(?:s|ed|ing)?"
+    r"|inspect(?:s|ed|ing)?|review(?:s|ed|ing)?|follow(?:s|ed|ing)?)\b",
+    re.I,
+)
+
+
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
 
 
@@ -572,6 +584,19 @@ def _condensed(criterion: str) -> str:
     return " ".join(criterion.split())
 
 
+def _path_requires_change(criterion: str, path: re.Match[str]) -> bool:
+    """Whether the action governing ``path`` says it changes rather than reads it."""
+    actions = [
+        (min(abs(action.start() - path.start()), abs(action.end() - path.end())), True)
+        for action in CHANGE_WORD.finditer(criterion)
+    ]
+    actions.extend(
+        (min(abs(action.start() - path.start()), abs(action.end() - path.end())), False)
+        for action in READ_WORD.finditer(criterion)
+    )
+    return min(actions, default=(0, False), key=lambda action: (action[0], not action[1]))[1]
+
+
 def check_changes_allowed(block: str, node_id: str, bar: Bar) -> None:
     """Raise :class:`CriteriaError` if the bar forbids the change the criteria require.
 
@@ -585,8 +610,7 @@ def check_changes_allowed(block: str, node_id: str, bar: Bar) -> None:
         return
     for criterion in criteria_items(block):
         path = QUOTED_PATH.search(criterion)
-        changed = CHANGE_WORD.search(criterion)
-        if path is None or changed is None:
+        if path is None or not _path_requires_change(criterion, path):
             continue
         raise CriteriaError(
             f"{node_id}: {bar.source} forbids this dispatch changing project files "

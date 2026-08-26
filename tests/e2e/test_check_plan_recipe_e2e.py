@@ -533,6 +533,35 @@ RESEARCH_ANSWERS_A_QUESTION = (
     "- The dispatch closes with a completion report naming the evidence it verified."
 )
 
+#: The criterion whose real refusal forced a manager to make a sound plan vaguer.
+#: Its later "changes" describes the branch; the action governing the named template
+#: is "read", and this process journey keeps that distinction at the public recipe.
+RESEARCH_READS_A_TEMPLATE_ABOUT_CHANGES = (
+    "- The report states a body for change request #127 following that repository's "
+    "own pull request template — read the template from "
+    "`.github/pull_request_template.md` in the publication checkout rather than "
+    "assuming its shape — describing what the branch changes and why.\n"
+    "- Confirmed facts are traced end to end against the sources.\n"
+    "- The dispatch closes with a completion report naming the evidence it verified."
+)
+
+#: Both actions concern the same named file, with the edit nearer the path. This is
+#: still impossible under the researcher bar even though the criterion also reads it.
+RESEARCH_READS_THEN_EDITS = (
+    "- After reading the source material, update `docs/fern-limitations.md` with the "
+    "confirmed findings.\n"
+    "- The result is traced end to end against the sources.\n"
+    "- The dispatch closes with a completion report naming the evidence it verified."
+)
+
+#: An intentionally terse but valid criterion puts the two actions equally close to
+#: the path. Ambiguity must retain the refusal rather than license an edit.
+RESEARCH_HAS_EQUIDISTANT_ACTIONS = (
+    "- read `docs/fern-limitations.md` edit\n"
+    "- The result is traced end to end against the sources.\n"
+    "- The dispatch closes with a completion report naming the evidence it verified."
+)
+
 #: The same read-only node with the two halves of the conflict scattered across
 #: *different* criteria: the path is named by one that only reads it, and the word
 #: asserting something changed belongs to the next one, about the report. Read as one
@@ -587,6 +616,43 @@ def test_the_same_read_only_node_asking_a_question_is_accepted(tmp_path: Path) -
 
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_a_read_only_node_may_read_a_named_template_about_branch_changes(
+    tmp_path: Path,
+) -> None:
+    """The paid-out false refusal is accepted through the real recipe and plan file."""
+    accepted = _check_plan(
+        _with_node(
+            _plan(tmp_path, STATES_ITS_BAR),
+            persona="researcher",
+            task=_research_task(RESEARCH_READS_A_TEMPLATE_ABOUT_CHANGES),
+        )
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+@pytest.mark.parametrize("criteria", (RESEARCH_READS_THEN_EDITS, RESEARCH_HAS_EQUIDISTANT_ACTIONS))
+def test_a_read_action_does_not_hide_an_edit_governing_the_same_path(
+    tmp_path: Path, criteria: str
+) -> None:
+    """Competing actions retain the full refusal through the real recipe."""
+    refused = _check_plan(
+        _with_node(
+            _plan(tmp_path, STATES_ITS_BAR),
+            persona="researcher",
+            task=_research_task(criteria),
+        )
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    reported = refused.stderr
+    assert "route:" in reported, reported
+    assert "modified project files" in reported, reported
+    assert "docs/fern-limitations.md" in reported, reported
+    assert "`docs-writer`" in reported, reported
 
 
 def test_an_editing_node_under_a_bar_that_permits_it_is_accepted(tmp_path: Path) -> None:
