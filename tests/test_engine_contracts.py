@@ -1350,3 +1350,64 @@ def test_the_run_root_lease_requires_the_state_onevcs_writes_for_an_open_session
         f"{RUN_LEASE_SCRIPT.name} no longer requires a recorded state of "
         f"{RUN_LEASE_OPEN_STATE!r}, so this gate reconciles a comparison it does not make"
     )
+
+
+#: The view a manager's watch greps, as `onepipeline` composes it. `just status` is a
+#: thin wrapper over `onepipeline status`, so the boundary `AGENTS.md` tells a watch to
+#: cut at is this function's own formatting and nothing on this side of the seam.
+STATUS_VIEW = re.compile(r"pub fn status\(.*?\n\}\n", re.DOTALL)
+
+#: The line the embedded provider health report opens with, exactly as the view writes
+#: it — two leading spaces included, because the cut is anchored (`/^  providers:/`) and
+#: a re-indent would leave it matching nothing while reading like it still works.
+HEALTH_BLOCK_OPENER = '"  providers: '
+
+#: The line rule 5 makes a HARD REQUIREMENT, which has to survive that cut. It survives
+#: only by being printed *above* the health block, so this is an ordering claim rather
+#: than a presence one.
+UNREAD_SURFACE_LINE = '"  {} planner update(s) waiting'
+
+#: The cut itself, as the watch item spells it. Read back out of the manager's document
+#: so a reworded instruction and this gate cannot come to be about different sed
+#: programs.
+HEALTH_BLOCK_CUT = "sed '/^  providers:/,$d'"
+
+
+def test_the_watch_cuts_the_status_view_where_the_health_report_really_starts() -> None:
+    """The anchor a watch cuts at is `onepipeline`'s own, and the cut keeps rule 5.
+
+    Both halves fail silently. A re-indented or renamed opener leaves the cut matching
+    nothing, so the watch goes back to greping the host's health report for the run's
+    words — which is the eleven-seconds-into-a-healthy-dispatch quota death the item
+    was written from. And a health block that moved *above* the unread-surface line
+    would make the cut swallow the one line rule 5 forbids filtering, turning a
+    documented fix into the exact failure the HARD REQUIREMENT exists to prevent.
+    """
+    written = MANAGER.read_text("utf-8")
+    assert HEALTH_BLOCK_CUT in written, (
+        f"{MANAGER.name} no longer tells a watch to cut the status view at "
+        f"{HEALTH_BLOCK_CUT!r}, so this gate reconciles an instruction nobody is given"
+    )
+    view = STATUS_VIEW.search(_source(ONEPIPELINE, "views.rs"))
+    assert view is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer composes its status view where this "
+        "gate reads it, so nothing here can say where that view's two documents meet"
+    )
+    composed = view.group(0)
+    opener = composed.find(HEALTH_BLOCK_OPENER)
+    assert opener != -1, (
+        f"onepipeline {ONEPIPELINE.ref} no longer opens the embedded health report with "
+        f"{HEALTH_BLOCK_OPENER!r}, so {MANAGER.name}'s {HEALTH_BLOCK_CUT!r} cuts nothing "
+        "and a watch over that view is grepping the host's report for the run's words"
+    )
+    unread = composed.find(UNREAD_SURFACE_LINE)
+    assert unread != -1, (
+        f"onepipeline {ONEPIPELINE.ref}'s status view no longer prints the unread-surface "
+        f"line, which {MANAGER.name} makes a HARD REQUIREMENT of every watch; the rule now "
+        "rests on `runs` alone and this gate can no longer say the cut keeps it"
+    )
+    assert unread < opener, (
+        f"onepipeline {ONEPIPELINE.ref} now prints the health report above the "
+        f"unread-surface line, so {MANAGER.name}'s cut removes the one line rule 5 forbids "
+        "filtering. Move the anchor, or the documented watch drops the question channel"
+    )

@@ -1007,6 +1007,35 @@ and is never a command.
    cannot apply, with the reason, and every edit it accepts reaches the graph; a
    non-zero reply is a rejection to correct, never a command to resend.
 
+   **A supervisory finding earns a check, never an action**, and being grounded is
+   what makes one worth checking rather than what makes it right. Two in one night
+   were grounded exactly as the rules ask — one quoted a diff, one quoted a
+   criterion — and both were locally true and globally wrong, each missing a fact
+   one level out: the first called a committed rename residue from a timing probe
+   when it was the worker clearing a judged-tier finding raised against its own
+   branch, and the second called a declaration edit unnecessary when the file says,
+   twelve lines above the pin, that every pin in that block is declared at the
+   newest release the registry carries. One `git show` of a commit message and one
+   `grep` of the surrounding comment answered them, under a minute each; acting on
+   either would have told a nearly-finished dispatch to undo correct work. Neither
+   was noise and neither should have gone unraised — a tier that raised only what
+   it was certain of would raise almost nothing — so the asymmetry is the whole
+   rule: the check costs a minute, and a wrong instruction to a live worker costs
+   the dispatch.
+
+   **A finding you decline on the merits is evidence about the node's bar, not only
+   about the worker.** Declining the second of those left its criterion standing —
+   *"`Cargo.toml`'s requirements are changed only if the bump actually requires
+   it"*, a mechanism the manager preferred, contradicting a convention the target
+   repository states in the file itself — and the criterion is what the judge
+   reads. Forty minutes later that node settled `task-failed` on a green complete
+   gate while its judge's own `completion_reason` recorded that every acceptance
+   criterion was met. A `context` note cannot reach that, for the reason the
+   amendment paragraph above gives: only a `retry` whose replacement states the
+   amended task, or a `cancel` plus a `requeue` carrying an `amend`, changes what
+   "done" means. So read a disagreement with a finding as a question about your own
+   task, and answer it before the judge does.
+
    **One execution path per deliverable.** When a path fails, diagnose and fix that
    path or escalate to the operator with evidence; never launch a duplicate parallel
    path for the same deliverable — a manager-driven integrate or recovery beside a
@@ -1044,6 +1073,23 @@ and more than one mechanism satisfies it:
    green throughout. A blocking surface produces no other signal until it is read
    — the run reports plain `ACTIVE`, never `awaiting-planner` — so dropping that
    one line removes the whole question channel invisibly.
+6. **A grep over the whole of `just status` is watching two subjects at once.**
+   That view is two documents in one stream: the run's own lines, then
+   `oneagentgraph health`'s JSON, which describes the **host** and not the run —
+   three identities this host has never configured carry `"reason":
+   "no_plan_quota"`, and a Copilot line reads `no GitHub token to read Copilot
+   quota with`. A watch matching `quota` anywhere in that output reported
+   `terminal: quota` eleven seconds into a healthy dispatch. Cut at the boundary
+   before you look for words in it —
+   `just status "$RUN" 2>&1 | sed '/^  providers:/,$d'` — and cut once, in one
+   snapshot the whole watch reads, rather than at each grep that reads it. The
+   reusable half is that **a view embedding another tool's report is not a
+   line-oriented document, and a grep over the whole of it matches two subjects at
+   once**. This is rule 2's converse and it costs the same thing: the words a false
+   match fires on — `quota`, `failed`, `refused` — are the words a real death is
+   reported in, so the first firing spends the correct instinct on nothing and the
+   second weakens it. Rule 5 survives the cut, because that block is the last thing
+   the view prints and the unread-surface line is above it.
 
 ### Answering on the channel
 
@@ -1496,7 +1542,19 @@ criterion that contradicts it, and a shipped role whose bar does not carry it. I
 reads both halves out of the resolved bar and the criteria rather than off a list of
 persona names, and it is written to **miss** a criterion that names its file in prose
 rather than to refuse a sound plan — a false refusal blocks correct work and gets
-worked around, which is worse than the gap.
+worked around, which is worse than the gap. **That prediction has since been paid
+out**, and how the refusal was worked around is the part to learn. A read-only
+research node — no repository, no branch, its deliverable entirely in its completion
+report — was refused for a criterion telling its worker to *read*
+`.github/pull_request_template.md` in the publication checkout, reported as criteria
+that require that file to change. The way past it was to stop naming the path in the
+criterion and move it into `## Additional info`, which makes the criterion vaguer to
+satisfy a check whose purpose is precision and leaves the worker following a pointer
+to learn which file to read. Do not pay that price: the pairing that genuinely cannot
+be satisfied is one whose verb **changes** a tracked file, and a criterion whose verb
+is a reading verb — read, quote, cite, follow the shape of — is the opposite case.
+Launch the plan whose criterion is precise, and treat the refusal as the check being
+wrong about a sound node rather than as a wording to soften.
 
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking
@@ -2009,6 +2067,28 @@ commands in its `just` form and passes every other line — and the whole of `--
 whose `recover_command` other consumers read — through untouched. See
 [Diff-derived PR
 descriptions](docs/repo-lifecycle.md#diff-derived-pr-descriptions).
+
+**The body is re-derived at every publication and the subject is derived once, which
+is backwards, because the subject is the one that becomes permanent.** `onevcs`
+passes `--title` on `gh pr create` and has no path that edits an open change request,
+so a republication pushes the branch and updates nothing else: the subject a plan
+node's `title` named before any of the work existed outlives every dispatch that
+changes what the branch does. onepipeline's change request #127 opened under the
+subject *"fix(deps): resolve the onevcs release that opens a session past a retained
+pipe"*, which was the whole of the branch at that moment; three further dispatches
+then worked it and one of them **reverted the bump**, leaving an empty net
+`Cargo.lock` diff and a net diff of two files, neither a manifest. That identity
+resolves `change-auto`, which is `gh pr merge --squash --auto` with no `--subject`,
+so GitHub composes the squash headline from the title, it lands on a base whose
+history is never rewritten, and `release-plz` reads it to choose the next version and
+write the changelog line. It was caught with about ten minutes to spare, and only
+because the subject was read while checking something else: nothing in the pipeline
+would have raised it, and the required `pr-title` check **passed** throughout,
+because it validates Conventional Commit *form* and cannot see the diff. So **read a
+change request's title against its net diff versus the base before anything merges
+it, never against its commits** — reading the commits is what hides this, since every
+commit message on that branch was accurate, including the one that made the bump and
+the one that undid it. Only the net diff says the pair cancels.
 
 ## Dogfooding rule
 
