@@ -166,6 +166,23 @@ FIXED_PORT_REASON = re.compile(r"bind fixed ports|43\d\d/|is already used", re.I
 #: sentinel and one log per invocation, on a host whose dispatches share `/tmp`.
 PER_INVOCATION = re.compile(r"one\s+log\s+per\s+invocation", re.IGNORECASE)
 
+#: The pre-launch check is about whether the invocation's sentinel path is already
+#: owned, never whether another gate or judged tier is running. The former prevents
+#: one invocation from reading another's result; the latter would reinstate the
+#: retired concurrency rule through implication rather than by name.
+SENTINEL_PATH_OWNERSHIP = re.compile(
+    r"sentinel\s+path\s+is\s+already\s+in\s+use\s+by\s+another\s+invocation",
+    re.IGNORECASE,
+)
+CONCURRENT_GATES_ALLOWED = re.compile(
+    r"does\s+not\s+(?:forbid|prohibit)[^.]*?concurrent[^.]*?(?:gates?|judged\s+tiers?)",
+    re.IGNORECASE,
+)
+AMBIGUOUS_IN_FLIGHT = re.compile(
+    r"nothing\s+is\s+already\s+in\s+flight\s+before\s+starting\s+one",
+    re.IGNORECASE,
+)
+
 
 @pytest.fixture(scope="module")
 def appendix() -> str:
@@ -456,6 +473,33 @@ def test_the_appendix_gives_a_self_match_proof_way_to_ask_what_is_running(
     assert PER_INVOCATION.search(appendix), (
         f"{APPENDIX} no longer names one sentinel and one log per invocation, which the "
         "rewrite of the polling rule had to leave standing"
+    )
+
+
+def test_the_pre_launch_check_is_about_sentinel_ownership_not_gate_concurrency(
+    appendix: str,
+) -> None:
+    """Keep a shared path from becoming an implied host-wide gate lock.
+
+    Two workers used distinct sentinel and log names, yet monitors read the old
+    ``nothing is already in flight`` sentence as forbidding their gates because it
+    never named the thing being checked. The check is path ownership; concurrent
+    gates and judged tiers remain valid when their invocations own distinct paths.
+    """
+    assert SENTINEL_PATH_OWNERSHIP.search(appendix), (
+        f"{APPENDIX} does not say that the pre-launch check is for an invocation's "
+        "sentinel path. Without that object, a reader can treat the check as a ban on "
+        "starting a gate while any other gate is running"
+    )
+    assert CONCURRENT_GATES_ALLOWED.search(appendix), (
+        f"{APPENDIX} does not distinguish sentinel-path ownership from concurrent "
+        "gates and judged tiers, so the retired serialization rule remains available "
+        "as an implication"
+    )
+    ambiguous = AMBIGUOUS_IN_FLIGHT.search(appendix)
+    assert ambiguous is None, (
+        f"{APPENDIX} still carries the ambiguous pre-launch instruction "
+        f"({ambiguous.group(0)!r}) that two monitors read as a concurrent-gate ban"
     )
 
 

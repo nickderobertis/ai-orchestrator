@@ -38,14 +38,17 @@ import pytest
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
 from test_dispatch_appendix import (
+    AMBIGUOUS_IN_FLIGHT,
     CAPTURED_AT_LAUNCH,
     CONCURRENT_GATE_INSTRUCTION,
+    CONCURRENT_GATES_ALLOWED,
     EXCLUDES_ONLY_ITSELF,
     FIXED_PORT_REASON,
     MATCHES_COMMAND_LINES,
     NEVER_PATTERN_KILL,
     PID_FROM_A_PATTERN,
     POLLING,
+    SENTINEL_PATH_OWNERSHIP,
     SIGNAL_ONLY_BY_PID,
 )
 from waits import timeout as e2e_timeout
@@ -305,4 +308,29 @@ def test_a_dispatched_worker_is_not_told_to_avoid_a_concurrent_gate(
     assert reason is None, (
         f"a dispatched worker is still handed the fixed-port conflict ({reason.group(0)!r}) "
         "as a reason to serialize its gates"
+    )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_checks_its_sentinel_not_other_gates(
+    dispatched_notes: str,
+) -> None:
+    """Read the repaired pre-launch check from the worker's real prompt.
+
+    This is the delivery seam where the ambiguity produced two supervisory findings:
+    the worker must receive a path-ownership check and explicit permission for
+    concurrent gates and judged tiers, not the objectless ``one`` that was read as a
+    gate.
+    """
+    assert SENTINEL_PATH_OWNERSHIP.search(dispatched_notes), (
+        "a dispatched worker is not told that the pre-launch check concerns its sentinel path"
+    )
+    assert CONCURRENT_GATES_ALLOWED.search(dispatched_notes), (
+        "a dispatched worker is not told that sentinel ownership does not prohibit "
+        "concurrent gates or judged tiers"
+    )
+    ambiguous = AMBIGUOUS_IN_FLIGHT.search(dispatched_notes)
+    assert ambiguous is None, (
+        "a dispatched worker still receives the ambiguous pre-launch instruction "
+        f"{ambiguous.group(0)!r}"
     )

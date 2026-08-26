@@ -137,8 +137,10 @@ shape rather than two literal paths. Several dispatches run on this host at once
 share `/tmp`, so a second worker writing `/tmp/gate.log` writes into the first one's — and
 `until [ -f /tmp/gate.exit ]` returns immediately on somebody else's exit file, reporting
 their result as yours. Name both after the invocation (`/tmp/gate.$$.log`, or the node id),
-and check that nothing is already in flight before starting one. Three workers collided on
-shared names today and not one of the three failures read as what it was: two
+and, before starting it, check whether its sentinel path is already in use by another
+invocation; if so, choose a different invocation-specific pair. This path-ownership check
+does not prohibit concurrent gates or judged tiers. Three workers collided on shared names
+today and not one of the three failures read as what it was: two
 deterministic-tier runs deadlocked against the same cargo target-directory lock, so both
 logs sat unchanged and neither progressed — about fifteen minutes lost and three
 interruptions to a live turn; two whole-e2e runs wrote to one log, and stopping the
