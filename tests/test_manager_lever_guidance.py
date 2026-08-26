@@ -76,12 +76,7 @@ OP_TABLE = re.compile(
 OP_NAME = re.compile(r"^\| `([a-z]+)` \|", re.MULTILINE)
 
 #: The levers the passage names, each of which has to be an op that table declares.
-NAMED_LEVERS = ("retry", "cancel", "requeue", "context")
-
-#: The op that does not exist here, and the reason it is worth naming: a binding
-#: amendment op is a real proposal, and documenting one before this host's engine has it
-#: would hand a manager a lever that fails at submission in the middle of a live run.
-UNAVAILABLE_LEVER = "amend"
+NAMED_LEVERS = ("retry", "cancel", "requeue", "context", "amend")
 
 
 class Claim(NamedTuple):
@@ -104,9 +99,9 @@ REQUIRED_CLAIMS = (
         'the only text that changes what "done" means for it is the\n   `task`',
     ),
     Claim(
-        "which edits reach a task mid-run",
+        "which binding edit reaches a task mid-run",
         LOOP_SECTION,
-        "the only edits that\n   reach one mid-run are `retry`",
+        "`amend`, which replaces the node's binding amendment",
     ),
     Claim(
         "a requeue amendment is merged onto the node",
@@ -114,9 +109,9 @@ REQUIRED_CLAIMS = (
         "`cancel` plus a `requeue` whose `amend` is merged onto the node",
     ),
     Claim(
-        "no lever amends a live dispatch's bar",
+        "an amendment does not alter the live dispatch's bar",
         LOOP_SECTION,
-        "there is no lever\n   here that amends a node's bar while its worker keeps working",
+        "`amend` does not interrupt a dispatch already running",
     ),
     Claim("a note binds nothing", LOOP_SECTION, "the other lever and it binds nothing"),
     Claim("where a carried note is rendered", LOOP_SECTION, "under `## Planner context`"),
@@ -174,7 +169,7 @@ REQUIRED_CLAIMS = (
     ),
     # These seven used to hold the opposite claim — a hard one-lifecycle-dispatch-per-
     # identity bound, and the three details a manager scheduled around it with. onevcs
-    # 0.14.1 fixed the reclamation race and this host adopted it at 0.15.0, so what a
+    # 0.14.1 fixed the reclamation race and this host adopted it at 0.15.2, so what a
     # manager now has to be told is that the bound is gone, on whose authority, and what
     # is left of it. Restated rather than deleted: a lifted constraint that nobody says
     # was lifted goes on being obeyed, which costs exactly the parallelism it was
@@ -189,7 +184,7 @@ REQUIRED_CLAIMS = (
     Claim(
         "which release this host adopts it at",
         RECLAMATION_OPENER,
-        "this host adopts it at 0.15.0",
+        "this host adopts it at 0.15.2",
     ),
     Claim(
         "the lift is a measurement, not a changelog reading",
@@ -309,10 +304,9 @@ def test_every_lever_the_manager_is_offered_is_an_op_the_engine_table_declares()
 
     A binding amendment op is a real proposal, and documenting one before the adopted
     engine has it would hand a manager a lever that fails at submission in the middle of
-    a live run — the exact moment the passage is read. So the levers it names are read
-    back against the live-edit table, and the op that does not exist here is held absent
-    from both. `tests/test_engine_contracts.py` holds that table against the engine's own
-    `Command` enum, so the day this host adopts a release that has one, this comes due.
+    a live run — the exact moment the passage is read. So every lever the manager passage
+    names is read back against the live-edit table. `tests/test_engine_contracts.py`
+    holds that table against the engine's own `Command` enum.
     """
     table = OP_TABLE.search(_text("docs/orchestration.md"))
     assert table is not None, (
@@ -330,12 +324,3 @@ def test_every_lever_the_manager_is_offered_is_an_op_the_engine_table_declares()
             f"{MANAGER}'s lever passage no longer names `{lever}`, which is one of the "
             "commands it tells a manager to choose between"
         )
-    assert UNAVAILABLE_LEVER not in declared, (
-        f"the live-edit table now declares a `{UNAVAILABLE_LEVER}` op. That is the lever "
-        f"{MANAGER} says this host does not have, so the passage is now the stale claim: "
-        "state the binding op beside `retry` and `requeue` instead"
-    )
-    assert f"`{UNAVAILABLE_LEVER}` op" not in passage, (
-        f"{MANAGER} offers a manager an `{UNAVAILABLE_LEVER}` op the adopted engine does "
-        "not accept; an edit naming it is refused at submission, mid-run"
-    )

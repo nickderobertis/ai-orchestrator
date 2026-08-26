@@ -93,12 +93,17 @@ TABLE_HEADING = "### The outcome vocabulary is closed, and it is this"
 LITERAL_SETTLEMENTS = re.compile(
     r"Settlement::plain\([^)]*?NodeStatus::(\w+),\s*Some\(\"([a-z][a-z-]*)\"\)"
 )
+CONSTANT_SETTLEMENTS = re.compile(
+    r"Settlement::plain\([^)]*?NodeStatus::(\w+),\s*Some\((?:[a-z:]+::)?([A-Z][A-Z_]*)\)"
+)
 
 #: The `failed(node, "task-failed")` helper, whose status is written once in its own
 #: definition rather than at each call. Both halves are read — the calls for the
 #: words, the definition for the status they settle under — because a helper that
 #: was re-pointed at another status would otherwise drift silently.
 FAILED_HELPER = re.compile(r"\bfailed\(\s*&?node(?:\.id)?[^,]*,\s*\"([a-z][a-z-]*)\"\s*\)")
+FAILED_HELPER_CONSTANT = re.compile(r"\bfailed\(\s*&?node(?:\.id)?[^,]*,\s*([A-Z][A-Z_]*)\s*\)")
+OUTCOME_CONSTANT = re.compile(r"pub const ([A-Z][A-Z_]*): &(?:'static )?str = \"([a-z][a-z-]*)\";")
 FAILED_HELPER_STATUS = re.compile(
     r"fn failed\(\s*node:\s*&str,\s*outcome:\s*&str\s*\)[^{]*\{\s*"
     r"Settlement::plain\(\s*node,\s*NodeStatus::(\w+),\s*Some\(outcome\)\s*\)"
@@ -119,14 +124,14 @@ RELAY_SITE = re.compile(
 )
 
 #: The guard that keeps every failure word away from that relay. `outcome_of`'s
-#: `Failed` arm answers whatever `failure_of` decides — the residual, or one of the
-#: four preserving words — and each of those settles the node `Failed` somewhere
-#: else. Only this early return decides which pairing is real, so it is asserted
-#: rather than assumed, and a release that drops it fails here instead of leaving
-#: every failure row of the table quietly reading `done`.
+#: `Failed` arm answers whatever `failure_of` decides — the residual, the unread
+#: merge path, or one of the preserving words — and each settles before the `Done`
+#: relay. Only these early returns decide which pairing is real, so the path through
+#: the preserving return is asserted rather than assumed.
 RELAY_GUARD = re.compile(
     r"if let onevcs::PublishOutcome::Failed \{[^}]*?\}\s*=\s*&published\.outcome\s*\{\s*"
-    r"return failed_publication\("
+    r".*?return failed_publication\(",
+    re.DOTALL,
 )
 
 #: What that guard sends a failure to instead, and the two sites there that settle
@@ -495,12 +500,12 @@ CONSTANTS = (
         "ONEVCS_GIT_HOOK_TIMEOUT (default {value}s)",
     ),
     Constant(
-        "git bound drain",
+        "git exit polling ceiling",
         ONEVCS,
         "git.rs",
-        re.compile(r"const DRAIN: Duration = Duration::from_secs\((\d+)\);"),
+        re.compile(r"const EXIT_POLL: Duration = Duration::from_millis\((\d+)\);"),
         LIFECYCLE,
-        "at most DRAIN ({value}s)",
+        "at most EXIT_POLL ({value}ms)",
     ),
     Constant(
         "preserved merge-path logs retained",
@@ -836,8 +841,16 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
     preserving = _region(shipped, PRESERVING_OUTCOME, "`Preserving::outcome`")
 
     found = {(status.lower(), outcome) for status, outcome in LITERAL_SETTLEMENTS.findall(shipped)}
+    constants = dict(OUTCOME_CONSTANT.findall(shipped))
     found.update(
         (helper_status.group(1).lower(), outcome) for outcome in FAILED_HELPER.findall(shipped)
+    )
+    found.update(
+        (helper_status.group(1).lower(), constants[name])
+        for name in FAILED_HELPER_CONSTANT.findall(shipped)
+    )
+    found.update(
+        (status.lower(), constants[name]) for status, name in CONSTANT_SETTLEMENTS.findall(shipped)
     )
     found.update(
         (relay.group(1).lower(), arm)
@@ -846,6 +859,9 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
     )
     found.update(
         (status, word) for status in failure_statuses for word in OUTCOME_OF_ARM.findall(preserving)
+    )
+    found.update(
+        (status, constants[name]) for status in failure_statuses for name in ("RESIDUAL", "UNREAD")
     )
     assert found, (
         f"no settlement was found in onepipeline {ONEPIPELINE.ref}; the engine settles a "

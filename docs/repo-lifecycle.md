@@ -13,17 +13,17 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.14.2**
+that source on every `just check` rather than restated: **`onepipeline` v0.15.1**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.15.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.15.2** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.15.0** as well at
+the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.15.2** as well at
 this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They have now diverged again**: two consecutive adoptions had
 `config/onepipeline.version` and `config/onevcs.version` carrying one number, and this
-one has them at 0.14.2 and 0.15.0. The habit that ambiguity taught is worth keeping
+one has them at 0.15.1 and 0.15.2. The habit that ambiguity taught is worth keeping
 rather than retiring with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -68,6 +68,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `pushed-unverified` | The publishing push **reached the remote** and the merge path could not then be read, and the budget is spent. The one failure word whose work is already on the origin: its reason names both the commit it landed at and what stopped the read, and a further attempt re-reads that path rather than re-pushing. |
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
+| `failed` | `dispatch-died` | The dispatch started and the agent worked, but the dispatch process then ended without an agent verdict; unlike a pre-work infrastructure refusal, it is not retried. |
 | `failed` | `no-agent-progress` | Every boundary attempt was spent and the agent produced nothing. |
 | `failed` | `infrastructure-failure` | The dispatch layer refused before any work began. |
 | `failed` | `invalid-node` | The node itself could not be run as written. |
@@ -219,14 +220,12 @@ from its own argv, so a new hook-running operation cannot silently inherit the
 ordinary bound. A non-numeric, zero, negative, or infinite value is refused at the
 boundary rather than silently reverting to unbounded.
 
-When a bound fires, the whole git process *group* is terminated before its output is
-collected, and the drain then waits at most `DRAIN` (30s) for pipes that have not
-already reached EOF — a call whose pipes drained and whose process merely would not
-exit is killed straight away, because a second EOF that will never come would add
-that whole drain to the bound that just fired. That wait is not a courtesy: a hook's
-children inherit git's pipes and outlive the shell that started them, so reading
-those pipes after killing git alone blocks on exactly the processes the bound
-stopped waiting for.
+While the bound is live, the exit loop waits at most `EXIT_POLL` (10ms) between
+checks when neither output reader has ended. When it fires, the whole git process
+*group* is terminated before the child is collected and both output readers are
+joined. The group matters because a hook's children inherit git's pipes and outlive
+the shell that started them; killing git alone would leave those writers holding the
+readers open.
 
 The group, and not a walk from git's pid, because a walk names the set of processes
 that existed when it ran and a git being torn down goes on starting more. Its
@@ -559,7 +558,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.14.2 and is refused **by its own name**, at every schema version and on a live
+v0.15.1 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -788,8 +787,8 @@ merge, so a push that resolved its own base could merge work whose own gate had
 failed.
 
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
-2026-08-26 against the installed onepipeline 0.14.2 binary (which its SBOM and
-embedded crate paths both identify as linking onevcs 0.15.0), every follow-up shape
+2026-08-26 against the installed onepipeline 0.15.1 binary (which its SBOM and
+embedded crate paths both identify as linking onevcs 0.15.2), every follow-up shape
 keeps the workstream's publication base:
 
 | Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
@@ -1167,7 +1166,7 @@ from both the release and `CHANGELOG`.
 A lifecycle node is an `agent` node in a plan with a `repo` and either a
 `persona`+`task` or a `steps` workstream. The `Node` schema is
 `deny_unknown_fields`, so what it may carry is a closed list —
-`id`, `kind`, `task`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
+`id`, `kind`, `task`, `amendment`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
 `context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
 `merge_policy`, `base_branch`, `branch`, `title`, `body`, `execution_checkout`,
 `steps`, `resume`, `adoption`, `consumes` — and
@@ -1322,7 +1321,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.14.2.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.15.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1399,8 +1398,8 @@ lives. The branch and its commits are preserved; the worktree is the session's a
 goes when the session does.
 
 **A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.14.2 has no notion
-of one and `onevcs` 0.15.0 has none to open — and nothing is published, on a local or
+pause on either engine at the adopted versions — `onepipeline` v0.15.1 has no notion
+of one and `onevcs` 0.15.2 has none to open — and nothing is published, on a local or
 a remote identity, until the last step has settled and the publication starts. A pause is
 purely local branch state.
 
@@ -1965,7 +1964,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.14.2 — so every number in it was a
+journey it named are absent from `onepipeline` v0.15.1 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

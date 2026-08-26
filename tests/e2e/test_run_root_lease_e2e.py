@@ -11,7 +11,7 @@ and reported each as a missing `claude` binary; the mechanism and the evidence a
 **onevcs 0.14.1 fixed it upstream** — `fix: prove a run root is abandoned from its
 session record, not from a lease nothing holds`
 (https://github.com/nickderobertis/onevcs/pull/82) — and this host adopted it through
-`config/onevcs.version` 0.15.0. Measured on both binaries with everything else held,
+`config/onevcs.version` 0.15.2. Measured on both binaries with everything else held,
 a session whose record names a live owner now keeps its run root across a sibling
 open, where 0.14.0 removed it.
 

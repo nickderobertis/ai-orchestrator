@@ -660,7 +660,7 @@ MALFORMED = (
         "an empty observer",
         RunId("plan-recipe-observer-empty"),
         ("--dag-graph=",),
-        "cannot read",
+        "graph reference is blank",
     ),
 )
 
