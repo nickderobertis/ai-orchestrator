@@ -58,6 +58,36 @@ out of what the frame itself carries:
   object lines is bounded too, and is one command away rather than lost, because the
   line names where the full text is read.
 
+**A monitor that looked and found nothing is not a monitor that failed**, and
+conflating the two removed this host's whole supervisory tier for two hours at a time.
+`personas/orchestrator.yaml` tells the monitor to spend no planner surface on a turn
+with no finding in it, because a queue of throat-clearing buries the blocking questions
+that share it. Until this filter learned the difference, obeying that instruction was
+fatal on the **first** quiet turn — which for a healthy run is usually the first turn:
+a frame carrying no assistant content was refused as a protocol failure, `oneagentgraph`
+recorded `member-died {"rule":"provider-failure","cause":"protocol"}`, and the run went
+on reporting `ACTIVE` with nothing watching it and nothing announcing the loss. Observed
+on `spanish-language-tutor-upgrade`, which lost its observer five minutes in and ran
+roughly two hours that way while every other indicator stayed green.
+
+So the two are made distinguishable rather than left conflated, and there are three
+things a turn can end in rather than two:
+
+* **the sentinel** — the monitor says `NOTHING TO REPORT` and nothing else, which is a
+  report that it looked and found nothing. No surface is raised, nothing is queued for
+  anybody to read, and onejudge is answered with a non-completion it can act on, so the
+  member lives and keeps watching;
+* **prose** — anything else the monitor said, raised as the surface it always was;
+* **no assistant content at all** — still a failure, because that is a real provider
+  defect, and it is precisely the case the sentinel exists to stop being mistaken for.
+  Its refusal names the sentinel, so the difference between the two is readable from the
+  refusal rather than inferable from this file.
+
+Structured output is the heavier alternative and one constraint rules it out: oneharness
+validates a structured answer against the complete response, so `stream = true` and
+`schema_file` cannot both hold, and turning streaming off for the run's long-lived
+watcher would trade away the per-turn visibility a manager supervises with.
+
 The surface is raised **non-blocking**. Blocking it would hold the run at
 `awaiting-planner` on every monitor turn, which would end the attached launch's
 settle-and-return contract and stop the frontier to ask a question about watching
@@ -177,6 +207,27 @@ RUN_IN_COMPOSED_TASK = re.compile(r"onepipeline run `([^`]+)`")
 #: leading `-` would be read as a flag rather than a run; a `/`, a `.` opening what could
 #: be `..`, or a NUL or other control character would name something other than the run.
 SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
+
+#: What the monitor says when it looked and found nothing. Stated to the model in the
+#: same paragraph of `personas/orchestrator.yaml` that tells it to stay quiet, so the
+#: instruction and this contract cannot drift apart.
+FOUND_NOTHING = "NOTHING TO REPORT"
+
+#: What is stripped from either end of a message before it is compared against that
+#: sentinel: a model asked for one bare line writes it in bold, in backticks, or with a
+#: full stop. Nothing beyond decoration, since any other word means the monitor spoke.
+DECORATION_AROUND_THE_SENTINEL = " \t\r\n.*`_"
+
+#: What the monitor is told when it reported that sentinel. The sentinel is quoted back
+#: so a monitor whose message was *nearly* it can see which reading it got.
+FOUND_NOTHING_ACKNOWLEDGED = (
+    "You reported `{sentinel}`, so no planner surface was raised and nothing was queued "
+    "for anybody to read. That is the right turn to take when you have no finding. Keep "
+    "reading the detailed stream and raise the next thing you do find."
+)
+
+#: And why that ruling is a non-completion, for the reader who meets it in a transcript.
+FOUND_NOTHING_REASON = "the monitor reported no finding, so no surface was raised"
 
 #: The surface kind a monitor's supervisor boundary is raised under. `channel
 #: serve` takes a free-form kind here, unlike `onepipeline surface --kind`, so this
@@ -403,6 +454,22 @@ class ObserverFrame(TypedDict):
     kind: str
     message: str
     blocking: bool
+
+
+class FoundNothing(NamedTuple):
+    """The monitor's own report that it looked and found nothing worth raising.
+
+    Its own type rather than a `None`, because a turn ends in one of three things and
+    only one of them is an absence: this one is a *report*, a lost turn is a failure, and
+    anything else the monitor said is a surface. Naming it is what stops the branch that
+    answers it from being read as the branch that handles a missing value — and what
+    stops the next reader from folding it back into the refusal it was folded into
+    before, which is the whole defect.
+
+    Carries nothing, deliberately: what the monitor wrote is the sentinel and the ruling
+    quotes the constant rather than the message, so a message that arrived with stray
+    decoration cannot put that decoration back in front of a planner.
+    """
 
 
 class LiveEdit(NamedTuple):
@@ -658,15 +725,50 @@ def machine_transcript_surface(
     )
 
 
-def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
+def found_nothing(said: str) -> bool:
+    """Whether this message is the monitor reporting that it found nothing.
+
+    Equality against the whole message rather than a search inside it. A turn that
+    raised a finding *and* wrote the sentinel has raised a finding, and swallowing it
+    would lose the observation this member exists to produce — so only decoration is
+    forgiven, and case with it, and everything else is prose to surface.
+    """
+    return said.strip(DECORATION_AROUND_THE_SENTINEL).casefold() == FOUND_NOTHING.casefold()
+
+
+def ruling_for_a_quiet_turn() -> SupervisorResponse:
+    """Answer a monitor that found nothing, without asking the planner anything.
+
+    Composed here rather than served, because there is nothing to serve: no surface was
+    raised, so no planner was asked and there is no ruling of theirs to relay. That is
+    not an answer on their behalf — a non-completion settles nothing, completes nothing,
+    and rules on no work. What it does is keep the member alive, which is the whole of
+    the fix: `fail()` here exits non-zero, `oneagentgraph` records that as `member-died
+    {"rule":"provider-failure","cause":"protocol"}`, and the run goes on reporting
+    `ACTIVE` with nothing watching it.
+    """
+    return SupervisorResponse(
+        completion=False,
+        message=FOUND_NOTHING_ACKNOWLEDGED.format(sentinel=FOUND_NOTHING),
+        reason=FOUND_NOTHING_REASON,
+    )
+
+
+def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | FoundNothing | int:
     """Turn one supervisor frame into the surface the planner is asked to answer.
 
-    What the conversation ends in decides which of three surfaces that is, and
-    `transcript_frames` draws the first line: a turn the monitor spoke in is prose, and
-    is raised verbatim, as the planner's question is the monitor's own words. Anything
-    that is a machine transcript is bounded, because republishing one is what put
-    176.1 MB of protocol on this channel — as a named failure where `lost_turn_error`
-    can prove the turn was lost, and as a named transcript where it cannot.
+    Or into `FoundNothing`, which is a turn with no surface in it: the monitor reported
+    the sentinel, so there is nothing to ask the planner and nothing is queued. It is
+    read before anything else is made of the message, because it is the answer a healthy
+    run gives most often — and because conflating it with the refusal above, which is
+    what a turn carrying no assistant content gets, is what killed this host's monitors.
+
+    Everything else is a surface, and `transcript_frames` draws the line between the
+    three of them: a turn the monitor spoke in is prose, and is raised verbatim, as the
+    planner's question is the monitor's own words. Anything that is a machine transcript
+    is bounded, because republishing one is what put 176.1 MB of protocol on this
+    channel — as a named failure where `lost_turn_error` can prove the turn was lost,
+    and as a named transcript where it cannot.
     """
     messages = frame.get("messages")
     if not isinstance(messages, list):
@@ -684,11 +786,16 @@ def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | int:
     ]
     if not spoken:
         return fail(
-            f"the monitor said nothing for run {run}, so there is nothing to ask the planner about",
+            f"the monitor said nothing at all for run {run} — no assistant message — "
+            "which is a turn its agent side lost rather than a turn that found nothing; "
+            f"a monitor with no finding reports `{FOUND_NOTHING}` and is answered "
+            "without a surface",
             f"read its turns with `just monitor {run} --filter monitor` to see why the "
             "turn produced no message",
         )
     said = spoken[-1]
+    if found_nothing(said):
+        return FoundNothing()
     frames = transcript_frames(said)
     if frames is None:
         return ObserverFrame(kind=SURFACE_KIND, message=said, blocking=False)
@@ -937,8 +1044,17 @@ def main() -> int:
         return 0
 
     surface = surface_for(frame, run)
-    if isinstance(surface, int):
-        return surface
+    match surface:
+        case int():
+            return surface
+        # A quiet turn is answered here and the channel is never opened, which is the
+        # half that matters as much as the member surviving: raising a surface saying
+        # "nothing to report" would cost the planner exactly the update the persona's
+        # silence rule exists to spare them, and bury the blocking questions sharing
+        # that queue behind it.
+        case FoundNothing():
+            print(json.dumps(ruling_for_a_quiet_turn(), ensure_ascii=False))
+            return 0
     ruling = served_by_the_planner(surface, run, binary)
     if isinstance(ruling, int):
         return ruling

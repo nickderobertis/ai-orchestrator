@@ -1229,14 +1229,33 @@ that rule comes from; what neither can ground that way is an **observation**, an
 own supervisor sends it back until it is one. See [A finding names the rule it is
 grounded in](docs/orchestration.md#a-finding-names-the-rule-it-is-grounded-in).
 **A quiet monitor is a working monitor**, and this is the one place the watch
-invariant below does not apply: both supervisory roles are now told to report
-findings rather than intentions and to end a turn that found nothing with no prose
-at all, because every turn they produce prose on becomes a planner update. One run
-queued twenty-eight, twenty-four of them content-free — fourteen variants of "I'll
-identify the active run, then attach to its detailed stream" — and a worker's
-blocking question sat unread behind that pile for fifteen minutes with the frontier
-stopped. So read an absence of surfaces as an absence of findings, and read the
-run's own state for whether anything is watching. They are also required to hand a
+invariant below does not apply: both supervisory roles are now told to report findings
+rather than intentions, because every turn they produce prose on becomes a planner
+update. One run queued twenty-eight, twenty-four of them content-free — fourteen
+variants of "I'll identify the active run, then attach to its detailed stream" — and a
+worker's blocking question sat unread behind that pile for fifteen minutes with the
+frontier stopped. So read an absence of surfaces as an absence of findings, and read the
+run's own state for whether anything is watching.
+
+**The monitor says its silence rather than performing it**, and the difference is the
+whole supervisory tier. A turn with no finding in it replies with exactly `NOTHING TO
+REPORT` and nothing else; `scripts/channel-serve.py` raises no surface for that, queues
+nothing for anybody to read, and answers onejudge with a non-completion the member goes
+on watching after. Producing **no** output at all is a different answer and still fails,
+because from outside it is indistinguishable from a turn the agent side lost, which is a
+real provider defect worth reporting — its refusal names the sentinel so the two are
+told apart at the point of refusal rather than by reading this file. Until the filter
+learned that difference the documented correct behaviour was fatal on the **first**
+quiet turn, which for a healthy run is usually the first turn:
+`spanish-language-tutor-upgrade` lost its observer five minutes in and ran roughly two
+hours at `OBSERVER DEAD` while every other indicator stayed green, because a run with no
+observer still reports plain `ACTIVE` and the loss announces itself nowhere.
+`personas/orchestrator.yaml` states the sentinel in the same paragraph that tells the
+monitor to stay quiet, so the instruction and the contract cannot drift apart, and
+`tests/e2e/test_monitor_quiet_turn_e2e.py` drives all three answers through the real
+filter onto a real published channel.
+
+Both supervisory roles are also required to hand a
 surface's text to the engine as **bytes** — the `finding` op in a reply envelope,
 or the `surface` verb reading a single-quoted heredoc off stdin — rather than as a
 command-line word: bash substitutes backticks and `$(...)` inside double quotes,
@@ -1252,6 +1271,23 @@ naming a node the graph has, and a `blocking` flag defaulting to false. It compi
 to a `finding-raised` operation that mutates no graph, and it is the one op that
 raises no second `monitor applied an edit` surface beside the finding itself — so a
 finding arrives once rather than twice.
+
+**One supervisory observation is open, and is recorded so the next occurrence is
+recognised rather than re-diagnosed.** A manager `context` edit delivered at the default
+`auto` interrupted a live turn; `turn-activity` journalling then showed member
+heartbeats only, for about eleven minutes, while that turn kept running. Measured in
+that dispatch's own worktree at the time: a fresh commit, a clean tree, a filling
+`.logs/nx.log` and a live `nx run-many` — while the views reported five events eleven
+minutes old and the run's own monitor escalated to "not progressing toward its
+acceptance criteria". The **leading candidate explanation** is onepipeline #127, merged
+and queued for release in that repository's open change request #124, which fixes
+reconcile-loop starvation in which relayed envelopes drained one per pass at roughly
+3.8 s each and held settlement behind them. Read that as a candidate and not as the
+cause: the mechanism is not isolated, and nothing here ties the interrupt to the
+starvation. The interim guidance is the part to act on — **when a dispatch looks silent,
+read its worktree before believing the event stream**: its commits, its tree, and
+whichever `.logs/<label>.log` its innermost stage is writing say what the stream cannot,
+and a supervisor that escalated on the stream alone escalated wrongly here.
 
 None of these roles authors target-project content; dispatch implementation and
 research to workers.
@@ -1272,6 +1308,24 @@ above; add a persona only for a genuinely distinct role or review bar. A dedicat
 `reviewer` is reserved for complex DAGs where one agent reviews and integrates
 several agents' independently produced work, since the simulated-user supervisor
 already reviews every dispatch.
+
+**That supervisor's authority is bounded, and the bound is stated where the bar is.**
+`config/onejudge.base.yaml`'s `user.persona` says the simulated user verifies against
+the criteria the task states and stops there: it does not issue rulings on the manager's
+behalf, redirect the dispatch onto other work, or direct a handoff to another dispatch.
+It said none of that until two incidents in one session did all three — a planner's
+simulated user composed a four-point "manager ruling" in-conversation and instructed the
+worker to post it over the run channel, and the worker complied; a worker's simulated
+user redirected a dispatch off its stated task onto unrelated lint findings and then
+told it to stop work and report the finding to an owning dispatch that did not exist. A
+simulated user that issues rulings is a second manager the real one cannot see, and a
+worker holding two instructions of equal authority resolves it by guessing.
+**Read the clause as defence in depth rather than as a confirmed cure**: both incidents
+may be fully explained by the upstream context corruption already fixed in onejudge
+0.5.2 and oneharness 0.11.0, both in force here, and nothing isolates this prose as
+either the cause or the fix. It is stated because a bound nobody wrote down is one no
+judge can be held to. A persona in `personas/` replaces that whole clause with its own
+review contract, so a role that needs the bound restates it rather than inheriting it.
 
 Draft a new role under gitignored `scratch/personas/`, dispatch against that
 directory, and refine it from observed performance. Once proven, dispatch its

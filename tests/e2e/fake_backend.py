@@ -162,6 +162,17 @@ ASK_RECORD_ENV = "FAKE_BACKEND_ASK_RECORD"
 DISPATCHED_MEMBER = "worker"
 MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 
+#: Optionally answer THAT member's agent turn with this text instead of the default.
+#:
+#: Opt-in and unset everywhere else, so every other journey reads the same monitor turn
+#: it always did. It exists for one thing a fixed answer cannot reach: the monitor's
+#: reply is what its judge side is handed, and one particular reply — the persona's
+#: found-nothing sentinel — is the turn that used to KILL the member. Proving it no
+#: longer does means a real launch whose monitor really says it, and the monitor's words
+#: are the paid model's, which is the one thing doubled here.
+OBSERVER_ANSWER_ENV = "FAKE_BACKEND_OBSERVER_ANSWER"
+OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
+
 #: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
 #: A journey about a run that is *live* needs one, and a stand-in that answers at
@@ -306,6 +317,14 @@ def main(argv: list[str]) -> int:
     argv, prompt = _prompt(argv)
     config = _flag(argv, CONFIG_FLAG)
     system = _flag(argv, SYSTEM_FLAG) or ""
+    watching = MEMBER_OF_CONFIG.search(config or "")
+    scripted = os.environ.get(OBSERVER_ANSWER_ENV)
+    observing_member = os.environ.get(OBSERVER_MEMBER_ENV)
+    scripted_answer = (
+        scripted
+        if scripted and watching is not None and watching.group(1) == observing_member
+        else None
+    )
     if prompt_log := os.environ.get(PROMPT_LOG_ENV):
         named = [key for key in os.environ.get(ENVIRONMENT_KEYS_ENV, "").split(",") if key]
         with Path(prompt_log).open("a", encoding="utf-8") as recorded:
@@ -317,6 +336,7 @@ def main(argv: list[str]) -> int:
                         "prompt": prompt,
                         "system": system,
                         "environment": {key: os.environ.get(key) for key in named},
+                        "scripted_answer": scripted_answer,
                     }
                 )
                 + "\n"
@@ -330,6 +350,10 @@ def main(argv: list[str]) -> int:
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, "the stand-in pacemaker reported")
     _ask_manager(config)
+    if scripted_answer is not None:
+        # Before the delay, not after: the delay exists to hold a dispatched WORKER's
+        # turn open so a run stays live, and slowing the watch is what it must not do.
+        return _answer(argv, scripted_answer)
     if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
     return _answer(argv, "the stand-in worker reported without changing anything")

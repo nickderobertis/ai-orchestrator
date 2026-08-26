@@ -107,11 +107,13 @@ INLINE_OPTION_PROHIBITION = "reach for the inline `--message`"
 #: substituting form as a simplification without first contradicting it.
 SUBSTITUTION_REASON = "command substitution"
 
-#: The monitor's discipline on what a turn is allowed to say. A run queued twenty-eight
-#: planner surfaces of which twenty-four were preambles, burying a worker's blocking
-#: question for fifteen minutes, so a turn with nothing to report must produce nothing.
+#: The monitor's discipline on what a turn is allowed to say. Both halves are read: a
+#: turn with no finding must raise no surface, and it must SAY so with the sentinel —
+#: a prompt telling it only to fall silent kills the member, because a turn producing
+#: nothing at all is what a lost turn looks like and its judge side refuses that.
+#: `tests/e2e/test_monitor_quiet_turn_e2e.py` drives what the sentinel then does.
 NARRATION_BAN = "never narrate what you are about to do"
-SILENT_TURN = "with no prose at all"
+FOUND_NOTHING_SENTINEL = "NOTHING TO REPORT"
 
 #: The pacemaker's discipline on what it may call a hang. Both halves, because the three
 #: false escalations in one session split evenly between them: an elapsed time read
@@ -617,7 +619,7 @@ def test_the_monitor_is_told_the_structured_way_to_report_a_finding(
 def test_the_monitor_is_told_to_report_findings_rather_than_narrate_intent(
     monitor_prompt: str,
 ) -> None:
-    """A turn with nothing to report owes the planner nothing, and is told so.
+    """A turn with nothing to report owes the planner nothing, and is told what to say.
 
     The monitor's reply text is raised as a planner update, so a turn spent saying what
     it is about to look at costs a surface and carries no finding. One run queued
@@ -625,6 +627,11 @@ def test_the_monitor_is_told_to_report_findings_rather_than_narrate_intent(
     unread behind that pile for fifteen minutes with the frontier stopped — while `N
     planner update(s) waiting`, the one line a planner may never filter, said only that
     there were twenty-eight.
+
+    Both halves are read, because the instruction to be quiet without the sentinel to be
+    quiet *with* is the shape that killed monitors: a turn producing nothing at all is
+    refused by the judge side as a lost turn, and the member dies for having obeyed its
+    own persona.
     """
     flat = _flat(monitor_prompt)
 
@@ -632,9 +639,11 @@ def test_the_monitor_is_told_to_report_findings_rather_than_narrate_intent(
         "the monitor is no longer told to stop narrating what it is about to do, so "
         f"every turn it takes can still cost the planner a surface:\n{monitor_prompt}"
     )
-    assert SILENT_TURN in flat, (
-        "the monitor is no longer told that a turn with nothing to report emits "
-        f"nothing:\n{monitor_prompt}"
+    assert FOUND_NOTHING_SENTINEL in flat, (
+        f"the monitor is no longer told to answer a turn with no finding in it with "
+        f"`{FOUND_NOTHING_SENTINEL}`, so the only way it has left to be quiet is to emit "
+        "nothing — which its judge side refuses as a lost turn, killing the member on "
+        f"its first correct turn:\n{monitor_prompt}"
     )
 
 

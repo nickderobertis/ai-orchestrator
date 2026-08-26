@@ -457,6 +457,45 @@ verdict there would continue or settle a run nobody ruled on.
 `tests/e2e/test_orchestrate_launch_e2e.py` drives the whole round trip on a real
 launch, and each refusal through the real script.
 
+#### A monitor that found nothing, and a monitor that said nothing
+
+These are two different turns and the filter used to have one answer for both, which
+cost this host its whole supervisory tier for hours at a time.
+[`personas/orchestrator.yaml`](../personas/orchestrator.yaml) tells the monitor to spend
+no planner surface on a turn with no finding in it — a queue of throat-clearing buries
+the blocking questions sharing it — and until the filter learned the difference, obeying
+that instruction was fatal on the **first** quiet turn, which for a healthy run is
+usually the first turn. A frame carrying no assistant content was refused as a protocol
+failure, `oneagentgraph` recorded `member-died
+{"rule":"provider-failure","cause":"protocol"}`, and the run carried on reporting
+`ACTIVE` with nothing watching it. Observed on `spanish-language-tutor-upgrade`, which
+lost its observer five minutes in and ran roughly two hours that way while every other
+indicator stayed green.
+
+So a monitor **says** its silence, and there are three answers rather than two:
+
+| The turn's last message | What happens |
+| --- | --- |
+| exactly `NOTHING TO REPORT` | no surface is raised and nothing is queued; onejudge is answered `{"completion": false}` with a message telling the monitor to keep watching, so the member lives |
+| anything else the monitor said | raised as the surface it always was — `monitor`, `monitor-failed`, or `monitor-transcript`, per the sections above |
+| no assistant content at all | still refused, naming the sentinel: an empty turn is a real provider defect and is what the sentinel exists to stop being mistaken for |
+
+Only decoration is forgiven around the sentinel — surrounding whitespace, a full stop,
+bold markers, backticks — and case with it. It is matched against the **whole** message
+and never searched for inside one: a turn that raised a finding and also wrote the
+sentinel has raised a finding, and swallowing it would lose the observation the member
+exists to produce.
+
+Structured output would be the heavier way to draw the same line, and one constraint
+rules it out: oneharness validates a structured answer against the complete response, so
+`stream = true` and `schema_file` cannot both hold, and turning streaming off for the
+run's long-lived watcher would trade away the per-turn visibility a manager supervises
+with.
+
+`tests/e2e/test_monitor_quiet_turn_e2e.py` drives all three through the real filter onto
+a real published channel, and reads what was and was not queued out of
+`runs/<run-id>/channel/queue.json`.
+
 #### The completion bar is scored by the planner too
 
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn

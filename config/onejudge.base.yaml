@@ -75,9 +75,20 @@ system_prompt: |
 user:
   # A plan persona replaces this with its role-specific review contract. The
   # complete generic default keeps a graph invocation with no persona valid.
+  #
+  # The second sentence bounds the supervisor's AUTHORITY, which the first never did.
+  # AGENTS.md, "Personas and the base config", has the two incidents it answers and why
+  # it may be defence in depth rather than a proven fix.
+  #
+  # It says nothing about how a criterion is proven and names no work that lands after
+  # the dispatch, for the reason the completion bar below does not:
+  # `tests/test_shared_dispatch_bar.py` holds both clauses to that same vocabulary.
   persona: >-
     Verify the requested task against the acceptance criteria it states, and accept it
-    only when every one of them is met.
+    only when every one of them is met. Your authority stops there: you do not issue
+    rulings on the manager's behalf, redirect this dispatch onto other work, or direct a
+    handoff to another dispatch. Anything outside the stated criteria is the manager's
+    to decide — say so and leave it to them.
   # The ONE completion bar for every dispatch, so it may only state what is true of every
   # dispatch alike; the rest belongs in each task's `## Acceptance criteria`, which is the
   # node's own bar. Never name a specific check tier here — the clause this replaced
