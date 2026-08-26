@@ -41,6 +41,7 @@ journeys are about: `PYTEST_ADDOPTS` for the Python tiers.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -208,6 +209,20 @@ def test_a_workspace_file_the_suite_reads_invalidates_the_cached_test_verdict(
 
     assert checkout.ran_the_command("orchestrator:test"), (
         f"changing {CODE_WITNESS} must re-run the suite that reads it"
+    )
+
+
+def test_an_originless_checkout_does_not_mint_an_unused_cache_directory(
+    checkout: Checkout,
+) -> None:
+    """A metadata-only Nx query must not leave an empty cache key behind."""
+    repo_key = hashlib.sha256(str(checkout.root).encode()).hexdigest()[:16]
+    cache_directory = checkout.cache / "ai-orchestrator" / "nx" / repo_key
+
+    checkout.resolved_target("test")
+
+    assert not cache_directory.exists(), (
+        "the wrapper created a repository-key directory even though Nx stored no result"
     )
 
 

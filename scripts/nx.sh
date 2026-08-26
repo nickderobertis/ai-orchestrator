@@ -32,7 +32,6 @@ repo_identity="$(git config --get remote.origin.url || git rev-parse --show-topl
 repo_key="$(printf '%s' "$repo_identity" | sha256sum | cut -c1-16)" || { echo "nx: cannot derive the repository cache key; verify sha256sum is available and retry" >&2; exit 1; }
 [[ "$repo_key" =~ ^[0-9a-f]{16}$ ]] || { echo "nx: derived an invalid repository cache key; verify sha256sum output and retry" >&2; exit 1; }
 cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx/${repo_key}"
-mkdir -p "$cache_root" || { echo "nx: cannot create shared cache directory '$cache_root'; repair its parent permissions and retry" >&2; exit 1; }
 export NX_CACHE_DIRECTORY="$cache_root"
 
 # Nx's daemon is off by default here, and any daemon that is turned back on uses
@@ -53,12 +52,22 @@ export NX_CACHE_DIRECTORY="$cache_root"
 export NX_DAEMON="${NX_DAEMON-false}"
 export NX_USE_LOCAL=true
 
+# The Bun-written shim rather than a path inside the package: Nx has moved its
+# bin entry between releases, and the shim is the one name that cannot. The
+# locked install above guarantees one of these exists before every invocation.
+NX_BIN="node_modules/.bin/nx"
+[[ -x "$NX_BIN" ]] || NX_BIN="node_modules/.bin/nx.cmd"
+if [[ ! -x "$NX_BIN" ]]; then
+  echo "nx: locked workspace install did not provide an executable node_modules/.bin/nx or node_modules/.bin/nx.cmd; repair the install and retry" >&2
+  exit 1
+fi
+
 # The log outlives this process on purpose: a failing run needs its full output
 # after the fact, and a *running* one has to be inspectable (`tail -f`) without
 # reading this process's file descriptors through /proc.
 preserved_log_open "$(dirname -- "$script_dir")" nx || exit 1
 log=$PRESERVED_LOG
-if bunx nx "$@" 2>&1 | redact_secrets >"$log"; then
+if "$NX_BIN" "$@" 2>&1 | redact_secrets >"$log"; then
   # llmlint: ignore[tool_output_is_signal] Explicit debug output lets the cache-contract check inspect Nx's success evidence, and lets `just lint-llm-diff` show the judge report Nx replayed; default successful invocations still emit one line.
   if [[ "${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}" == "1" ]]; then cat "$log"; fi
   printf 'nx: requested targets succeeded\n'

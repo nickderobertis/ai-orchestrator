@@ -248,7 +248,10 @@ if [[ "${FAIL_COMMAND:-}" == "bun" ]]; then
   exit 9
 fi
 mkdir -p node_modules/.bin
-touch node_modules/.bin/nx
+cat >node_modules/.bin/nx <<'NX'
+#!/usr/bin/env bash
+printf 'nx %s\n' "$*" >>"$TRACE_FILE"
+NX
 chmod +x node_modules/.bin/nx
 """
     )
@@ -258,7 +261,10 @@ chmod +x node_modules/.bin/nx
 def _mark_nx_installed(checkout: Path) -> None:
     nx = checkout / "node_modules/.bin/nx"
     nx.parent.mkdir(parents=True, exist_ok=True)
-    nx.touch()
+    nx.write_text(
+        '#!/usr/bin/env bash\nprintf \'nx %s\\n\' "$*" >>"$TRACE_FILE"\n',
+        encoding="utf-8",
+    )
     nx.chmod(0o755)
 
 
@@ -694,7 +700,7 @@ def test_the_screenshot_gallery_root_is_ignored() -> None:
 
 
 def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
-    """A checkout the *real* `scripts/nx.sh` runs in, with `bunx` doubled.
+    """A checkout the *real* `scripts/nx.sh` runs in, with Nx doubled.
 
     Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, and
     `workspace-install.sh` are the real files, because what they choose to do —
@@ -748,15 +754,6 @@ def _nx_wrapper_env(
 def _add_nx_wrapper_doubles(checkout: Path) -> None:
     """Trace Bun and Nx without installing or running either."""
     _add_bun_double(checkout)
-    bunx = checkout / "bin" / "bunx"
-    bunx.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-printf 'bunx %s\\n' "$*" >>"$TRACE_FILE"
-""",
-        encoding="utf-8",
-    )
-    bunx.chmod(0o755)
 
 
 @pytest.mark.reads_recipes
@@ -784,7 +781,7 @@ def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
         "bun install --frozen-lockfile",
-        "bunx nx run-many -t test",
+        "nx run-many -t test",
     ]
 
 
@@ -813,7 +810,7 @@ def test_nx_wrapper_installs_nothing_when_the_tree_already_matches_the_lockfile(
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
         "bun install --frozen-lockfile (no changes)",
-        "bunx nx run cached",
+        "nx run cached",
     ]
 
 
@@ -1607,7 +1604,7 @@ def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> N
     `.logs/nx.log` the outer one was still writing and truncated it — leaving a
     running check uninspectable at the moment a reader needs it.
 
-    So the doubled `bunx` here does what pytest does to its parent: it invokes
+    So the doubled workspace Nx here does what pytest does to its parent: it invokes
     `scripts/nx.sh` again, in the same checkout, from inside the outer run's own
     process tree. The outer log has to still hold what it wrote *before* the nested
     run, and go on to hold what it writes after.
@@ -1615,8 +1612,8 @@ def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> N
     checkout = _nx_nesting_checkout(tmp_path)
     nested_started = tmp_path / "nested.started"
     release = tmp_path / "release"
-    bunx = checkout / "bin" / "bunx"
-    bunx.write_text(
+    nx = checkout / "node_modules/.bin/nx"
+    nx.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         # The nested run fails, so it also has to *name* where its own evidence
@@ -1635,7 +1632,7 @@ def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> N
         'echo "outer line after the nested run"\n',
         encoding="utf-8",
     )
-    bunx.chmod(0o755)
+    nx.chmod(0o755)
     env = os.environ.copy()
     env["PATH"] = f"{checkout / 'bin'}:{env['PATH']}"
     env["XDG_CACHE_HOME"] = str(tmp_path / "cache")

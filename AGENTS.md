@@ -1812,6 +1812,41 @@ inside each project target remain authoritative, and `format-check` remains a
 format-only verification. Session provisioning and the initial locked Bun
 install precede Nx because they make Nx available; bootstrap then delegates
 project setup through uniform Nx `bootstrap` targets.
+The computation cache those targets use is not `.nx/cache`, despite the
+`cacheDirectory` fallback in `nx.json`: every supported invocation goes through
+`scripts/nx.sh`, which exports `NX_CACHE_DIRECTORY` as
+`${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/nx/<key>`, where `<key>` is the
+first 16 hexadecimal characters of the SHA-256 of `remote.origin.url`. That
+environment variable wins over `nx.json`. Measured 2026-08-26, the canonical
+checkout, this run's isolated clone and worktree, and an extant publication clone
+all reported `https://github.com/nickderobertis/ai-orchestrator.git`, resolved to
+`756e79f93796751d`, and shared the same 81 MB directory; `.nx/cache` did not exist.
+So deleting or changing `nx.json`'s setting would change no gate the wrapper runs,
+and a publication clone already replays entries a session worktree stored.
+
+An originless Git checkout still falls back to its top-level path for the key:
+copies belonging to e2e journeys are not repository identities and must not be
+silently grouped together. The wrapper used to `mkdir` that key before asking Nx
+to do anything, leaving 167 empty directories among the 171 measured in the host
+cache root. It now only exports the destination; Nx creates it if a cacheable task
+actually stores an entry, while a metadata-only invocation leaves nothing behind.
+Existing empty directories are inert historical litter; this change deliberately
+does not delete shared host state.
+
+The publication-shaped measurement for this change was
+`AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 just gate origin main`. Its deterministic Nx run
+took 6m52s, not the issue's roughly 37 minutes, and reported one hit among seven
+cacheable tasks: `format-check` replayed. `test` re-ran for 6m50s because the
+changed wrapper is part of its `codeWorkspace` input; `test-docs` re-ran for
+2m43s and `lint` and `typecheck` re-ran because their `wholeWorkspace` inputs saw
+the same change; `test-recipes` re-ran for 19s because `recipeWorkspace` includes
+`scripts/**/*`; `test-checkouts` always re-runs because it is uncached; and
+`coverage` always re-runs because it is uncached and consumes the test result.
+The run stopped at the real lint finding (an unsorted new import), after completing
+the other targets, rather than reaching llmlint; the import was then fixed at the
+reported site. That is a cold changed-input measurement, not evidence of a
+workspace-local cache miss: the shared cache was in use, and every miss either had
+an input changed by this branch or belonged to a deliberately uncached target.
 `scripts/workspace-install.sh` is that locked Bun install's one source. A freshly
 created worktree carries no `node_modules`, so every `scripts/nx.sh` runs it first
 and heals itself — and so does a worktree whose `node_modules` no longer matches
