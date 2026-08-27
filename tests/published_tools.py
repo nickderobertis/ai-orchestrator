@@ -59,4 +59,6 @@ PUBLISHED_TOOLS = (
 #: own named function — onejudge's check also proves the `onejudge_sdk` import — so
 #: they stay outside the uniform table. Named so a caller enumerating
 #: `config/*.version` can say which files `PUBLISHED_TOOLS` is deliberately silent about.
-SEPARATELY_GATED_VERSION_FILES = frozenset({"onejudge.version", "oneharness.version"})
+SEPARATELY_GATED_VERSION_FILES = frozenset(
+    {"onejudge.version", "oneharness.version", "onetaskgraph.version"}
+)

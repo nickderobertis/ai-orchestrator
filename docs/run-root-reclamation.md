@@ -8,9 +8,9 @@ landed and been adopted here.
 **Read the history below as history.** `onevcs` 0.14.1 fixed this at the source —
 [`fix: prove a run root is abandoned from its session record, not from a lease nothing
 holds`](https://github.com/nickderobertis/onevcs/pull/82) — and `config/onevcs.version`
-adopted it at 0.15.2. Re-measured on this host on 2026-08-25 with both binaries and
+adopted it at 0.15.4. Re-measured on this host on 2026-08-25 with both binaries and
 everything else held: a session record naming a live owner keeps its run root across a
-sibling `session open` on 0.14.1 and 0.15.2, and loses it on 0.14.0. **Concurrent
+sibling `session open` on 0.14.1 and 0.15.4, and loses it on 0.14.0. **Concurrent
 lifecycle dispatch on one identity is no longer unsafe for this reason**, and the
 "at most one" constraint this document used to impose is lifted.
 
@@ -124,7 +124,7 @@ released with its session — and released again when that session is handed to 
 different owner — and a real `session-setup.sh` taking it inside a real session
 worktree. That first leg asserted the deletion until 2026-08-25, and it was proven to
 discriminate before it was believed: it fails against onevcs 0.14.0 with the reclaimed
-root named, and passes against the adopted 0.15.2.
+root named, and passes against the adopted 0.15.4.
 
 It reads the session record directly rather than asking `onevcs session holders`,
 which answers the same question, because a freshly cut worktree has no `.venv` yet:

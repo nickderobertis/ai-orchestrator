@@ -175,7 +175,7 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
     """
     adopted = tmp_path / "adopted-run"
     launched = subprocess.run(
-        ["just", "orchestrate", "examples/single-node-direct.plan.json", "--detach"],
+        ["just", "orchestrate", "examples:scheduler-research", "--detach"],
         cwd=REPO_ROOT,
         env={
             **_environment(adopted),

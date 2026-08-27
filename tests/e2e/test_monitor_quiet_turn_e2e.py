@@ -34,6 +34,7 @@ from fake_backend import (
     OBSERVER_MEMBER_ENV,
     PROMPT_LOG_ENV,
 )
+from project_fixtures import project_from_plan
 
 # How many turns the monitor's AGENT side took, read the one way a turn is observable —
 # out of the prompts it was given. Imported rather than restated: its sibling journey
@@ -478,7 +479,7 @@ def test_a_monitor_that_answers_the_sentinel_survives_a_whole_real_run(
             [
                 "just",
                 "orchestrate",
-                str(plan),
+                project_from_plan(plan),
                 "--heartbeat-interval",
                 str(PACEMAKER_INTERVAL_SECONDS),
             ],

@@ -55,6 +55,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
 )
 from planner_channel import PersistentManager, just, ruling
+from project_fixtures import project_from_plan
 from scratch_identity import seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -543,7 +544,11 @@ def orchestrate_attached(tmp_path_factory: pytest.TempPathFactory, oneharness_bi
     plan = _plan(tmp_path, run, [_node("only")])
 
     try:
-        with _attached(["just", "orchestrate", str(plan)], environment, tmp_path / "launch.log"):
+        with _attached(
+            ["just", "orchestrate", project_from_plan(plan)],
+            environment,
+            tmp_path / "launch.log",
+        ):
             dispatched = _await_dispatch(turns)
             manager = _answering(run, environment)
             answered = _await_answer(record, manager)
@@ -570,7 +575,7 @@ def orchestrate_detached(tmp_path_factory: pytest.TempPathFactory, oneharness_bi
 
     launched = just(
         "orchestrate",
-        str(plan),
+        project_from_plan(plan),
         "--detach",
         *WITHOUT_OBSERVER,
         environment=environment,
@@ -606,7 +611,7 @@ def orchestrate_adopted(tmp_path_factory: pytest.TempPathFactory, oneharness_bin
 
     launched = just(
         "orchestrate",
-        str(plan),
+        project_from_plan(plan),
         "--detach",
         *WITHOUT_OBSERVER,
         environment=environment,

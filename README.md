@@ -33,8 +33,8 @@ just gate               # complete pre-push gate, including llmlint
 just orchestrate examples/tracked-graph.example.json
 
 # One subtask is a one-node plan — the same engine, the same ledger:
-just orchestrate examples/single-node-direct.plan.json
-just orchestrate examples/single-node-lifecycle.plan.json
+just orchestrate examples:scheduler-research
+just orchestrate examples:health-endpoint
 
 # Read the next planner surface, and reply to it:
 just channel-next <run-id>

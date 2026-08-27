@@ -203,5 +203,5 @@ the two the bar makes of every implementation dispatch:
   evidence for it.
 
 Criteria state properties of the finished tree; the commands that produce them belong in
-this section. `just check-plan <plan.json>` refuses a task whose criteria omit a demand its
+this section. `just check-plan <source:project>` refuses a task whose criteria omit a demand its
 resolved review bar — or this appendix — makes of it.

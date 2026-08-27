@@ -43,6 +43,7 @@ from fake_backend import (
     MEMBER_OF_CONFIG,
     PROMPT_LOG_ENV,
 )
+from project_fixtures import read_project_plan
 from scratch_identity import seeded
 from waits import timeout as e2e_timeout
 
@@ -73,7 +74,21 @@ INHERITED_ENVIRONMENT = (
 RunId = NewType("RunId", str)
 
 #: Where `scripts/plan.sh` writes what it generates, relative to this checkout.
-PLAN_DIRECTORY = REPO_ROOT / "scratch" / "plans"
+PLAN_DIRECTORY = REPO_ROOT / ".plans"
+
+
+def _project_record(project: str) -> Path:
+    return PLAN_DIRECTORY / "projects" / f"{project}.md"
+
+
+def _remove_project(project: str) -> None:
+    _project_record(project).unlink(missing_ok=True)
+    tasks = PLAN_DIRECTORY / "tasks" / project
+    if tasks.is_dir():
+        for task in tasks.iterdir():
+            task.unlink(missing_ok=True)
+        tasks.rmdir()
+
 
 #: The two checkouts the generated node names, as `scripts/plan.sh` defaults them: this
 #: repository's publication checkout and the registered safety clone a planner's
@@ -127,7 +142,7 @@ TURN_BUDGET = 40
 
 #: The shipped brief and the plan this repository ships as what it produces.
 SHIPPED_BRIEF = "examples/planner-brief.example.md"
-SHIPPED_PLAN = REPO_ROOT / "examples" / "single-node-planner.plan.json"
+SHIPPED_PROJECT = "examples:planner-brief-example"
 
 
 class JournalEvent(TypedDict):
@@ -252,7 +267,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
     environment[ENVIRONMENT_KEYS_ENV] = ASK_MANAGER_ENV
     brief = tmp_path / "cursor-shape.md"
     brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / f"{RUN}.plan.json"
+    generated = _project_record(RUN)
     try:
         launch = _just(
             "plan",
@@ -275,7 +290,14 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
             # `cast` rather than a validating read: the recipe writes this document and
             # `PlanDocument` states what it promises; the subscripts below fail loudly
             # if it is not that shape, which is the assertion.
-            plan=cast(PlanDocument, json.loads(generated.read_text(encoding="utf-8"))),
+            plan=cast(
+                PlanDocument,
+                json.loads(
+                    (Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN / "plan.json").read_text(
+                        encoding="utf-8"
+                    )
+                ),
+            ),
             # `cast` for the same reason: `onepipeline` owns the journal's record
             # contract, `JournalEvent` states only the three fields this journey reads,
             # and a record missing one fails at the subscript that wanted it.
@@ -292,7 +314,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         )
     finally:
         _just("stop", RUN, environment=environment, seconds=60)
-        generated.unlink(missing_ok=True)
+        _remove_project(RUN)
 
 
 def _worker_turns(planned: Planned) -> list[TurnRecord]:
@@ -351,13 +373,13 @@ def test_the_generated_plan_is_one_isolated_planner_node_carrying_the_brief_verb
     one, so a generated plan with it could never be launched at all.
     """
     plan = planned.plan
-    assert plan["schema_version"] == 2, plan
+    assert plan["schema_version"] == 3, plan
     assert plan["name"] == RUN, plan
     assert plan["goal"]["text"].strip(), "the plan states no goal"
     assert len(plan["tasks"]) == 1, plan["tasks"]
 
     node = plan["tasks"][0]
-    assert node["task"] == BRIEF, (
+    assert node["task"] == BRIEF.rstrip(), (
         "the brief did not reach the node verbatim; the manager's words are the task:\n"
         f"{node['task']!r}"
     )
@@ -594,7 +616,6 @@ def test_a_caller_who_names_an_observer_launches_with_the_one_they_named(
         pytest.skip("just is not installed")
     brief = tmp_path / "cursor-shape.md"
     brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / f"{observer.run}.plan.json"
     environment = _environment(tmp_path)
 
     # `--detach` because what is under test is the launch, not the run it drives: the
@@ -626,7 +647,7 @@ def test_a_caller_who_names_an_observer_launches_with_the_one_they_named(
         )
     finally:
         _just("stop", observer.run, environment=environment, seconds=60)
-        generated.unlink(missing_ok=True)
+        _remove_project(observer.run)
 
 
 class Malformed(NamedTuple):
@@ -686,7 +707,6 @@ def test_an_observer_that_names_no_graph_refuses_the_launch(
         pytest.skip("just is not installed")
     brief = tmp_path / "cursor-shape.md"
     brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / f"{malformed.run}.plan.json"
     environment = _environment(tmp_path)
     turns = tmp_path / "turns.jsonl"
     environment[PROMPT_LOG_ENV] = str(turns)
@@ -714,7 +734,7 @@ def test_an_observer_that_names_no_graph_refuses_the_launch(
         )
     finally:
         _just("stop", malformed.run, environment=environment, seconds=60)
-        generated.unlink(missing_ok=True)
+        _remove_project(malformed.run)
 
 
 @pytest.mark.reads_docs
@@ -729,21 +749,29 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    shipped = json.loads(SHIPPED_PLAN.read_text(encoding="utf-8"))
-    regenerated = PLAN_DIRECTORY / f"{shipped['name']}.plan.json"
+    shipped = read_project_plan(SHIPPED_PROJECT)
     environment = _environment(tmp_path)
     # `--detach` and a runs root of this journey's own: what is under test is the
     # document, and the run it starts is stopped on the way out.
     launch = _just("plan", SHIPPED_BRIEF, "--detach", environment=environment)
     try:
         assert launch.returncode == 0, f"{SHIPPED_BRIEF} did not launch:\n{launch.stderr}"
-        assert json.loads(regenerated.read_text(encoding="utf-8")) == shipped, (
-            f"{SHIPPED_PLAN.name} is not what `just plan {SHIPPED_BRIEF}` writes; "
+        generated_plan = json.loads(
+            (
+                Path(environment["ONEPIPELINE_RUNS_DIR"])
+                # llmlint: ignore[suppressions_justified] CLI fixture validates this title.
+                / cast(str, shipped["name"])
+                / "plan.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert generated_plan == shipped, (
+            f"{SHIPPED_PROJECT} is not what `just plan {SHIPPED_BRIEF}` writes; "
             f"regenerate it from the brief rather than editing it by hand"
         )
     finally:
         _just("stop", str(shipped["name"]), environment=environment, seconds=60)
-        regenerated.unlink(missing_ok=True)
+        # llmlint: ignore[suppressions_justified] The CLI fixture validates this title.
+        _remove_project(cast(str, shipped["name"]))
 
 
 class Refusal(NamedTuple):
@@ -877,18 +905,21 @@ def test_a_brief_filename_is_sanitized_into_the_run_id_the_engine_would_mint(
         pytest.skip("just is not installed")
     brief = tmp_path / "cursor.shape.md"
     brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / "cursor-shape.plan.json"
     environment = _environment(tmp_path)
 
     launch = _just("plan", str(brief), "--detach", environment=environment)
     try:
         assert launch.returncode == 0, f"{brief.name} did not launch:\n{launch.stderr}"
-        named = json.loads(generated.read_text(encoding="utf-8"))["name"]
+        named = json.loads(
+            (Path(environment["ONEPIPELINE_RUNS_DIR"]) / "cursor-shape" / "plan.json").read_text(
+                encoding="utf-8"
+            )
+        )["name"]
         assert named == "cursor-shape", named
         assert f"just channel-next {named}" in launch.stdout + launch.stderr, launch.stderr
     finally:
         _just("stop", "cursor-shape", environment=environment, seconds=60)
-        generated.unlink(missing_ok=True)
+        _remove_project("cursor-shape")
 
 
 @pytest.mark.parametrize(

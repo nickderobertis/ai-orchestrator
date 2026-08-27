@@ -46,6 +46,7 @@ from planner_channel import (
     reply_unguarded,
     ruling,
 )
+from project_fixtures import project_from_plan
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -275,7 +276,13 @@ def asked(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Asked]:
         ),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", str(plan), "--dag-graph", "off", environment=environment)
+    launch = _just(
+        "orchestrate",
+        project_from_plan(plan),
+        "--dag-graph",
+        "off",
+        environment=environment,
+    )
     assert launch.returncode == 0, f"the launch failed:\n{launch.stdout}\n{launch.stderr}"
     try:
         yield Asked(environment, run)
@@ -1192,7 +1199,12 @@ def dispatched_turns(
         ),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", str(plan), environment=environment, seconds=300)
+    launch = _just(
+        "orchestrate",
+        project_from_plan(plan),
+        environment=environment,
+        seconds=300,
+    )
     try:
         assert launch.returncode == 0, f"the launch did not settle:\n{launch.stdout}{launch.stderr}"
         assert turns.is_file(), f"no harness turn was recorded at {turns}"

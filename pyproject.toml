@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "Local orchestration harness: drive many onejudge processes to complete a task DAG in parallel."
 requires-python = ">=3.11"
 dependencies = [
-    "oneagentgraph-cli==0.3.10",
+    "oneagentgraph-cli==0.3.11",
     "oneharness-cli==0.11.0",
-    "onejudge==0.5.3",
+    "onejudge==0.5.4",
     "onepipeline-api-cli==0.6.3",
-    "onepipeline-cli==0.15.1",
-    "onevcs-cli==0.15.2",
+    "onepipeline-cli==0.16.1",
+    "onevcs-cli==0.15.4",
 ]
 
 [project.scripts]
@@ -18,7 +18,7 @@ dependencies = [
 # a tool it shells out to a merged `ONEHARNESS_HISTORY_LABELS` value, and the merge
 # has to preserve an inherited value whose shape the recipe does not know.
 orchestrator-history-labels = "orchestrator.labels:main"
-# The second reads a plan against the review bar each of its nodes resolves to, which
+# The second reads a plan project against the review bar each of its nodes resolves to, which
 # no published CLI knows how to do: the bar is composed from this host's own base
 # config and the role `onepipeline` links, and the plan is refused before a launch
 # spends a dispatch on a node its own judge would fail on procedure.

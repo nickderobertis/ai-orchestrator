@@ -170,7 +170,7 @@ upgrade:
 # All three shapes dispatch, so all three carry the ask-manager seam their workers
 # stop and ask through; `scripts/onepipeline.sh` establishes it for `start` and
 # `adopt` alike, and refuses a launch whose wrapper it cannot run.
-[doc('Launch a plan on the monitor and drafting graphs and stay attached until the run settles (`--detach` returns at the launch record); `--adopt <run-id>` attaches a fresh driver to an intact ledger.')]
+[doc('Launch a qualified onetaskgraph project on the monitor and drafting graphs; `--detach` returns at its launch record and `--adopt <run-id>` resumes it.')]
 orchestrate *args:
     # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
     @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else defaults=(); for pair in "--dag-graph graphs/dag-scope.yaml" "--pr-author-graph graphs/pr-author.yaml"; do read -r flag ref <<<"$pair"; named=; for argument in "$@"; do if [[ "$argument" == "$flag" || "$argument" == "$flag"=* ]]; then named=1; break; fi; done; [[ -n "$named" ]] || defaults+=("$flag" "$ref"); done; ./scripts/onepipeline.sh start "$@" ${defaults[@]+"${defaults[@]}"}; fi
@@ -180,7 +180,7 @@ orchestrate *args:
 # [<onepipeline start flags>]`. Those five flags are the recipe's own; everything else
 # reaches `onepipeline start` untouched.
 #
-# It writes the one-node plan rather than asking a manager to remember its shape;
+# It writes the one-task local project rather than asking a manager to remember its shape;
 # `scripts/plan.sh` states what has to be right about that shape and why. The
 # ask-manager seam every launch exports is not among them — that is
 # `scripts/onepipeline.sh`'s, for `start` and `adopt` alike — but the run id is: this
@@ -204,16 +204,16 @@ orchestrate *args:
 # the DAG UI place are `onepipeline start`'s own, so what an observer would add to a
 # planning run is a monitor watching it for drift from the plan it is what writes. A
 # caller who names one keeps it, exactly as `just orchestrate` keeps a caller's own.
-[doc('Launch a planner on a manager-written brief as a one-node plan, under a run id this launch guarantees is its own.')]
+[doc('Launch a planner on a manager-written brief as a one-task local project, under a run id this launch guarantees is its own.')]
 plan *args:
     @./scripts/plan.sh "$@"
 
-# Read a plan against the bar each of its nodes will actually be judged against:
-# `just check-plan <plan.json>`. What it refuses and why is
+# Read a qualified plan project against the bar each of its nodes will actually be
+# judged against: `just check-plan <source>:<project>`. What it refuses and why is
 # `orchestrator/criteria_guard.py`'s to say; two things about the *result* are this
 # seam's. Exit 1 is a refusal, naming the node, the demand, and where that demand is
-# made; exit 2 is a plan that could not be read at all, so nothing was judged — a
-# plan builder branches on the difference. And it reads the plan only: it launches
+# made; exit 2 is a project that could not be read at all, so nothing was judged — a
+# plan builder branches on the difference. And it reads the project only: it launches
 # nothing, spends no provider turn, and is safe to run beside live work.
 [doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
 check-plan *args:
@@ -541,6 +541,13 @@ smoke *args:
 session-setup:
     # llmlint: ignore[tool_output_is_signal] installation progress and per-tool verification diagnostics are the session setup's operator-facing result.
     ./scripts/session-setup.sh
+
+# Read this repository's plan store through the pinned standalone CLI.
+# The selected query's result is this viewing command's product; onetaskgraph's
+# own diagnostics name failed sources and corrective actions.
+# llmlint: ignore[tool_output_is_signal] The selected query's result is this viewing command's product.
+plans *args:
+    ~/.local/bin/onetaskgraph {{args}}
 
 # --- llmlint (LLM-judge tier) --------------------------------------------
 # Non-deterministic, harness-backed, and kept OUT of `just check`. It runs at

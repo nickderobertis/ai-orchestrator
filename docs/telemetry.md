@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.15.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.16.1 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.11.0/0.5.3 upgrade (`config/oneharness.version` and
+after the 0.11.0/0.5.4 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check

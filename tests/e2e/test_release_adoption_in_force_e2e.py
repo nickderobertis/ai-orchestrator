@@ -42,6 +42,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from project_fixtures import local_project
 from registered_checkouts import registered_checkouts
 from test_linked_engine_reconciliation_e2e import LINKED_IN_BINARY
 from test_linked_libraries import Release
@@ -121,15 +122,14 @@ def _registry_identities() -> frozenset[str]:
     )
 
 
-def _plan(tmp_path: Path, name: str, tasks: list[dict[str, object]]) -> Path:
-    """A plan file the engine's own loader will read, and nothing will dispatch.
+def _plan(tmp_path: Path, name: str, tasks: list[dict[str, object]]) -> str:
+    """A local project the engine's own loader will read, and nothing will dispatch.
 
     Every case below is a **load-time** refusal, so the loader is reached and the
     scheduler is not. That is what makes driving the real `onepipeline start` safe
     here: a plan it refuses spends no dispatch, launches no agent, and writes no run.
     """
-    written = tmp_path / f"{name}.plan.json"
-    written.write_text(
+    return local_project(
         json.dumps(
             {
                 "schema_version": 3,
@@ -138,9 +138,8 @@ def _plan(tmp_path: Path, name: str, tasks: list[dict[str, object]]) -> Path:
                 "tasks": tasks,
             }
         ),
-        encoding="utf-8",
+        f"{name}-{tmp_path.name}",
     )
-    return written
 
 
 def _task(node: str, **extra: object) -> dict[str, object]:
@@ -152,7 +151,7 @@ def _task(node: str, **extra: object) -> dict[str, object]:
     }
 
 
-def _refused(plan: Path) -> str:
+def _refused(plan: str) -> str:
     """What the engine said refusing `plan`, having proved it refused it.
 
     **Every plan handed to this helper must be one the loader rejects**, and that is a
@@ -164,7 +163,7 @@ def _refused(plan: Path) -> str:
     under test to a refusal about something else.
     """
     started = subprocess.run(
-        [str(ENGINE), "start", str(plan), "--detach"],
+        [str(ENGINE), "start", plan, "--detach"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -172,7 +171,7 @@ def _refused(plan: Path) -> str:
         check=False,
     )
     assert started.returncode != 0, (
-        f"{plan.name} was accepted and launched a run. Every plan this journey drives "
+        f"{plan} was accepted and launched a run. Every project this journey drives "
         f"must be refused while it loads: {started.stdout!r}"
     )
     return started.stdout + started.stderr

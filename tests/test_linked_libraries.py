@@ -394,8 +394,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.10", core="0.12.0"),
-    LinkedCore(dependent="onejudge", dependent_version="0.5.3", core="0.12.0"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.11", core="0.12.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.5.4", core="0.12.1"),
 )
 
 #: Where an operator meets the CLI-versus-core reality, and the sentence that has to
@@ -418,7 +418,7 @@ HARNESS_CORE_PROSE = ProseClaim(
 #: **Empty, and kept.** The one entry this carried was `onejudge`, pinned at 0.4.0
 #: against a linked 0.5.0 because the tag was published and the PyPI distribution was
 #: not. Both halves of that ground went at once: the registry now carries every
-#: `onejudge` from 0.5.0 to 0.5.3, and the adopted engine links 0.5.3, so there is nothing left to
+#: `onejudge` from 0.5.0 to 0.5.4, and the adopted engine links 0.5.4, so there is nothing left to
 #: except and the entry is retired rather than re-dated. What stays is the escape
 #: hatch — `Divergence`, this registry, and the two tests that read it — because the
 #: next adoption that meets an uninstallable linked release needs to declare one

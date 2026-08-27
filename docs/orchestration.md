@@ -3,15 +3,25 @@
 
 # Tracked graph orchestration
 
-`just orchestrate <plan.json>` turns one large task into one recorded hierarchical
+`just orchestrate <source:project>` turns one large task into one recorded hierarchical
 DAG. It is the **only** way to dispatch direct agent work, full repository
 lifecycles, and explicit actions that only a person can complete: a single dispatch
-is a plan file holding one node, so every piece of running work has a journal, an
+is a project holding one task, so every piece of running work has a journal, an
 ownership row, surfaces, and a place in the DAG UI. The engine drives that DAG
 **continuously to settlement** — it schedules, dispatches, reconciles, and settles
 on its own, with no verb to advance it and nothing to advance between. See
-`examples/single-node-direct.plan.json` and
-`examples/single-node-lifecycle.plan.json`.
+`examples:scheduler-research` and `examples:health-endpoint`.
+
+Plans authored through this repository's configured plan store are read with
+`just plans <onetaskgraph arguments>`. For example, `just plans project list
+--allow-partial` lists the local Markdown projects even when the configured GitHub
+Projects credential is absent, while `just plans project show
+authoring:<project>` reads one local project. The recipe always invokes the pinned
+standalone `onetaskgraph` CLI against `onetaskgraph.yaml`; its source diagnostics
+name a failed source and the credential or correction it needs. Use `just
+orchestrate <source:project>` names that project directly; no export or intermediate
+plan file is part of the launch. The `plans` recipe reads and writes the store, while
+`orchestrate` launches a tracked run.
 
 ## The manager and the planner
 
@@ -19,7 +29,7 @@ The top-level session agent is the **manager**: it holds the user conversation,
 launches runs, reviews what settles, and answers surfaces. The **planner** is not
 that session. It is a dispatched onejudge worker like every other node — supervised
 by its own simulated-user judge, costing turns, settling on the ledger — whose
-deliverable is a plan file, and `just plan <brief.md>` is the one-node launch that
+deliverable is a local Markdown project, and `just plan <brief.md>` is the one-node launch that
 dispatches it. What each of the two decides is stated where that role reads it: the
 manager's in [AGENTS.md](../AGENTS.md#your-loop-as-manager), the planner's in
 [`personas/planner.yaml`](../personas/planner.yaml), which is that dispatch's own
@@ -64,7 +74,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.15.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.16.1 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -186,7 +196,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.15.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.16.1 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -251,7 +261,7 @@ Two things about them are worth knowing before reading a surprising run:
 
 ## The planner channel
 
-`just orchestrate <plan.json>` starts the run, prints its run id, and then **stays
+`just orchestrate <source:project>` starts the run, prints its run id, and then **stays
 attached**: it streams the run's merged events and returns when the run
 [settles](#when-an-attach-returns). `--detach` returns at the launch record
 instead, for a run that should go unattended. The launched process leads its own
@@ -328,7 +338,7 @@ reconciler applies an accepted edit on its next pass.
 The planner-facing recipes are:
 
 ```sh
-just orchestrate plan.json
+just orchestrate authoring:my-project
 just channel-next RUN
 just channel-reply RUN reply.json
 just channel-approve RUN
@@ -372,7 +382,7 @@ answers with exactly the `{completion, message, reason}` object onejudge's
 
 | | Shape |
 | --- | --- |
-| onejudge 0.5.3 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
+| onejudge 0.5.4 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
 | `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
 
 Naming `onepipeline channel serve` directly as the member's `judge.command` is
@@ -383,7 +393,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.15.1 in the judge command's own environment on a real
+  measured against onepipeline 0.16.1 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -501,7 +511,7 @@ a real published channel, and reads what was and was not queued out of
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
 boundary; `judge` comes once the conversation ends, to score `user.done_when` —
 always, whether the supervisor ruled complete or the turn cap ran out, and
-independently of `evals` and `assessment`. Measured on onejudge 0.5.3 with a
+independently of `evals` and `assessment`. Measured on onejudge 0.5.4 with a
 `kind: command` judge that logged every op it was asked.
 
 That second one has **no configuration escape**, and the attempts are worth knowing
@@ -577,7 +587,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.15.1 answers `{"reply":0,"state":"applied"}` and records
+a real run on onepipeline 0.16.1 answers `{"reply":0,"state":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
 it applies it a **second** time. The same measurement, re-submitted, comes back
@@ -621,7 +631,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/e2e/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.15.1**, composed where the
+node dispatch of a run carries it as of onepipeline 0.16.1**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -1267,18 +1277,12 @@ nothing" and "amended with nothing" are one record rather than two.
 
 ## Node shapes
 
-A plan file may be JSON or YAML, and each is read with **its own** escape
-semantics: a `.json` file is parsed as JSON, so a `😀` surrogate pair —
-what `json.dump` writes for one emoji, and therefore what a plan generated
-programmatically contains — reaches the dispatched agent as the character it
-encodes. Reading it as YAML instead yields the two unpaired halves, which no
-UTF-8 encoder accepts, and the node fails on its own task prose. A `.json`
-document that is not a mapping is refused by name (`must be a JSON mapping, got
-list`); one JSON itself cannot parse falls back to the YAML reading, so nothing
-that loaded before stops loading. The same rule governs the JSON documents the run
-ledger writes and reads back — the plan and result records, the launch record, and
-each node's report — so a recorded emoji survives to `just history-show` and the
-read API.
+A qualified project id resolves through `onetaskgraph.yaml`. Project metadata named
+`onepipeline.<field>` supplies plan-level settings; each project task becomes a
+top-level node, with its body as the dispatched task and its `onepipeline.*` metadata
+supplying node fields. A task's `depends_on` records supply ordinary dependencies.
+The engine preserves the resolved project as JSON in the run ledger, so recorded
+Unicode survives to `just history-show` and the read API.
 
 Every top-level node needs a unique `id`; `deps` is an optional list of other
 top-level ids or wait-only cross-DAG references of the form
@@ -2241,7 +2245,7 @@ and `note`, and omitting it means `auto`:
 Live delivery is `oneagentgraph interrupt` against **the dispatch's own control
 socket**, so it reaches a node only once something of that dispatch has reported a
 member; before then there is no turn to address and `auto` falls through to the next
-dispatch. The three modes and the two endings above are read from onepipeline 0.15.1,
+dispatch. The three modes and the two endings above are read from onepipeline 0.16.1,
 where `Deliver` is still `auto` / `live` / `next` and `Delivery` still `live` /
 `deferred`. That they *work* was measured on a live run under an earlier release and
 has not been re-taken since: a note sent to a worker three hours into its dispatch

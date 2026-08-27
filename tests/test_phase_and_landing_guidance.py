@@ -261,7 +261,7 @@ def test_the_phase_section_names_the_pin_this_checkout_carries(version_file: str
     repair rather than a loosening. The shared phrase was written on the adoption where
     `config/onepipeline.version` and `config/onevcs.version` happened to carry the same
     number, and it silently required them to go on doing so: on 2026-08-25 they parted
-    — 0.15.1 and 0.15.2 — and no sentence could satisfy it for both. Requiring each pin
+    — 0.16.1 and 0.15.4 — and no sentence could satisfy it for both. Requiring each pin
     to be named beside its own release says the same thing where they coincide and goes
     on saying it where they do not, which is the case a reader most needs the prose to
     be honest about.
@@ -325,7 +325,7 @@ def test_the_landing_passage_keeps_the_half_no_release_has_fixed(claim: Claim) -
     """The squash-merge half is true at every release, and deleting it is the danger.
 
     `crates/onevcs/src/landed.rs` is one blob at v0.11.0, v0.13.0, v0.14.0 and the
-    pinned v0.15.2 alike, so
+    pinned v0.15.4 alike, so
     nothing about the four tiers has moved since the incident this passage records. A
     reader who took onevcs 0.14.0's retry fix as making `content comparison`
     trustworthy would be wrong in the direction that re-dispatches merged work, which

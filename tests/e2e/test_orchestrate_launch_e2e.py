@@ -34,6 +34,7 @@ from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN
 from harness_indirections import established_indirections, harness_routing
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
+from project_fixtures import project_from_plan, read_project_plan
 from published_surface import surface_of
 from shared_dispatch_bar import (
     shared_agent_preamble,
@@ -62,18 +63,13 @@ PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
 #: The shipped example this journey launches. A plan written for this repository's
 #: own operators, so a schema or field the published crate stopped accepting fails
 #: here rather than the first time a planner types it.
-SHIPPED_PLAN = "examples/single-node-direct.plan.json"
+SHIPPED_PROJECT = "examples:scheduler-research"
 
 #: The run id `onepipeline` mints from that plan's `name`.
 SHIPPED_RUN = "scheduler-research"
 
-#: The one shipped lifecycle plan, and the plan schema version this repository
-#: writes — read from that file rather than restated, so the two cannot disagree and
-#: a bump has one place to happen. The adopted crate still reads older versions
-#: beneath this one; that is a courtesy to plan files an operator kept, not a
-#: version to write.
-SHIPPED_LIFECYCLE_PLAN = REPO_ROOT / "examples/single-node-lifecycle.plan.json"
-PLAN_SCHEMA_VERSION: int = json.loads(SHIPPED_LIFECYCLE_PLAN.read_text("utf-8"))["schema_version"]
+#: The plan schema written in the shipped example projects' onepipeline metadata.
+PLAN_SCHEMA_VERSION = 3
 
 #: A Conventional Commit subject: `type(optional scope)optional !: summary`.
 CONVENTIONAL_COMMIT_SUBJECT = re.compile(r"^[a-z]+(\([^()]+\))?!?: \S.*$")
@@ -365,7 +361,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     # say when it comes due, so the journey says it rather than editing the graph.
     launch = _just(
         "orchestrate",
-        SHIPPED_PLAN,
+        SHIPPED_PROJECT,
         "--heartbeat-interval",
         str(PACEMAKER_INTERVAL_SECONDS),
         environment=environment,
@@ -428,7 +424,7 @@ def routed_persona_run(
     )
     launch = _just(
         "orchestrate",
-        str(plan),
+        project_from_plan(plan),
         "--node-set",
         f"members.worker.agent.oneharness_config={worker_config}",
         "--node-set",
@@ -698,6 +694,7 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         )
 
 
+@pytest.mark.reads_docs
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
     launched: Launched,
@@ -727,14 +724,8 @@ def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
     measurement.
     """
     shared_bar = shared_completion_bar()
-    # `cast` rather than a validating read: this is a plan file this repository ships and
-    # `test_every_plan_this_repository_ships_is_one_the_published_crate_accepts` already
-    # holds its shape against the launcher. A second schema check here would restate that
-    # gate, and the `split` below fails loudly anyway if the task is not the prose it is.
-    task = cast(
-        str,
-        json.loads((REPO_ROOT / SHIPPED_PLAN).read_text(encoding="utf-8"))["tasks"][0]["task"],
-    )
+    task_record = REPO_ROOT / "examples/tasks/scheduler-research/research.md"
+    task = task_record.read_text(encoding="utf-8").split("---", 2)[2]
     criteria = task.split("## Acceptance criteria", 1)[1].strip()
     assert criteria, "the shipped plan's node states no acceptance criteria to be judged by"
 
@@ -839,7 +830,7 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
 
     refused = _just(
         "orchestrate",
-        SHIPPED_PLAN,
+        SHIPPED_PROJECT,
         "--detach",
         "--dag-graph",
         str(tmp_path / "absent" / "dag-scope.yaml"),
@@ -1097,7 +1088,7 @@ def _refused_plan(
     # the plan's own and no paid work is reachable even if one were somehow accepted.
     return _just(
         "orchestrate",
-        str(written),
+        project_from_plan(written),
         "--detach",
         "--dag-graph",
         str(tmp_path / "absent" / "dag-scope.yaml"),
@@ -1169,9 +1160,10 @@ def test_every_lifecycle_node_this_repository_ships_states_a_title() -> None:
     branch and stays there.
     """
     lifecycle = [
-        (origin, node)
-        for origin, document in _plans_in_the_repository()
-        for node in json.loads(document)["tasks"]
+        (project, node)
+        for project in _plans_in_the_repository()
+        # llmlint: ignore[suppressions_justified] The CLI fixture validates this list.
+        for node in cast(list[dict[str, object]], read_project_plan(project)["tasks"])
         if "repo" in node
     ]
     assert lifecycle, "no lifecycle nodes were found to check"
@@ -1412,7 +1404,7 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
         ),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", str(plan), environment=environment)
+    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
     try:
         assert launch.returncode == 0, launch.stdout + launch.stderr
         applied = subprocess.run(
@@ -1588,7 +1580,7 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
         json.dumps({"schema_version": 2, "name": run, "tasks": [_node(id="only")]}),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", str(plan), environment=environment)
+    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
     try:
         assert launch.returncode == 0, launch.stdout + launch.stderr
 
@@ -1677,7 +1669,7 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
         json.dumps({"schema_version": 2, "name": run, "tasks": [_node(id="only")]}),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", str(plan), environment=environment)
+    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
     try:
         assert launch.returncode == 0, launch.stdout + launch.stderr
 
@@ -1830,7 +1822,13 @@ def planner_supervised(
     )
 
     launched = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", str(plan), "--heartbeat-interval", str(PACEMAKER_INTERVAL_SECONDS)],
+        [
+            "just",
+            "orchestrate",
+            project_from_plan(plan),
+            "--heartbeat-interval",
+            str(PACEMAKER_INTERVAL_SECONDS),
+        ],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -2118,7 +2116,13 @@ def observed_environment(
         encoding="utf-8",
     )
 
-    launch = _just("orchestrate", str(plan), "--dag-graph", str(graph), environment=environment)
+    launch = _just(
+        "orchestrate",
+        project_from_plan(plan),
+        "--dag-graph",
+        str(graph),
+        environment=environment,
+    )
     try:
         assert launch.returncode == 0, f"{launch.stdout}\n{launch.stderr}"
         assert recorded.is_file(), (
@@ -3060,7 +3064,7 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
         ),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", str(plan), environment=environment)
+    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
     try:
         assert launch.returncode == 0, launch.stdout + launch.stderr
         # No planner-facing view reports a node's turn budget — `results`, `status`,
@@ -3082,26 +3086,12 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
         _just("stop", "turn-budget-e2e", environment=environment, seconds=60)
 
 
-def _plans_in_the_repository() -> list[tuple[str, str]]:
-    """Every plan document this repository ships, by where it is written.
-
-    The shipped example files, plus the plan snippets `docs/` teaches from — a
-    fenced JSON block that declares a `schema_version` is a plan an operator will
-    copy, and it drifts from the published schema exactly as silently as a file
-    does.
-    """
-    found = [
-        (str(plan.relative_to(REPO_ROOT)), plan.read_text("utf-8"))
-        for plan in sorted((REPO_ROOT / "examples").glob("*.json"))
+def _plans_in_the_repository() -> list[str]:
+    """Every committed example project, as its qualified launch id."""
+    return [
+        f"examples:{record.stem}"
+        for record in sorted((REPO_ROOT / "examples" / "projects").glob("*.md"))
     ]
-    for document in sorted((REPO_ROOT / "docs").glob("*.md")):
-        blocks = re.findall(r"```json\n(.*?)```", document.read_text("utf-8"), re.DOTALL)
-        found.extend(
-            (f"{document.relative_to(REPO_ROOT)} snippet {index}", block)
-            for index, block in enumerate(blocks)
-            if '"schema_version"' in block
-        )
-    return found
 
 
 @pytest.mark.reads_docs
@@ -3127,13 +3117,10 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
     assert plans, "no plan documents were found to check"
     environment = _environment(tmp_path, oneharness_bin)
     absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
-    plan = tmp_path / "candidate.plan.json"
-
-    for origin, document in plans:
-        plan.write_text(document, encoding="utf-8")
+    for project in plans:
         refused = _just(
             "orchestrate",
-            str(plan),
+            project,
             "--detach",
             "--dag-graph",
             absent_graph,
@@ -3151,7 +3138,7 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
             marker in reported
             for marker in ("dag-scope.yaml", "session holders", "concurrent project work refused")
         )
-        assert reached_downstream_boundary, f"{origin} was not accepted as a plan:\n{reported}"
+        assert reached_downstream_boundary, f"{project} was not accepted as a plan:\n{reported}"
 
 
 #: Every file that restates the `merge_policy` vocabulary in prose. Three, because
@@ -3178,9 +3165,6 @@ UNKNOWN_POLICY = "no-such-merge-policy"
 #: would have taken. That list is the vocabulary's one source.
 REFUSED_POLICY = re.compile(r"unknown variant `([^`]+)`, expected one of ((?:`[^`]+`(?:, )?)+)")
 
-#: The shipped lifecycle example, which is the plan shape `merge_policy` belongs to.
-LIFECYCLE_PLAN = "examples/single-node-lifecycle.plan.json"
-
 
 @pytest.fixture(scope="module")
 def merge_policy_launch(
@@ -3198,7 +3182,19 @@ def merge_policy_launch(
     tmp_path = tmp_path_factory.mktemp("merge-policy")
     environment = _environment(tmp_path, oneharness_bin)
     absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
-    plan = json.loads((REPO_ROOT / LIFECYCLE_PLAN).read_text(encoding="utf-8"))
+    plan = {
+        "schema_version": PLAN_SCHEMA_VERSION,
+        "name": "merge-policy-probe",
+        "tasks": [
+            {
+                "id": "service",
+                "title": "feat: add service",
+                "task": "## What\nAdd the service.\n\n## Why\nIt is required.\n\n"
+                "## Acceptance criteria\n- The service works.\n",
+                "repo": "ai-orchestrator-isolated",
+            }
+        ],
+    }
 
     def launch(policy: str) -> str:
         plan["tasks"][0]["merge_policy"] = policy
@@ -3206,7 +3202,7 @@ def merge_policy_launch(
         written.write_text(json.dumps(plan), encoding="utf-8")
         refused = _just(
             "orchestrate",
-            str(written),
+            project_from_plan(written),
             "--detach",
             "--dag-graph",
             absent_graph,
@@ -3370,7 +3366,7 @@ def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     live: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
     plan.write_text(json.dumps(live), encoding="utf-8")
     launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", str(plan), "--dag-graph", "off"],
+        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -3518,7 +3514,13 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedG
     }
     plan.write_text(json.dumps(supervised), encoding="utf-8")
     launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", str(plan), "--heartbeat-interval", str(PACEMAKER_INTERVAL_SECONDS)],
+        [
+            "just",
+            "orchestrate",
+            project_from_plan(plan),
+            "--heartbeat-interval",
+            str(PACEMAKER_INTERVAL_SECONDS),
+        ],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -3617,7 +3619,7 @@ def _cancellable(
     cancellable: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
     plan.write_text(json.dumps(cancellable), encoding="utf-8")
     launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", str(plan), "--dag-graph", "off"],
+        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"],
         cwd=REPO_ROOT,
         env=environment,
         text=True,

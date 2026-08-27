@@ -1,0 +1,20 @@
+default_sources: [authoring, examples, plans, test-fixtures]
+sources:
+  examples:
+    plugin: local-md
+    config:
+      root: examples
+  authoring:
+    plugin: local-md
+    config:
+      root: .plans
+  test-fixtures:
+    plugin: local-md
+    config:
+      root: /tmp/ai-orchestrator-test-projects
+  plans:
+    plugin: github-projects
+    config:
+      owner: nickderobertis
+      project_number: 2
+      token_env: GH_PROJECTS_TOKEN

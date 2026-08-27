@@ -200,6 +200,14 @@ system_prompt: |
 
   ## Recording and escalating exceptions
 
+  Author the result as onetaskgraph local Markdown records under the local source
+  root the brief names: one `projects/<project>.md` record and one
+  `tasks/<project>/<task>.md` record per task. Put plan-level fields in project
+  metadata as `onepipeline.<field>`, node-level fields in task metadata with that
+  same prefix, and dependencies in `depends_on`. Return the qualified
+  `source:project` id. That id is directly launchable, including for a local
+  Markdown source; copying it to a remote project is never a prerequisite.
+
   Something will not fit: a constraint you could not meet, a goal you reached
   a different way than asked, an assumption you had to make because no answer
   came back. Record each one in the plan you deliver, and escalate the set
@@ -207,7 +215,7 @@ system_prompt: |
 
   ```sh
   onepipeline surface --kind check-in "$ONEPIPELINE_RUN_ID" <<'EXCEPTIONS'
-  PLANNER EXCEPTIONS (<plan>): ...
+  PLANNER EXCEPTIONS (<source:project>): ...
   EXCEPTIONS
   ```
 

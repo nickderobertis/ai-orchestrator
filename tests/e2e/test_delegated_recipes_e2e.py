@@ -25,8 +25,8 @@ for this recipe that is `tests/e2e/test_sweep_e2e.py`.
 
 from __future__ import annotations
 
-import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -128,14 +128,14 @@ DELEGATIONS = (
     # and opens its change requests with no drafted body.
     Delegation(
         "orchestrate",
-        ("plan.json",),
-        "uv run onepipeline start plan.json --dag-graph graphs/dag-scope.yaml"
+        ("authoring:probe",),
+        "uv run onepipeline start authoring:probe --dag-graph graphs/dag-scope.yaml"
         " --pr-author-graph graphs/pr-author.yaml",
     ),
     Delegation(
         "orchestrate",
-        ("plan.json", "--detach"),
-        "uv run onepipeline start plan.json --detach --dag-graph graphs/dag-scope.yaml"
+        ("authoring:probe", "--detach"),
+        "uv run onepipeline start authoring:probe --detach --dag-graph graphs/dag-scope.yaml"
         " --pr-author-graph graphs/pr-author.yaml",
     ),
     # A caller who names one keeps it: the flags refuse to be given twice, so adding
@@ -143,26 +143,27 @@ DELEGATIONS = (
     # naming one leaves the other's default in place.
     Delegation(
         "orchestrate",
-        ("plan.json", "--dag-graph", "off"),
-        "uv run onepipeline start plan.json --dag-graph off"
+        ("authoring:probe", "--dag-graph", "off"),
+        "uv run onepipeline start authoring:probe --dag-graph off"
         " --pr-author-graph graphs/pr-author.yaml",
     ),
     Delegation(
         "orchestrate",
-        ("plan.json", "--dag-graph=graphs/other.yaml"),
-        "uv run onepipeline start plan.json --dag-graph=graphs/other.yaml"
+        ("authoring:probe", "--dag-graph=graphs/other.yaml"),
+        "uv run onepipeline start authoring:probe --dag-graph=graphs/other.yaml"
         " --pr-author-graph graphs/pr-author.yaml",
     ),
     Delegation(
         "orchestrate",
-        ("plan.json", "--pr-author-graph", "graphs/other.yaml"),
-        "uv run onepipeline start plan.json --pr-author-graph graphs/other.yaml"
+        ("authoring:probe", "--pr-author-graph", "graphs/other.yaml"),
+        "uv run onepipeline start authoring:probe --pr-author-graph graphs/other.yaml"
         " --dag-graph graphs/dag-scope.yaml",
     ),
     Delegation(
         "orchestrate",
-        ("plan.json", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
-        "uv run onepipeline start plan.json --pr-author-graph=graphs/other.yaml --dag-graph=off",
+        ("authoring:probe", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
+        "uv run onepipeline start authoring:probe"
+        " --pr-author-graph=graphs/other.yaml --dag-graph=off",
     ),
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs its launch chose, so neither default is added to it.
@@ -180,12 +181,12 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF,),
-        "uv run onepipeline start scratch/plans/cursor-shape.plan.json --dag-graph off",
+        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
     ),
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        "uv run onepipeline start scratch/plans/listing-api.plan.json --detach --dag-graph off",
+        "uv run onepipeline start authoring:listing-api --detach --dag-graph off",
     ),
     # The joined spelling of both, which is a separate parsing path: `--name=` decides
     # the plan path this line names, and `--max-turns=` is absorbed rather than
@@ -193,7 +194,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        "uv run onepipeline start scratch/plans/listing-api.plan.json --detach --dag-graph off",
+        "uv run onepipeline start authoring:listing-api --detach --dag-graph off",
     ),
     # The three flags that decide where the planner works are absorbed here too, in
     # both spellings: they go into the node this recipe writes, and a copy of one
@@ -202,12 +203,12 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--repo", "other", "--execution-checkout", "other-isolated"),
-        "uv run onepipeline start scratch/plans/cursor-shape.plan.json --dag-graph off",
+        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
     ),
     Delegation(
         "plan",
         (BRIEF, "--repo=other", "--execution-checkout=other-isolated", "--direct"),
-        "uv run onepipeline start scratch/plans/cursor-shape.plan.json --dag-graph off",
+        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
     ),
     # A caller who names an observer keeps it, in either spelling and including their
     # own `off`: the flag refuses to be given twice, so the default is added only when
@@ -215,14 +216,12 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
-        "uv run onepipeline start scratch/plans/cursor-shape.plan.json"
-        " --dag-graph graphs/dag-scope.yaml",
+        "uv run onepipeline start authoring:cursor-shape --dag-graph graphs/dag-scope.yaml",
     ),
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        "uv run onepipeline start scratch/plans/cursor-shape.plan.json"
-        " --dag-graph=graphs/other.yaml --detach",
+        "uv run onepipeline start authoring:cursor-shape --dag-graph=graphs/other.yaml --detach",
     ),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and
@@ -499,8 +498,8 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     ]
 
 
-#: The plan `just plan` writes, at the path the recipe derives from the brief's name.
-GENERATED_PLAN = "scratch/plans/cursor-shape.plan.json"
+#: The task record `just plan` writes under the local authoring source.
+GENERATED_TASK = ".plans/tasks/cursor-shape/plan.md"
 
 
 class NodeShape(NamedTuple):
@@ -563,11 +562,17 @@ def test_the_plan_recipe_writes_the_node_shape_it_was_asked_for(
     result = _run(checkout, trace, "plan", BRIEF, *shape.arguments)
 
     assert result.returncode == 0, result.stderr
-    node = json.loads((checkout / GENERATED_PLAN).read_text(encoding="utf-8"))["tasks"][0]
-    placed = None if "repo" not in node else (node["repo"], node.get("execution_checkout"))
+    task_record = (checkout / GENERATED_TASK).read_text(encoding="utf-8")
+    repo_match = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
+    execution_match = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
+    placed = (
+        None
+        if repo_match is None
+        else (repo_match.group(1), execution_match.group(1) if execution_match else None)
+    )
     assert placed == shape.placement, (
         f"`just plan {' '.join(shape.arguments)}` wrote a node placed at {placed}, so the "
-        f"planner would work somewhere other than {shape.placement}: {node}"
+        f"planner would work somewhere other than {shape.placement}: {task_record}"
     )
     assert shape.says in result.stderr, (
         f"the launch said nothing about where this planner works, which for the direct "
@@ -1143,7 +1148,7 @@ def test_the_replan_recipe_says_where_its_derivation_went(tmp_path: Path) -> Non
     """
     checkout, trace = _checkout(tmp_path)
 
-    result = _run(checkout, trace, "replan", "plan.json", "result.json")
+    result = _run(checkout, trace, "replan", "authoring:probe", "result.json")
 
     assert result.returncode == 2
     assert "just channel-reply" in result.stderr

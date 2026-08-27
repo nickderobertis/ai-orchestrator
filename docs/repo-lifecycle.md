@@ -13,17 +13,17 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.15.1**
+that source on every `just check` rather than restated: **`onepipeline` v0.16.1**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.15.2** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.15.4** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.15.2** as well at
+the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.15.4** as well at
 this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They have now diverged again**: two consecutive adoptions had
 `config/onepipeline.version` and `config/onevcs.version` carrying one number, and this
-one has them at 0.15.1 and 0.15.2. The habit that ambiguity taught is worth keeping
+one has them at 0.16.1 and 0.15.4. The habit that ambiguity taught is worth keeping
 rather than retiring with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -558,7 +558,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.15.1 and is refused **by its own name**, at every schema version and on a live
+v0.16.1 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -787,8 +787,8 @@ merge, so a push that resolved its own base could merge work whose own gate had
 failed.
 
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
-2026-08-26 against the installed onepipeline 0.15.1 binary (which its SBOM and
-embedded crate paths both identify as linking onevcs 0.15.2), every follow-up shape
+2026-08-26 against the installed onepipeline 0.16.1 binary (which its SBOM and
+embedded crate paths both identify as linking onevcs 0.15.4), every follow-up shape
 keeps the workstream's publication base:
 
 | Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
@@ -1226,7 +1226,7 @@ out-of-band landing verbs, which is how branches usually reach a base on this ho
 
 | command | what it lands | how drafting reaches it |
 | --- | --- | --- |
-| `just orchestrate <plan.json>` | a run's own lifecycle publications | `onepipeline start --pr-author-graph graphs/pr-author.yaml` |
+| `just orchestrate <source:project>` | a run's own lifecycle publications | `onepipeline start --pr-author-graph graphs/pr-author.yaml` |
 | `just publish-branch <branch> --repo <checkout>` | a complete branch no session holds | `scripts/land-branch.sh` → `scripts/draft-pr-body.sh` → `onevcs publish-branch --body-file <PATH>` |
 | `just repo-recover <branch> --repo <checkout>` | a preserved branch with an incomplete-step marker | the same, into `onevcs recover --body-file <PATH>` |
 
@@ -1321,7 +1321,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.15.1.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.16.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1365,11 +1365,9 @@ just repo-recover <branch> --repo <checkout> --body-file /tmp/body.md
 `integrate` takes neither, and that is not an omission: the local merge train opens
 no change request, so there is nothing for a body to be the description of.
 
-Run these nodes with `just orchestrate`, the one way to dispatch; it still accepts
-old lifecycle-only plan files unchanged. See `examples/tracked-graph.example.json`,
-`examples/repo-plan.example.json`, and the one-node forms in
-`examples/single-node-lifecycle.plan.json` and
-`examples/single-node-direct.plan.json`.
+Run these nodes with `just orchestrate <source:project>`, the one way to dispatch.
+See the `examples:tracked-release` and `examples:repo-plan-example` projects, and
+the one-node `examples:health-endpoint` and `examples:scheduler-research` forms.
 
 ## Several onejudge on ONE PR: workstreams
 
@@ -1398,8 +1396,8 @@ lives. The branch and its commits are preserved; the worktree is the session's a
 goes when the session does.
 
 **A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.15.1 has no notion
-of one and `onevcs` 0.15.2 has none to open — and nothing is published, on a local or
+pause on either engine at the adopted versions — `onepipeline` v0.16.1 has no notion
+of one and `onevcs` 0.15.4 has none to open — and nothing is published, on a local or
 a remote identity, until the last step has settled and the publication starts. A pause is
 purely local branch state.
 
@@ -1964,7 +1962,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.15.1 — so every number in it was a
+journey it named are absent from `onepipeline` v0.16.1 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

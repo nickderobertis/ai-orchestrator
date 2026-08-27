@@ -24,12 +24,15 @@ repository's prose: editing that file changes what this recipe accepts.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from project_fixtures import project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.criteria_guard import APPENDIX, OUT_OF_DISPATCH
@@ -104,16 +107,214 @@ def _plan(root: Path, criteria: str) -> Path:
     return written
 
 
-def _check_plan(plan: Path) -> subprocess.CompletedProcess[str]:
-    """Run the real recipe from this checkout."""
+def _check_project(
+    project: str, *, environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Drive the recipe with one already materialized qualified project."""
     return subprocess.run(
-        ["just", "check-plan", str(plan)],
+        ["just", "check-plan", project],
         cwd=REPO_ROOT,
+        env=environment,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(120),
         check=False,
     )
+
+
+def _check_plan(plan: Path) -> subprocess.CompletedProcess[str]:
+    """Run the real recipe from this checkout."""
+    project = project_from_plan(plan) if plan.is_file() else "authoring:absent"
+    return _check_project(project)
+
+
+def test_project_store_reports_malformed_stdin_at_its_command_boundary(tmp_path: Path) -> None:
+    refused = subprocess.run(
+        [sys.executable, "-m", "orchestrator.project_store", str(tmp_path / "store")],
+        cwd=REPO_ROOT,
+        input="{bad",
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "input is not valid JSON" in refused.stderr
+    assert "Traceback" not in refused.stderr
+
+
+@pytest.mark.parametrize(
+    ("payload", "destination", "message"),
+    (
+        ('{"tasks":[]}', "store", "requires string"),
+        ('{"name":"p","tasks":[{}]}', "store", "requires a string `id`"),
+        (
+            '{"name":"p","tasks":[{"id":"same id"},{"id":"same-id"}]}',
+            "store",
+            "slug-colliding",
+        ),
+        ('{"name":"p","tasks":[{"id":"a","task":7}]}', "store", "title and task"),
+        ('{"name":"p","tasks":[{"id":"a","deps":[7]}]}', "store", "dependencies"),
+        ('{"name":"p","tasks":[{"id":"a","repo":7}]}', "store", "repository"),
+        ('{"name":"p","tasks":[{"id":"a","deps":["missing"]}]}', "store", "unknown"),
+        ('{"name":"p","tasks":[]}', "blocked", "cannot write"),
+    ),
+)
+def test_project_store_reports_semantic_and_write_failures(
+    tmp_path: Path, payload: str, destination: str, message: str
+) -> None:
+    target = tmp_path / destination
+    if destination == "blocked":
+        target.write_text("not a directory", encoding="utf-8")
+    refused = subprocess.run(
+        [sys.executable, "-m", "orchestrator.project_store", str(target)],
+        cwd=REPO_ROOT,
+        input=payload,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert message in refused.stderr
+    assert "Traceback" not in refused.stderr
+
+
+def test_project_store_recovers_after_a_replacement_is_partially_written(tmp_path: Path) -> None:
+    """Retrying the command completes a store whose task directory blocked its first write."""
+    root = tmp_path / "store"
+    blocked = root / "tasks" / "replacement"
+    blocked.parent.mkdir(parents=True)
+    blocked.write_text("blocks the task directory", encoding="utf-8")
+    command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
+    payload = json.dumps({"name": "Replacement", "tasks": [{"id": "only"}]})
+
+    partial = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        input=payload,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+
+    assert partial.returncode == 2, partial.stdout + partial.stderr
+    assert (root / "projects/replacement.md").is_file(), (
+        "the failure happened before replacement began, so this does not exercise recovery"
+    )
+    assert "cannot write generated plan" in partial.stderr
+
+    blocked.unlink()
+    recovered = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        input=payload,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert (root / "tasks/replacement/only.md").is_file()
+
+
+def test_project_store_slugs_dependency_targets_for_the_real_store(tmp_path: Path) -> None:
+    root = tmp_path / "store"
+    written = subprocess.run(
+        [sys.executable, "-m", "orchestrator.project_store", str(root)],
+        cwd=REPO_ROOT,
+        input=json.dumps(
+            {
+                "name": "Slug dependency",
+                "tasks": [
+                    {"id": "Parent Node", "task": "Parent."},
+                    {"id": "Child Node", "task": "Child.", "deps": ["Parent Node"]},
+                ],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert written.returncode == 0, written.stderr
+    environment = os.environ | {"ONETASKGRAPH_SOURCES__TEST_FIXTURES__CONFIG__ROOT": str(root)}
+    read = subprocess.run(
+        [
+            "just",
+            "plans",
+            "task",
+            "deps",
+            "test-fixtures:slug-dependency/child-node",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert read.returncode == 0, read.stderr
+    edges = json.loads(read.stdout)["items"]
+    assert edges[0]["to"]["id"] == "test-fixtures:slug-dependency/parent-node"
+
+
+def test_project_store_replacement_removes_tasks_absent_from_the_new_plan(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
+    first = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        input=json.dumps(
+            {
+                "name": "Replacement",
+                "tasks": [{"id": "kept"}, {"id": "removed"}],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+    replacement = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        input=json.dumps({"name": "Replacement", "tasks": [{"id": "kept"}]}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert replacement.returncode == 0, replacement.stderr
+    environment = os.environ | {"ONETASKGRAPH_SOURCES__TEST_FIXTURES__CONFIG__ROOT": str(root)}
+    read = subprocess.run(
+        [
+            "just",
+            "plans",
+            "task",
+            "list",
+            "--source",
+            "test-fixtures",
+            "--project",
+            "replacement",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert read.returncode == 0, read.stderr
+    assert [record["id"] for record in json.loads(read.stdout)["items"]] == [
+        "test-fixtures:replacement/kept"
+    ]
 
 
 def test_a_plan_whose_node_states_its_bar_is_accepted(tmp_path: Path) -> None:
@@ -167,6 +368,27 @@ def test_a_plan_of_human_actions_alone_is_accepted_and_says_it_checked_nothing(
 
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "0 dispatched node(s)" in checked.stdout, checked.stdout
+
+
+def test_check_plan_reads_every_page_of_a_multi_page_project(tmp_path: Path) -> None:
+    plan = tmp_path / "paged.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "name": "check-plan-paged-e2e",
+                "tasks": [
+                    {"id": f"human-{index}", "kind": "human", "task": f"Approve {index}."}
+                    for index in range(3)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checked = _check_plan(plan)
+
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "0 dispatched node(s)" in checked.stdout
 
 
 def test_a_plan_whose_node_omits_a_demand_it_will_be_held_to_is_refused(tmp_path: Path) -> None:
@@ -363,7 +585,6 @@ def test_every_way_a_node_names_its_bar_resolves_through_the_recipe(
     (
         pytest.param({"persona": "../../elsewhere.yaml"}, "outside this checkout", id="escaped"),
         pytest.param({"persona": 7}, "`persona` is int", id="persona-not-a-name"),
-        pytest.param({"id": []}, "states `id` as list", id="id-not-a-string"),
         pytest.param({"task": None}, "states no `task` string", id="no-task"),
         pytest.param({"kind": "review"}, "`kind` is 'review'", id="unknown-kind"),
         pytest.param({"steps": 3}, "`steps` is int", id="steps-not-a-list"),
@@ -472,34 +693,12 @@ def test_a_task_rebuilt_from_a_stale_appendix_is_refused(tmp_path: Path) -> None
     assert "current operational appendix" in refused.stderr, refused.stderr
 
 
-@pytest.mark.parametrize(
-    ("document", "reason"),
-    (
-        ("{not json", "not JSON"),
-        ('["a plan is not a list"]', "not an object"),
-        ('{"name": "probe"}', "states no `tasks`"),
-        ('{"tasks": {"probe": {}}}', "`tasks` is dict, not a list"),
-    ),
-)
-def test_a_plan_whose_document_is_wrong_says_which_way(
-    tmp_path: Path, document: str, reason: str
-) -> None:
-    """A malformed plan is a purposeful diagnostic rather than a traceback."""
-    written = tmp_path / "malformed.json"
-    written.write_text(document, encoding="utf-8")
-
-    refused = _check_plan(written)
-
-    assert refused.returncode != 0, refused.stdout + refused.stderr
-    assert reason in refused.stderr, refused.stderr
-
-
 def test_a_plan_that_cannot_be_read_is_not_reported_as_a_refusal(tmp_path: Path) -> None:
-    """Exit 2, because nothing was judged — a distinction a plan builder branches on."""
+    """Exit 2, because no project was read and therefore nothing was judged."""
     unreadable = _check_plan(tmp_path / "absent.json")
 
     assert unreadable.returncode == 2, unreadable.stdout + unreadable.stderr
-    assert "cannot read" in unreadable.stderr, unreadable.stderr
+    assert "authoring:absent" in unreadable.stderr, unreadable.stderr
     assert "just orchestrate" in unreadable.stderr, unreadable.stderr
 
 

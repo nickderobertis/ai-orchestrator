@@ -77,7 +77,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.15.1,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.16.1,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -208,9 +208,10 @@ additive and declared only on a record that *has* one, which is what keeps an ol
 reader whole. **What is no longer true here is that there is such an older reader.**
 Through the previous adoption the `oneagentgraph` this host's
 [smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
-a release behind the CLI it spawns; measured on 2026-08-25 from both installed wheels'
-own SBOMs, `oneagentgraph-cli` 0.3.10 and `oneharness-cli` 0.11.0 are compiled against
-the **same** `oneharness-core` 0.12.0, so reader and writer are one build. Nothing
+a release behind the CLI it spawns; measured on 2026-08-26 from both installed wheels'
+own SBOMs, `oneagentgraph-cli` 0.3.11 is compiled against `oneharness-core` 0.12.1
+while `oneharness-cli` 0.11.0 is compiled against 0.12.0. They are separate artifacts,
+and their differing core versions are deliberate. Nothing
 about that rests on an adopter remembering to check: the pre-push hook selects
 `just smoke` for any diff touching `config/oneharness.version`, so the next bump proves
 the pairing on a real turn or does not reach the remote.
@@ -404,7 +405,7 @@ each per-run config declare exactly the intended identity, then override the two
 refs without editing a shared config:
 
 ```sh
-just orchestrate plan.json \
+just orchestrate authoring:my-project \
   --node-set members.worker.agent.oneharness_config=/tmp/worker-codex.toml \
   --node-set members.worker.judge.oneharness_config=/tmp/judge-claude-alt2.toml
 ```
@@ -460,7 +461,7 @@ validation belong to the published oneagentgraph graph contract; this repository
 only documents the operator-facing spelling alongside its tested config-ref path. -->
 
 ```sh
-just orchestrate plan.json \
+just orchestrate authoring:my-project \
   --node-set members.worker.agent.oneharness_config=/tmp/worker-claude.toml \
   --node-set members.worker.agent.model=claude-opus-5 \
   --node-set members.worker.judge.oneharness_config=/tmp/judge-claude.toml \
@@ -977,8 +978,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.15.1,
-> `oneagentgraph` 0.3.10, nor `onevcs` 0.15.2. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.16.1,
+> `oneagentgraph` 0.3.11, nor `onevcs` 0.15.4. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1222,8 +1223,8 @@ dispatch a stamp belongs to, while this caller created the path it matches.
 - **Run one subtask as a one-node plan.** There is no separate single-dispatch
   command: a plan holding one direct node or one lifecycle node goes through the
   same executor, ledger, and progress views as a wide DAG, so no piece of running
-  work is invisible to them. See `examples/single-node-direct.plan.json` and
-  `examples/single-node-lifecycle.plan.json`.
+  work is invisible to them. See the `examples:scheduler-research` and
+  `examples:health-endpoint` projects.
 - **Inspect the branch behind a `task-failed` node.** That outcome commonly means
   the agent hit its turn cap at the moment it finished, not that its work failed or
   vanished — onejudge exits 1 both ways. Agents commit incrementally, and the
@@ -1262,7 +1263,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.5.3 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.5.3/docs/protocol.md)),
+([onejudge v0.5.4 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.5.4/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

@@ -50,6 +50,7 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV
+from project_fixtures import project_from_plan
 
 # The launch environment has one source and it is the module that owns the launch
 # journeys. Copying its twenty lines here is how a journey comes to run against a
@@ -115,7 +116,7 @@ RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 #: those are the two degradations the score path has to survive.
 ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
-#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.5.3
+#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.5.4
 #: with a `kind: command` judge that logged every op it was asked. No `task`, no `session`
 #: — which is why the run is read from the environment.
 SCORING_FRAME = {
@@ -341,7 +342,7 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             [
                 "just",
                 "orchestrate",
-                str(plan),
+                project_from_plan(plan),
                 "--heartbeat-interval",
                 str(PACEMAKER_INTERVAL_SECONDS),
             ],

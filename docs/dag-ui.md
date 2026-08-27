@@ -111,7 +111,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.3.10**.
+linked crate; on the adopted release that is **oneagentgraph 0.3.11**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

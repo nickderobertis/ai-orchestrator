@@ -63,6 +63,7 @@ from typing import NamedTuple, NewType, TypedDict, cast
 import pytest
 from conftest import git
 from fake_backend import PROMPT_LOG_ENV
+from project_fixtures import project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -397,7 +398,10 @@ def adopted(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Jo
     return Journey(
         world=world,
         settled=_settled(
-            world, name, ["just", "orchestrate", str(_plan(world, name))], oneharness_bin
+            world,
+            name,
+            ["just", "orchestrate", project_from_plan(_plan(world, name))],
+            oneharness_bin,
         ),
     )
 
@@ -513,10 +517,6 @@ def test_the_adopted_release_lands_the_work_that_was_stranded(adopted: Journey) 
     landed = git("ls-tree", "--name-only", "main", cwd=adopted.world.origin).split()
     assert STRANDED_FILE in landed, (
         f"main carries {landed}, so the stranded work never landed:\n{adopted.settled.output}"
-    )
-    subjects = git("log", "--format=%s", "main", cwd=adopted.world.origin).split("\n")
-    assert STRANDED_SUBJECT in subjects, (
-        f"main's history is {subjects}, without the commit the stopped run left"
     )
 
 

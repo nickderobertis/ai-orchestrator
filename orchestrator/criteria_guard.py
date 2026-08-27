@@ -49,8 +49,10 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -73,10 +75,23 @@ GRAPHS = Path("graphs")
 ENGINE = "onepipeline"
 
 CRITERIA_HEADING = "## Acceptance criteria"
+STORE_PAGE_SIZE = 2
 
 
 class CriteriaError(ValueError):
     """A plan node would be judged against something its task does not state."""
+
+
+@dataclass(frozen=True)
+class StoreTask:
+    """A validated task record returned by onetaskgraph."""
+
+    qualified_id: str
+    node_id: str
+    title: str
+    content: str | None
+    metadata: Mapping[str, object]
+    repositories: list[object]
 
 
 class Bar(NamedTuple):
@@ -851,30 +866,195 @@ def check_plan(plan: object) -> int:
     return checked
 
 
+# llmlint: ignore[suppressions_justified] Open CLI JSON; consumed fields narrow below.
+def _store_json(arguments: Sequence[str]) -> dict[str, Any]:
+    """Read one JSON answer from the installed store CLI."""
+    binary = shutil.which("onetaskgraph")
+    if binary is None:
+        raise OSError("onetaskgraph is not installed on PATH")
+    read = subprocess.run(
+        [binary, *arguments, "--json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if read.returncode != 0:
+        raise OSError(read.stderr.strip() or f"onetaskgraph exited {read.returncode}")
+    try:
+        payload = json.loads(read.stdout)
+    except json.JSONDecodeError as exc:
+        raise OSError(f"onetaskgraph returned invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise OSError("onetaskgraph returned a non-object response")
+    return payload
+
+
+# llmlint: ignore[suppressions_justified] Store values stay open until validated here.
+def _one_item(payload: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
+    """Require one store item and return its typed payload mapping."""
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or len(items) != 1:
+        raise OSError(
+            f"onetaskgraph returned {len(items) if isinstance(items, list) else 0} {kind} records"
+        )
+    record = items[0]
+    item = record.get("item") if isinstance(record, dict) else None
+    if not isinstance(item, dict):
+        raise OSError(f"onetaskgraph returned a {kind} without an object payload")
+    return item
+
+
+# llmlint: ignore[suppressions_justified] Engine plan metadata is an open contract.
+def _project_plan(project: str) -> dict[str, Any]:
+    """Map a qualified store project onto the plan fields the engine reads."""
+    try:
+        source, native = project.split(":", 1)
+    except ValueError as exc:
+        raise OSError("a project id must be qualified as <source>:<native>") from exc
+    if not source or not native:
+        raise OSError("a qualified project id must contain both <source> and <native> components")
+    held = _one_item(_store_json(["project", "show", project]), "project")
+    metadata = held.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise OSError("onetaskgraph returned project metadata that is not an object")
+    project_title = held.get("title")
+    if not isinstance(project_title, str):
+        raise OSError("onetaskgraph returned a project without a string title")
+    plan = {
+        key.removeprefix("onepipeline."): value
+        for key, value in metadata.items()
+        if isinstance(key, str) and key.startswith("onepipeline.")
+    }
+    plan.setdefault("name", project_title)
+    listed: list[object] = []
+    page: str | None = None
+    seen_pages: set[str] = set()
+    while True:
+        arguments = [
+            "task",
+            "list",
+            "--source",
+            source,
+            "--project",
+            native,
+            "--limit",
+            str(STORE_PAGE_SIZE),
+        ]
+        if page is not None:
+            arguments.extend(["--page", page])
+        answer = _store_json(arguments)
+        items = answer.get("items")
+        if not isinstance(items, list):
+            raise OSError("onetaskgraph returned a task listing that is not a list")
+        listed.extend(items)
+        following = answer.get("next")
+        if following is None:
+            break
+        if not isinstance(following, str) or not following:
+            raise OSError("onetaskgraph returned an invalid next-page token")
+        if following in seen_pages:
+            raise OSError("onetaskgraph returned a repeated next-page token")
+        seen_pages.add(following)
+        page = following
+    ids: dict[str, str] = {}
+    node_ids: set[str] = set()
+    records: list[StoreTask] = []
+    for record in listed:
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            raise OSError("onetaskgraph returned a task without a qualified id")
+        item = record.get("item")
+        if not isinstance(item, dict):
+            raise OSError("onetaskgraph returned a task without an object payload")
+        task_metadata = item.get("metadata", {})
+        node_id = task_metadata.get("onepipeline.id") if isinstance(task_metadata, dict) else None
+        if not isinstance(node_id, str):
+            raise OSError(f"task {record['id']} has no string onepipeline.id")
+        repositories = item.get("repositories", [])
+        if not isinstance(repositories, list):
+            raise OSError(f"task {record['id']} has non-list repositories")
+        if not all(isinstance(repository, str) for repository in repositories):
+            raise OSError(f"task {record['id']} has a non-string repository")
+        if len(repositories) > 1:
+            raise OSError(f"task {record['id']} has more than one repository")
+        title = item.get("title")
+        content = item.get("content")
+        if not isinstance(title, str) or (content is not None and not isinstance(content, str)):
+            raise OSError(f"task {record['id']} has invalid title or content")
+        qualified_id = record["id"]
+        if qualified_id in ids or node_id in node_ids:
+            raise OSError(
+                f"onetaskgraph returned duplicate task identity {qualified_id!r} or "
+                f"onepipeline.id {node_id!r}"
+            )
+        ids[qualified_id] = node_id
+        node_ids.add(node_id)
+        records.append(
+            StoreTask(
+                qualified_id=qualified_id,
+                node_id=node_id,
+                title=title,
+                content=content,
+                metadata=task_metadata,
+                repositories=repositories,
+            )
+        )
+    # llmlint: ignore[suppressions_justified] Nodes include open validated metadata.
+    nodes: list[dict[str, Any]] = []
+    for task_record in records:
+        node = {
+            key.removeprefix("onepipeline."): value
+            for key, value in task_record.metadata.items()
+            if isinstance(key, str) and key.startswith("onepipeline.")
+        }
+        node["title"] = task_record.title
+        node["task"] = task_record.content
+        if task_record.repositories:
+            node["repo"] = task_record.repositories[0]
+        edges = _store_json(["task", "deps", task_record.qualified_id]).get("items")
+        if not isinstance(edges, list):
+            raise OSError(
+                f"onetaskgraph returned non-list dependencies for {task_record.qualified_id}"
+            )
+        targets: list[str] = []
+        for edge in edges:
+            match edge:
+                case {"to": {"id": str(target_id)}}:
+                    targets.append(target_id)
+                case _:
+                    raise OSError(
+                        "onetaskgraph returned a dependency edge without a string target id "
+                        f"for {task_record.qualified_id}"
+                    )
+        unknown = [target for target in targets if target not in ids]
+        if unknown:
+            raise OSError(
+                f"onetaskgraph returned unknown dependency targets for "
+                f"{task_record.qualified_id}: {', '.join(unknown)}"
+            )
+        deps = [ids[target] for target in targets]
+        if deps:
+            node["deps"] = deps
+        nodes.append(node)
+    plan["tasks"] = nodes
+    return plan
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Check a plan file before it is launched, from `just check-plan`."""
+    """Check a qualified plan project before it is launched, from `just check-plan`."""
     parser = argparse.ArgumentParser(
         description=(
             "Refuse a plan whose node would be judged against a demand its task does not state."
         )
     )
-    parser.add_argument("plan", type=Path, metavar="PLAN.json")
+    parser.add_argument("project", metavar="SOURCE:PROJECT")
     args = parser.parse_args(argv)
     try:
-        document = args.plan.read_text(encoding="utf-8")
-    except OSError as exc:
+        plan = _project_plan(args.project)
+    except (OSError, ValueError) as exc:
         print(
-            f"check-plan: cannot read {args.plan}: {exc}; pass the path of the plan file "
-            f"you are about to hand `just orchestrate`",
-            file=sys.stderr,
-        )
-        return 2
-    try:
-        plan = json.loads(document)
-    except ValueError as exc:
-        print(
-            f"check-plan: cannot read {args.plan}: it is not JSON ({exc}); correct the "
-            f"document and retry",
+            f"check-plan: cannot read project {args.project}: {exc}; pass the qualified "
+            "project id you are about to hand `just orchestrate`",
             file=sys.stderr,
         )
         return 2

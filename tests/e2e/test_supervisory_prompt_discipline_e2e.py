@@ -58,7 +58,7 @@ CODEX_PROMPT_LOG_ENV = "FAKE_CODEX_PROMPT_LOG"
 #: The shipped example the monitor's launch runs, and the run id `onepipeline` mints
 #: from its `name`. A one-node plan: what is under test is the observer graph every
 #: launch attaches, not anything the plan's own node does.
-SHIPPED_PLAN = "examples/single-node-direct.plan.json"
+SHIPPED_PROJECT = "examples:scheduler-research"
 SHIPPED_RUN = "scheduler-research"
 
 #: How long the stand-in holds the dispatched worker's turn. The monitor's own turns
@@ -302,7 +302,7 @@ def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
     environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
 
     launch = subprocess.run(
-        ["just", "orchestrate", SHIPPED_PLAN],
+        ["just", "orchestrate", SHIPPED_PROJECT],
         cwd=REPO_ROOT,
         env=environment,
         text=True,

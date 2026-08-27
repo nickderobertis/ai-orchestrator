@@ -23,6 +23,9 @@ refusal attributable to one cause.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -541,24 +544,26 @@ def test_a_node_that_dispatches_but_states_no_task_is_refused(appendix: Path) ->
 
 
 def test_the_command_accepts_a_plan_that_states_its_bar(
-    appendix: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps(_plan(persona="engineer", task=_task(COMPLETE))), encoding="utf-8")
+    monkeypatch.setattr(
+        criteria_guard, "_project_plan", lambda _: _plan(persona="engineer", task=_task(COMPLETE))
+    )
 
-    assert main([str(plan)]) == 0
+    assert main(["authoring:complete"]) == 0
     assert "1 dispatched node(s)" in capsys.readouterr().out
 
 
 def test_the_command_refuses_a_plan_that_does_not(
-    appendix: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    plan = tmp_path / "plan.json"
-    plan.write_text(
-        json.dumps(_plan(persona="engineer", task=_task("- The thing is done."))), encoding="utf-8"
+    monkeypatch.setattr(
+        criteria_guard,
+        "_project_plan",
+        lambda _: _plan(persona="engineer", task=_task("- The thing is done.")),
     )
 
-    assert main([str(plan)]) == 1
+    assert main(["authoring:incomplete"]) == 1
     assert "check-plan:" in capsys.readouterr().err
 
 
@@ -572,28 +577,24 @@ def test_the_command_reports_a_checkout_that_cannot_answer_what_the_bar_is(
     repairs it.
     """
     monkeypatch.setattr(criteria_guard, "REPO_ROOT", tmp_path / "no-such-checkout")
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps(_plan(persona="engineer", task=_task(COMPLETE))), encoding="utf-8")
+    monkeypatch.setattr(
+        criteria_guard, "_project_plan", lambda _: _plan(persona="engineer", task=_task(COMPLETE))
+    )
 
-    assert main([str(plan)]) == 2
+    assert main(["authoring:complete"]) == 2
     reported = capsys.readouterr().err
     assert "review configuration" in reported, reported
     assert "just bootstrap" in reported, reported
 
 
 def test_the_command_separates_an_unreadable_plan_from_a_refused_one(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Exit 2 rather than 1: nothing was judged, so nothing was refused."""
-    missing = tmp_path / "absent.json"
-
-    assert main([str(missing)]) == 2
-    assert "cannot read" in capsys.readouterr().err
-
-    malformed = tmp_path / "malformed.json"
-    malformed.write_text("{not json", encoding="utf-8")
-
-    assert main([str(malformed)]) == 2
+    """Exit 2 rather than 1: an unreadable project leaves nothing to judge."""
+    monkeypatch.setattr(
+        criteria_guard, "_project_plan", lambda _: (_ for _ in ()).throw(OSError("missing"))
+    )
+    assert main(["authoring:absent"]) == 2
     assert "cannot read" in capsys.readouterr().err
 
 
@@ -767,3 +768,386 @@ def test_an_engine_whose_every_role_forbids_changes_says_so_rather_than_offering
 def test_the_tracked_appendix_is_where_the_guard_reads_it_from() -> None:
     """The promotion this module is half of: the appendix is tracked, not scratch."""
     assert (REPO_ROOT / criteria_guard.APPENDIX).is_file()
+
+
+def test_store_json_validates_the_cli_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    def completed(
+        code: int, stdout: str = "", stderr: str = ""
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], code, stdout, stderr)
+
+    monkeypatch.setattr(criteria_guard.shutil, "which", lambda _: "/test/onetaskgraph")
+
+    monkeypatch.setattr(
+        criteria_guard.subprocess, "run", lambda *args, **kwargs: completed(2, stderr="no")
+    )
+    with pytest.raises(OSError, match="no"):
+        criteria_guard._store_json(["project", "show", "x:y"])
+
+    monkeypatch.setattr(
+        criteria_guard.subprocess, "run", lambda *args, **kwargs: completed(0, json.dumps([]))
+    )
+    with pytest.raises(OSError, match="non-object"):
+        criteria_guard._store_json(["project", "show", "x:y"])
+
+    monkeypatch.setattr(
+        criteria_guard.subprocess, "run", lambda *args, **kwargs: completed(0, "{bad")
+    )
+    with pytest.raises(OSError, match="invalid JSON"):
+        criteria_guard._store_json(["project", "show", "x:y"])
+
+    monkeypatch.setattr(
+        criteria_guard.subprocess,
+        "run",
+        lambda *args, **kwargs: completed(0, json.dumps({"items": []})),
+    )
+    assert criteria_guard._store_json(["project", "show", "x:y"]) == {"items": []}
+
+
+def test_store_json_requires_the_installed_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(criteria_guard.shutil, "which", lambda _: None)
+    with pytest.raises(OSError, match="not installed"):
+        criteria_guard._store_json(["project", "show", "x:y"])
+
+
+def _store_process_double(tmp_path: Path, mode: str) -> dict[str, str]:
+    """Provide malformed external responses through the real subprocess boundary."""
+    binary = tmp_path / "onetaskgraph"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "if os.environ['STORE_DOUBLE_MODE'] == 'invalid-json': print('{bad')\n"
+        "elif sys.argv[1:3] == ['project', 'show']: "
+        "print(json.dumps({'items': [{'item': {'title': 'p', 'metadata': {}}}]}))\n"
+        "elif sys.argv[1:3] == ['task', 'list']: "
+        "print(json.dumps({'items': [{'id': 'fake:p/a', 'item': "
+        "{'title': 'A', 'content': 'A.', 'metadata': "
+        "{'onepipeline.id': 'a'}, 'repositories': []}}]}))\n"
+        "else: print(json.dumps({'items': [{'to': 7}]}))\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    return os.environ | {
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "STORE_DOUBLE_MODE": mode,
+    }
+
+
+@pytest.mark.parametrize("mode,message", (("invalid-json", "invalid JSON"), ("edge", "edge")))
+def test_check_plan_process_reports_malformed_store_responses(
+    tmp_path: Path, mode: str, message: str
+) -> None:
+    read = subprocess.run(
+        [str(Path(sys.executable).with_name("orchestrator-check-plan")), "fake:p"],
+        cwd=REPO_ROOT,
+        env=_store_process_double(tmp_path, mode),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert read.returncode == 2
+    assert message in read.stderr
+    assert "Traceback" not in read.stderr
+
+
+@pytest.mark.parametrize(
+    "payload,message",
+    (({}, "0 project records"), ({"items": [{}]}, "without an object payload")),
+)
+def test_one_item_rejects_incomplete_store_records(
+    payload: dict[str, object], message: str
+) -> None:
+    with pytest.raises(OSError, match=message):
+        criteria_guard._one_item(payload, "project")
+
+
+def test_project_plan_reconstructs_metadata_repositories_and_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = {
+        "project": {
+            "items": [
+                {
+                    "item": {
+                        "title": "probe",
+                        "metadata": {"onepipeline.schema_version": 3},
+                    }
+                }
+            ]
+        },
+        "list": {
+            "items": [
+                {
+                    "id": "source:probe/first",
+                    "item": {
+                        "title": "First",
+                        "content": "Do first.",
+                        "metadata": {"onepipeline.id": "first"},
+                        "repositories": ["github.com/acme/service"],
+                    },
+                },
+                {
+                    "id": "source:probe/second",
+                    "item": {
+                        "title": "Second",
+                        "content": "Do second.",
+                        "metadata": {"onepipeline.id": "second"},
+                        "repositories": [],
+                    },
+                },
+            ]
+        },
+        "first": {"items": []},
+        "second": {
+            "items": [{"to": {"id": "source:probe/first"}}],
+        },
+    }
+
+    def store(arguments: list[str]) -> dict[str, object]:
+        if arguments[:2] == ["project", "show"]:
+            return answers["project"]
+        if arguments[:2] == ["task", "list"]:
+            return answers["list"]
+        return answers["second" if arguments[-1].endswith("second") else "first"]
+
+    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    plan = criteria_guard._project_plan("source:probe")
+
+    assert plan["schema_version"] == 3
+    assert plan["tasks"][0]["repo"] == "github.com/acme/service"
+    assert plan["tasks"][1]["deps"] == ["first"]
+
+
+def test_project_plan_reads_every_task_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A store cursor is sent back to the public task-list boundary unchanged."""
+    pages: list[str | None] = []
+
+    def store(arguments: list[str]) -> dict[str, object]:
+        if arguments[:2] == ["project", "show"]:
+            return {"items": [{"item": {"title": "p"}}]}
+        if arguments[:2] == ["task", "list"]:
+            page = arguments[arguments.index("--page") + 1] if "--page" in arguments else None
+            pages.append(page)
+            if page is None:
+                return {"items": [], "next": "second-page"}
+            return {"items": [], "next": None}
+        raise AssertionError(f"an empty project has no dependency query: {arguments}")
+
+    monkeypatch.setattr(criteria_guard, "_store_json", store)
+
+    assert criteria_guard._project_plan("s:p")["tasks"] == []
+    assert pages == [None, "second-page"]
+
+
+@pytest.mark.parametrize(
+    ("next_pages", "message"),
+    (([7], "invalid next-page token"), (["again", "again"], "repeated next-page token")),
+)
+def test_project_plan_rejects_invalid_task_page_cursors(
+    monkeypatch: pytest.MonkeyPatch, next_pages: list[object], message: str
+) -> None:
+    calls = 0
+
+    def store(arguments: list[str]) -> dict[str, object]:
+        nonlocal calls
+        if arguments[:2] == ["project", "show"]:
+            return {"items": [{"item": {"title": "p"}}]}
+        answer = {"items": [], "next": next_pages[min(calls, len(next_pages) - 1)]}
+        calls += 1
+        return answer
+
+    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    with pytest.raises(OSError, match=message):
+        criteria_guard._project_plan("s:p")
+
+
+@pytest.mark.parametrize("project", ("unqualified", ":native", "source:"))
+def test_project_plan_requires_a_qualified_id(project: str) -> None:
+    with pytest.raises(OSError, match="qualified"):
+        criteria_guard._project_plan(project)
+
+
+@pytest.mark.parametrize(
+    "project_item,listing,deps,message",
+    (
+        ({"title": 7}, [], [], "string title"),
+        ({"title": "p", "metadata": []}, [], [], "metadata"),
+        ({"title": "p"}, None, [], "task listing"),
+        ({"title": "p"}, [None], [], "qualified id"),
+        ({"title": "p"}, [{"id": "s:p/a"}], [], "object payload"),
+        (
+            {"title": "p"},
+            [{"id": "s:p/a", "item": {"metadata": {}, "title": "a", "content": "a"}}],
+            [],
+            "onepipeline.id",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "metadata": {"onepipeline.id": "a"},
+                        "repositories": "not-a-list",
+                    },
+                }
+            ],
+            [],
+            "non-list repositories",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "metadata": {"onepipeline.id": "a"},
+                        "repositories": [7],
+                    },
+                }
+            ],
+            [],
+            "non-string repository",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "metadata": {"onepipeline.id": "a"},
+                        "repositories": ["github.com/a/a", "github.com/b/b"],
+                    },
+                }
+            ],
+            [],
+            "more than one repository",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "title": 7,
+                        "content": "body",
+                        "metadata": {"onepipeline.id": "a"},
+                        "repositories": [],
+                    },
+                }
+            ],
+            [],
+            "invalid title or content",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "metadata": {"onepipeline.id": "a"},
+                        "title": "a",
+                        "content": "a",
+                    },
+                }
+            ],
+            None,
+            "non-list dependencies",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "title": "a",
+                        "content": "a",
+                        "metadata": {"onepipeline.id": "a"},
+                    },
+                }
+            ],
+            [{"to": 7}],
+            "dependency edge",
+        ),
+    ),
+)
+def test_project_plan_rejects_malformed_store_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    project_item: object,
+    listing: object,
+    deps: object,
+    message: str,
+) -> None:
+    def store(arguments: list[str]) -> dict[str, object]:
+        if arguments[:2] == ["project", "show"]:
+            return {"items": [{"item": project_item}]}
+        if arguments[:2] == ["task", "list"]:
+            return {"items": listing}
+        return {"items": deps}
+
+    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    with pytest.raises(OSError, match=message):
+        criteria_guard._project_plan("s:p")
+
+
+@pytest.mark.parametrize("second_id,second_node", (("s:p/a", "b"), ("s:p/b", "a")))
+def test_project_plan_rejects_duplicate_store_identities(
+    monkeypatch: pytest.MonkeyPatch, second_id: str, second_node: str
+) -> None:
+    listing = [
+        {
+            "id": "s:p/a",
+            "item": {
+                "title": "A",
+                "content": "A.",
+                "metadata": {"onepipeline.id": "a"},
+                "repositories": [],
+            },
+        },
+        {
+            "id": second_id,
+            "item": {
+                "title": "B",
+                "content": "B.",
+                "metadata": {"onepipeline.id": second_node},
+                "repositories": [],
+            },
+        },
+    ]
+
+    def store(arguments: list[str]) -> dict[str, object]:
+        if arguments[:2] == ["project", "show"]:
+            return {"items": [{"item": {"title": "p"}}]}
+        return {"items": listing}
+
+    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    with pytest.raises(OSError, match="duplicate task identity"):
+        criteria_guard._project_plan("s:p")
+
+
+def test_project_plan_rejects_a_dependency_on_an_unlisted_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def store(arguments: list[str]) -> dict[str, object]:
+        if arguments[:2] == ["project", "show"]:
+            return {"items": [{"item": {"title": "p"}}]}
+        if arguments[:2] == ["task", "list"]:
+            return {
+                "items": [
+                    {
+                        "id": "s:p/a",
+                        "item": {
+                            "title": "A",
+                            "content": "A.",
+                            "metadata": {"onepipeline.id": "a"},
+                            "repositories": [],
+                        },
+                    }
+                ]
+            }
+        return {"items": [{"to": {"id": "s:p/missing"}}]}
+
+    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    with pytest.raises(OSError, match="unknown dependency targets"):
+        criteria_guard._project_plan("s:p")

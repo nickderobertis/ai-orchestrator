@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from project_fixtures import local_project
 
 from orchestrator.root import REPO_ROOT
 
@@ -90,10 +91,6 @@ ABANDONED_MESSAGE = "\n# Please enter the commit message for your changes.\n"
 #: How the hook declares the limit it refuses at. Read rather than restated: a second
 #: copy here would agree with the hook by construction and prove nothing about either.
 SUBJECT_LIMIT_DECLARATION = re.compile(r"^SUBJECT_LIMIT=(\d+)$", re.MULTILINE)
-
-#: The shipped lifecycle plan a title long enough to be refused is grafted onto, so the
-#: engine's own limit is measured against a plan it otherwise accepts.
-SHIPPED_LIFECYCLE_PLAN = REPO_ROOT / "examples/single-node-lifecycle.plan.json"
 
 #: The registered checkouts this host tracks, and the origin whose provenance subjects
 #: the hook exempts. Which checkout of it a host holds is per-host, so it is resolved
@@ -322,6 +319,7 @@ def test_a_subject_at_the_publication_limit_is_recorded(repository: Path) -> Non
     assert committed.returncode == 0, committed.stderr
 
 
+@pytest.mark.reads_docs
 def test_the_limit_the_hook_refuses_at_is_the_one_the_engine_publishes_under(
     tmp_path: Path,
 ) -> None:
@@ -337,14 +335,23 @@ def test_the_limit_the_hook_refuses_at_is_the_one_the_engine_publishes_under(
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     limit = _declared_subject_limit()
-    plan = json.loads(SHIPPED_LIFECYCLE_PLAN.read_text(encoding="utf-8"))
-    plan["name"] = "subject-limit-probe"
-    plan["tasks"][0]["title"] = _subject_of_length(limit + 1)
-    probe = tmp_path / "over-limit.plan.json"
-    probe.write_text(json.dumps(plan), encoding="utf-8")
+    plan = {
+        "schema_version": 3,
+        "name": "subject-limit-probe",
+        "tasks": [
+            {
+                "id": "probe",
+                "title": _subject_of_length(limit + 1),
+                "task": "## What\nProbe the limit.\n\n## Why\nKeep contracts aligned.\n\n"
+                "## Acceptance criteria\n- The limit is reported.\n",
+                "repo": "ai-orchestrator-isolated",
+            }
+        ],
+    }
+    project = local_project(json.dumps(plan), "subject-limit-probe")
 
     refused = subprocess.run(
-        ["just", "orchestrate", str(probe)],
+        ["just", "orchestrate", project],
         cwd=REPO_ROOT,
         env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(tmp_path / "runs")},
         text=True,

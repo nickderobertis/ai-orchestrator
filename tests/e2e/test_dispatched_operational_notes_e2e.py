@@ -37,6 +37,7 @@ from typing import NamedTuple, cast
 import pytest
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
+from project_fixtures import project_from_plan
 from test_dispatch_appendix import (
     AMBIGUOUS_IN_FLIGHT,
     CAPTURED_AT_LAUNCH,
@@ -169,7 +170,7 @@ def dispatched(
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
     launch = subprocess.run(
-        ["just", "orchestrate", str(_plan(tmp_path))],
+        ["just", "orchestrate", project_from_plan(_plan(tmp_path))],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -178,6 +179,7 @@ def dispatched(
         check=False,
     )
     try:
+        assert launch.returncode == 0, launch.stdout + launch.stderr
         # The stand-in writes this JSONL itself, one object per turn; it is test-owned on
         # both ends, so this states its schema rather than validating somebody else's.
         # llmlint: ignore[tests_mirror_real_usage] No view carries a dispatch's own prompt.

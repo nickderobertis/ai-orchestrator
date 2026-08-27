@@ -169,7 +169,7 @@ REQUIRED_CLAIMS = (
     ),
     # These seven used to hold the opposite claim — a hard one-lifecycle-dispatch-per-
     # identity bound, and the three details a manager scheduled around it with. onevcs
-    # 0.14.1 fixed the reclamation race and this host adopted it at 0.15.2, so what a
+    # 0.14.1 fixed the reclamation race and this host adopted it at 0.15.4, so what a
     # manager now has to be told is that the bound is gone, on whose authority, and what
     # is left of it. Restated rather than deleted: a lifted constraint that nobody says
     # was lifted goes on being obeyed, which costs exactly the parallelism it was
@@ -184,7 +184,7 @@ REQUIRED_CLAIMS = (
     Claim(
         "which release this host adopts it at",
         RECLAMATION_OPENER,
-        "this host adopts it at 0.15.2",
+        "this host adopts it at 0.15.4",
     ),
     Claim(
         "the lift is a measurement, not a changelog reading",

@@ -20,7 +20,6 @@ cheap.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -28,6 +27,7 @@ from pathlib import Path
 import pytest
 from waits import timeout as e2e_timeout
 
+from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The roles this repository's prose says `oneagentgraph` compiles in. Stated here as
@@ -166,34 +166,38 @@ def test_a_plan_node_naming_an_unshipped_persona_fails_before_a_harness_starts(
     """
     launch_dir = tmp_path / "launch"
     launch_dir.mkdir()
-    for linked in ("graphs", "config", "personas", "oneharness.toml", "oneharness.judge.toml"):
+    for linked in (
+        "graphs",
+        "config",
+        "personas",
+        "oneharness.toml",
+        "oneharness.judge.toml",
+        "onetaskgraph.yaml",
+    ):
         (launch_dir / linked).symlink_to(REPO_ROOT / linked)
     for git in (["init", "-q", "."], ["commit", "-q", "--allow-empty", "-m", "probe"]):
         subprocess.run(
             ["git", *git], cwd=launch_dir, check=True, capture_output=True, timeout=e2e_timeout(60)
         )
 
-    plan = launch_dir / "plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "goal": {"text": "Measure how an unshipped persona name resolves"},
-                "name": "persona-probe",
-                "tasks": [
-                    {
-                        "id": "probe",
-                        "persona": "orchestrator",
-                        "task": (
-                            "## What\nNothing: this node is never expected to start.\n\n"
-                            "## Why\nIts persona is the measurement.\n\n"
-                            "## Acceptance criteria\n- Unreachable."
-                        ),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    write_plan_project(
+        launch_dir / ".plans",
+        {
+            "schema_version": 3,
+            "goal": {"text": "Measure how an unshipped persona name resolves"},
+            "name": "persona-probe",
+            "tasks": [
+                {
+                    "id": "probe",
+                    "persona": "orchestrator",
+                    "task": (
+                        "## What\nNothing: this node is never expected to start.\n\n"
+                        "## Why\nIts persona is the measurement.\n\n"
+                        "## Acceptance criteria\n- Unreachable."
+                    ),
+                }
+            ],
+        },
     )
 
     environment = dict(os.environ)
@@ -203,7 +207,7 @@ def test_a_plan_node_naming_an_unshipped_persona_fails_before_a_harness_starts(
     environment["ONEPIPELINE_LAUNCHER_SESSION"] = "persona-catalog-e2e"
 
     launched = subprocess.run(
-        ["onepipeline", "start", str(plan)],
+        ["onepipeline", "start", "authoring:persona-probe"],
         cwd=launch_dir,
         env=environment,
         text=True,

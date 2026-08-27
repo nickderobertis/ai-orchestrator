@@ -41,6 +41,7 @@ from typing import NamedTuple, TypedDict, cast
 
 import pytest
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
+from project_fixtures import project_from_plan
 from scratch_identity import seeded
 from waits import timeout as e2e_timeout
 
@@ -175,7 +176,11 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment[PROMPT_LOG_ENV] = str(prompt_log)
 
     launch = subprocess.run(
-        ["just", "orchestrate", str(_plan(root, identity.publication))],
+        [
+            "just",
+            "orchestrate",
+            project_from_plan(_plan(root, identity.publication)),
+        ],
         cwd=REPO_ROOT,
         env=environment,
         text=True,

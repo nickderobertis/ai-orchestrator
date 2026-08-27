@@ -4,7 +4,7 @@
 # [<onepipeline start flags>]`.
 #
 # The manager's job is writing the brief and reviewing what comes back, not
-# assembling a plan file by hand. So this recipe writes the plan, and the one shape
+# assembling a plan project by hand. So this recipe writes the project, and the one shape
 # that must be right is machine-produced rather than remembered:
 #
 #   * **The persona is named as a path**, `../personas/planner.yaml`, relative to
@@ -79,11 +79,11 @@
 # `--dag-graph` included.
 set -euo pipefail
 
-#: Where a generated plan is written, under the gitignored scratch root. Kept in the
-#: repository rather than in a temporary directory because it is the document the
-#: launch is judged against: a manager reading back what their brief became, or
-#: relaunching it with `just orchestrate`, needs the file to still be there.
-PLAN_DIRECTORY="scratch/plans"
+#: Where a generated project's record is written under the gitignored local-md root.
+#: Kept in the repository because it is the project the launch is judged against and
+#: its qualified id remains directly relaunchable with `just orchestrate`.
+PLAN_DIRECTORY=".plans/projects"
+PLAN_SOURCE="authoring"
 
 #: The persona ref the one node carries. A path, deliberately — see the header.
 PLANNER_PERSONA="../personas/planner.yaml"
@@ -171,7 +171,7 @@ if repo:
 if turns:
     node["max_turns"] = int(turns)
 plan = {
-    "schema_version": 2,
+    "schema_version": 3,
     "goal": {"text": f"Plan the work the manager briefed in {brief}"},
     "name": name,
     "tasks": [node],
@@ -370,16 +370,18 @@ fi
 export_ask_manager plan || exit $?
 
 # Both checked rather than left to `set -e`, which would exit with whatever the
-# helper printed and no repair — and, for the write, would leave a half-written plan
+# helper printed and no repair — and, for the write, would leave a half-written project
 # behind for the next launch to pick up.
 mkdir -p "$PLAN_DIRECTORY" || fail "the plan directory $PLAN_DIRECTORY could not be created" \
     "check that this checkout is writable, then retry"
-plan="$PLAN_DIRECTORY/$name.plan.json"
+plan="$PLAN_DIRECTORY/$name.md"
 "$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$max_turns" \
-    "$repo" "$execution" "$TITLE_PREFIX$name" >"$plan" || {
+    "$repo" "$execution" "$TITLE_PREFIX$name" \
+    | "$python" -m orchestrator.project_store .plans >/dev/null || {
     # `|| :` so a removal that fails cannot replace the diagnostic below with its own
     # exit; the partial plan is then named by that diagnostic rather than silently kept.
-    rm -f "$plan" || :
+    rm -f "$plan" ".plans/tasks/$name"/*.md || :
+    rmdir ".plans/tasks/$name" 2>/dev/null || :
     fail "the plan for '$brief' could not be written to $plan by $python" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 }
@@ -393,7 +395,8 @@ if [ -n "$repo" ]; then
 else
     placement="--direct dispatches it into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
 fi
-echo "plan: wrote $plan; $placement; answer this planner's questions with: just channel-next $name" >&2
+project="$PLAN_SOURCE:$name"
+echo "plan: wrote $project at $plan; $placement; answer this planner's questions with: just channel-next $name" >&2
 
 # Through the shared wrapper rather than `uv run` directly, because that is where a
 # planner's identity is established: a run launched without it records `unknown`,
@@ -406,4 +409,4 @@ echo "plan: wrote $plan; $placement; answer this planner's questions with: just 
 # into a version pin.
 # llmlint: ignore[boundary_inputs_validated] `onepipeline start` validates its own surface; restating it here is the drift this repository gates against.
 # llmlint: ignore[tool_output_is_signal] This is `just orchestrate`'s attached launch with a plan written first: streaming the run as it goes is what a manager stays attached for, and the one line this script owns — the plan it wrote and the command that answers the planner — is printed above.
-exec "$script_dir/onepipeline.sh" start "$plan" ${forwarded[@]+"${forwarded[@]}"} ${observer[@]+"${observer[@]}"}
+exec "$script_dir/onepipeline.sh" start "$project" ${forwarded[@]+"${forwarded[@]}"} ${observer[@]+"${observer[@]}"}
