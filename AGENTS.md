@@ -156,6 +156,63 @@ the whole tree, so unrelated work landing on the base beside it does *not* move 
 answer — but it is still a comparison and never a `yes`, because publication squashes
 and no patch id survives that.
 
+**Which of the four tiers a landing can reach at all is decided by its publication
+workflow, and that is the half of this advice a reader most needs and the document
+longest left out.** `onevcs` stamps the commit *it* writes, and each workflow only
+writes one of the two. A `local-direct` publication builds the base's squash commit
+itself, so the base carries `Orchestrator-Landed-Commit: <the branch's tip>` under the
+`trailer_prefix` `config/onevcs.rules.yml` sets — and that is `a landing trailer on the
+base`, a record kept in the repository's own history, which outlives everything this
+host stores. A remote publication writes no such commit: the host writes it, GitHub's
+squash carries no trailer, and `onevcs` records the landing the only place it still
+writes — as a `chore: record the landing of <branch>` commit **on the branch**, whose
+trailer names the *base* commit instead. Nothing reads that one back, because the
+trailer tier looks at the base. So a remote landing's only records are `a recorded
+landing` and `the change request's number in the base`, and **neither of those survives
+the loss of this host's state**: the first *is* that state, and the second needs a
+change request `onevcs` holds a record of before it can look for its number, so under
+`change request: none recorded` the `(#51)` sitting in the base's own subject goes
+unread. Lose the record and a remote landing has
+nothing left but `content comparison`, where a `local-direct` landing still has its
+trailer. Read `decided by:` before `landed:` for either — and for a remote branch read
+it knowing that `content comparison` there is what a lost record looks like, not what
+an unlanded branch looks like.
+
+**Re-measured 2026-08-27 on the pinned onevcs 0.15.4, over two landings held identical
+but for the workflow their identity resolves.** Asked in this host's own state root
+both answer `landed: yes`, `decided by: a recorded landing`, and `just recoverable`
+offers neither: the `local-direct` `onevcs/s-42dae8f0b0f5`, which landed on
+`ai-orchestrator`'s `main` as squash commit `ed8c396` carrying
+`Orchestrator-Landed-Commit: 8ba981bb…` — that branch's own tip — and the `change-auto`
+`onevcs/s-a221fd101a0f`, which merged as
+https://github.com/nickderobertis/onetaskgraph/pull/51 at `b39cf630`. Asked against a
+throwaway `ONEVCS_HOME` holding this repository's own rules file, a checkout of each
+identity, and **no session records**, they part: the `local-direct` branch answers
+`landed: yes`, `decided by: a landing trailer on the base (ed8c396…)`, and `recoverable
+--all` marks it landed with *"Nothing to resume"*, while the `change-auto` branch —
+whose own tip is `chore: record the landing of onevcs/s-a221fd101a0f` carrying
+`Orchestrator-Landed-Commit: b39cf630…` — answers `landed: unknown`, `decided by:
+content comparison`, `change request: none recorded`, and `just recoverable` lists it
+under `— may have landed` with a `publish-branch` command beside it, reporting *"no
+change request's number in the base's history, and no landing trailer"* while `(#51)`
+sits in that base commit's own subject and the trailer sits on the branch it was asked
+about. Rewrite that rules file's `trailer_prefix` and the `local-direct` branch falls to
+`content comparison` too, which is what says the trailer tier is read under this host's
+configured prefix rather than under a name `onevcs` knows by itself.
+
+**That inverts what this passage was asked to record, and the inversion is the useful
+part.** The correction was briefed from a manager's reading in which the `local-direct`
+branch answered `landed: no` by `content comparison` while the trailer sat on the base,
+and the remote one answered `a recorded landing` — so the lesson would have been that
+`local-direct` is the weak side. Every one of those four answers was re-taken here on
+2026-08-27 and the `local-direct` half no longer reproduces at all: with the session
+record present it answers `a recorded landing`, with the record gone it answers the
+trailer, and it is offered by `recoverable` in neither state. What does reproduce is
+the trailer on `ed8c396` and the remote landing's `a recorded landing`. The weak side is
+the remote one, for the reason above — its evidence is all in this host's state root —
+and this is stated rather than quietly amended because the earlier reading is the one a
+manager would otherwise re-derive from the same symptom.
+
 **That warning has two halves, and onevcs 0.14.0 moved exactly one of them.**
 
 *The squash-merge half stands untouched.* `crates/onevcs/src/landed.rs` is one blob —
@@ -1791,12 +1848,24 @@ whether it carries an incomplete-step marker, and the exact command that lands i
 branch under its identity's policy, `just integrate` for the local merge train,
 with the fetch included when the publication checkout does not have the
 branch. Reach for it instead of diffing clones by hand. **What it will no longer
-offer is a branch that already landed.** Through onevcs 0.8.x it decided that by
+offer is a branch that already landed — unconditionally for a `local-direct`
+identity, and only while this host's record of the landing survives for a remote
+one.** Through onevcs 0.8.x it decided that by
 comparing trees, so a stale copy of a merged branch could be listed as work to
 resume and the command beside it would have reopened it; 0.9.0 infers landing from
-history instead, and ties it to the copy whose work it accounts for. So a branch
-missing from the listing is a branch this verb has evidence about, not one it failed
-to notice — and `just work-status <branch>` is where that evidence is read.
+history instead, and ties it to the copy whose work it accounts for. **What that
+inference has left to read is what differs by workflow**, for the reason [the landing
+tiers](#what-this-repo-is) give: a `local-direct` landing is stamped onto the base by
+`onevcs`'s own squash commit, so the listing drops it from the repository's history
+alone and would go on doing so on a host that had never seen the branch; a remote
+landing is stamped by the host, which stamps nothing, so every record of it lives in
+`$ONEVCS_HOME` and a remote branch whose record is gone is listed again, under `— may
+have landed`, with a `publish-branch` command beside it. So a **`local-direct`** branch
+missing from the listing is a branch this verb has evidence about, not one it failed to
+notice; for a remote branch that holds only while the record does, and a remote row
+saying `may have landed` is the verb reporting that it has no record rather than that
+the branch is unpublished. `just work-status <branch>` is where either evidence is
+read — its `decided by:` line, which names the tier, before its `landed:` line.
 **Which branches "every" covers is decided by where you run it**, and it is not always every identity: run
 inside a registered checkout it answers for that checkout's identity **alone**, and
 run anywhere else it answers across every registered identity. Run from this

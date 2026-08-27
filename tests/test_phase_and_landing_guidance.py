@@ -419,3 +419,296 @@ def test_the_landing_passage_is_not_dated_to_a_release_this_host_does_not_run() 
         f"onevcs {stale}, and config/onevcs.version reads {adopted}. A measurement is "
         "re-taken and re-dated in the same change that moves the pin, never inherited"
     )
+
+
+#: The section the recoverable-branch listing is documented in. Named separately from
+#: `PHASE_SECTION` because the two claims this module now holds sit in different
+#: sections of the same document: the tiers are explained where the repository
+#: explains itself, and the listing is explained with the rest of the command surface.
+COMMAND_SURFACE_SECTION = "## Command surface"
+#: The section the landing tiers are explained in — the one this document opens with,
+#: because what a `landed:` answer is worth is part of what this repository is.
+LANDING_TIER_SECTION = "## What this repo is"
+
+#: The pre-correction sentence, verbatim. Held as a refusal rather than as a claim
+#: because this is the exact wording the correction replaced, and because a reader
+#: repairing a reflowed paragraph would naturally reach for it again: it is shorter,
+#: it reads as confident, and nothing about it looks wrong. It is wrong for a remote
+#: identity, whose every record of a landing lives in `$ONEVCS_HOME` rather than in
+#: the repository, so a branch this host has forgotten comes back into the listing
+#: with a `publish-branch` command beside it however long ago it merged.
+FLATTENED_RECOVERABLE_CLAIM = "**What it will no longer offer is a branch that already landed.**"
+
+#: Every claim the per-workflow split has to make, and the whole reason this module
+#: grew a third subject. Enumerated the way `PHASE_CLAIMS` is, and for a sharper
+#: version of the same reason: this host's own state root answers `a recorded landing`
+#: for *both* workflows, so no command a manager runs here contradicts a document that
+#: has flattened the split back into one sentence. The divergence only appears once the
+#: session record is gone — on another host, after a state-root reset, or for a branch
+#: no session ever recorded — which is exactly when nobody is in a position to re-derive
+#: it.
+WORKFLOW_SPLIT_CLAIMS = (
+    Claim(
+        "the reachable tiers are decided by the workflow",
+        "**Which of the four tiers a landing can reach at all is decided by its publication\n"
+        "workflow",
+    ),
+    Claim("onevcs stamps only the commit it writes", "stamps the commit *it* writes"),
+    Claim(
+        "local-direct stamps the base",
+        "the base carries `Orchestrator-Landed-Commit: <the branch's tip>`",
+    ),
+    Claim(
+        "the prefix comes from the rules file", "`trailer_prefix` `config/onevcs.rules.yml` sets"
+    ),
+    Claim("that trailer outlives this host", "outlives everything this\nhost stores"),
+    Claim("a remote base commit carries no trailer", "GitHub's\nsquash carries no trailer"),
+    Claim(
+        "a remote landing is stamped on the branch",
+        "as a `chore: record the landing of <branch>` commit **on the branch**",
+    ),
+    Claim("nothing reads the branch stamp back", "Nothing reads that one back"),
+    Claim(
+        "neither remote record survives losing this host's state",
+        "**neither of those survives\nthe loss of this host's state**",
+    ),
+    Claim(
+        "the change-request tier needs a recorded change request",
+        "the `(#51)` sitting in the base's own subject goes\nunread",
+    ),
+    Claim(
+        "content comparison means a lost record for a remote branch",
+        "what a lost record looks like, not what\nan unlanded branch looks like",
+    ),
+)
+
+#: What the corrected recoverable claim has to keep saying. Both workflow words in the
+#: headline, so a reader can tell which of this host's identities it holds for without
+#: running anything, and the remote row's own wording, so they recognise it when it
+#: appears.
+RECOVERABLE_SPLIT_CLAIMS = (
+    Claim(
+        "the claim names the workflow it holds for",
+        "already landed — unconditionally for a `local-direct`\nidentity, and only while this "
+        "host's record of the landing survives for a remote\none.**",
+    ),
+    Claim(
+        "what differs is what is left to read",
+        "**What that\ninference has left to read is what differs by workflow**",
+    ),
+    Claim(
+        "a local-direct landing is stamped on the base",
+        "stamped onto the base by\n`onevcs`'s own squash commit",
+    ),
+    Claim(
+        "a remote landing's records are all host state",
+        "every record of it lives in\n`$ONEVCS_HOME`",
+    ),
+    Claim(
+        "a forgotten remote branch is listed again", "is listed again, under `— may\nhave landed`"
+    ),
+    Claim("a remote row means no record", "reporting that it has no record rather than that"),
+)
+
+#: The stamp the workflow-split measurement is reported under. Deliberately a
+#: different shape from `LANDING_MEASUREMENT_STAMP` — that one ends at a colon and
+#: reports one ref, this one reports a pair — so the two paragraphs cannot satisfy
+#: each other's gate.
+SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, over two landings"
+SPLIT_MEASUREMENT_DATE = "2026-08-27"
+#: Both refs, because the whole measurement is a comparison: either alone is an
+#: anecdote about one workflow rather than evidence that the workflow is what decides.
+SPLIT_MEASUREMENT_REFS = ("onevcs/s-42dae8f0b0f5", "onevcs/s-a221fd101a0f")
+#: The change request the remote half landed through, for the reason the sibling
+#: measurement names one: without it the quoted `unknown` reads as uncertainty rather
+#: than as the verb having lost a merge that happened.
+SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgraph/pull/51"
+#: What each half answered with no session record, verbatim, so a later reader
+#: re-takes this measurement rather than a similar one.
+SPLIT_MEASUREMENT_ANSWERS = (
+    "`decided by: a landing trailer on the base (ed8c396…)`",
+    "`landed: unknown`, `decided by:\ncontent comparison`",
+)
+#: The condition that separates the two answers. Without it the paragraph reports two
+#: verbs disagreeing and gives a reader nothing to reproduce.
+SPLIT_MEASUREMENT_CONDITION = "and **no session records**"
+
+
+def _paragraph_containing(needle: str, description: str) -> str:
+    """The one paragraph of the guidance document carrying `needle`, flattened.
+
+    Same reason `_landing_measurement_passage` scopes to a paragraph: a ref named in
+    one section and an answer quoted in another are two claims a reader cannot pair,
+    and a gate satisfied by them separately would pass a passage that reported neither
+    together.
+    """
+    prose = _text(GUIDANCE_DOCUMENT)
+    paragraphs = [block for block in prose.split("\n\n") if flat(needle) in flat(block)]
+    assert len(paragraphs) == 1, (
+        f"{GUIDANCE_DOCUMENT} carries {len(paragraphs)} paragraphs containing "
+        f"{description}, and this gate reconciles exactly one. Reported twice is two "
+        "claims that can drift apart; reported nowhere is no measurement at all"
+    )
+    return flat(paragraphs[0])
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("claim", WORKFLOW_SPLIT_CLAIMS, ids=lambda claim: claim.subject)
+def test_the_landing_tiers_say_which_workflow_can_reach_each(claim: Claim) -> None:
+    """Which tiers a landing can reach is a property of the workflow that published it.
+
+    `onevcs` stamps the commit it writes and each workflow writes only one of the two:
+    a `local-direct` publication writes the base's squash commit and stamps the
+    branch's tip onto it, while a remote publication's base commit is the host's and
+    carries nothing, leaving the session record and the change request it names — both
+    in `$ONEVCS_HOME` — as the whole of the evidence. A document that stated the tiers
+    without that split would leave a manager reading `content comparison` on a merged
+    remote branch as *not published*, which is the reading that re-dispatches work that
+    already landed.
+    """
+    assert flat(claim.phrase) in flat(section(LANDING_TIER_SECTION)), (
+        f"{GUIDANCE_DOCUMENT}'s landing-tier passage no longer says {claim.subject}: "
+        f"the phrase {claim.phrase!r} is gone. The split is not recoverable by running "
+        "anything here — this host's state root answers `a recorded landing` for both "
+        "workflows, and they only diverge once that record is gone"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_recoverable_claim_is_not_flattened_back_to_one_workflow() -> None:
+    """The exact pre-correction sentence, refused by name.
+
+    It is the sentence a reflow or a tidy-up reaches for, because it is shorter and
+    reads as confident, and it is wrong for every remote identity registered here. A
+    manager verified a landing, read this listing, and was offered a `publish-branch`
+    command for the branch that had just landed; the document is what stopped them
+    following it, and this claim is the half of the document that would not have.
+    """
+    assert flat(FLATTENED_RECOVERABLE_CLAIM) not in flat(section(COMMAND_SURFACE_SECTION)), (
+        f"{GUIDANCE_DOCUMENT}'s {COMMAND_SURFACE_SECTION!r} states "
+        f"{FLATTENED_RECOVERABLE_CLAIM!r} as one workflow-independent sentence. It holds "
+        "for a `local-direct` identity, whose landing is stamped onto the base in the "
+        "repository's own history, and not for a remote one, whose every record lives in "
+        "`$ONEVCS_HOME`: say which, or the confident half is the half that gets acted on"
+    )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("claim", RECOVERABLE_SPLIT_CLAIMS, ids=lambda claim: claim.subject)
+def test_the_recoverable_claim_says_which_workflow_it_holds_for(claim: Claim) -> None:
+    """Refusing the flat sentence is not enough; the split has to be stated.
+
+    Deleting the claim outright would satisfy the refusal above and leave a reader with
+    no account of the listing's evidence at all, which is the failure mode a
+    negative-only gate always has.
+    """
+    assert flat(claim.phrase) in flat(section(COMMAND_SURFACE_SECTION)), (
+        f"{GUIDANCE_DOCUMENT}'s {COMMAND_SURFACE_SECTION!r} no longer says "
+        f"{claim.subject}: the phrase {claim.phrase!r} is gone"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_workflow_split_is_reported_as_one_reproducible_measurement() -> None:
+    """A split asserted without the pair of branches it was taken over is an opinion.
+
+    All of it in one paragraph, for the reason the sibling measurement gives: the two
+    refs, the change request the remote half landed through, the condition that
+    separates them, and what each answered under it. Any of them stated elsewhere in
+    this document is a claim a reader cannot pair with the others, and this document is
+    long enough that some of them are.
+    """
+    stamp = SPLIT_MEASUREMENT_STAMP.format(
+        date=SPLIT_MEASUREMENT_DATE, release=_adopted("onevcs.version")
+    )
+    passage = _paragraph_containing(stamp, f"the stamp {stamp!r}")
+
+    for ref in SPLIT_MEASUREMENT_REFS:
+        assert ref in passage, (
+            f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer names {ref}. "
+            "The measurement is a comparison: one ref alone is an anecdote about one "
+            "workflow rather than evidence that the workflow is what decides"
+        )
+    assert SPLIT_MEASUREMENT_CHANGE_REQUEST in passage, (
+        f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer names "
+        f"{SPLIT_MEASUREMENT_CHANGE_REQUEST}, the change request the remote half landed "
+        "through. Without it the quoted `unknown` reads as uncertainty rather than as "
+        "the verb having lost a merge that happened"
+    )
+    assert flat(SPLIT_MEASUREMENT_CONDITION) in passage, (
+        f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer states the "
+        "condition the two answers were taken under. Both branches answer `a recorded "
+        "landing` on this host as it stands; the split only appears with the session "
+        "record gone, so a measurement that omits that is not reproducible"
+    )
+    for answer in SPLIT_MEASUREMENT_ANSWERS:
+        assert flat(answer) in passage, (
+            f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer quotes "
+            f"{answer!r}. The verb's own words are the point: a paraphrase cannot be "
+            "compared against a fresh run of it"
+        )
+
+
+class PageClaim(NamedTuple):
+    """One thing a page under `docs/` has to say, and the phrase that says it."""
+
+    #: The page, repository-relative.
+    page: str
+    #: What the claim is about, for the failure message and the test id.
+    subject: str
+    phrase: str
+
+
+#: The same split, where the two pages that describe these verbs in detail restate it.
+#: Held here rather than in a page-specific module because a split stated in `AGENTS.md`
+#: and contradicted three pages away is worse than one stated nowhere: a reader who
+#: opens the detailed page trusts it over the summary.
+SIBLING_PAGE_CLAIMS = (
+    PageClaim(
+        "docs/orchestration.md",
+        "the recoverable listing's evidence depends on the workflow",
+        "**but which evidence there is to drop out on depends on the\n"
+        "identity's publication workflow.**",
+    ),
+    PageClaim(
+        "docs/orchestration.md",
+        "a forgotten remote branch comes back into the listing",
+        "comes back into this listing under\n`— may have landed`",
+    ),
+    PageClaim(
+        "docs/repo-lifecycle.md",
+        "the per-workflow tier table has its own section",
+        "#### What `decided by:` can reach, per workflow",
+    ),
+    PageClaim(
+        "docs/repo-lifecycle.md",
+        "a remote landing's branch trailer is never read back",
+        "**That trailer is written and never read\n  back**",
+    ),
+    PageClaim(
+        "docs/repo-lifecycle.md",
+        "the local squash carries the landing trailer",
+        "`Orchestrator-Landed-Commit: <the branch's tip>` trailer under the rules file's",
+    ),
+)
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(
+    "claim", SIBLING_PAGE_CLAIMS, ids=lambda claim: f"{claim.page}: {claim.subject}"
+)
+def test_the_detailed_pages_restate_the_same_split(claim: PageClaim) -> None:
+    """`AGENTS.md` is the summary; these two pages are what a reader opens next.
+
+    Both describe the verbs whose answers this split governs — `just recoverable` in
+    the orchestration page, `just work-status` and the merge strategies in the lifecycle
+    page — and both stated the landing evidence without saying that a remote identity
+    keeps all of it outside the repository. A page that goes on saying that outranks the
+    summary for the reader who went looking for detail.
+    """
+    assert flat(claim.phrase) in flat(_text(claim.page)), (
+        f"{claim.page} no longer says {claim.subject}: the phrase {claim.phrase!r} is "
+        "gone. The "
+        "per-workflow split has to hold on the detailed page too, or a reader who opens "
+        "it reads the flat claim as the authoritative one"
+    )

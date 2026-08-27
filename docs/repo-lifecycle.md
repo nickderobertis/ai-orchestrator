@@ -1123,8 +1123,14 @@ lands it after a reconcile.
 
   **Under `change-auto` a node settles when the merge completes, at the commit the
   host merged it at.** That is the other half of 0.10.0: the watch runs to `merged`,
-  the landing is recorded as a provenance trailer on the branch itself, and the
-  publication checkout is fast-forwarded. So a `change-auto` node no longer counts
+  the landing is recorded as a provenance trailer on the branch itself — a `chore:
+  record the landing of <branch>` commit whose `Orchestrator-Landed-Commit:` names the
+  base commit the host merged it at — and the publication checkout is fast-forwarded.
+  **That trailer is written and never read back**: `onevcs status`'s landing tiers look
+  for a trailer on the *base*, which only the `local-direct` path below writes, so it is
+  a record for a person reading the branch rather than one the verbs consult — see
+  [what `decided by:` can reach, per workflow](#what-decided-by-can-reach-per-workflow).
+  So a `change-auto` node no longer counts
   as *settled without landing* for the life of the run — the state that used to
   persist after the PR merged, after the release went out, forever. What it costs is
   time: the node holds its identity's merge slot until the host lands the change or
@@ -1136,8 +1142,13 @@ lands it after a reconcile.
   it builds the branch-to-base merge in a detached scratch worktree and pushes
   that exact tree, which is where the repository's own `pre-push` hook runs. The
   branch lands as one squashed commit whose single parent is the prior base tip and
-  whose message is the composed subject. This is the model for direct merge into
-  main after the checks pass, including GitHub origins intentionally marked local.
+  whose message is the composed subject, plus one
+  `Orchestrator-Landed-Commit: <the branch's tip>` trailer under the rules file's
+  `trailer_prefix`. That trailer is the whole reason a `local-direct` landing stays
+  decidable after this host forgets it: it is on the base, in the repository's own
+  history, and it is what `onevcs status`'s third tier reads. This is the model for
+  direct merge into main after the checks pass, including GitHub origins intentionally
+  marked local.
   A **bare** local origin accepts the push directly; a non-bare origin needs
   `receive.denyCurrentBranch=updateInstead` so its working tree updates too.
 
@@ -1588,6 +1599,36 @@ nothing looks again, so `just results` and `just status` say *as of settlement* 
 mean it; a change that merged an hour later still reads there as not landed. Ask
 this verb instead of inferring the answer from a run, and read `--json` when
 something other than a person is going to act on it.
+
+#### What `decided by:` can reach, per workflow
+
+The verb answers `landed:` from four tiers in order, and names the one that decided in
+`decided by:`. Three of them are records — `a recorded landing`, `the change request's
+number in the base`, `a landing trailer on the base` — and the fourth, `content
+comparison`, is a comparison of the paths the branch touched against the base, which is
+why it may answer `no` or `unknown` and never `yes`. **Which of the three records a
+landing can have is fixed by the workflow that published it**, because `onevcs` can only
+stamp the commit it writes itself:
+
+| Workflow | What carries the landing | Where it lives | What is left when the record is gone |
+| --- | --- | --- | --- |
+| `local-direct` | the base's squash commit, carrying `Orchestrator-Landed-Commit: <the branch's tip>` | the repository's own history | the trailer, so `landed: yes` still |
+| `change-open` / `change-auto` / `change-direct` | a `chore: record the landing of <branch>` commit on the **branch**, plus the session record and the change request it names | the branch, and `$ONEVCS_HOME` | nothing the tiers read — `landed: unknown`, `decided by: content comparison` |
+
+The branch-side trailer a remote landing writes is never read back, because the third
+tier looks at the base; and the second tier looks for a change request `onevcs` has a
+record of, so the `(#51)` a GitHub squash puts in the base subject does not answer it on
+its own. The practical consequence is one asymmetry to carry: a **remote** branch that
+merged, asked on a host whose session record for it is gone, answers `landed: unknown`
+by `content comparison` and comes back into `just recoverable` under `— may have landed`
+with a `publish-branch` command beside it. Read that as *no record*, confirm against the
+change request, and do not run the command. A `local-direct` branch in the same state
+still answers from its trailer. Both halves were measured on 2026-08-27 against the
+pinned `onevcs`, over one landing of each workflow — `onevcs/s-42dae8f0b0f5`, which this
+repository's `local-direct` identity landed as `ed8c396`, and `onevcs/s-a221fd101a0f`,
+which `onetaskgraph`'s `change-auto` identity merged as change request 51 — each asked
+once in this host's state root, where both answer `a recorded landing`, and once in a
+throwaway one holding no session record for either, where they part.
 
 The distinction that matters most is the middle two. `repo-recover` is the only
 verb that knows how to attest an incomplete-step marker, so a branch carrying one

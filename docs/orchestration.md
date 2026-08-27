@@ -2052,8 +2052,21 @@ not have the branch, the suggested command starts with the ref-only fetch that b
 it there — aiming `integrate`, which reads local branches only, at a branch the
 canonical checkout never had is the invocation this exists to stop. A branch that
 merged, or that its base has since reached, drops out on that evidence rather than by
-a name-shaped guess. The view opens repositories to read and writes nothing, so it is
-safe beside live dispatches.
+a name-shaped guess — **but which evidence there is to drop out on depends on the
+identity's publication workflow.** A `local-direct` landing is stamped onto the base by
+`onevcs`'s own squash commit, as `Orchestrator-Landed-Commit: <the branch's tip>` under
+the rules file's `trailer_prefix`, so the listing drops it from git history alone. A
+remote landing's base commit is written by the host and carries no trailer, so its only
+records are the session record and the change request that record names, both in
+`$ONEVCS_HOME`; a remote branch whose record is gone comes back into this listing under
+`— may have landed`, with a `publish-branch` command beside it, however long ago it
+merged. Read that row as *no record*, never as *not published*, and confirm it against
+the change request before running the command it prints. Measured 2026-08-27 on the
+pinned `onevcs`, over one landing of each workflow asked in a state root holding no
+session record for either: the `local-direct` one still answered `landed: yes` from its
+trailer and stayed out of the listing, the remote one answered `landed: unknown` and
+came back into it. The view opens repositories to read and writes
+nothing, so it is safe beside live dispatches.
 
 ### When an attach returns
 
