@@ -162,6 +162,7 @@ def test_a_pre_adoption_runs_root_lists_no_runs_rather_than_failing(legacy_root:
     assert listed.stdout.count(f"no {LAUNCH_RECORD}") == len(LEGACY_RUN_IDS), listed.stdout
 
 
+@pytest.mark.reads_docs
 def test_the_listing_does_find_a_run_whose_launch_record_is_present(
     legacy_root: Path, tmp_path: Path
 ) -> None:
@@ -174,17 +175,21 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
     the recorded shape and nothing else.
     """
     adopted = tmp_path / "adopted-run"
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    for records in ("projects", "tasks"):
+        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
+    environment = {
+        **_environment(adopted),
+        "ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT": str(examples),
+        "ONEAGENTGRAPH_ONEHARNESS_BIN": str(Path(__file__).resolve().parent / "fake_backend.py"),
+        "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
     launched = subprocess.run(
         ["just", "orchestrate", "examples:scheduler-research", "--detach"],
         cwd=REPO_ROOT,
-        env={
-            **_environment(adopted),
-            "ONEAGENTGRAPH_ONEHARNESS_BIN": str(
-                Path(__file__).resolve().parent / "fake_backend.py"
-            ),
-            "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-        },
+        env=environment,
         text=True,
         stdin=subprocess.DEVNULL,
         capture_output=True,

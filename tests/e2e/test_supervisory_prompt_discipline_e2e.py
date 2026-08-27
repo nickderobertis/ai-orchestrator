@@ -297,6 +297,11 @@ def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("monitor-prompt")
     environment = _environment(tmp_path, oneharness_bin)
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    for records in ("projects", "tasks"):
+        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
+    environment["ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT"] = str(examples)
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
     environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)

@@ -9,7 +9,7 @@ import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal, NewType, TypedDict
 
 from fake_backend import PROMPT_LOG_ENV
 from test_orchestrate_launch_e2e import _environment as _launch_environment
@@ -18,6 +18,69 @@ from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
+_NodeId = NewType("_NodeId", str)
+_PipelineId = NewType("_PipelineId", str)
+
+
+class _AddedNode(TypedDict):
+    id: _NodeId
+    task: str
+    expects_no_diff: bool
+
+
+class _AddCommand(TypedDict):
+    op: Literal["add"]
+    node: _AddedNode
+
+
+class _LiveEditEnvelope(TypedDict):
+    version: Literal[1]
+    commands: list[_AddCommand]
+
+
+@dataclass(frozen=True)
+class _Settlement:
+    status: str
+    outcome: str | None
+
+    @classmethod
+    def from_mapping(cls, value: object) -> _Settlement:
+        if not isinstance(value, dict):
+            raise ValueError("stored task requires a settlement object")
+        status = value.get("status")
+        outcome = value.get("outcome")
+        if not isinstance(status, str) or (outcome is not None and not isinstance(outcome, str)):
+            raise ValueError("stored task settlement requires string status and outcome values")
+        return cls(status=status, outcome=outcome)
+
+
+@dataclass(frozen=True)
+class _StoredTask:
+    pipeline_id: _PipelineId
+    settlement: _Settlement
+
+    @classmethod
+    def from_item(cls, value: object) -> _StoredTask:
+        if not isinstance(value, dict):
+            raise ValueError("stored task list item must be an object")
+        item = value.get("item")
+        if not isinstance(item, dict):
+            raise ValueError("stored task list item requires an item object")
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("stored task requires a metadata object")
+        pipeline_id = metadata.get("onepipeline.id")
+        if not isinstance(pipeline_id, str):
+            raise ValueError("stored task requires a pipeline id and settlement object")
+        settlement = _Settlement.from_mapping(metadata.get("onepipeline.settlement"))
+        return cls(pipeline_id=_PipelineId(pipeline_id), settlement=settlement)
+
+
+def _stored_tasks(body: str) -> list[_StoredTask]:
+    payload = json.loads(body)
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ValueError("stored task response requires an items array")
+    return [_StoredTask.from_item(item) for item in payload["items"]]
 
 
 @dataclass(frozen=True)
@@ -224,6 +287,76 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
     )
     assert launched.returncode == 0, launched.stdout + launched.stderr
     assert (tmp_path / "turns.jsonl").is_file(), "the stored plan reached no execution turn"
+
+
+def test_run_settlements_and_live_edits_reach_the_plan_store(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The real launch writes both execution outcome and a graph addition to its source."""
+    _write_local_project(tmp_path)
+    environment = _launch_environment(tmp_path / "execution", oneharness_bin)
+    environment.update(_plan_environment(tmp_path))
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
+
+    launched = subprocess.run(
+        ["just", "orchestrate", "authoring:launch", "--dag-graph", "off"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    live_edit: _LiveEditEnvelope = {
+        "version": 1,
+        "commands": [
+            {
+                "op": "add",
+                "node": {
+                    "id": _NodeId("record-follow-up"),
+                    "task": "Record this follow-up without dispatching.",
+                    "expects_no_diff": True,
+                },
+            }
+        ],
+    }
+    edited = subprocess.run(
+        ["just", "channel-reply", "launch"],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=json.dumps(live_edit),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert edited.returncode == 0, edited.stdout + edited.stderr
+
+    adopted = subprocess.run(
+        ["just", "orchestrate", "--adopt", "launch"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert adopted.returncode == 0, adopted.stdout + adopted.stderr
+
+    stored = subprocess.run(
+        ["just", "plans", "task", "list", "--project", "authoring:launch", "--json"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stored.returncode == 0, stored.stdout + stored.stderr
+    by_pipeline_id = {task.pipeline_id: task for task in _stored_tasks(stored.stdout)}
+    assert set(by_pipeline_id) == {"probe", "record-follow-up"}
+    assert by_pipeline_id["probe"].settlement == _Settlement(status="done", outcome=None)
+    added_settlement = by_pipeline_id["record-follow-up"].settlement
+    assert added_settlement.status == "done"
+    assert added_settlement.outcome == "no-changes"
 
 
 def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:

@@ -11,7 +11,7 @@ The two halves already agree on the **response**. `channel serve` answers with
 exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
 onejudge's `supervisor` op expects. What they do not agree on is the **request**,
 and this filter is that one reconciliation, as onejudge 0.5.4 writes it and
-`onepipeline` 0.16.1 reads it:
+`onepipeline` 0.16.2 reads it:
 
     onejudge  ->  {"op": "supervisor", "task", "persona", "done_when",
                    "worktree", "history_name", "messages": [...], "session"}
@@ -28,7 +28,7 @@ out of what the frame itself carries:
 * **The run id.** The task `onepipeline` composes for the graph opens by naming
   the run, so the id is read from there. The environment names it too —
   `ONEPIPELINE_RUN_ID` is set to the run id on both sides of an observer member,
-  measured against onepipeline 0.16.1 by dumping this command's whole environment on
+  measured against onepipeline 0.16.2 by dumping this command's whole environment on
   a real launch — but that is a per-release export while the composed task is the
   contract this filter already validates, so the task stays the source. The export
   is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where
@@ -150,7 +150,7 @@ driven directly rather than through the channel for exactly that reason.
 Such an answer is **recognised, reported to the monitor, and not acted on**, and the
 member survives it. Not acted on is the measured half. `onepipeline reply` applies an
 envelope's commands *itself*, before the envelope is queued for any reader: measured
-against onepipeline 0.16.1 by replying `{"op":"add", …}` to a real run, which answers
+against onepipeline 0.16.2 by replying `{"op":"add", …}` to a real run, which answers
 `{"reply":0,"state":"applied"}` and records `edit-committed` there and then. So the
 edit has already reached the engine by the time it arrives here, and this reader has
 nothing left to route. Handing it back with a second `onepipeline reply` — the obvious
@@ -281,7 +281,7 @@ ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
 #: How `onepipeline` names the run to both sides of an observer member. The scoring op
 #: is the one frame that carries no `task`, so this is its only source; measured against
-#: onepipeline 0.16.1 and re-measured on a real launch by
+#: onepipeline 0.16.2 and re-measured on a real launch by
 #: `tests/e2e/test_orchestrate_launch_e2e.py` every gate run.
 RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 

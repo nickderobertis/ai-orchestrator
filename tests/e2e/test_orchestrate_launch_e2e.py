@@ -353,6 +353,11 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("orchestrate-launch")
     environment = _environment(tmp_path, oneharness_bin)
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    for records in ("projects", "tasks"):
+        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
+    environment["ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT"] = str(examples)
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
     # The pacemaker's shipped period is half an hour and this run settles in seconds,
