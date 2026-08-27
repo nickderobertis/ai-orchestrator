@@ -257,7 +257,7 @@ pinned branch instead of cutting a second one on the same name, and **continue**
 pinned branch nothing holds — opening the worktree at that branch's tip and
 merging the base into it — rather than refusing the pin. Both are what let a retry
 reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.16.2**, never `config/onevcs.version`:
+plan node is the adopted onepipeline 0.16.3**, never `config/onevcs.version`:
 onepipeline links onevcs, oneagentgraph, and onejudge as Rust libraries, so a
 dispatch runs the copy that release resolved, while `config/onevcs.version` pins
 the onevcs *CLI* the manager verbs run — `publish-branch`, `recoverable`,
@@ -277,9 +277,10 @@ strings -a "$(readlink -f "$(command -v onepipeline)")" \
 ```
 
 On the adopted release that answers `oneagentgraph-0.3.11`, `oneharness-core-0.12.1`,
-`onejudge-0.5.4`, and `onevcs-0.15.4` — **one** line for `oneharness-core` where the
-adoption before this one answered two, which is the answer no pin in `config/` can
-give and still the reason the table above sends `oneharness` to a different gate. A
+`onejudge-0.5.4`, and `onevcs-0.15.4` — **one** line for `oneharness-core`, where every
+adoption up to the one on 2026-08-25 answered two, which is the answer no pin in
+`config/` can give and still the reason the table above sends `oneharness` to a
+different gate. A
 second published source says the same without `strings`, without a network and
 without a clone: the same wheel ships a CycloneDX SBOM under its `dist-info/sboms/`
 declaring one version per linked crate, and `tests/test_linked_libraries.py` — whose
@@ -288,9 +289,9 @@ repository's prose to it. Both were re-taken on this host's installed artifacts 
 2026-08-27 and agree line for line.
 
 **Read the locks after that measurement, and in this order.** `git show
-v0.16.2:Cargo.lock`, at the tag of the release actually *installed*, is
+v0.16.3:Cargo.lock`, at the tag of the release actually *installed*, is
 corroboration that should agree: onepipeline's requirement is
-`onevcs = "0.15"` at v0.16.2 and its lock still resolves onevcs 0.15.4 — and here
+`onevcs = "0.15"` at v0.16.3 and its lock still resolves onevcs 0.15.4 — and here
 the *requirement* is what decided, because pre-1.0 the minor is the breaking position
 and `"0.15"` admits no 0.14.x at all. That is the opposite of the worked example
 below and is why the lock is read second rather than first: which of the two
@@ -405,13 +406,13 @@ engine wheel's bill of materials has no onetaskgraph entry to compare it with.
 **`config/oneharness.version` is the one pin that cannot be reconciled that way,
 and that is a property of what it names rather than a hole in the gate.** The crate
 beside it is `oneharness-core`: `oneagentgraph` 0.3.11 brings `oneharness-core` 0.12.1
-and `onejudge` 0.5.4 brings `oneharness-core` 0.12.1, so the adopted engine now links
-**one** release of it where the adoption before this one linked two. **That collapse
-does not make the pin reconcilable, and the check that used to say it would has been
-re-shaped rather than retired.** The reason was never the count: this pin is the
+and `onejudge` 0.5.4 brings `oneharness-core` 0.12.1, so the adopted engine links
+**one** release of it, as it has since the adoption on 2026-08-25 and did not before.
+**That collapse does not make the pin reconcilable, and the check that used to say it
+would has been re-shaped rather than retired.** The reason was never the count: this pin is the
 `oneharness` **CLI** the wrapper scripts and `just smoke` spawn, which is a different
-artifact from the core whatever the core's version graph looks like. Measured on this
-host's own installed wheels on 2026-08-25, the two disagree by a whole minor —
+artifact from the core whatever the core's version graph looks like. Re-measured on
+this host's own installed wheels on 2026-08-27, the two disagree by a whole minor —
 `config/oneharness.version` reads 0.11.0 and *that CLI wheel's own SBOM declares the
 `oneharness-core` it was compiled against as 0.12.0* — so reconciling them would
 assert that two artifacts carry one number. What
@@ -597,11 +598,12 @@ both of the first two now have. The release-targets surface — those four verbs
 links is past it too, so a dispatch resolves a release over the surface as well. The
 adoption modes merged as https://github.com/nickderobertis/onepipeline/pull/113 and are
 carried by the **engine CLI** at onepipeline 0.13.0, the first release cut after it;
-`config/onepipeline.version` reads 0.16.2, past that floor too. Those two carrying
+`config/onepipeline.version` reads 0.16.3, past that floor too. Those two carrying
 numbers are equal and are about different tools; nothing here should be read off the
-number alone. The two **pins** beside them are no longer equal, having parted at this
-adoption after two in which they coincided — so a bare number in this section may now
-be any of four things, and every one of them is written with its tool beside it. The view that shows
+number alone. The two **pins** beside them are not equal: they carried one number for
+the two adoptions ending 2026-08-24, parted at the one on 2026-08-25, and have moved
+independently at every adoption since — so a bare number in this section may be any of
+four things, and every one of them is written with its tool beside it. The view that shows
 which release carried each landed node, and every release event, is **onepipeline-ui
 0.6.3** (https://github.com/nickderobertis/onepipeline-ui/pull/36), and
 `config/onepipeline-ui.version` reads 0.6.3 — a release with **two** artifacts, the
@@ -742,10 +744,10 @@ cannot hide the session series, and the paced read that picks up a settled node'
 releases — arrived in **onepipeline 0.14.0**
 (https://github.com/nickderobertis/onepipeline/pull/117). Both floors are behind this
 host: `config/onevcs.version` reads 0.15.4 and
-`config/onepipeline.version` reads 0.16.2, and the adopted engine links onevcs
+`config/onepipeline.version` reads 0.16.3, and the adopted engine links onevcs
 0.15.4, so a dispatch resolves a phase over the same release the manager verbs do.
-**Those two numbers are no longer one number**, which they were for the two adoptions
-before this — read each with the tool beside it. What
+**Those two numbers are not one number**, which they were for the two adoptions ending
+2026-08-24 and have not been since — read each with the tool beside it. What
 it changes on this host **today** is the vocabulary and nothing else: with no release
 target declared anywhere, no session here has a Release phase, no run relays a release
 event, and a launch naming neither `adoption` nor `consumes` gets exactly the run it
@@ -997,6 +999,17 @@ and is never a command.
    conflicts in that session traced to an instruction's authority being written down
    nowhere.
 
+   **A green run proves nothing about the plan store**, so do not read a settled
+   board as the record of what happened. Each settlement is *projected* back to the
+   source project on a best-effort worker: it preserves the description an operator
+   authored there and refuses rather than defaulting when it cannot read the
+   destination, but a projection that never landed settles the run exactly like one
+   that did, and the only thing that says so is one line on the driver's own stderr —
+   which a detached run writes to a log nobody opens. The engine's own `just results`,
+   `just status`, and the run journal are the record; see [what the write-back owns,
+   and what it does not
+   guarantee](docs/orchestration.md#what-the-write-back-owns-and-what-a-green-run-proves).
+
    Triage follow-ups, keep the user informed at
    each milestone, and never let more than 30 minutes pass between updates. When
    a completed task published a PR, include the relevant PR link in its completion
@@ -1200,7 +1213,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.16.2 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.16.3 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -1627,7 +1640,7 @@ question to its manager over the run's own channel instead of guessing at a
 decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
-dispatch of a run carries it as of onepipeline 0.16.2**, composed where the dispatch
+dispatch of a run carries it as of onepipeline 0.16.3**, composed where the dispatch
 is made. That is a statement about the release in force and **not** about where the
 behaviour arrived: `executor::dispatch_env` composes the pair, and it has done so
 since onepipeline **0.8.1** (https://github.com/nickderobertis/onepipeline/pull/76).
@@ -1746,7 +1759,7 @@ timeline spans — `rollup` spans labelled `agent_role: orchestrator` — but a 
 measured here carried none, and the bounded local capture that used to back-fill
 them exists nowhere on the adopted stack; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
-cannot fully answer: on the adopted onepipeline 0.16.2 a run whose journal does not hold
+cannot fully answer: on the adopted onepipeline 0.16.3 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
 is the one line that makes the rest unprovable, so read it before acting on a node
 those views show as never settled. It used to be said only on the driver's stderr,
@@ -1790,7 +1803,7 @@ measurement's own output verbatim. Three reads reach them: `just monitor <run-id
 their own.
 
 **What `just transcript` renders on the release this host has is the calls *and*
-their outputs.** Re-measured on the adopted onepipeline 0.16.2 against the same
+their outputs.** Re-measured on the adopted onepipeline 0.16.3 against the same
 recorded run this used to be measured on, which is what closed a defect a manager
 had to be warned about here: each turn prints one `tool_call` line per call, carrying
 the tool's name and the argument string its producer recorded, and one `tool_result`
@@ -2142,7 +2155,7 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.16.2
+graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.16.3
 they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries

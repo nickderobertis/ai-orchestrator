@@ -92,11 +92,16 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # at a scoring one, and that `reply` applies an envelope's commands itself — which is
     # the premise the filter's own inaction on a claimed live edit rests on, so a release
     # that moved it would have this reader start losing manager edits.
-    # Six in the operating manual: which plan schema versions the reconciler reads, what
+    # Eight in the operating manual: which plan schema versions the reconciler reads, what
     # a monitor member's environment carries, what a judge command's does, which
     # dispatches are handed the run they may ask their manager on, where a `context` note
-    # is delivered, and that same `reply` measurement said to an operator.
-    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 6},
+    # is delivered, that same `reply` measurement said to an operator, and the two halves
+    # of the write-back's own account — the release below which it deleted the project
+    # description an operator authored, and the release its refuse-rather-than-default
+    # read was measured against. Those last two are the reason a count is declared here
+    # rather than derived: they are literals in prose about a *behaviour* that moved, so
+    # a bump has to re-open them exactly as it re-opens the six before them.
+    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 8},
 }
 
 

@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.16.2 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.16.3 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -62,8 +62,8 @@ fix86-llmlint  WALL 50m22s
 
 `WALL` is the run's elapsed time, not summed work. The **eight buckets are a closed
 set and sum exactly to it** — re-taken on the adopted engine over this host's own
-runs root, where all **137** recorded runs balance to the millisecond, which is worth
-saying because it is an invariant the crate documented before it upheld it:
+runs root on 2026-08-27, where all **207** recorded runs balance to the millisecond,
+which is worth saying because it is an invariant the crate documented before it upheld it:
 onepipeline 0.12.1 is the release that made emitted bucket totals match wall time in
 both directions, and beneath it this sentence was a claim about the contract rather
 than about a run. The set below is reconciled against

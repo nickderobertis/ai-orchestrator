@@ -13,7 +13,7 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.16.2**
+that source on every `just check` rather than restated: **`onepipeline` v0.16.3**
 (`config/onepipeline.version`) and
 the **`onevcs` 0.15.4** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
@@ -21,9 +21,10 @@ lifecycle node publishes through. The manager verbs — `just publish-branch`,
 the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.15.4** as well at
 this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
-**They have now diverged again**: two consecutive adoptions had
-`config/onepipeline.version` and `config/onevcs.version` carrying one number, and this
-one has them at 0.16.2 and 0.15.4. The habit that ambiguity taught is worth keeping
+**They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
+consecutive adoptions before it had `config/onepipeline.version` and
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.16.3
+and 0.15.4. The habit that ambiguity taught is worth keeping
 rather than retiring with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -558,7 +559,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.16.2 and is refused **by its own name**, at every schema version and on a live
+v0.16.3 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -787,7 +788,7 @@ merge, so a push that resolved its own base could merge work whose own gate had
 failed.
 
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
-2026-08-27 against the installed onepipeline 0.16.2 binary (which its SBOM and
+2026-08-27 against the installed onepipeline 0.16.3 binary (which its SBOM and
 embedded crate paths both identify as linking onevcs 0.15.4), every follow-up shape
 keeps the workstream's publication base:
 
@@ -1321,7 +1322,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.16.2.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.16.3.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1396,7 +1397,7 @@ lives. The branch and its commits are preserved; the worktree is the session's a
 goes when the session does.
 
 **A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.16.2 has no notion
+pause on either engine at the adopted versions — `onepipeline` v0.16.3 has no notion
 of one and `onevcs` 0.15.4 has none to open — and nothing is published, on a local or
 a remote identity, until the last step has settled and the publication starts. A pause is
 purely local branch state.
@@ -1962,7 +1963,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.16.2 — so every number in it was a
+journey it named are absent from `onepipeline` v0.16.3 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.
