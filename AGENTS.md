@@ -867,8 +867,9 @@ and is never a command.
    - `deps` names real prerequisites, so unrelated branches stay parallel.
    - Nodes have unique IDs; agent nodes carry `persona` + concrete `task` prose
      (and optionally `repo`/`steps` for a lifecycle that runs several steps on one
-     branch); `kind: human` nodes carry only the action prose. Start from
-     `examples/tracked-graph.example.json`. A node carrying `done_when` is refused
+     branch); `kind: human` nodes carry only the action prose. Start from the records
+     `examples/projects/tracked-release.md` and `examples/tasks/tracked-release/`,
+     which state all four shapes. A node carrying `done_when` is refused
      while the plan loads, at any declared `schema_version`. `max_turns` is how a
      task gets more room; at `schema_version: 2` it reaches the dispatch, which v1
      never did.
@@ -1706,6 +1707,25 @@ repository launches, and reads as lost rather than as overridden. Knowing which 
 wins is the whole of the answer, and `scripts/credentials-env.sh` reads this checkout's
 file and nothing else — the machine-wide one is not a fallback, not a source to read
 from, and not something this repository moves or repairs.
+
+**That same file nominates a board, and the nomination is the whole of what keeps a
+credentialed write lane off the plans board.** `GH_PROJECTS_TOKEN` is not the only name
+this checkout's `.env` carries: `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name one
+GitHub Projects board by owner and number, and onetaskgraph's own live lane — the
+integration tests of its `github-projects` plugin, which write for real — selects its
+board from exactly that pair. Absent, the lane does not fail and does not ask: it
+queries the viewer's **most recently updated** ProjectV2 and writes to whatever comes
+back. This account owns two, number 1 *"onetaskgraph live"*, which holds that lane's own
+fixtures, and number 2 *"AI Orchestrator"*, the plans board `onetaskgraph.yaml`'s
+`plans` source reads — so the moment the plans board became the more recently updated of
+the two, a credentialed write lane retargeted itself onto it with nothing said, and left
+a draft item there on 2026-08-27. This host therefore nominates
+`GH_PROJECTS_OWNER=nickderobertis` and `GH_PROJECTS_NUMBER=1`, in the gitignored `.env`
+above, because that is the file `scripts/credentials-env.sh` reads and the launcher's
+copy of it is what a launch exports from — so nothing tracked here can carry the
+nomination, and a worker in a worktree cannot make one for a future launch. Nothing
+detects its absence either: a lane with no nomination looks exactly like a lane with a
+correct one until somebody reads which board it wrote to.
 
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.

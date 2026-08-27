@@ -1445,8 +1445,10 @@ repo-specific roles (`crozier/crozier-corpus`).
 Human steps require `kind: human` and `task`, and are referenced outside the node
 as `NODE_ID/STEP_ID`. Steps share one branch and run serially in topological order
 because concurrent writers cannot safely share a worktree. See
-[`tracked-graph.example.json`](../examples/tracked-graph.example.json) for direct,
-lifecycle, top-level human, and nested human nodes in one graph.
+the records
+[`examples/projects/tracked-release.md`](../examples/projects/tracked-release.md) and
+[`examples/tasks/tracked-release/`](../examples/tasks/tracked-release) for direct,
+lifecycle, top-level human, and nested human nodes in one plan.
 The `/` separator is reserved: top-level human ids and human step ids cannot
 contain it. Existing lifecycle node ids may contain `/`; nested completion strips
 that node's exact prefix rather than assuming the first slash separates the step.

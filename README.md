@@ -29,10 +29,10 @@ just bootstrap          # install the adopted CLIs + sync the Python env
 just check              # deterministic gate (format, lint, types, personas, tests)
 just gate               # complete pre-push gate, including llmlint
 
-# Launch one recorded graph mixing agents, repos, and human gates, and supervise it:
-just orchestrate examples/tracked-graph.example.json
+# Launch one example project mixing agents, repos, and human gates, and supervise it:
+just orchestrate examples:tracked-release
 
-# One subtask is a one-node plan — the same engine, the same ledger:
+# One subtask is a one-task project — the same engine, the same ledger:
 just orchestrate examples:scheduler-research
 just orchestrate examples:health-endpoint
 

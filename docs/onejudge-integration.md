@@ -725,9 +725,11 @@ load is usually the one whose publication it blocks. Nothing is relaxed by
 retrying: a launch path that is genuinely broken fails every attempt and still
 fails, a recorded turn that violates the contract above fails on the first attempt
 without paying for a second, and a passing run reports how many launches it took.
-`tests/e2e/test_smoke_contention_e2e.py` drives the real recipe under a live load
-of real dispatches, with only the paid provider CLI doubled through oneharness's
-own `ONEHARNESS_BIN_CODEX` seam.
+The bounded relaunch itself is `oneagentgraph
+smoke`'s own policy and is proven in that repository; what this repository's suite
+drives is the recipe that spawns it — `tests/e2e/test_delegated_recipes_e2e.py` runs
+`just smoke` through the real recipe and holds it to forcing this repository's own
+agent config rather than the throwaway one the published verb writes.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
 `oneharness.judge.toml`, `oneharness.orchestrator.toml`, or

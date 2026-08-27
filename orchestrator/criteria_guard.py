@@ -759,15 +759,17 @@ class Node(NamedTuple):
 def _mapping(value: object, where: str) -> Mapping[str, Any]:
     """``value`` as a plan object, refused by name when it is something else.
 
-    A plan is a JSON document some other tool wrote, so every container this walks
-    is untrusted input. Refusing it here names the field a plan's author has to fix;
-    reaching in and hoping raises whatever `AttributeError` the shape happens to
-    produce, six frames from anything they can act on.
+    A plan is what `_project_plan` assembles out of the answers onetaskgraph returns
+    for a qualified project, so every container this walks is untrusted input.
+    Refusing it here names the field a plan's author has to fix in the store record it
+    came from; reaching in and hoping raises whatever `AttributeError` the shape
+    happens to produce, six frames from anything they can act on.
     """
     if not isinstance(value, Mapping):
         raise CriteriaError(
-            f"{where} is {type(value).__name__}, not an object; a plan states its nodes "
-            f"as JSON objects — see examples/tracked-graph.example.json"
+            f"{where} is {type(value).__name__}, not an object; a plan is assembled from "
+            f"the qualified onetaskgraph project `just check-plan` reads, and its nodes are "
+            f"that project's task records — see examples/tasks/tracked-release/"
         )
     return value
 
@@ -777,7 +779,8 @@ def _listed(value: object, where: str) -> Sequence[Any]:
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise CriteriaError(
             f"{where} is {type(value).__name__}, not a list; a plan states its nodes and "
-            f"steps as JSON arrays — see examples/tracked-graph.example.json"
+            f"steps as lists, and a lifecycle node's steps are the `onepipeline.steps` its "
+            f"own task record carries — see examples/tasks/tracked-release/service.md"
         )
     return value
 
@@ -807,10 +810,17 @@ def dispatched_nodes(plan: object) -> Iterator[Node]:
     branch — so the step is the dispatch and the node above it is not.
     """
     document = _mapping(plan, "the plan")
+    # tests/test_criteria_guard.py covers this, and no recipe journey can: `_project_plan`
+    # sets `tasks` on every plan it assembles, so a project whose store answer has no task
+    # arrives here as an empty list rather than a missing key. The two refusals below this
+    # one are reachable from a real project and are driven by
+    # tests/e2e/test_check_plan_recipe_e2e.py.
+    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
     if "tasks" not in document:
         raise CriteriaError(
             "the plan states no `tasks`, so there is nothing here to launch; a plan is the "
-            "file `just orchestrate` loads — see examples/tracked-graph.example.json"
+            "qualified onetaskgraph project `just orchestrate` launches, and its tasks are "
+            "that project's task records — see examples/projects/tracked-release.md"
         )
     tasks = _listed(document["tasks"], "the plan's `tasks`")
     for index, task in enumerate(tasks):

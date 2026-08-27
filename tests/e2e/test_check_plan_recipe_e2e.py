@@ -894,3 +894,45 @@ def test_a_path_read_in_one_criterion_is_not_paired_with_a_change_in_the_next(
 
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+class Malformed(NamedTuple):
+    """One lifecycle `steps` value a store record can carry, and what it must be told."""
+
+    #: The value the plan node states, which reaches the task record as
+    #: `onepipeline.steps` and comes back out of `_project_plan` unchanged.
+    steps: object
+    #: The refusal's opening, naming the field the plan's author has to fix.
+    field: str
+    #: The record path the refusal sends them to, which must exist in this checkout.
+    example: str
+
+
+#: Both refusals a real qualified project can reach: a store record's `onepipeline.`
+#: metadata is arbitrary JSON — nothing between the plan's author and this guard
+#: narrows it — so a `steps` that is not a list, and one whose entries are not
+#: objects, are the two shapes that arrive here malformed.
+MALFORMED_STEPS = (
+    Malformed(3, "route's `steps` is int, not a list", "examples/tasks/tracked-release/service.md"),
+    Malformed(
+        ["one"],
+        "route's `steps[0]` is str, not an object",
+        "examples/tasks/tracked-release/",
+    ),
+)
+
+
+@pytest.mark.parametrize("malformed", MALFORMED_STEPS, ids=lambda item: item.field)
+def test_a_malformed_step_is_refused_against_the_plan_input_the_recipe_reads(
+    tmp_path: Path, malformed: Malformed
+) -> None:
+    """The refusal names the store record to fix and an example this checkout has."""
+    refused = _check_plan(_with_node(_plan(tmp_path, STATES_ITS_BAR), steps=malformed.steps))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    reported = refused.stderr
+    assert malformed.field in reported, reported
+    assert "task record" in reported, reported
+    assert "JSON" not in reported, reported
+    assert malformed.example in reported, reported
+    assert (REPO_ROOT / malformed.example).exists(), reported

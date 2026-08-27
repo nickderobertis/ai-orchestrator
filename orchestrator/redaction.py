@@ -9,9 +9,11 @@ verbose transport trace would durably record a live token.
 This module keeps that impossible by construction, from the only place the value
 is known: the environment the harness itself was handed.  Every secret-looking
 variable's value is replaced with ``<redacted:NAME>`` wherever it appears.  It is
-deliberately stdlib-only and import-light so ``scripts/redact-secrets.py`` can
-stream shell output through it with the system interpreter, before any virtualenv
-exists.
+deliberately stdlib-only and import-light so anything preserving evidence can import
+it without this package's dependencies.  The shell side of the same rule is
+``redact_secrets`` in ``scripts/preserved-log.sh``, kept in pure Bash because it runs
+in front of ``just check`` where no virtualenv is guaranteed;
+``tests/test_redaction.py`` holds the two to one behavior.
 """
 
 from __future__ import annotations

@@ -76,6 +76,14 @@ SETTLED_RUN = "relink-race"
 #: A third, for the supervisory tier: its pacemaker completed a turn and settled, which
 #: is what makes a `dispatch` span exist at all. Neither run above has one — a run whose
 #: observer never finished a turn records the members and no conversation.
+#:
+#: * Rewritten: one field, the `payload.detail` of its seventh event, whose recorded
+#:   `Bash` call read a plan file the move to onetaskgraph plan storage has since
+#:   deleted. It now names the shipped example project record that replaced it. The
+#:   rewrite is declared here rather than made silently, for the same reason the slice
+#:   below declares its own: a recording nobody can tell apart from an edited one is
+#:   evidence of nothing. Nothing read from this fixture touches that payload — the
+#:   journeys below read span shape — and its 623 events are otherwise untouched.
 SUPERVISED_RUN = "dag-ui-conversation"
 #: A fourth, for the publication that reached its base: it is the one recorded here
 #: whose publication span reads `merged`, and it reached that state without ever
