@@ -1770,19 +1770,42 @@ credentialed write lane off the plans board.** `GH_PROJECTS_TOKEN` is not the on
 this checkout's `.env` carries: `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name one
 GitHub Projects board by owner and number, and onetaskgraph's own live lane — the
 integration tests of its `github-projects` plugin, which write for real — selects its
-board from exactly that pair. Absent, the lane does not fail and does not ask: it
-queries the viewer's **most recently updated** ProjectV2 and writes to whatever comes
-back. This account owns two, number 1 *"onetaskgraph live"*, which holds that lane's own
-fixtures, and number 2 *"AI Orchestrator"*, the plans board `onetaskgraph.yaml`'s
-`plans` source reads — so the moment the plans board became the more recently updated of
-the two, a credentialed write lane retargeted itself onto it with nothing said, and left
-a draft item there on 2026-08-27. This host therefore nominates
-`GH_PROJECTS_OWNER=nickderobertis` and `GH_PROJECTS_NUMBER=1`, in the gitignored `.env`
-above, because that is the file `scripts/credentials-env.sh` reads and the launcher's
-copy of it is what a launch exports from — so nothing tracked here can carry the
-nomination, and a worker in a worktree cannot make one for a future launch. Nothing
-detects its absence either: a lane with no nomination looks exactly like a lane with a
-correct one until somebody reads which board it wrote to.
+board from exactly that pair. This account owns two, number 1 *"onetaskgraph live"*,
+which holds that lane's own fixtures, and number 2 *"AI Orchestrator"*, the plans board
+`onetaskgraph.yaml`'s `plans` source reads. Under the release that lane used to
+**discover** a board when the pair was absent — it queried the viewer's most recently
+updated ProjectV2 and wrote to whatever came back — so the moment the plans board became
+the more recently updated of the two, a credentialed write lane retargeted itself onto
+it with nothing said, and left a draft item there on 2026-08-27. **The adopted
+onetaskgraph 0.2.11 no longer discovers anything**, and it wants a third name: read from
+that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
+at tag `v0.2.11`, which is where that lane lives — the board comes from
+`GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
+comes from `GH_PROJECTS_REPOSITORY`, and the lane **skips** when any of the three is
+absent, exactly as it already did without `GH_PROJECTS_TOKEN`. So the retargeting above
+is history rather than live exposure, and the cost of a missing nomination has inverted:
+a lane nobody nominated a repository for does not run at all. This host therefore
+nominates `GH_PROJECTS_OWNER=nickderobertis`, `GH_PROJECTS_NUMBER=1` and
+`GH_PROJECTS_REPOSITORY` for that lane's own repository, in the gitignored `.env` above,
+because that is the file `scripts/credentials-env.sh` reads and the launcher's copy of
+it is what a launch exports from — so nothing tracked here can carry the nomination, and
+a worker in a worktree cannot make one for a future launch. Nothing detects its absence
+either: on the release that discovered a board, a lane with no nomination looked exactly
+like a lane with a correct one until somebody read which board it wrote to; on this one
+it looks exactly like a lane whose credential is absent.
+
+**That third name is the lane's repository and not this source's**, and the two are
+configured in different places for a reason worth keeping straight. `GH_PROJECTS_*`
+steers another repository's test lane, from the process environment; what steers *this*
+host's plans board is `onetaskgraph.yaml`'s own `plans` source, and since the redesign it
+carries `repository: nickderobertis/ai-orchestrator` beside its owner and number. That
+field is where the board's project and task issues are created, because **a board is a
+container of projects and not a project**: a project is an issue and its tasks are that
+issue's sub-issues, `createIssue` requires a `repositoryId`, and a board has none of its
+own — so a write without the field is refused naming it, and the pin and the field have
+to move together. Spell it GitHub's way, `owner/name`: `github.com/nickderobertis/ai-orchestrator`
+is refused as not naming a repository, and `github.com/…` is only how the source renders
+that identity back.
 
 `just runs` lists recorded runs with the session that launched each one and the
 surfaces each has queued unread; `just runs --mine` narrows that to this session's.

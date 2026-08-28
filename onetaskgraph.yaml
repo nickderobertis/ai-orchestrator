@@ -17,4 +17,5 @@ sources:
     config:
       owner: nickderobertis
       project_number: 2
+      repository: nickderobertis/ai-orchestrator
       token_env: GH_PROJECTS_TOKEN

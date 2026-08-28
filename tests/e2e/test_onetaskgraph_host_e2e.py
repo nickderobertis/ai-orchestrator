@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NewType, TypedDict
@@ -36,6 +40,54 @@ LOCAL_PROJECT = _ProjectId("launch")
 #: `onetaskgraph.yaml` roots at this checkout's `.plans`, which these journeys point
 #: elsewhere per run. Derived rather than restated, so the native id has one source.
 LOCAL_QUALIFIED = f"authoring:{LOCAL_PROJECT}"
+#: The one task that project holds, named once so the copy journey can assert which
+#: issues a copy created rather than only how many.
+LOCAL_TASK_TITLE = "test: launch local project"
+
+
+@dataclass(frozen=True)
+class _Repository:
+    """One GitHub repository, in the two halves every call about it is spelled with.
+
+    Named rather than carried as a pair because both halves travel together through
+    three different spellings — the `owner/name` the configuration file holds, the two
+    variables GitHub's own repository lookup takes, and the `nameWithOwner` an issue
+    answers — and a pair says nothing about which of the two came first.
+    """
+
+    owner: str
+    name: str
+
+    @classmethod
+    def parse(cls, value: str, source: str) -> _Repository:
+        owner, _, name = value.partition("/")
+        if not owner or not name or "/" in name:
+            raise ValueError(f"{source} names {value!r}, which is not one `owner/name`")
+        return cls(owner=owner, name=name)
+
+    def __str__(self) -> str:
+        return f"{self.owner}/{self.name}"
+
+
+def _configured_repository() -> _Repository:
+    """The repository the committed `plans` source names.
+
+    Read out of the file under test rather than restated here: what the copy journeys
+    assert is that the *configured* repository is the one a create reaches, so a
+    fixture holding its own copy of that value would still pass with the file naming
+    another repository — or none.
+    """
+    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+    named = re.search(r"^\s+repository:\s*(\S+)\s*$", text, re.MULTILINE)
+    if named is None:
+        raise ValueError("onetaskgraph.yaml names no repository for its `plans` source")
+    return _Repository.parse(named.group(1), "onetaskgraph.yaml's `plans` source")
+
+
+CONFIGURED_REPOSITORY = _configured_repository()
+#: A repository under the same owner that the board fixture answers as invisible, which
+#: is what GitHub answers for one that does not exist or that the token cannot see.
+UNREACHABLE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="not-a-repository")
 
 
 class _AddedNode(TypedDict):
@@ -131,57 +183,237 @@ def _stored_project_content(body: str, project_id: _ProjectId) -> str | None:
     raise ValueError(f"the store holds no project {project_id!r}")
 
 
-@dataclass(frozen=True)
-class _GitHubProjectFixture:
-    node_id: str = "PVT_fixture"
-    title: str = "AI Orchestrator"
-    description: str = "Permanent plans"
-    url: str = "https://github.com/users/nickderobertis/projects/2"
-    timestamp: str = "2026-08-26T00:00:00Z"
+#: The node identifiers GitHub gives the things on one board, each a type of its own
+#: because the writes under test address different ones: a field value is set on a
+#: board item, a sub-issue link names issue content, a status is chosen among one
+#: field's options, and `createIssue` takes a repository a board has none of. Spelling
+#: them all `str` would let this fixture answer a source that had confused two of them
+#: exactly as it answers one that had not, which is the confusion it exists to catch.
+_BoardNodeId = NewType("_BoardNodeId", str)
+_BoardItemId = NewType("_BoardItemId", str)
+_IssueNodeId = NewType("_IssueNodeId", str)
+_FieldNodeId = NewType("_FieldNodeId", str)
+_FieldOptionId = NewType("_FieldOptionId", str)
+_RepositoryNodeId = NewType("_RepositoryNodeId", str)
+#: The board field the source owns and reads a copy's origin back out of, and the
+#: `Status` field every board carries. A category this board cannot represent refuses
+#: the write naming it, so the options below are the three the shipped mapping reaches
+#: by name; `done` and `cancelled` close the issue instead and need no option.
+ORIGIN_FIELD_NAME = "onetaskgraph.origin"
+ORIGIN_FIELD_ID = _FieldNodeId("FIELD_origin")
+STATUS_FIELD_ID = _FieldNodeId("FIELD_status")
 
-    def graphql_response(self) -> dict[str, object]:
-        project: dict[str, object] = {
-            "id": self.node_id,
-            "title": self.title,
-            "shortDescription": self.description,
-            "url": self.url,
-            "createdAt": self.timestamp,
-            "updatedAt": self.timestamp,
-            "closed": False,
-            "fields": {"nodes": [], "pageInfo": {"hasNextPage": False}},
-            "items": {
-                "nodes": [],
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
+
+@dataclass(frozen=True)
+class _StatusOption:
+    id: _FieldOptionId
+    name: str
+
+    def rendered(self) -> dict[str, str]:
+        return {"id": self.id, "name": self.name}
+
+
+STATUS_OPTIONS: tuple[_StatusOption, ...] = (
+    _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
+    _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
+    _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
+)
+#: The node id the fixture answers the configured repository's own lookup with. The
+#: journey asserts this reaches `createIssue`, which is the whole of what naming a
+#: repository on the source buys: a board has none of its own, so a write without it
+#: is refused rather than filed somewhere.
+REPOSITORY_NODE_ID = _RepositoryNodeId("R_ai_orchestrator")
+#: A project somebody wrote on the board by hand, carrying one sub-issue. A board issue
+#: is a project when it has sub-issues or the source's own item-kind marker, so a board
+#: whose items were empty would answer `project list` with nothing — the board's own
+#: title is not a project and is never read as one.
+BOARD_PROJECT_TITLE = "Board-authored plan"
+BOARD_TASK_TITLE = "Read the board back"
+
+
+@dataclass
+class _Issue:
+    """One issue on the board, under the two node ids GitHub gives it.
+
+    `item_id` is the board's row and `content_id` is the issue itself, and the writes
+    address different ones: a field value is set on the row, while a sub-issue link and
+    an issue update name the content. Collapsing them into one id would let a fixture
+    pass a source that confused the two.
+    """
+
+    item_id: _BoardItemId
+    content_id: _IssueNodeId
+    title: str
+    body: str
+    parent_id: _IssueNodeId | None = None
+    sub_issues: int = 0
+
+    def item(self) -> dict[str, object]:
+        return {
+            "id": self.item_id,
+            "fieldValues": {
+                "nodes": [
+                    {
+                        "name": "Todo",
+                        "field": {
+                            "id": STATUS_FIELD_ID,
+                            "name": "Status",
+                            "options": [option.rendered() for option in STATUS_OPTIONS],
+                        },
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+            "content": {
+                "__typename": "Issue",
+                "id": self.content_id,
+                "title": self.title,
+                "body": self.body,
+                "url": f"https://github.com/{CONFIGURED_REPOSITORY}/issues/{self.item_id}",
+                "createdAt": "2026-08-26T00:00:00Z",
+                "updatedAt": "2026-08-26T00:00:00Z",
+                "state": "OPEN",
+                "stateReason": None,
+                "repository": {"nameWithOwner": str(CONFIGURED_REPOSITORY)},
+                "parent": None if self.parent_id is None else {"id": self.parent_id},
+                "subIssuesSummary": {"total": self.sub_issues},
+                "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
             },
         }
+
+
+class _Board:
+    """One Projects v2 board, mutated by the writes the source performs against it.
+
+    Stateful because the operations under test are a sequence rather than one call:
+    a copy resolves the configured repository, creates an issue in it, files that
+    issue on the board and then files the project's tasks under it as sub-issues, and
+    each of those reads the board again. A handler that answered one canned document
+    would report a board the writes never reached.
+    """
+
+    node_id: ClassVar[_BoardNodeId] = _BoardNodeId("PVT_fixture")
+    title: ClassVar[str] = "AI Orchestrator"
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        parent = _Issue(
+            item_id=_BoardItemId("PVTI_board_plan"),
+            content_id=_IssueNodeId("I_board_plan"),
+            title=BOARD_PROJECT_TITLE,
+            body="A plan an operator wrote on the board itself.",
+            sub_issues=1,
+        )
+        child = _Issue(
+            item_id=_BoardItemId("PVTI_board_task"),
+            content_id=_IssueNodeId("I_board_task"),
+            title=BOARD_TASK_TITLE,
+            body="Its one sub-issue, which is what makes the issue above a project.",
+            parent_id=parent.content_id,
+        )
+        self.issues: list[_Issue] = [parent, child]
+        self.created: list[_Issue] = []
+
+    def board_response(self) -> dict[str, object]:
         return {
             "data": {
-                "owner": {"projectV2": project},
-                "user": {"projectV2": None},
+                "owner": {
+                    "projectV2": {
+                        "id": self.node_id,
+                        "title": self.title,
+                        "fields": {
+                            "nodes": [
+                                {
+                                    "__typename": "ProjectV2SingleSelectField",
+                                    "id": STATUS_FIELD_ID,
+                                    "name": "Status",
+                                    "options": [option.rendered() for option in STATUS_OPTIONS],
+                                },
+                                {
+                                    "__typename": "ProjectV2Field",
+                                    "id": ORIGIN_FIELD_ID,
+                                    "name": ORIGIN_FIELD_NAME,
+                                },
+                            ],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "items": {
+                            "nodes": [issue.item() for issue in self.issues],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        },
+                    }
+                }
+            }
+        }
+
+    def create_issue(self, variables: dict[str, object]) -> dict[str, object]:
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("createIssue requires an input object")
+        title = payload.get("title")
+        body = payload.get("body")
+        if not isinstance(title, str) or not isinstance(body, str):
+            raise ValueError("createIssue requires a title and a body")
+        created = _Issue(
+            item_id=_BoardItemId(f"PVTI_created_{len(self.created)}"),
+            content_id=_IssueNodeId(f"I_created_{len(self.created)}"),
+            title=title,
+            body=body,
+        )
+        self.created.append(created)
+        self.issues.append(created)
+        return {"data": {"createIssue": {"issue": {"id": created.content_id}}}}
+
+    def _issue(self, content_id: object) -> _Issue:
+        for issue in self.issues:
+            if issue.content_id == content_id:
+                return issue
+        raise ValueError(f"the board holds no issue {content_id!r}")
+
+    def add_to_board(self, variables: dict[str, object]) -> dict[str, object]:
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("addProjectV2ItemById requires an input object")
+        return {
+            "data": {
+                "addProjectV2ItemById": {
+                    "item": {"id": self._issue(payload.get("contentId")).item_id}
+                }
+            }
+        }
+
+    def add_sub_issue(self, variables: dict[str, object]) -> dict[str, object]:
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("addSubIssue requires an input object")
+        parent = self._issue(payload.get("issueId"))
+        child = self._issue(payload.get("subIssueId"))
+        child.parent_id = parent.content_id
+        parent.sub_issues += 1
+        return {
+            "data": {
+                "addSubIssue": {
+                    "issue": {"id": parent.content_id},
+                    "subIssue": {"id": child.content_id},
+                }
             }
         }
 
 
 @dataclass(frozen=True)
-class _GraphQLVariables:
-    owner: str
-    number: int
-
-    @classmethod
-    def from_mapping(cls, value: object) -> _GraphQLVariables:
-        if not isinstance(value, dict):
-            raise ValueError("GraphQL variables must be an object")
-        owner = value.get("owner")
-        number = value.get("number")
-        if not isinstance(owner, str) or not isinstance(number, int):
-            raise ValueError("GraphQL variables require string owner and integer number")
-        return cls(owner=owner, number=number)
-
-
-@dataclass(frozen=True)
 class _GraphQLRequest:
+    """One request the source made, kept as its operation and its own variables.
+
+    The operation is derived from the document rather than sent beside it, because
+    the source names none of its operations: routing on the root field is what a
+    GraphQL server does with an anonymous document, and it is what lets one handler
+    answer a board read and a create in the sequence a copy performs them.
+    """
+
     query: str
-    variables: _GraphQLVariables
+    variables: dict[str, object]
 
     @classmethod
     def from_json(cls, body: bytes) -> _GraphQLRequest:
@@ -189,12 +421,63 @@ class _GraphQLRequest:
         if not isinstance(payload, dict):
             raise ValueError("GraphQL request must be an object")
         query = payload.get("query")
+        variables = payload.get("variables")
         if not isinstance(query, str):
             raise ValueError("GraphQL request requires a query string")
-        return cls(query=query, variables=_GraphQLVariables.from_mapping(payload.get("variables")))
+        if not isinstance(variables, dict):
+            raise ValueError("GraphQL request requires a variables object")
+        return cls(query=query, variables=variables)
+
+    @property
+    def operation(self) -> _Operation:
+        for marker, operation in _OPERATIONS.items():
+            if marker in self.query:
+                return operation
+        raise ValueError(f"no fixture operation answers {self.query!r}")
+
+    @property
+    def repository(self) -> _Repository:
+        return _Repository(owner=self.string("owner"), name=self.string("name"))
+
+    def string(self, name: str) -> str:
+        value = self.variables.get(name)
+        if not isinstance(value, str):
+            raise ValueError(f"GraphQL variable {name!r} must be a string")
+        return value
+
+    def input_value(self, name: str) -> object:
+        payload = self.variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("GraphQL request has no input object")
+        return payload.get(name)
 
 
-FIXTURE = _GitHubProjectFixture()
+class _Operation(StrEnum):
+    BOARD = "board"
+    REPOSITORY = "repository"
+    DEPENDENCIES = "dependencies"
+    CREATE_ISSUE = "createIssue"
+    ADD_TO_BOARD = "addToBoard"
+    UPDATE_FIELD = "updateField"
+    ADD_SUB_ISSUE = "addSubIssue"
+    UPDATE_ISSUE = "updateIssue"
+
+
+#: Each operation's marker in the document the source sends, in the order they are
+#: tried. The source ships its queries as constants, so the root field is a stable
+#: substring of each one and is what tells a board read from the writes that follow it.
+_OPERATIONS: dict[str, _Operation] = {
+    "repositoryOwner": _Operation.BOARD,
+    "{repository(owner:": _Operation.REPOSITORY,
+    "blockedBy(first:": _Operation.DEPENDENCIES,
+    "createIssue(": _Operation.CREATE_ISSUE,
+    "addProjectV2ItemById(": _Operation.ADD_TO_BOARD,
+    "updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELD,
+    "addSubIssue(": _Operation.ADD_SUB_ISSUE,
+    "updateIssue(": _Operation.UPDATE_ISSUE,
+}
+
+BOARD = _Board()
 
 
 class _GitHubFixture(BaseHTTPRequestHandler):
@@ -202,16 +485,97 @@ class _GitHubFixture(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         length = int(self.headers["Content-Length"])
-        self.requests.append(_GraphQLRequest.from_json(self.rfile.read(length)))
-        body = json.dumps(FIXTURE.graphql_response()).encode()
+        request = _GraphQLRequest.from_json(self.rfile.read(length))
+        self.requests.append(request)
+        body = json.dumps(self._answer(request)).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _answer(self, request: _GraphQLRequest) -> dict[str, object]:
+        """The document this fixture answers one operation with.
+
+        An operation it does not implement is answered as a GraphQL error naming the
+        document, so a source that starts making a call this board cannot serve fails
+        saying which call rather than on a missing field somewhere downstream.
+        """
+        try:
+            operation = request.operation
+        except ValueError as unknown:
+            return {"errors": [{"message": str(unknown)}]}
+        match operation:
+            case _Operation.BOARD:
+                return BOARD.board_response()
+            case _Operation.REPOSITORY:
+                return self._repository(request.repository)
+            case _Operation.DEPENDENCIES:
+                empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+                return {
+                    "data": {"node": {"__typename": "Issue", "blockedBy": empty, "blocking": empty}}
+                }
+            case _Operation.CREATE_ISSUE:
+                return BOARD.create_issue(request.variables)
+            case _Operation.ADD_TO_BOARD:
+                return BOARD.add_to_board(request.variables)
+            case _Operation.UPDATE_ISSUE:
+                return {"data": {"updateIssue": {"issue": {"id": request.input_value("id")}}}}
+            case _Operation.UPDATE_FIELD:
+                return {
+                    "data": {
+                        "updateProjectV2ItemFieldValue": {
+                            "projectV2Item": {"id": request.input_value("itemId")}
+                        }
+                    }
+                }
+            case _Operation.ADD_SUB_ISSUE:
+                return BOARD.add_sub_issue(request.variables)
+
+    @staticmethod
+    def _repository(named: _Repository) -> dict[str, object]:
+        """What GitHub answers about one repository, and about one it will not show.
+
+        A repository that does not exist, or that the token cannot see, comes back as a
+        present and null field rather than as an error — which is the answer the source
+        turns into its refusal, so it is the answer this fixture gives.
+        """
+        if named != CONFIGURED_REPOSITORY:
+            return {"data": {"repository": None}}
+        return {
+            "data": {
+                "repository": {"id": REPOSITORY_NODE_ID, "nameWithOwner": str(named)},
+            }
+        }
+
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+@contextmanager
+def _serving_board() -> Iterator[dict[str, str]]:
+    """Serve the board fixture, yielding the environment that points `plans` at it.
+
+    The board is reset per journey rather than shared: it is mutated by the writes a
+    copy performs, so a second journey reading the residue of the first would report a
+    board somebody else's copy filled in.
+    """
+    BOARD.reset()
+    _GitHubFixture.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _GitHubFixture)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield {
+            "GH_PROJECTS_TOKEN": "fixture-token",
+            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": (
+                f"http://127.0.0.1:{server.server_port}/graphql"
+            ),
+        }
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def _plan_environment(root: Path) -> dict[str, str]:
@@ -235,7 +599,7 @@ def _write_local_project(root: Path) -> None:
                 {
                     "id": "probe",
                     "persona": "engineer",
-                    "title": "test: launch local project",
+                    "title": LOCAL_TASK_TITLE,
                     "task": "## What\nReply with done.\n\n## Why\nProve launch.\n\n"
                     "## Acceptance criteria\n- The task settles.\n",
                 }
@@ -245,22 +609,17 @@ def _write_local_project(root: Path) -> None:
 
 
 def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) -> None:
-    """The committed owner/project pair reaches a fixture through the installed release."""
+    """The committed owner/project pair reaches a fixture through the installed release.
+
+    The board's projects are what this reads back, never the board: the adopted source
+    holds many projects on one board as issues and their sub-issues, so the board's own
+    title is a container's name and answering `project list` with it would be reporting
+    a project nobody wrote.
+    """
     _write_local_project(tmp_path)
-    _GitHubFixture.requests = []
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _GitHubFixture)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
+    with _serving_board() as remote:
         environment = _plan_environment(tmp_path)
-        environment.update(
-            {
-                "GH_PROJECTS_TOKEN": "fixture-token",
-                "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": (
-                    f"http://127.0.0.1:{server.server_port}/graphql"
-                ),
-            }
-        )
+        environment.update(remote)
         result = subprocess.run(
             ["just", "plans", "project", "list", "--json"],
             cwd=REPO_ROOT,
@@ -269,21 +628,100 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
             capture_output=True,
             check=False,
         )
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert {
-        "launch",
-        "AI Orchestrator",
-    }.issubset({item["item"]["title"] for item in payload["items"]})
-    assert _GitHubFixture.requests
-    variables = _GitHubFixture.requests[0].variables
-    assert variables.owner == "nickderobertis"
-    assert variables.number == 2
+    titles = {item["item"]["title"] for item in payload["items"]}
+    assert {"launch", BOARD_PROJECT_TITLE}.issubset(titles)
+    assert BOARD.title not in titles, (
+        "the board is a container of projects and not a project, and this read "
+        f"returned its own title among {titles}"
+    )
+    board_reads = [
+        request for request in _GitHubFixture.requests if request.operation is _Operation.BOARD
+    ]
+    assert board_reads
+    assert board_reads[0].variables["owner"] == "nickderobertis"
+    assert board_reads[0].variables["number"] == 2
+
+
+def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Path) -> None:
+    """A copy to `plans` creates its issues in the repository this checkout names.
+
+    That naming is the whole of what the `repository` field buys: a board has no
+    repository of its own and `createIssue` requires one, so a copy either resolves the
+    configured repository's node id and files every issue against it or is refused. The
+    node id the fixture answers with is asserted at `createIssue` rather than only at
+    the lookup, because a source that asked for the repository and then created its
+    issues somewhere else would pass the lookup assertion alone.
+    """
+    _write_local_project(tmp_path)
+    with _serving_board() as remote:
+        environment = _plan_environment(tmp_path)
+        environment.update(remote)
+        copied = subprocess.run(
+            ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    lookups = {
+        request.repository
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.REPOSITORY
+    }
+    assert lookups == {CONFIGURED_REPOSITORY}, (
+        "the copy has to resolve the repository this checkout configures, and it "
+        f"looked up {lookups}"
+    )
+    creations = [
+        request
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.CREATE_ISSUE
+    ]
+    assert {request.input_value("repositoryId") for request in creations} == {REPOSITORY_NODE_ID}, (
+        "every created issue has to carry the configured repository's own node id"
+    )
+    assert {issue.title for issue in BOARD.created} == {LOCAL_PROJECT, LOCAL_TASK_TITLE}
+    filed = {
+        (request.input_value("issueId"), request.input_value("subIssueId"))
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.ADD_SUB_ISSUE
+    }
+    project, task = BOARD.created[0], BOARD.created[1]
+    assert filed == {(project.content_id, task.content_id)}, (
+        f"a project's tasks are its issue's sub-issues, and this copy filed {filed}"
+    )
+
+
+def test_project_copy_is_refused_when_the_configured_repository_is_unreachable(
+    tmp_path: Path,
+) -> None:
+    """A repository the token cannot see refuses the copy before anything is created."""
+    _write_local_project(tmp_path)
+    with _serving_board() as remote:
+        environment = _plan_environment(tmp_path)
+        environment.update(remote)
+        environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__REPOSITORY"] = str(UNREACHABLE_REPOSITORY)
+        copied = subprocess.run(
+            ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert copied.returncode != 0, copied.stdout
+    assert str(UNREACHABLE_REPOSITORY) in copied.stderr, copied.stderr
+    assert not BOARD.created, (
+        "a repository this destination cannot reach has to refuse before it creates "
+        f"anything, and it created {[issue.title for issue in BOARD.created]}"
+    )
 
 
 def test_missing_remote_credential_keeps_local_plan_launchable(

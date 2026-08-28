@@ -27,6 +27,21 @@ reports its changing graph and outcomes on the board itself; the run journal rem
 the detailed execution record. The `plans` recipe is the operator's direct store
 surface, while `orchestrate` launches the tracked run and keeps its source plan current.
 
+The `plans` source is one GitHub Projects board, and since the redesigned
+`github-projects` source **a board is a container of projects rather than a project**: a
+project is an issue, its tasks are that issue's sub-issues, and the board's own title is
+never read as a project. Creating an issue needs a repository and a board has none of its
+own, so that source names one — `repository: nickderobertis/ai-orchestrator` in
+`onetaskgraph.yaml`, spelled GitHub's own `owner/name` way — and it is where every
+project and task issue a copy or a write-back creates is filed. A write with no
+repository named is refused naming the field, so the field and
+`config/onetaskgraph.version` move together: the release below the adopted one refuses
+the field as unknown, and the adopted one refuses the write without it. Reads never need
+it, which is why a board can still be listed by a checkout that names none.
+`tests/e2e/test_onetaskgraph_host_e2e.py` drives both halves against a board fixture —
+a copy of a local project files its issues in the configured repository, and a
+repository the credential cannot reach refuses the copy before anything is created.
+
 ## What the write-back owns, and what a green run proves
 
 **What the write-back owns is the node projection, and nothing else on that record.**
