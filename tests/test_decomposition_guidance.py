@@ -97,6 +97,15 @@ OWNED_STATEMENTS = (
     Owned(MANAGER.document, "the framework writes the reference block, so a task must not"),
     Owned(MANAGER.document, "A probe is not a gate"),
     Owned(MANAGER.document, "the person who has to act, or find who will"),
+    # What a node that changes code owes its judge, now that this host has stopped
+    # dispatching a worker to run its repository's whole bar. The split is the same one:
+    # writing that criterion is the planner's and it travels, while what a manager then
+    # reads when the merge path refuses the branch is the manager's and it stays. A copy
+    # of either half in the other document is how a plan comes to demand a gate again —
+    # the demand this host removed, and the one a judge will happily import.
+    Owned(PLANNER.document, "Never make a node's repository-wide gate one of those criteria"),
+    Owned(MANAGER.document, "**Node criteria stopped naming a gate here**"),
+    Owned(MANAGER.document, "`checks-failed` is the ordinary way that arrives"),
     # The mechanics: the shape a contract node takes in this engine's graph, and how
     # its dependents are wired to it.
     Owned(MECHANICS.document, "no-op or sample-data implementation"),

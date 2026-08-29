@@ -2,61 +2,23 @@
 
 ### Operational notes for this host
 
-**Iterate on the judged tier alone. Never loop on the complete gate.** This is the single
-most expensive mistake made in this workstream: one node ran the complete gate three times
-to learn its lint findings — ~28 minutes a round, each round ending on the judged tier
-after the deterministic tier had already passed — and then cleared its last two findings in
-four minutes once it split them. Your loop is
+**Run only the checks that exercise what you changed.** The tests that cover the code
+you touched, the lint that reads your diff — and nothing wider. The repository's own
+automation runs the full bar downstream on the change this work becomes: a `pre-push`
+hook where that repository publishes locally, the host's required checks where it
+publishes remotely. Neither is waiting for you to have run it first, so running it here
+spends twenty to forty minutes of this dispatch learning what the merge path reports
+anyway. That is measured rather than estimated: one node in this workstream spent about
+84 minutes on three rounds of everything its repository could run, to reach lint findings
+a diff-scoped run reports in two.
 
-    just lint-llm-diff "$BASE"
-
-alone, about two minutes a roll. The complete gate is `complete_gate` below, and you run it
-over the **finished** tree to confirm rather than as the loop that finds your findings.
-What that "once" does and does not license is the paragraph after next.
-
-**Define the complete gate once, before you start, and never spell it out again.** Every
-part of it varies by repository — the base branch is not always `main`, the recipe that is
-the full bar is not always called `gate`, and that recipe already runs the judged tier in
-some repositories while in others that tier is a separate step — so all of it lives in one
-definition and everything below calls it. **Derive both values before you run anything;
-neither is a fixed string, and the second one is the one workers get wrong:**
-
-    BASE=origin/master   # confirm it: git remote show origin | sed -n 's/.*HEAD branch: /origin\//p'
-    GATE=gate            # confirm it: just --list — take the recipe whose own description is
-                         # this repository's full bar, whatever it is called
-    complete_gate() { just bootstrap && just "$GATE" && just lint-llm-diff "$BASE"; }
-
-A repository with no `gate` recipe is ordinary rather than broken, and substituting is what
-you are meant to do: crozier has none, and its `check` is described by its own `just --list`
-as *"Full quality gate. Fails on any issue."* — so `GATE=check` there, and a dispatch that
-insisted on `just gate` would have run nothing at all.
-
-**Nothing outside the repository answers which recipe that is.** `config/onevcs.rules.yml`
-carried a per-identity `gate:` command until **onevcs 0.11.0 removed the concept** — a rule
-is `{publication, approvals}` now and a `gate:` key is refused by name — so it is no longer
-an answer. `just repos`'s gate column is not one either: it is the registry's own detection
-from the origin and the checkout, and it prints `just gate` for repositories that have no
-such recipe. The repository's own `just --list` is what decides.
-
-It has to run as **one invocation**, over the tree you are reporting on. That is the whole
-of what is being checked — that the chain ran end to end in one command, not that your
-report echoes this file's spelling of it. A report that **names the command you
-substituted** (`just bootstrap && just check && just lint-llm-diff origin/master`) has
-satisfied the rule, and is the better report, because it says what actually ran. What fails
-is running the parts separately, however green each was on its own — which is why nothing
-below ever names a part of the chain instead of the whole of it.
-
-**"Once" is a rule against looping, not a per-dispatch budget.** The reason to run the
-complete gate exactly once is that it is a ~28-minute way to learn something the judged
-tier reports in two; it is not an allowance of one run per dispatch to be spent and then
-cited. A worker today read it as the budget, edited a file after its gate had gone green,
-and would have cited that green in its completion report — correctly, by the letter of the
-instruction, which is why the instruction is now stated in full. A gate run that predates
-your last edit verified a tree that no longer exists, and a report citing it is inaccurate
-however green it was. So: iterate on the judged tier alone, then run the complete gate over
-the tree you are actually reporting on. If it reports something, fix that and run it again
-— that second run is the rule working, not a breach of it. What you may never do is reach
-for it *before* the judged tier, to discover findings, which is the whole cost above.
+**Pick those checks from your change, and take the narrowest scope each one supports.**
+One test module over the whole suite; the lint over your diff over the lint over the
+tree. A repository's own fast deterministic tier is a fine choice when it is what
+exercises your change — its `just --list` says which recipe that is — and a poor one when
+you reached for it because it was the widest thing available. When a check you ran
+reports something, fix that and run **that check** again; nothing here asks you to re-run
+its neighbours to confirm, and a wider tier cannot re-check a finding it never made.
 
 **Never signal a process you did not identify by PID, and a PID you got from a pattern is
 still a pattern kill.** Several managers share this host, and their dispatches, drivers,
@@ -110,12 +72,12 @@ unconditionally and then reported a publish as RUNNING that did not exist. That 
 the evidence that matters most — a rule its own author reproduces an hour after issuing it
 is a rule whose wording is the problem rather than its reader.
 
-**Wait with a sentinel file.** Background `complete_gate` itself — the whole chain, so what
-you waited on is the same command the paragraphs above call complete — and poll for a file
-only that command can write:
+**Wait with a sentinel file.** Background the whole command you are waiting on — one
+command, so that what you waited on is what you meant to run — and poll for a file only
+that invocation can write:
 
-    ( complete_gate > /tmp/gate.log 2>&1; echo $? > /tmp/gate.exit ) &
-    until [ -f /tmp/gate.exit ]; do sleep 20; done
+    ( just test > /tmp/check.$$.log 2>&1; echo $? > /tmp/check.$$.exit ) &
+    until [ -f /tmp/check.$$.exit ]; do sleep 20; done
 
 **To ask whether a process is running at all, match the executable, not the command line.**
 `pgrep -x onepipeline` matches process *names* exactly — the binary, not its arguments — so
@@ -134,12 +96,12 @@ start.
 
 **One sentinel and one log per invocation, and look before you launch one.** That pair is a
 shape rather than two literal paths. Several dispatches run on this host at once and they
-share `/tmp`, so a second worker writing `/tmp/gate.log` writes into the first one's — and
-`until [ -f /tmp/gate.exit ]` returns immediately on somebody else's exit file, reporting
-their result as yours. Name both after the invocation (`/tmp/gate.$$.log`, or the node id),
-and, before starting it, check whether its sentinel path is already in use by another
+share `/tmp`, so a second worker writing `/tmp/check.log` writes into the first one's — and
+`until [ -f /tmp/check.exit ]` returns immediately on somebody else's exit file, reporting
+their result as yours. Name both after the invocation (`/tmp/check.$$.log`, or the node
+id), and, before starting it, check whether its sentinel path is already in use by another
 invocation; if so, choose a different invocation-specific pair. This path-ownership check
-does not prohibit concurrent gates or judged tiers. Three workers collided on shared names
+does not prohibit concurrent checks or judged tiers. Three workers collided on shared names
 today and not one of the three failures read as what it was: two
 deterministic-tier runs deadlocked against the same cargo target-directory lock, so both
 logs sat unchanged and neither progressed — about fifteen minutes lost and three
@@ -150,7 +112,7 @@ has stopped growing as two commands blocking each other before you read it as on
 working.
 
 **Root-owned files after a container run.** The pre-push visual guard captures in Docker
-as root and can leave `.nx/` and `dist/` unwritable, failing the *next* gate with `NX
+as root and can leave `.nx/` and `dist/` unwritable, failing the *next* check with `NX
 Permission denied (os error 13)`. There is no passwordless sudo; repair from inside a
 container:
 
@@ -166,18 +128,19 @@ runner; it announces itself as an unrelated test failing. One command rules it o
 
     df -h /home .
 
-**The judged tier is nondeterministic.** It has already returned opposite verdicts on an
-identical diff in this workstream. Clear the findings it names, then stop — do not re-run
-hunting a clean sheet, and never suppress a rule to move a number. If a rule looks wrong
-or misapplied, say so with evidence rather than editing it.
+**The judged lint tier is nondeterministic**, wherever a repository runs one. It has
+already returned opposite verdicts on an identical diff in this workstream. Clear the
+findings it names, then stop — do not re-run hunting a clean sheet, and never suppress a
+rule to move a number. If a rule looks wrong or misapplied, say so with evidence rather
+than editing it.
 
 **`--no-verify` is not an acceptable response to a slow or inconvenient hook.** The hooks
 are this repository's enforcement point — there is no CI — so bypassing one commits work
-that nothing has checked, and the closeout gate does not catch it afterwards: that runs
-over the finished tree, by which point a bypassed commit is simply history. Two workers
+that nothing has checked, and nothing you run afterwards catches it: a check runs over
+the finished tree, by which point a bypassed commit is simply history. Two workers
 today reached for `git commit --no-verify`, both on a commit they had judged mechanical,
 and one of the two was a *merge* commit — a conflict resolution, which is the single most
-likely commit in a dispatch to be wrong. No gate caught either one; the monitor caught
+likely commit in a dispatch to be wrong. No check caught either one; the monitor caught
 both. If a hook is slow, wait for it. If it refuses, it is telling you something about the
 commit in front of you, and the answer is to fix the commit.
 
@@ -185,6 +148,17 @@ commit in front of you, and the answer is to fix the commit.
 merge`. Finish the branch, commit everything, leave the tree clean, and report — the
 lifecycle publishes it after you settle. Publication is explicitly **not** yours to
 perform and **not** part of your acceptance criteria.
+
+**Your completion report is the last thing this dispatch produces, and it describes the
+tree as it finally is.** Every commit you made, every check you ran, over the tree that
+exists when you stop. A report that predates your last commit describes a tree that no
+longer exists, and is read as work left half-applied — which is how six of fourteen nodes
+in one workstream settled `task-failed` while their work was complete and green, every
+verdict naming the order of the report rather than a criterion it missed. So there is
+nothing to do differently while you work and one thing that has to be true at the end:
+whatever you find after you have written the report — a check you re-ran, a file you
+touched, a finding you cleared — is fixed first and then reported afresh, so that the
+report the judge reads is about the tree the judge can see.
 
 ### State the bar in `## Acceptance criteria`, not only here
 

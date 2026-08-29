@@ -962,10 +962,17 @@ and is never a command.
      not all be satisfied while the goal is missed. Unrealistic testing is where
      that gap usually hides.
    - Each node's `## Acceptance criteria` carries its own verification demand,
-     including the complete gate where the node changes code. Nothing else asks
-     for one: the completion clause every dispatch shares states only that the
-     task's criteria are met and the change is committed whole, so a gate no
-     node's list names is a gate no judge looks for.
+     and for a node that changes code that demand is the checks which exercise
+     the change — the tests over what it touched, the lint over its diff — never
+     its repository's complete gate. Nothing else asks for one: the completion
+     clause every dispatch shares states only that the task's criteria are met
+     and the change is committed whole, so a demand no node's list names is a
+     demand no judge looks for. **Node criteria stopped naming a gate here**, and
+     a plan that names one again is asking a worker for something this host no
+     longer dispatches it to do: the full bar runs downstream on the merge path,
+     after the node has settled, so a criterion resting on it is one the worker
+     cannot satisfy from inside its own dispatch — the failure the bullet below
+     is about.
    - Every criterion is satisfiable by the worker inside its own dispatch, from
      what that dispatch controls. One resting on a merged change request, a
      deploy, or a third party describes state that arrives after the worker is
@@ -1427,8 +1434,21 @@ and a supervisor that escalated on the stream alone escalated wrongly here.
 None of these roles authors target-project content; dispatch implementation and
 research to workers.
 
-Require each worker to prove its own change with `just gate`. Review surfaced gate
-evidence rather than a judge verdict alone; relevant checks must not have skipped.
+Require each worker to prove its own change with the checks that exercise it — the
+tests over what it touched, the lint over its diff — not with `just gate`, which this
+host stopped asking a dispatch to run. Review the evidence it surfaces rather than a
+judge verdict alone; relevant checks must not have skipped.
+
+**So the merge path is what refuses a bad branch now, and `checks-failed` is the
+ordinary way that arrives.** A worker that ran less will sometimes hand over a branch
+its repository's own bar then rejects, and the engine dispatches that node again onto
+the same branch with the failure's reason — three attempts by default — before settling
+on one of the five retryable failure words. Read one as the system working rather than
+as a worker that misbehaved: what it costs is a retry on a branch that already exists,
+against what a dispatch used to spend twenty to forty minutes of every node learning in
+advance. What it does not license is a settled `checks-failed` left unread; that is
+still a branch carrying a tree the merge path would not pass, and still yours to look
+at.
 
 ## Personas and the base config
 
@@ -2210,9 +2230,11 @@ only when the pushed diff touches `scripts/`,
 `oneharness.judge.toml`, `oneharness.orchestrator.toml`, or
 `oneharness.check-in.toml`; ordinary pushes consume no harness quota.
 
-A dispatched change is not done until `just gate` is green, and its agent clears
-its own llmlint findings rather than leaving closeout to integration: iterate on
-them with `just lint-llm-diff <base>` alone, then run `just gate` once to confirm.
+A dispatched change is done when the checks that exercise it are green; the complete
+bar is the pre-push hook's, on the push that publishes the branch. An agent that runs
+the judged tier clears its own findings rather than leaving closeout to integration, and
+iterates with `just lint-llm-diff <base>` alone rather than paying for the whole gate
+per finding.
 `llmlint.yml` is a legitimate deliverable when a task names it; otherwise a worker
 fixes the code or adds a justified site-scoped `ignore` directive, and reports a
 rule that looks wrong or misapplied instead of editing it. Deciding when a marginal

@@ -462,7 +462,10 @@ def test_a_plan_whose_node_omits_a_demand_it_will_be_held_to_is_refused(tmp_path
     The message has to carry both halves for the plan's author to act on it: which
     demand went unanswered, and where it is made — here the appendix this repository
     tracks and every node's task carries, which is where the end-to-end demand lives
-    on the adopted stack.
+    on the adopted stack. The section it names moved with the complete gate: the
+    operational notes used to demand that the gate chain run "end to end in one
+    command", and with that instruction gone the demand a node is held to is the one
+    the appendix's own closing section makes of every implementation dispatch.
     """
     refused = _check_plan(_plan(tmp_path, OMITS_A_DEMAND))
 
@@ -470,7 +473,7 @@ def test_a_plan_whose_node_omits_a_demand_it_will_be_held_to_is_refused(tmp_path
     reported = refused.stderr
     assert "route:" in reported, reported
     assert "proof end to end" in reported, reported
-    assert "Operational notes for this host" in reported, reported
+    assert "State the bar in" in reported, reported
     assert "State it as a criterion" in reported, reported
 
 
@@ -743,13 +746,22 @@ def test_a_task_rebuilt_from_a_stale_appendix_is_refused(tmp_path: Path) -> None
 
     Every task carries the appendix by copy, so a builder cloned before an appendix
     fix silently reintroduces the wording that fix removed — which is exactly how the
-    complete-gate contradiction outlived being noticed.
+    complete-gate contradiction outlived being noticed, and exactly what an older
+    builder would do with the complete-gate instruction this host has since removed.
+    The edit below is that regression in miniature: the leading rule about which checks
+    a dispatch owes, replaced by the chained gate invocation it superseded.
     """
     plan = _plan(tmp_path, STATES_ITS_BAR)
     document = json.loads(plan.read_text(encoding="utf-8"))
-    document["tasks"][0]["task"] = document["tasks"][0]["task"].replace(
-        "complete_gate", "just bootstrap && just gate"
+    stale = document["tasks"][0]["task"].replace(
+        "Run only the checks that exercise what you changed",
+        "Run `just bootstrap && just gate` once at closeout",
     )
+    assert stale != document["tasks"][0]["task"], (
+        "the appendix no longer carries the leading rule this journey ages out, so "
+        "nothing here proves a task rebuilt from an older copy is refused"
+    )
+    document["tasks"][0]["task"] = stale
     plan.write_text(json.dumps(document), encoding="utf-8")
 
     refused = _check_plan(plan)

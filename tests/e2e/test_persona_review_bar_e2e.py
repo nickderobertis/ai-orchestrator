@@ -29,7 +29,22 @@ because both failures reach a supervisor the same way: the recipes it demands
 failures — a recipe that disappears is a command nobody can run, while an identifier that
 changes meaning is a command that still runs and now asks for the opposite of the work —
 so the drifted copy below carries one drift of each kind and the report for each is read
-on its own.
+on its own. The width of a demand is a third kind, and it carries that too — for the
+reason the next paragraph gives.
+
+That clause was corrected a second time, for the opposite excess. It went on to call the
+pair it demanded "crozier's complete gate", justified by their being what crozier's merge
+path verifies — and this host has since stopped asking a dispatch to run a repository's
+whole bar at all, for exactly that reason: the merge path runs it downstream on the change
+the work becomes, so a dispatch made to reproduce it spends its turns learning what that
+path reports anyway. The two commands stay, because they are what exercises a corpus
+change; what a supervisor may no longer be handed is a demand for the bar behind them. So
+the delivered prose is read for that too: it must demand no repository-wide bar, in the
+same wordings `tests/test_shared_dispatch_bar.py` holds the shared standing bar to, so one
+property has one spelling wherever this host states it. Width cannot be read off the set
+of recipes a bar names — the corrected and uncorrected clauses demand the same two
+commands — which is why this one is read out of the prose and why the drifted copy puts
+the old framing back rather than a third recipe.
 
 `tests/test_persona_recipe_drift.py` and `tests/test_persona_identifier_drift.py` ask this
 of the tracked files for every repo-specific persona, which is the cheap gate; this asks it
@@ -58,6 +73,7 @@ from persona_probe import (
     started_member,
 )
 from persona_recipes import RepoPersona, checkout_of, named_recipes, persona_at, undefined_recipes
+from test_shared_dispatch_bar import NO_PROJECT_WIDE_DEMAND
 
 from orchestrator.root import REPO_ROOT
 
@@ -78,6 +94,23 @@ PROBE_TASK = "Probe that this persona's review bar reached its supervisor."
 #: The recipe the uncorrected clause demanded, which crozier does not define. Restored
 #: into a copy of the persona to drive the failure path.
 DRIFTED_RECIPE = "gate"
+
+#: The proof clause as it read before this host stopped asking a dispatch for a
+#: repository's whole bar, restored into the drifted copy below. Its two named commands
+#: were never the problem — they are what exercises a corpus change — so what is drifted
+#: back is the framing that made them a whole-bar demand, which is the half a supervisor
+#: acts on.
+UNCORRECTED_PROOF = """the
+      checks that exercise the change green — `just check` for the deterministic
+      tier over a generator repair, and `just lint-llm-diff` against the branch's
+      comparison base for the judged one? Those, and no wider: crozier's merge
+      path runs the rest downstream on the change this work becomes, so a
+      dispatch made to reproduce that here spends its turns learning what the
+      merge path reports anyway."""
+DRIFTED_PROOF = """crozier's
+      complete gate green — `just check` for the deterministic tier and
+      `just lint-llm-diff` against the branch's comparison base for the judged
+      one, which together are what its merge path verifies?"""
 
 #: The file crozier registers every corpus in, named by the tracked bar, and the rename
 #: put in its place to drive the identifier failure path. crozier tracks no such path.
@@ -114,13 +147,16 @@ def _probe_graph(destination: Path, persona: Path) -> Path:
 class DeliveredBar(NamedTuple):
     """One supervisor's delivered bar, read into what each reconciliation needs of it.
 
-    Both views are of the same prompt: what that bar demands the repository *run*, and
-    what it names *of* the repository. They travel together because one graph run
-    produces both, and they stay named apart because they are reconciled apart.
+    Three views of the same prompt: what that bar demands the repository *run*, what it
+    names *of* the repository, and the prose both were read out of. They travel together
+    because one graph run produces all three, and they stay named apart because they are
+    reconciled apart — the prose is kept because how wide a demand is cannot be read off a
+    set of recipe names.
     """
 
     demands: RepoPersona
     names: NamedIdentifiers
+    prose: str
 
 
 def _supervisor_turns(turns: list[ProviderTurn]) -> list[ProviderTurn]:
@@ -169,6 +205,7 @@ def _delivered_bar(tmp_path: Path, oneharness_bin: str, persona: Path) -> Delive
             recipes=named_recipes(delivered),
         ),
         names=identifiers_of(named=str(persona), repository=persona.parent.name, prose=delivered),
+        prose=delivered,
     )
 
 
@@ -203,11 +240,22 @@ def test_the_delivered_crozier_bar_demands_and_names_only_what_that_repository_h
         f"applying is not this file's: {sorted(delivered.recipes - tracked.recipes)}"
     )
     assert {"check", "lint-llm-diff", "test-corpus-match"} <= delivered.recipes, (
-        "the delivered bar no longer demands crozier's complete gate — `just check` for "
-        "the deterministic tier and `just lint-llm-diff` for the judged one, which is the "
-        "pair config/onevcs.rules.yml resolves for its merge path — beside the corpus "
+        "the delivered bar no longer demands the checks that exercise a corpus change — "
+        "`just check` for the deterministic tier over a generator repair and `just "
+        "lint-llm-diff` over the branch's diff for the judged one — beside the corpus "
         f"proof itself: {sorted(delivered.recipes)}"
     )
+
+    # How wide those demands are cannot be read off a set of recipe names, so it is read
+    # off the prose: the same two commands, framed as a repository's whole bar, is the
+    # demand this host removed everywhere else and the one a supervisor acts on.
+    for phrase in NO_PROJECT_WIDE_DEMAND:
+        assert phrase.lower() not in bar.prose.lower(), (
+            f"the supervisor was handed a demand for {phrase!r}. crozier's merge path "
+            "runs that bar downstream on the change this work becomes, so a corpus "
+            "dispatch held to it here spends its turns learning what that path reports "
+            f"anyway:\n{bar.prose}"
+        )
 
     report = undefined_recipes(delivered, crozier_checkout)
     assert report is None, report
@@ -251,15 +299,33 @@ def test_a_delivered_bar_demanding_or_naming_what_crozier_lacks_is_reported(
         f"the tracked persona no longer names `{CORPUS_REGISTRY}`, so this journey cannot "
         "drift that path to one crozier does not track"
     )
+    assert UNCORRECTED_PROOF in corrected, (
+        "the tracked persona's proof clause is no longer the one this journey drifts back "
+        "to a whole-bar demand, so nothing here keeps that half of the passing case honest"
+    )
+    # The proof clause is restored before the recipe is drifted, because the first
+    # `just check` in this file is inside that clause: drifting the recipe first would
+    # leave the clause unmatchable and silently drop the whole-bar drift.
     drifted.write_text(
-        corrected.replace("`just check`", f"`just {DRIFTED_RECIPE}`", 1).replace(
-            CORPUS_REGISTRY, DRIFTED_REGISTRY
-        ),
+        corrected.replace(UNCORRECTED_PROOF, DRIFTED_PROOF)
+        .replace("`just check`", f"`just {DRIFTED_RECIPE}`", 1)
+        .replace(CORPUS_REGISTRY, DRIFTED_REGISTRY),
         encoding="utf-8",
     )
 
     bar = _delivered_bar(tmp_path, oneharness_bin, drifted)
     delivered, named = bar.demands, bar.names
+
+    # The width half, kept honest the same way the two reconciliations are: a supervisor
+    # handed the clause as it read before this host stopped asking for a whole bar is
+    # reported by the phrase such a demand cannot avoid. Without this, the passing case
+    # would read the same green against prose that demanded everything.
+    reported = [phrase for phrase in NO_PROJECT_WIDE_DEMAND if phrase.lower() in bar.prose.lower()]
+    assert reported, (
+        "the drifted whole-bar demand did not reach the supervisor, so the passing case's "
+        f"absence of one proves nothing:\n{bar.prose}"
+    )
+
     assert DRIFTED_RECIPE in delivered.recipes, (
         "the drifted demand did not reach the supervisor, so this journey proves nothing "
         f"about the failure path: {sorted(delivered.recipes)}"

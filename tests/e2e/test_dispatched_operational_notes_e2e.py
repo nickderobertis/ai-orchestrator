@@ -14,12 +14,24 @@ Everything between the recipe and the model is real: the `just orchestrate` reci
 `tests/e2e/fake_backend.py` stands in for the paid model alone, at the `oneharness` seam
 a dispatch reaches it through, and records the prompt each turn was given.
 
-What is asserted is the pair of rules this repository most recently paid for. A worker is
-told never to signal a process it did not identify by PID — stated *before* any reasoning
-about how a pattern matches, because the old text argued only from `pgrep -f`'s
-self-match and `pkill -x`, which does not self-match, is the more dangerous form; two
-workers reached that place in one day while another manager's dispatch was live. And a
-worker is no longer told to avoid running two gates concurrently: that rested on this
+What is asserted is what this repository most recently paid for, in both directions.
+
+A worker is told to run only the checks that exercise what it changed, is told that the
+repository's full bar runs downstream on the merge path, and is handed no complete gate
+to run — the instruction this host removed after a gate run cost twenty to forty minutes
+of every dispatch to learn what the merge path reports anyway, and after six of fourteen
+nodes in one workstream settled `task-failed` with complete, green work. Removing it
+from the file is a different claim from a worker no longer being handed it: this text is
+copied into every task, rendered by `onepipeline`, and handed to `oneagentgraph`, and a
+stale builder's copy travels through all three unchanged. It is also told, as a property
+rather than as a procedure, that its completion report is the last thing it produces —
+which is what six of those nodes were actually failed on.
+
+A worker is told never to signal a process it did not identify by PID — stated *before*
+any reasoning about how a pattern matches, because the old text argued only from `pgrep
+-f`'s self-match and `pkill -x`, which does not self-match, is the more dangerous form;
+two workers reached that place in one day while another manager's dispatch was live. And
+a worker is no longer told to avoid running two gates concurrently: that rested on this
 repository's e2e configs binding fixed ports, which they no longer do.
 """
 
@@ -40,17 +52,32 @@ from harness_indirections import established_indirections
 from project_fixtures import project_from_plan
 from test_dispatch_appendix import (
     AMBIGUOUS_IN_FLIGHT,
+    BACKGROUNDED,
     CAPTURED_AT_LAUNCH,
+    CHAINED_INVOCATION,
     CONCURRENT_GATE_INSTRUCTION,
-    CONCURRENT_GATES_ALLOWED,
+    CONCURRENT_RUNS_ALLOWED,
+    DEFINITION,
+    DOWNSTREAM,
     EXCLUDES_ONLY_ITSELF,
     FIXED_PORT_REASON,
+    GATE_FUNCTION,
     MATCHES_COMMAND_LINES,
+    NARROWEST_SCOPE,
     NEVER_PATTERN_KILL,
+    PER_INVOCATION_PATH,
     PID_FROM_A_PATTERN,
     POLLING,
+    REPORT_DESCRIBES_THE_FINAL_TREE,
+    REPORT_IS_LAST,
+    REPORTED_AFRESH,
+    RERUN_THAT_CHECK,
     SENTINEL_PATH_OWNERSHIP,
     SIGNAL_ONLY_BY_PID,
+    TARGETED_CHECKS,
+    WAITED_ON,
+    WIDE_BAR,
+    sentence_around,
 )
 from waits import timeout as e2e_timeout
 
@@ -229,6 +256,97 @@ def dispatched_notes(dispatched: Dispatched) -> str:
 
 
 @pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_told_to_run_only_the_checks_that_exercise_its_change(
+    dispatched_notes: str,
+) -> None:
+    """The instruction that replaced the gate, read off the prompt a worker was handed.
+
+    The file saying it is not the same claim as the worker reading it: the appendix is
+    copied into a task by a plan builder, rendered by `onepipeline`, and handed to
+    `oneagentgraph`, and each of those is a place a rule can be dropped or truncated.
+    The wide bar has to arrive too, named as something that runs downstream — a worker
+    told only to run less, and never told who runs the rest, reinstates the wider run on
+    its own judgment.
+    """
+    assert TARGETED_CHECKS.search(dispatched_notes), (
+        "a dispatched worker was handed operational notes that never tell it to run only "
+        "the checks that exercise what it changed, which is the whole of what replaced "
+        "the complete gate"
+    )
+    assert NARROWEST_SCOPE.search(dispatched_notes), (
+        "the notes a dispatch carries never tell it to take the narrowest scope each "
+        "check supports, so 'the checks that exercise what you changed' arrives satisfied "
+        "by the widest tier that touches the change"
+    )
+    assert RERUN_THAT_CHECK.search(dispatched_notes), (
+        "the notes a dispatch carries never say that the check which reported something "
+        "is the check to run again, so a worker confirms a fix by rerunning that check's "
+        "neighbours — the round this instruction replaced"
+    )
+    mentions = list(WIDE_BAR.finditer(dispatched_notes))
+    assert mentions, (
+        "the notes a dispatch carries no longer say a repository-wide bar exists at all, "
+        "so a worker told to run less is not told who runs the rest"
+    )
+    for mention in mentions:
+        sentence = sentence_around(dispatched_notes, mention.start())
+        assert any(marker in sentence.lower() for marker in DOWNSTREAM), (
+            f"a dispatched worker is handed {mention.group(0)!r} in a sentence that does "
+            f"not say it runs downstream on the merge path ({sentence!r})"
+        )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_handed_no_complete_gate_to_run(
+    dispatched_notes: str,
+) -> None:
+    """The removed instruction, absent from the prompt rather than from a file.
+
+    A task rebuilt from a builder cloned before this change carries the old appendix
+    verbatim — `just check-plan` refuses that plan, but nothing between the plan and the
+    model would — so the absence is asserted where a worker actually reads it: no
+    `complete_gate` definition, no handle to call one by, and no chained `just … && just
+    …` for a worker to run instead.
+    """
+    defined = DEFINITION.search(dispatched_notes)
+    assert defined is None, (
+        f"a dispatched worker is handed a complete gate to run ({defined.group(0)!r}); "
+        "this host stopped asking a dispatch for its repository's whole bar"
+    )
+    assert GATE_FUNCTION not in dispatched_notes, (
+        f"a dispatched worker is handed `{GATE_FUNCTION}`, the handle the removed "
+        "instruction called its chain by"
+    )
+    chained = CHAINED_INVOCATION.search(dispatched_notes)
+    assert chained is None, (
+        f"a dispatched worker is handed {chained.group(0)!r} — recipes chained into one "
+        "command is what the complete gate was, under whatever name"
+    )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_told_what_its_completion_report_must_be(
+    dispatched_notes: str,
+) -> None:
+    """The residue of the removed gate, arriving as a property of the finished dispatch.
+
+    Six of fourteen nodes in one workstream settled `task-failed` on the ordering of
+    their completion reports rather than on a missed criterion, and a live `context` note
+    warning a dispatch about the pattern did not prevent a recurrence — which is why this
+    is in the text every dispatch is handed rather than in a note somebody remembers to
+    send.
+    """
+    for stated, missing in (
+        (REPORT_IS_LAST, "that the completion report is the last thing it produces"),
+        (REPORT_DESCRIBES_THE_FINAL_TREE, "that the report describes the tree as it finally is"),
+        (REPORTED_AFRESH, "that what it finds afterwards is fixed and then reported afresh"),
+    ):
+        assert stated.search(dispatched_notes), (
+            f"the notes a dispatch carries no longer say {missing}"
+        )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
 def test_a_dispatched_worker_is_told_to_signal_only_what_it_identified_by_pid(
     dispatched_notes: str,
 ) -> None:
@@ -314,6 +432,41 @@ def test_a_dispatched_worker_is_not_told_to_avoid_a_concurrent_gate(
 
 
 @pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_shown_a_wait_on_one_command_and_its_own_sentinel(
+    dispatched_notes: str,
+) -> None:
+    """The worked wait, read off the prompt rather than off the file it was copied from.
+
+    Its predecessor backgrounded two of the complete gate's three parts and polled a
+    shared `/tmp/gate.exit`, so a worker that obeyed it both ran the parts separately and
+    could end its wait on another dispatch's result — on a host where three workers
+    collided on shared names in one day. The example a worker is handed now has to be the
+    repaired one: one command in the background, and the sentinel it polls named after
+    the invocation that writes it.
+    """
+    backgrounded = BACKGROUNDED.findall(dispatched_notes)
+    assert backgrounded, (
+        "the notes a dispatch carries show it no way to wait on a long command at all, so "
+        "a worker that needs one reaches for a pattern match instead"
+    )
+    waited = WAITED_ON.search(dispatched_notes)
+    assert waited is not None, (
+        "the notes a dispatch carries background a command and never poll for its "
+        "sentinel, which is the half that makes the wait end"
+    )
+    sentinel = waited["sentinel"]
+    assert PER_INVOCATION_PATH.search(sentinel), (
+        f"a dispatched worker is shown a wait on {sentinel!r}, a path every dispatch on "
+        "this host would write, so its wait can end on somebody else's result"
+    )
+    for command in backgrounded:
+        assert sentinel in command, (
+            f"a dispatched worker is shown {command!r} backgrounded against a wait on "
+            f"{sentinel!r}, which that command does not write"
+        )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
 def test_a_dispatched_worker_checks_its_sentinel_not_other_gates(
     dispatched_notes: str,
 ) -> None:
@@ -327,7 +480,7 @@ def test_a_dispatched_worker_checks_its_sentinel_not_other_gates(
     assert SENTINEL_PATH_OWNERSHIP.search(dispatched_notes), (
         "a dispatched worker is not told that the pre-launch check concerns its sentinel path"
     )
-    assert CONCURRENT_GATES_ALLOWED.search(dispatched_notes), (
+    assert CONCURRENT_RUNS_ALLOWED.search(dispatched_notes), (
         "a dispatched worker is not told that sentinel ownership does not prohibit "
         "concurrent gates or judged tiers"
     )

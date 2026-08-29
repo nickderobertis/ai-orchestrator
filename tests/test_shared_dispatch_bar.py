@@ -25,6 +25,16 @@ why it is not the next thing to remove.
 The preamble half below is a different guard on the same file: a dispatch with no
 tracked change is told the truth, and one that changed something is not let off.
 
+That half moved once and is now read the same way the completion bar is — for what it
+says, and for the demand it may not make again. It used to order every dispatch to run
+the project's complete verification at closeout, independently of its task, so removing
+that instruction from the operational appendix alone would have left it in force and the
+change would not have landed. What replaced it is the checks that exercise the change,
+with the project's full bar named as something that runs downstream; what it keeps is
+everything that clause was the only enforcement of — the deterministic tier before each
+commit, the refusal to bypass a pre-commit or pre-push hook, and a failing check
+iterated on alone.
+
 `tests/e2e/test_orchestrate_launch_e2e.py` proves what this file cannot — that these
 clauses are what a real launch hands a real worker and its real judge — from a launch
 with only the paid model doubled. This file reads the file itself, because what is under
@@ -42,6 +52,7 @@ from shared_dispatch_bar import (
     shared_completion_bar,
     shared_judge_persona,
 )
+from test_dispatch_appendix import DOWNSTREAM, WIDE_BAR, sentence_around
 
 #: The whole shared completion bar, so that changing it is a change to this file too.
 #: What is left of it is the task's own criteria plus one clause about the tree the
@@ -166,9 +177,9 @@ NO_TRACKED_CHANGE_ALLOWANCES = (
 #: allowance above struck out. Each of these was there before the allowances were, and
 #: none of them may become reachable through one.
 DEMANDS_OF_A_DISPATCH_THAT_CHANGED_SOMETHING = (
-    "run the project's complete verification exactly once at closeout and clear any "
-    "findings it reports",
-    "Work is not done until that run is green",
+    "run only the checks that exercise what you changed",
+    "iterate against that check alone, at the narrowest scope it supports",
+    "Work is not done while a check you ran is failing",
     "bypassing the project's pre-commit or pre-push verification is not an acceptable "
     "response to a slow or failing check",
     "Never rely on the harness to commit for you or leave finished work uncommitted",
@@ -204,16 +215,79 @@ def _preamble_binding_on_a_dispatch_that_changed_something() -> str:
     return binding
 
 
-def test_the_preamble_still_holds_a_dispatch_that_changed_something_to_the_whole_bar() -> None:
+#: What a project-wide bar is spelled as, what makes a mention of one a statement about
+#: who runs it, and how a mention is cut down to the sentence it sits in — all three
+#: imported from the appendix's own guard rather than restated. The preamble and the
+#: operational notes are two halves of what one dispatch reads, so a bar this file
+#: admitted and that one refused would be a contradiction handed to a worker, exactly
+#: like the one the appendix used to contain.
+
+#: The demand this clause used to make, in the wordings a re-added one would take. Held
+#: as phrases rather than as stems because the preamble legitimately uses every stem
+#: inside them: it is the one clause here that names checks at all.
+NO_PROJECT_WIDE_DEMAND = (
+    "complete verification",
+    "full verification",
+    "complete gate",
+    "whole gate",
+    "entire gate",
+    "at closeout",
+)
+
+
+@pytest.mark.parametrize("phrase", NO_PROJECT_WIDE_DEMAND)
+def test_the_preamble_demands_no_project_wide_verification_of_every_dispatch(
+    phrase: str,
+) -> None:
+    """The removed demand, held gone by the way it would be worded rather than by one line.
+
+    This clause reached every dispatch whatever its task said, which is why the appendix
+    could not remove the instruction on its own. A re-added one would be worded fresh, so
+    what is checked is the phrasing such a demand cannot avoid: a verification named as
+    complete, or a run placed at closeout.
+    """
+    preamble = " ".join(shared_agent_preamble().split())
+    assert phrase.lower() not in preamble.lower(), (
+        f"{BASE_CONFIG}'s `system_prompt` demands {phrase!r} of every dispatch again. "
+        "That demand is what cost twenty to forty minutes a dispatch to learn what the "
+        "merge path reports anyway; what a dispatch owes is the checks that exercise its "
+        f"own change:\n{preamble}"
+    )
+
+
+def test_the_preamble_names_a_project_wide_bar_only_as_something_run_downstream() -> None:
+    """The positive half: the wide bar is somebody else's, and the clause says whose.
+
+    Without it, a worker told to run less concludes the rest is nobody's and runs it
+    anyway — which is the instruction returning through the worker's own judgment rather
+    than through this file.
+    """
+    preamble = shared_agent_preamble()
+    mentions = list(WIDE_BAR.finditer(preamble))
+    assert mentions, (
+        f"{BASE_CONFIG}'s `system_prompt` no longer says a project-wide bar exists at "
+        "all, so nothing tells a dispatch who runs what it was told not to"
+    )
+    for mention in mentions:
+        sentence = sentence_around(preamble, mention.start())
+        assert any(marker in sentence.lower() for marker in DOWNSTREAM), (
+            f"{BASE_CONFIG}'s `system_prompt` names {mention.group(0)!r} in a sentence "
+            f"that does not say it runs downstream ({sentence!r}), so it reads as this "
+            "dispatch's to run"
+        )
+
+
+def test_the_preamble_still_holds_a_dispatch_that_changed_something_to_every_demand() -> None:
     """No allowance for a document-producing dispatch is reachable by one that changed code.
 
     Demonstrated by removing every sentence that hangs on having changed nothing and
     reading what is left, which is what a dispatch that changed something is bound by.
-    This excludes the rewording that reads as permission — moving the closeout
-    verification, "work is not done until that run is green", the refusal to bypass a
-    pre-commit or pre-push gate, or "never leave finished work uncommitted" inside a
-    sentence that a dispatch with a diff could also apply to itself, or softening any of
-    them into something optional for everyone.
+    This excludes the rewording that reads as permission — moving the demand to run the
+    checks that exercise the change, "work is not done while a check you ran is failing",
+    the narrowed iteration, the refusal to bypass a pre-commit or pre-push hook, or
+    "never leave finished work uncommitted" inside a sentence that a dispatch with a diff
+    could also apply to itself, or softening any of them into something optional for
+    everyone.
     """
     binding = _preamble_binding_on_a_dispatch_that_changed_something()
     for demand in DEMANDS_OF_A_DISPATCH_THAT_CHANGED_SOMETHING:
@@ -228,17 +302,17 @@ def test_the_preamble_tells_a_dispatch_with_no_tracked_change_something_true() -
     """The allowances exist, and each says what IS true of a document-producing dispatch.
 
     The other direction of the same guard: an allowance that named its condition but
-    demanded the gate anyway would leave the preamble as false for that dispatch as it
+    demanded the checks anyway would leave the preamble as false for that dispatch as it
     was before. So each sentence is read back for what it permits — closing out with no
-    verification over a tree that does not exist, and a clean `git status` being a
-    complete outcome rather than a reason to author a file nobody asked for.
+    checks over code that was never changed, and a clean `git status` being a complete
+    outcome rather than a reason to author a file nobody asked for.
     """
     closeout = _preamble_sentence_allowing(NO_TRACKED_CHANGE_ALLOWANCES[0])
-    assert "complete without it" in closeout, (
+    assert "complete without them" in closeout, (
         f"{BASE_CONFIG}'s `system_prompt` names the no-tracked-change condition at "
         f"closeout without saying such a dispatch is complete:\n{closeout}"
     )
-    assert "never because running it is slow or inconvenient" in closeout, (
+    assert "never because running them is slow or inconvenient" in closeout, (
         f"{BASE_CONFIG}'s `system_prompt` lets closeout be skipped without saying what "
         f"may not decide it, so any dispatch can reach the allowance:\n{closeout}"
     )

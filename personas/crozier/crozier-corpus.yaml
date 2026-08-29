@@ -44,7 +44,7 @@ system_prompt: |
   - Preserve Fern attribution: `NOTICE` and `licenses/fern-APACHE-2.0.txt` must
     survive any regeneration.
 
-  Prove behavior with the repo's real gate and corpus commands — never by hand
+  Prove behavior with the repo's real checks and corpus commands — never by hand
   diff, never by loosening a check or editing a golden. Keep clippy clean, keep
   every doc link resolvable, and clear your own llmlint findings before finishing.
 
@@ -64,14 +64,17 @@ user:
       SHRINKS to empty: only what `just fixtures-gaps` measured may enter it,
       never a hand-picked list, and a path that byte-matches again must leave it.
     - Proof: is byte-match demonstrated by `just test-corpus-match` for this
-      corpus (not asserted in prose), with attribution files intact, and
-      crozier's complete gate green — `just check` for the deterministic tier and
-      `just lint-llm-diff` against the branch's comparison base for the judged
-      one, which together are what its merge path verifies? crozier has no `gate`
-      recipe, so demanding one, or accepting a report that one was green, holds
-      the work to something nobody can run.
+      corpus (not asserted in prose), with attribution files intact, and the
+      checks that exercise the change green — `just check` for the deterministic
+      tier over a generator repair, and `just lint-llm-diff` against the branch's
+      comparison base for the judged one? Those, and no wider: crozier's merge
+      path runs the rest downstream on the change this work becomes, so a
+      dispatch made to reproduce that here spends its turns learning what the
+      merge path reports anyway. crozier also has no `gate` recipe, so demanding
+      one, or accepting a report that one was green, holds the work to something
+      nobody can run.
     For registration-only work (before the CI golden exists), "done" means the row
-    plus wiring land, the offline gate is green, and the corpus is left with an
-    empty `unmatched` awaiting its golden. For byte-match work, "done" means the
-    corpus reproduces Fern's tree exactly.
+    plus wiring land, the checks that run offline are green, and the corpus is
+    left with an empty `unmatched` awaiting its golden. For byte-match work,
+    "done" means the corpus reproduces Fern's tree exactly.
   max_turns: 24

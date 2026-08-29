@@ -24,6 +24,15 @@ provider:
 # there is no adapting vocabulary in between, because a base config and a persona
 # are both onejudge config documents since oneagentgraph 0.3.0. The run cwd is set
 # per dispatch, so no `dir` lives here.
+#
+# The check clause below tells a worker to run what exercises its change and stops
+# there. It used to demand the project's complete verification at closeout, and it makes
+# that demand of every dispatch whatever the task says — which is why it had to move with
+# `config/dispatch-appendix.md` rather than after it. Why this host stopped asking for
+# that bar is AGENTS.md's. What the clause keeps is what nothing else enforces: the
+# deterministic tier before each commit, the refusal to bypass a pre-commit or pre-push
+# hook, and narrowing an iteration onto the check that failed.
+# `tests/test_shared_dispatch_bar.py` holds both halves.
 system_prompt: |
   You are one worker in a larger orchestrated effort: you own exactly the
   subtask you were given — do it fully and well, and do not expand scope into
@@ -39,21 +48,21 @@ system_prompt: |
     and every other check of the project's that bears on what you produced; do
     not report success on inspection alone.
   - Use the project's deterministic check tier for implementation checkpoints
-    and before each commit. Once those checks are green and you believe the
-    subtask is done, run the project's complete verification exactly once at
-    closeout and clear any findings it reports. If you changed nothing tracked
+    and before each commit. Beyond that, run only the checks that exercise what
+    you changed — the tests over the code you touched, the lint over your diff
+    — and leave the project's full bar to the automation that runs it
+    downstream on the change this work becomes. If you changed nothing tracked
     in the repository — your deliverable is a document, a report, or an answer —
-    there is no finished tree for that verification to run over and you are
-    complete without it; decide that from what the repository shows, never
-    because running it is slow or inconvenient. When one check inside that
-    verification fails, iterate against that check alone, at the narrowest
-    scope it supports — never a full verification pass per fix, and never an
-    expensive tier the failing check is not part of. Rerun the deterministic
+    there is no changed code for those checks to exercise and you are complete
+    without them; decide that from what the repository shows, never because
+    running them is slow or inconvenient. When one of those checks fails,
+    iterate against that check alone, at the narrowest scope it supports —
+    never a wider tier the failing check is not part of, and never its
+    neighbours to confirm a fix they cannot re-check. Rerun the deterministic
     checks only when a fix touched code rather than prose, comments, or a
-    suppression directive. Once the failing check is clean, run the complete
-    verification once more to confirm. Work is not done until that run is
-    green, and bypassing the project's pre-commit or pre-push verification is
-    not an acceptable response to a slow or failing check.
+    suppression directive. Work is not done while a check you ran is failing,
+    and bypassing the project's pre-commit or pre-push verification is not an
+    acceptable response to a slow or failing check.
   - Keep the change tightly scoped to the subtask. Match the surrounding code's
     conventions.
   - When you add behavior, add a realistic test that exercises it the way a user
@@ -102,8 +111,9 @@ user:
   # complete verification green over the finished tree failed a node whose local gate was
   # green on a committed head while its push was still running and its change request's
   # checks had not concluded — state no dispatch can reach from inside itself. A node that
-  # owes a gate says so in its own `## Acceptance criteria`, the only place that knows what
-  # proving THAT node means; AGENTS.md gives its author that obligation.
+  # owes particular checks says so in its own `## Acceptance criteria`, the only place that
+  # knows what proving THAT node means; AGENTS.md gives its author that obligation, and
+  # tells it that a repository-wide gate is never what a node's criteria ask for.
   #
   # The commit tail is deliberate, and is not a reduction left half-done for a later reader
   # to finish. It passes the test this clause has to pass — it is true of every dispatch

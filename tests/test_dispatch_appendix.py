@@ -1,40 +1,47 @@
-"""The operational appendix may not contradict itself about the complete gate.
+"""The operational appendix hands a dispatch its checks, and no longer hands it a gate.
 
 `config/dispatch-appendix.md` is the text every dispatched task carries, and it was
 gitignored scratch propagated by copy-paste until this suite tracked it. That is not
-incidental to what went wrong in it: it named a three-part chain as the complete gate
-to be run *once*, and then, four paragraphs later, demonstrated waiting on a gate with
-a sentinel that backgrounded only two of those three parts. A worker that obeyed both
-ran the parts separately and was failed for it, in its judge's own words: *"The
-required complete gate (...) was never run once end-to-end; its components were run
-separately."*
+incidental to what went wrong in it. It named a three-part chain as the complete gate to
+be run *once*, and then, four paragraphs later, demonstrated waiting on a gate with a
+sentinel that backgrounded only two of those three parts; a worker that obeyed both ran
+the parts separately and was failed for it, in its judge's own words: *"The required
+complete gate (...) was never run once end-to-end; its components were run separately."*
+It failed a second node the opposite way, by spelling the gate recipe as a bare `just
+gate` — work that had run crozier's real bar, `just check`, crozier having no `gate`
+recipe, was failed for naming it. Both are why the chain was afterwards named once and
+its recipe derived rather than handed over.
 
-Nothing could have caught that, because nothing read the file. What is asserted here
-is the property the two passages have to share rather than either one's wording: the
-complete gate is **named once**, and every worked example that runs or waits on a gate
-runs that name and never a part of the chain behind it. A future edit is free to change
-what the chain is; it is not free to leave two passages disagreeing about it again.
+**This host has since stopped asking a dispatch to run that bar at all**, which is what
+these checks are now written to. A gate run spent twenty to forty minutes of a dispatch
+learning what the merge path reports anyway, and six of fourteen nodes in one workstream
+settled `task-failed` with complete, gate-green work. So what is asserted here is the
+instruction that replaced it — run only the checks that exercise what you changed, take
+the narrowest scope each supports, and rerun the one that reported — together with the
+one thing the file may still say about a repository-wide bar: that it runs downstream,
+on the merge path, after this dispatch has settled.
 
-The same file failed a second node the opposite way: it spelled the gate recipe as a
-bare `just gate`, and the judge read that as the literal to check a report against, so
-work that had run crozier's real bar — `just check`, crozier having no `gate` recipe —
-was failed for naming it. The gate slot is therefore held as a substitution the reader
-derives, and the file is required to say that what is checked is the one invocation
-rather than the name in it.
+The machinery the old instruction needed is asserted **gone** rather than left to a
+reviewer's memory, exactly as the retired concurrency rule below is: the `complete_gate`
+definition, the recipe slot a reader had to derive for it, and the chained
+one-invocation demand. A rule this file states constrains every dispatch on this host, so
+one that has stopped being true is a cost paid hundreds of times over — and a reason left
+behind is an instruction the next reader reconstructs.
 
-A third passage failed the same way with a different subject. The rule on waiting for a
-gate named `pgrep -f "just gate"` as its trap, so it read as advice about gates while the
-defect is in the polling mechanism — and readers who had read it wedged against
-`scripts/fetch-corpus.sh`, `llmlint-judge.sh` and `publish-branch` instead. Seven instances
-are now recorded in it: four workers before one night, and two workers and the manager
-during it, the manager an hour after instructing a worker about the rule. Which is why what
-is asserted below is the mechanism (`pgrep -f` matches whole command lines and
-excludes only its own process) together with the self-match-proof check the old text
-answered nowhere.
+What the ordering incident left behind is held positively instead. Six of those settled
+nodes were failed on where the completion report sat rather than on a missed criterion,
+so the file now states the outcome that report must have — the last thing the dispatch
+produces, describing the tree as it finally is — and that is asserted here as a property
+rather than as a procedure for producing it.
 
-The cheap-iteration rule is held the same way — by position rather than by phrasing —
-because the cost of burying it is measured: one node lost about 84 minutes looping on
-the whole gate to learn its lint findings, after the rule had already been written down.
+The passages that were never about the gate are unchanged, and so are their reasons. The
+rule on waiting was written as advice about waiting on a *gate*, and readers who had read
+it walked into the same trap against other patterns: a worker wedged on
+`scripts/fetch-corpus.sh`, another on `llmlint-judge.sh`, and the manager an hour after
+issuing the rule on `publish-branch`. Seven instances are recorded in it: four workers
+before one night, and two workers and the manager during it. Which is why what is asserted
+below is the mechanism (`pgrep -f` matches whole command lines and excludes only its own
+process) together with the self-match-proof check the old text answered nowhere.
 
 The signalling rule is held on a different axis from the one it used to argue from. Every
 paragraph of it argued from `-f`'s self-match, and `-x` does not self-match — so a reader
@@ -45,12 +52,10 @@ asserted now is the axis that actually decides it: a process is signalled only w
 identified by its own PID, a PID obtained from a pattern is still a pattern kill, and the
 self-match text stays as the explanation of a wait that never ends.
 
-The instruction against running two gates concurrently is asserted **gone**, and its
-absence is held rather than left to a reviewer's memory: it rested on this repository's
-e2e configs binding fixed ports, live e2e code allocates through `_free_port()` instead,
-and two managers' judged tiers ran concurrently on 2026-08-24 and both completed. A rule
-this file states constrains every dispatch on this host, so one that has stopped being
-true is a cost paid hundreds of times over.
+The instruction against running two checks concurrently is asserted gone for the same
+reason: it rested on this repository's e2e configs binding fixed ports, live e2e code
+allocates through `_free_port()` instead, and two managers' judged tiers ran concurrently
+on 2026-08-24 and both completed.
 
 `tests/test_criteria_guard.py` proves the guard that reads this file; here the subject
 is the file itself, which is why these belong to the tier keyed on this repository's
@@ -70,48 +75,63 @@ from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_docs
 
-#: The one definition every other passage has to call instead of spelling out.
+#: The definition this file used to carry, asserted absent. Kept as the shape it had,
+#: because that is what a reintroduction would look like.
 DEFINITION = re.compile(r"^ *complete_gate\(\) *\{(?P<chain>[^}]*)\}", re.MULTILINE)
 
-#: A command put into the background, which is what a sentinel example does. The
-#: chain is what has to be in here, and this is where the contradiction lived.
-BACKGROUNDED = re.compile(r"\(\s*(?P<command>[^()]*?)\s*\)\s*&")
+#: The token every passage called instead of spelling the chain out, and the chained
+#: invocation the chain was: two `just` recipes joined into one command for a worker to
+#: run. Either one returning is the whole instruction returning with it.
+GATE_FUNCTION = "complete_gate"
+CHAINED_INVOCATION = re.compile(r"just\s+[^\s&|;]+\s*&&\s*just\b")
 
-#: Any single step of the chain, named directly. Legitimate in the definition and in
-#: the cheap loop, and nowhere near a sentinel: the whole failure was a sentinel that
-#: named two of these instead of the gate they compose into.
-CHAIN_STEP = re.compile(r"\bjust +(?:bootstrap|gate|lint-llm-diff)\b")
+#: The demand that chain carried: that it ran end to end in one command. It is the
+#: sentence a judge compared a report against, and it has no subject left.
+ONE_INVOCATION = re.compile(r"one\s+invocation", re.IGNORECASE)
 
-#: The gate slot of the chain, as a substitution rather than as a literal recipe name.
-#: `just "$GATE"` matches; `just gate` deliberately does not.
-SUBSTITUTED = re.compile(r"just\s+\"?\$\{?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\}?\"?")
-
-#: A literal gate recipe name standing in the chain where a substitution belongs. This
-#: is the defect itself: a name that does not exist in every repository, handed over as
-#: though it were fixed.
-BARE_GATE = re.compile(r"just\s+(?:gate|check)\b")
-
-#: An assignment in the setup block a reader substitutes into, with whatever trails it.
-#: `BASE` has always carried a `# confirm it:` derivation; the gate slot now must too.
+#: The derivation block a reader substituted into. The gate slot needed a recipe name
+#: derived per repository, because the recipe that is a repository's full bar is not
+#: always called `gate` — crozier's is `check`. With nothing to run, nothing derives one.
 ASSIGNMENT = re.compile(r"^ +(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<rest>.*)$", re.MULTILINE)
-
-#: What a derivation looks like: the reader is shown the command that answers it.
 DERIVATION = re.compile(r"confirm it:", re.I)
 
-#: The report the judge is handed says what actually ran, which in a repository whose
-#: full bar is not called `gate` is not the template's own spelling.
-SUBSTITUTION_SATISFIES = re.compile(r"names?\s+the\s+command\s+you\s+substituted", re.I)
+#: The rule that replaced all of it, and the scope rule beside it. Held on their
+#: load-bearing words rather than on a sentence, so a reword is free and a dropped half
+#: is not; `\s+` between words because this file is hard-wrapped.
+TARGETED_CHECKS = re.compile(r"only\s+the\s+checks\s+that\s+exercise\s+what\s+you\s+changed", re.I)
+NARROWEST_SCOPE = re.compile(r"narrowest\s+scope\s+each\s+one\s+supports", re.IGNORECASE)
+RERUN_THAT_CHECK = re.compile(r"run\s+\*\*that\s+check\*\*\s+again", re.IGNORECASE)
 
-#: The two halves of the "once" rule, matched on their load-bearing words rather than
-#: on a sentence — the same way everything else here is held, so that a reword is free
-#: and a dropped half is not. The first says the complete gate confirms a finished tree
-#: instead of being the loop that finds the findings; the second says "once" bounds
-#: looping rather than budgeting a run that a later edit may then be charged to.
-#: Written with `\s+` between words because this file is hard-wrapped, so any phrase
-#: long enough to be worth pinning is one reflowing a paragraph can break across a line.
-AGAINST_LOOPING = re.compile(r"over\s+the\s+\*\*finished\*\*\s+tree", re.IGNORECASE)
-NOT_A_BUDGET = re.compile(r"not\s+a\s+per-dispatch\s+budget", re.IGNORECASE)
-STALE_GREEN = re.compile(r"predates\s+your\s+last\s+edit", re.IGNORECASE)
+#: A repository-wide bar, in the spellings a worker-facing instruction would use. The
+#: file may still name one — it has to, to say who runs it — so this locates the mention
+#: and :data:`DOWNSTREAM` decides whether it is named as somebody else's.
+WIDE_BAR = re.compile(
+    r"\b(?:complete|full|whole|entire)\s+(?:gate|bar|verification|check\s+suite)\b", re.I
+)
+
+#: What makes a mention of that bar a statement about who runs it rather than an
+#: instruction to run it here. The merge path is the whole answer: a `pre-push` hook
+#: where the repository publishes locally, the host's required checks where it does not.
+DOWNSTREAM = ("downstream", "merge path", "pre-push", "required checks")
+
+#: The outcome the completion report owes, in the three parts that failed six nodes: it
+#: is produced last, it describes the tree as it finally is, and anything found after it
+#: is fixed and reported again rather than left behind a report that predates it.
+REPORT_IS_LAST = re.compile(
+    r"completion\s+report\s+is\s+the\s+last\s+thing\s+this\s+dispatch\s+produces", re.I
+)
+REPORT_DESCRIBES_THE_FINAL_TREE = re.compile(
+    r"describes\s+the\s+tree\s+as\s+it\s+finally\s+is", re.IGNORECASE
+)
+REPORTED_AFRESH = re.compile(r"fixed\s+first\s+and\s+then\s+reported\s+afresh", re.IGNORECASE)
+
+#: A command put into the background, which is what the sentinel example does, and the
+#: sentinel that example polls. The pair is what makes the wait an answer about the
+#: invocation that wrote it rather than about whichever dispatch wrote `/tmp` first.
+BACKGROUNDED = re.compile(r"\(\s*(?P<command>[^()]*?)\s*\)\s*&")
+WAITED_ON = re.compile(r"until \[ -f (?P<sentinel>\S+) \]")
+#: What makes a path this invocation's own rather than every dispatch's.
+PER_INVOCATION_PATH = re.compile(r"\$\$|\$\{?[A-Za-z_]")
 
 #: Where the polling rule is stated at all: the passage that first reaches for a
 #: pattern match against a process. Matched on `pgrep -f` rather than on a heading,
@@ -167,15 +187,17 @@ FIXED_PORT_REASON = re.compile(r"bind fixed ports|43\d\d/|is already used", re.I
 PER_INVOCATION = re.compile(r"one\s+log\s+per\s+invocation", re.IGNORECASE)
 
 #: The pre-launch check is about whether the invocation's sentinel path is already
-#: owned, never whether another gate or judged tier is running. The former prevents
+#: owned, never whether another check or judged tier is running. The former prevents
 #: one invocation from reading another's result; the latter would reinstate the
-#: retired concurrency rule through implication rather than by name.
+#: retired concurrency rule through implication rather than by name. The permission is
+#: matched on `checks` as well as `gates` because the thing a worker now runs
+#: concurrently is a check: the noun moved with the instruction, the rule did not.
 SENTINEL_PATH_OWNERSHIP = re.compile(
     r"sentinel\s+path\s+is\s+already\s+in\s+use\s+by\s+another\s+invocation",
     re.IGNORECASE,
 )
-CONCURRENT_GATES_ALLOWED = re.compile(
-    r"does\s+not\s+(?:forbid|prohibit)[^.]*?concurrent[^.]*?(?:gates?|judged\s+tiers?)",
+CONCURRENT_RUNS_ALLOWED = re.compile(
+    r"does\s+not\s+(?:forbid|prohibit)[^.]*?concurrent[^.]*?(?:gates?|checks?|judged\s+tiers?)",
     re.IGNORECASE,
 )
 AMBIGUOUS_IN_FLIGHT = re.compile(
@@ -189,112 +211,204 @@ def appendix() -> str:
     return (REPO_ROOT / APPENDIX).read_text(encoding="utf-8")
 
 
-def test_the_complete_gate_is_defined_exactly_once(appendix: str) -> None:
-    """One definition is what makes agreement between passages structural.
+def sentence_around(prose: str, at: int) -> str:
+    """The sentence ``at`` falls inside, flattened onto one line.
 
-    Two spellings of the chain is the shape the contradiction had: each was locally
-    reasonable, and nothing connected them. A reader following this file cannot end
-    up running something other than what it calls complete if there is only one thing
-    to run.
+    Cut on sentence boundaries rather than on paragraphs, because a paragraph is large
+    enough to hold both a mention of a repository-wide bar and, somewhere else entirely,
+    the word that would excuse it.
     """
-    definitions = DEFINITION.findall(appendix)
+    opened = max(prose.rfind(". ", 0, at), prose.rfind("\n\n", 0, at)) + 1
+    closed = prose.find(". ", at)
+    return " ".join(prose[opened : len(prose) if closed < 0 else closed].split())
 
-    assert len(definitions) == 1, (
-        f"{APPENDIX} defines the complete gate {len(definitions)} times; two spellings "
-        "of the chain is exactly how its two passages came to disagree about what "
-        "running it means"
+
+def test_the_appendix_defines_no_repository_wide_gate_for_a_worker_to_run(
+    appendix: str,
+) -> None:
+    """The instruction this host removed, asserted gone in the machinery it needed.
+
+    A `complete_gate` definition, the token every other passage called instead of
+    spelling the chain out, and a chained `just … && just …` invocation are the three
+    shapes it had here. Any one of them coming back brings the whole instruction with
+    it, whatever the prose around it then says: a worker reads the runnable thing.
+
+    Asserted rather than remembered because a rule this file states is paid for by every
+    dispatch this host makes — a gate run cost twenty to forty minutes of a dispatch to
+    learn what the merge path reports anyway, and six of fourteen nodes in one workstream
+    settled `task-failed` with complete, gate-green work.
+    """
+    defined = DEFINITION.search(appendix)
+    assert defined is None, (
+        f"{APPENDIX} defines a complete gate again ({defined.group(0)!r}). This host "
+        "stopped asking a dispatch to run its repository's whole bar; what a dispatch "
+        "owes is the checks that exercise its own change"
+    )
+    assert GATE_FUNCTION not in appendix, (
+        f"{APPENDIX} names `{GATE_FUNCTION}` again, which is the handle every passage "
+        "here used to call the whole chain by; nothing left in this file has a chain to "
+        "call"
+    )
+    chained = CHAINED_INVOCATION.search(appendix)
+    assert chained is None, (
+        f"{APPENDIX} hands a worker {chained.group(0)!r} — recipes chained into one "
+        "command is what 'the complete gate' was, under whatever name"
+    )
+    demanded = ONE_INVOCATION.search(appendix)
+    assert demanded is None, (
+        f"{APPENDIX} still demands that something run as {demanded.group(0)!r}; that "
+        "demand had exactly one subject, and a judge compared a worker's report against "
+        "it"
     )
 
 
-def test_the_definition_composes_every_step_of_the_chain(appendix: str) -> None:
-    """A definition that dropped a step would be the same defect, moved.
+def test_the_appendix_derives_no_gate_recipe_for_a_worker_to_substitute(
+    appendix: str,
+) -> None:
+    """The other half of the machinery: the recipe slot a reader filled in per repository.
 
-    The middle step is asserted as a *slot* rather than as a name, because the recipe
-    that is a repository's full bar is not always called `gate` — which is the whole
-    subject of :func:`test_the_gate_recipe_is_derived_rather_than_handed_over_as_a_fixed_name`.
-    What has to survive is that the chain still has three steps and that the gate is one
-    of them; what it is called is the reader's to derive.
+    It existed because the recipe that is a repository's full bar is not always called
+    `gate` — crozier's is `check` — and a bare name here was both a command that may not
+    exist and a literal a judge compared a report against, which failed finished work.
+    With nothing repository-wide left to run, a derivation for it is a question with no
+    answer: a reader who derives one has been told there is something to run.
     """
-    chain = DEFINITION.search(appendix)
-    assert chain is not None, f"{APPENDIX} no longer defines `complete_gate`"
-
-    for step in ("just bootstrap", "just lint-llm-diff"):
-        assert step in chain["chain"], (
-            f"{APPENDIX}'s complete gate no longer composes {step!r}, so a worker that "
-            f"runs it has not run what this file calls complete:\n{chain['chain']}"
-        )
-    assert SUBSTITUTED.search(chain["chain"]), (
-        f"{APPENDIX}'s complete gate no longer runs the repository's own gate recipe at "
-        f"all, so a worker that runs it has not run what this file calls complete:\n"
-        f"{chain['chain']}"
+    derived = [
+        found["name"] for found in ASSIGNMENT.finditer(appendix) if DERIVATION.search(found["rest"])
+    ]
+    assert not derived, (
+        f"{APPENDIX} shows a worker how to derive {derived} before it starts. Those "
+        "slots existed to fill in a chained gate invocation; deriving one again is the "
+        "instruction returning by way of its setup block"
     )
 
 
-def test_every_worked_example_waits_on_the_whole_chain(appendix: str) -> None:
-    """The passage that failed a node, held to the passage that defines the gate.
+def test_the_appendix_names_a_repository_wide_bar_only_as_something_run_downstream(
+    appendix: str,
+) -> None:
+    """The one thing this file may still say about that bar: who runs it, and when.
 
-    The sentinel example backgrounded `just bootstrap && just gate` — two of the
-    three parts the prose four paragraphs above called complete. This asserts the
-    class rather than the wording: whatever is put into the background has to be the
-    gate's own name, and naming any step of the chain there is the defect returning
-    under new spelling.
+    It has to say it — a worker told to run less needs to know the rest is not simply
+    skipped, or it reinstates the wider run on its own judgment. So each mention is read
+    in its own sentence and required to name the merge path that owns it: a `pre-push`
+    hook where the repository publishes locally, the host's required checks where it
+    publishes remotely.
     """
-    backgrounded = BACKGROUNDED.findall(appendix)
-
-    assert backgrounded, f"{APPENDIX} no longer shows how to wait on a gate at all"
-    for command in backgrounded:
-        assert "complete_gate" in command, (
-            f"{APPENDIX} backgrounds {command!r}, which is not the command it calls "
-            "complete; a worker that waits on this has waited on something else"
-        )
-        named = CHAIN_STEP.search(command)
-        assert named is None, (
-            f"{APPENDIX} backgrounds {named.group(0)!r} rather than the whole gate "
-            f"({command!r}) — which is the contradiction that failed a node for "
-            "running the gate's components separately"
+    mentions = list(WIDE_BAR.finditer(appendix))
+    assert mentions, (
+        f"{APPENDIX} no longer says a repository-wide bar exists at all. A worker told "
+        "only to run less concludes the rest is nobody's, and runs it anyway"
+    )
+    for mention in mentions:
+        sentence = sentence_around(appendix, mention.start())
+        assert any(marker in sentence.lower() for marker in DOWNSTREAM), (
+            f"{APPENDIX} names {mention.group(0)!r} in a sentence that does not say it "
+            f"runs downstream on the merge path ({sentence!r}), so it reads as this "
+            "dispatch's to run"
         )
 
 
-def test_the_cheap_iteration_rule_is_the_first_thing_a_reader_meets(appendix: str) -> None:
-    """Burying it has a measured cost, so its position is part of what it says."""
+def test_the_targeted_check_rule_is_the_first_thing_a_reader_meets(appendix: str) -> None:
+    """Burying the cheap rule has a measured cost, so its position is part of what it says.
+
+    The buried version of it — iterate on the judged tier, do not loop on the whole
+    chain — cost one node about 84 minutes after it had already been written down. What
+    leads now is the rule that replaced it, and it leads for the same reason.
+    """
     first = re.search(r"\*\*(?P<rule>[^*]+)\*\*", appendix)
     assert first is not None, f"{APPENDIX} leads with no emphasized rule at all"
 
     rule = " ".join(first["rule"].split())
-    assert "Iterate on the judged tier alone" in rule, (
-        f"{APPENDIX} now leads with {rule!r}; the cheap-iteration rule is what this "
-        "file exists to teach and it cost a node 84 minutes the last time it was not "
-        "the first thing read"
+    assert TARGETED_CHECKS.search(rule), (
+        f"{APPENDIX} now leads with {rule!r}; the rule about which checks a dispatch owes "
+        "is what this file exists to teach, and burying its predecessor cost a node 84 "
+        "minutes"
     )
 
 
-def test_the_rule_still_bounds_looping_on_the_complete_gate_without_capping_it(
+def test_the_appendix_scopes_each_check_and_reruns_only_the_one_that_reported(
     appendix: str,
 ) -> None:
-    """The other half of the rule: the cheap loop is the judged tier, not the gate.
+    """The two halves that keep 'run less' from collapsing back into 'run everything'.
 
-    "Once" is asserted here as a bound on *looping*, not as a cap on runs — the appendix
-    is required to say both, and a rerun after a reported failure is the rule working.
-
-    Both halves of "once" are required together, because each alone has been read
-    wrongly here. Dropping the first lets a worker loop on the ~28-minute chain to
-    discover findings the judged tier reports in two. Dropping the second lets a worker
-    read "once" as a per-dispatch allowance — one did, edited a file after its gate had
-    gone green, and would have reported that green as its verification, which by the
-    letter of the older wording it was entitled to do.
+    Without the scope rule, a worker satisfies the leading rule by running the widest
+    tier that touches its change and calling it exercised. Without the rerun rule it
+    confirms a fix by running that tier's neighbours again, which is the ~28-minute round
+    the old instruction was looped on — the cost is identical whatever the loop is
+    called.
     """
-    assert "just lint-llm-diff" in appendix
-    assert AGAINST_LOOPING.search(appendix), (
-        f"{APPENDIX} no longer says the complete gate is run over the finished tree "
-        "rather than looped on, which is the half of the rule that stops a worker "
-        "spending 28 minutes a round on findings the judged tier reports in two"
+    assert NARROWEST_SCOPE.search(appendix), (
+        f"{APPENDIX} no longer tells a worker to take the narrowest scope each check "
+        "supports, so 'the checks that exercise what you changed' is satisfied by the "
+        "widest tier that touches it"
     )
-    assert NOT_A_BUDGET.search(appendix) and STALE_GREEN.search(appendix), (
-        f'{APPENDIX} no longer says that the "once" is a rule against looping rather '
-        "than a budget, or no longer says that a green predating your last edit has not "
-        "verified your work; without both, a worker may cite a stale green and be right "
-        "by the letter of this file"
+    assert RERUN_THAT_CHECK.search(appendix), (
+        f"{APPENDIX} no longer says that a check which reported something is the check to "
+        "run again; confirming a fix by rerunning its neighbours is the round this "
+        "instruction replaced"
     )
+
+
+def test_the_completion_report_is_stated_as_the_outcome_it_must_have(appendix: str) -> None:
+    """The residue of the removed gate, stated as a property rather than as an order.
+
+    Six of fourteen nodes in one workstream settled `task-failed` with complete,
+    gate-green work, every verdict naming where the completion report sat rather than a
+    criterion it missed — one that the report appeared before the recorded commit and
+    gate actions. A live `context` note warning a dispatch about the pattern did not
+    prevent a recurrence, which is why this is written as what has to be true of the
+    finished dispatch: the report is last, it describes the tree as it finally is, and
+    anything found afterwards is fixed and reported again rather than left standing
+    behind a report that predates it.
+    """
+    for stated, missing in (
+        (REPORT_IS_LAST, "that the completion report is the last thing the dispatch produces"),
+        (REPORT_DESCRIBES_THE_FINAL_TREE, "that it describes the tree as it finally is"),
+        (REPORTED_AFRESH, "that what is found afterwards is fixed and then reported afresh"),
+    ):
+        assert stated.search(appendix), (
+            f"{APPENDIX} no longer says {missing}; without it a dispatch that fixes "
+            "something after reporting leaves a report describing a tree that no longer "
+            "exists, which is what failed six nodes whose work was complete and green"
+        )
+
+
+def test_the_worked_wait_backgrounds_one_command_behind_its_own_sentinel(
+    appendix: str,
+) -> None:
+    """The wait, held to the naming rule the passage beside it states.
+
+    Its predecessor backgrounded two of the complete gate's three parts, which failed a
+    node for running the components separately, and wrote `/tmp/gate.exit` — a shared
+    path, in a file whose own next paragraph requires one sentinel per invocation, on a
+    host where three workers collided on shared names in one day. So what is asserted is
+    the pair: the example backgrounds one whole command, and the sentinel it polls is the
+    one that command writes and is named after the invocation that ran it.
+    """
+    backgrounded = BACKGROUNDED.findall(appendix)
+    assert backgrounded, f"{APPENDIX} no longer shows how to wait on a long command at all"
+
+    waited = WAITED_ON.search(appendix)
+    assert waited is not None, (
+        f"{APPENDIX} backgrounds a command and never polls for its sentinel, which is the "
+        "half that makes the wait end"
+    )
+    sentinel = waited["sentinel"]
+    assert PER_INVOCATION_PATH.search(sentinel), (
+        f"{APPENDIX} waits on {sentinel!r}, a path every dispatch on this host would "
+        "write; name it after the invocation, as the paragraph below this example requires"
+    )
+    for command in backgrounded:
+        assert sentinel in command, (
+            f"{APPENDIX} backgrounds {command!r} and waits on {sentinel!r}, which that "
+            "command does not write — so the wait ends on somebody else's result"
+        )
+        chained = CHAINED_INVOCATION.search(command)
+        assert chained is None, (
+            f"{APPENDIX} backgrounds {chained.group(0)!r}: a chain rather than the one "
+            "command a worker meant to run, which is the shape that failed a node for "
+            "running its parts separately"
+        )
 
 
 def test_the_appendix_asks_for_the_bar_to_be_stated_as_criteria(appendix: str) -> None:
@@ -310,97 +424,6 @@ def test_the_appendix_asks_for_the_bar_to_be_stated_as_criteria(appendix: str) -
         assert demand in appendix, (
             f"{APPENDIX} no longer asks for {demand!r} as an acceptance criterion, so a "
             "node that omits it is judged on the bar's own reading of it instead"
-        )
-
-
-def test_the_gate_recipe_is_derived_rather_than_handed_over_as_a_fixed_name(
-    appendix: str,
-) -> None:
-    """The defect above, asserted as a shape: a derived value, not a name.
-
-    Only the base ref carried a `# confirm it:` derivation, so the gate recipe beside it
-    read as fixed. What that derivation says is free to change; handing over a name
-    again is not.
-    """
-    chain = DEFINITION.search(appendix)
-    assert chain is not None, f"{APPENDIX} no longer defines `complete_gate`"
-
-    named = BARE_GATE.search(chain["chain"])
-    assert named is None, (
-        f"{APPENDIX} puts {named.group(0)!r} in the complete gate as a fixed name. The "
-        "recipe that is a repository's full bar is not always called `gate` — crozier's "
-        "is `check` — and a bare name here is both a command that may not exist and a "
-        "literal a judge compares a report against, which has already failed finished work"
-    )
-
-    substituted = [
-        found["name"] for found in SUBSTITUTED.finditer(chain["chain"]) if found["name"] != "BASE"
-    ]
-    assert substituted, (
-        f"{APPENDIX}'s complete gate names no substitution for the gate recipe "
-        f"({chain['chain']!r}); a worker in a repository without that recipe is left to "
-        "guess whether it may deviate from this file"
-    )
-
-    derived = {
-        found["name"] for found in ASSIGNMENT.finditer(appendix) if DERIVATION.search(found["rest"])
-    }
-    for name in substituted:
-        assert name in derived, (
-            f"{APPENDIX} substitutes ${name} into the complete gate but never shows how "
-            f"to derive it. `BASE` carries a `# confirm it:` command and that asymmetry "
-            f"is what made the other slot read as fixed"
-        )
-
-
-def test_what_the_judge_checks_is_one_invocation_and_not_a_recipe_name(
-    appendix: str,
-) -> None:
-    """Both halves: the rule against running the parts separately, and its actual subject.
-
-    The rule is unchanged — the chain runs end to end, in one command, over the finished
-    tree. What is stated now is what it was always about: that the chain *ran*, not that
-    the report echoes this file's own spelling of it. A report naming the command the
-    worker substituted is the better report, because it says what actually ran.
-    """
-    assert "one invocation" in appendix, (
-        f"{APPENDIX} no longer requires the complete gate to run as one invocation, which "
-        "is the rule the substitution must not be read as relaxing"
-    )
-    assert AGAINST_LOOPING.search(appendix), (
-        f"{APPENDIX} no longer says the complete gate runs over the finished tree"
-    )
-    assert SUBSTITUTION_SATISFIES.search(appendix), (
-        f"{APPENDIX} no longer says that a report naming the substituted command satisfies "
-        "the one-invocation rule — without it the template's own spelling reads as the "
-        "literal to check a report against, which is how correct work was failed"
-    )
-
-
-def test_the_appendix_says_what_does_not_answer_which_recipe_is_the_gate(
-    appendix: str,
-) -> None:
-    """The two authorities a reader would otherwise reach for, both wrong, named here.
-
-    `config/onevcs.rules.yml` carried a per-identity `gate:` until onevcs 0.11.0 removed
-    the concept, so it is no longer an answer at all. `just repos`'s gate column is the
-    registry's own detection from the origin and the checkout, and it prints `just gate`
-    for repositories that have no such recipe. The repository's own `just --list` is what
-    decides, and this file is now the only place a dispatch learns that.
-    """
-    paragraphs = [block for block in appendix.split("\n\n") if "onevcs.rules.yml" in block]
-    assert paragraphs, (
-        f"{APPENDIX} no longer says that `config/onevcs.rules.yml` does not answer which "
-        "recipe is a repository's gate; onevcs 0.11.0 removed the `gate:` key and a reader "
-        "who does not know that reaches for a file that decides nothing"
-    )
-    paragraph = paragraphs[0]
-    for authority in ("just repos", "just --list"):
-        assert authority in paragraph, (
-            f"{APPENDIX} names `config/onevcs.rules.yml` as no answer but says nothing "
-            f"about {authority!r} in the same breath. Both wrong authorities and the one "
-            "right one belong together, or a reader talked out of the first falls into "
-            "the second"
         )
 
 
@@ -491,7 +514,7 @@ def test_the_pre_launch_check_is_about_sentinel_ownership_not_gate_concurrency(
         "sentinel path. Without that object, a reader can treat the check as a ban on "
         "starting a gate while any other gate is running"
     )
-    assert CONCURRENT_GATES_ALLOWED.search(appendix), (
+    assert CONCURRENT_RUNS_ALLOWED.search(appendix), (
         f"{APPENDIX} does not distinguish sentinel-path ownership from concurrent "
         "gates and judged tiers, so the retired serialization rule remains available "
         "as an implication"

@@ -578,28 +578,51 @@ def _serving_board() -> Iterator[dict[str, str]]:
         server.server_close()
 
 
-def _plan_environment(root: Path) -> dict[str, str]:
-    """The environment a read across the default sources runs under.
+def _prepare_plan_sources(root: Path) -> dict[str, str]:
+    """Build every plan source one journey reads under ``root``, and name them.
 
-    Both gitignored local roots are pointed per run, and at *different* directories.
+    Preparing them is three things and the name covers all three: the two gitignored
+    local roots are *created* under ``root``, every source is *pointed* at what was
+    created, and the credential file each source resolves is pointed at one under
+    ``root`` too — away from this host's own, which is what keeps a journey off the
+    live board whatever the operator has configured.
+
+    Both local roots are created and pointed per run, and at *different* directories.
     `plans-local` has to be pointed somewhere because a `local-md` source refuses a root
     it cannot canonicalize and refuses it for the whole read, so these journeys would
     otherwise pass or fail on whether this checkout happened to have run session setup —
     and it has to be pointed somewhere else because two sources over one root each answer
     with every project in it, which is the duplicate listing the roots are kept apart to
     avoid.
+
+    This is separate from :func:`_plan_environment` because a journey that *launches*
+    composes these names on top of `_launch_environment`, whose whole job is isolating a
+    launch — its own runs root, its paid-provider guard, the launcher variables it
+    deliberately popped. Updating that environment with a whole ambient copy restores
+    every one of them. A dispatch of this repository exports `ONEPIPELINE_RUNS_DIR=runs`,
+    so the three journeys below that composed the two that way launched into the
+    checkout's own shared runs root rather than their own: run concurrently under
+    `-n 4`, they minted `launch`, `launch-2` and `launch-3` between them, and the one
+    that reads its run id back failed on the name it was given.
     """
     local_plans = root / "local-plans"
     (local_plans / "projects").mkdir(parents=True, exist_ok=True)
     (local_plans / "tasks").mkdir(parents=True, exist_ok=True)
+    return {
+        "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
+        "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT": str(root),
+        "ONETASKGRAPH_SOURCES__PLANS-LOCAL__CONFIG__ROOT": str(local_plans),
+    }
+
+
+def _plan_environment(root: Path) -> dict[str, str]:
+    """The environment a read across the default sources runs under.
+
+    A whole ambient copy, because a read is not a launch and has nothing to isolate
+    from. A journey that launches takes :func:`_prepare_plan_sources` instead.
+    """
     environment = os.environ.copy()
-    environment.update(
-        {
-            "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
-            "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT": str(root),
-            "ONETASKGRAPH_SOURCES__PLANS-LOCAL__CONFIG__ROOT": str(local_plans),
-        }
-    )
+    environment.update(_prepare_plan_sources(root))
     return environment
 
 
@@ -795,7 +818,7 @@ def test_run_settlements_and_live_edits_reach_the_plan_store(
     """The real launch writes both execution outcome and a graph addition to its source."""
     _write_local_project(tmp_path)
     environment = _launch_environment(tmp_path / "execution", oneharness_bin)
-    environment.update(_plan_environment(tmp_path))
+    environment.update(_prepare_plan_sources(tmp_path))
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
 
     launched = subprocess.run(
@@ -902,7 +925,7 @@ def test_settlement_write_back_preserves_the_authored_project_description(
     _write_local_project(tmp_path)
     _author_project_body(tmp_path, LOCAL_PROJECT, AUTHORED_PROJECT_BODY)
     environment = _launch_environment(tmp_path / "execution", oneharness_bin)
-    environment.update(_plan_environment(tmp_path))
+    environment.update(_prepare_plan_sources(tmp_path))
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
 
     def _show_project() -> str | None:
@@ -1025,7 +1048,7 @@ def test_a_refused_destination_read_settles_the_run_and_writes_nothing(
 
     log = tmp_path / "plan-store-calls.log"
     environment = _launch_environment(tmp_path / "execution", oneharness_bin)
-    environment.update(_plan_environment(tmp_path))
+    environment.update(_prepare_plan_sources(tmp_path))
     environment.update(_injected_partial_read(log))
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
 
@@ -1038,6 +1061,15 @@ def test_a_refused_destination_read_settles_the_run_and_writes_nothing(
         check=False,
     )
     assert launched.returncode == 0, launched.stdout + launched.stderr
+    # Asserted before the run id, because the run id is what a lost isolation shows up
+    # as and the name alone cannot say why. `ONEPIPELINE_RUNS_DIR` is relative and this
+    # repository's own dispatches export it, so a launch that took the ambient value ran
+    # into the checkout's shared runs root, where a sibling journey of this module has
+    # already taken the name and this one is handed `launch-2` or `launch-3` instead.
+    assert (tmp_path / "execution" / "runs" / LOCAL_PROJECT).is_dir(), (
+        "this launch did not run in its own runs root, so the run id below is whatever "
+        "was free in a root it shares with every other launch on this checkout"
+    )
     assert json.loads(launched.stdout.splitlines()[-1]) == {
         "run_id": LOCAL_PROJECT,
         "settlement": "complete",
