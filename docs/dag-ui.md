@@ -75,23 +75,28 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.6.3**, the release `config/onepipeline-ui.version` pins, is the
+**`onepipeline-ui` 0.6.4**, the release `config/onepipeline-ui.version` pins, is the
 one that shows which release carried each landed node, alongside every release event.
 Opening a node whose dependency was adopted `published` shows what it waited on and
 the versions that arrived; opening one held shows what it is held on, whether that is
 an automated probe or a person's release step.
 
 **On this host it renders none of that, and that is not a defect in the view.** No
-repository registered here declares a release target, so no run holds a release event
-and no node has a release to show. The consequence worth internalising is that this
+run recorded here holds a release event: `ai-orchestrator` declares no release target,
+and no plan launched from here has yet named `adoption` or `consumes` for a node in one
+of the six registered repositories that do declare one. The consequence worth
+internalising is that this
 surface fails *silently* in the direction of looking absent: an operator sees no
 release row whether the release is unadopted or the target is undeclared, and the two
-are indistinguishable from the browser. Declaring a target is a `releases.yml` under
-`$ONEVCS_HOME`, and nothing on this host writes one.
+are indistinguishable from the browser. Declaring a target for *this* repository would
+be a `release-targets.toml` at its own root, or a `releases.yml` under
+`$ONEVCS_HOME`, and nothing on this host writes either.
 
 What the *reader* answers differently is one number — `timeline_schema_version`, which
 0.6.3 serves at 7 where 0.6.2 served 6, with every other byte of the timeline and
-conversation responses identical on the runs compared.
+conversation responses identical on the runs compared. 0.6.4, the adopted release,
+changes nothing the view or the read API serves: its whole diff against 0.6.3 is that
+repository's own release-target declaration, its release probe, and CI.
 `tests/e2e/test_dag_ui_serving_e2e.py` holds this in a browser: it opens one desktop
 viewport on the pair over a real recorded run and asserts that the page renders — the
 run's goal, its counters, its failed node — and that no release row is on it, in either
@@ -111,7 +116,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.3.12**.
+linked crate; on the adopted release that is **oneagentgraph 0.3.13**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

@@ -12,8 +12,9 @@ loader that reads a plan:
 
 * the `onevcs` CLI the manager verbs run, which is `config/onevcs.version` and which
   has to carry the `release` verb group for a target to be configurable at all;
-* that the same CLI reports **no release targets** for this repository, which is what
-  makes "nothing here uses it" a measurement rather than an assumption;
+* that the same CLI reports **no release targets** for this repository, and reports the
+  set of registered repositories that do declare one, which is what makes "nothing here
+  uses it" a measurement rather than an assumption;
 * the `onevcs` the adopted engine **links**, which is what a dispatch publishes
   through and what an engine resolving a node's adoption mode calls — read out of the
   engine binary itself, because that is the artifact that runs;
@@ -61,11 +62,40 @@ from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
 
-#: The verb group release adoption exists to add, and the four subcommands under it.
-#: All four, because the section describes what each one is for and a build carrying
-#: three of them would leave one of those descriptions about nothing.
+#: The verb group release adoption exists to add, and the six subcommands under it.
+#: All six, because the section describes what each one is for and a build carrying
+#: five of them would leave one of those descriptions about nothing. `discover` and
+#: `declaration` joined the four onevcs 0.13.0 shipped when 0.16.x started reading a
+#: repository's own `release-targets.toml`, and `declaration` is the one that reads it.
 RELEASE_VERB = "release"
-RELEASE_SUBCOMMANDS = ("targets", "latest", "status", "acknowledge")
+RELEASE_SUBCOMMANDS = (
+    "targets",
+    "discover",
+    "latest",
+    "status",
+    "acknowledge",
+    "declaration",
+)
+
+#: Which registered identities carry their own `release-targets.toml`, and how many
+#: targets each declares. Measured 2026-08-29 on the adopted onevcs 0.16.2, which is the
+#: release that started reading a repository's own declaration beside the host's — under
+#: which six of this host's registered repositories began declaring targets without
+#: anybody configuring anything here.
+#:
+#: Held as the whole mapping rather than as "at least one", for the reason
+#: `LINKED_HARNESS_CORES` is: what a reader of `AGENTS.md` acts on is *which* repository
+#: has a release to await, and a set that only had to be non-empty would go on passing
+#: while the one they care about dropped out. `AGENTS.md`'s "Sequencing a node behind a
+#: release" names this same list, so a change upstream comes due in the prose as well.
+DECLARING_IDENTITIES = {
+    "github.com/nickderobertis/oneagentgraph": 3,
+    "github.com/nickderobertis/oneharness": 6,
+    "github.com/nickderobertis/onejudge": 3,
+    "github.com/nickderobertis/onepipeline": 3,
+    "github.com/nickderobertis/onepipeline-ui": 4,
+    "github.com/nickderobertis/onevcs": 4,
+}
 
 #: How the recipes reach the CLI whose version `config/onevcs.version` pins — the same
 #: `uv run` every manager verb in the justfile is a wrapper over, so what this journey
@@ -83,6 +113,9 @@ READ_API = ("uv", "run", "onepipeline-api")
 #: This repository, as `onevcs` resolves it. Asked about itself rather than about a
 #: sibling because it is the one identity this checkout is guaranteed to be inside.
 THIS_REPOSITORY = "ai-orchestrator"
+#: The same repository as the registry's own key, which is what the per-identity loop
+#: below reports and so the spelling the declaring-set assertions have to compare against.
+THIS_REPOSITORY_IDENTITY = "github.com/nickderobertis/ai-orchestrator"
 
 #: The mode a repository with nothing declared resolves to, which is the whole reason
 #: a plan naming neither field runs as it always did.
@@ -208,25 +241,28 @@ def test_the_cli_the_manager_verbs_run_carries_the_release_surface() -> None:
     missing = [verb for verb in RELEASE_SUBCOMMANDS if not re.search(rf"(?m)^\s+{verb}\b", offered)]
     assert not missing, (
         f"the pinned onevcs's `{RELEASE_VERB}` group is missing {missing}; AGENTS.md "
-        "describes what each of the four verbs is for, and a description of a verb "
+        "describes what each of those verbs is for, and a description of a verb "
         "that is not there is the class of claim this journey exists to catch"
     )
 
 
-def test_nothing_on_this_host_declares_a_release_target() -> None:
+def test_which_registered_repositories_declare_a_release_target() -> None:
     """The second half of the section's opening sentence, measured rather than assumed.
 
     "In force" and "in use" are different, and this is the one that decides what a run
-    actually does: with no target declared, a dependency landing anywhere earns no
-    reference row and no hold, whatever mode a node resolves to. A target appearing
-    anywhere is not a defect — it is somebody putting the mechanism to work, and the
-    section's claim that nothing does coming due in the same moment.
+    actually does: with no target declared for a repository, a dependency landing there
+    earns no reference row and no hold, whatever mode a node resolves to. That used to
+    be true of every repository registered here, and onevcs 0.16.x ended it without
+    anybody configuring anything — a repository's own `release-targets.toml` is now read
+    beside the host's document, and six of this host's siblings ship one. So the claim
+    the section makes is narrower than it was and this journey measures it as such:
+    `ai-orchestrator` declares none, and exactly `DECLARING_IDENTITIES` do.
 
     Asked of **every** registered identity rather than of this repository alone,
-    because that is the breadth of the claim: "no repository registered here declares
-    a release target". A version of this that asked only about `ai-orchestrator` would
-    pass while a sibling repository held a target and a `published` node really could
-    hold — which is the state the section says does not exist.
+    because that is the breadth of the claim. A version of this that asked only about
+    `ai-orchestrator` would pass while a sibling repository silently gained or lost a
+    target and a `published` node's wait changed under a section that still described
+    the old set.
 
     "Registered here" is the `onevcs` registry rather than `config/onevcs.checkouts`,
     and the difference is load-bearing between a registration landing in `config/` and
@@ -258,8 +294,13 @@ def test_nothing_on_this_host_declares_a_release_target() -> None:
             continue
         assert reported.returncode == 0, f"{identity}: {reported.stderr}"
         declared = json.loads(reported.stdout)
-        if declared["targets"] or declared["adoption"] != DEFAULT_ADOPTION:
-            declaring[identity] = declared
+        assert declared["adoption"] == DEFAULT_ADOPTION, (
+            f"{identity} resolves the {declared['adoption']!r} adoption rung rather than "
+            f"{DEFAULT_ADOPTION!r}. {GUIDANCE_SECTION!r} in AGENTS.md says every node here "
+            "resolves to fast unless its own plan says otherwise; that sentence is now due"
+        )
+        if declared["targets"]:
+            declaring[identity] = len(declared["targets"])
 
     answered = sorted(set(identities) - set(unregistered))
     assert answered, (
@@ -268,11 +309,16 @@ def test_nothing_on_this_host_declares_a_release_target() -> None:
         f"set; run `just repos-apply`. Awaiting registration: {sorted(unregistered)}"
     )
 
-    assert not declaring, (
-        f"these registered repositories declare a release target or a non-default "
-        f"adoption rung: {declaring}. {GUIDANCE_SECTION!r} in AGENTS.md says no "
-        "repository registered here declares one and that every node therefore "
-        "resolves to fast with nothing to await; both sentences are now due"
+    assert declaring == DECLARING_IDENTITIES, (
+        f"the registered repositories declaring a release target are {declaring}, and "
+        f"this repository is written against {DECLARING_IDENTITIES}. "
+        f"{GUIDANCE_SECTION!r} in AGENTS.md names that same list and says which of them "
+        "a dependency can be awaited in; re-read it against what is really declared"
+    )
+    assert THIS_REPOSITORY_IDENTITY not in declaring, (
+        f"{THIS_REPOSITORY_IDENTITY} now declares a release target, so a plan of this "
+        f"repository can hold on one. {GUIDANCE_SECTION!r} in AGENTS.md says it declares "
+        "none and that a plan of it therefore awaits nothing; both sentences are now due"
     )
 
     # And the refusal an operator meets when they ask anyway, which is what tells them

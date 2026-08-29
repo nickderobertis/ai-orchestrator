@@ -132,14 +132,19 @@ REQUIRED_CLAIMS = (
     # what a reader needs in order to tell "this host can do it" from "this host does
     # it" — which is the one distinction this whole section now turns on.
     Claim(
-        "no repository here declares a target",
-        "no\nrepository registered here declares a release target",
+        "this repository declares no target",
+        "**`ai-orchestrator` declares none**",
+    ),
+    Claim(
+        "some repositories registered here do declare one",
+        "reads a target from the **repository's own** `release-targets.toml`",
     ),
     Claim(
         "a target-less repository releases nothing",
         "a repository that declares\nnone releases nothing as far as this mechanism is concerned",
     ),
     Claim("the release-targets document's path", "`$ONEVCS_HOME/releases.yml`"),
+    Claim("the producer's declaration is the other half", "`release-targets.toml` at its own root"),
     Claim("this host has no such document", "**this host does not have one**"),
     Claim("the verbs were driven", "answers `adoption: fast`"),
     Claim("the modes reach the loader", "unknown variant `bogus`, expected `fast` or `published`"),

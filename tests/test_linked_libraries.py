@@ -98,7 +98,7 @@ TURN_CONTENT_FLOOR = Release(0, 3, 6)
 #: the CLI the manager verbs run; what a dispatched node publishes through is this
 #: linked copy, and a bump to `config/onepipeline.version` that resolved an older onevcs
 #: would put the gate back into every dispatch while every version file on the host
-#: still read 0.11.0.
+#: still read 0.11.2.
 GATE_FREE_FLOOR = Release(0, 11, 0)
 
 
@@ -379,9 +379,9 @@ class ProseClaim(NamedTuple):
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
 #: between them would mean anything. Measured 2026-08-25 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.11.0 and names the `oneharness-cli`
+#: wheels: `config/oneharness.version` reads 0.11.2 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.12.0. One wheel, its own library, two numbers.
+#: against as 0.12.1. One wheel, its own library, two numbers.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
 #: What each dependent resolves that crate at in the adopted engine. The whole
@@ -394,14 +394,14 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.12", core="0.12.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.6.1", core="0.12.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.13", core="0.12.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.6.2", core="0.12.1"),
 )
 
 #: Where an operator meets the CLI-versus-core reality, and the sentence that has to
 #: name every half of it. Prose rather than only a comment for the reason the
 #: divergence below has prose: the person who reads `config/oneharness.version` and
-#: concludes the dispatched turn runs 0.11.0 is making the same mistake the whole of
+#: concludes the dispatched turn runs 0.11.2 is making the same mistake the whole of
 #: this module is about. One fragment, spelled once per dependent, with every number
 #: in it interpolated — a sentence that hardcoded the *dependent's* version would go
 #: stale the day oneagentgraph moved without this gate saying so.
@@ -418,7 +418,7 @@ HARNESS_CORE_PROSE = ProseClaim(
 #: **Empty, and kept.** The one entry this carried was `onejudge`, pinned at 0.4.0
 #: against a linked 0.5.0 because the tag was published and the PyPI distribution was
 #: not. Both halves of that ground went at once: the registry now carries every
-#: `onejudge` from 0.5.0 to 0.5.4, and the adopted engine links 0.5.4, so there is nothing left to
+#: `onejudge` from 0.5.0 to 0.6.2, and the adopted engine links 0.6.2, so there is nothing left to
 #: except and the entry is retired rather than re-dated. What stays is the escape
 #: hatch — `Divergence`, this registry, and the two tests that read it — because the
 #: next adoption that meets an uninstallable linked release needs to declare one
@@ -617,8 +617,8 @@ def test_the_oneharness_pin_names_an_artifact_the_engine_does_not_link() -> None
     installed wheels, that instruction is wrong: the engine does link one core now,
     and the pin still cannot be reconciled, because `config/oneharness.version` names
     the `oneharness-cli` wheel and the linked crate is `oneharness-core`. Those are
-    separate artifacts on separate cadences — the installed CLI reads 0.11.0 and its
-    own SBOM declares the core it is compiled against as 0.12.0 — so an equality
+    separate artifacts on separate cadences — the installed CLI reads 0.11.2 and its
+    own SBOM declares the core it is compiled against as 0.12.1 — so an equality
     between them would assert that two artifacts carry one number.
 
     So the property gated is the one that was always the real reason and was only ever

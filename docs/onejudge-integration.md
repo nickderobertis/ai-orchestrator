@@ -77,7 +77,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.17.3,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.17.5,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -174,8 +174,8 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.11.0 is
-the adopted release, and what it changes reaches this host's **monitor** rather than
+`config/oneharness.version` release and rejects a stale binary. Version 0.11.2 is
+the adopted release, and what 0.11.0 changed reaches this host's **monitor** rather than
 its workers: a named session continued under `--control` now genuinely continues the
 same conversation, and a control mechanism whose protocol has no resume request
 refuses the continuation instead of silently opening a new conversation while the
@@ -209,9 +209,11 @@ reader whole. **What is no longer true here is that there is such an older reade
 Through the previous adoption the `oneagentgraph` this host's
 [smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
 a release behind the CLI it spawns; measured on 2026-08-26 from both installed wheels'
-own SBOMs, `oneagentgraph-cli` 0.3.12 is compiled against `oneharness-core` 0.12.1
-while `oneharness-cli` 0.11.0 is compiled against 0.12.0. They are separate artifacts,
-and their differing core versions are deliberate. Nothing
+own SBOMs on 2026-08-29, `oneagentgraph-cli` 0.3.13 is compiled against
+`oneharness-core` 0.12.1
+and `oneharness-cli` 0.11.2 against 0.12.1 as well — equal at this adoption, where the
+one before had them a minor apart. They are separate artifacts on separate cadences,
+so read that equality as a coincidence rather than as a rule. Nothing
 about that rests on an adopter remembering to check: the pre-push hook selects
 `just smoke` for any diff touching `config/oneharness.version`, so the next bump proves
 the pairing on a real turn or does not reach the remote.
@@ -490,7 +492,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.11.0, a config's per-harness `model` **beats** the variable, while the `--model`
+0.11.2, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -607,7 +609,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.11.0, confirmed against the binary:
+candidate it ended up running — through oneharness 0.11.2, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -980,8 +982,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.17.3,
-> `oneagentgraph` 0.3.12, nor `onevcs` 0.15.8. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.17.5,
+> `oneagentgraph` 0.3.13, nor `onevcs` 0.16.2. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1265,7 +1267,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.6.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.6.1/docs/protocol.md)),
+([onejudge v0.6.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.6.2/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
@@ -1287,7 +1289,7 @@ member would otherwise have gone straight to a paid subscription. What is still 
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
 at `tests/e2e/fake_codex.py` — every config in this repository names `codex` first, so
 pinning that identity's binary is what keeps a suite run off a subscription. The two
-do not collide: re-measured against the adopted oneharness 0.11.0, a harness selected
+do not collide: re-measured against the adopted oneharness 0.11.2, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the
 one that matters — the same chain without `--mock-harness` runs the pinned binary — so

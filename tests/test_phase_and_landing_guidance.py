@@ -115,7 +115,7 @@ PHASE_CLAIMS = (
         "never handed\nout, named in a refusal, or derivable",
     ),
     Claim("a retried branch's release follows the chain", "with retries followed"),
-    Claim("nothing on this host uses it yet", "no run relays a release\nevent"),
+    Claim("no run of this repository relays one", "no run of it relays a release\nevent"),
 )
 
 #: Every claim the landing passage has to make, split by which half of the warning it
@@ -129,11 +129,14 @@ SQUASH_HALF_CLAIMS = (
         "*The squash-merge half stands untouched in substance",
     ),
     # The module *did* move: `crates/onevcs/src/landed.rs` was `f8529d72` at v0.11.0,
-    # v0.13.0 and v0.14.0, and is `1b86bb66` at v0.15.4 and `ec3bea7c` at v0.15.8. The
+    # v0.13.0 and v0.14.0, and is `1b86bb66` at v0.15.4 and `ec3bea7c` from v0.15.8 on. The
     # claim worth keeping is therefore what a blob hash was only ever a proxy for — that
     # the four tiers and the never-yes rule did not move — so the passage is held to
     # naming the blob at the pinned release rather than to asserting one blob throughout.
-    Claim("the deciding module's identity is named", "`ec3bea7c` at the pinned v0.15.8"),
+    Claim(
+        "the deciding module's identity is named",
+        "`ec3bea7c` at v0.15.8 and at the pinned v0.16.2",
+    ),
     Claim(
         "the last tier can never say yes",
         "must never answer `yes` — it is a comparison, not\na record",
@@ -154,8 +157,11 @@ LANDING_RETRY_HALF_CLAIMS = (
         "the link is written at session open",
         "**But that link is written at `session open`",
     ),
-    Claim("this host carries none", "**none** carries a\n`retried_by`"),
-    Claim("a pre-adoption branch reads the old warning", "read the old\nwarning unchanged"),
+    Claim(
+        "this host now carries a chain",
+        "session records under\n`$ONEVCS_HOME/sessions/` on this host carry a `retried_by`",
+    ),
+    Claim("a landing with no record reads the old warning", "read the old\nwarning unchanged"),
     Claim("both answers are unknown there", "treat **both** of that tier's answers as unknown"),
     Claim("no is the dangerous one", "`no` is the dangerous one"),
     Claim("decided by is still read first", "still read before `landed:`"),
@@ -175,18 +181,13 @@ LANDING_MEASUREMENT_DATE = "2026-08-29"
 #: measurement rather than a similar one. The incident's own change request stopped
 #: answering here on 2026-08-25 — no session record correlates it any more — and a
 #: measurement nobody can re-take is not evidence, whatever it once showed.
-LANDING_MEASUREMENT_REF = "onevcs/s-a37f615ff961"
+LANDING_MEASUREMENT_REF = "onevcs/s-107f9b4639a1"
 #: The change request that ref's work landed through, which is what makes the answer
 #: below dangerous rather than merely uncertain: it merged, and the verb still says no.
-LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgraph/pull/15"
-#: What that ref answered, verbatim. Quoted rather than paraphrased: the whole value of
-#: the sentence is that a reader can run the verb and compare. It changed at onevcs
-#: 0.15.8 — the verb now reaches the change request's number in the base where it used
-#: to fall through to the comparison — which is why this is re-taken at every adoption
-#: rather than re-dated.
-LANDING_MEASUREMENT_ANSWER = (
-    "now answers `landed: yes`, `decided by: the\nchange request's number in the base"
-)
+LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/142"
+#: What that ref still answered, verbatim. Quoted rather than paraphrased: the
+#: whole value of the sentence is that a reader can run the verb and compare.
+LANDING_MEASUREMENT_ANSWER = "still answers `landed: no`, `decided\nby: content comparison`"
 
 
 def _text(relative_path: str) -> str:
@@ -337,7 +338,7 @@ def test_the_phase_section_names_both_change_requests_that_carry_it() -> None:
 def test_the_landing_passage_keeps_the_half_no_release_has_fixed(claim: Claim) -> None:
     """The squash-merge half is true at every release, and deleting it is the danger.
 
-    `crates/onevcs/src/landed.rs` has moved since v0.14.0 — re-read at v0.15.8 on
+    `crates/onevcs/src/landed.rs` has moved since v0.14.0 — re-read at v0.16.2 on
     2026-08-29, its four tiers, their order and its own never-yes rule are unchanged and
     a constraint was added beside them — so
     nothing about the four tiers has moved since the incident this passage records. A
@@ -532,11 +533,11 @@ SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, 
 SPLIT_MEASUREMENT_DATE = "2026-08-29"
 #: Both refs, because the whole measurement is a comparison: either alone is an
 #: anecdote about one workflow rather than evidence that the workflow is what decides.
-SPLIT_MEASUREMENT_REFS = ("onevcs/s-42dae8f0b0f5", "onevcs/s-a221fd101a0f")
+SPLIT_MEASUREMENT_REFS = ("onevcs/s-60938a07cb2e", "onevcs/s-14e04d0b57e2")
 #: The change request the remote half landed through, for the reason the sibling
 #: measurement names one: without it the quoted `unknown` reads as uncertainty rather
 #: than as the verb having lost a merge that happened.
-SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgraph/pull/51"
+SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/156"
 #: What each half answered with no session record, verbatim, so a later reader
 #: re-takes this measurement rather than a similar one.
 #: Both halves moved at onevcs 0.15.8 and are recorded as measured rather than as the
@@ -545,8 +546,8 @@ SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgra
 #: half stopped being askable at all once its branch was pruned from every registered
 #: checkout after landing. The trailer it was cited for is still on `ed8c396`.
 SPLIT_MEASUREMENT_ANSWERS = (
-    "`landed: no`, `decided by: content comparison`",
-    "names no work this host knows",
+    "`decided by: a landing trailer on the base (5e723477…)`",
+    "`landed: no`, `decided by:\ncontent comparison`",
 )
 #: The condition that separates the two answers. Without it the paragraph reports two
 #: verbs disagreeing and gives a reader nothing to reproduce.

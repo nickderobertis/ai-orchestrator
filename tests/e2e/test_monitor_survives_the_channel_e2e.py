@@ -116,7 +116,7 @@ RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 #: those are the two degradations the score path has to survive.
 ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
-#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.6.1
+#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.6.2
 #: with a `kind: command` judge that logged every op it was asked. No `task`, no `session`
 #: — which is why the run is read from the environment.
 SCORING_FRAME = {

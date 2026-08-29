@@ -8,11 +8,25 @@ landed and been adopted here.
 **Read the history below as history.** `onevcs` 0.14.1 fixed this at the source —
 [`fix: prove a run root is abandoned from its session record, not from a lease nothing
 holds`](https://github.com/nickderobertis/onevcs/pull/82) — and `config/onevcs.version`
-adopted it at 0.15.4. Re-measured on this host on 2026-08-25 with both binaries and
+adopted it at 0.15.4 and reads 0.16.2 today. Re-measured on this host on 2026-08-25 with both binaries and
 everything else held: a session record naming a live owner keeps its run root across a
 sibling `session open` on 0.14.1 and 0.15.4, and loses it on 0.14.0. **Concurrent
 lifecycle dispatch on one identity is no longer unsafe for this reason**, and the
 "at most one" constraint this document used to impose is lifted.
+
+**onevcs 0.15.6 widened the rule this document specified, and the widening is worth
+reading before the specification below.** What that release protects is every run root
+a record still `open` names, whatever became of the process that opened it — the
+`liveness()` half of the test below is gone. The reason is the case the specification
+did not separate: a session opened from the command line is owned by the `onevcs` that
+printed its token and then exited, so its record answers stale from that instant while
+an operator works in the worktree for hours, and reading stale as *nobody is in here*
+is the same deletion this document is about. What ends a run root's protection now is
+`session close` writing `Lifecycle::Closed`, after which it falls through to the lease
+and the retention bound exactly as before. Measured against the adopted 0.16.2 on
+2026-08-29 and asserted by two legs of
+`tests/e2e/test_run_root_lease_e2e.py`: a killed owner leaves an open session's root
+standing, and a closed session's root is gone at the very next sibling open.
 
 Every section below is kept rather than deleted, because the reasoning is what a reader
 needs when they meet the next race of this shape — and because the mitigation is still
@@ -119,12 +133,14 @@ Two further limits, stated rather than discovered later:
 
 `tests/e2e/test_run_root_lease_e2e.py` drives all of it against the real `onevcs`:
 the root surviving *without* the lease, which is the adopted fix and is what that
-journey's first leg now asserts; the root surviving with it; the lease
+journey's first leg now asserts; the root surviving with it; the root surviving a
+killed owner while its record is still `open`, which is the 0.15.6 widening; the root
+pruned once the session is *closed*; the lease
 released with its session — and released again when that session is handed to a
 different owner — and a real `session-setup.sh` taking it inside a real session
 worktree. That first leg asserted the deletion until 2026-08-25, and it was proven to
 discriminate before it was believed: it fails against onevcs 0.14.0 with the reclaimed
-root named, and passes against the adopted 0.15.4.
+root named, and passes against the adopted 0.16.2.
 
 It reads the session record directly rather than asking `onevcs session holders`,
 which answers the same question, because a freshly cut worktree has no `.venv` yet:
@@ -151,8 +167,8 @@ protects a root named by an **open** session even once the CLI that opened it ha
 exited — the door 0.14.1 left open, through which a sibling open was still deleting an
 active dispatch's worktree moments after launch. Bisected here on 2026-08-29 against
 the released CLIs with everything else held: that root is kept from 0.15.6 onward and
-was removed at 0.15.4 and 0.15.5, and every release through 0.16.0 behaves as 0.15.6
-does. So owner liveness no longer prunes and session close does, which both the old and
+was removed at 0.15.4 and 0.15.5, and every release through the pinned 0.16.2 behaves
+as 0.15.6 does. So owner liveness no longer prunes and session close does, which both the old and
 the pinned release answer identically. The cost is stated rather than discovered later:
 a session that opens and is never closed keeps its run root indefinitely, and `just
 sweep` — which removes only what it can prove no live process names — is what reclaims
@@ -177,7 +193,9 @@ shape is right and it is what a reader compares the implementation against.
 
 **The protection it should use:** a session record. `reclaim` should skip any run root
 named by a record whose `state` is `Lifecycle::Open` and whose `liveness()` is
-`Liveness::Live`, and only then fall through to the lease test it makes today. Both
+`Liveness::Live`, and only then fall through to the lease test it makes today. (0.14.1
+landed exactly this; 0.15.6 then dropped the `liveness()` half, for the reason the
+opening section gives.) Both
 halves already exist and need no new concept:
 
 - `workspace::all()` (`:464`) returns every session record on the host, so the run
@@ -217,7 +235,7 @@ suggestion sends the reader to PATH and the harness install.
 
 **This repository cannot correct it.** The text belongs to `oneharness-core`:
 `crates/oneharness-core/src/io/runner.rs:490` in `fn run_job_supervised`, and again at
-`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.11.0 binary on
+`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.11.2 binary on
 this host, and a dispatch reaches the same crate as a linked library rather than
 through any script here, so nothing on this side of the boundary is in a position to
 rewrite it. The fix belongs there: when the job named a `cwd` (set at `runner.rs:457`)

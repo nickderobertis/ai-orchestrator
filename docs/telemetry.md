@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.17.3 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.17.5 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.11.0/0.6.1 upgrade (`config/oneharness.version` and
+after the 0.11.2/0.6.2 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -151,11 +151,14 @@ this paragraph whenever either pin moves. That re-check has now been made twice
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
-could classify. For this one it was re-taken on 2026-08-25 by spending a real
-`just smoke` turn on the adopted pair and reading the record it wrote: at history
+could classify. For this one it was re-taken on 2026-08-29 by spending a real
+`oneagentgraph smoke` turn on the adopted pair, through this repository's own agent
+wrapper and with `ONEHARNESS_HISTORY_DIR` pointed at a throwaway store, and reading the
+record it wrote: at history
 schema 1.1 the `usage` block is `input_tokens`, `output_tokens`, `cache_read_tokens`,
-`cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered and
-on the one that fell through on quota alike. Nothing an accounting reader reads is
+`cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered —
+that turn's chain selected `claude-code:alternate` first and so wrote no fallen-through
+record to compare, which the 2026-08-25 re-take of the same measurement did. Nothing an accounting reader reads is
 renamed, retyped, or re-meant, which is why the boundary sentence names the pair
 these records are written under rather than the older one they were first taken on. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
@@ -236,7 +239,7 @@ served them.
    that is a different fix from a dead driver.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.6.3**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.6.4**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because that crate has no registered checkout
    on this host and its CLI dumps no schema, so a bump is what re-opens this
    paragraph: `timeline_schema_version` 7, spans of kind `run`, `dispatch`, `node`,
@@ -298,14 +301,19 @@ served them.
    themselves needs a registered checkout of that crate or a schema verb on its CLI,
    and is tracked as follow-up. -->
 3. **What 0.6.3 changed here, and it is one number.** Serving the same runs from
-   0.6.2 and 0.6.3 side by side is what dates this section. The whole delta is
+   0.6.2 and 0.6.3 side by side is what dates this section. The adopted 0.6.4 changes
+   nothing on either route: its whole diff against 0.6.3 is that repository's own
+   release-target declaration, its release probe, and CI, so every measurement below
+   is read at 0.6.3 and stands at the pin. The whole delta is
    `timeline_schema_version` 6 becoming 7: on the six runs checked in under
    `tests/fixtures/timeline-runs/` and on `dag-ui-truth`, `issue-27`, and
    `pr-author-body` from this host's own runs root, every other byte of the timeline
    response is identical, and the conversation route is byte-identical too. That is
    what the release *adds* rather than what it changes — 0.6.3 renders which release
    carried each landed node, and no run on this host has a release event in it,
-   because no repository registered here declares a release target. So a reader who
+   because `ai-orchestrator` declares no release target and no plan launched from here
+   has yet named `adoption` or `consumes` for a node in one of the six registered
+   repositories that do declare one. So a reader who
    opens a node and finds no release row is looking at an undeclared target, not an
    unadopted release. `tests/e2e/test_dag_ui_serving_e2e.py` holds the rendering half —
    a browser opened on a real recorded run draws no release row from data that has

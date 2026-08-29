@@ -202,9 +202,13 @@ REQUIRED_CLAIMS = (
         "**kept and still wired**",
     ),
     Claim(
+        # `opened` until the adopted onevcs: from 0.15.6 an *open* record protects its
+        # run root whatever became of the process that opened it, so what makes an
+        # uncommitted root reclaimable is the session having closed. The old wording
+        # contradicted the widening this same passage now states two paragraphs above.
         "an uncommitted abandoned session is still removed outright",
         RECLAMATION_OPENER,
-        "an abandoned session that opened and never committed is still\nremoved outright",
+        "an abandoned session that closed and never committed is still\nremoved outright",
     ),
     Claim(
         "the mechanism is pointed at rather than restated",
