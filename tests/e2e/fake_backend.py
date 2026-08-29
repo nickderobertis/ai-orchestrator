@@ -173,6 +173,16 @@ MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 OBSERVER_ANSWER_ENV = "FAKE_BACKEND_OBSERVER_ANSWER"
 OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 
+#: Optionally have the dispatched agent turn WRITE the files a real one would.
+#:
+#: A planner's whole deliverable is a plan it authors as records in a local Markdown
+#: store, and `scripts/plan.sh` records a planner pass for whatever that run authored.
+#: A stand-in that only reports leaves nothing for the closeout to find, so a journey
+#: about the closeout would be measuring an empty diff. This names a JSON file mapping
+#: each destination path to its content, written once, by the dispatched member alone —
+#: the one action a planner takes that anything downstream of the turn can observe.
+AUTHOR_PLAN_ENV = "FAKE_BACKEND_AUTHOR_PLAN"
+
 #: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
 #: A journey about a run that is *live* needs one, and a stand-in that answers at
@@ -282,6 +292,31 @@ def _ask_manager(config: str | None) -> None:
     )
 
 
+def _author_plan(config: str | None) -> None:
+    """Write the records a dispatched planner would have authored, once.
+
+    Claimed by removing the instruction file, so a dispatch that reaches this branch
+    repeatedly — the supervisor sends it back for more — authors the plan exactly once
+    rather than rewriting it per turn.
+    """
+    instruction = os.environ.get(AUTHOR_PLAN_ENV)
+    if not instruction:
+        return
+    named = MEMBER_OF_CONFIG.search(config or "")
+    if named is None or named.group(1) != DISPATCHED_MEMBER:
+        return
+    claimed = Path(instruction)
+    try:
+        written = json.loads(claimed.read_text(encoding="utf-8"))
+        claimed.unlink()
+    except (OSError, json.JSONDecodeError):
+        return
+    for destination, content in written.items():
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+
 def _answer(argv: list[str], text: str) -> int:
     """Run the real CLI for this turn, with `text` as the provider's answer."""
     real = os.environ.get(REAL_BINARY_ENV)
@@ -350,6 +385,7 @@ def main(argv: list[str]) -> int:
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, "the stand-in pacemaker reported")
     _ask_manager(config)
+    _author_plan(config)
     if scripted_answer is not None:
         # Before the delay, not after: the delay exists to hold a dispatched WORKER's
         # turn open so a run stays live, and slowing the watch is what it must not do.

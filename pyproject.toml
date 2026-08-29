@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-# The two commands this repository still owns. Every other verb is a thin `just`
+# The three commands this repository still owns. Every other verb is a thin `just`
 # wrapper over a published CLI; the first exists because `just lint-llm` has to hand
 # a tool it shells out to a merged `ONEHARNESS_HISTORY_LABELS` value, and the merge
 # has to preserve an inherited value whose shape the recipe does not know.
@@ -23,6 +23,12 @@ orchestrator-history-labels = "orchestrator.labels:main"
 # config and the role `onepipeline` links, and the plan is refused before a launch
 # spends a dispatch on a node its own judge would fail on procedure.
 orchestrator-check-plan = "orchestrator.criteria_guard:main"
+# The third spends the judged turn that clears a plan's authored content: `check-plan`
+# refuses a task carrying no review record for what it currently says, and this is what
+# records one. It is a command of this repository rather than a wrapper because the
+# record it writes has to be written by this repository's own code — see
+# `orchestrator/plan_review.py` for why that is structural rather than a convention.
+orchestrator-review-plan = "orchestrator.plan_review:main"
 
 [dependency-groups]
 dev = [

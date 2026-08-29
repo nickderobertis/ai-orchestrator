@@ -1,0 +1,899 @@
+"""A review record covers exactly the authored content, and only a pass writes one.
+
+Two plans shipped here whose criteria nothing had reviewed, and both produced finished,
+gate-green work that a judge then rejected for satisfying the repository instead of the
+criterion. What this module holds is the rule that catches both: a task carries a
+digest of its own authored content, and a task whose content does not hash to its
+record has not been reviewed — which covers the plan an operator wrote by hand and the
+planner's plan an operator then tweaked, without anything having to detect who typed
+either one.
+
+Four properties are checked here because each of them is what makes the gate worth
+having rather than an inconvenience: the key covers the authored fields and nothing a
+settlement write-back owns, so a record survives its node being dispatched; it covers
+the bar too, so a record does not outlive the bar it was granted under; a refusal
+records nothing, so no failed review can be replayed as a pass; and there is no
+argument, option, or environment variable that writes a record without a pass.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import TypedDict, get_type_hints
+
+import pytest
+
+from orchestrator import plan_review, plan_store
+from orchestrator.plan_store import StoreTask
+from orchestrator.root import REPO_ROOT
+
+BAR = "bar-fingerprint"
+
+#: The two verdicts a review turn can answer with, in the shape the response schema
+#: declares and `orchestrator/plan_review.py` reads.
+PASSES = plan_review.Verdict(passes=True, reason="it proves the route")
+REFUSES = plan_review.Verdict(passes=False, reason="criterion 2 names a release number")
+
+
+def _task(
+    *,
+    qualified_id: str = "demo:plan/route",
+    node_id: str = "route",
+    title: str = "feat: add the route",
+    content: str | None = "## What\n\nAdd the route.\n",
+    metadata: Mapping[str, object] | None = None,
+    repositories: list[object] | None = None,
+    deps: tuple[str, ...] = (),
+) -> StoreTask:
+    """One store task, in the fields a review key is computed from."""
+    return StoreTask(
+        qualified_id=qualified_id,
+        node_id=node_id,
+        title=title,
+        content=content,
+        metadata=(
+            {"onepipeline.id": "route", "onepipeline.persona": "engineer"}
+            if metadata is None
+            else metadata
+        ),
+        repositories=[] if repositories is None else repositories,
+        deps=deps,
+    )
+
+
+def _recorded(task: StoreTask, key: str) -> StoreTask:
+    return _task(
+        qualified_id=task.qualified_id,
+        node_id=task.node_id,
+        title=task.title,
+        content=task.content,
+        metadata={**task.metadata, plan_review.RECORD_KEY: {"key": key, "by": "review-plan"}},
+        repositories=list(task.repositories),
+        deps=task.deps,
+    )
+
+
+def test_the_key_changes_with_every_authored_field() -> None:
+    """The fields the record covers: title, prose, persona, deps, and a step's own two."""
+    base = plan_review.review_key(_task(), BAR)
+    moved = {
+        "title": _task(title="feat: add another route"),
+        "content": _task(content="## What\n\nAdd a different route.\n"),
+        "persona": _task(metadata={"onepipeline.id": "route", "onepipeline.persona": "reviewer"}),
+        "deps": _task(deps=("design",)),
+    }
+    for field, task in moved.items():
+        assert plan_review.review_key(task, BAR) != base, field
+
+
+#: One lifecycle node's steps, and the same steps with one authored field of one step
+#: moved. A lifecycle node states its prose and its persona per step rather than in
+#: `task` and `persona`, so for that node these are the whole of its authored content.
+STEPS = [
+    {"id": "implement", "persona": "engineer", "task": "Add the route.\n"},
+    {"id": "document", "persona": "docs-writer", "task": "Write it up.\n"},
+]
+
+
+def _stepped(steps: object) -> StoreTask:
+    return _task(content=None, metadata={"onepipeline.id": "route", "onepipeline.steps": steps})
+
+
+def test_the_key_changes_with_every_authored_field_of_a_lifecycle_step() -> None:
+    """A stepped node's criteria and personas are keyed, one step at a time.
+
+    The whole of a lifecycle node's authored content can live in its `steps`, so a key
+    that stopped at `task` and `persona` left a standing record over criteria nobody
+    read — the hole this closes. Each of the three authored fields of each step is
+    moved on its own, because a key covering the block but not the field would pass a
+    test that moved the whole list.
+    """
+    base = plan_review.review_key(_stepped(STEPS), BAR)
+    moved = {
+        "the first step's prose": [{**STEPS[0], "task": "Add a different route.\n"}, STEPS[1]],
+        "the second step's prose": [STEPS[0], {**STEPS[1], "task": "Write up something else."}],
+        "the first step's persona": [{**STEPS[0], "persona": "researcher"}, STEPS[1]],
+        "the second step's persona": [STEPS[0], {**STEPS[1], "persona": "reviewer"}],
+        "a step's id": [{**STEPS[0], "id": "build"}, STEPS[1]],
+        "the order they run in": [STEPS[1], STEPS[0]],
+        "a step dropped": [STEPS[0]],
+    }
+    for field, steps in moved.items():
+        assert plan_review.review_key(_stepped(steps), BAR) != base, field
+
+
+def test_a_step_field_no_author_wrote_leaves_the_record_standing() -> None:
+    """The narrowing is what stops the engine's own bookkeeping invalidating a review.
+
+    A step is keyed on the three fields its author writes, so a field added to a step by
+    something other than its author is outside the key for the same reason `status` is.
+    """
+    base = plan_review.review_key(_stepped(STEPS), BAR)
+    annotated = [{**STEPS[0], "branch": "onevcs/s-0000"}, STEPS[1]]
+    assert plan_review.review_key(_stepped(annotated), BAR) == base
+
+
+@pytest.mark.parametrize("steps", ("not a list", {"id": "one"}, ["not a step"], 7), ids=str)
+def test_steps_this_cannot_narrow_are_answered_as_no_steps(steps: object) -> None:
+    """`just review-plan` reads a plan `just check-plan` may not have passed.
+
+    So this meets whatever the store holds. Answering an unreadable `steps` as no steps
+    costs nothing already lost: `check_plan` refuses `steps` that are not a list of
+    mappings by name, and it runs before any record is consulted, so a plan this cannot
+    narrow is one no launch reaches whatever its record says.
+    """
+    assert plan_review.authored_steps(_stepped(steps)) is None
+    assert plan_review.review_key(_stepped(steps), BAR) == plan_review.review_key(
+        _stepped(None), BAR
+    )
+
+
+def test_the_key_covers_the_authored_content_and_nothing_else_a_plan_carries() -> None:
+    """Everything outside the authored content leaves a standing record standing.
+
+    The one worth naming because a reader will meet it is a task **retargeted at another
+    repository**, which keeps its record. `max_turns` is the shape of everything else: a
+    dispatch control its author sets and no reviewer rules on.
+    """
+    base = plan_review.review_key(_task(), BAR)
+    unkeyed = {
+        "repositories": _task(repositories=["github.com/nickderobertis/elsewhere"]),
+        "max_turns": _task(
+            metadata={
+                "onepipeline.id": "route",
+                "onepipeline.persona": "engineer",
+                "onepipeline.max_turns": 60,
+            }
+        ),
+    }
+    for field, task in unkeyed.items():
+        assert plan_review.review_key(task, BAR) == base, field
+
+
+def test_a_record_stands_across_a_change_to_a_field_the_key_does_not_cover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Driven through the reader the check uses, not only through the hash.
+
+    A key that ignored a field while `unreviewed` still refused over it would be the
+    same defect wearing the opposite sign, so the pair is asserted rather than the hash
+    alone.
+    """
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    task = _task()
+    key = plan_review.review_key(task, BAR)
+    retargeted = _recorded(
+        _task(repositories=["github.com/nickderobertis/elsewhere"]),
+        key,
+    )
+    assert plan_review.unreviewed([retargeted]) == []
+
+    edited = _recorded(_task(content="## What\n\nSomething else entirely.\n"), key)
+    assert plan_review.unreviewed([edited]) == [edited]
+
+
+def test_a_stepped_record_is_read_the_same_way_the_check_reads_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stepped halves of the same pair, driven through `unreviewed` rather than the
+    hash: a step field no author wrote leaves the record standing, and a step's own
+    prose or persona moving is what the check refuses over.
+    """
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    key = plan_review.review_key(_stepped(STEPS), BAR)
+    annotated = _recorded(_stepped([{**STEPS[0], "branch": "onevcs/s-0000"}, STEPS[1]]), key)
+    assert plan_review.unreviewed([annotated]) == []
+
+    for steps in (
+        [{**STEPS[0], "task": "Add a different route.\n"}, STEPS[1]],
+        [{**STEPS[0], "persona": "researcher"}, STEPS[1]],
+    ):
+        moved = _recorded(_stepped(steps), key)
+        assert plan_review.unreviewed([moved]) == [moved]
+
+
+def test_the_key_survives_the_fields_a_settlement_write_back_owns() -> None:
+    """A node being dispatched must not invalidate the review of its own content.
+
+    The engine projects each settlement back onto the plan it was launched from, so a
+    key over the whole record would go stale the first time a node ran — and the gate
+    would then refuse every plan that had ever been launched.
+    """
+    settled = _task(
+        metadata={
+            "onepipeline.id": "route",
+            "onepipeline.persona": "engineer",
+            "onepipeline.state": "done",
+            "onepipeline.branch": "onevcs/s-abc",
+        }
+    )
+    assert plan_review.review_key(settled, BAR) == plan_review.review_key(_task(), BAR)
+
+
+def test_the_key_changes_with_the_bar_in_force() -> None:
+    """A record does not outlive the bar it was granted under."""
+    assert plan_review.review_key(_task(), BAR) != plan_review.review_key(_task(), "moved")
+
+
+def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path) -> None:
+    """Editing either file, by one byte, invalidates every record made under it."""
+    for relative in plan_review.BAR_FILES:
+        copy = tmp_path / relative.name
+        copy.parent.mkdir(parents=True, exist_ok=True)
+    original = tmp_path / "original"
+    moved = tmp_path / "moved"
+    for root in (original, moved):
+        for relative in plan_review.BAR_FILES:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((REPO_ROOT / relative).read_bytes())
+    assert plan_review.bar_fingerprint(original) == plan_review.bar_fingerprint(REPO_ROOT)
+    edited = moved / plan_review.BAR_FILES[0]
+    edited.write_bytes(edited.read_bytes() + b"\n# one more byte\n")
+    assert plan_review.bar_fingerprint(moved) != plan_review.bar_fingerprint(original)
+
+
+#: How each JSON Schema scalar the verdict declares is spelled in Python. Two entries
+#: because the contract is two fields; a third type appearing in the schema fails the
+#: gate below on the lookup rather than being guessed at.
+SCHEMA_TYPES = {"boolean": bool, "string": str}
+
+
+def test_the_verdict_type_matches_the_schema_it_is_validated_against() -> None:
+    """`Verdict` and the response schema are one contract, so they are reconciled here.
+
+    oneharness validates a review turn against `config/plan-review-verdict.schema.json`
+    and this package reads what comes back through `plan_review.Verdict`. The two
+    declare the same two fields in different files and nothing compared them, so a
+    field renamed or retyped on one side was caught only by whichever journey happened
+    to trip over it — which is the drift this repository gates everywhere else it
+    restates somebody's contract.
+
+    Both directions are held, because they fail differently and both fail quietly: a
+    field the schema requires and `Verdict` omits is read as absent, and one `Verdict`
+    declares while the schema forbids it never arrives at all.
+    """
+    schema = json.loads((REPO_ROOT / plan_review.BAR_FILES[1]).read_text(encoding="utf-8"))
+    declared = get_type_hints(plan_review.Verdict)
+
+    assert schema["additionalProperties"] is False, schema
+    assert set(schema["required"]) == set(schema["properties"]) == set(declared), schema
+    for name, described in schema["properties"].items():
+        assert SCHEMA_TYPES[described["type"]] is declared[name], name
+
+
+def test_the_bar_fingerprint_covers_the_question_it_asks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rewording `REVIEW_PROMPT` invalidates every record made under the old wording.
+
+    The sibling above covers the half of the bar that is files, which `bar_fingerprint`
+    reads from the root it is handed. The prompt is a constant of this module instead,
+    so it reaches the digest by a different route and a regression dropping it is
+    invisible to that test — the pass would go on standing under a question nobody
+    asked. `tests/e2e/test_plan_review_e2e.py` drives the same property through the
+    real command surface; this is the tier that answers in milliseconds.
+    """
+    before = plan_review.bar_fingerprint()
+    monkeypatch.setattr(
+        plan_review, "REVIEW_PROMPT", f"{plan_review.REVIEW_PROMPT}\nOne sentence on.\n"
+    )
+    assert plan_review.bar_fingerprint() != before
+
+
+@pytest.mark.parametrize(
+    "record",
+    [None, "a string", {"no key": 1}, {"key": 7}],
+    ids=["absent", "string", "keyless", "unstring"],
+)
+def test_a_record_this_cannot_read_is_answered_as_no_record(record: object) -> None:
+    """The safe direction: an unreadable record refuses the task rather than a whole plan."""
+    metadata = {"onepipeline.id": "route"}
+    if record is not None:
+        metadata[plan_review.RECORD_KEY] = record
+    assert plan_review.recorded(_task(metadata=metadata)) is None
+
+
+def test_a_recorded_pass_is_authoritative_and_a_moved_one_is_not() -> None:
+    task = _task()
+    current = _recorded(task, plan_review.review_key(task, BAR))
+    assert plan_review.unreviewed([current], BAR) == []
+    assert plan_review.unreviewed([_recorded(task, "under an older bar")], BAR) == [
+        _recorded(task, "under an older bar")
+    ]
+
+
+def test_the_bar_in_force_is_used_when_none_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    task = _task()
+    assert plan_review.unreviewed([_recorded(task, plan_review.review_key(task, BAR))]) == []
+
+
+class _Setting(TypedDict):
+    """One entry of the store CLI's `config show` answer, in the two fields read here."""
+
+    key: str
+    value: str
+
+
+class _Configuration(TypedDict):
+    """The store CLI's `config show` answer, narrowed to what `source_root` reads."""
+
+    settings: list[_Setting]
+
+
+class _Store:
+    """A local Markdown source on disk, with the store answers a review reads it through."""
+
+    def __init__(self, root: Path, tasks: Sequence[StoreTask]) -> None:
+        self.root = root
+        self.tasks = list(tasks)
+        (root / "projects").mkdir(parents=True, exist_ok=True)
+        (root / "projects" / "plan.md").write_text('---\ntitle: "P"\n---\n', encoding="utf-8")
+        for task in self.tasks:
+            _, _, native = task.qualified_id.partition(":")
+            document = root / "tasks" / native.split("/")[0] / f"{native.split('/')[1]}.md"
+            document.parent.mkdir(parents=True, exist_ok=True)
+            document.write_text(
+                "---\n"
+                f"title: {json.dumps(task.title)}\n"
+                "metadata:\n"
+                + "".join(
+                    f"  {json.dumps(key)}: {json.dumps(value)}\n"
+                    for key, value in task.metadata.items()
+                )
+                + "---\n\n"
+                + (task.content or "")
+                + "\n",
+                encoding="utf-8",
+            )
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(plan_store, "store_json", self._answer)
+        monkeypatch.setattr(plan_store, "read_tasks", self._read)
+        monkeypatch.setattr(
+            plan_store, "read_plan", lambda project, records: {"name": "P", "tasks": []}
+        )
+
+    def _read(self, project: str) -> list[StoreTask]:
+        assert project == "demo:plan"
+        return list(self.tasks)
+
+    def _answer(self, arguments: Sequence[str]) -> _Configuration:
+        assert list(arguments) == ["config", "show"]
+        return _Configuration(
+            settings=[
+                _Setting(key="sources.demo.plugin", value="local-md"),
+                _Setting(key="sources.demo.config.root", value=str(self.root)),
+            ]
+        )
+
+    def written(self, native: str) -> object:
+        document = self.root / "tasks" / native.split("/")[0] / f"{native.split('/')[1]}.md"
+        for line in document.read_text(encoding="utf-8").splitlines():
+            if f'"{plan_review.RECORD_KEY}"' in line:
+                return json.loads(line.split(": ", 1)[1])
+        return None
+
+
+def _verdicts(monkeypatch: pytest.MonkeyPatch, *answers: plan_review.Verdict) -> list[str]:
+    """Stand the judged turn in at the one boundary a verdict crosses into this module."""
+    given = list(answers)
+    seen: list[str] = []
+
+    def verdict(prompt: str) -> plan_review.Verdict:
+        seen.append(prompt)
+        return given.pop(0)
+
+    monkeypatch.setattr(plan_review, "_verdict", verdict)
+    return seen
+
+
+def test_a_passing_review_records_the_key_the_check_will_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    prompts = _verdicts(monkeypatch, PASSES)
+
+    assert plan_review.main(["demo:plan"]) == 0
+    written = store.written("plan/route")
+    assert isinstance(written, dict)
+    assert written["key"] == plan_review.review_key(_task(), BAR)
+    assert written["by"] == plan_review.BY_REVIEW
+    assert "The review bar" in prompts[0]
+    assert "Add the route." in prompts[0]
+
+
+def test_a_refused_review_records_nothing_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed review leaves nothing behind that a later run could replay as a pass."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    _verdicts(monkeypatch, REFUSES)
+
+    assert plan_review.main(["demo:plan"]) == 1
+    assert store.written("plan/route") is None
+    reported = capsys.readouterr().err
+    assert "criterion 2 names a release number" in reported
+    assert "nothing was recorded" in reported
+
+
+def test_a_refusal_without_a_readable_reason_still_names_the_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    _verdicts(monkeypatch, plan_review.Verdict(passes=False, reason=""))
+
+    assert plan_review.main(["demo:plan"]) == 1
+    assert "route: refused" in capsys.readouterr().err
+
+
+def test_a_task_already_carrying_a_record_spends_no_judged_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    current = _recorded(_task(), plan_review.review_key(_task(), BAR))
+    store = _Store(tmp_path / "store", [current])
+    store.install(monkeypatch)
+    prompts = _verdicts(monkeypatch)
+
+    assert plan_review.main(["demo:plan"]) == 0
+    assert prompts == []
+    assert "1 already carried one" in capsys.readouterr().out
+
+
+def test_a_review_that_stops_partway_keeps_and_reports_the_passes_it_granted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Each pass is written as it is granted, so a later failure cannot unsay it.
+
+    A diagnostic claiming nothing was recorded would send its reader looking for state
+    that is there, and — worse — reading a plan as wholly unreviewed when half of it is.
+    """
+    first = _task(qualified_id="demo:plan/first", node_id="first")
+    second = _task(qualified_id="demo:plan/second", node_id="second")
+    store = _Store(tmp_path / "store", [first, second])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    answers = [PASSES]
+
+    def verdict(prompt: str) -> plan_review.Verdict:
+        if answers:
+            return answers.pop(0)
+        raise OSError("the chain answered nothing")
+
+    monkeypatch.setattr(plan_review, "_verdict", verdict)
+
+    assert plan_review.main(["demo:plan"]) == 2
+    reported = capsys.readouterr().err
+    assert "the chain answered nothing" in reported, reported
+    assert "1 task(s) were reviewed and recorded before that" in reported, reported
+    assert "beginning at second" in reported, reported
+    assert isinstance(store.written("plan/first"), dict)
+    assert store.written("plan/second") is None
+
+
+def test_a_pass_the_store_will_not_accept_is_reported_as_a_review_that_did_not_happen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Granting a pass and writing it down are one step, so they fail as one."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    _verdicts(monkeypatch, PASSES)
+    monkeypatch.setattr(
+        plan_store,
+        "write_metadata",
+        lambda *_: (_ for _ in ()).throw(OSError("the record is read-only")),
+    )
+
+    assert plan_review.main(["demo:plan"]) == 2
+    reported = capsys.readouterr().err
+    assert "the record is read-only" in reported, reported
+    assert "0 task(s) were reviewed and recorded before that" in reported, reported
+    assert store.written("plan/route") is None
+
+
+def test_a_project_that_cannot_be_read_records_nothing_and_says_so(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        plan_store, "read_tasks", lambda _: (_ for _ in ()).throw(OSError("no such project"))
+    )
+    assert plan_review.main(["demo:absent"]) == 2
+    assert "no such project" in capsys.readouterr().err
+
+
+def _harness(monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str = "") -> None:
+    """Stand the `oneharness run` process in with one report and one diagnostic stream."""
+    completed = subprocess.CompletedProcess(["oneharness"], 0, stdout, stderr)
+    monkeypatch.setattr(
+        plan_review.subprocess,
+        "run",
+        lambda *arguments, **keywords: completed,
+    )
+
+
+def test_the_judged_turn_reads_its_verdict_out_of_the_harness_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a candidate whose answer the schema validated is read as the verdict."""
+    _harness(
+        monkeypatch,
+        json.dumps(
+            {
+                "results": [
+                    "not an object",
+                    {"schema_valid": False, "structured": {"passes": True, "reason": "stale"}},
+                    {"schema_valid": True, "structured": None},
+                    {"schema_valid": True, "structured": {"passes": "yes", "reason": "wrong"}},
+                    {"schema_valid": True, "structured": {"passes": True, "reason": 7}},
+                    {"schema_valid": True, "structured": {"passes": True, "reason": "sound"}},
+                ]
+            }
+        ),
+    )
+    assert plan_review._verdict("prompt") == {"passes": True, "reason": "sound"}
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "expected"),
+    [
+        ("not json", "", "no readable report"),
+        ("not json", "the chain stopped", "the chain stopped"),
+        (json.dumps({"results": []}), "", "no candidate answered"),
+        (json.dumps({"results": "not a list"}), "", "no candidate answered"),
+        (json.dumps(["not an object"]), "", "no candidate answered"),
+    ],
+)
+def test_a_turn_that_answered_no_verdict_is_refused_rather_than_assumed(
+    stdout: str, stderr: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure direction is always "not reviewed", never "reviewed and passed"."""
+    _harness(monkeypatch, stdout, stderr)
+    with pytest.raises(OSError, match=expected):
+        plan_review._verdict("prompt")
+
+
+def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
+    """The prompt and the key are held to each other in both directions.
+
+    A field whose change invalidates the record but which nobody was shown is one nobody
+    reviewed. A field shown but not covered is the same defect wearing the opposite sign:
+    the reviewer passes content that can then change under its own record. So each field
+    carries a sentinel and is asserted present or absent according to which side of the
+    four it is on, and a field added to one and forgotten in the other fails here.
+    """
+    sentinels = {
+        "title": "sentinel-title",
+        "content": "sentinel-body-prose",
+        "persona": "sentinel-persona",
+        "deps": "sentinel-dependency",
+        "step id": "sentinel-step-id",
+        "step prose": "sentinel-step-task",
+        "step persona": "sentinel-step-persona",
+    }
+    unkeyed = {
+        "repository": "github.com/nickderobertis/sentinel-repository",
+        "a step field no author wrote": "sentinel-step-branch",
+    }
+    task = _task(
+        title=sentinels["title"],
+        content=sentinels["content"],
+        metadata={
+            "onepipeline.id": "route",
+            "onepipeline.persona": sentinels["persona"],
+            "onepipeline.steps": [
+                {
+                    "id": sentinels["step id"],
+                    "persona": sentinels["step persona"],
+                    "task": sentinels["step prose"],
+                    "branch": unkeyed["a step field no author wrote"],
+                }
+            ],
+        },
+        repositories=[unkeyed["repository"]],
+        deps=(sentinels["deps"],),
+    )
+    composed = plan_review._prompt("P", task)
+    for field, sentinel in sentinels.items():
+        assert sentinel in composed, f"{field} is hashed into the key and never shown: {composed}"
+    for field, sentinel in unkeyed.items():
+        assert sentinel not in composed, (
+            f"{field} is shown to the reviewer and not covered by the key, so a pass "
+            f"would stand over content the reviewer read and nothing protects: {composed}"
+        )
+
+
+def test_a_task_with_no_body_prose_still_composes_a_prompt() -> None:
+    composed = plan_review._prompt("P", _task(content=None))
+    assert "states no body prose" in composed
+
+
+def test_a_planning_closeout_records_only_what_the_run_authored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plan already on disk when the planner launched is not that planner's output."""
+    existing = _task(qualified_id="demo:plan/existing", node_id="existing")
+    store = _Store(tmp_path / "store", [existing])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    projects = ["demo:plan"]
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: list(projects))
+
+    before = plan_review.plan_projects()
+    assert plan_review.record_projects_new_since(before).written == []
+    assert store.written("plan/existing") is None
+
+    authored = _task(qualified_id="demo:authored/route", node_id="route")
+    _Store(tmp_path / "store", [authored])
+    projects.append("demo:authored")
+    monkeypatch.setattr(
+        plan_store,
+        "read_tasks",
+        lambda project: [authored] if project == "demo:authored" else [existing],
+    )
+    assert plan_review.record_projects_new_since(before).written == ["demo:authored/route"]
+    written = store.written("authored/route")
+    assert isinstance(written, dict)
+    assert written["by"] == plan_review.BY_PLANNING
+    assert written["key"] == plan_review.review_key(authored, BAR)
+    assert store.written("plan/existing") is None
+
+
+def test_a_plan_edited_beside_a_planning_run_is_left_unrecorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a project that *appeared* is recorded, so an edit beside the run is not.
+
+    A closeout that recorded whatever moved would bless an operator's own hand edit to
+    an existing plan made while their planner worked — which is the case this gate
+    exists to catch, reached from the other side. The cost of the narrower rule is that
+    a planner *revising* a project from an earlier run costs a `just review-plan`, and
+    that is the direction this has to fail in.
+    """
+    existing = _task(qualified_id="demo:plan/existing", node_id="existing")
+    store = _Store(tmp_path / "store", [existing])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: ["demo:plan"])
+
+    before = plan_review.plan_projects()
+    edited = _task(
+        qualified_id="demo:plan/existing",
+        node_id="existing",
+        content="## What\n\nAn operator changed this while the planner ran.\n",
+    )
+    store.tasks[:] = [edited]
+    _Store(tmp_path / "store", [edited])
+
+    assert plan_review.record_projects_new_since(before).written == []
+    assert store.written("plan/existing") is None
+
+
+def test_a_second_planning_runs_project_is_recorded_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window that is left, recorded here so it is known rather than found.
+
+    A closeout records every plan project that appeared while its run was in flight, and
+    a *second* planning run creating its own project in that window is indistinguishable
+    from its own planner's output: nothing tells this host which project a dispatched
+    planner authored, because the plan is its deliverable rather than its argument.
+
+    No journey drives this, and that is deliberate rather than a gap: reaching it means
+    two overlapping real planning runs, which is the very thing
+    `tests/e2e/test_plan_review_e2e.py`'s closeout journeys give each launch a plan
+    store of its own to avoid — a peer's window spanning one of theirs is what failed a
+    publication gate before they did.
+    """
+    store = _Store(tmp_path / "store", [])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    projects: list[str] = []
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: list(projects))
+
+    before = plan_review.plan_projects()
+
+    mine = _task(qualified_id="demo:mine/route", node_id="route")
+    theirs = _task(qualified_id="demo:theirs/route", node_id="route")
+    _Store(tmp_path / "store", [mine])
+    _Store(tmp_path / "store", [theirs])
+    projects.extend(["demo:mine", "demo:theirs"])
+    monkeypatch.setattr(
+        plan_store,
+        "read_tasks",
+        lambda project: [mine] if project == "demo:mine" else [theirs],
+    )
+
+    assert plan_review.record_projects_new_since(before).written == [
+        "demo:mine/route",
+        "demo:theirs/route",
+    ]
+
+
+def test_a_task_of_another_project_is_never_recorded_against_this_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pair decides a file that is then edited, so a mismatched pair is refused.
+
+    A record written into a task it does not describe would read as sound afterwards:
+    nothing downstream can tell a key computed for another project's task from a stale
+    one, so the refusal has to be here.
+    """
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    elsewhere = _task(qualified_id="demo:other/route")
+    with pytest.raises(OSError, match="is not one of"):
+        plan_review.write_record("demo:plan", elsewhere, "abc", plan_review.BY_REVIEW)
+    with pytest.raises(OSError, match="is not one of"):
+        plan_review.write_record("other:plan", _task(), "abc", plan_review.BY_REVIEW)
+    assert store.written("plan/route") is None
+
+
+def test_the_planning_verbs_round_trip_their_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    authored = _task(qualified_id="demo:authored/route", node_id="route")
+    store = _Store(tmp_path / "store", [])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    projects: list[str] = []
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: list(projects))
+
+    snapshot = tmp_path / "snapshot.json"
+    assert plan_review.planning_main(["snapshot", str(snapshot)]) == 0
+
+    _Store(tmp_path / "store", [authored])
+    projects.append("demo:authored")
+    monkeypatch.setattr(plan_store, "read_tasks", lambda project: [authored])
+    assert plan_review.planning_main(["closeout", str(snapshot)]) == 0
+    assert "1 task(s)" in capsys.readouterr().err
+    assert isinstance(store.written("authored/route"), dict)
+
+
+def test_a_project_a_closeout_cannot_record_is_left_alone_rather_than_failing_the_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A neighbour's plan in the window may not kill this planning run.
+
+    A closeout cannot tell its own run's output from a concurrent one's, so every plan
+    that appeared in its window is one it may meet — and one already on this host cannot
+    take a record at all: a project `onepipeline`'s settlement write-back has re-rendered
+    holds a `metadata` block `plan_store.write_metadata` refuses to edit around. Raising
+    there would exit a launch non-zero over an unrelated plan, so the project is passed
+    over and named, and the run this closeout belongs to still records what it authored.
+    """
+    authored = _task(qualified_id="demo:authored/route", node_id="route")
+    neighbour = _task(qualified_id="demo:neighbour/route", node_id="route")
+    store = _Store(tmp_path / "store", [])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    projects: list[str] = []
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: list(projects))
+
+    snapshot = tmp_path / "snapshot.json"
+    assert plan_review.planning_main(["snapshot", str(snapshot)]) == 0
+
+    _Store(tmp_path / "store", [authored, neighbour])
+    projects.extend(["demo:authored", "demo:neighbour"])
+    monkeypatch.setattr(
+        plan_store,
+        "read_tasks",
+        lambda project: [authored] if project == "demo:authored" else [neighbour],
+    )
+    # The write-back's own rendering: a plain YAML line where this writes `"<key>": <json>`.
+    document = tmp_path / "store" / "tasks" / "neighbour" / "route.md"
+    document.write_text(
+        document.read_text(encoding="utf-8").replace('  "onepipeline.id": "route"', "  id: route"),
+        encoding="utf-8",
+    )
+
+    assert plan_review.planning_main(["closeout", str(snapshot)]) == 0
+    reported = capsys.readouterr().err
+    assert "demo:neighbour" in reported, reported
+    assert "cannot edit around" in reported, reported
+    assert "1 task(s)" in reported, reported
+    assert isinstance(store.written("authored/route"), dict)
+    assert store.written("neighbour/route") is None
+
+
+@pytest.mark.parametrize("held", ['{"a": 1}', "[7]", "{bad"], ids=["object", "values", "malformed"])
+def test_a_snapshot_a_closeout_cannot_read_records_nothing(
+    held: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(held, encoding="utf-8")
+    assert plan_review.planning_main(["closeout", str(snapshot)]) == 2
+    assert "plan-review:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("shape", "refusal"),
+    (
+        ("symlink", "is a symlink"),
+        ("directory", "not a regular file"),
+        ("foreign", "does not hold a review snapshot"),
+    ),
+    ids=["symlink", "directory", "foreign"],
+)
+def test_a_snapshot_is_never_written_through_a_destination_it_did_not_write(
+    shape: str, refusal: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verb takes its destination from the command line, so it validates it.
+
+    `scripts/plan.sh` hands over its own `mktemp` file and nothing else, so an argument
+    that is anything but that shape is a slip — and the two slips that cost something
+    are a symlink, whose target this would truncate on somebody else's behalf, and a
+    path already holding content of its own. Both are refused before the write.
+    """
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: [])
+    destination = tmp_path / "destination"
+    owned = tmp_path / "owned.json"
+    owned.write_text("its owner's content", encoding="utf-8")
+    match shape:
+        case "symlink":
+            destination.symlink_to(owned)
+        case "directory":
+            destination.mkdir()
+        case _:
+            destination.write_text("its owner's content", encoding="utf-8")
+
+    with pytest.raises(OSError, match=refusal):
+        plan_review.snapshot_file(destination)
+    assert plan_review.planning_main(["snapshot", str(destination)]) == 2
+    assert owned.read_text(encoding="utf-8") == "its owner's content"
+
+
+def test_a_snapshot_destination_that_is_absent_or_already_a_snapshot_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two shapes `scripts/plan.sh` actually produces: a fresh file, and a rewrite.
+
+    `mktemp` creates an empty file, and a second launch reusing a path finds the
+    previous launch's snapshot there — so a validation that refused either would refuse
+    the only caller this verb has.
+    """
+    monkeypatch.setattr(plan_review, "PLAN_SOURCES", ("demo",))
+    monkeypatch.setattr(plan_store, "local_projects", lambda source: ["demo:already"])
+    for destination in (tmp_path / "absent", tmp_path / "empty", tmp_path / "prior"):
+        if destination.name == "empty":
+            destination.touch()
+        if destination.name == "prior":
+            destination.write_text('["demo:earlier"]', encoding="utf-8")
+        assert plan_review.planning_main(["snapshot", str(destination)]) == 0
+        assert json.loads(destination.read_text(encoding="utf-8")) == ["demo:already"]

@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 
+from orchestrator import plan_review
+from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 #: The retreat's own source and the root it is required not to share. Named here
@@ -171,3 +173,32 @@ def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli(
         if source.root is not None
     } == {key: value for key, value in resolved.items() if key.endswith(".config.root")}
     assert read_default_sources(text) == resolved["default_sources"]
+
+
+def test_every_source_a_planning_closeout_records_into_is_configured_and_writable() -> None:
+    """`PLAN_SOURCES` restates names `onetaskgraph.yaml` owns, so it is reconciled here.
+
+    A source renamed there and not here does not fail: it silently drops out of both the
+    snapshot and the closeout, so a planning run stops recording what it authored and
+    every plan of that store starts costing a judged turn to relaunch. Nothing else
+    notices, which is exactly the drift a restated vocabulary needs a gate for.
+    """
+    configured = read_plan_sources(_configuration())
+    for name in plan_review.PLAN_SOURCES:
+        assert name in configured, (
+            f"orchestrator/plan_review.py records a planner pass into the {name!r} source, "
+            f"which onetaskgraph.yaml no longer configures; the two names are one "
+            f"vocabulary and have to move together"
+        )
+        assert configured[name].plugin == WRITABLE_PLUGIN, (
+            f"the {name!r} source is served by {configured[name].plugin!r}, and a review "
+            f"record is only ever written into a {WRITABLE_PLUGIN!r} one"
+        )
+
+
+def test_the_plan_store_this_repository_plans_against_is_recorded_into() -> None:
+    """The retreat's own source is where a plan of this repository lives, so it is covered."""
+    assert LOCAL_PLANS in plan_review.PLAN_SOURCES, (
+        f"a plan of this repository is stored under {LOCAL_PLANS!r}, so a planning run "
+        f"that authored one there must record a pass for it"
+    )

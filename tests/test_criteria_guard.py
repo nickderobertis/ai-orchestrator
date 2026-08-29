@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import criteria_guard
+from orchestrator import criteria_guard, plan_review, plan_store
 from orchestrator.criteria_guard import (
     CRITERIA_HEADING,
     Bar,
@@ -366,7 +366,7 @@ def test_no_bar_can_be_resolved_without_the_engine_that_ships_the_roles(
 ) -> None:
     """A missing `onepipeline` is named as the reason, not silently treated as no role."""
     criteria_guard._engine_bytes.cache_clear()
-    monkeypatch.setattr(criteria_guard.shutil, "which", lambda _: None)
+    monkeypatch.setattr(plan_store.shutil, "which", lambda _: None)
     try:
         with pytest.raises(CriteriaError, match="is not on PATH"):
             criteria_guard._engine_bytes()
@@ -547,7 +547,7 @@ def test_the_command_accepts_a_plan_that_states_its_bar(
     appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
-        criteria_guard, "_project_plan", lambda _: _plan(persona="engineer", task=_task(COMPLETE))
+        plan_store, "read_project", lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [])
     )
 
     assert main(["authoring:complete"]) == 0
@@ -558,9 +558,9 @@ def test_the_command_refuses_a_plan_that_does_not(
     appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
-        criteria_guard,
-        "_project_plan",
-        lambda _: _plan(persona="engineer", task=_task("- The thing is done.")),
+        plan_store,
+        "read_project",
+        lambda _: (_plan(persona="engineer", task=_task("- The thing is done.")), []),
     )
 
     assert main(["authoring:incomplete"]) == 1
@@ -578,7 +578,7 @@ def test_the_command_reports_a_checkout_that_cannot_answer_what_the_bar_is(
     """
     monkeypatch.setattr(criteria_guard, "REPO_ROOT", tmp_path / "no-such-checkout")
     monkeypatch.setattr(
-        criteria_guard, "_project_plan", lambda _: _plan(persona="engineer", task=_task(COMPLETE))
+        plan_store, "read_project", lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [])
     )
 
     assert main(["authoring:complete"]) == 2
@@ -592,7 +592,7 @@ def test_the_command_separates_an_unreadable_plan_from_a_refused_one(
 ) -> None:
     """Exit 2 rather than 1: an unreadable project leaves nothing to judge."""
     monkeypatch.setattr(
-        criteria_guard, "_project_plan", lambda _: (_ for _ in ()).throw(OSError("missing"))
+        plan_store, "read_project", lambda _: (_ for _ in ()).throw(OSError("missing"))
     )
     assert main(["authoring:absent"]) == 2
     assert "cannot read" in capsys.readouterr().err
@@ -770,44 +770,165 @@ def test_the_tracked_appendix_is_where_the_guard_reads_it_from() -> None:
     assert (REPO_ROOT / criteria_guard.APPENDIX).is_file()
 
 
+def _reviewable(**metadata: object) -> plan_store.StoreTask:
+    return plan_store.StoreTask(
+        qualified_id="authoring:probe/probe",
+        node_id="probe",
+        title="feat: probe",
+        content="## What\n\nProbe.\n",
+        metadata={"onepipeline.id": "probe", **metadata},
+        repositories=[],
+        deps=(),
+    )
+
+
+def test_the_command_refuses_a_task_nothing_has_reviewed(
+    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Content nothing has reviewed is what reaches a dispatch when nobody is watching.
+
+    Both plans this gate exists to catch were single-node plans an operator wrote and
+    launched with no planner, so `personas/planner.yaml`'s judge — the thing that exists
+    to catch exactly this — never saw their criteria.
+    """
+    monkeypatch.setattr(
+        plan_store,
+        "read_project",
+        lambda _: (
+            _plan(persona="engineer", task=_task(COMPLETE)),
+            [_reviewable()],
+        ),
+    )
+
+    assert main(["authoring:probe"]) == 1
+    reported = capsys.readouterr().err
+    assert "no review record" in reported, reported
+    assert "probe" in reported, reported
+    assert "just review-plan authoring:probe" in reported, reported
+
+
+def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
+    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A recorded pass is authoritative: a second opinion is how one tree gets two verdicts."""
+    task = _reviewable()
+    key = plan_review.review_key(task, plan_review.bar_fingerprint())
+    monkeypatch.setattr(
+        plan_store,
+        "read_project",
+        lambda _: (
+            _plan(persona="engineer", task=_task(COMPLETE)),
+            [_reviewable(**{plan_review.RECORD_KEY: {"key": key}})],
+        ),
+    )
+    monkeypatch.setattr(
+        plan_review, "_verdict", lambda _: pytest.fail("a recorded pass spent a judged turn")
+    )
+
+    assert main(["authoring:probe"]) == 0
+    assert "carries a review record" in capsys.readouterr().out
+
+
+def test_the_command_reports_a_checkout_that_cannot_answer_what_the_review_bar_is(
+    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The bar is tracked files, so a checkout missing one says so rather than passing."""
+    monkeypatch.setattr(
+        plan_store,
+        "read_project",
+        lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [_reviewable()]),
+    )
+    monkeypatch.setattr(
+        plan_review,
+        "bar_fingerprint",
+        lambda *_: (_ for _ in ()).throw(OSError("no such file")),
+    )
+
+    assert main(["authoring:probe"]) == 2
+    reported = capsys.readouterr().err
+    assert "fingerprint the review bar" in reported, reported
+    assert "just bootstrap" in reported, reported
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    [
+        "- `Cargo.lock` resolves onevcs to 0.15.4.",
+        "- The pin reads v0.16.3.",
+        "- The manifest requires >= 1.2.",
+        "- The adopted release is 2.0.0-rc.1.",
+    ],
+    ids=["three-part", "prefixed", "operator", "prerelease"],
+)
+def test_criteria_may_not_carry_a_version_literal(criterion: str) -> None:
+    """The number is well-formed and it perishes; the property it stands in for does not.
+
+    This node shipped: a criterion required a lockfile to resolve a sibling to an exact
+    version, the sibling published a newer one between the task being written and the
+    node being dispatched, the worker resolved the newest as that repository's own
+    manifest demands, and the judge failed finished, gate-green work for doing the right
+    thing. A judge reading the number would most likely have passed it.
+    """
+    with pytest.raises(CriteriaError, match="version literal"):
+        check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    [
+        "- The lockfile resolves the sibling to the newest release its requirement admits.",
+        "- Line coverage stays at 100%.",
+        "- The suite runs across 4 xdist workers.",
+        "- The plan declares schema version 3.",
+    ],
+    ids=["property", "percentage", "count", "schema"],
+)
+def test_a_criterion_naming_the_property_instead_is_accepted(criterion: str) -> None:
+    """The refusal is written to miss rather than to over-refuse: no bare `<n>.<n>`.
+
+    An unprefixed two-component number is a duration, a percentage, or a schema version
+    far more often than it is a release, and a false refusal here blocks correct work
+    and gets worked around — which is worse than the gap.
+    """
+    check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
 def test_store_json_validates_the_cli_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     def completed(
         code: int, stdout: str = "", stderr: str = ""
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], code, stdout, stderr)
 
-    monkeypatch.setattr(criteria_guard.shutil, "which", lambda _: "/test/onetaskgraph")
+    monkeypatch.setattr(plan_store.shutil, "which", lambda _: "/test/onetaskgraph")
 
     monkeypatch.setattr(
-        criteria_guard.subprocess, "run", lambda *args, **kwargs: completed(2, stderr="no")
+        plan_store.subprocess, "run", lambda *args, **kwargs: completed(2, stderr="no")
     )
     with pytest.raises(OSError, match="no"):
-        criteria_guard._store_json(["project", "show", "x:y"])
+        plan_store.store_json(["project", "show", "x:y"])
 
     monkeypatch.setattr(
-        criteria_guard.subprocess, "run", lambda *args, **kwargs: completed(0, json.dumps([]))
+        plan_store.subprocess, "run", lambda *args, **kwargs: completed(0, json.dumps([]))
     )
     with pytest.raises(OSError, match="non-object"):
-        criteria_guard._store_json(["project", "show", "x:y"])
+        plan_store.store_json(["project", "show", "x:y"])
 
-    monkeypatch.setattr(
-        criteria_guard.subprocess, "run", lambda *args, **kwargs: completed(0, "{bad")
-    )
+    monkeypatch.setattr(plan_store.subprocess, "run", lambda *args, **kwargs: completed(0, "{bad"))
     with pytest.raises(OSError, match="invalid JSON"):
-        criteria_guard._store_json(["project", "show", "x:y"])
+        plan_store.store_json(["project", "show", "x:y"])
 
     monkeypatch.setattr(
-        criteria_guard.subprocess,
+        plan_store.subprocess,
         "run",
         lambda *args, **kwargs: completed(0, json.dumps({"items": []})),
     )
-    assert criteria_guard._store_json(["project", "show", "x:y"]) == {"items": []}
+    assert plan_store.store_json(["project", "show", "x:y"]) == {"items": []}
 
 
 def test_store_json_requires_the_installed_cli(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(criteria_guard.shutil, "which", lambda _: None)
+    monkeypatch.setattr(plan_store.shutil, "which", lambda _: None)
     with pytest.raises(OSError, match="not installed"):
-        criteria_guard._store_json(["project", "show", "x:y"])
+        plan_store.store_json(["project", "show", "x:y"])
 
 
 def _store_process_double(tmp_path: Path, mode: str) -> dict[str, str]:
@@ -859,7 +980,7 @@ def test_one_item_rejects_incomplete_store_records(
     payload: dict[str, object], message: str
 ) -> None:
     with pytest.raises(OSError, match=message):
-        criteria_guard._one_item(payload, "project")
+        plan_store.one_item(payload, "project")
 
 
 def test_project_plan_reconstructs_metadata_repositories_and_dependencies(
@@ -911,8 +1032,8 @@ def test_project_plan_reconstructs_metadata_repositories_and_dependencies(
             return answers["list"]
         return answers["second" if arguments[-1].endswith("second") else "first"]
 
-    monkeypatch.setattr(criteria_guard, "_store_json", store)
-    plan = criteria_guard._project_plan("source:probe")
+    monkeypatch.setattr(plan_store, "store_json", store)
+    plan = plan_store.read_project("source:probe")[0]
 
     assert plan["schema_version"] == 3
     assert plan["tasks"][0]["repo"] == "github.com/acme/service"
@@ -934,9 +1055,9 @@ def test_project_plan_reads_every_task_page(monkeypatch: pytest.MonkeyPatch) -> 
             return {"items": [], "next": None}
         raise AssertionError(f"an empty project has no dependency query: {arguments}")
 
-    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    monkeypatch.setattr(plan_store, "store_json", store)
 
-    assert criteria_guard._project_plan("s:p")["tasks"] == []
+    assert plan_store.read_project("s:p")[0]["tasks"] == []
     assert pages == [None, "second-page"]
 
 
@@ -957,15 +1078,15 @@ def test_project_plan_rejects_invalid_task_page_cursors(
         calls += 1
         return answer
 
-    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    monkeypatch.setattr(plan_store, "store_json", store)
     with pytest.raises(OSError, match=message):
-        criteria_guard._project_plan("s:p")
+        plan_store.read_project("s:p")
 
 
 @pytest.mark.parametrize("project", ("unqualified", ":native", "source:"))
 def test_project_plan_requires_a_qualified_id(project: str) -> None:
     with pytest.raises(OSError, match="qualified"):
-        criteria_guard._project_plan(project)
+        plan_store.read_project(project)
 
 
 @pytest.mark.parametrize(
@@ -1086,9 +1207,9 @@ def test_project_plan_rejects_malformed_store_answers(
             return {"items": listing}
         return {"items": deps}
 
-    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    monkeypatch.setattr(plan_store, "store_json", store)
     with pytest.raises(OSError, match=message):
-        criteria_guard._project_plan("s:p")
+        plan_store.read_project("s:p")
 
 
 @pytest.mark.parametrize("second_id,second_node", (("s:p/a", "b"), ("s:p/b", "a")))
@@ -1121,9 +1242,9 @@ def test_project_plan_rejects_duplicate_store_identities(
             return {"items": [{"item": {"title": "p"}}]}
         return {"items": listing}
 
-    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    monkeypatch.setattr(plan_store, "store_json", store)
     with pytest.raises(OSError, match="duplicate task identity"):
-        criteria_guard._project_plan("s:p")
+        plan_store.read_project("s:p")
 
 
 def test_project_plan_rejects_a_dependency_on_an_unlisted_task(
@@ -1148,6 +1269,6 @@ def test_project_plan_rejects_a_dependency_on_an_unlisted_task(
             }
         return {"items": [{"to": {"id": "s:p/missing"}}]}
 
-    monkeypatch.setattr(criteria_guard, "_store_json", store)
+    monkeypatch.setattr(plan_store, "store_json", store)
     with pytest.raises(OSError, match="unknown dependency targets"):
-        criteria_guard._project_plan("s:p")
+        plan_store.read_project("s:p")

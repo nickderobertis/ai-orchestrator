@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The verdict a plan-review turn answers with",
+  "description": "The structured answer `oneharness.plan-review.toml` validates every review turn against, and the whole contract between the reviewer and `orchestrator/plan_review.py`, which records a pass only when `passes` is true and records nothing at all otherwise. Two required fields and nothing beside them: a reviewer that answered with its own commentary, a severity, or a rewritten task would have that extra silently ignored, so the schema refuses it here — where oneharness re-prompts — rather than downstream where nothing is watching. This file is hashed into every review key, so editing it invalidates every record made under the previous version.",
+  "type": "object",
+  "properties": {
+    "passes": {
+      "type": "boolean",
+      "description": "Whether this task's authored content may be dispatched. False records nothing, so the task stays refused by `just check-plan` until its content changes and is reviewed again."
+    },
+    "reason": {
+      "type": "string",
+      "description": "One sentence saying why. On a refusal it is what the operator is shown and the only thing that says what to correct, so it names the criterion rather than the impression."
+    }
+  },
+  "required": ["passes", "reason"],
+  "additionalProperties": false
+}

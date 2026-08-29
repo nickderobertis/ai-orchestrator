@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from project_fixtures import project_from_plan
+from project_fixtures import project_from_plan, reviewed
 from waits import timeout as e2e_timeout
 
 from orchestrator.criteria_guard import APPENDIX, OUT_OF_DISPATCH
@@ -110,7 +110,16 @@ def _plan(root: Path, criteria: str) -> Path:
 def _check_project(
     project: str, *, environment: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """Drive the recipe with one already materialized qualified project."""
+    """Drive the recipe with one already materialized qualified project.
+
+    Every project here is reviewed first — through the real `just review-plan`, with
+    only the paid provider scripted — because since the review gate landed a plan
+    nothing has reviewed is refused before its criteria are read at all, and what these
+    journeys are about is the criteria. The gate itself is
+    `tests/e2e/test_plan_review_e2e.py`'s subject, which reviews nothing in advance.
+    """
+    if ":" in project and not project.endswith(":absent"):
+        reviewed(project)
     return subprocess.run(
         ["just", "check-plan", project],
         cwd=REPO_ROOT,

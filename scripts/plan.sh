@@ -398,6 +398,23 @@ fi
 project="$PLAN_SOURCE:$name"
 echo "plan: wrote $project at $plan; $placement; answer this planner's questions with: just channel-next $name" >&2
 
+# The snapshot `record_projects_new_since` is taken against; its docstring says what
+# the window does and does not cover. Placed after the brief project is written, and
+# deliberately: a manager wrote that one, no planner reviewed it, and `just check-plan`
+# is right to go on refusing it.
+# llmlint: ignore[changed_behavior_has_e2e] A host failure: `mktemp` refusing on a full or unwritable temporary filesystem. Driving it means breaking the filesystem the journey itself runs on.
+snapshot=$(mktemp) || fail "the review snapshot could not be opened" \
+    "free disk space and retry"
+# The snapshot holds no secret and nothing reads it after this launch, so a removal
+# that fails costs one stale file in the temporary directory rather than anything a
+# caller has to act on now — but it is said rather than swallowed, because the next
+# reader of a full temporary filesystem should know what put a file there.
+trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could not be removed; delete it by hand once this launch has finished" >&2' EXIT
+# llmlint: ignore[changed_behavior_has_e2e] The snapshot lists each plan source's own root, so what can fail it is the store's configuration being unreadable or the pinned toolchain being absent from a checkout this script has already resolved — neither reachable from a journey that is not breaking the host it runs on.
+"$python" -m orchestrator.plan_review snapshot "$snapshot" || fail \
+    "the plan review snapshot could not be taken by $python" \
+    "restore the pinned toolchain with 'just bootstrap', then retry"
+
 # Through the shared wrapper rather than `uv run` directly, because that is where a
 # planner's identity is established: a run launched without it records `unknown`,
 # and `just runs --mine` and `just stop` then disown it.
@@ -407,6 +424,28 @@ echo "plan: wrote $project at $plan; $placement; answer this planner's questions
 # one thing that knows its own surface, and a copy of its flag list here would both be
 # the drift `tests/test_cli_surface_drift.py` exists to catch and turn a pass-through
 # into a version pin.
+#
+# Run rather than `exec`ed, which it was until this launch grew a closeout: a planning
+# run that settles successfully has produced a plan its own judge has already read, so
+# the tasks it authored are recorded here rather than left for `just review-plan` to
+# spend a second judged turn on. A run that did not settle successfully records nothing,
+# and a planner working in its own worktree — which is the default placement — writes
+# its plan somewhere this snapshot never saw, so there is simply nothing to record.
 # llmlint: ignore[boundary_inputs_validated] `onepipeline start` validates its own surface; restating it here is the drift this repository gates against.
 # llmlint: ignore[tool_output_is_signal] This is `just orchestrate`'s attached launch with a plan written first: streaming the run as it goes is what a manager stays attached for, and the one line this script owns — the plan it wrote and the command that answers the planner — is printed above.
-exec "$script_dir/onepipeline.sh" start "$project" ${forwarded[@]+"${forwarded[@]}"} ${observer[@]+"${observer[@]}"}
+#
+# A closeout that fails carries its own status out, rather than being swallowed under a
+# green launch: what it failed to do is record what this run authored, and a plan
+# silently left unrecorded is one whose next `just check-plan` refuses it with nothing
+# to say why. What does *not* fail it is a plan it cannot record — that one is named and
+# left alone, because a closeout cannot tell its own run's output from a neighbour's and
+# an unrelated plan may not kill this launch. Both endings that a journey can reach
+# without breaking the host are driven — a settled run recording what it authored, and
+# an unsettled one recording nothing — in tests/e2e/test_plan_review_e2e.py.
+status=0
+"$script_dir/onepipeline.sh" start "$project" ${forwarded[@]+"${forwarded[@]}"} ${observer[@]+"${observer[@]}"} || status=$?
+if [ "$status" -eq 0 ]; then
+    # llmlint: ignore[changed_behavior_has_e2e] The one ending left is a settled run whose closeout then fails outright, which now takes an unreadable snapshot or an unreadable review bar rather than any plan on disk; a project it cannot record is passed over instead, which `tests/test_plan_review.py` drives.
+    "$python" -m orchestrator.plan_review closeout "$snapshot" || status=$?
+fi
+exit "$status"

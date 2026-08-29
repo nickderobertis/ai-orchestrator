@@ -1,0 +1,118 @@
+# The plan reviewer's harness config: WHICH harness + model reads one plan task
+# against `personas/planner.yaml`'s bar before that task may be dispatched. Named by
+# `orchestrator/plan_review.py`, which `just review-plan` runs. See AGENTS.md.
+#
+# This is a FOURTH copy of the supervisory routing, and it is a separate file for the
+# same reason `oneharness.check-in.toml` and `oneharness.pr-author.toml` are: the sides
+# that share that identity order do not share a deadline, and `schema_file` and `stream`
+# below are this side's alone. Pointing this at either of the others would take its
+# schema and its deadline away at once — and this one's schema is the verdict contract
+# a record is written from.
+
+# run_mode: how the selected harnesses are run. "fallback" tries them in priority
+# order and stops at the first that can actually run, falling through only
+# harnesses that cannot run at all — see the note in oneharness.toml.
+run_mode = "fallback"
+
+# timeout: the per-turn deadline in seconds. Stated rather than inherited, because a
+# reviewer is a scheduled, bounded job and not a watcher: it reads one task, answers
+# with one verdict, and exits. It sits between an operator and a launch, so a turn with
+# no deadline would hold a plan unlaunchable indefinitely.
+#
+# What a missed deadline costs is bounded and safe: a review that does not answer
+# records nothing, so the task stays refused and the operator runs it again. The
+# failure direction is always "not reviewed", never "reviewed and passed".
+timeout = 300
+
+# schema_file: the structured answer every turn is validated against, and what makes
+# this a contract rather than a prompt. Relative to THIS file's directory. It is also
+# hashed into every review key, so editing it invalidates every record made under the
+# previous version.
+schema_file = "config/plan-review-verdict.schema.json"
+
+# schema_max_retries: how many times oneharness re-prompts a turn whose answer does not
+# validate. Two, for the reason the drafter states: the failure this absorbs is a model
+# wrapping its verdict in prose rather than a model that cannot judge the task.
+schema_max_retries = 2
+
+# stream = false, and it is not a preference. oneharness validates a structured answer
+# against the COMPLETE response, so `stream = true` and `schema_file` cannot both hold.
+
+stream = false
+
+# Record this side's runs to disk too; a pinned `--config` skips the user-level
+# config.toml, so history must be enabled here.
+history = true
+
+# `role` names the SIDE of the conversation: the reviewer is a single-sided agent turn.
+history_labels = { role = "agent" }
+
+# The reviewer carries the supervisory order, not the worker's: both Codex identities
+# first — deliberately the reverse of oneharness.toml's worker order — then the workers'
+# alternate Claude subscriptions in the same relative order the worker uses, with the
+# primary Claude identity last. This turn runs before any worker is dispatched, so it
+# must not queue ahead of the workers already doing their own.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+harnesses = [
+    "codex",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
+
+# [harness.<id>]: per-harness overrides. Model names differ per provider, so
+# each harness names its own.
+# Sol is the flagship tier of the GPT-5.6 family; name it explicitly so the tier
+# cannot drift under us.
+[harness.codex]
+model = "gpt-5.6-sol"
+
+# The second Codex identity. See scripts/codex-alt-home.sh for the indirection.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+unset_env = ["OPENAI_API_KEY"]
+
+[harness.claude-code]
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless on other harnesses.
+env = { IS_SANDBOX = "1" }
+
+# The Claude fallbacks are the same three identities every other role names, with
+# the same portable indirections and credential masking.
+[harness.claude-code.variant.alternate]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# The last resort: Claude's default config directory, with every higher-precedence
+# credential selector and any inherited alternate directory masked off.
+[harness.claude-code.variant.primary]
+model = "claude-opus-5"
+unset_env = [
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# Inspect the effective, fully layered config (and where each value came from)
+# with `oneharness config`.

@@ -1010,6 +1010,16 @@ and is never a command.
    Send a plan back to its planner rather than repairing it yourself when the
    repair is decomposition. Fixing it in place is the same over-reach as planning
    it yourself, and it lands work no plan-quality judge ever reviewed.
+
+   **A plan you wrote or tweaked yourself is one nothing has reviewed**, and `just
+   check-plan` refuses it by name until `just review-plan <source:project>` has read
+   its authored content against `personas/planner.yaml`'s bar. That refusal is the
+   whole of the answer to "I already know what this node has to do": the two plans it
+   exists to catch were both written under time pressure, both produced finished,
+   gate-green work, and both had that work failed by a judge for satisfying the
+   repository instead of the criterion. A plan a planner wrote and you did not touch
+   is already recorded and costs nothing — see [Command
+   surface](#command-surface).
 5. **Pick or create personas.** Each node names a general role and review bar in
    `personas/`. Prefer precise task prose — a specific `## Acceptance criteria`
    list — over encoding subtask details in a new persona, and note that there is no
@@ -1764,6 +1774,80 @@ be satisfied is one whose verb **changes** a tracked file, and a criterion whose
 is a reading verb — read, quote, cite, follow the shape of — is the opposite case.
 Launch the plan whose criterion is precise, and treat the refusal as the check being
 wrong about a sound node rather than as a wording to soften.
+
+**Two more refusals are about criteria nothing has reviewed rather than criteria a bar
+disagrees with.** A criterion never carries a **version literal** — a release number, a
+dependency version — because that number perishes between the task being written and
+its node being dispatched, and the criterion then fails finished work for doing the
+right thing. That one is deterministic *because* a judge would pass it: the criterion
+that shipped required a lockfile to resolve a sibling to an exact version, the sibling
+published a newer one in between, the worker resolved the newest as that repository's
+own manifest demands, and its judge failed a green gate. State the property the version
+stood in for. And a task carrying **no review record for what it currently says** is
+refused outright, naming each such task and `just review-plan <source:project>`, which
+is what records one.
+
+**`just review-plan <source:project>` spends the judged turn that clears a plan's
+authored content**, reading each unreviewed task against `personas/planner.yaml`'s own
+bar — the judge every planner-written plan already passes through. Detecting *who
+typed* a node is the wrong question: it catches the plan an operator wrote by hand and
+misses the planner's plan an operator then tweaked, and both of those have shipped
+here. What is detected instead is content nothing has reviewed, which covers both with
+one rule — a task carries a digest of its own authored content, and a task whose
+content does not hash to its record has not been reviewed. Four things about it are
+the same properties this repository already defends for its judged lint tier. Only a
+**pass** is recorded, so a refusal leaves nothing to replay. A record **is
+authoritative** — `check-plan` accepts it and spends no second turn, because a second
+opinion on identical content is how one branch comes to hold two opposite verdicts.
+There is **no escape hatch**: no flag, no option, no environment variable, because an
+escape here is reached under exactly the time pressure that produced both errors. And
+the key covers the bar as well as the content, so moving any part of that bar —
+`personas/planner.yaml`, the verdict schema, or the question asked above them —
+invalidates every record granted under the previous one, exactly as
+`scripts/llmlint-fingerprint.sh` invalidates a cached verdict when the judge
+configuration moves.
+
+**What the key covers is chosen, not incidental.** It is the authored content — the
+title, the body prose, the persona, and the dependencies — and nothing a settlement
+write-back owns. `status` in particular is not in it: the engine projects each
+settlement back onto the plan it was launched from, so a key over the whole record would
+go stale the first time a node ran and the gate would refuse every plan that had ever
+been launched. Covering exactly the authored content buys the other half of that too — a
+write-back that overwrote authored prose invalidates the record rather than leaving a
+pass standing over content nobody read.
+
+**A lifecycle node states that content somewhere else, and reaching it is the whole of
+why "authored content" is the rule rather than a list of four fields.** A node that runs
+several agent steps on one branch states its prose and its persona **once per `steps`
+entry** rather than in `task` and `persona`, so for that node the steps are where its
+criteria live — and a key that stopped at the node's own fields left a standing record
+over criteria nobody had read, which is the one thing this gate exists to prevent. Each
+step is keyed on the three fields its author writes — its id, its persona, and its prose
+— so editing any step's criteria or persona invalidates that node's record, and reordering
+or dropping a step does too. Each step is narrowed to those three for the same reason
+`status` is excluded above: a field something other than the author adds to a step must
+not invalidate a review of content nobody moved. The reviewer is shown every step in the
+order it runs, as prose rather than as escaped JSON, because a stepped node's acceptance
+criteria *are* that prose.
+
+**One thing a plan carries is outside the key, and what that costs is worth knowing
+rather than discovering.** A task **retargeted at another repository** after its review
+keeps its record: which repository the work lands in is not something the review ruled on.
+
+**A record is written by this repository's own code and never by a dispatched agent**,
+and that is structural rather than a rule anybody is asked to follow. The plan stores
+this covers are the gitignored `.plans-local/` and `.plans/` of the *manager's*
+checkout; a dispatched worker runs in a worktree of its own, nothing it writes below
+either directory is tracked, and so no branch it produces carries a record back. There
+is no recipe, flag, or documented step by which a dispatch writes one either. The two
+writers are `just review-plan`, on a pass, and **`just plan`'s own closeout**: a
+planning run that settles successfully has produced a plan `personas/planner.yaml`'s
+judge already read, so the tasks that run authored are recorded rather than reviewed a
+second time. That trusts the planner's judge to have covered node-level criteria, and
+it is a decision rather than an inference — a planner-authored node that later fails a
+review is evidence to stop and look, not a reason to add a per-node planner pass. The
+closeout is scoped to what changed during the run, so the brief the *manager* wrote to
+launch it is not blessed by the planning run happening beside it.
 
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking

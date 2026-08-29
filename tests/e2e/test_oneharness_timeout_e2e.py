@@ -52,6 +52,19 @@ PR_AUTHOR_MEMBER = "pr-author"
 #: chosen, not that it is some number.
 DRAFTER_DEADLINE_SECONDS = 300
 
+#: The plan reviewer's config, which is the fourth copy of the supervisory routing.
+#: It is named here rather than read out of a graph because nothing dispatches it: it
+#: is a command of this repository, run by `just review-plan`, and
+#: `orchestrator/plan_review.py` is what names it. Separate for the same reason the
+#: other two copies are, and for one more of its own — a reviewer sits between an
+#: operator and a launch, and its `schema_file` is the verdict a review record is
+#: written from.
+PLAN_REVIEW_CONFIG = REPO_ROOT / "oneharness.plan-review.toml"
+
+#: The reviewer's per-turn deadline, as that file states it. Exact for the same reason
+#: the other two are: what matters is that it is finite and chosen.
+REVIEWER_DEADLINE_SECONDS = 300
+
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
     """Map each graph member to its own scalar settings, nested side keys dotted.
@@ -252,15 +265,15 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all six turn configs together from oneharness's effective values."""
+    """Prove all seven turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
-    assert len({monitor, pacemaker, drafter}) == 3, (
-        f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), and the "
-        f"pr-author drafter ({drafter}) must each name their own oneharness config; "
-        "re-sharing one is what gives a scheduled member no deadline, which fails "
-        "silently"
+    assert len({monitor, pacemaker, drafter, PLAN_REVIEW_CONFIG}) == 4, (
+        f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), the "
+        f"pr-author drafter ({drafter}) and the plan reviewer ({PLAN_REVIEW_CONFIG}) "
+        "must each name their own oneharness config; re-sharing one is what gives a "
+        "scheduled member no deadline, which fails silently"
     )
 
     configs = {
@@ -270,6 +283,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "monitor": monitor,
         "pacemaker": pacemaker,
         "drafter": drafter,
+        "reviewer": PLAN_REVIEW_CONFIG,
     }
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
@@ -310,6 +324,26 @@ def test_every_side_resolves_its_intended_effective_deadline(
     assert effective["drafter"]["schema_file"]["value"], (
         "oneharness.pr-author.toml must name the schema a drafted body is validated "
         "against; without it a turn's answer reaches publication unchecked"
+    )
+    assert effective["reviewer"]["timeout"] == {
+        "value": REVIEWER_DEADLINE_SECONDS,
+        "source": str(PLAN_REVIEW_CONFIG),
+    }, (
+        f"the plan reviewer must retain its explicit finite "
+        f"{REVIEWER_DEADLINE_SECONDS}-second deadline: it runs between an operator and "
+        "a launch, so an unbounded turn holds a plan unlaunchable indefinitely"
+    )
+    # The reviewer answers under a response schema too, and for the harder reason: a
+    # record is written from that verdict, so an answer nothing validated would be
+    # recorded as a pass. Holding both together keeps a later "turn streaming back on
+    # for visibility" edit from breaking the command rather than only changing it.
+    assert effective["reviewer"]["stream"]["value"] is False, (
+        "oneharness.plan-review.toml must keep `stream = false`: a schema run does not "
+        "stream, and oneharness refuses a run declaring both"
+    )
+    assert effective["reviewer"]["schema_file"]["value"], (
+        "oneharness.plan-review.toml must name the schema a verdict is validated "
+        "against; without it an unvalidated answer is recorded as a review"
     )
 
     # The split duplicated a routing, so hold the copy to one intended difference.

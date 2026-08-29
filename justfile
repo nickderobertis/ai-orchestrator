@@ -219,6 +219,27 @@ plan *args:
 check-plan *args:
     @uv run orchestrator-check-plan "$@"
 
+# Spend the judged turn that clears a plan's authored content: `just review-plan
+# <source>:<project>`.
+#
+# `just check-plan` refuses a task carrying no review record for what it currently
+# says, and this is the command that records one. It reads each unreviewed task against
+# `personas/planner.yaml`'s own bar — the judge every planner-written plan already
+# passes through, so that a plan an operator wrote by hand, or a planner's plan an
+# operator then tweaked, is read by the same reviewer rather than by nobody.
+#
+# Three things about the result. It records a **pass** and nothing else, so a refusal
+# leaves nothing behind to replay. A record it wrote is authoritative — `check-plan`
+# accepts it and spends no second turn on identical content. And it takes no flag that
+# lets a plan past that refusal, because an escape here is reached under exactly the
+# time pressure that produced the two unreviewed plans this gate exists to catch.
+#
+# Exit 1 is a refusal, naming each task and the reason; exit 2 is a plan or a review
+# turn that could not be read at all, so nothing was recorded either way.
+[doc("Review a plan's unreviewed task content against the planner's own bar and record each pass.")]
+review-plan *args:
+    @./scripts/review-plan.sh "$@"
+
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.
 #

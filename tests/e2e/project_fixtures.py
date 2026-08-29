@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,19 @@ from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
+
+#: The paid provider's stand-in and the guard covering the identities `ONEHARNESS_BIN_*`
+#: cannot reach, so `reviewed` below spends a real review turn without spending money.
+_FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
+_PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
+
+#: What the scripted reviewer answers. One passing verdict, repeated for every task:
+#: `tests/e2e/fake_codex.py` reuses its last scripted answer once the list runs out.
+_PASSING_VERDICT = json.dumps({"passes": True, "reason": "the criteria prove this node"})
+
+#: Where the review turns this fixture spends keep their harness history, so they do not
+#: land in the host's. One directory per test process, created on first use.
+_HISTORY = Path(tempfile.mkdtemp(prefix="ai-orchestrator-fixture-history-"))
 
 
 def local_project(content: str, name: str) -> str:
@@ -40,6 +54,41 @@ def local_project(content: str, name: str) -> str:
 def project_from_plan(plan: Path, name: str | None = None) -> str:
     """Store a JSON plan as a local project through the committed source layout."""
     return local_project(plan.read_text(encoding="utf-8"), name or plan.stem)
+
+
+def reviewed(project: str) -> str:
+    """Review ``project`` through the real `just review-plan`, and answer its id.
+
+    A plan reaching `just check-plan` green is one something has already reviewed, so a
+    journey about any *other* refusal has to start from that state. It is reached the
+    way an operator reaches it — the real recipe, the real script, the real
+    `oneharness` CLI and its response schema — rather than by writing the record
+    directly, so no journey built on this begins from state the exercised interface
+    cannot produce. Only the paid provider is scripted, at the seam every other journey
+    here scripts it at.
+    """
+    environment = dict(os.environ)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEHARNESS_BIN_CODEX"] = str(_FAKE_CODEX)
+    # And the identities that seam cannot reach; see `no_paid_provider`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{_PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps([_PASSING_VERDICT])
+    environment["XDG_STATE_HOME"] = str(_HISTORY)
+    reviewing = subprocess.run(
+        ["just", "review-plan", project],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if reviewing.returncode != 0:
+        raise AssertionError(
+            f"the fixture could not review {project} through `just review-plan`: "
+            f"{reviewing.stdout}{reviewing.stderr}"
+        )
+    return project
 
 
 # llmlint: ignore[suppressions_justified] The fixture reconstructs open plan metadata.

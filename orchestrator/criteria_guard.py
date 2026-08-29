@@ -14,12 +14,19 @@ procedure. Four nodes have been lost that way in this host's history:
   host's own operational appendix back at it;
 * one failed for never having *"provided a final verified completion report"* — a
   demand in neither its task nor the shared completion clause, imported wholesale
-  from the built-in role's bar.
+  from the built-in role's bar;
+* one required a lockfile to resolve a sibling to an exact version. The sibling
+  published a newer one between the task being written and the node being dispatched,
+  the worker resolved the newest as that repository's own manifest demands, and the
+  judge failed finished, gate-green work for doing the right thing. That is what
+  :data:`VERSION_LITERAL` refuses, and it belongs to this deterministic tier rather
+  than to a review bar precisely because a judge reading the number would most likely
+  have *passed* it — the criterion was well-formed, just perishable.
 
-The first pair is what the criteria checks below refuse. The second pair is what
-:func:`resolve_bar` and :data:`DEMANDS` refuse: a demand that will be made of this
-node has to be *stated* as a criterion, so the judge checks a criterion the author
-wrote instead of one it reconstructed.
+The first pair, and the version literal, are what the criteria checks below refuse.
+The second pair is what :func:`resolve_bar` and :data:`DEMANDS` refuse: a demand
+that will be made of this node has to be *stated* as a criterion, so the judge checks
+a criterion the author wrote instead of one it reconstructed.
 
 A third shape is worse than either, because no wording of the criteria rescues it:
 a bar that forbids the dispatch changing project files, under a task that requires
@@ -32,6 +39,14 @@ pairing by name. It reads the resolved bar and the criteria rather than a list o
 role names — ``researcher`` reads like the right role for a node whose job is
 measurement, and its file-modification clause is invisible from ``personas/``,
 which is not where a bare name resolves.
+
+One refusal here is not about a bar at all. Every plan whose node failed above was
+written by an operator and launched with no planner, so ``personas/planner.yaml``'s
+judge — which exists to catch exactly this — never read those criteria.
+:mod:`orchestrator.plan_review` is what closes that, and :func:`main` refuses a task
+carrying no review record for what it currently says; this module only reads that
+answer, because detecting *who typed* a node is the wrong question and detecting
+unreviewed content covers both the hand-written plan and the tweaked one.
 
 Resolving that bar is the part that cannot be guessed. A plan node's ``persona`` is
 a **name**, and a name resolves to a role compiled into ``oneagentgraph`` rather
@@ -46,17 +61,15 @@ the wrong one here would validate every plan against a bar no dispatch is given.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
-import subprocess
 import sys
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from orchestrator import plan_review, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The operational text every dispatched task carries, and the one source a plan
@@ -75,23 +88,10 @@ GRAPHS = Path("graphs")
 ENGINE = "onepipeline"
 
 CRITERIA_HEADING = "## Acceptance criteria"
-STORE_PAGE_SIZE = 2
 
 
 class CriteriaError(ValueError):
     """A plan node would be judged against something its task does not state."""
-
-
-@dataclass(frozen=True)
-class StoreTask:
-    """A validated task record returned by onetaskgraph."""
-
-    qualified_id: str
-    node_id: str
-    title: str
-    content: str | None
-    metadata: Mapping[str, object]
-    repositories: list[object]
 
 
 class Bar(NamedTuple):
@@ -448,6 +448,16 @@ DEFERRAL = re.compile(
 # satisfy the property and still be failed on the spelling.
 PHRASE = re.compile(r"\b(verbatim|word for word|the exact (?:phrase|wording|words))\b", re.I)
 
+# A release number written into a criterion; the incident it refuses is in this
+# module's docstring. Three shapes, and no bare `<n>.<n>`: an unprefixed two-component
+# number is a duration, a percentage, or a schema version far more often than it is a
+# release, and a false refusal here blocks correct work.
+VERSION_LITERAL = re.compile(
+    r"\bv?\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.-]+)?\b"
+    r"|\bv\d+\.\d+\b"
+    r"|[><=~^!]=?\s*\d+\.\d+\b"
+)
+
 #: Demands whose absence from the criteria has already failed finished work. Each is
 #: enforced only where it is actually made — in the resolved bar, or in the task's
 #: own prose outside the criteria — so a role that stops making one stops requiring
@@ -691,6 +701,14 @@ def check(task: str, node_id: str, bar: Bar) -> None:
             f"than a particular property. Ask for the content in '## Additional info'; "
             f"criteria state what must be true of the tree."
         )
+    pinned = VERSION_LITERAL.search(block)
+    if pinned:
+        raise CriteriaError(
+            f"{node_id}: criteria name a version literal ({pinned.group(0).strip()!r}). A "
+            f"release published between this task being written and its node being "
+            f"dispatched makes finished work fail against it. State the property that "
+            f"version stands in for instead."
+        )
     for pattern, why in PROCEDURE:
         named = pattern.search(block)
         if named:
@@ -759,8 +777,9 @@ class Node(NamedTuple):
 def _mapping(value: object, where: str) -> Mapping[str, Any]:
     """``value`` as a plan object, refused by name when it is something else.
 
-    A plan is what `_project_plan` assembles out of the answers onetaskgraph returns
-    for a qualified project, so every container this walks is untrusted input.
+    A plan is what `orchestrator/plan_store.py` assembles out of the answers
+    onetaskgraph returns for a qualified project, so every container this walks is
+    untrusted input.
     Refusing it here names the field a plan's author has to fix in the store record it
     came from; reaching in and hoping raises whatever `AttributeError` the shape
     happens to produce, six frames from anything they can act on.
@@ -810,7 +829,7 @@ def dispatched_nodes(plan: object) -> Iterator[Node]:
     branch — so the step is the dispatch and the node above it is not.
     """
     document = _mapping(plan, "the plan")
-    # tests/test_criteria_guard.py covers this, and no recipe journey can: `_project_plan`
+    # tests/test_criteria_guard.py covers this, and no recipe journey can: `read_plan`
     # sets `tasks` on every plan it assembles, so a project whose store answer has no task
     # arrives here as an empty list rather than a missing key. The two refusals below this
     # one are reachable from a real project and are driven by
@@ -876,180 +895,6 @@ def check_plan(plan: object) -> int:
     return checked
 
 
-# llmlint: ignore[suppressions_justified] Open CLI JSON; consumed fields narrow below.
-def _store_json(arguments: Sequence[str]) -> dict[str, Any]:
-    """Read one JSON answer from the installed store CLI."""
-    binary = shutil.which("onetaskgraph")
-    if binary is None:
-        raise OSError("onetaskgraph is not installed on PATH")
-    read = subprocess.run(
-        [binary, *arguments, "--json"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if read.returncode != 0:
-        raise OSError(read.stderr.strip() or f"onetaskgraph exited {read.returncode}")
-    try:
-        payload = json.loads(read.stdout)
-    except json.JSONDecodeError as exc:
-        raise OSError(f"onetaskgraph returned invalid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise OSError("onetaskgraph returned a non-object response")
-    return payload
-
-
-# llmlint: ignore[suppressions_justified] Store values stay open until validated here.
-def _one_item(payload: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
-    """Require one store item and return its typed payload mapping."""
-    items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list) or len(items) != 1:
-        raise OSError(
-            f"onetaskgraph returned {len(items) if isinstance(items, list) else 0} {kind} records"
-        )
-    record = items[0]
-    item = record.get("item") if isinstance(record, dict) else None
-    if not isinstance(item, dict):
-        raise OSError(f"onetaskgraph returned a {kind} without an object payload")
-    return item
-
-
-# llmlint: ignore[suppressions_justified] Engine plan metadata is an open contract.
-def _project_plan(project: str) -> dict[str, Any]:
-    """Map a qualified store project onto the plan fields the engine reads."""
-    try:
-        source, native = project.split(":", 1)
-    except ValueError as exc:
-        raise OSError("a project id must be qualified as <source>:<native>") from exc
-    if not source or not native:
-        raise OSError("a qualified project id must contain both <source> and <native> components")
-    held = _one_item(_store_json(["project", "show", project]), "project")
-    metadata = held.get("metadata", {})
-    if not isinstance(metadata, dict):
-        raise OSError("onetaskgraph returned project metadata that is not an object")
-    project_title = held.get("title")
-    if not isinstance(project_title, str):
-        raise OSError("onetaskgraph returned a project without a string title")
-    plan = {
-        key.removeprefix("onepipeline."): value
-        for key, value in metadata.items()
-        if isinstance(key, str) and key.startswith("onepipeline.")
-    }
-    plan.setdefault("name", project_title)
-    listed: list[object] = []
-    page: str | None = None
-    seen_pages: set[str] = set()
-    while True:
-        arguments = [
-            "task",
-            "list",
-            "--source",
-            source,
-            "--project",
-            native,
-            "--limit",
-            str(STORE_PAGE_SIZE),
-        ]
-        if page is not None:
-            arguments.extend(["--page", page])
-        answer = _store_json(arguments)
-        items = answer.get("items")
-        if not isinstance(items, list):
-            raise OSError("onetaskgraph returned a task listing that is not a list")
-        listed.extend(items)
-        following = answer.get("next")
-        if following is None:
-            break
-        if not isinstance(following, str) or not following:
-            raise OSError("onetaskgraph returned an invalid next-page token")
-        if following in seen_pages:
-            raise OSError("onetaskgraph returned a repeated next-page token")
-        seen_pages.add(following)
-        page = following
-    ids: dict[str, str] = {}
-    node_ids: set[str] = set()
-    records: list[StoreTask] = []
-    for record in listed:
-        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
-            raise OSError("onetaskgraph returned a task without a qualified id")
-        item = record.get("item")
-        if not isinstance(item, dict):
-            raise OSError("onetaskgraph returned a task without an object payload")
-        task_metadata = item.get("metadata", {})
-        node_id = task_metadata.get("onepipeline.id") if isinstance(task_metadata, dict) else None
-        if not isinstance(node_id, str):
-            raise OSError(f"task {record['id']} has no string onepipeline.id")
-        repositories = item.get("repositories", [])
-        if not isinstance(repositories, list):
-            raise OSError(f"task {record['id']} has non-list repositories")
-        if not all(isinstance(repository, str) for repository in repositories):
-            raise OSError(f"task {record['id']} has a non-string repository")
-        if len(repositories) > 1:
-            raise OSError(f"task {record['id']} has more than one repository")
-        title = item.get("title")
-        content = item.get("content")
-        if not isinstance(title, str) or (content is not None and not isinstance(content, str)):
-            raise OSError(f"task {record['id']} has invalid title or content")
-        qualified_id = record["id"]
-        if qualified_id in ids or node_id in node_ids:
-            raise OSError(
-                f"onetaskgraph returned duplicate task identity {qualified_id!r} or "
-                f"onepipeline.id {node_id!r}"
-            )
-        ids[qualified_id] = node_id
-        node_ids.add(node_id)
-        records.append(
-            StoreTask(
-                qualified_id=qualified_id,
-                node_id=node_id,
-                title=title,
-                content=content,
-                metadata=task_metadata,
-                repositories=repositories,
-            )
-        )
-    # llmlint: ignore[suppressions_justified] Nodes include open validated metadata.
-    nodes: list[dict[str, Any]] = []
-    for task_record in records:
-        node = {
-            key.removeprefix("onepipeline."): value
-            for key, value in task_record.metadata.items()
-            if isinstance(key, str) and key.startswith("onepipeline.")
-        }
-        node["title"] = task_record.title
-        node["task"] = task_record.content
-        if task_record.repositories:
-            node["repo"] = task_record.repositories[0]
-        edges = _store_json(["task", "deps", task_record.qualified_id]).get("items")
-        if not isinstance(edges, list):
-            raise OSError(
-                f"onetaskgraph returned non-list dependencies for {task_record.qualified_id}"
-            )
-        targets: list[str] = []
-        for edge in edges:
-            match edge:
-                case {"to": {"id": str(target_id)}}:
-                    targets.append(target_id)
-                case _:
-                    raise OSError(
-                        "onetaskgraph returned a dependency edge without a string target id "
-                        f"for {task_record.qualified_id}"
-                    )
-        unknown = [target for target in targets if target not in ids]
-        if unknown:
-            raise OSError(
-                f"onetaskgraph returned unknown dependency targets for "
-                f"{task_record.qualified_id}: {', '.join(unknown)}"
-            )
-        deps = [ids[target] for target in targets]
-        if deps:
-            node["deps"] = deps
-        nodes.append(node)
-    plan["tasks"] = nodes
-    return plan
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Check a qualified plan project before it is launched, from `just check-plan`."""
     parser = argparse.ArgumentParser(
@@ -1060,7 +905,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("project", metavar="SOURCE:PROJECT")
     args = parser.parse_args(argv)
     try:
-        plan = _project_plan(args.project)
+        plan, records = plan_store.read_project(args.project)
     except (OSError, ValueError) as exc:
         print(
             f"check-plan: cannot read project {args.project}: {exc}; pass the qualified "
@@ -1084,5 +929,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"check-plan: {checked} dispatched node(s) state the bar they are judged against")
+    try:
+        unreviewed = plan_review.unreviewed(records)
+    # tests/test_criteria_guard.py covers this: the review bar is composed from this
+    # checkout's own tracked files, so a recipe journey run from here cannot remove one.
+    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
+    except OSError as exc:
+        print(
+            f"check-plan: cannot fingerprint the review bar this plan would be reviewed "
+            f"against: {exc}; run `just bootstrap` from the repository root and retry",
+            file=sys.stderr,
+        )
+        return 2
+    if unreviewed:
+        named = ", ".join(task.node_id for task in unreviewed)
+        print(
+            f"check-plan: {len(unreviewed)} task(s) carry no review record for their current "
+            f"authored content: {named}. Nothing has reviewed those criteria, which is how "
+            f"a plan written under time pressure reaches a dispatch. Review them with "
+            f"`just review-plan {args.project}`.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"check-plan: {checked} dispatched node(s) state the bar they are judged against, "
+        f"and every task carries a review record for its current authored content"
+    )
     return 0
