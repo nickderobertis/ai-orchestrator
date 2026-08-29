@@ -63,6 +63,8 @@ second="$(stat -c '%i:%Y:%s' "$HOME/.local/bin/onetaskgraph")"
 test "$first" = "$second"
 test -d .plans/tasks
 test -d .plans/projects
+test -d .plans-local/tasks
+test -d .plans-local/projects
 """
     return subprocess.run(
         ["bash", "-c", command],
@@ -355,8 +357,14 @@ install_onetaskgraph
     assert not (home / ".local/bin/onetaskgraph").exists()
 
 
-def test_authoring_directory_creation_failure_is_required(tmp_path: Path) -> None:
-    """A verified installation still fails if its authoring directories cannot be created."""
+@pytest.mark.parametrize("blocked", [".plans", ".plans-local"])
+def test_plan_root_creation_failure_is_required(tmp_path: Path, blocked: str) -> None:
+    """A verified installation still fails if its plan-store roots cannot be created.
+
+    Both roots are created together, and a source refuses a root it cannot canonicalize
+    for the whole read rather than for itself alone — so an installation that reported
+    success with one of them missing would leave `just plans` exiting 4 on every source.
+    """
     version = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
     archive = _release_fixture(tmp_path, version)
     repo = tmp_path / "repo"
@@ -364,7 +372,7 @@ def test_authoring_directory_creation_failure_is_required(tmp_path: Path) -> Non
     (repo / "config").mkdir()
     for version_file in (REPO_ROOT / "config").glob("*.version"):
         shutil.copy2(version_file, repo / "config" / version_file.name)
-    (repo / ".plans").write_text("not a directory", encoding="utf-8")
+    (repo / blocked).write_text("not a directory", encoding="utf-8")
     home = tmp_path / "home"
     home.mkdir()
     command = r"""

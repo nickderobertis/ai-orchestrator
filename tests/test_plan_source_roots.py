@@ -1,0 +1,173 @@
+"""No two configured plan sources store their records under one root directory.
+
+Sharing a root is invisible to everything else this repository runs. Two `local-md`
+sources over one directory both answer with every project in it, so a listing across
+the default sources reports each plan twice — once under each source name — and
+neither copy is wrong, no diagnostic is emitted, and a qualified `<source>:<project>`
+id stops being unique in practice. The failure only shows up as a duplicated listing
+somebody has to notice.
+
+The check has to be able to fail, so it is exercised both ways: over the real
+`onetaskgraph.yaml` and over a document that deliberately points two sources at one
+root. The second is what says a green here means the roots are distinct rather than
+that the reader found nothing.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+from plan_sources import read_default_sources, read_plan_sources, shared_roots
+
+from orchestrator.root import REPO_ROOT
+
+#: The retreat's own source and the root it is required not to share. Named here
+#: because a `plans-local` that silently landed back on `.plans` is exactly the
+#: mistake this module exists to refuse.
+LOCAL_PLANS = "plans-local"
+
+
+def _configuration() -> str:
+    return (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+
+
+def test_no_two_configured_sources_share_a_root() -> None:
+    """Every source `onetaskgraph.yaml` roots at a directory roots at its own."""
+    shared = shared_roots(read_plan_sources(_configuration()))
+    assert not shared, (
+        "onetaskgraph.yaml points several sources at one root: "
+        + "; ".join(
+            f"{root} is claimed by {', '.join(sorted(names))}" for root, names in shared.items()
+        )
+        + " — every project under a shared root answers once per source, so a listing "
+        "across the default sources reports each plan more than once"
+    )
+
+
+def test_the_check_names_both_sources_and_the_root_when_two_are_shared() -> None:
+    """A document that shares a root fails, and the failure says which and where."""
+    shared = shared_roots(
+        read_plan_sources(
+            "default_sources: [one, two]\n"
+            "sources:\n"
+            "  one:\n"
+            "    plugin: local-md\n"
+            "    config:\n"
+            "      root: .plans\n"
+            "  two:\n"
+            "    plugin: local-md\n"
+            "    config:\n"
+            "      root: ./.plans/\n"
+        )
+    )
+    assert shared == {".plans": ["one", "two"]}, (
+        "two sources over one root must be reported with both names and the root, and "
+        "two spellings of one directory must compare equal"
+    )
+
+
+def test_the_local_plan_source_is_configured_and_roots_at_its_own_directory() -> None:
+    """`plans-local` exists, is a local Markdown source, and shares nothing."""
+    text = _configuration()
+    sources = read_plan_sources(text)
+    assert LOCAL_PLANS in sources, (
+        f"onetaskgraph.yaml has to define the {LOCAL_PLANS!r} source this repository "
+        "plans against; see AGENTS.md, 'Where a plan of this repository lives'"
+    )
+    local = sources[LOCAL_PLANS]
+    assert local.plugin == "local-md", local.plugin
+    assert local.root is not None, f"{LOCAL_PLANS} has to name the directory it stores plans in"
+    assert LOCAL_PLANS in read_default_sources(text), (
+        f"{LOCAL_PLANS} has to answer when a command names no source, or the plans this "
+        "repository stores there go unlisted by every default read"
+    )
+
+
+def test_the_local_plan_root_is_ignored_by_git() -> None:
+    """The retreat's root is gitignored, like the authoring root beside it."""
+    root = read_plan_sources(_configuration())[LOCAL_PLANS].root
+    assert root is not None
+    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").split()
+    assert f"/{root.rstrip('/')}/" in ignored, (
+        f".gitignore has to ignore /{root}/: plans stored there are working state, and a "
+        "planner that force-added them onto a branch has already destroyed a manager's own"
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        ("plugin", "github-projects"),
+        ("owner", "nickderobertis"),
+        ("project_number", "2"),
+        ("repository", "nickderobertis/ai-orchestrator"),
+        ("token_env", "GH_PROJECTS_TOKEN"),
+    ],
+)
+def test_the_board_source_is_left_exactly_as_it_was(setting: str, expected: str) -> None:
+    """`plans` keeps every value it carried before the retreat.
+
+    Retiring the retreat is the deletion of `plans-local`, which only works while
+    `plans` is untouched — and a live run's settlements are projected back to the
+    project they were launched from, so repointing it moves a running plan's store out
+    from under it.
+    """
+    board = read_plan_sources(_configuration())["plans"]
+    actual = board.plugin if setting == "plugin" else board.settings.get(setting)
+    assert actual == expected, (
+        f"onetaskgraph.yaml's `plans` source names {setting} {actual!r} where it carried "
+        f"{expected!r}; the retreat to `plans-local` leaves that source alone"
+    )
+
+
+def _resolved_configuration() -> dict[str, object]:
+    """Every setting the installed CLI resolves out of this checkout's own file."""
+    result = subprocess.run(
+        [str(Path.home() / ".local/bin/onetaskgraph"), "--json", "config", "show"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload: object = json.loads(result.stdout)
+    assert isinstance(payload, dict), payload
+    settings = payload["settings"]
+    assert isinstance(settings, list), settings
+    resolved: dict[str, object] = {}
+    for entry in settings:
+        assert isinstance(entry, dict), entry
+        key = entry["key"]
+        assert isinstance(key, str), entry
+        resolved[key] = entry["value"]
+    return resolved
+
+
+@pytest.mark.reads_checkouts
+def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli() -> None:
+    """The document reader above is reconciled against the release that really loads it.
+
+    `tests/plan_sources.py` reads `onetaskgraph.yaml` with a reader for this document's
+    own shape rather than with a YAML parser, so the shared-root check is worth exactly
+    what that reader is worth — a restructured file it silently read as fewer sources
+    would leave every assertion above passing over a configuration nobody checked.
+
+    Uncached, because the subject is the installed producer rather than this workspace:
+    a memo keyed on the tree here would replay across the very `onetaskgraph` upgrade
+    that could change how a source document is loaded.
+    """
+    resolved = _resolved_configuration()
+    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+    read_here = read_plan_sources(text)
+    assert {f"sources.{name}.plugin": source.plugin for name, source in read_here.items()} == {
+        key: value for key, value in resolved.items() if key.endswith(".plugin")
+    }
+    assert {
+        f"sources.{name}.config.root": source.root
+        for name, source in read_here.items()
+        if source.root is not None
+    } == {key: value for key, value in resolved.items() if key.endswith(".config.root")}
+    assert read_default_sources(text) == resolved["default_sources"]

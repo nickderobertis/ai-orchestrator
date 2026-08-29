@@ -43,6 +43,25 @@ def test_render_plan_project_covers_supported_node_shapes(tmp_path: Path) -> Non
     assert 'depends_on: ["stored-plan/first"]' in second
 
 
+def test_a_rendered_plan_lists_its_project_document_last() -> None:
+    """A concurrent reader sees either no project or a whole one, never half of one.
+
+    `write_plan_project` writes in the mapping's order, and a local Markdown source
+    that finds a project document opens the task directory below it — so a document
+    published before its tasks refuses the reader's whole walk rather than answering
+    with an empty project. That ordering is the record's own, which is why it is
+    stated by what `render_plan_project` returns rather than by how it is written.
+    """
+    rendered = list(
+        project_store.render_plan_project(
+            {"name": "plan", "tasks": [{"id": "first"}, {"id": "second"}]}
+        )
+    )
+
+    assert rendered[-1] == Path("projects/plan.md"), rendered
+    assert all(path.parent == Path("tasks/plan") for path in rendered[:-1]), rendered
+
+
 @pytest.mark.parametrize(
     "plan",
     (

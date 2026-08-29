@@ -16,9 +16,9 @@ Plans authored through this repository's configured plan store are read with
 `just plans <onetaskgraph arguments>`. For example, `just plans project list
 --allow-partial` lists the local Markdown projects even when the configured GitHub
 Projects credential is absent, while `just plans project show
-authoring:<project>` reads one local project. The recipe always invokes the pinned
-standalone `onetaskgraph` CLI against `onetaskgraph.yaml`; its source diagnostics
-name a failed source and the credential or correction it needs. `just orchestrate
+plans-local:<project>` reads one plan of this repository. The recipe always invokes
+the pinned standalone `onetaskgraph` CLI against `onetaskgraph.yaml`; its source
+diagnostics name a failed source and the credential or correction it needs. `just orchestrate
 <source:project>` names that project directly; no export or intermediate plan file
 is part of the launch. On the adopted engine, each node settlement is
 written back to that source project, and live graph edits add, remove, or update its
@@ -26,6 +26,18 @@ tasks and dependency edges there. A run launched from GitHub Projects therefore
 reports its changing graph and outcomes on the board itself; the run journal remains
 the detailed execution record. The `plans` recipe is the operator's direct store
 surface, while `orchestrate` launches the tracked run and keeps its source plan current.
+
+## The plan store this repository plans against
+
+**A plan of this repository is stored under the `plans-local` source**, rooted at this
+checkout's gitignored `.plans-local/`, and no new plan of it is authored on the `plans`
+board. That is a temporary retreat rather than the design, and the whole of the reasoning —
+the two defects that forced it, the two releases that retire it, and why retiring it is the
+deletion of `plans-local` rather than a re-edit of `plans` — is recorded once, in
+[Where a plan of this repository
+lives](../AGENTS.md#where-a-plan-of-this-repository-lives). Everything below about the
+board still describes the source as it is configured; it describes a store this repository
+does not plan against today.
 
 The `plans` source is one GitHub Projects board, and since the redesigned
 `github-projects` source **a board is a container of projects rather than a project**: a

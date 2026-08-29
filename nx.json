@@ -27,6 +27,7 @@
       "{workspaceRoot}/tests/fixtures/**/*",
       "{workspaceRoot}/tests/conftest.py",
       "{workspaceRoot}/tests/nx_inputs.py",
+      "{workspaceRoot}/tests/plan_fixture_root.py",
       "{workspaceRoot}/tests/registered_checkouts.py",
       "{workspaceRoot}/tests/e2e/nx_workspace.py",
       "{workspaceRoot}/tests/e2e/test_delegated_recipes_e2e.py",

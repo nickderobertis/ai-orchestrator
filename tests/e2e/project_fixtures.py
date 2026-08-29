@@ -1,8 +1,14 @@
-"""Materialize test-owned local Markdown projects for real onepipeline launches."""
+"""Materialize test-owned local Markdown projects for real onepipeline launches.
+
+Nothing here removes what it wrote. The root is the one `onetaskgraph.yaml` configures
+for the `test-fixtures` source, which every concurrent test tier of this repository
+reads at once, and a record removed mid-walk refuses the walk rather than disappearing
+from it. Reclaiming belongs to `tests/plan_fixture_root.py`, which runs under the
+exclusive lock and only against records whose writing process is gone.
+"""
 
 from __future__ import annotations
 
-import atexit
 import itertools
 import json
 import os
@@ -11,12 +17,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from plan_fixture_root import ROOT as _PROJECT_ROOT
+
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
-_WRITTEN: list[Path] = []
 _PROJECT_SEQUENCE = itertools.count()
-_PROJECT_ROOT = Path("/tmp/ai-orchestrator-test-projects")
 
 
 def local_project(content: str, name: str) -> str:
@@ -28,8 +34,6 @@ def local_project(content: str, name: str) -> str:
         raise ValueError("a plan fixture must be a JSON object")
     plan.setdefault("name", native)
     write_plan_project(_PROJECT_ROOT, plan, native_id=native)
-    written = [_PROJECT_ROOT / "projects" / f"{native}.md", _PROJECT_ROOT / "tasks" / native]
-    _WRITTEN.extend(written)
     return f"test-fixtures:{native}"
 
 
@@ -87,14 +91,3 @@ def read_project_plan(project: str) -> dict[str, Any]:
         tasks.append(node)
     plan["tasks"] = tasks
     return plan
-
-
-@atexit.register
-def _remove_projects() -> None:
-    for written in reversed(_WRITTEN):
-        if written.is_dir():
-            for child in written.iterdir():
-                child.unlink(missing_ok=True)
-            written.rmdir()
-        else:
-            written.unlink(missing_ok=True)

@@ -579,11 +579,25 @@ def _serving_board() -> Iterator[dict[str, str]]:
 
 
 def _plan_environment(root: Path) -> dict[str, str]:
+    """The environment a read across the default sources runs under.
+
+    Both gitignored local roots are pointed per run, and at *different* directories.
+    `plans-local` has to be pointed somewhere because a `local-md` source refuses a root
+    it cannot canonicalize and refuses it for the whole read, so these journeys would
+    otherwise pass or fail on whether this checkout happened to have run session setup —
+    and it has to be pointed somewhere else because two sources over one root each answer
+    with every project in it, which is the duplicate listing the roots are kept apart to
+    avoid.
+    """
+    local_plans = root / "local-plans"
+    (local_plans / "projects").mkdir(parents=True, exist_ok=True)
+    (local_plans / "tasks").mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
     environment.update(
         {
             "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
             "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT": str(root),
+            "ONETASKGRAPH_SOURCES__PLANS-LOCAL__CONFIG__ROOT": str(local_plans),
         }
     )
     return environment

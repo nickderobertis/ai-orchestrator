@@ -60,17 +60,18 @@ def render_plan_project(
     # onepipeline metadata, which is deliberately copied through below.
     document = cast(PlanDocument, plan)
     project = _slug(native_id or name)
+    # llmlint: ignore[boundary_inputs_validated] Every caller of this module decodes its
+    # plan with `json.load`/`json.loads` first — `main` from stdin, the suite's fixtures
+    # from their own documents — so a metadata value here is a decoded JSON value and is
+    # serializable by construction. The stable keys this rendering depends on are the ones
+    # validated above and per task below; the rest is onepipeline's open contract, which
+    # this boundary is required to carry through untouched.
     project_metadata = {
         f"onepipeline.{key}": value
         for key, value in document.items()
         if key not in {"name", "tasks"}
     }
-    rendered = {
-        Path("projects") / f"{project}.md": _frontmatter(
-            {"title": name, "status": "todo", "metadata": project_metadata},
-            f"Execution plan {project}.",
-        )
-    }
+    rendered: dict[Path, str] = {}
     validated: list[tuple[PlanNode, str]] = []
     task_ids: set[str] = set()
     task_slugs: set[str] = set()
@@ -120,10 +121,25 @@ def render_plan_project(
                 node["repo"] = repo
         if deps:
             fields["depends_on"] = [f"{project}/{task_names[dependency]}" for dependency in deps]
+        # llmlint: ignore[boundary_inputs_validated] Decoded JSON, for the reason stated
+        # where the project's own metadata is built above.
         fields["metadata"] = {"onepipeline.id": node_id} | {
             f"onepipeline.{key}": value for key, value in node.items()
         }
         rendered[Path("tasks") / project / f"{node_slug}.md"] = _frontmatter(fields, body)
+    # The project document is rendered last, and `write_plan_project` writes in this
+    # order, because a root is read concurrently with being written: a local Markdown
+    # source that finds a project document opens the task directory below it, and one
+    # that is not there yet is a hard refusal rather than an empty project. So a project
+    # that was not published before becomes visible only once its tasks are on disk.
+    # Replacing one published already is weaker and cannot be otherwise without a second
+    # root to swap in: its document stays visible while its task files are rewritten one
+    # at a time, so a reader can catch a mixed record. What the order still buys there is
+    # that a replacement which fails leaves the reader the project it already had.
+    rendered[Path("projects") / f"{project}.md"] = _frontmatter(
+        {"title": name, "status": "todo", "metadata": project_metadata},
+        f"Execution plan {project}.",
+    )
     return rendered
 
 
@@ -131,8 +147,11 @@ def render_plan_project(
 def write_plan_project(root: Path, plan: Mapping[str, Any], *, native_id: str | None = None) -> str:
     """Write a rendered project under one local-md root and return its native id."""
     rendered = render_plan_project(plan, native_id=native_id)
-    project = next(path.stem for path in rendered if path.parent == Path("projects"))
+    document = next(path for path in rendered if path.parent == Path("projects"))
+    project = document.stem
     for relative, content in rendered.items():
+        if relative == document:
+            continue
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content, encoding="utf-8")
@@ -142,6 +161,12 @@ def write_plan_project(root: Path, plan: Mapping[str, Any], *, native_id: str | 
         for existing in task_directory.iterdir():
             if existing.is_file() and existing not in current_tasks:
                 existing.unlink()
+    # Last, for the reason `render_plan_project` states: a project not published before
+    # becomes visible only here, with its tasks already written, and a replacement that
+    # never reached this line left the previously published document untouched.
+    destination = root / document
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(rendered[document], encoding="utf-8")
     return project
 
 

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import plan_fixture_root
 import pytest
 from nx_inputs import (
     CODE_WORKSPACE,
@@ -70,6 +71,20 @@ DISPATCH_SELECTION_ENV = (
     "ONEHARNESS_HARNESSES",
     "ONEHARNESS_MODEL",
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _shared_plan_fixture_root() -> None:
+    """Hold this process's reader lock on the shared local-md fixture root.
+
+    Nx runs this repository's test tiers as concurrent processes over one configured
+    `test-fixtures` root, so a record removed by one of them is a record another is
+    walking. Every process takes the shared lock before it runs anything, which is
+    what makes a sweep possible at all — see `tests/plan_fixture_root.py` for the
+    refusal a removal mid-walk produces and the gate it has already failed.
+    """
+    plan_fixture_root.sweep_dead_owners()
+    plan_fixture_root.hold_shared()
 
 
 @pytest.fixture(scope="session")

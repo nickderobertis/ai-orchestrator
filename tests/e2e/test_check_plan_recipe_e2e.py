@@ -183,13 +183,19 @@ def test_project_store_reports_semantic_and_write_failures(
 
 
 def test_project_store_recovers_after_a_replacement_is_partially_written(tmp_path: Path) -> None:
-    """Retrying the command completes a store whose task directory blocked its first write."""
+    """Retrying the command completes a store whose second task blocked its first write.
+
+    A root is read while it is being written, so what a half-written store leaves behind
+    is the operator-visible property here: the project document is published last, and a
+    write that failed before reaching it leaves no project at all rather than one whose
+    tasks a source would then fail to open. The blocker is the *second* task, because a
+    run that wrote nothing would exercise no recovery.
+    """
     root = tmp_path / "store"
-    blocked = root / "tasks" / "replacement"
-    blocked.parent.mkdir(parents=True)
-    blocked.write_text("blocks the task directory", encoding="utf-8")
+    blocked = root / "tasks" / "replacement" / "second.md"
+    blocked.mkdir(parents=True)
     command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
-    payload = json.dumps({"name": "Replacement", "tasks": [{"id": "only"}]})
+    payload = json.dumps({"name": "Replacement", "tasks": [{"id": "first"}, {"id": "second"}]})
 
     partial = subprocess.run(
         command,
@@ -202,12 +208,16 @@ def test_project_store_recovers_after_a_replacement_is_partially_written(tmp_pat
     )
 
     assert partial.returncode == 2, partial.stdout + partial.stderr
-    assert (root / "projects/replacement.md").is_file(), (
+    assert (root / "tasks/replacement/first.md").is_file(), (
         "the failure happened before replacement began, so this does not exercise recovery"
+    )
+    assert not (root / "projects/replacement.md").exists(), (
+        "a store that never finished its tasks must not publish the project a reader "
+        "would then open those tasks from"
     )
     assert "cannot write generated plan" in partial.stderr
 
-    blocked.unlink()
+    blocked.rmdir()
     recovered = subprocess.run(
         command,
         cwd=REPO_ROOT,
@@ -219,7 +229,62 @@ def test_project_store_recovers_after_a_replacement_is_partially_written(tmp_pat
     )
 
     assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-    assert (root / "tasks/replacement/only.md").is_file()
+    assert (root / "tasks/replacement/second.md").is_file()
+    assert (root / "projects/replacement.md").is_file()
+
+
+def test_a_replacement_that_fails_leaves_the_published_project_where_it_was(
+    tmp_path: Path,
+) -> None:
+    """Replacing an already published project, driven at the command boundary.
+
+    The project document is written last, so a *replacement* is the case where one is
+    already published while its tasks are being rewritten: a failure part-way leaves the
+    reader the project it had, not a half-published new one, and the retry is what
+    completes the replacement. The first write is the real command too, because a store
+    assembled by hand would not be the store this recovers.
+    """
+    root = tmp_path / "store"
+    command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
+
+    def store(payload: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(30),
+            check=False,
+        )
+
+    published = store({"name": "Replacement", "tasks": [{"id": "first", "task": "Original."}]})
+    assert published.returncode == 0, published.stdout + published.stderr
+    document = (root / "projects/replacement.md").read_text(encoding="utf-8")
+
+    blocked = root / "tasks" / "replacement" / "second.md"
+    blocked.mkdir()
+    failed = store(
+        {
+            "name": "Replacement",
+            "tasks": [{"id": "first", "task": "Replaced."}, {"id": "second"}],
+        }
+    )
+
+    assert failed.returncode == 2, failed.stdout + failed.stderr
+    assert "Replaced." in (root / "tasks/replacement/first.md").read_text(encoding="utf-8")
+    assert (root / "projects/replacement.md").read_text(encoding="utf-8") == document
+
+    blocked.rmdir()
+    recovered = store(
+        {
+            "name": "Replacement",
+            "tasks": [{"id": "first", "task": "Replaced."}, {"id": "second"}],
+        }
+    )
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert (root / "tasks/replacement/second.md").is_file()
 
 
 def test_project_store_slugs_dependency_targets_for_the_real_store(tmp_path: Path) -> None:

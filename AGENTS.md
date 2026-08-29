@@ -823,6 +823,55 @@ the host harness's own built-in subagent mechanism (its own agent/task/fork tool
 unless the request names that mechanism explicitly. When the wording is ambiguous,
 dispatch onejudge.
 
+## Where a plan of this repository lives
+
+**A plan of this repository is stored under the `plans-local` source** — the local
+Markdown source `onetaskgraph.yaml` roots at this checkout's gitignored `.plans-local/`.
+Author one there, read one with `just plans project show plans-local:<project>`, and
+launch one as `just orchestrate plans-local:<project>`. **Never author a new plan on the `plans` board.**
+
+**That is a retreat, and reading it as the design is the mistake this passage exists to
+prevent.** The intended store is the `plans` GitHub Projects board, and it stays configured
+in `onetaskgraph.yaml` exactly as it was — same plugin, owner, project number, repository,
+and credential variable — because a live run's own settlements are projected back to the
+project they were launched from, and repointing that source would move a running plan's
+store out from under it. What changed is only which source this repository *plans against*,
+and it changed because that board cannot hold more than one plan today without corrupting
+every plan on it. Two defects cause that, neither of them this repository's to repair:
+
+- onetaskgraph's `github-projects` source **discards the query it is handed**, so a read
+  scoped to one project answers with every project's tasks. With a second plan on the board
+  a scoped read returns the other plan's nodes too, plan validation then reports on a node
+  belonging to a different plan, and the launch is refused outright.
+- onepipeline's settlement write-back **renames a destination project to its own native
+  identifier and writes no labels**, so every settlement degrades the record it projects
+  onto rather than leaving the authored one intact.
+
+**Two conditions retire the retreat**, and both are releases adopted here rather than
+repairs made here: a released `onetaskgraph` whose `github-projects` source honours the
+query it is handed, and a released `onepipeline` whose write-back preserves a destination
+project's title and its labels. Until both are in force, the board holds at most one plan
+and this repository plans locally.
+
+**Retiring it is a deletion, never a re-edit of the `plans` source.** Delete the
+`plans-local` source from `onetaskgraph.yaml`, its name from `default_sources`, its
+`.gitignore` entry, the root `scripts/session-setup.sh` creates for it, the mentions of it
+in this document and in
+[`docs/orchestration.md`](docs/orchestration.md#the-plan-store-this-repository-plans-against),
+and the checks that hold this section — `tests/test_plan_source_roots.py`,
+`tests/test_plan_store_guidance.py`, and `tests/e2e/test_plan_store_local_e2e.py`. What is
+left is the `plans` source, because nothing ever edited it. That shape is chosen
+rather than incidental: a retreat that repointed `plans` at a local root would need a
+second migration to undo, and a half-applied second migration is indistinguishable from
+the corruption this one exists to avoid. The revert is subtraction.
+
+**`plans-local` roots at `.plans-local/` and not at `.plans/`**, which the `authoring`
+source `just plan` writes already roots at. Two local Markdown sources over one root make
+every project in it answer twice — once under each source name — so a listing across the
+default sources reports each plan twice, neither copy is wrong, and a qualified id stops being
+unique in practice. Nothing else catches that, which is why
+`tests/test_plan_source_roots.py` fails when two configured sources share a root.
+
 ## Your loop as manager
 
 You are the **manager**: the top-level session role. You hold the conversation with
@@ -870,8 +919,12 @@ and is never a command.
    than a decision. Give it the user's motivation in the user's own terms, because
    that is the one thing no amount of reading the code recovers and it is what
    every node's `## Why` is written from. Name the repository and the qualified
-   project id the plan must create. For local authoring, use the `authoring` source
-   rooted at this checkout's gitignored `.plans/`; its project and task records are
+   project id the plan must create. A plan of **this** repository is stored under the
+   `plans-local` source rooted at this checkout's gitignored `.plans-local/`, for the
+   reasons in [Where a plan of this repository
+   lives](#where-a-plan-of-this-repository-lives) — never on the `plans` board. For a
+   plan of any other repository, name the `authoring` source rooted at the gitignored
+   `.plans/` that `just plan` writes. Either source's project and task records are
    launchable in place and need not be copied to GitHub Projects first. Do not hand
    it contracts, acceptance criteria, or a node
    breakdown: researching the code and producing those is the dispatch you are
@@ -1799,6 +1852,9 @@ configured in different places for a reason worth keeping straight. `GH_PROJECTS
 steers another repository's test lane, from the process environment; what steers *this*
 host's plans board is `onetaskgraph.yaml`'s own `plans` source, and since the redesign it
 carries `repository: nickderobertis/ai-orchestrator` beside its owner and number. That
+source stays configured and nothing here plans against it: this repository's own plans live
+under `plans-local`, for the reasons in [Where a plan of this repository
+lives](#where-a-plan-of-this-repository-lives). That
 field is where the board's project and task issues are created, because **a board is a
 container of projects and not a project**: a project is an issue and its tasks are that
 issue's sub-issues, `createIssue` requires a `repositoryId`, and a board has none of its
