@@ -184,7 +184,7 @@ REQUIRED_CLAIMS = (
     Claim(
         "which release this host adopts it at",
         RECLAMATION_OPENER,
-        "this host adopts it at 0.15.4",
+        "this host adopts it at 0.15.8",
     ),
     Claim(
         "the lift is a measurement, not a changelog reading",

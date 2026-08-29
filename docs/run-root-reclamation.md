@@ -140,11 +140,23 @@ behind a line that reads like an ordinary "nothing to hold here".
 
 This must not buy a live dispatch's safety with a disk that fills up, so the
 retention was tested rather than reasoned about.
-`test_the_lease_is_released_with_its_session_so_a_dead_run_root_still_prunes` opens a
+`test_a_closed_sessions_run_root_is_reclaimed_by_the_next_open` opens a
 real session, holds its lease, kills the owning process, waits for the lease to be
-released, and then requires the next `onevcs session open` to delete that root. It
-does. Nothing in `reclaim` is modified, `RETAINED_DEAD_RUNS` is untouched, and a run
-root whose owner is gone is exactly as reclaimable as it was before.
+released, **closes the session**, and then requires the next `onevcs session open` to
+delete that root. It does.
+
+**Closing it is the question because onevcs 0.15.6 changed which one decides.**
+[`fix(workspace): keep a run root a live session is still working in`](https://github.com/nickderobertis/onevcs/pull/99)
+protects a root named by an **open** session even once the CLI that opened it has
+exited — the door 0.14.1 left open, through which a sibling open was still deleting an
+active dispatch's worktree moments after launch. Bisected here on 2026-08-29 against
+the released CLIs with everything else held: that root is kept from 0.15.6 onward and
+was removed at 0.15.4 and 0.15.5, and every release through 0.16.0 behaves as 0.15.6
+does. So owner liveness no longer prunes and session close does, which both the old and
+the pinned release answer identically. The cost is stated rather than discovered later:
+a session that opens and is never closed keeps its run root indefinitely, and `just
+sweep` — which removes only what it can prove no live process names — is what reclaims
+those.
 
 ## The upstream fix, as landed
 

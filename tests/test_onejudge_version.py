@@ -100,8 +100,11 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # description an operator authored, and the release its refuse-rather-than-default
     # read was measured against. Those last two are the reason a count is declared here
     # rather than derived: they are literals in prose about a *behaviour* that moved, so
-    # a bump has to re-open them exactly as it re-opens the six before them.
-    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 8},
+    # a bump has to re-open them exactly as it re-opens the six before them. The ninth is
+    # the release whose write-back stopped renaming a destination project and dropping its
+    # labels, which is what returned this repository's plans to the board — a third
+    # behavioural literal, re-opened by a bump for the same reason as the two above.
+    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 9},
 }
 
 

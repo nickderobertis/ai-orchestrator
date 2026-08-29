@@ -298,16 +298,13 @@ onetaskgraph_target() {
   esac
 }
 
-create_plan_roots() {
-  # Every gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses
-  # a root it cannot canonicalize, and it refuses it for the *whole* read: one absent
+create_plan_root() {
+  # The gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses a
+  # root it cannot canonicalize, and it refuses it for the *whole* read: one absent
   # directory makes `just plans project list` exit 4 across every source. A fresh
-  # checkout carries neither, so both are created here rather than on first write.
-  # `.plans` is what `just plan` authors into; `.plans-local` is the store this
-  # repository plans against — see AGENTS.md, "Where a plan of this repository lives".
-  mkdir -p \
-    "$REPO_ROOT/.plans/tasks" "$REPO_ROOT/.plans/projects" \
-    "$REPO_ROOT/.plans-local/tasks" "$REPO_ROOT/.plans-local/projects"
+  # checkout carries none, so it is created here rather than on first write. `.plans` is
+  # what `just plan` authors into.
+  mkdir -p "$REPO_ROOT/.plans/tasks" "$REPO_ROOT/.plans/projects"
 }
 
 verify_onetaskgraph() {
@@ -320,7 +317,7 @@ verify_onetaskgraph() {
 
 install_onetaskgraph() {
   if verify_onetaskgraph; then
-    create_plan_roots
+    create_plan_root
     return $?
   fi
   local target archive base temporary checksum
@@ -356,7 +353,7 @@ install_onetaskgraph() {
   fi
   rm -rf "$temporary"
   hash -r
-  verify_onetaskgraph && create_plan_roots
+  verify_onetaskgraph && create_plan_root
 }
 
 install_bun() {

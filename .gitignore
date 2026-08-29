@@ -6,9 +6,6 @@ __pycache__/
 /.env
 # Local Markdown plan authoring; onetaskgraph copies finished plans to the remote store.
 /.plans/
-# The `plans-local` plan store: this repository's own plans while the GitHub Projects
-# store cannot hold more than one. A root of its own, never shared with `/.plans/`.
-/.plans-local/
 # uv
 # (uv.lock IS committed)
 

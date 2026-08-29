@@ -26,7 +26,7 @@ from typing import TypedDict, get_type_hints
 
 import pytest
 
-from orchestrator import plan_review, plan_store
+from orchestrator import criteria_guard, plan_review, plan_store
 from orchestrator.plan_store import StoreTask
 from orchestrator.root import REPO_ROOT
 
@@ -77,11 +77,12 @@ def _recorded(task: StoreTask, key: str) -> StoreTask:
 
 
 def test_the_key_changes_with_every_authored_field() -> None:
-    """The fields the record covers: title, prose, persona, deps, and a step's own two."""
+    """The fields the record covers: title, prose, kind, persona, deps, and a step's own two."""
     base = plan_review.review_key(_task(), BAR)
     moved = {
         "title": _task(title="feat: add another route"),
         "content": _task(content="## What\n\nAdd a different route.\n"),
+        "kind": _task(metadata={"onepipeline.id": "route", "onepipeline.kind": "human"}),
         "persona": _task(metadata={"onepipeline.id": "route", "onepipeline.persona": "reviewer"}),
         "deps": _task(deps=("design",)),
     }
@@ -231,6 +232,34 @@ def test_the_key_survives_the_fields_a_settlement_write_back_owns() -> None:
         }
     )
     assert plan_review.review_key(settled, BAR) == plan_review.review_key(_task(), BAR)
+
+
+def test_the_human_kind_is_the_one_the_criteria_guard_reads() -> None:
+    """One vocabulary, restated on the side that cannot import the other.
+
+    `orchestrator.criteria_guard` reads this repository's plans and imports this module,
+    so this one cannot import it back — and the two would then be free to disagree about
+    which value names the shape that dispatches nobody. They must not: this module tells
+    the reviewer a human node carries an action rather than criteria, and that module is
+    what skips it when the criteria are checked, so a plan whose node one of them called
+    human and the other did not would be reviewed under one bar and checked under
+    another. The metadata key is the same name under the `onepipeline.` prefix
+    `orchestrator.plan_store` strips before the guard sees a node.
+    """
+    assert plan_review.HUMAN == criteria_guard.HUMAN
+    assert plan_review.KIND == "onepipeline.kind"
+
+
+def test_the_reviewer_is_told_what_to_hold_a_human_node_to() -> None:
+    """Showing the field without saying what it means would change no verdict.
+
+    The bar the prompt carries is about acceptance criteria, which a human node states
+    none of by construction, so a reviewer shown `kind` and nothing else has no reason
+    to ask a different question of it — and refusing that shape for the property it may
+    not have is a refusal its author can never correct.
+    """
+    assert 'A task whose `kind` is "human"' in plan_review.REVIEW_PROMPT
+    assert "acceptance criteria" in plan_review.REVIEW_PROMPT
 
 
 def test_the_key_changes_with_the_bar_in_force() -> None:
@@ -521,14 +550,59 @@ def test_a_pass_the_store_will_not_accept_is_reported_as_a_review_that_did_not_h
     assert store.written("plan/route") is None
 
 
+def _configured(monkeypatch: pytest.MonkeyPatch, plugin: str, root: str = "/tmp/store") -> None:
+    """Answer `config show` for one source, so a writability read reaches no real store."""
+    monkeypatch.setattr(
+        plan_store,
+        "store_json",
+        lambda arguments: _Configuration(
+            settings=[
+                _Setting(key="sources.demo.plugin", value=plugin),
+                _Setting(key="sources.demo.config.root", value=root),
+            ]
+        ),
+    )
+
+
 def test_a_project_that_cannot_be_read_records_nothing_and_says_so(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    _configured(monkeypatch, "local-md")
     monkeypatch.setattr(
         plan_store, "read_tasks", lambda _: (_ for _ in ()).throw(OSError("no such project"))
     )
     assert plan_review.main(["demo:absent"]) == 2
     assert "no such project" in capsys.readouterr().err
+
+
+def test_a_store_no_record_can_be_written_into_is_refused_before_a_turn_is_spent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The board this repository plans against is read-only to this gate, so say so first.
+
+    Reviewing it would otherwise pay a provider for a verdict, reach the write, find
+    there is nowhere to put it, and report a plan no further run of this command can
+    advance — which reads as a transient failure and is not one.
+    """
+    _configured(monkeypatch, "github-projects")
+    prompts = _verdicts(monkeypatch)
+    read: list[str] = []
+    monkeypatch.setattr(plan_store, "read_tasks", lambda project: read.append(project) or [])
+
+    assert plan_review.main(["demo:plan"]) == 2
+    assert prompts == [], "a turn was spent on a review that could never be recorded"
+    assert read == [], "the store was read for a plan that could never be cleared"
+    reported = capsys.readouterr().err
+    assert "github-projects" in reported, reported
+    assert "no run of this command can record one" in reported, reported
+
+
+def test_a_local_markdown_store_is_writable_and_says_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other answer, so a green above means the plugin decided rather than the read."""
+    _configured(monkeypatch, "local-md")
+    assert plan_review.unwritable("demo:plan") is None
 
 
 def _harness(monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str = "") -> None:
@@ -594,6 +668,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
     sentinels = {
         "title": "sentinel-title",
         "content": "sentinel-body-prose",
+        "kind": "sentinel-kind",
         "persona": "sentinel-persona",
         "deps": "sentinel-dependency",
         "step id": "sentinel-step-id",
@@ -609,6 +684,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
         content=sentinels["content"],
         metadata={
             "onepipeline.id": "route",
+            "onepipeline.kind": sentinels["kind"],
             "onepipeline.persona": sentinels["persona"],
             "onepipeline.steps": [
                 {

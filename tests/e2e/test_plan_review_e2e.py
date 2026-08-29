@@ -166,6 +166,10 @@ def test_an_unreviewed_plan_is_refused_and_a_reviewed_one_is_accepted(tmp_path: 
     assert "no review record" in refused.stderr, refused.stderr
     assert "route" in refused.stderr, refused.stderr
     assert f"just review-plan {project}" in refused.stderr, refused.stderr
+    # And what that command can do about it, because it cannot do it everywhere: a
+    # record is an entry of the task's own Markdown document, so the board this
+    # repository plans against carries none and `review-plan` there only refuses.
+    assert "only for a plan held in a local Markdown store" in refused.stderr, refused.stderr
     assert _launches(tmp_path) == 0, "the deterministic check spent a provider turn"
 
     environment = _reviewing(tmp_path, PASSES)
@@ -249,6 +253,95 @@ def test_editing_the_persona_invalidates_the_record(tmp_path: Path) -> None:
     assert reviewed_as in written, written
     document.write_text(
         written.replace(reviewed_as, '"onepipeline.persona": "docs-writer"'), encoding="utf-8"
+    )
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no review record" in refused.stderr, refused.stderr
+    assert "route" in refused.stderr, refused.stderr
+
+
+#: The action a `kind: human` node carries. A human node names something an external
+#: person performs, so it states that action and no acceptance criteria at all — which
+#: is the one property the review bar otherwise demands of everything it reads.
+HUMAN_ACTION = "Merge the change request once its required checks have gone green."
+
+
+def _human_project(name: str) -> str:
+    """One agent node beside one `kind: human` node — the shape a plan with a gate has."""
+    return local_project(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "goal": {"text": "Deliver the checkout route"},
+                "tasks": [
+                    _node("route"),
+                    {"id": "merge", "kind": "human", "title": "chore: merge", "task": HUMAN_ACTION},
+                ],
+            }
+        ),
+        name,
+    )
+
+
+def test_a_human_node_is_reviewed_as_the_shape_it_is(tmp_path: Path) -> None:
+    """A plan carrying a human action can be reviewed, and so can reach `check-plan` green.
+
+    `check-plan` demands a record for **every** task while `review-plan` was shown only a
+    task's prose, its title, its deps and its persona — never which shape of node it is.
+    A human node states an action rather than criteria, so a reviewer reading it under a
+    bar about acceptance criteria refuses it for the one property its shape forbids, and
+    the plan is then refused for want of the record that refusal could not write. That
+    made every plan carrying this repository's own documented human node shape
+    unlaunchable through its own pre-launch check, whatever its author wrote.
+    """
+    project = _human_project("review-human")
+    prompts = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+    assert "recorded a review of 2 task(s)" in review.stdout, review.stdout
+
+    # The turn that read the human action was told which shape it was reading, and told
+    # what to hold that shape to — both halves, because the field alone is a value the
+    # bar says nothing about, and the paragraph alone is advice about a shape the
+    # reviewer cannot see this task is.
+    given = [
+        json.loads(line)["prompt"] for line in prompts.read_text(encoding="utf-8").splitlines()
+    ]
+    (human,) = [one for one in given if HUMAN_ACTION in one]
+    assert '"kind": "human"' in human, human
+    assert 'A task whose `kind` is "human"' in human, human
+
+    accepted = _just("check-plan", project)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_turning_a_dispatched_node_into_a_human_one_invalidates_its_record(
+    tmp_path: Path,
+) -> None:
+    """The key covers the kind, because the kind decides which question was asked of it.
+
+    A pass granted over criteria a worker will be judged against says nothing about the
+    same prose once nobody is dispatched from it — and the reverse is the reading that
+    costs: an action a reviewer cleared as an external step would otherwise keep its
+    record while becoming a task a judge holds to acceptance criteria it does not have.
+    Driven the way an operator changes a node's shape, by editing the stored record.
+    """
+    project = _human_project("review-human-rekinded")
+    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    assert _just("check-plan", project).returncode == 0
+
+    document = _document(project, "route")
+    written = document.read_text(encoding="utf-8")
+    reviewed_as = '  "onepipeline.persona": "engineer"'
+    assert reviewed_as in written, written
+    document.write_text(
+        written.replace(reviewed_as, f'  "onepipeline.kind": "human"\n{reviewed_as}'),
+        encoding="utf-8",
     )
 
     refused = _just("check-plan", project)
@@ -711,14 +804,37 @@ def test_a_pass_that_cannot_be_recorded_leaves_the_plan_refused(tmp_path: Path) 
     assert "no review record" in still.stderr, still.stderr
 
 
-def test_neither_plan_store_this_gate_covers_is_tracked() -> None:
+def test_a_store_no_record_can_be_written_into_is_refused_before_a_turn_is_spent(
+    tmp_path: Path,
+) -> None:
+    """`just review-plan` on the board refuses up front, and pays no provider for it.
+
+    A record is an entry of a task's own Markdown document, so the `github-projects`
+    board this repository plans against has nowhere to keep one. Reaching that at the
+    write would mean paying for a verdict first and then reporting a plan no further run
+    of the command can advance, which reads as a transient failure and is not one — so
+    the refusal is measured together with the turn count that says nothing was spent.
+
+    Driven against the real `plans` source of this checkout's own `onetaskgraph.yaml`,
+    which is what makes it a statement about the store this repository actually plans
+    against rather than about a fixture shaped like one. It needs no credential and
+    touches no board: the refusal is decided by the plugin the configuration names.
+    """
+    refused = _just("review-plan", "plans:anything", environment=_reviewing(tmp_path))
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "github-projects" in refused.stderr, refused.stderr
+    assert "no run of this command can record one" in refused.stderr, refused.stderr
+    assert _launches(tmp_path) == 0, "a provider turn was spent on a review nothing could record"
+
+
+def test_the_plan_store_this_gate_writes_into_is_not_tracked() -> None:
     """No branch a dispatched worker produces can carry a review record into this checkout.
 
     This is what makes "a record is written only by this repository's own code" a
-    property rather than a convention. A dispatch works in a worktree of its own; both
-    plan roots are gitignored there exactly as they are here, so a record written in one
-    reaches no commit, no branch, and no publication — and there is no recipe, flag, or
-    documented step by which a dispatched agent writes one either.
+    property rather than a convention. A dispatch works in a worktree of its own; the
+    plan root a closeout writes into is gitignored there exactly as it is here, so a
+    record written in it reaches no commit, no branch, and no publication — and there is
+    no recipe, flag, or documented step by which a dispatched agent writes one either.
     """
     for source in plan_review.PLAN_SOURCES:
         root = plan_store.source_root(source)

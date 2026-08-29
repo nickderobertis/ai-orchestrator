@@ -94,17 +94,15 @@ def test_a_source_resolves_to_the_directory_it_stores_records_in(
 
 
 def test_a_relative_root_resolves_against_this_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`onetaskgraph.yaml` states `.plans-local`, and the record is below this checkout."""
+    """`onetaskgraph.yaml` states `.plans`, and the record is below this checkout."""
     monkeypatch.setattr(
         plan_store,
         "store_json",
         _store(
-            _settings(
-                **{"sources.demo.plugin": "local-md", "sources.demo.config.root": ".plans-local"}
-            )
+            _settings(**{"sources.demo.plugin": "local-md", "sources.demo.config.root": ".plans"})
         ),
     )
-    assert plan_store.source_root("demo") == plan_store.REPO_ROOT / ".plans-local"
+    assert plan_store.source_root("demo") == plan_store.REPO_ROOT / ".plans"
 
 
 @pytest.mark.parametrize(

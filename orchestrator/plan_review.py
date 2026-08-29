@@ -28,11 +28,20 @@ no option, no environment variable — because an escape here is reached under e
 time pressure that produced both errors above.
 
 **A record is written by this repository's own code and never by a dispatched agent**,
-and that is structural rather than a rule anybody is asked to follow. The plan stores
-this gate covers are the gitignored `.plans-local/` and `.plans/` of *this* checkout: a
-dispatched worker runs in a worktree of its own, nothing it writes below either
-directory is tracked, and so no branch it produces can carry a record back here. There
-is no recipe, flag, or documented step by which a dispatch writes one either.
+and that is structural rather than a rule anybody is asked to follow. The store this
+gate writes into is the gitignored `.plans/` of *this* checkout: a dispatched worker
+runs in a worktree of its own, nothing it writes below that directory is tracked, and so
+no branch it produces can carry a record back here. There is no recipe, flag, or
+documented step by which a dispatch writes one either.
+
+**A record is read from any source and written into a local Markdown one**, which is the
+asymmetry to know before reaching for :func:`review`. A record travels in the open
+metadata map a task already carries, so :func:`recorded` answers for a board task exactly
+as it does for a file; writing one edits the task's own Markdown document, which only a
+`local-md` source has. So a plan held on the GitHub Projects board this repository plans
+against can be *checked* — and is refused, because it carries no record — while nothing
+here can record one for it. :func:`unwritable` is what says that up front, so the refusal
+arrives before a judged turn is spent rather than after.
 """
 
 from __future__ import annotations
@@ -81,11 +90,12 @@ BAR_FILES = (
 #: deadline, and the verdict schema, exactly as the change-request drafter is configured.
 HARNESS_CONFIG = Path("oneharness.plan-review.toml")
 
-#: The plan stores this repository plans against, and the only ones a planning closeout
-#: looks at. `plans-local` is where a plan of this repository lives and `authoring` is
-#: what `just plan` writes; the other configured sources are this repository's shipped
-#: examples, the suite's fixtures, and a GitHub Projects board nothing plans against.
-PLAN_SOURCES = ("plans-local", "authoring")
+#: The plan stores a planning closeout looks at: every source it may record a pass into.
+#: `authoring` is the gitignored root `just plan` writes a manager's brief into, and it
+#: is the only one — the other configured local sources are this repository's shipped
+#: examples and the suite's fixtures, and the `plans` board a plan of this repository
+#: lives on is a source no record can be written into at all (see :func:`unwritable`).
+PLAN_SOURCES = ("authoring",)
 
 
 class By(StrEnum):
@@ -121,6 +131,15 @@ satisfied while the goal the task states is missed, that each one is satisfiable
 worker inside its own dispatch, and that none of them names a procedure, a spelling, or
 a perishable fact — a release number, a dependency version, a line count — in place of
 the property it stands in for.
+
+A task whose `kind` is "human" is the one exception, and it is a different question
+rather than a softer one. Nothing is dispatched from it: it names an action an external
+person or outside system performs, so it states that action rather than acceptance
+criteria and must never grow any. Hold that one to whether the action is genuinely
+external — a merge, a deploy, an outside sign-off, a release somebody performs — rather
+than a review or an acceptance the plan's own supervisor would make; and to whether one
+person could read it and know exactly what to do. Refusing it for having no acceptance
+criteria refuses the shape itself, which is the one refusal that can never be corrected.
 
 Do not rewrite the task and do not judge it on style. Answer with the JSON object the
 response schema declares: whether it passes, and one sentence saying why. A refusal is
@@ -174,6 +193,19 @@ def bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
 #: that lives in the open metadata map rather than beside it. A lifecycle node states one
 #: per step instead; see :data:`STEPS`.
 PERSONA = "onepipeline.persona"
+
+#: Where a task states which shape of node it is — the only `kind` a plan states, and a
+#: field the reviewer is shown because it decides which question the bar asks. A
+#: `kind: human` node carries the action a person performs rather than criteria a judge
+#: reads, so a reviewer shown only its prose refuses it for the one property its shape
+#: forbids it from having, and `check-plan` then refuses the plan for want of the record
+#: that refusal could not write. `tests/test_plan_review.py` holds this value to
+#: `orchestrator.criteria_guard.HUMAN`, which is the same vocabulary read from the other
+#: side; it is restated rather than imported because that module reads this one.
+KIND = "onepipeline.kind"
+
+#: The one value :data:`KIND` takes. An agent node says it is one by carrying no `kind`.
+HUMAN = "human"
 
 #: Where a lifecycle node states its steps. A node that runs several agent steps on one
 #: branch states its prose and its persona once per step rather than in `task` and
@@ -235,6 +267,7 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     authored = {
         "bar": bar,
         "deps": sorted(task.deps),
+        "kind": task.metadata.get(KIND),
         "persona": task.metadata.get(PERSONA),
         "steps": authored_steps(task),
         "task": task.content,
@@ -373,6 +406,7 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
     authored = {
         "title": task.title,
         "depends_on": sorted(task.deps),
+        "kind": task.metadata.get(KIND),
         "persona": task.metadata.get(PERSONA),
     }
     return (
@@ -386,8 +420,43 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
     )
 
 
+def unwritable(project: str) -> str | None:
+    """Why ``project``'s source could never carry a review record, or ``None``.
+
+    A record is an entry of the task's own Markdown document, so only a `local-md`
+    source has anywhere to put one — and that is the whole of what this decides: the
+    plugin, and that it names a root at all. Whether that root then accepts the write,
+    being absent or read-only, is the write's own answer and is reported there. This is
+    the half that can be known before a provider turn is spent, which is why it is asked
+    separately rather than left to the write alone.
+
+    Answered as a reason rather than as a flag because both callers print it: this is
+    the whole of what an operator can do about a plan on a store nothing here writes
+    into, and "not writable" without the plugin's name sends them looking for a
+    permission problem.
+    """
+    source, _ = plan_store.qualified(project)
+    try:
+        plan_store.source_root(source)
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
 def review(project: str) -> Reviewed:
-    """Review every unreviewed task of ``project`` and record each pass."""
+    """Review every unreviewed task of ``project`` and record each pass.
+
+    A source no record can be written into is refused before the first turn is spent.
+    Reviewing it would otherwise pay a provider for a verdict, discover at the write
+    that there is nowhere to put it, and report a plan no further run of this command
+    can advance — which reads as a transient failure and is not one.
+    """
+    reason = unwritable(project)
+    if reason is not None:
+        raise OSError(
+            f"{reason}, so no run of this command can record one for {project!r} and none "
+            f"was attempted; a plan held there is checked but never cleared"
+        )
     records = plan_store.read_tasks(project)
     bar = bar_fingerprint()
     pending = unreviewed(records, bar)

@@ -15,6 +15,23 @@ session record, not from a lease nothing holds`
 a session whose record names a live owner now keeps its run root across a sibling
 open, where 0.14.0 removed it.
 
+**onevcs 0.15.6 then moved what "abandoned" means, deliberately, and journey (3) is
+written to the release this host runs rather than to the one before it.**
+`fix(workspace): keep a run root a live session is still working in`
+(https://github.com/nickderobertis/onevcs/pull/99) protects a run root named by an
+**open** session "even after the CLI process that opened the session exits", because a
+sibling open was still deleting an active dispatch's worktree moments after launch —
+the same ninety-second incident above, reached through the one door 0.14.1 left open.
+Bisected here on 2026-08-29 against the released CLIs with everything else held: an
+open session whose opener has exited keeps its run root from 0.15.6 onward and lost it
+at 0.15.4 and 0.15.5, and every release through 0.16.0 behaves as 0.15.6 does. So owner
+liveness is no longer what prunes, and journey (3) asks the question that now decides
+it — a session that has been **closed** — which both 0.15.4 and the pinned release
+answer the same way. What that trade costs is real and is not hidden: a session that
+opens and is never closed keeps its run root indefinitely, where before its opener's
+death was enough, and `just sweep` — which removes only what it can prove no live
+process names — is what reclaims those.
+
 `scripts/hold-run-lease.sh` is what this repository did about it from below while that
 was outstanding: take that same shared lease and keep holding it for as long as the
 session is live. It is kept and still driven here — it is no longer the only thing
@@ -30,8 +47,8 @@ The first four are one argument and are worth reading in order:
    lease held at all, which is what makes the rest of this a mitigation rather than
    a necessity;
 2. the mitigation — the same sequence with the lease held also leaves the root alone;
-3. the hygiene neither may cost — once the owner is gone the lease goes with it and
-   the very next open prunes the root exactly as before;
+3. the hygiene neither may cost — a **closed** session's root is pruned by the very
+   next open, which is where that hygiene now comes from;
 4. the wiring — a real `session-setup.sh`, which is what a dispatch runs at startup,
    really takes the lease.
 
@@ -408,16 +425,51 @@ def test_holding_the_lease_keeps_a_live_dispatchs_run_root(tmp_path: Path) -> No
         _release(session)
 
 
-def test_the_lease_is_released_with_its_session_so_a_dead_run_root_still_prunes(
+def test_an_open_sessions_run_root_survives_its_opener_exiting(tmp_path: Path) -> None:
+    """The protection onevcs 0.15.6 added, with no lease held and no owner alive.
+
+    This is the door 0.14.1 left open: that release proved a root abandoned from a
+    *live owner* in its session record, so a dispatch whose opening CLI had returned —
+    which is every dispatch, moments after launch — looked abandoned to the next
+    sibling open. Asserted here because this repository's prose now claims it and
+    because it is the half that decides whether a live dispatch keeps its worktree; the
+    journey below asserts the hygiene it must not have cost.
+    """
+    identity = _identity(tmp_path)
+    session = _open_session(identity)
+    try:
+        session.owner.kill()
+        session.owner.wait(timeout=e2e_timeout(60))
+        assert not _lease_is_held(session.lock), (
+            "no lease is held here on purpose: the protection under test is the session "
+            "record's, and a held lease would prove the mitigation instead"
+        )
+
+        _sibling_opens_a_session(identity)
+
+        assert session.run_root.is_dir(), (
+            f"{session.run_root} was reclaimed after its opener exited; an open session's "
+            "root is protected from onevcs 0.15.6 onward, and losing it is what destroyed "
+            "three dispatches within ninety seconds"
+        )
+        assert session.worktree.is_dir()
+    finally:
+        session.owner.kill()
+
+
+def test_a_closed_sessions_run_root_is_reclaimed_by_the_next_open(
     tmp_path: Path,
 ) -> None:
-    """The hygiene the mitigation must not cost.
+    """The hygiene the mitigation must not cost, asked the way the pinned release decides it.
 
     The bounded recovery history exists because unpruned scratch fills this host's
     disk, so a hold that outlived its dispatch would trade one failure for a worse one.
-    The owner is killed — which is what a finished or crashed dispatch looks like — and
-    the very next sibling open has to reclaim the root exactly as it did in the first
-    journey.
+    Since onevcs 0.15.6 an *open* session's root is protected even once its opener has
+    exited — see the module docstring — so the owner dying is no longer the question.
+    Closing the session is, so the sequence is: hold the lease, end the owner, release
+    the hold, close the session, and require the very next sibling open to reclaim the
+    root. The hold is taken and released rather than skipped because what must be shown
+    is that the *mitigation* leaves nothing behind, not merely that close prunes.
     """
     identity = _identity(tmp_path)
     session = _open_session(identity)
@@ -426,10 +478,20 @@ def test_the_lease_is_released_with_its_session_so_a_dead_run_root_still_prunes(
     assert _lease_is_held(session.lock), held.stderr
 
     _release(session)
+    closed = subprocess.run(
+        ["uv", "run", "onevcs", "session", "close", session.token],
+        cwd=REPO_ROOT,
+        env=identity.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert closed.returncode == 0, f"{closed.stdout}\n{closed.stderr}"
 
     _sibling_opens_a_session(identity)
     assert not session.run_root.exists(), (
-        f"{session.run_root} outlived its session, so this hold is now the thing "
+        f"{session.run_root} outlived its closed session, so this hold is now the thing "
         "keeping dead scratch on disk"
     )
 

@@ -124,8 +124,16 @@ PHASE_CLAIMS = (
 #: reader to re-read the wrong one.
 SQUASH_HALF_CLAIMS = (
     Claim("the warning has two halves", "**That warning has two halves"),
-    Claim("the squash half is untouched", "*The squash-merge half stands untouched.*"),
-    Claim("the deciding module did not move", "is one blob —\n`f8529d72`"),
+    Claim(
+        "the squash half is untouched in substance",
+        "*The squash-merge half stands untouched in substance",
+    ),
+    # The module *did* move: `crates/onevcs/src/landed.rs` was `f8529d72` at v0.11.0,
+    # v0.13.0 and v0.14.0, and is `1b86bb66` at v0.15.4 and `ec3bea7c` at v0.15.8. The
+    # claim worth keeping is therefore what a blob hash was only ever a proxy for — that
+    # the four tiers and the never-yes rule did not move — so the passage is held to
+    # naming the blob at the pinned release rather than to asserting one blob throughout.
+    Claim("the deciding module's identity is named", "`ec3bea7c` at the pinned v0.15.8"),
     Claim(
         "the last tier can never say yes",
         "must never answer `yes` — it is a comparison, not\na record",
@@ -162,7 +170,7 @@ LANDING_RETRY_HALF_CLAIMS = (
 #: same date for a different measurement. A stamp is only evidence where it is
 #: attached to the claim it stamps.
 LANDING_MEASUREMENT_STAMP = "Re-measured {date} on the pinned onevcs {release}:"
-LANDING_MEASUREMENT_DATE = "2026-08-25"
+LANDING_MEASUREMENT_DATE = "2026-08-29"
 #: The ref the verb was actually asked about, so a later reader re-takes exactly the
 #: measurement rather than a similar one. The incident's own change request stopped
 #: answering here on 2026-08-25 — no session record correlates it any more — and a
@@ -171,9 +179,14 @@ LANDING_MEASUREMENT_REF = "onevcs/s-a37f615ff961"
 #: The change request that ref's work landed through, which is what makes the answer
 #: below dangerous rather than merely uncertain: it merged, and the verb still says no.
 LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgraph/pull/15"
-#: What that ref still answered, verbatim. Quoted rather than paraphrased: the
-#: whole value of the sentence is that a reader can run the verb and compare.
-LANDING_MEASUREMENT_ANSWER = "still answers `landed: no`, `decided\nby: content comparison`"
+#: What that ref answered, verbatim. Quoted rather than paraphrased: the whole value of
+#: the sentence is that a reader can run the verb and compare. It changed at onevcs
+#: 0.15.8 — the verb now reaches the change request's number in the base where it used
+#: to fall through to the comparison — which is why this is re-taken at every adoption
+#: rather than re-dated.
+LANDING_MEASUREMENT_ANSWER = (
+    "now answers `landed: yes`, `decided by: the\nchange request's number in the base"
+)
 
 
 def _text(relative_path: str) -> str:
@@ -324,8 +337,9 @@ def test_the_phase_section_names_both_change_requests_that_carry_it() -> None:
 def test_the_landing_passage_keeps_the_half_no_release_has_fixed(claim: Claim) -> None:
     """The squash-merge half is true at every release, and deleting it is the danger.
 
-    `crates/onevcs/src/landed.rs` is one blob at v0.11.0, v0.13.0, v0.14.0 and the
-    pinned v0.15.4 alike, so
+    `crates/onevcs/src/landed.rs` has moved since v0.14.0 — re-read at v0.15.8 on
+    2026-08-29, its four tiers, their order and its own never-yes rule are unchanged and
+    a constraint was added beside them — so
     nothing about the four tiers has moved since the incident this passage records. A
     reader who took onevcs 0.14.0's retry fix as making `content comparison`
     trustworthy would be wrong in the direction that re-dispatches merged work, which
@@ -515,7 +529,7 @@ RECOVERABLE_SPLIT_CLAIMS = (
 #: reports one ref, this one reports a pair — so the two paragraphs cannot satisfy
 #: each other's gate.
 SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, over two landings"
-SPLIT_MEASUREMENT_DATE = "2026-08-27"
+SPLIT_MEASUREMENT_DATE = "2026-08-29"
 #: Both refs, because the whole measurement is a comparison: either alone is an
 #: anecdote about one workflow rather than evidence that the workflow is what decides.
 SPLIT_MEASUREMENT_REFS = ("onevcs/s-42dae8f0b0f5", "onevcs/s-a221fd101a0f")
@@ -525,9 +539,14 @@ SPLIT_MEASUREMENT_REFS = ("onevcs/s-42dae8f0b0f5", "onevcs/s-a221fd101a0f")
 SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onetaskgraph/pull/51"
 #: What each half answered with no session record, verbatim, so a later reader
 #: re-takes this measurement rather than a similar one.
+#: Both halves moved at onevcs 0.15.8 and are recorded as measured rather than as the
+#: adoption before them found them: the remote half's answer degraded from `unknown` to
+#: `no` — the dangerous one, because it closes the question — and the `local-direct`
+#: half stopped being askable at all once its branch was pruned from every registered
+#: checkout after landing. The trailer it was cited for is still on `ed8c396`.
 SPLIT_MEASUREMENT_ANSWERS = (
-    "`decided by: a landing trailer on the base (ed8c396…)`",
-    "`landed: unknown`, `decided by:\ncontent comparison`",
+    "`landed: no`, `decided by: content comparison`",
+    "names no work this host knows",
 )
 #: The condition that separates the two answers. Without it the paragraph reports two
 #: verbs disagreeing and gives a reader nothing to reproduce.

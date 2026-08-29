@@ -26,11 +26,6 @@ from orchestrator import plan_review
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
-#: The retreat's own source and the root it is required not to share. Named here
-#: because a `plans-local` that silently landed back on `.plans` is exactly the
-#: mistake this module exists to refuse.
-LOCAL_PLANS = "plans-local"
-
 
 def _configuration() -> str:
     return (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
@@ -71,34 +66,6 @@ def test_the_check_names_both_sources_and_the_root_when_two_are_shared() -> None
     )
 
 
-def test_the_local_plan_source_is_configured_and_roots_at_its_own_directory() -> None:
-    """`plans-local` exists, is a local Markdown source, and shares nothing."""
-    text = _configuration()
-    sources = read_plan_sources(text)
-    assert LOCAL_PLANS in sources, (
-        f"onetaskgraph.yaml has to define the {LOCAL_PLANS!r} source this repository "
-        "plans against; see AGENTS.md, 'Where a plan of this repository lives'"
-    )
-    local = sources[LOCAL_PLANS]
-    assert local.plugin == "local-md", local.plugin
-    assert local.root is not None, f"{LOCAL_PLANS} has to name the directory it stores plans in"
-    assert LOCAL_PLANS in read_default_sources(text), (
-        f"{LOCAL_PLANS} has to answer when a command names no source, or the plans this "
-        "repository stores there go unlisted by every default read"
-    )
-
-
-def test_the_local_plan_root_is_ignored_by_git() -> None:
-    """The retreat's root is gitignored, like the authoring root beside it."""
-    root = read_plan_sources(_configuration())[LOCAL_PLANS].root
-    assert root is not None
-    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").split()
-    assert f"/{root.rstrip('/')}/" in ignored, (
-        f".gitignore has to ignore /{root}/: plans stored there are working state, and a "
-        "planner that force-added them onto a branch has already destroyed a manager's own"
-    )
-
-
 @pytest.mark.parametrize(
     ("setting", "expected"),
     [
@@ -110,18 +77,19 @@ def test_the_local_plan_root_is_ignored_by_git() -> None:
     ],
 )
 def test_the_board_source_is_left_exactly_as_it_was(setting: str, expected: str) -> None:
-    """`plans` keeps every value it carried before the retreat.
+    """`plans` keeps every value it carried before, during and after the retreat.
 
-    Retiring the retreat is the deletion of `plans-local`, which only works while
-    `plans` is untouched — and a live run's settlements are projected back to the
-    project they were launched from, so repointing it moves a running plan's store out
-    from under it.
+    The retreat to a local Markdown store was designed to be undone by subtraction, and
+    that only worked because `plans` was left alone throughout: it was deleted rather
+    than repointed back. This survives the retirement because the reason outlives it — a
+    live run's settlements are projected back to the project it was launched from, so
+    repointing this source moves a running plan's store out from under it.
     """
     board = read_plan_sources(_configuration())["plans"]
     actual = board.plugin if setting == "plugin" else board.settings.get(setting)
     assert actual == expected, (
         f"onetaskgraph.yaml's `plans` source names {setting} {actual!r} where it carried "
-        f"{expected!r}; the retreat to `plans-local` leaves that source alone"
+        f"{expected!r}; this is the source this repository plans against"
     )
 
 
@@ -196,9 +164,37 @@ def test_every_source_a_planning_closeout_records_into_is_configured_and_writabl
         )
 
 
-def test_the_plan_store_this_repository_plans_against_is_recorded_into() -> None:
-    """The retreat's own source is where a plan of this repository lives, so it is covered."""
-    assert LOCAL_PLANS in plan_review.PLAN_SOURCES, (
-        f"a plan of this repository is stored under {LOCAL_PLANS!r}, so a planning run "
-        f"that authored one there must record a pass for it"
+def test_the_store_a_planning_run_authors_into_is_recorded_into() -> None:
+    """`just plan` writes into `authoring`, so a planning closeout has to record it.
+
+    Named for what a planning run does rather than for "the plan store this repository
+    plans against", which is the board and is a different question: a record cannot be
+    written into a `github-projects` source at all, so the closeout covers the store a
+    run authors into and `test_no_source_a_closeout_records_into_is_unwritable` above
+    is what keeps the two from being confused.
+    """
+    authoring = read_plan_sources(_configuration())["authoring"]
+    assert authoring.root == ".plans", authoring.root
+    assert "authoring" in plan_review.PLAN_SOURCES, (
+        "`just plan` writes a manager's brief into the 'authoring' source, so a planning "
+        "run that authored one there must record a pass for it"
+    )
+
+
+def test_no_source_a_closeout_records_into_is_unwritable() -> None:
+    """A closeout may only name sources a record can actually be written into.
+
+    `plans` is the counter-example that gives this teeth: it is the store a plan of this
+    repository lives on, it is the obvious name to reach for here, and a record can
+    never be written into it — a closeout naming it would pass over every project on the
+    board on every planning run, reporting a failure that is not one.
+    """
+    configured = read_plan_sources(_configuration())
+    assert configured["plans"].plugin != WRITABLE_PLUGIN, (
+        "this check is only worth running while a configured source exists that a record "
+        "cannot be written into; `plans` was that source"
+    )
+    assert "plans" not in plan_review.PLAN_SOURCES, (
+        "the 'plans' board is served by a plugin no review record can be written into, so "
+        "a planning closeout must not try to record into it"
     )

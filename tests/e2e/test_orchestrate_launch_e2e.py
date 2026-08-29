@@ -1794,8 +1794,11 @@ def planner_supervised(
 ) -> Iterator[Supervised]:
     """Launch a run and supervise its monitor for as long as the journeys need it.
 
-    A plan holding one human gate, so the graph has a decision to sit on and the run
-    stays unsettled while the monitor works. A background answerer plays the planner:
+    A plan holding one **held worker**, so the run stays unsettled while the monitor
+    works. A human gate does not: it leaves the graph nothing to dispatch, so the run
+    settles onto the attestation at once, and from onepipeline 0.17.3 a reply to a
+    settled run is refused — *"nothing will ever read a reply to it"* — which silences
+    the very conversation this journey reads. A background answerer plays the planner:
     it reads each surface with the real `just channel-next` and answers it with the
     real `just channel-reply`, which is what keeps the conversation — and therefore
     the observer graph, and therefore its scheduled pacemaker — alive.
@@ -1804,6 +1807,7 @@ def planner_supervised(
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("planner-supervises-monitor")
     environment = _environment(tmp_path, oneharness_bin)
+    environment[AGENT_DELAY_ENV] = str(SUPERVISED_HELD_SECONDS)
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
     plan = tmp_path / "serve.plan.json"
@@ -1813,14 +1817,7 @@ def planner_supervised(
                 "schema_version": 2,
                 "goal": {"text": "prove the channel is the monitor's judge side"},
                 "name": SUPERVISED_RUN,
-                "tasks": [
-                    {
-                        "id": "gate",
-                        "kind": "human",
-                        "task": "## What\nApprove.\n\n## Why\nProbe.\n\n"
-                        "## Acceptance criteria\n- Approved.",
-                    }
-                ],
+                "tasks": [_node(id="held")],
             }
         ),
         encoding="utf-8",
@@ -3290,6 +3287,12 @@ def test_the_retired_merge_policy_spellings_are_refused_by_name(
 #: it, short enough that the journey is not the slowest thing in the suite.
 WORKER_HELD_SECONDS = 20
 
+#: The longer hold the channel journeys need: three parametrizations share one run, each
+#: waits for its own surface and sends its own verdict, and a reply arriving after the
+#: hold expires is refused for the right reason — the run settled — and so would fail
+#: those journeys for a reason they are not about.
+SUPERVISED_HELD_SECONDS = 120
+
 #: The verb the engine used to be advanced by. It is gone, and its absence is half of
 #: what "settles on its own" means: the other half is a run that settled anyway.
 RETIRED_ADVANCING_VERB = "round"
@@ -3490,7 +3493,7 @@ VERDICT_RECIPES = (
 )
 
 
-class SupervisedGate(NamedTuple):
+class SupervisedChannel(NamedTuple):
     """A run whose channel has a reader, and the environment that reaches it."""
 
     environment: dict[str, str]
@@ -3498,24 +3501,28 @@ class SupervisedGate(NamedTuple):
 
 
 @pytest.fixture
-def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedGate]:
-    """A monitored run whose planner channel has somebody waiting on the other end."""
+def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedChannel]:
+    """A monitored run whose planner channel has somebody waiting on the other end.
+
+    The node is a **held worker** rather than a human action, and that is what makes the
+    delivery below mean anything. A plan whose only node is a human action has nothing
+    to dispatch, so the run settles onto the attestation immediately — and onepipeline
+    0.17.3 refuses a reply to a settled run by name, *"nothing will ever read a reply to
+    it; no reply was queued"*. Below that release the same reply was answered
+    `"state":"delivered"` and nothing read it, so this journey was asserting a false
+    receipt; holding the worker open is what gives the verdict a live reader to reach.
+    """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     run = RunId("verdict-recipes-e2e")
     environment = _environment(tmp_path, oneharness_bin)
+    environment[AGENT_DELAY_ENV] = str(SUPERVISED_HELD_SECONDS)
     plan = tmp_path / "verdict.plan.json"
-    # A human action is nobody's to dispatch, so it names no persona.
-    gate: PlanNode = {
-        "id": "gate",
-        "kind": "human",
-        "task": "## What\nApprove.\n\n## Why\nProbe.\n\n## Acceptance criteria\n- Approved.",
-    }
     supervised: CandidatePlan = {
         "schema_version": 2,
         "goal": {"text": "prove the verdict recipes reach the live channel"},
         "name": run,
-        "tasks": [gate],
+        "tasks": [_node(id="held")],
     }
     plan.write_text(json.dumps(supervised), encoding="utf-8")
     launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
@@ -3533,7 +3540,7 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedG
         stderr=subprocess.PIPE,
     )
     try:
-        yield SupervisedGate(environment, run)
+        yield SupervisedChannel(environment, run)
     finally:
         launch.kill()
         launch.wait(timeout=e2e_timeout(60))
@@ -3547,7 +3554,7 @@ def supervised_gate(tmp_path: Path, oneharness_bin: str) -> Iterator[SupervisedG
 @pytest.mark.xdist_group("verdict-recipes")
 @pytest.mark.parametrize(("recipe", "arguments"), VERDICT_RECIPES, ids=lambda row: str(row))
 def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
-    supervised_gate: SupervisedGate, recipe: str, arguments: tuple[str, ...]
+    supervised_channel: SupervisedChannel, recipe: str, arguments: tuple[str, ...]
 ) -> None:
     """Each verdict recipe renders an envelope the real channel takes and delivers.
 
@@ -3561,7 +3568,7 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
     thing under test is only observable while a rendezvous is open, and which surface
     that is, is not this journey's claim.
     """
-    environment, run = supervised_gate
+    environment, run = supervised_channel
     limit = deadline(180)
     delivered = None
     while delivered is None:

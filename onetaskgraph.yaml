@@ -1,4 +1,4 @@
-default_sources: [authoring, examples, plans, plans-local, test-fixtures]
+default_sources: [authoring, examples, plans, test-fixtures]
 sources:
   examples:
     plugin: local-md
@@ -12,10 +12,6 @@ sources:
     plugin: local-md
     config:
       root: /tmp/ai-orchestrator-test-projects
-  plans-local:
-    plugin: local-md
-    config:
-      root: .plans-local
   plans:
     plugin: github-projects
     config:

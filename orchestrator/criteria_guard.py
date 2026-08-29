@@ -943,11 +943,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if unreviewed:
         named = ", ".join(task.node_id for task in unreviewed)
+        # The qualification is unconditional rather than a branch on this plan's own
+        # store, which would be a second answer to `plan_review.unwritable`'s question
+        # and a diagnostic no journey could reach without writing to the live board. A
+        # record is an entry of a task's own Markdown document, so a plan held anywhere
+        # else cannot carry one — and saying so here is what stops an operator reading
+        # `review-plan` as a step that will clear a board plan. Running it says which
+        # store it is, immediately and without spending a turn.
         print(
             f"check-plan: {len(unreviewed)} task(s) carry no review record for their current "
             f"authored content: {named}. Nothing has reviewed those criteria, which is how "
             f"a plan written under time pressure reaches a dispatch. Review them with "
-            f"`just review-plan {args.project}`.",
+            f"`just review-plan {args.project}`, which records a pass only for a plan held "
+            f"in a local Markdown store.",
             file=sys.stderr,
         )
         return 1

@@ -581,19 +581,16 @@ def _serving_board() -> Iterator[dict[str, str]]:
 def _prepare_plan_sources(root: Path) -> dict[str, str]:
     """Build every plan source one journey reads under ``root``, and name them.
 
-    Preparing them is three things and the name covers all three: the two gitignored
-    local roots are *created* under ``root``, every source is *pointed* at what was
-    created, and the credential file each source resolves is pointed at one under
-    ``root`` too — away from this host's own, which is what keeps a journey off the
-    live board whatever the operator has configured.
+    Preparing them is two things and the name covers both: the gitignored authoring
+    root is *pointed* at ``root``, which the caller has already made, and the credential
+    file each source resolves is pointed at one under ``root`` too — away from this
+    host's own, which is what keeps a journey off the live board whatever the operator
+    has configured.
 
-    Both local roots are created and pointed per run, and at *different* directories.
-    `plans-local` has to be pointed somewhere because a `local-md` source refuses a root
-    it cannot canonicalize and refuses it for the whole read, so these journeys would
-    otherwise pass or fail on whether this checkout happened to have run session setup —
-    and it has to be pointed somewhere else because two sources over one root each answer
-    with every project in it, which is the duplicate listing the roots are kept apart to
-    avoid.
+    Pointing it per run rather than leaving it at `.plans` is what makes these journeys
+    say something: a `local-md` source refuses a root it cannot canonicalize and refuses
+    it for the whole read, so they would otherwise pass or fail on whether this checkout
+    happened to have run session setup.
 
     This is separate from :func:`_plan_environment` because a journey that *launches*
     composes these names on top of `_launch_environment`, whose whole job is isolating a
@@ -605,13 +602,9 @@ def _prepare_plan_sources(root: Path) -> dict[str, str]:
     `-n 4`, they minted `launch`, `launch-2` and `launch-3` between them, and the one
     that reads its run id back failed on the name it was given.
     """
-    local_plans = root / "local-plans"
-    (local_plans / "projects").mkdir(parents=True, exist_ok=True)
-    (local_plans / "tasks").mkdir(parents=True, exist_ok=True)
     return {
         "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
         "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT": str(root),
-        "ONETASKGRAPH_SOURCES__PLANS-LOCAL__CONFIG__ROOT": str(local_plans),
     }
 
 
@@ -1101,14 +1094,38 @@ def test_a_refused_destination_read_settles_the_run_and_writes_nothing(
 
 
 def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:
-    """The host binary reports the pin and the authoring directory cannot be added."""
+    """This checkout's own provisioning puts the pinned binary in force, and .plans is ignored.
+
+    Provisioned first rather than merely observed, and that is the whole of what this
+    journey can honestly claim. `session-setup.sh` installs the release archive into
+    `$HOME/.local/bin`, which is **shared by every checkout of this repository on the
+    host** — so a second checkout pinned to a different release reinstalls its own over
+    this one, at any moment and mid-gate, and a bare read of that path measures whichever
+    checkout provisioned last rather than anything about this one. Running this
+    checkout's provisioning and then asserting is the claim that survives that — it
+    proves the installer honours *this* pin, which is what "in force" can mean while the
+    path is shared. Eliminating the sharing means giving each checkout its own bin
+    directory, which is a change to provisioning rather than to this journey.
+    """
+    provisioned = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert provisioned.returncode == 0, provisioned.stdout + provisioned.stderr
     version = subprocess.run(
         [str(Path.home() / ".local/bin/onetaskgraph"), "--version"],
         text=True,
         capture_output=True,
         check=True,
     )
-    assert version.stdout.strip() == f"onetaskgraph {ADOPTED}"
+    assert version.stdout.strip() == f"onetaskgraph {ADOPTED}", (
+        f"{version.stdout.strip()} is installed after this checkout provisioned, which "
+        f"adopts {ADOPTED}; another checkout sharing $HOME/.local/bin may have "
+        "reinstalled its own pin between the two"
+    )
     ignored = subprocess.run(
         ["git", "check-ignore", "-q", ".plans/projects/example.md"],
         cwd=REPO_ROOT,

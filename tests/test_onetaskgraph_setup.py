@@ -63,8 +63,9 @@ second="$(stat -c '%i:%Y:%s' "$HOME/.local/bin/onetaskgraph")"
 test "$first" = "$second"
 test -d .plans/tasks
 test -d .plans/projects
-test -d .plans-local/tasks
-test -d .plans-local/projects
+# The retired `plans-local` store: setup must not recreate the root the retreat used,
+# or a stale copy of this repository's plans reappears beside the board it now plans on.
+test ! -e .plans-local
 """
     return subprocess.run(
         ["bash", "-c", command],
@@ -357,13 +358,13 @@ install_onetaskgraph
     assert not (home / ".local/bin/onetaskgraph").exists()
 
 
-@pytest.mark.parametrize("blocked", [".plans", ".plans-local"])
+@pytest.mark.parametrize("blocked", [".plans"])
 def test_plan_root_creation_failure_is_required(tmp_path: Path, blocked: str) -> None:
-    """A verified installation still fails if its plan-store roots cannot be created.
+    """A verified installation still fails if its plan-store root cannot be created.
 
-    Both roots are created together, and a source refuses a root it cannot canonicalize
-    for the whole read rather than for itself alone — so an installation that reported
-    success with one of them missing would leave `just plans` exiting 4 on every source.
+    A source refuses a root it cannot canonicalize for the whole read rather than for
+    itself alone — so an installation that reported success with it missing would leave
+    `just plans` exiting 4 on every source.
     """
     version = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
     archive = _release_fixture(tmp_path, version)

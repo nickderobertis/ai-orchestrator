@@ -116,7 +116,7 @@ RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 #: those are the two degradations the score path has to survive.
 ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
-#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.5.4
+#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.6.1
 #: with a `kind: command` judge that logged every op it was asked. No `task`, no `session`
 #: — which is why the run is read from the environment.
 SCORING_FRAME = {
@@ -162,7 +162,9 @@ class Watched(NamedTuple):
     reply_answers: list[ReplyAnswer]
     #: `just monitor --filter monitor` over the settled run.
     stream: str
-    #: The graph's own events, which name the member behind each one.
+    #: The graph's own events, which name the member behind each one. `Any` because
+    #: `oneagentgraph` owns this envelope and this journey reads two keys out of it —
+    #: restating the rest here would be a second copy of somebody else's schema.
     graph_events: list[dict[str, Any]]
     #: How the attached launch ended, and what it printed on the way.
     settlement: str
@@ -276,6 +278,9 @@ class EditingManager:
 def _graph_events(scratch: Path) -> list[dict[str, Any]]:
     """The dag-scope graph's own record of this run, which names the member per event.
 
+    The `Any` values are carried for the reason the field above states: the envelope is
+    `oneagentgraph`'s own and only two of its keys are read here.
+
     `just monitor` renders these too, but its line carries the event and not the member
     it happened to, and which member died is exactly the question. The graph writes
     them into the scratch this journey named, so this is that run's record and no
@@ -284,6 +289,8 @@ def _graph_events(scratch: Path) -> list[dict[str, Any]]:
     events = []
     for log in sorted(scratch.glob("dag-scope-*/events.jsonl")):
         # `oneagentgraph` owns this schema; only `kind` and `labels.member` are read.
+        # The `cast` is that ownership at the type level: `json.loads` answers `Any`, and
+        # validating a schema this journey does not own would be a copy of it.
         # llmlint: ignore[tests_mirror_real_usage] The rendered line omits the member.
         events.extend(
             cast(dict[str, Any], json.loads(line))

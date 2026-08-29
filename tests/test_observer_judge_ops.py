@@ -10,7 +10,7 @@ way round and gated here.
 base's rather than over it, so a null one adds nothing, and `user.done_when_replaces_base`
 is refused outright with nothing to replace it with. A `kind: onejudge` member therefore
 always carries a bar it is always asked to score, once the conversation ends, whether the
-supervisor ruled complete or the turn cap ran out — measured against onejudge 0.5.4 with
+supervisor ruled complete or the turn cap ran out — measured against onejudge 0.6.1 with
 a `kind: command` judge that logged every op it was asked, and independently of the two
 keys a persona can decline. So `done_when` is closed by being
 **served**: `scripts/channel-serve.py` raises the criterion to the planner and relays the

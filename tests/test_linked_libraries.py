@@ -394,8 +394,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.11", core="0.12.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.5.4", core="0.12.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.12", core="0.12.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.6.1", core="0.12.1"),
 )
 
 #: Where an operator meets the CLI-versus-core reality, and the sentence that has to

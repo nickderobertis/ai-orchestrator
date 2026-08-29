@@ -9,13 +9,15 @@ that cannot write a plan to its board at all, which is the state this pair was a
 to leave behind.
 
 A third claim is gated the same way and for a sharper reason: **which source this
-repository plans against**. That is a temporary retreat from the board, and a retreat
-nobody can tell from a decision is one the next reader adopts as the design — so the
-documents are held to naming the source `onetaskgraph.yaml` actually defaults to, to
-recording both defects that forced the retreat, and to naming both conditions that
-retire it. The name is read back out of the prose and looked up in the real
-configuration rather than restated here, because a claim checked against a literal in
-this file would survive the configuration moving underneath it.
+repository plans against**. It was a local Markdown store for one day in August 2026,
+while two upstream defects made a second plan on the board corrupt every plan on it;
+both were repaired and adopted, and the store is the board again. What survives that
+episode is the gate, not the workaround: the documents are held to naming the source
+`onetaskgraph.yaml` actually defaults to, read back out of the prose and looked up in
+the real configuration rather than restated here, because a claim checked against a
+literal in this file would survive the configuration moving underneath it — and because
+a store the prose names but nothing reaches is exactly what the retreat's own
+half-finished shape would have left behind.
 
 Gated rather than trusted because a version in prose goes stale silently: nothing else
 in this repository reads these sentences, so the next bump would leave them describing
@@ -43,18 +45,21 @@ ORCHESTRATION = "docs/orchestration.md"
 #: is cited at a tag, and a tag is a version claim in a spelling the release check below
 #: cannot see — `v0.2.11` is not `onetaskgraph 0.2.11` — so it is asked for separately.
 LANE_SOURCE = "crates/onetaskgraph-github-projects/tests/live.rs"
-#: The GitHub Projects source this repository configures and does not plan against.
-#: Named as a literal because the retreat's whole shape is that this source is *not*
-#: edited: a value derived from the file could not fail when somebody edited it.
+#: The GitHub Projects source this repository configures and plans against. Named as a
+#: literal because this source is never repointed — a live run's settlements are
+#: projected back to the project it was launched from — so a value derived from the file
+#: could not fail when somebody edited it.
 BOARD = "plans"
 #: The sentence both documents open their plan-store claim with. The source name inside
 #: it is the prose's own answer to "where is a plan of this repository stored", and it
 #: is what every check below looks up in the configuration.
 PLANNED_AGAINST = re.compile(
-    r"A plan of (?:\*\*)?this(?:\*\*)? repository is stored under the `([^`]+)` source"
+    r"A plan of (?:\*\*)?this(?:\*\*)? repository is stored on the `([^`]+)` "
+    r"GitHub Projects board"
 )
-#: The section that records the retreat once. Every other mention points at it.
-RETREAT_SECTION = "Where a plan of this repository lives"
+#: The section that records where a plan lives, and what the store cost to get back.
+#: Every other mention points at it rather than restating it.
+STORE_SECTION = "Where a plan of this repository lives"
 
 
 def _flat(text: str) -> str:
@@ -155,9 +160,9 @@ def test_the_source_each_document_names_is_one_the_configuration_defaults_to(
         f"not default to (it defaults to {defaults}); a plan stored there goes unlisted by "
         "every read that names no source"
     )
-    assert planned != BOARD, (
-        f"{name} sends a reader to the `{BOARD}` board, which cannot hold more than one "
-        f"plan today; see {MANAGER}, '{RETREAT_SECTION}'"
+    assert planned == BOARD, (
+        f"{name} sends a reader to `{planned}` where this repository plans on the "
+        f"`{BOARD}` board; see {MANAGER}, '{STORE_SECTION}'"
     )
 
 
@@ -169,72 +174,69 @@ def test_both_documents_name_the_same_plan_source() -> None:
     )
 
 
-def test_the_manager_document_records_the_retreat_and_both_defects_behind_it() -> None:
-    """The retreat reads as a retreat, with both defects that forced it named."""
+def test_the_manager_document_records_what_the_store_cost_to_get_back() -> None:
+    """Both repaired defects stay named, because a fix nobody can name is one nobody can check.
+
+    The board held one plan at a time until two upstream defects were repaired. Naming
+    them is what lets the next reader tell a working store from one that has silently
+    regressed to the same behaviour: a scoped read that answers with every project's
+    tasks looks exactly like a board with one plan on it.
+    """
     text = _flat(_document(MANAGER))
-    planned = _named_in_prose(MANAGER)
-    assert f"## {RETREAT_SECTION}" in _document(MANAGER), (
-        f"{MANAGER} has to carry a `{RETREAT_SECTION}` section; every other mention of "
-        f"`{planned}` points at it rather than restating it"
+    assert f"## {STORE_SECTION}" in _document(MANAGER), (
+        f"{MANAGER} has to carry a `{STORE_SECTION}` section; every other mention of the "
+        "plan store points at it rather than restating it"
     )
-    assert "retreat" in text, (
-        f"{MANAGER} has to say that planning under `{planned}` is a retreat: an "
-        "undocumented retreat is indistinguishable from a decision, and the next reader "
-        "takes it for the intended design"
-    )
-    assert "discards the query it is handed" in text, (
+    assert "discarded the query it was handed" in text, (
         f"{MANAGER} has to name the first defect — onetaskgraph's `github-projects` source "
-        "discards the query it is handed, so a read scoped to one project answers with "
+        "discarded the query it was handed, so a read scoped to one project answered with "
         "every project's tasks"
     )
-    assert "renames a destination project to its own native identifier" in text, (
+    assert "renamed a destination project to its own native identifier" in text, (
         f"{MANAGER} has to name the second defect — onepipeline's settlement write-back "
-        "renames a destination project to its own native identifier"
+        "renamed a destination project to its own native identifier"
     )
-    assert "writes no labels" in text, (
-        f"{MANAGER} has to say the settlement write-back writes no labels; a defect named "
+    assert "wrote no labels" in text, (
+        f"{MANAGER} has to say the settlement write-back wrote no labels; a defect named "
         "by half is one nobody can tell has been fixed"
     )
 
 
-def test_the_manager_document_names_both_conditions_that_retire_the_retreat() -> None:
-    """A retreat with no stated exit is one nobody knows to undo."""
+def test_the_manager_document_says_the_store_was_proven_against_the_real_board() -> None:
+    """A repair adopted but never driven is one this host has no evidence for.
+
+    Both defects are invisible from every gate here: a discarded query answers, and a
+    degraded projection settles green. So the document is held to saying the pair was
+    measured against the real board with two projects on it, which is the only condition
+    under which either could have been observed at all.
+    """
     text = _flat(_document(MANAGER))
-    assert "honours the query it is handed" in text, (
-        f"{MANAGER} has to name the first retirement condition: a released onetaskgraph "
-        "whose `github-projects` source honours the query it is handed"
-    )
-    assert "preserves a destination project's title and its labels" in text, (
-        f"{MANAGER} has to name the second retirement condition: a released onepipeline "
-        "whose write-back preserves a destination project's title and its labels"
+    assert "against the real board with two" in text, (
+        f"{MANAGER} has to say the repaired store was measured against the real board with "
+        "two projects on it; one project on the board is the state in which both defects "
+        "are invisible"
     )
 
 
-def test_the_manager_document_says_retiring_the_retreat_is_a_deletion() -> None:
-    """The revert is subtraction, and saying so is what stops a second migration."""
+def test_the_manager_document_keeps_the_best_effort_warning_the_repair_did_not_fix() -> None:
+    """The projection is still best-effort, and the repair is the moment that gets forgotten.
+
+    A reader who has just been told the write-back preserves what it projects is the one
+    most likely to start trusting a settled board as the record of a run. It is not one:
+    the projection runs off the reconcile loop, so a settlement that never landed settles
+    the run exactly like one that did.
+    """
     text = _flat(_document(MANAGER))
-    planned = _named_in_prose(MANAGER)
-    assert f"Delete the `{planned}` source from `onetaskgraph.yaml`" in text, (
-        f"{MANAGER} has to say that retiring the retreat deletes the `{planned}` source "
-        f"rather than re-editing the `{BOARD}` source"
-    )
-    assert f"never a re-edit of the `{BOARD}` source" in text, (
-        f"{MANAGER} has to say the retirement is never a re-edit of the `{BOARD}` source: "
-        "a retreat that repointed it would need a second migration to undo, and a "
-        "half-applied second migration is what this shape exists to avoid"
+    assert "best-effort" in text, (
+        f"{MANAGER} has to keep saying the write-back is best-effort; the repair changed "
+        "what a projection writes, not whether a green run proves it landed"
     )
 
 
-@pytest.mark.parametrize("name", [MANAGER, ORCHESTRATION])
-def test_no_document_sends_a_reader_to_author_a_new_plan_on_the_board(name: str) -> None:
-    """Both documents forbid the board outright rather than merely preferring the store."""
-    text = _flat(_document(name))
-    forbidden = (
-        f"Never author a new plan on the `{BOARD}` board.",
-        f"no new plan of it is authored on the `{BOARD}` board",
-    )
-    assert any(sentence in text for sentence in forbidden), (
-        f"{name} has to say outright that no new plan of this repository is authored on "
-        f"the `{BOARD}` board; preferring the local store leaves the board readable as an "
-        "option, and one plan too many on it corrupts every plan there"
+def test_the_manager_document_says_the_board_source_is_never_repointed() -> None:
+    """The one value on that source that no change may move, and why."""
+    text = _flat(_document(MANAGER))
+    assert "moves a running plan's store out from under it" in text, (
+        f"{MANAGER} has to say why the `{BOARD}` source is never repointed: a live run's "
+        "settlements are projected back to the project it was launched from"
     )

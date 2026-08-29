@@ -77,7 +77,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.16.3,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.17.3,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -209,7 +209,7 @@ reader whole. **What is no longer true here is that there is such an older reade
 Through the previous adoption the `oneagentgraph` this host's
 [smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
 a release behind the CLI it spawns; measured on 2026-08-26 from both installed wheels'
-own SBOMs, `oneagentgraph-cli` 0.3.11 is compiled against `oneharness-core` 0.12.1
+own SBOMs, `oneagentgraph-cli` 0.3.12 is compiled against `oneharness-core` 0.12.1
 while `oneharness-cli` 0.11.0 is compiled against 0.12.0. They are separate artifacts,
 and their differing core versions are deliberate. Nothing
 about that rests on an adopter remembering to check: the pre-push hook selects
@@ -980,8 +980,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.16.3,
-> `oneagentgraph` 0.3.11, nor `onevcs` 0.15.4. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.17.3,
+> `oneagentgraph` 0.3.12, nor `onevcs` 0.15.8. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1265,7 +1265,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.5.4 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.5.4/docs/protocol.md)),
+([onejudge v0.6.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.6.1/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
