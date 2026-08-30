@@ -344,6 +344,121 @@ Two things about them are worth knowing before reading a surprising run:
   the response object and disagree on the request; see [Serving the channel as the
   monitor's judge side](#serving-the-channel-as-the-monitors-judge-side).
 
+### The observer graph is alive only while one of its members is
+
+`graphs/dag-scope.yaml` names two members and only one of them is a conversation, which
+reads like a free choice and is not. The `check-in` pacemaker is a scheduled
+single-sided member and survives every run it fires on; the `monitor` is a
+`kind: onejudge` conversation and is routinely settled early by its own quiet turns. The
+obvious repair — make the monitor the pacemaker's shape, a scheduled `kind: oneharness`
+member that samples every few minutes and cannot be scored against a completion bar — is
+**not available on the pinned reader**, and reaching for it costs a run its watcher
+entirely. This section records why, because the belief it corrects is one a reader
+re-derives from the same symptom.
+
+**The reader refuses an observer graph whose members are all scheduled.** Convert the
+`monitor` block to a scheduled single-sided member, leave the pacemaker untouched, and
+`oneagentgraph validate` answers:
+
+```
+oneagentgraph: invalid config: every member of this graph is scheduled or descends
+from one, so the run quiesces as soon as its clocks tick and a deferred first turn
+(check-in, monitor) never comes due; give each of them `start_after: 0`, or a member
+outside the schedules for them to pace
+```
+
+The shipped document validates (`dag-scope: 2 member(s) OK`); only the conversion makes
+it invalid, and a document the reader refuses attaches **no** observer at all. Giving the
+monitor a deferred first turn while the pacemaker takes an immediate one is refused the
+same way, naming `monitor`: once no member is outside the schedules, the reader asks
+`start_after: 0` of every one of them.
+
+**The remedy that refusal names buys one tick.** An all-`start_after: 0` observer graph
+loads, and then, driven through `just orchestrate` against a real run with the suite's
+provider stand-ins, its own journal reads:
+
+```
+07:40:48.055Z  graph-started   dag-scope
+07:40:48.055Z  member-started  check-in / monitor
+07:40:48.079Z  member-settled  check-in / monitor
+07:40:48.180Z  graph-settled   {check-in: settled, monitor: settled}
+```
+
+125 milliseconds, against schedules of 600 and 1800 seconds. The driver then printed
+`onepipeline: the observer graph for 'scheduler-research' has stopped watching; the run
+is still being driven` and **did not relaunch it**; that run's remaining 88 seconds were
+unwatched, and a run with no observer reports plain `ACTIVE`.
+
+**The cause is liveness, not scheduling.** A graph runs while at least one member is
+unsettled — mid-turn, or mid-conversation — and a scheduled member settles after each
+firing, so a graph made only of scheduled members has nothing left to keep the process
+alive until the next tick. `kind: onejudge` is the only long-lived member shape a
+document here can declare. So the monitor's conversation is what keeps the whole observer
+graph running, and the `check-in` pacemaker fires *inside* it.
+
+**The pacemaker's survival is therefore not a property of its kind**, and reading it as
+one is what makes the repair above look available. The evidence is in this host's own
+recorded runs, counted over every `member-settled` a pacemaker has ever written: **89 of
+them**, across 27 runs, and they split **50/39** on whether a conversation member was
+beside them. Fifty belong to a two-member observer document — the shipped
+`graphs/dag-scope.yaml`, and the older revision that spelled the same member
+`orchestrator` — and every one of those fifty
+fired while that member's conversation was live. Forty-eight settled while it was still
+unsettled outright. The remaining two settled after it had **died**, and reading them as
+counter-examples is the mistake this paragraph is guarding: both are turns that were
+already in flight when the graph tore down under them, started at `08:50:43.215Z`
+against a monitor death at `08:51:34.017Z` (`condemn-answer-steer`) and at
+`14:10:57.668Z` against one at `14:11:05.880Z` (`dag-ui-observability-2`). **No
+pacemaker turn on this host has ever begun after its graph's conversation member
+ended.**
+
+The other thirty-nine settlements are the same finding from the other side, and they are
+why the count is worth having rather than merely large. They belong to one run,
+`onetaskgraph-build-3`, wired to a one-member scratch document with no conversation
+member at all (`scratch/graphs/dag-scope-quiet.yaml`, gitignored — a mitigation for a
+flooding monitor, not a design). Each of those thirty-nine settlements took its whole
+observer graph down with it, within **0.100s to 0.112s**, median 0.103s, every single
+time. Read them as the **directly observed form of the failure the scheduled repair
+would have introduced**, rather than as an exception to the rule the other fifty state:
+this host has been running that experiment by accident for thirty-nine firings, and it
+came out the way the 125-millisecond probe above did. A pacemaker with nothing beside it
+paces nothing, because there is nothing left alive for it to pace. Both counts are
+readings of this host's accumulated journals rather than claims about a release, so
+nothing re-takes them; what the gate below holds is the behaviour underneath them.
+
+**What settles the monitor is a different thing, and worth not confusing with this
+one.** onejudge names it in the member's own report: *the agent and the supervisor
+repeated 2 no-op exchanges (no tool activity, and the same agent reply each time);
+settled on the work already done*. A quiet monitor answering exactly `NOTHING TO REPORT`
+satisfies that signature by construction, which is why the sentinel that stopped the
+monitor flooding the planner's queue is also what ends its conversation. onejudge
+declares a field for exactly this contract — `user.settle_on_noop`, documented in
+`onejudge` 0.6.2's `src/cli/config.rs` and `src/engine.rs` as the opt-out for "an
+observer instructed to answer with one fixed short sentence while it finds nothing",
+with `max_turns` left as the bound. Nothing here sets it today; that is a change to
+`personas/orchestrator.yaml` and a decision for a manager, not something this section
+claims is in force.
+
+**Two upstream changes would lift the constraint, and neither belongs to this
+repository.** Either alone is enough:
+
+- **`oneagentgraph`** — keep a graph whose members are all scheduled alive between
+  ticks, instead of refusing the document and settling the `start_after: 0` variant
+  after one firing each. It would be working when a two-member observer graph with
+  deferred first turns loads, and its members' second turns appear in the run's own
+  event stream at their declared periods.
+- **`onepipeline`** — relaunch an observer graph that has settled while its run is
+  still being driven, rather than printing that it has stopped watching and continuing
+  without one. It would be working when the driver emits a second `graph-started` for
+  the same `--dag-graph` after that message, and the run's remaining nodes are covered
+  by monitor turns.
+
+Do not implement either from here. Until one of them lands, the monitor stays a
+conversation, and `tests/e2e/test_observer_graph_liveness_e2e.py` holds all of it: that
+the shipped document still validates, that the reader still refuses the all-scheduled
+one in the words quoted above, and that the remedy it names still settles the observer
+after one turn per member.
+
 ## The planner channel
 
 `just orchestrate <source:project>` starts the run, prints its run id, and then **stays

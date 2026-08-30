@@ -27,7 +27,11 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # The same two measurements, said to an operator and to the model that lives under
     # them. The prose half is what a reader acts on and the persona half is what the
     # member is configured by, so a bump that moved either would leave both wrong.
-    Path("docs/orchestration.md"): 2,
+    # The third names the release whose own source documents `user.settle_on_noop` — the
+    # field a monitor settled on its quiet turns would opt out through — and a citation
+    # to a file at a version is only worth reading while the version is the one in
+    # force, so it joins this gate rather than aging quietly beside the two above.
+    Path("docs/orchestration.md"): 3,
     Path("personas/orchestrator.yaml"): 1,
     # And the gates that state which onejudge release each op measurement was taken
     # against. A test asserting a per-release behaviour under a release that has moved

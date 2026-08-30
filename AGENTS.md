@@ -1559,6 +1559,31 @@ monitor to stay quiet, so the instruction and the contract cannot drift apart, a
 `tests/e2e/test_monitor_quiet_turn_e2e.py` drives all three answers through the real
 filter onto a real published channel.
 
+**That monitor is a conversation because a conversation is what keeps the observer graph
+alive**, and the repair its early settlement invites is refused by the pinned reader.
+Making it a scheduled single-sided member — the `check-in` pacemaker's shape, which no
+completion bar is scored against — leaves no member outside the schedules, and
+`oneagentgraph` refuses that document outright; the all-`start_after: 0` shape its
+refusal offers instead loads and then settles the whole observer graph after one turn
+per member, with nothing relaunching it. So **the pacemaker does not survive because of
+its kind**: it survives because it fires inside the monitor's conversation, and a run
+whose monitor has settled gets no pacemaker update either. What ends that conversation
+is onejudge settling a repeated no-op exchange, which a quiet `NOTHING TO REPORT`
+satisfies by construction — the same sentinel that stopped the flooding. The evidence is
+this host's own 89 recorded pacemaker settlements, and they split 50/39. The fifty taken
+under a two-member observer document — the shipped `graphs/dag-scope.yaml`, and the older
+revision spelling the same member `orchestrator` — each fired while that conversation was
+live, the two that settled after it died being turns already in flight when the graph
+tore down under them. The thirty-nine taken under a one-member document with **no**
+conversation member at all each took the whole observer graph down with them, in 0.100s
+to 0.112s: not an exception to the rule but the directly observed form of the failure the
+scheduled repair would introduce, already run thirty-nine times on this host by accident.
+The measurements, the reader's own words, and the two upstream changes
+that would lift the constraint are in [The observer graph is alive only while one of its
+members
+is](docs/orchestration.md#the-observer-graph-is-alive-only-while-one-of-its-members-is),
+held by `tests/e2e/test_observer_graph_liveness_e2e.py`.
+
 Both supervisory roles are also required to hand a
 surface's text to the engine as **bytes** — the `finding` op in a reply envelope,
 or the `surface` verb reading a single-quoted heredoc off stdin — rather than as a
