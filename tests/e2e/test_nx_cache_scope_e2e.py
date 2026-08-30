@@ -46,6 +46,8 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -416,4 +418,132 @@ def test_the_cross_worktree_cache_check_replays_until_its_own_fixture_moves(
 
     assert checkout.ran_the_command("workspace:check-nx-cache"), (
         f"changing {FIXTURE_WITNESS} must re-run the check built out of it"
+    )
+
+
+#: Where the wrapper keys the native cache, under whatever `XDG_CACHE_HOME` names.
+#: Restated from `scripts/nx.sh` because it is shell; the journeys below also assert
+#: `$TMPDIR` holds no per-root directory, so a wrapper that set nothing still fails.
+NATIVE_CACHE = Path("ai-orchestrator") / "nx-native"
+#: What Nx names a native cache directory when nothing redirects it: one per workspace
+#: root, which on this host is one per dispatch. Its absence is the point.
+PER_ROOT_NATIVE_CACHE = "nx-native-file-cache-*"
+#: An origin two distinct worktrees can share. Any URL; the wrapper hashes it.
+SHARED_ORIGIN = "https://example.invalid/nickderobertis/ai-orchestrator.git"
+
+
+def _native_cache_keys(cache: Path) -> list[str]:
+    """Every per-origin native cache directory holding a copied Nx native module."""
+    root = cache / NATIVE_CACHE
+    if not root.is_dir():
+        return []
+    return sorted(entry.name for entry in root.iterdir() if any(entry.glob("*.node")))
+
+
+@pytest.fixture
+def scratch() -> Iterator[Path]:
+    """A `$TMPDIR` of this journey's own, and a deliberately short one.
+
+    Short because Nx opens plugin sockets under it and a Unix socket address is capped
+    at 108 bytes on Linux: a scratch root under `tmp_path` is long enough on its own to
+    fail every Nx invocation with *"Attempted to open socket that exceeds the maximum
+    socket length"*, which says nothing about the caches these journeys are for.
+    """
+    root = Path(tempfile.mkdtemp(prefix="nxs-"))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _nx_metadata_query(root: Path, cache: Path, scratch: Path) -> subprocess.CompletedProcess[str]:
+    """One real Nx invocation, with both cache roots and `$TMPDIR` of this journey's own.
+
+    A metadata query is enough and is the point: loading the native module is what
+    mints a native cache directory, and it happens on every invocation whether or not
+    a task runs.
+    """
+    scratch.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        ["./scripts/nx.sh", "show", "project", PROJECT, "--json"],
+        cwd=root,
+        env={
+            **os.environ,
+            "XDG_CACHE_HOME": str(cache),
+            "TMPDIR": str(scratch),
+            "UV_NO_SYNC": "1",
+            "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+        },
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _worktree_of(origin: str, root: Path) -> Path:
+    """A copy of this checkout that reports ``origin`` as its own repository identity."""
+    copy_checkout(root)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "remote", "add", "origin", origin], cwd=root, check=True)
+    return root
+
+
+def test_two_worktrees_of_one_origin_share_one_native_cache_directory(
+    tmp_path: Path, scratch: Path
+) -> None:
+    """The 22 MB native module is copied once per origin, not once per workspace root.
+
+    Nx names that directory from the hash of the workspace root, so on a host where
+    every dispatch works in a fresh worktree it mints a new one — 22 MB — per dispatch,
+    under `$TMPDIR`, and removes none: 617 of them at 12.8 GiB were measured here with
+    not one older than a day. Neither published sweeper owns that family, so `just
+    sweep` reclaimed 0 B while the device filled and a driver died mid-supervision.
+
+    Both halves are asserted because either alone passes for the wrong reason. That the
+    two worktrees share one directory is not enough on its own — a wrapper that failed
+    to set the variable and left Nx to its own default would still put both under
+    `$TMPDIR` — so the scratch root each invocation ran with is read back and required
+    to hold no per-root directory at all.
+    """
+    cache = tmp_path / "cache"
+    first = _worktree_of(SHARED_ORIGIN, tmp_path / "first")
+    second = _worktree_of(SHARED_ORIGIN, tmp_path / "second")
+
+    for root in (first, second):
+        queried = _nx_metadata_query(root, cache, scratch)
+        assert queried.returncode == 0, queried.stdout + queried.stderr
+
+    assert len(_native_cache_keys(cache)) == 1, (
+        "two worktrees of one origin left "
+        f"{_native_cache_keys(cache)} native cache directories; the whole point of "
+        "keying this on the repository identity is that they share one"
+    )
+    assert not list(scratch.glob(PER_ROOT_NATIVE_CACHE)), (
+        "Nx minted its own per-workspace-root native cache under the scratch root "
+        f"anyway: {sorted(entry.name for entry in scratch.glob(PER_ROOT_NATIVE_CACHE))}. "
+        "That is the unbounded family this redirection exists to end"
+    )
+
+
+def test_two_originless_checkouts_do_not_share_a_native_cache_directory(
+    tmp_path: Path, scratch: Path
+) -> None:
+    """An originless copy is not a repository identity, and must not be grouped as one.
+
+    The same guarantee the computation cache already gives: copies belonging to e2e
+    journeys have no origin, they fall back to their own top-level path, and two of
+    them are two different trees rather than one repository measured twice.
+    """
+    cache = tmp_path / "cache"
+    for name in ("first", "second"):
+        root = tmp_path / name
+        copy_checkout(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        queried = _nx_metadata_query(root, cache, scratch)
+        assert queried.returncode == 0, queried.stdout + queried.stderr
+
+    assert len(_native_cache_keys(cache)) == 2, (
+        "two originless checkouts resolved to "
+        f"{_native_cache_keys(cache)}; a checkout with no origin is not a repository "
+        "identity and must not be silently grouped with another"
     )

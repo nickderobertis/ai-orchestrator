@@ -498,20 +498,26 @@ manager verbs stay on the same `onevcs` a dispatch publishes through. That is a
 narrower guarantee than it sounds and worth stating exactly: it makes the two
 *agree*, and it is the SBOM that decides which value they agree on.
 
-**One hazard comes with that archive, and it is a property of where it lands.** Session
-setup installs `onetaskgraph` into `$HOME/.local/bin`, which every checkout of this
-repository on the host shares — so two checkouts at different pins overwrite each
-other's copy, and a bare read of that path measures whichever provisioned last rather
-than anything about the checkout doing the reading. Measured on 2026-08-29 while this
-pin moved: the canonical checkout, an adoption behind, reinstalled its own release over
-this branch's within a minute and repeatedly mid-gate, byte-identical to the archive its
-pin names. Nothing warns; the version simply changes underfoot, and a check that reads
-the path is answering about the host rather than about its own tree. That is why
-`tests/e2e/test_onetaskgraph_host_e2e.py` provisions before it asserts — the claim that
-survives a shared path is that *this* checkout's installer honours *this* pin. Every
-sibling tool avoids the hazard by living in the checkout's own `.venv/bin`; giving the
-archive a per-checkout directory too would end it, and is a change to provisioning
-rather than to any check.
+**One hazard came with that archive, and it is now closed at the place it came from.**
+Session setup installed `onetaskgraph` into `$HOME/.local/bin`, which every checkout of
+this repository on the host shares, while `verify_onetaskgraph` demanded the *reading*
+checkout's own pin — so two checkouts at different pins overwrote each other's copy and
+each verified a binary the other had just replaced, and a bare read of that path
+measured whichever provisioned last rather than anything about the checkout doing the
+reading. The `SessionStart` hook fires on `startup` and `resume` alike, including for a
+run's own supervisory members, so the reversions arrived in bursts rather than once:
+seven restores in about ten minutes, roughly one every eighty seconds. The structural
+cost was worse than the churn — a version-adopting node could never verify its own
+adoption while any other checkout was live, because the artifact it verified was shared
+and the verifier was per checkout. `scripts/session-setup.sh` now installs it into
+`<root>/.venv/bin`, where every other pinned tool here already lives, and `just plans`
+reads it from there; the copy already at the shared path is left alone, because it
+belongs to whichever checkout put it there and removing shared host state is not this
+installer's to do. `tests/e2e/test_onetaskgraph_host_e2e.py` provisions two checkouts at
+two pins under one `HOME` and asserts each verifies its own, and
+`tests/e2e/test_ask_manager_e2e.py` sandboxes `HOME` and plants a wrong-pinned copy at
+the once-shared path, first on `PATH`, so that a launch resolving this checkout's own is
+a positive result rather than an accident of search order.
 
 `config/onetaskgraph.version` is deliberately outside that reconciliation, for the same
 artifact-boundary reason as the `oneharness` CLI pin: session setup installs and verifies
@@ -972,12 +978,12 @@ no longer write.
 taken by accident and is the better half of the measurement**: the same two reads twenty
 minutes earlier answered all five tasks for *both* projects, because the shared
 `$HOME/.local/bin/onetaskgraph` had been overwritten with 0.2.11 by the canonical checkout
-a minute after this one provisioned 0.2.12 — the hazard recorded two paragraphs below,
-firing live and silently in the middle of the measurement it would have falsified. **So
-read that pin's version at the moment of each board measurement and record it beside the
-answer**, and take the answer through a copy of the binary this checkout provisioned rather
-than through the shared path; a board read that does not name the release it was taken on
-is a read about whichever checkout provisioned last.
+a minute after this one provisioned 0.2.12 — the hazard recorded above, firing live and
+silently in the middle of the measurement it would have falsified. That hazard is closed:
+the archive now lands in each checkout's own `.venv/bin`, and `just plans` reads it there.
+**Read that pin's version at the moment of each board measurement and record it beside the
+answer anyway**; a board read that does not name the release it was taken on is a read
+about whichever binary answered, and this record is why.
 
 *The validation.* `just check-plan` on the first project reported
 `github-projects-capabilities/honour-the-query` — a step of that project's own node — and
@@ -2366,8 +2372,29 @@ and a publication clone already replays entries a session worktree stored.
 `scripts/nx.sh` in real linked worktrees, including the originless checkout that must not
 be grouped with a repository identity.
 
-An originless Git checkout still falls back to its top-level path for the key:
-copies belonging to e2e journeys are not repository identities and must not be
+**Nx keeps a second cache, and until this change nothing bounded it.** It copies its
+native module — 22 MB of `.node` — out of `node_modules` before loading it, into a
+directory named from the hash of the *workspace root*, the Nx version, and the user. On
+this host every dispatch works in a fresh worktree, so every dispatch is a new workspace
+root, so every dispatch mints another 22 MB directory under `$TMPDIR` and nothing ever
+removes one: 617 of them at 12.8 GiB were counted here with not one older than a day,
+and neither published sweeper owns that family, so `just sweep` correctly reported
+reclaiming nothing while the device filled and a driver died mid-supervision.
+`scripts/nx.sh` now exports `NX_NATIVE_FILE_CACHE_DIRECTORY` as
+`${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/nx-native/<key>`, keyed exactly as the
+computation cache is, which collapses those 617 into one per origin. It is a sibling of
+the computation cache rather than the same directory, because Nx creates
+`NX_CACHE_DIRECTORY` only when it stores a task result — the property that keeps a
+metadata-only invocation from leaving anything behind — while the native loader creates
+its own on every invocation. Sharing is safe by that loader's construction: it copies to
+a unique name and renames, loads an existing file whose size already matches, and
+prefixes each file with the Nx version, so two worktrees at two Nx releases keep two
+files rather than fight over one. `tests/e2e/test_nx_cache_scope_e2e.py` drives two real
+worktrees of one origin and asserts they share one native directory and that the scratch
+root each ran with holds no per-root one.
+
+An originless Git checkout still falls back to its top-level path for the key — for both
+caches: copies belonging to e2e journeys are not repository identities and must not be
 silently grouped together. The wrapper used to `mkdir` that key before asking Nx
 to do anything, leaving 167 empty directories among the 171 measured in the host
 cache root. It now only exports the destination; Nx creates it if a cacheable task
@@ -2415,6 +2442,19 @@ lock` rather than the silent rewrite `uv run` performs on its way into a target 
 the difference between the two on a branch whose subject *is* a pin. `UV_NO_SYNC`
 turns it off, which is how the journeys that copy this checkout keep pointing uv at
 this one's environment.
+`scripts/onetaskgraph-install.sh` is the third, and it exists because the
+per-checkout destination closed one hazard by opening another: the standalone
+plan-store CLI lives in `<root>/.venv/bin` so a checkout reads the release *it*
+pinned, and **nothing but this repository puts a binary there** — where the shared
+`$HOME/.local/bin` it replaced was populated by whichever checkout provisioned last.
+Session setup runs on a `SessionStart` hook, which a publication's own clone never
+fires, so the gate a publication ran there resolved no CLI at all and every recipe
+and test that reads the plan store failed on the missing file. It reads exactly as
+its two siblings: one `--version` and no network once the binary already reports this
+checkout's pin, off under `UV_NO_SYNC`, and a no-op in a workspace declaring no
+adopted release. It defines no install of its own — `scripts/session-setup.sh` stays
+the one source of what an install does — and `just plans` and `onepipeline`'s
+launching verbs call it directly, because neither reaches an Nx target.
 Use `docs/telemetry.md` to inspect a run's wall-clock breakdown and usage with
 `just telemetry`; it is run-scoped, with no per-node rows and no turn timeline —
 the timeline is the read API's, at `/api/v2/runs/{run}/timeline`.
@@ -2826,6 +2866,29 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   used to carry those constraints went with the dispatch journeys that needed
   them; a test of that shape reintroduces the marker, its tier, and its reason
   together rather than weakening an assertion to survive a worker.
+  **The resource that has actually cost journeys here is a mutex rather than the
+  machine.** `uv` holds an *exclusive* lock on this checkout's project environment
+  `<root>/.venv`, and every `just` recipe in this suite reaches its tool through
+  `uv run`, which waits on that lock for as long as a holder keeps it: an
+  `flock -x .venv/.lock` held twelve seconds made `uv run onepipeline --version`
+  take 10.87 s, where a free lock answered in 0.01 s. Saturation on its own does
+  not do that — with fourteen CPU-bound processes on a fourteen-CPU host the poll
+  a deadline-based journey spends its wait in went from 23 ms to 77 ms, four
+  concurrent copies of the channel family passed with their round trips still at
+  0.1–0.9 s, and so did that family beside a concurrent real-Nx and real-`bun`
+  pytest process. So read a wait that *expires* as something holding a lock, and a
+  wait that merely lengthens as load. `SHARED_TOOLCHAIN_GROUP` in
+  `tests/e2e/nx_workspace.py` is the constraint for that resource — it covers both
+  `<root>/node_modules` and `<root>/.venv`, and every journey carrying it runs in
+  the code-keyed `orchestrator:test` tier. **One name is the whole mechanism**, and
+  getting that wrong looks exactly like getting it right: `--dist loadgroup`
+  co-locates the tests sharing a group *name* and says nothing about two different
+  names, which run on two workers at once — so a writer in one group and a reader
+  in another are as concurrent as if neither declared anything. The journeys that
+  re-provision this checkout and the deadline-based channel journeys that wait on
+  `uv run` while they do therefore spell that one constant, and
+  `tests/test_nx_cache_scope.py::test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group`
+  reads the group each *collected* item resolves to and fails on a second name.
 - **Tests are realistic, not mocked.** What this repository still owns is its
   command surface, so the suite drives the *real* `just` recipes, the real wrapper
   scripts, the real `oneharness` CLI, and real Nx. The published CLIs a recipe

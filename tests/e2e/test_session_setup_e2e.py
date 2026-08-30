@@ -13,6 +13,7 @@ from provisioning import (
     setup_repo,
 )
 from published_tools import PUBLISHED_TOOLS
+from test_sweep_e2e import NOTHING_EXAMINED
 
 
 def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Path) -> None:
@@ -22,14 +23,14 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
 
     assert installed.returncode == 0, installed.stderr
     assert f"at {repo / '.venv' / 'bin' / 'onejudge'}" in installed.stderr
-    # Both halves of the composed sweep reach a session, and on a host where every
-    # family was examined and nothing was left to act on that is the whole of what it
-    # says — one line naming the four families it judged, rather than four sections a
-    # reader learns to skim past.
-    assert (
-        "just sweep: nothing to act on — every family examined: "
-        "oneagentgraph runs, temp; onevcs publications, recoveries." in installed.stderr
-    )
+    # Both halves of the composed sweep reach a session, and this fixture's `HOME` and
+    # `TMPDIR` put every family it judges inside `tmp_path` — where nothing has written
+    # one yet. So the answer is the short form for a sweep with *nothing to judge*,
+    # which is deliberately not the sentence a sweep that judged live candidates gives:
+    # read as one `Reclaimed: none` those two are indistinguishable, and only one of
+    # them is evidence the sweep is working. Imported from the module that owns both
+    # sentences rather than restated, so a wording change fails there once.
+    assert NOTHING_EXAMINED in installed.stderr, installed.stderr
     assert "=== just sweep — what this run looked at ===" not in installed.stderr
     assert (
         subprocess.run(

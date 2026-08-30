@@ -21,7 +21,8 @@
 #   6. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #   7. The standalone onetaskgraph CLI is installed from the checksum-verified release
 #      archive at the version in `config/onetaskgraph.version` (its wheel is not the
-#      release path this host relies on).
+#      release path this host relies on), into this checkout's own `.venv/bin` rather
+#      than a directory every checkout on the host shares.
 #
 # Before any of that it runs `scripts/hold-run-lease.sh`, which holds this
 # dispatch's run-root occupancy lease against a sibling `onevcs session open`
@@ -67,6 +68,11 @@ readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
+# This checkout's own environment, beside every other pinned tool, because
+# `verify_onetaskgraph` below demands the *reading* checkout's pin: a destination the
+# host shares makes that unsatisfiable whenever another checkout is live. A copy already
+# at the old shared path is left alone; it belongs to whichever checkout put it there.
+readonly ONETASKGRAPH_BIN="$PROJECT_VENV_BIN/onetaskgraph"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 # shellcheck source=scripts/claude-alt-config-dir.sh
 source "$SCRIPT_DIR/claude-alt-config-dir.sh"
@@ -308,7 +314,7 @@ create_plan_root() {
 }
 
 verify_onetaskgraph() {
-  local binary="$BIN_DIR/onetaskgraph" actual expected
+  local binary="$ONETASKGRAPH_BIN" actual expected
   expected="onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION"
   [ -x "$binary" ] || return 1
   actual="$("$binary" --version 2>/dev/null)" || return 1
@@ -345,8 +351,8 @@ install_onetaskgraph() {
   fi
   if ! tar -xzf "$temporary/$archive" -C "$temporary" \
     || [ ! -f "$temporary/onetaskgraph" ] \
-    || ! mkdir -p "$BIN_DIR" \
-    || ! install -m 0755 "$temporary/onetaskgraph" "$BIN_DIR/onetaskgraph"; then
+    || ! mkdir -p "$PROJECT_VENV_BIN" \
+    || ! install -m 0755 "$temporary/onetaskgraph" "$ONETASKGRAPH_BIN"; then
     log "onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION release archive installation failed"
     rm -rf "$temporary"
     return 1
@@ -519,7 +525,7 @@ else
   toolchain_failed=1
 fi
 if verify_onetaskgraph; then
-  log "ready (onetaskgraph: $ADOPTED_ONETASKGRAPH_VERSION at $BIN_DIR/onetaskgraph)"
+  log "ready (onetaskgraph: $ADOPTED_ONETASKGRAPH_VERSION at $ONETASKGRAPH_BIN)"
 else
   log "onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION is required — 'just check' will fail until setup succeeds"
   toolchain_failed=1

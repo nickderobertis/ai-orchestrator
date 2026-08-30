@@ -41,13 +41,30 @@ Marked = TypeVar("Marked")
 #: `--dist loadgroup` is the fix, and applying both marks from one tuple is what stops
 #: a journey taking the install without the group.
 #:
+#: `node_modules` is one of two things this group serialises, and the second is why
+#: the group is named for the toolchain rather than for the install. The other is this
+#: checkout's project environment, `<root>/.venv`: `uv` takes an **exclusive** lock on
+#: it, and every `just` recipe in this suite reaches its tool through `uv run`, which
+#: waits on that lock for as long as a holder keeps it.
+#:
+#: **So the readers join it too, and one name is the whole mechanism.** `--dist
+#: loadgroup` co-locates the tests that share a group *name* and says nothing about two
+#: different names, which run on two workers at once — so a writer in one group and a
+#: reader in another are exactly as concurrent as if neither declared anything. Both
+#: halves therefore spell this one constant: the journeys that re-provision this
+#: checkout, and the deadline-based channel journeys whose every step is a `just`
+#: recipe waiting on the lock those journeys take. All of them run in the code-keyed
+#: `orchestrator:test` tier, where `-n 4 --dist loadgroup` decides who runs beside whom.
+#: AGENTS.md's four-xdist-workers invariant carries the measurements, including why host
+#: CPU is not what this constraint is about.
+#:
 #: Provision rather than skip: `workspace_install` in `tests/conftest.py` installs the
 #: workspace this points at, so a bare `pytest` in a fresh worktree runs these journeys
 #: instead of withdrawing them.
-WORKSPACE_INSTALL_GROUP = "shared-workspace-install"
+SHARED_TOOLCHAIN_GROUP = "shared-checkout-toolchain"
 WORKSPACE_INSTALL_MARKS = (
     pytest.mark.usefixtures("workspace_install"),
-    pytest.mark.xdist_group(WORKSPACE_INSTALL_GROUP),
+    pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP),
 )
 
 
@@ -58,6 +75,11 @@ def shares_workspace_install(target: Marked) -> Marked:
     expect its test's scheduling to change, and that scheduling is the whole point.
     A module declaring them for every test spreads `WORKSPACE_INSTALL_MARKS` into its
     own `pytestmark` instead; either way the pair comes from the one tuple.
+
+    "Access" covers reading through this checkout's provisioned toolchain as well as
+    reinstalling it, for the reason above: a journey that runs this checkout's own
+    `scripts/session-setup.sh` holds the exclusive lock every other `uv run` here waits
+    on, and rewrites the `.venv/bin` they resolve their tools from.
     """
     for mark in reversed(WORKSPACE_INSTALL_MARKS):
         target = mark(target)

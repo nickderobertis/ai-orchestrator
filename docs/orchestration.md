@@ -1751,10 +1751,13 @@ it applied in seconds. The floor was long, not truncated.
 
 What that covers is narrower than it once was, and the difference is operational.
 `oneagentgraph sweep` examines the two families it owns, `runs` and `temp`. The
-families it does not — a private `nx` install per `bunx nx` invocation, a copy of
-Nx's native binary per workspace root, a run directory per pytest session, and
-onejudge's own scratch — are the *volume* ones, appearing because dispatches are
-running, and nothing reclaims them now. They share one root, `$TMPDIR` or `/tmp`, and
+families it does not — a private `nx` install per `bunx nx` invocation, a run directory
+per pytest session, and onejudge's own scratch — are the *volume* ones, appearing
+because dispatches are running, and nothing reclaims them now. One producer has since
+left that list rather than been reclaimed from it: Nx copied its native binary once per
+workspace root, which on a host where every dispatch works in a fresh worktree meant
+another 22 MB directory per dispatch, and `scripts/nx.sh` now keys that copy on the
+repository identity so there is one per origin instead of one per root. They share one root, `$TMPDIR` or `/tmp`, and
 the trailer measures and names it for exactly that reason. Neither does anything reclaim the
 **processes** a finished dispatch left running, which reparenting to init puts
 outside every tree walk; the engines that start them own keeping them alive and
@@ -1767,16 +1770,38 @@ at". A cleanup run that silently skips the family filling the disk reads as a cl
 bill of health, which is worse than no cleanup at all.
 
 **That is why the sections are rationed.** A sweep that examined every family and
-left nothing to act on prints one line naming the families it judged, and prints no
-sections at all:
+left nothing to act on prints a short form naming the families it judged, how many
+candidates it looked at, and how many it took, and prints no sections at all:
 
 ```text
-just sweep: nothing to act on — every family examined: oneagentgraph runs, temp; onevcs publications, recoveries.
+just sweep: reclaimed 1 of 2 candidate(s) examined — every family examined: oneagentgraph runs, temp; onevcs publications, recoveries; free space (df -h) is what says this host has room, not this line.
 ```
 
-Both verbs' reports and the trailer appear when — and only when — a verb failed or a
-family went unexamined, which are the two states an operator has to do something
-about. Four sections of retentions on a host where everything was judged teach a
+**Two of its readings look alike and are opposite pieces of news, so they are two
+different sentences.** A sweep that reclaimed nothing because every candidate it judged
+was live or within retention is the sweep working; a sweep that reclaimed nothing
+because there was nothing to judge has said almost nothing about this host. Read as one
+`Reclaimed: none` they are indistinguishable, which is how a full disk comes to read as
+a clean bill of health:
+
+```text
+just sweep: nothing reclaimed — 3 candidate(s) examined across every family (oneagentgraph runs, temp; onevcs publications, recoveries), all live or within retention; free space (df -h) is what says this host has room, not this line.
+just sweep: nothing reclaimed — no candidate was examined; every family (oneagentgraph runs, temp; onevcs publications, recoveries) was empty; free space (df -h) is what says this host has room, not this line.
+```
+
+**And no figure any of them prints is what says this host has room** — which is why
+every verdict ends by saying so, as part of the one line rather than as a paragraph
+under it. A sweep takes only what it can *prove* dead, in the families named beside the
+number and in no others. The long form says the same at length, where a reader arrived
+because something is wrong and the `Reclaimed:` line is in front of them.
+`tests/e2e/test_sweep_e2e.py` drives both of the readings above against the real recipe
+and asserts they differ.
+
+A report this recipe cannot read those counts out of — a release that reworded one of
+the lines they come from — prints the sections rather than guessing between the two
+sentences, which is the conflation they exist to end. Both verbs' reports and the
+trailer otherwise appear when — and only when — a verb failed or a family went
+unexamined, which are the two states an operator has to do something about. Four sections of retentions on a host where everything was judged teach a
 reader to skim, and what they learn to skim past is the trailer that names the family
 nothing looked at. Rationing them is what keeps that trailer worth reading.
 `--dry-run` is the exception and always prints them: it removes nothing and is asked

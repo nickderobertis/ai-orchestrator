@@ -41,6 +41,7 @@
       "{workspaceRoot}/scripts/preserved-log.sh",
       "{workspaceRoot}/scripts/workspace-install.sh",
       "{workspaceRoot}/scripts/python-install.sh",
+      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/tests/fixtures/nx-cache/**/*"
     ],
     "sharedGlobals": [

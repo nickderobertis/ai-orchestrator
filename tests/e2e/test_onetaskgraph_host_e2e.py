@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
@@ -17,6 +16,16 @@ from pathlib import Path
 from typing import ClassVar, Literal, NewType, TypedDict
 
 from fake_backend import PROMPT_LOG_ENV
+from nx_workspace import shares_workspace_install
+from onetaskgraph_release import checkout as throwaway_checkout
+from onetaskgraph_release import (
+    fetch_double,
+    host_target,
+    installed_binary,
+    release_fixture,
+    run_installer,
+)
+from published_tools import ONETASKGRAPH_BIN
 from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 
@@ -991,11 +1000,12 @@ LAUNCH_PLAN_READS = 1
 # entry to the answer it actually returned.
 def _injected_partial_read(log: Path) -> dict[str, str]:
     """Point `onepipeline`'s plan-store calls at the fault injector, and log them."""
-    real_onetaskgraph = shutil.which("onetaskgraph")
-    assert real_onetaskgraph, "the adopted onetaskgraph must be on PATH — run 'just bootstrap'"
+    assert ONETASKGRAPH_BIN.is_file(), (
+        f"this checkout's own onetaskgraph is missing at {ONETASKGRAPH_BIN} — run 'just bootstrap'"
+    )
     return {
         "ONETASKGRAPH_BIN": str(STUB_ONETASKGRAPH),
-        REAL_ENV: real_onetaskgraph,
+        REAL_ENV: str(ONETASKGRAPH_BIN),
         LOG_ENV: str(log),
         PASS_SHOWS_ENV: str(LAUNCH_PLAN_READS),
     }
@@ -1093,19 +1103,216 @@ def test_a_refused_destination_read_settles_the_run_and_writes_nothing(
     )
 
 
+#: The pin the second checkout below adopts. Any release `ADOPTED` is not; each
+#: checkout's archive is built here rather than fetched, so only the difference matters.
+OTHER_PIN = "0.0.1"
+
+
+# llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Two things are reached
+# past here and both are the boundary rather than the layer under test. The archive fetch
+# is doubled at `curl`, which is the crossing to GitHub: the installer, its checksum
+# verification, its destination and its verifier are all the real ones, and fetching two
+# real releases of two different pins would make this journey a network test of somebody
+# else's release page. And the entry point is `install_onetaskgraph` / `verify_onetaskgraph`
+# rather than the whole of `session-setup.sh`, because the property under test is
+# *two checkouts at two pins* — the public entry point provisions the checkout it is run
+# from, so a second pin can only be reached by running it twice, which is exactly what
+# this does. `tests/e2e/test_onetaskgraph_host_e2e.py` also drives the public path whole,
+# in `test_adopted_archive_binary_and_authoring_ignore_are_in_force`.
+def test_two_checkouts_at_two_pins_do_not_revert_each_other(tmp_path: Path) -> None:
+    """Each checkout provisions and verifies its own pin, and neither touches the other's.
+
+    This is the defect the destination change is for, driven end to end. Provisioning
+    used to install the archive into `$HOME/.local/bin` — one path for the whole host —
+    while `verify_onetaskgraph` demanded the *reading* checkout's pin, so the last
+    installer to run won and every other checkout verified a binary it had not asked
+    for. A `SessionStart` hook fires on every session start and resume, so the
+    reversions arrived in bursts rather than once.
+
+    Both checkouts are provisioned from this repository's real `install_onetaskgraph`,
+    in the order that used to break it — the second one's install is what reverted the
+    first — and both are read back afterwards. One `HOME` is deliberately shared
+    between them: it is the thing they used to collide in, so a journey that gave each
+    its own would pass with the collision still there.
+    """
+    root = tmp_path
+    home = root / "shared-home"
+    first = throwaway_checkout(root / "first", version=ADOPTED)
+    second = throwaway_checkout(root / "second", version=OTHER_PIN)
+
+    installed_first = run_installer(first, release_fixture(root, ADOPTED), home)
+    assert installed_first.returncode == 0, (
+        f"the checkout pinned to {ADOPTED} could not provision:\n"
+        f"{installed_first.stdout}{installed_first.stderr}"
+    )
+    installed_second = run_installer(second, release_fixture(root, OTHER_PIN), home)
+    assert installed_second.returncode == 0, (
+        f"the checkout pinned to {OTHER_PIN} could not provision:\n"
+        f"{installed_second.stdout}{installed_second.stderr}"
+    )
+
+    for repo, pin in ((first, ADOPTED), (second, OTHER_PIN)):
+        reported = subprocess.run(
+            [str(installed_binary(repo)), "--version"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert reported.stdout.strip() == f"onetaskgraph {pin}", (
+            f"{repo.name} adopts {pin} and its own .venv/bin holds "
+            f"{reported.stdout.strip()!r}; the other checkout's install reverted it"
+        )
+        verified = subprocess.run(
+            ["bash", "-c", "source scripts/session-setup.sh\nverify_onetaskgraph"],
+            cwd=repo,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert verified.returncode == 0, (
+            f"{repo.name} adopts {pin} and its own verification refuses the binary "
+            f"it provisioned; the other checkout at {OTHER_PIN if pin == ADOPTED else ADOPTED} "
+            f"is live beside it:\n{verified.stdout}{verified.stderr}"
+        )
+
+    assert not (home / ".local" / "bin" / "onetaskgraph").exists(), (
+        "provisioning wrote to the host-shared $HOME/.local/bin, which is the one "
+        "path two checkouts at two pins can overwrite each other on"
+    )
+
+
+def _heal(
+    repo: Path, home: Path, serving: Path | None, root: Path
+) -> subprocess.CompletedProcess[str]:
+    """Run the real self-heal in ``repo``, with only the archive fetch doubled.
+
+    `curl` is doubled as an executable at the front of `PATH` rather than as a shell
+    function, because the entry point under test is a script and a function would not
+    survive into it. ``serving`` of ``None`` is a `curl` that always fails, which is
+    what makes "this run reached no network" an assertion rather than a hope.
+    """
+    return subprocess.run(
+        ["bash", "scripts/onetaskgraph-install.sh"],
+        cwd=repo,
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "PATH": os.pathsep.join((str(fetch_double(root, serving)), os.environ["PATH"])),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_a_checkout_with_no_plan_store_cli_provisions_its_own(tmp_path: Path) -> None:
+    """A fresh worktree or publication clone heals itself rather than reading nothing.
+
+    The destination change put this CLI in `<root>/.venv/bin` so a checkout reads the
+    release it pinned, and that closed one hazard by opening another: `.venv` is
+    ignored state, nothing but this repository puts a binary there, and session setup
+    runs on a `SessionStart` hook that a publication's own clone never fires. The gate
+    a publication ran in that clone then resolved no CLI at all, and every recipe and
+    test that reads the plan store failed on the missing file — which is the shape of
+    the two self-heals `scripts/nx.sh` already performs for Bun and for uv.
+
+    Both runs are asserted, because the first alone would pass for a wrapper that
+    re-downloads on every invocation — which is what would put a fetch in front of
+    every Nx target. The second runs with a `curl` that cannot succeed, so an install
+    that reached the network could not have exited 0.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = throwaway_checkout(tmp_path / "checkout", version=ADOPTED)
+    archive = release_fixture(tmp_path, ADOPTED, target=host_target())
+
+    assert not installed_binary(repo).exists(), (
+        "the throwaway checkout already carries a CLI, so healing it proves nothing"
+    )
+    healed = _heal(repo, home, archive, tmp_path)
+    assert healed.returncode == 0, (
+        f"a checkout with no plan store CLI could not provision one:\n"
+        f"{healed.stdout}{healed.stderr}"
+    )
+    reported = subprocess.run(
+        [str(installed_binary(repo)), "--version"], text=True, capture_output=True, check=False
+    )
+    assert reported.stdout.strip() == f"onetaskgraph {ADOPTED}", (
+        f"the self-heal left {reported.stdout.strip()!r} at {installed_binary(repo)}, "
+        f"and this checkout adopts {ADOPTED}"
+    )
+
+    again = _heal(repo, home, None, tmp_path)
+    assert again.returncode == 0, (
+        "the second run of the self-heal fetched rather than reading the binary it "
+        f"had already installed:\n{again.stdout}{again.stderr}"
+    )
+
+
+def test_the_plans_recipe_heals_a_checkout_that_has_none(tmp_path: Path) -> None:
+    """`just plans` answers in a checkout no session setup has ever run in.
+
+    The recipe reads `<root>/.venv/bin/onetaskgraph` directly, so the destination
+    change made it the first thing to fail where nothing had provisioned. Driven
+    through the real recipe rather than through the script it calls: that the wiring
+    exists is the half a journey over the installer alone cannot see.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = throwaway_checkout(tmp_path / "checkout", version=ADOPTED, recipes=True)
+    archive = release_fixture(tmp_path, ADOPTED, target=host_target())
+
+    read = subprocess.run(
+        ["just", "plans", "--version"],
+        cwd=repo,
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "PATH": os.pathsep.join((str(fetch_double(tmp_path, archive)), os.environ["PATH"])),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert read.returncode == 0, (
+        f"`just plans` failed in a checkout carrying no CLI:\n{read.stdout}{read.stderr}"
+    )
+    assert read.stdout.strip() == f"onetaskgraph {ADOPTED}", (
+        f"`just plans --version` answered {read.stdout.strip()!r} in a checkout adopting {ADOPTED}"
+    )
+
+
+# llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] This repository runs one Nx project
+# and splits its test tiers by pytest marker over four keys `nx.json` declares, which is a
+# settled design rather than an omission: `orchestrator:test`, `test-docs`, `test-recipes`
+# and `test-checkouts` each key on what their tests read, `tests/conftest.py` fails a test
+# that reads outside its own tier's key, and `tests/test_nx_cache_scope.py` holds the four
+# selectors to a partition of the suite. A second Nx project for host-tool journeys would
+# add a key nothing enforces beside the ones that are enforced.
+@shares_workspace_install
 def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:
     """This checkout's own provisioning puts the pinned binary in force, and .plans is ignored.
 
-    Provisioned first rather than merely observed, and that is the whole of what this
-    journey can honestly claim. `session-setup.sh` installs the release archive into
-    `$HOME/.local/bin`, which is **shared by every checkout of this repository on the
-    host** — so a second checkout pinned to a different release reinstalls its own over
-    this one, at any moment and mid-gate, and a bare read of that path measures whichever
-    checkout provisioned last rather than anything about this one. Running this
-    checkout's provisioning and then asserting is the claim that survives that — it
-    proves the installer honours *this* pin, which is what "in force" can mean while the
-    path is shared. Eliminating the sharing means giving each checkout its own bin
-    directory, which is a change to provisioning rather than to this journey.
+    Scheduled rather than merely run: this is the one journey here that provisions
+    **this** checkout, so it holds the exclusive lock on `<root>/.venv` that every other
+    `just` recipe in this suite waits on through `uv run`, and it rewrites the
+    `.venv/bin` those recipes resolve their tools from. `shares_workspace_install` is
+    the constraint that already exists for that resource; `tests/e2e/nx_workspace.py`
+    carries its reason and the measurement behind it.
+
+    Provisioned first rather than merely observed, and now the reading is a claim about
+    *this* checkout rather than about the host. The installer used to put the archive in
+    `$HOME/.local/bin`, one path every checkout on the host shares, while
+    `verify_onetaskgraph` demanded the reading checkout's own pin — so a bare read of
+    that path measured whichever checkout provisioned last, and the canonical checkout
+    reinstalled its own release over this one mid-gate. The destination is this
+    checkout's own `.venv/bin` now, which is what makes the assertion below say
+    something about the tree it is running in.
     """
     provisioned = subprocess.run(
         ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
@@ -1116,15 +1323,19 @@ def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:
     )
     assert provisioned.returncode == 0, provisioned.stdout + provisioned.stderr
     version = subprocess.run(
-        [str(Path.home() / ".local/bin/onetaskgraph"), "--version"],
+        [str(ONETASKGRAPH_BIN), "--version"],
         text=True,
         capture_output=True,
         check=True,
     )
     assert version.stdout.strip() == f"onetaskgraph {ADOPTED}", (
-        f"{version.stdout.strip()} is installed after this checkout provisioned, which "
-        f"adopts {ADOPTED}; another checkout sharing $HOME/.local/bin may have "
-        "reinstalled its own pin between the two"
+        f"{version.stdout.strip()} is installed at {ONETASKGRAPH_BIN} after this "
+        f"checkout provisioned, which adopts {ADOPTED}"
+    )
+    assert f"ready (onetaskgraph: {ADOPTED} at {ONETASKGRAPH_BIN})" in provisioned.stderr, (
+        "session setup's own success line does not name the per-checkout destination "
+        "it provisioned, which is the one thing an operator reads to tell this "
+        f"checkout's binary from the host-shared path it replaced:\n{provisioned.stderr}"
     )
     ignored = subprocess.run(
         ["git", "check-ignore", "-q", ".plans/projects/example.md"],
@@ -1132,3 +1343,6 @@ def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:
         check=False,
     )
     assert ignored.returncode == 0
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import re
+import urllib.error
+import urllib.request
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -665,3 +669,199 @@ def test_the_linked_oneharness_cores_are_named_where_an_operator_meets_them() ->
             f"once; the adopted engine links {brought}, and an operator meeting "
             "disagreeing oneharness numbers has to be told which one a dispatched turn runs"
         )
+
+
+# Everything above is an *internal* consistency check: the pins in `config/` against
+# the bill of materials of the wheel this host installed. It is silent about the one
+# question an adoption starts from — whether that wheel is the newest the registry
+# publishes — so a host a release cycle behind reads exactly like a host that is
+# current, on every gate run, for as long as nobody thinks to look.
+#
+# So the reading is taken and *reported*, never enforced. Adopting a release is a
+# manager's decision made between runs, on evidence about what the release changed; a
+# gate that failed on the registry moving would fail this repository on somebody else's
+# publish, with nothing in this tree to fix. The reading belongs in the uncached tier
+# for the same reason `tests/test_credential_dialect_drift.py` does: it reconciles
+# against state outside this workspace, and a memo keyed on this tree would replay a
+# green across the very registry move it exists to notice.
+
+#: Where a distribution's published releases are read from. The JSON API rather than
+#: the simple index, because it names each release as its own key and needs no HTML.
+REGISTRY_URL = "https://pypi.org/pypi/{distribution}/json"
+
+#: How long this reading waits on the registry. Short deliberately: an unreachable
+#: registry is one of this reading's ordinary answers, and a check that reports rather
+#: than enforces has no business holding the tier open for a network.
+REGISTRY_TIMEOUT_SECONDS = 20
+
+#: The only release spellings this reading orders. A pre-release or a post-release is
+#: skipped rather than parsed, because ordering it correctly is `packaging`'s job and
+#: getting it wrong here would turn a report into a wrong report.
+RELEASE_SPELLING = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+class RegistryReading(NamedTuple):
+    """What the registry says about the wheel this host installed.
+
+    ``newest`` is `None` when the registry could not be read at all, which is a third
+    answer rather than "not behind": an unreachable registry has said nothing about the
+    world, exactly as an unanswered release probe has not said a release is missing.
+    """
+
+    distribution: str
+    installed: Release
+    newest: Release | None
+    unread: str | None
+
+    @property
+    def behind(self) -> bool:
+        """Whether the registry publishes a release later than the installed one."""
+        return self.newest is not None and self.newest > self.installed
+
+    def sentence(self) -> str:
+        """The reading, as the one line an operator is shown."""
+        if self.newest is None:
+            return (
+                f"{self.distribution} {self.installed} is installed and the registry "
+                f"could not be read ({self.unread}), so nothing here says whether a "
+                "later release exists"
+            )
+        if self.behind:
+            return (
+                f"{self.distribution} {self.installed} is installed and PyPI publishes "
+                f"{self.newest}; the pins in config/ are reconciled against the older "
+                "wheel, so adopting is a decision to make between runs"
+            )
+        return f"{self.distribution} {self.installed} is installed and is the newest PyPI publishes"
+
+
+class RegistryReadingWarning(UserWarning):
+    """The category the reading is reported under, whichever of its three answers it is.
+
+    Named for the reading rather than for one of its answers: the same category carries
+    "current", "behind", and "the registry could not be read", and a reader filtering on
+    a lag-shaped name would miss the two that are not lag.
+
+    A warning rather than a failure or a bare `print`: pytest lists it in its own
+    summary, so the reading reaches an operator reading a green tier — where a `print`
+    reaches nobody without `-s` and a failure would fail this repository on somebody
+    else's publish.
+    """
+
+
+def orderable_releases(distribution: str) -> tuple[tuple[Release, ...], str | None]:
+    """The registry's releases this reading can order, and why it could not be read.
+
+    Named for what it returns rather than for the registry's whole answer: a
+    pre-release or a post-release is published and is deliberately not here, because
+    ordering one correctly is `packaging`'s job and getting it wrong would turn a
+    report into a wrong report.
+    """
+    try:
+        with urllib.request.urlopen(  # noqa: S310 - a literal https URL, not caller input
+            REGISTRY_URL.format(distribution=distribution), timeout=REGISTRY_TIMEOUT_SECONDS
+        ) as answer:
+            payload = json.loads(answer.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as unread:
+        return (), f"{type(unread).__name__}: {unread}"
+    releases = payload.get("releases")
+    if not isinstance(releases, dict):
+        return (), "the registry answered without a releases object"
+    return (
+        tuple(
+            sorted(
+                Release(*(int(part) for part in version.split(".")))
+                for version in releases
+                if RELEASE_SPELLING.match(version)
+            )
+        ),
+        None,
+    )
+
+
+def registry_reading(
+    distribution: str, installed: Release, published: tuple[Release, ...], unread: str | None
+) -> RegistryReading:
+    """Compose the reading from an installed release and what the registry published.
+
+    Pure, and separate from the read above, so the three answers — current, behind, and
+    unreadable — are each provable without a registry that happens to be in that state.
+    """
+    return RegistryReading(
+        distribution=distribution,
+        installed=installed,
+        newest=published[-1] if published else None,
+        unread=unread if published == () else None,
+    )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The marker is this
+# repository's tier mechanism rather than a shortcut around one: it runs four tiers over
+# one Nx project, keyed on four `nx.json` named inputs, and `reads_checkouts` is the
+# selector for the *uncached* target `orchestrator:test-checkouts` — the tier that exists
+# precisely because no key over this workspace can describe state outside it. A second Nx
+# project would need its own key over the same nothing. `tests/test_nx_cache_scope.py`
+# holds the four selectors to a partition of the suite, so a marker that stopped routing
+# is a failing check rather than a test nothing runs.
+@pytest.mark.reads_checkouts
+def test_whether_the_installed_engine_wheel_is_behind_the_registry_is_read_and_reported() -> None:
+    """Take the reading against the real registry, and report it without enforcing it.
+
+    The gates above hold this host's pins to what the installed wheel linked and say
+    nothing about whether that wheel is current — which is the question an adoption
+    starts from. This asks it every time the uncached tier runs, and the only thing it
+    asserts is that an answer was produced: being behind is news for a manager, not a
+    failure of this tree, and an unreachable registry is a third answer rather than
+    evidence that nothing newer exists.
+    """
+    installed = Release.parse(
+        importlib.metadata.version(ENGINE_DISTRIBUTION), f"the installed {ENGINE_DISTRIBUTION}"
+    )
+    published, unread = orderable_releases(ENGINE_DISTRIBUTION)
+    reading = registry_reading(ENGINE_DISTRIBUTION, installed, published, unread)
+
+    warnings.warn(reading.sentence(), RegistryReadingWarning, stacklevel=1)
+
+    assert reading.sentence(), "the registry reading produced no sentence to report"
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+@pytest.mark.parametrize(
+    ("published", "unread", "behind", "fragment"),
+    (
+        (("0.17.5", "0.18.0"), None, True, "PyPI publishes 0.18.0"),
+        (("0.17.5",), None, False, "is the newest PyPI publishes"),
+        ((), "URLError: unreachable", False, "the registry could not be read"),
+    ),
+)
+def test_a_registry_answer_is_reported_in_every_shape_and_fails_nothing(
+    published: tuple[str, ...], unread: str | None, behind: bool, fragment: str
+) -> None:
+    """All three answers produce a reading, and none of them is a failure.
+
+    Driven over a stated registry answer rather than the real one, because the answer
+    that matters most — the installed wheel being behind — is the one this host is not
+    in today and cannot be put into. Reporting is asserted the way an operator meets
+    it: the warning is raised and caught here, which is a failure of nothing.
+    """
+    installed = Release.parse("0.17.5", "this journey")
+    reading = registry_reading(
+        ENGINE_DISTRIBUTION,
+        installed,
+        tuple(Release.parse(version, "this journey") for version in published),
+        unread,
+    )
+
+    assert reading.behind is behind, reading
+    assert fragment in reading.sentence(), reading.sentence()
+
+    with warnings.catch_warnings(record=True) as reported:
+        warnings.simplefilter("always")
+        warnings.warn(reading.sentence(), RegistryReadingWarning, stacklevel=1)
+
+    assert [str(one.message) for one in reported] == [reading.sentence()], (
+        "the reading has to reach an operator as a report; a behind-the-registry answer "
+        "that failed the tier would fail this repository on somebody else's publish"
+    )

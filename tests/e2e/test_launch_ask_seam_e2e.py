@@ -54,6 +54,7 @@ from fake_backend import (
     MEMBER_OF_CONFIG,
     PROMPT_LOG_ENV,
 )
+from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import PersistentManager, just, ruling
 from project_fixtures import project_from_plan
 from scratch_identity import seeded
@@ -198,7 +199,12 @@ ASK_WINDOW_SECONDS = int(e2e_timeout(ANSWERED_SECONDS * 2))
 #: channel with a manager thread driving real recipes at it — measured, a suite running
 #: the two beside each other left that module's wrapper waiting past its own deadline.
 #: What has to be serialized is driving a channel, not driving this file's channels.
-LAUNCH_GROUP = "ask-manager-channel"
+#:
+#: That group is now `tests/e2e/nx_workspace.py`'s, shared with the journeys that
+#: re-provision this checkout's toolchain, for the reason stated there: these recipes
+#: reach their tools through `uv run`, and `--dist loadgroup` serialises one group name
+#: rather than two.
+LAUNCH_GROUP = SHARED_TOOLCHAIN_GROUP
 
 #: The two checkouts the node `just plan` writes names, as `scripts/plan.sh` defaults
 #: them. Each launch below seeds a scratch pair under exactly these names, so the

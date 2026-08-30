@@ -35,8 +35,10 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
+from pathlib import Path
 
 from conftest import READS_CHECKOUTS_MARKER, READS_DOCS_MARKER, READS_RECIPES_MARKER
 from nx_inputs import (
@@ -255,6 +257,142 @@ def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
 
     contracts = {pair for pairs in found.values() for pair in pairs}
     assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
+
+
+#: The expression a journey runs *this* checkout's own provisioning through, rather
+#: than the script's bare name, which appears in prose all over this suite and names a
+#: copy under `tmp_path` in every provisioning journey but one.
+OWN_PROVISIONING = 'REPO_ROOT / "scripts" / "session-setup.sh"'
+
+#: The decorator that takes this checkout's install and joins the group serialising
+#: access to it, and the module-level tuple that spreads the same pair.
+SHARED_INSTALL_DECORATOR = "shares_workspace_install"
+
+#: The modules whose journeys wait on a deadline they do not control while every step
+#: they take is a `just` recipe — a wrapper process and a manager thread both blocking
+#: on `uv run`, which waits on the very lock a journey re-provisioning this checkout
+#: holds. They are the readers; the scan above finds the writers.
+DEADLINE_CHANNEL_MODULES = ("test_ask_manager_e2e.py", "test_launch_ask_seam_e2e.py")
+
+#: A pytest plugin that records the xdist group each *collected* test resolves to.
+#: Read from a collection rather than from the source, because the group is what an
+#: item carries rather than how it is spelled: a decorator, a module `pytestmark`, and
+#: a constant one file assigns from another all arrive here identically, and a scan for
+#: any one spelling would pass a suite that had drifted into the others.
+GROUP_DUMP_PLUGIN = """
+import os
+
+
+def pytest_collection_modifyitems(session, config, items):
+    with open(os.environ["ORCHESTRATOR_GROUP_LOG"], "w", encoding="utf-8") as log:
+        for item in items:
+            mark = item.get_closest_marker("xdist_group")
+            group = mark.args[0] if mark is not None and mark.args else ""
+            log.write(f"{item.nodeid}\\t{group}\\n")
+"""
+
+#: Where that plugin writes what it saw.
+GROUP_LOG_ENV = "ORCHESTRATOR_GROUP_LOG"
+
+
+def _collected_groups(tmp_path: Path) -> dict[str, str]:
+    """Every collected test id, and the xdist group it resolves to — from real pytest."""
+    plugins = tmp_path / "plugins"
+    plugins.mkdir(parents=True, exist_ok=True)
+    (plugins / "group_dump.py").write_text(GROUP_DUMP_PLUGIN, encoding="utf-8")
+    log = tmp_path / "groups.tsv"
+    collected = subprocess.run(
+        ["uv", "run", "pytest", "--collect-only", "--no-cov", "-p", "group_dump"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(plugins),
+            GROUP_LOG_ENV: str(log),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    recorded = log.read_text(encoding="utf-8").splitlines()
+    return dict(line.split("\t", 1) for line in recorded if line)
+
+
+def _reprovisioning_tests() -> list[str]:
+    """Every test whose body runs *this* checkout's own provisioning, as `<module>::<name>`."""
+    found: list[str] = []
+    for module in sorted((REPO_ROOT / "tests" / "e2e").glob("test_*_e2e.py")):
+        source = module.read_text(encoding="utf-8")
+        if OWN_PROVISIONING not in source:
+            continue
+        for function in ast.walk(ast.parse(source)):
+            if not isinstance(function, ast.FunctionDef) or not function.name.startswith("test_"):
+                continue
+            if OWN_PROVISIONING in (ast.get_source_segment(source, function) or ""):
+                found.append(f"{module.name}::{function.name}")
+    return found
+
+
+def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
+    tmp_path: Path,
+) -> None:
+    """One group name, or the constraint is not a constraint.
+
+    `uv` holds an **exclusive** lock on `<root>/.venv`, and every `just` recipe in this
+    suite reaches its tool through `uv run`, which waits on that lock for as long as a
+    holder keeps it. A journey running this checkout's own `session-setup.sh` takes that
+    lock and rewrites the `.venv/bin` other workers resolve their tools from; the
+    deadline-based channel journeys are what waits on it, one `just` recipe at a time.
+
+    `--dist loadgroup` co-locates the tests that share a group *name* and says nothing
+    about two different names — those run on two workers at once. So a writer in one
+    group and a reader in another are exactly as concurrent as if neither declared
+    anything, which is what this asserts against: not that each side declares *a*
+    group, but that every one of them resolves to the same one.
+
+    Read off a real collection, so the assertion is about the items the scheduler will
+    see rather than about how any of them happens to be spelled. A test in those modules
+    that declares no group is out of scope rather than a failure: those are the refusal
+    journeys, which launch no run and wait on no deadline. What may not happen is one of
+    them naming a *second* group.
+    """
+    groups = _collected_groups(tmp_path)
+    readers = {
+        node: group
+        for node, group in groups.items()
+        if group and any(f"/{module}::" in node for module in DEADLINE_CHANNEL_MODULES)
+    }
+    assert readers, (
+        f"no test collected from {DEADLINE_CHANNEL_MODULES} declares an xdist group, so "
+        "nothing there is serialised against the journeys that re-provision this checkout"
+    )
+
+    writers = {
+        node: group
+        for node, group in groups.items()
+        for named in _reprovisioning_tests()
+        if node.split("[", 1)[0].endswith(named)
+    }
+    assert writers, (
+        "no collected test provisions this checkout, so nothing here is holding the "
+        f"lock these journeys wait on; the scan looks for {OWN_PROVISIONING}"
+    )
+
+    unscheduled = sorted(node for node, group in writers.items() if not group)
+    assert not unscheduled, (
+        f"{unscheduled} re-provision this checkout and declare no xdist group at all, so "
+        f"they run wherever the scheduler puts them; declare @{SHARED_INSTALL_DECORATOR}"
+    )
+
+    named = set(readers.values()) | set(writers.values())
+    assert len(named) == 1, (
+        f"the journeys that re-provision this checkout and the journeys that wait on "
+        f"`uv run` while they do resolve to {sorted(named)}. `--dist loadgroup` "
+        "serialises one group name and never two, so more than one name here leaves a "
+        "writer free to run beside a reader on another worker — which is the state this "
+        "constraint was added to end. Readers: "
+        f"{sorted(set(readers.values()))}; writers: {sorted(set(writers.values()))}"
+    )
 
 
 def _collected(selector: str) -> set[str]:

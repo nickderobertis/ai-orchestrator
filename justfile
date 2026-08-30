@@ -566,9 +566,15 @@ session-setup:
 # Read this repository's plan store through the pinned standalone CLI.
 # The selected query's result is this viewing command's product; onetaskgraph's
 # own diagnostics name failed sources and corrective actions.
+#
+# This checkout's own `.venv/bin`, never a directory the whole host shares: session
+# setup installs the release `config/onetaskgraph.version` names there, so the binary
+# this reads is the one this checkout pinned rather than whichever checkout on the
+# host provisioned last.
 # llmlint: ignore[tool_output_is_signal] The selected query's result is this viewing command's product.
 plans *args:
-    ~/.local/bin/onetaskgraph {{args}}
+    ./scripts/onetaskgraph-install.sh
+    ./.venv/bin/onetaskgraph {{args}}
 
 # --- llmlint (LLM-judge tier) --------------------------------------------
 # Non-deterministic, harness-backed, and kept OUT of `just check`. It runs at

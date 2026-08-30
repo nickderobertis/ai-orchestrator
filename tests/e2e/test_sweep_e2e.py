@@ -8,10 +8,11 @@ ones; what makes that safe is isolation rather than substitution — `ONEAGENTGR
 writes the family it owns and the host scratch root the trailer now measures, so a
 journey that let it point at the real `/tmp` would report on 83 GiB of this host.
 
-A sweep with nothing to act on is one line, so several journeys below rehearse with
-`--dry-run` first and then sweep for real: the rehearsal is where the reports are read,
-and the real pass is where the disk and the one line are. `--dry-run` keeps its report
-because it removes nothing and is asked in order to be answered.
+A sweep with nothing to act on is a short form of two sentences, so several journeys
+below rehearse with `--dry-run` first and then sweep for real: the rehearsal is where
+the reports are read, and the real pass is where the disk and the short form are.
+`--dry-run` keeps its report because it removes nothing and is asked in order to be
+answered.
 
 Several journeys remove for real rather than rehearsing, because their claims are about
 what is left on disk. The one that holds a directory open holds it with an actual
@@ -67,14 +68,68 @@ def _declared_families(constant: str) -> tuple[str, ...]:
 ONEAGENTGRAPH_FAMILIES = _declared_families("ONEAGENTGRAPH_FAMILIES")
 ONEVCS_FAMILIES = _declared_families("ONEVCS_FAMILIES")
 
-#: The whole of a sweep that examined every family and left nothing to act on. Composed
-#: from the families declared above rather than pasted, so a release that renames one
-#: fails here too instead of leaving the short form describing the previous release.
-SHORT_FORM = (
-    "just sweep: nothing to act on — every family examined: "
-    f"oneagentgraph {', '.join(ONEAGENTGRAPH_FAMILIES)}; "
-    f"onevcs {', '.join(ONEVCS_FAMILIES)}."
+#: Every family this recipe composes, as its own short forms name them. Composed from
+#: the families declared above rather than pasted, so a release that renames one fails
+#: here too instead of leaving the short form describing the previous release.
+FAMILIES = f"oneagentgraph {', '.join(ONEAGENTGRAPH_FAMILIES)}; onevcs {', '.join(ONEVCS_FAMILIES)}"
+
+
+def _declared_block(constant: str) -> list[str]:
+    """One multi-line single-quoted constant's value, read out of the wrapper itself.
+
+    Separate from `_declared` because that one reads a value off one line and this one
+    is a sentence spanning several: the wrapper writes it with `printf`, so what an
+    operator sees is these lines with the first indented under the verdict above it.
+    """
+    text = WRAPPER.read_text()
+    opening = f"\n{constant}='"
+    start = text.find(opening)
+    if start < 0:
+        raise AssertionError(f"{WRAPPER.name} declares no multi-line {constant}")
+    start += len(opening)
+    end = text.index("'", start)
+    return text[start:end].splitlines()
+
+
+#: The clause every one-line verdict ends with, and the paragraph the long form carries
+#: instead. Read rather than restated, for the reason `_declared` gives: a successful
+#: sweep is one line, so the clause is part of the verdict rather than a note under it.
+FREE_SPACE_CLAUSE = _declared("FREE_SPACE_CLAUSE")
+FREE_SPACE_LINES = [
+    f"    {line}" if index == 0 else line
+    for index, line in enumerate(_declared_block("FREE_SPACE_NOTE"))
+]
+
+#: The two readings that used to be one sentence. Nothing reclaimed with candidates
+#: examined means every candidate was live or within retention — the sweep working —
+#: and nothing reclaimed with none examined means there was nothing to judge. A host
+#: filling up looks like the first and reads like the second.
+NOTHING_EXAMINED = (
+    f"just sweep: nothing reclaimed — no candidate was examined; every family ({FAMILIES}) "
+    f"was empty; {FREE_SPACE_CLAUSE}."
 )
+
+
+def nothing_reclaimed(examined: int) -> str:
+    """The short form for a sweep that judged candidates and could take none of them."""
+    return (
+        f"just sweep: nothing reclaimed — {examined} candidate(s) examined across every "
+        f"family ({FAMILIES}), all live or within retention; {FREE_SPACE_CLAUSE}."
+    )
+
+
+def reclaimed(taken: int, examined: int) -> str:
+    """The short form for a sweep that took something and left nothing to act on."""
+    return (
+        f"just sweep: reclaimed {taken} of {examined} candidate(s) examined — every "
+        f"family examined: {FAMILIES}; {FREE_SPACE_CLAUSE}."
+    )
+
+
+def short_form(verdict: str) -> list[str]:
+    """The whole of what the composition writes when there is nothing to act on: one line."""
+    return [verdict]
+
 
 #: Every section heading of the long form — both verbs' and the trailer's — which the
 #: composition prints only when something is left for an operator to act on.
@@ -337,7 +392,7 @@ def test_a_directory_a_live_process_holds_survives_a_real_sweep(host: Host) -> N
         # The rehearsal that licenses the removal below: it must name this journey's own
         # roots, so a release that stopped honouring the overrides fails here rather
         # than sweeping the operator's scratch. It is also where the retention is read,
-        # because the real pass below has nothing to act on and so says one line.
+        # because the real pass below has nothing to act on and so says the short form.
         rehearsal = sweep(host, "--dry-run", "--min-age-hours", "0")
         assert rehearsal.returncode == 0, rehearsal.stderr
         assert str(host.temp) in rehearsal.stdout
@@ -349,7 +404,7 @@ def test_a_directory_a_live_process_holds_survives_a_real_sweep(host: Host) -> N
         assert result.returncode == 0, result.stderr
         assert held.exists(), "a directory a live process holds was removed"
         assert not dead.exists(), "the dead directory beside it was not reclaimed"
-        assert result.stdout.splitlines() == [SHORT_FORM]
+        assert result.stdout.splitlines() == short_form(reclaimed(1, 2))
     finally:
         holder.terminate()
         holder.wait(timeout=e2e_timeout(30))
@@ -418,21 +473,67 @@ def test_a_sweep_that_reclaimed_nothing_still_says_what_it_looked_at(host: Host)
         assert family in examined(result.stdout)
 
 
-def test_a_sweep_with_nothing_left_to_act_on_is_one_line(host: Host) -> None:
+def test_a_sweep_with_nothing_left_to_act_on_is_the_short_form(host: Host) -> None:
     """Coverage was complete and nothing here is an operator's, so the sections stay away.
 
     Proven on a pass that really reclaimed rather than on an idle host, because the
     claim is about a *working* sweep being quiet — one that swept nothing would print
-    the same line for the wrong reason. The line still names all four families, so the
-    short form is an account of the scope and not an unqualified all-clear.
+    the same short form for the wrong reason, which is what the pair of journeys below
+    is about. The verdict still names all four families and now says how many
+    candidates it judged, so the short form is an account of the scope and not an
+    unqualified all-clear.
     """
     dead = host.scratch("dead", held=False)
 
     result = sweep(host, "--min-age-hours", "0")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [SHORT_FORM]
-    assert not dead.exists(), "the one line came from a sweep that reclaimed nothing"
+    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
+    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
+
+
+def test_nothing_reclaimed_with_candidates_examined_is_not_the_sentence_for_an_empty_host(
+    host: Host,
+) -> None:
+    """The two readings a single `Reclaimed: none` used to give one answer for.
+
+    A host whose families are full of live work reclaims nothing, and so does a host
+    with no families to judge at all. The first is the sweep working; the second is a
+    sweep that looked at nothing, and on a host where the disk is filling those are
+    opposite pieces of news. Both are driven here against the same recipe and the same
+    roots, and the assertion is that the two answers differ — asserted as a comparison
+    as well as against each sentence, so a future edit that made both say one thing
+    again fails here rather than passing two half-checks.
+    """
+    empty = sweep(host, "--min-age-hours", "0")
+
+    assert empty.returncode == 0, empty.stderr
+    assert empty.stdout.splitlines() == short_form(NOTHING_EXAMINED), empty.stdout
+
+    live = host.scratch("live", held=True)
+    holder = subprocess.Popen(
+        ["python3", "-c", HOLDER, str(live)],
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=str(live),
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held", "the holder never took the lock"
+
+        judged = sweep(host, "--min-age-hours", "0")
+    finally:
+        holder.terminate()
+        holder.wait(timeout=e2e_timeout(30))
+
+    assert judged.returncode == 0, judged.stderr
+    assert judged.stdout.splitlines() == short_form(nothing_reclaimed(1)), judged.stdout
+    assert live.exists(), "the candidate this journey is about was reclaimed"
+    assert judged.stdout != empty.stdout, (
+        "a sweep that judged a candidate and could take none of it said exactly what a "
+        "sweep with nothing to judge said; those are opposite pieces of news on a host "
+        "whose disk is filling"
+    )
 
 
 def test_a_family_neither_verb_examined_keeps_both_reports_and_the_trailer(
@@ -455,7 +556,12 @@ def test_a_family_neither_verb_examined_keeps_both_reports_and_the_trailer(
     for section in SECTIONS:
         assert section in result.stdout, "an unexamined family did not bring the report back"
     assert str(host.worktrees) in not_examined(result.stdout)
-    assert SHORT_FORM not in result.stdout
+    for verdict in (NOTHING_EXAMINED, nothing_reclaimed(1), reclaimed(1, 1)):
+        assert verdict not in result.stdout, "the short form stood in for the long one"
+    assert "\n".join(FREE_SPACE_LINES) in result.stdout, (
+        "the long form is what a reader opens because something is wrong, with the "
+        "`Reclaimed:` line above it; it has to say what really answers that question"
+    )
     assert legacy.exists(), "a root this sweep only reports on was reclaimed"
     assert not dead.exists(), "the families the verbs do own went unswept"
 
@@ -628,7 +734,7 @@ def test_a_scratch_root_holding_only_examined_scratch_and_this_recipes_lock_is_q
 
     A root whose every entry either belongs to a verb that examined it or was written
     by this recipe on its way there leaves nothing for an operator to do, so it is not
-    a family and the sweep stays one line. Reporting it anyway would put a section in
+    a family and the sweep stays in its short form. Reporting it anyway would put a section in
     front of a reader at every dispatch start, and what a reader learns to skim past is
     the trailer that names the family nothing looked at — which is the whole thing this
     rationing protects.
@@ -636,7 +742,7 @@ def test_a_scratch_root_holding_only_examined_scratch_and_this_recipes_lock_is_q
     The lock file below is the reason the count has an exclusion at all, and it is what
     `uv run` really leaves here on the way to each verb rather than a shape invented
     for this journey: counted, this family would be non-empty on every host that has
-    ever run the recipe and the one line below would be unreachable rather than
+    ever run the recipe and the short form below would be unreachable rather than
     rationed. It is the *only* exclusion — the journey above puts an ordinary loose
     file in the same root and it moves the count.
     """
@@ -646,10 +752,10 @@ def test_a_scratch_root_holding_only_examined_scratch_and_this_recipes_lock_is_q
     result = sweep(host, "--min-age-hours", "0")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [SHORT_FORM]
+    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
     assert str(host.temp) not in result.stdout
     assert loose.exists(), "a file this recipe only measures was removed"
-    assert not dead.exists(), "the one line came from a sweep that reclaimed nothing"
+    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
 
 
 def test_the_floor_this_recipe_passes_by_default_is_one_both_verbs_apply(
@@ -1047,3 +1153,81 @@ def test_an_argument_neither_verb_takes_is_refused_before_either_runs(
     assert result.returncode == 2, result.stdout
     assert reason in result.stderr
     assert dead.exists(), "a refused invocation swept anyway"
+
+
+#: A `uv` that answers `uv run <verb> sweep` with a report whose *shape* is a released
+#: verb's and whose count lines are not. This is what a release rewording one of them
+#: looks like from the recipe: every section is there, the exit status is 0, and the two
+#: numbers the composition reads out of them are gone.
+REWORDED_UV = """#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" != run ]; then exec /usr/bin/env "$@"; fi
+case "${2:-}" in
+  oneagentgraph)
+    printf 'sweep: examined family "runs" at /somewhere — 3 folders\\n'
+    printf 'sweep: examined family "temp" at /elsewhere — 1 folder\\n'
+    printf 'sweep: reclaimed 0 B from 0 folders; examined: runs, temp; unexamined: none\\n'
+    ;;
+  onevcs)
+    printf 'Families examined:\\n'
+    printf '  publications — 2 roots in /somewhere\\n'
+    printf '  recoveries — 0 roots in /elsewhere\\n'
+    printf 'Families not examined:\\n  none\\n'
+    printf 'Reclaimed:\\n  none\\n'
+    ;;
+esac
+"""
+
+
+# llmlint: ignore-block[e2e_not_mocked] The recipe, its parsing and its output are the
+# real ones; what is substituted is `uv`, the boundary the recipe crosses to reach the
+# two published verbs, and it is substituted with a report *only a future release could
+# write*. That is the whole condition under test — a verb that succeeded and reworded a
+# line — and it cannot be arranged with the installed verbs, which by construction still
+# write the lines this recipe reads.
+def test_a_report_whose_counts_cannot_be_read_prints_the_sections_rather_than_guessing(
+    host: Host, tmp_path: Path
+) -> None:
+    """An unreadable count is a third answer, and it may not collapse into either of two.
+
+    The composition tells "nothing reclaimed, candidates examined" from "nothing
+    reclaimed, nothing examined" by reading counts out of each verb's own report. A
+    release that rewords one of those lines leaves it reading zero, which is the second
+    sentence — and that sentence, wrongly given, is an all-clear on a host where nothing
+    was looked at. So it prints the verbs' own reports instead, which is where the
+    operator can see what really happened.
+    """
+    stub = tmp_path / "stub-bin"
+    stub.mkdir()
+    (stub / "uv").write_text(REWORDED_UV, encoding="utf-8")
+    (stub / "uv").chmod(0o755)
+    environment = {**host.environment, "PATH": f"{stub}{os.pathsep}{host.environment['PATH']}"}
+
+    result = subprocess.run(
+        ["just", "sweep", "--min-age-hours", "0"],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        timeout=e2e_timeout(120),
+    )
+
+    assert result.returncode == 0, result.stderr
+    for verdict in (NOTHING_EXAMINED, nothing_reclaimed(0), reclaimed(0, 0)):
+        assert verdict not in result.stdout, (
+            "a report whose counts could not be read was answered with a verdict about "
+            f"how many candidates were judged:\n{result.stdout}"
+        )
+    for section in SECTIONS:
+        assert section in result.stdout, (
+            f"an unreadable count cost the reports that are the answer:\n{result.stdout}"
+        )
+    assert "3 folders" in result.stdout, (
+        "the verb's own report is not in front of the operator, so nothing here says "
+        f"which line stopped being readable:\n{result.stdout}"
+    )
+
+
+# llmlint: ignore-end[e2e_not_mocked]

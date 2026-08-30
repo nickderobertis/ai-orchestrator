@@ -28,11 +28,28 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # the environment matches the lockfile.
 "$script_dir/python-install.sh" || exit 1
 
+# The third, and the one a shared host path used to hide. The plan-store CLI is
+# installed into `<root>/.venv/bin` so a checkout reads the release it pinned rather
+# than whichever checkout on the host provisioned last — and nothing but this repository
+# puts one there, so a fresh worktree or publication clone arrives with none and every
+# recipe and test that reads the plan store fails on the missing file. It exits
+# immediately once the binary already reports this checkout's pin.
+"$script_dir/onetaskgraph-install.sh" || exit 1
+
 repo_identity="$(git config --get remote.origin.url || git rev-parse --show-toplevel)" || { echo "nx: cannot resolve repository identity; run from a Git checkout and retry" >&2; exit 1; }
 repo_key="$(printf '%s' "$repo_identity" | sha256sum | cut -c1-16)" || { echo "nx: cannot derive the repository cache key; verify sha256sum is available and retry" >&2; exit 1; }
 [[ "$repo_key" =~ ^[0-9a-f]{16}$ ]] || { echo "nx: derived an invalid repository cache key; verify sha256sum output and retry" >&2; exit 1; }
 cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx/${repo_key}"
 export NX_CACHE_DIRECTORY="$cache_root"
+
+# The *other* Nx cache, keyed the same way so it grows per repository rather than per
+# worktree: Nx copies its 22 MB native module into a directory named from the workspace
+# root, and every dispatch here works in a new one. A sibling of the computation cache
+# rather than that directory itself, because Nx creates `NX_CACHE_DIRECTORY` only when
+# it stores a task result — which is what lets a metadata-only invocation leave nothing
+# behind — while the native loader creates its own on every invocation. See AGENTS.md,
+# "The computation cache those targets use".
+export NX_NATIVE_FILE_CACHE_DIRECTORY="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}"
 
 # Nx's daemon is off by default here, and any daemon that is turned back on uses
 # the installed Nx for its own housekeeping.

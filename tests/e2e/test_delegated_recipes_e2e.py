@@ -54,6 +54,11 @@ WRAPPER_SCRIPTS = (
     # with. Every launch takes that seam, `onepipeline.sh` included, so the helper that
     # establishes it and the wrapper it names are both part of a runnable checkout.
     "plan.sh",
+    # A launch reads its plan through the standalone CLI this repository installs into
+    # the checkout's own `.venv/bin`, so `onepipeline.sh` heals a checkout that carries
+    # none before it launches. The checkout here declares no adopted release, which is
+    # the case that heal no-ops in — but it has to be there to no-op.
+    "onetaskgraph-install.sh",
     "credentials-env.sh",
     "ask-manager-env.sh",
     "ask-manager.sh",

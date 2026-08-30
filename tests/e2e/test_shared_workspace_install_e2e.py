@@ -2,9 +2,11 @@
 
 Every journey carrying `WORKSPACE_INSTALL_MARKS` drives a real `bun install
 --frozen-lockfile` into one shared `node_modules`, and the group half of that tuple is
-the only thing keeping two of them from doing it at once. That makes the scheduler's
-behaviour load-bearing here rather than incidental, so it is measured: real pytest-xdist
-over real tests that report which worker took them and when.
+the only thing keeping two of them from doing it at once. The deadline-based channel
+journeys name that same group, because their every step is a `just` recipe waiting on
+the `<root>/.venv` lock those installs hold. That makes the scheduler's behaviour
+load-bearing here rather than incidental, so it is measured: real pytest-xdist over real
+tests that report which worker took them and when.
 
 Non-overlap is asserted beside co-location because it is the property the shared install
 needs — a group pinned to one worker would still race if xdist ever ran a worker's tests
@@ -18,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-from nx_workspace import WORKSPACE_INSTALL_GROUP
+from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from waits import timeout as e2e_timeout
 
 #: Enough tests that a load-balancing scheduler would split them across two workers,
@@ -62,7 +64,7 @@ def _schedule(tmp_path: Path) -> list[Ran]:
     """Run the generated tests under real pytest-xdist and read back what happened."""
     generated = tmp_path / "test_generated.py"
     generated.write_text(
-        GENERATED.format(group=WORKSPACE_INSTALL_GROUP, count=GROUPED), encoding="utf-8"
+        GENERATED.format(group=SHARED_TOOLCHAIN_GROUP, count=GROUPED), encoding="utf-8"
     )
     log = tmp_path / "schedule.log"
     log.write_text("", encoding="utf-8")
@@ -108,7 +110,7 @@ def test_one_group_runs_on_one_worker_and_never_two_at_once(tmp_path: Path) -> N
     assert len(recorded) == GROUPED, f"only {len(recorded)} of {GROUPED} tests reported"
     workers = {ran.worker for ran in recorded}
     assert len(workers) == 1, (
-        f"the {WORKSPACE_INSTALL_GROUP!r} group ran across {sorted(workers)}; "
+        f"the {SHARED_TOOLCHAIN_GROUP!r} group ran across {sorted(workers)}; "
         "`--dist loadgroup` is what keeps every journey sharing one `node_modules` off "
         "each other, and it is not in force"
     )

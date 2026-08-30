@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from plan_fixture_root import ROOT as _PROJECT_ROOT
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -99,7 +100,7 @@ def read_project_plan(project: str) -> dict[str, Any]:
     # llmlint: ignore[suppressions_justified] The CLI owns this open JSON schema.
     def read(*arguments: str) -> dict[str, Any]:
         completed = subprocess.run(
-            [str(Path.home() / ".local/bin/onetaskgraph"), *arguments, "--json"],
+            [str(ONETASKGRAPH_BIN), *arguments, "--json"],
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,

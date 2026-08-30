@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import plan_review
 from orchestrator.plan_store import WRITABLE_PLUGIN
@@ -96,7 +96,7 @@ def test_the_board_source_is_left_exactly_as_it_was(setting: str, expected: str)
 def _resolved_configuration() -> dict[str, object]:
     """Every setting the installed CLI resolves out of this checkout's own file."""
     result = subprocess.run(
-        [str(Path.home() / ".local/bin/onetaskgraph"), "--json", "config", "show"],
+        [str(ONETASKGRAPH_BIN), "--json", "config", "show"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

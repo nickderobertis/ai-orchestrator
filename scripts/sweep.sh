@@ -40,10 +40,17 @@ two published verbs that own them: `oneagentgraph sweep` and `onevcs sweep`.
                            mean the same thing by it. Their own default is 24, which
                            on this host reclaimed nothing at all.
 
-A sweep that examined every family and left nothing to act on says so in one line.
-A verb that failed, or a family neither of them examined, prints both reports and the
-trailer naming what was left unlooked-at. `--dry-run` always prints them: it removes
-nothing, so those reports are the answer it was asked for.
+A sweep that examined every family and left nothing to act on says so in a short form
+naming how many candidates it judged and how many it took. Two of those readings look
+alike and are not: nothing reclaimed with candidates examined means every one of them
+was live or within retention, and nothing reclaimed with none examined means there was
+nothing to judge — so they are two different sentences. Free space is what says whether
+this host has room; the reclaimed figure is a statement about these families only.
+
+A verb that failed, a family neither of them examined, or a report this recipe cannot
+read those counts out of, prints both reports and the trailer naming what was left
+unlooked-at. `--dry-run` always prints them: it removes nothing, so those reports are
+the answer it was asked for.
 
 The host scratch root — $TMPDIR, or /tmp — is one of those families. It is measured
 and named there, and nothing here removes anything under it.
@@ -120,6 +127,67 @@ onevcs_report="$(uv run onevcs sweep ${forwarded[@]+"${forwarded[@]}"})" || onev
 #: the installed verbs report examining by `tests/e2e/test_sweep_e2e.py`.
 ONEAGENTGRAPH_FAMILIES='runs, temp'
 ONEVCS_FAMILIES='publications, recoveries'
+
+#: How `oneagentgraph sweep` names what it looked at and what it took. Two counts, one
+#: per line it already writes: `examined family "runs" at <path> — N director(y|ies)`,
+#: and one summary `reclaimed <size> from N director(y|ies);` — spelled `would reclaim`
+#: under `--dry-run`. Restated here rather than inferred, and held against the
+#: installed verb by `tests/e2e/test_sweep_e2e.py`, so a release that rewords either
+#: line fails there instead of leaving this recipe quietly counting nothing.
+# shellcheck disable=SC2016 # `$0` below is awk's whole record, not this shell's name.
+ONEAGENTGRAPH_COUNTS='
+BEGIN { examined = 0; reclaimed = 0; saw_examined = 0; saw_reclaimed = 0 }
+$0 ~ /^sweep: examined family "[^"]*" at .* [0-9]+ director(y|ies)$/ {
+  line = $0
+  sub(/ director(y|ies)$/, "", line)
+  count = split(line, field, " ")
+  examined += field[count]
+  saw_examined = 1
+  next
+}
+$0 ~ /^sweep: (reclaimed|would reclaim) .* from [0-9]+ director(y|ies);/ {
+  line = $0
+  sub(/ director(y|ies);.*$/, "", line)
+  count = split(line, field, " ")
+  reclaimed += field[count]
+  saw_reclaimed = 1
+  next
+}
+END {
+  print saw_examined ? examined : "unreadable"
+  print saw_reclaimed ? reclaimed : "unreadable"
+}
+'
+
+#: The same two counts as `onevcs sweep` writes them. Its examined families are listed
+#: one per line as `  <family> — N run root(s) in <path>`, and a family nothing has cut
+#: a root in yet says so in words instead of with a zero — which is a count of none and
+#: is read as one. Its summary is `onevcs sweep: reclaimed N workspace(s), ...`.
+# shellcheck disable=SC2016 # `$0` below is awk's whole record, not this shell's name.
+ONEVCS_COUNTS='
+BEGIN { examined = 0; reclaimed = 0; saw_examined = 0; saw_reclaimed = 0 }
+$0 ~ /^  [^ ]+ — [0-9]+ run root\(s\) in / {
+  line = $0
+  sub(/ run root\(s\) in .*$/, "", line)
+  count = split(line, field, " ")
+  examined += field[count]
+  saw_examined = 1
+  next
+}
+$0 ~ /^  [^ ]+ — nothing has cut a run root at .* yet$/ { saw_examined = 1; next }
+$0 ~ /^onevcs sweep: (reclaimed|would reclaim) [0-9]+ workspace\(s\),/ {
+  line = $0
+  sub(/ workspace\(s\),.*$/, "", line)
+  count = split(line, field, " ")
+  reclaimed += field[count]
+  saw_reclaimed = 1
+  next
+}
+END {
+  print saw_examined ? examined : "unreadable"
+  print saw_reclaimed ? reclaimed : "unreadable"
+}
+'
 
 # A failed sweeper is reported with what to do about it and not only with its status:
 # "a family went unswept" is not something an operator can act on without the command
@@ -379,7 +447,60 @@ print_sections() {
   else
     printf '  %s\n' "${unexamined[@]}"
   fi
+  # Said here as well as in the one-line forms, because this is the report in front of
+  # an operator who came looking at a full disk — and the `Reclaimed:` line above it is
+  # the number they are most likely to read as the answer.
+  printf '    %s\n' "$FREE_SPACE_NOTE"
 }
+
+#: Two numbers read out of one verb's report: how many candidates it examined, and how
+#: many of them it took. Either answers `unreadable` when the report carries no line
+#: this recipe recognizes, which is a release rewording one of them — never a zero,
+#: because "examined nothing" and "cannot tell what was examined" are the two answers
+#: this whole distinction exists to keep apart.
+counted() {
+  local report="$1" program="$2"
+  printf '%s\n' "$report" | awk "$program"
+}
+
+# Constraint 3 at the third place that can breach it: this runs after both verbs have
+# swept, so an `awk` that fell over must not discard their reports. A missing count
+# degrades to the word below and takes the long form, where the verbs' own lines are.
+counts_readable=1
+examined_candidates=0
+reclaimed_candidates=0
+counted_values=()
+mapfile -t counted_values < <(
+  counted "$oneagentgraph_report" "$ONEAGENTGRAPH_COUNTS"
+  counted "$onevcs_report" "$ONEVCS_COUNTS"
+)
+# Four numbers, in this order: what oneagentgraph examined and took, then what onevcs
+# did. Anything else — a short list, a word, an empty line — is a report this recipe
+# could not read, never a zero.
+if [ "${#counted_values[@]}" -ne 4 ]; then
+  counts_readable=0
+else
+  for counted_value in "${counted_values[@]}"; do
+    [[ $counted_value =~ ^[0-9]+$ ]] || counts_readable=0
+  done
+fi
+if [ "$counts_readable" -ne 0 ]; then
+  examined_candidates=$((counted_values[0] + counted_values[2]))
+  reclaimed_candidates=$((counted_values[1] + counted_values[3]))
+fi
+
+#: The clause every verdict below ends with, because the number in front of it is the
+#: one a reader mistakes for an all-clear. A sweep takes only what it can *prove* dead,
+#: in the families named beside it, so what says this host has room is free space.
+#: Part of the verdict rather than a paragraph under it: a successful sweep is one line.
+FREE_SPACE_CLAUSE='free space (df -h) is what says this host has room, not this line'
+
+#: The same thing at length, for the long form alone. There the reader arrived because
+#: something is wrong, the sections are already in front of them, and the `Reclaimed:`
+#: line above is the number they are most likely to read as the answer.
+FREE_SPACE_NOTE='What says this host has room is free space — df -h — never the reclaimed
+    figure: a sweep takes only what it can prove dead, in the families named
+    here and in no others.'
 
 # Constraint 4, as its three cases.
 if [ "$dry_run" -ne 0 ]; then
@@ -399,9 +520,29 @@ elif [ "${#unexamined[@]}" -ne 0 ] ||
   # move.
   # llmlint: ignore[tool_output_is_signal] an unreached family is the answer; above.
   print_sections
+elif [ "$counts_readable" -eq 0 ]; then
+  # Neither verb failed and no family went unlooked-at, but this recipe could not read
+  # how many candidates were judged out of what they wrote — a release reworded a line
+  # above. The one-line forms below would then have to guess between "examined nothing"
+  # and "cannot tell", which is exactly the conflation they exist to end, so the
+  # operator gets the verbs' own reports instead.
+  # llmlint: ignore[tool_output_is_signal] an unreadable count is the answer; above.
+  print_sections
+elif [ "$examined_candidates" -eq 0 ]; then
+  # Nothing was reclaimed because there was nothing to judge. Said in its own sentence
+  # because the state below says the opposite thing with the same number: a host whose
+  # families are empty and a host whose every candidate is alive both reclaim nothing,
+  # and only one of them is evidence that the sweep is working.
+  printf 'just sweep: nothing reclaimed — no candidate was examined; every family (%s; %s) was empty; %s.\n' \
+    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" "$FREE_SPACE_CLAUSE"
+elif [ "$reclaimed_candidates" -eq 0 ]; then
+  printf 'just sweep: nothing reclaimed — %d candidate(s) examined across every family (%s; %s), all live or within retention; %s.\n' \
+    "$examined_candidates" "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
+    "$FREE_SPACE_CLAUSE"
 else
-  printf 'just sweep: nothing to act on — every family examined: %s; %s.\n' \
-    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES"
+  printf 'just sweep: reclaimed %d of %d candidate(s) examined — every family examined: %s; %s; %s.\n' \
+    "$reclaimed_candidates" "$examined_candidates" \
+    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" "$FREE_SPACE_CLAUSE"
 fi
 
 # A sweeper that failed leaves a family unswept, and an operator watching for a full

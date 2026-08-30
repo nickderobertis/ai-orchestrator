@@ -702,15 +702,24 @@ def test_the_screenshot_gallery_root_is_ignored() -> None:
 def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
     """A checkout the *real* `scripts/nx.sh` runs in, with Nx doubled.
 
-    Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, and
-    `workspace-install.sh` are the real files, because what they choose to do —
-    which log to write, and whether to provision the workspace first — is what is
-    under test.
+    Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, `workspace-install.sh`,
+    `python-install.sh` and `onetaskgraph-install.sh` are the real files, because what
+    they choose to do — which log to write, and whether to provision the workspace
+    first — is what is under test. This checkout declares no adopted release, which is
+    the case the plan-store heal is written to no-op in: `tests/fixtures/nx-cache` is
+    the other one, and a wrapper that fetched here would put a network crossing in
+    front of every Nx target in a tree that has no plan store to read.
     """
     checkout = tmp_path / name
     (checkout / "scripts").mkdir(parents=True)
     (checkout / "bin").mkdir()
-    for script in ("nx.sh", "preserved-log.sh", "workspace-install.sh", "python-install.sh"):
+    for script in (
+        "nx.sh",
+        "preserved-log.sh",
+        "workspace-install.sh",
+        "python-install.sh",
+        "onetaskgraph-install.sh",
+    ):
         shutil.copy2(ROOT / "scripts" / script, checkout / "scripts" / script)
         (checkout / "scripts" / script).chmod(0o755)
     # `nx.sh` derives its shared cache key from the repository identity.

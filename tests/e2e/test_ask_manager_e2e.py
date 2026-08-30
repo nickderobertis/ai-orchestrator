@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import NamedTuple, NewType, Protocol, TypedDict, cast
 
 import pytest
+from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import (
     MANAGER_PATIENCE_SECONDS,
     TOKEN,
@@ -125,6 +126,15 @@ RunId = NewType("RunId", str)
 #: sentence rather than a manager left holding an answer nobody came for.
 MAX_ATTEMPTS = 4
 
+#: The release the decoy `onetaskgraph` reports. Any release this checkout does not
+#: adopt; the journey below holds it to differing from the pin.
+DECOY_PIN = "0.0.1"
+
+#: Read rather than restated, so the decoy is held to the real pin.
+ADOPTED_ONETASKGRAPH = (
+    (REPO_ROOT / "config" / "onetaskgraph.version").read_text(encoding="utf-8").strip()
+)
+
 #: The agent node every plan below carries. It is never dispatched — it depends on the
 #: human gate, which nobody attests — and it exists so a `context` live edit has a
 #: node to be addressed to, which is how the misrouted-edit journey gets a real one.
@@ -136,6 +146,42 @@ class Asked(NamedTuple):
 
     environment: dict[str, str]
     run: RunId
+
+
+def _sandboxed_home(tmp_path: Path) -> dict[str, str]:
+    """A `HOME` of this journey's own, carrying a decoy at the once-shared tool path.
+
+    Two reasons, and the second is what this returns rather than merely sets. Host
+    state under the real `HOME` — an operator's `~/.config/onetaskgraph/secrets.env`,
+    a Claude or codex config directory — reaches a launch these journeys make, so a
+    sandbox is what makes them answer about this checkout. And the standalone
+    `onetaskgraph` CLI was installed into `$HOME/.local/bin` until provisioning moved
+    it into each checkout's own `.venv/bin`: one path the whole host shared, which the
+    canonical checkout reverted below this one's pin roughly every 80 seconds, and
+    four cases here failed every time it did.
+
+    So the sandbox plants a *differently pinned* copy there and puts that directory
+    first on `PATH`. Resolution then has to be positive rather than accidental: a
+    launch reaches `onetaskgraph` through `uv run`, which prepends this checkout's own
+    environment, so the decoy is passed over even from the front of the search path.
+    Every journey in this module runs against it, and the one below asserts it.
+    """
+    home = tmp_path / "home"
+    shared_bin = home / ".local" / "bin"
+    shared_bin.mkdir(parents=True, exist_ok=True)
+    decoy = shared_bin / "onetaskgraph"
+    decoy.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' 'onetaskgraph {DECOY_PIN}'\n", encoding="utf-8"
+    )
+    decoy.chmod(0o755)
+    return {
+        "HOME": str(home),
+        "PATH": os.pathsep.join((str(shared_bin), os.environ["PATH"])),
+        # uv resolves this project's environment on every `uv run` and caches that
+        # under the real `HOME`. Re-resolving it per journey costs minutes and a
+        # network, neither of which any journey here is about.
+        "UV_CACHE_DIR": os.environ.get("UV_CACHE_DIR") or str(Path.home() / ".cache" / "uv"),
+    }
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -150,6 +196,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment.update(_sandboxed_home(tmp_path))
     return environment
 
 
@@ -417,7 +464,14 @@ def _finish(
 #: each one is a wrapper process and a manager thread both waiting on `just` recipes,
 #: and four of those racing the rest of a full suite is what turned a several-second
 #: round trip into one that outlived the window it was given.
-CHANNEL_GROUP = "ask-manager-channel"
+#:
+#: `tests/e2e/nx_workspace.py`'s group, because every one of those `just` recipes
+#: reaches its tool through `uv run`, which waits on the exclusive lock a journey
+#: re-provisioning this checkout holds. A group of this module's own would co-locate
+#: these journeys with each other and leave that writer free to run beside them on
+#: another worker, which is not a constraint at all: `--dist loadgroup` serialises one
+#: group name, never two.
+CHANNEL_GROUP = SHARED_TOOLCHAIN_GROUP
 
 
 def _waited_for_question(
@@ -478,6 +532,53 @@ def test_the_wrapper_answers_with_the_managers_message_and_nothing_else(asked: A
     assert status == 0, f"the wrapper did not accept the manager's answer:\n{err}"
     assert TOKEN.sub("", out).strip() == ANSWER, out
     assert err == "", f"a successful ask reported something on stderr:\n{err}"
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_the_round_trip_survives_a_differently_pinned_tool_at_the_once_shared_path(
+    asked: Asked,
+) -> None:
+    """The same round trip, with a wrong-pinned `onetaskgraph` first on the search path.
+
+    Provisioning installed that CLI into `$HOME/.local/bin` until it moved into each
+    checkout's own `.venv/bin`, and while the path was shared a sibling checkout
+    reinstalled its own release over this one — measured at roughly one reversion every
+    80 seconds — which is what failed four cases here at a time. `_sandboxed_home`
+    plants exactly that: a copy reporting a release this checkout does not adopt, at
+    that path, ahead of everything else on `PATH`.
+
+    Both halves are asserted, because either alone passes for the wrong reason. That
+    the decoy is really there and really disagrees is what says the environment was
+    arranged; that the launch in the fixture and the ask below both succeed anyway is
+    what says resolution goes through this checkout's own environment rather than
+    through whichever copy the search path reaches first.
+    """
+    decoy = Path(asked.environment["HOME"]) / ".local" / "bin" / "onetaskgraph"
+    reported = subprocess.run([str(decoy)], text=True, capture_output=True, check=False)
+    assert reported.stdout.strip() == f"onetaskgraph {DECOY_PIN}", (
+        f"the decoy at {decoy} reports {reported.stdout.strip()!r}; this journey is "
+        "about a wrong-pinned copy being passed over, so there has to be one"
+    )
+    assert asked.environment["PATH"].split(os.pathsep)[0] == str(decoy.parent), (
+        "the decoy is not first on PATH, so passing it over proves nothing about how "
+        f"the tool is resolved: {asked.environment['PATH']}"
+    )
+    assert ADOPTED_ONETASKGRAPH != DECOY_PIN, (
+        f"config/onetaskgraph.version now adopts {ADOPTED_ONETASKGRAPH}, which is the "
+        "decoy's own release; pick another for DECOY_PIN"
+    )
+
+    asking = _ask(asked, "Should the test key cover docs?", window=ANSWERED_WINDOW_SECONDS)
+    manager = Manager(asked.run, asked.environment, [lambda token: ruling(f"{ANSWER} {token}")])
+
+    status, out, err = _finish(asking, manager=manager)
+    manager.checked(asker_said=err)
+
+    assert status == 0, (
+        "the round trip failed with a wrong-pinned onetaskgraph first on PATH, which "
+        f"is the state a sibling checkout used to leave this host in:\n{err}"
+    )
+    assert TOKEN.sub("", out).strip() == ANSWER, out
 
 
 @pytest.mark.xdist_group(CHANNEL_GROUP)
@@ -1286,7 +1387,7 @@ def _turns_of(turns: list[TurnRecord], member: str) -> list[TurnRecord]:
     return found
 
 
-@pytest.mark.xdist_group("ask-manager-dispatch-environment")
+@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_dispatched_agent_is_given_the_run_it_belongs_to(
     dispatched_turns: list[TurnRecord],
 ) -> None:
@@ -1311,7 +1412,7 @@ def test_a_dispatched_agent_is_given_the_run_it_belongs_to(
     )
 
 
-@pytest.mark.xdist_group("ask-manager-dispatch-environment")
+@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_an_observer_member_cannot_tell_its_run_from_an_enclosing_one_by_that_variable(
     dispatched_turns: list[TurnRecord],
 ) -> None:

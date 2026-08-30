@@ -62,3 +62,10 @@ PUBLISHED_TOOLS = (
 SEPARATELY_GATED_VERSION_FILES = frozenset(
     {"onejudge.version", "oneharness.version", "onetaskgraph.version"}
 )
+
+#: Where this checkout's own provisioning installs the standalone `onetaskgraph` CLI,
+#: and the one place the suite reads it from. It is per checkout rather than a
+#: directory the whole host shares — `scripts/session-setup.sh` says why — so a test
+#: that read a shared path would be answering about whichever checkout provisioned
+#: last rather than about this one.
+ONETASKGRAPH_BIN = REPO_ROOT / ".venv" / "bin" / "onetaskgraph"
