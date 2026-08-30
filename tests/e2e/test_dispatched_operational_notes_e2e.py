@@ -24,8 +24,10 @@ nodes in one workstream settled `task-failed` with complete, green work. Removin
 from the file is a different claim from a worker no longer being handed it: this text is
 copied into every task, rendered by `onepipeline`, and handed to `oneagentgraph`, and a
 stale builder's copy travels through all three unchanged. It is also told, as a property
-rather than as a procedure, that its completion report is the last thing it produces —
-which is what six of those nodes were actually failed on.
+rather than as an ordering of its own outputs, that every claim it makes about the
+finished work is true of the tree as it finally stands — and is no longer told that its
+report must be its last output, which is the demand that failed six further nodes with
+complete committed work and no acceptance criterion unmet.
 
 A worker is told never to signal a process it did not identify by PID — stated *before*
 any reasoning about how a pattern matches, because the old text argued only from `pgrep
@@ -51,10 +53,15 @@ from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
 from project_fixtures import project_from_plan
 from test_dispatch_appendix import (
+    A_DELTA_SATISFIES_IT,
+    A_FALSE_CLAIM_STILL_FAILS,
+    A_RUN_FROM_BEFORE_THE_CHANGE_IS_EVIDENCE,
     AMBIGUOUS_IN_FLIGHT,
+    AN_INDUCED_FAILURE_IS_EVIDENCE,
     BACKGROUNDED,
     CAPTURED_AT_LAUNCH,
     CHAINED_INVOCATION,
+    CLAIMS_TRUE_OF_THE_FINAL_TREE,
     CONCURRENT_GATE_INSTRUCTION,
     CONCURRENT_RUNS_ALLOWED,
     DEFINITION,
@@ -68,13 +75,16 @@ from test_dispatch_appendix import (
     PER_INVOCATION_PATH,
     PID_FROM_A_PATTERN,
     POLLING,
-    REPORT_DESCRIBES_THE_FINAL_TREE,
     REPORT_IS_LAST,
     REPORTED_AFRESH,
     RERUN_THAT_CHECK,
+    RERUN_WHAT_A_CHANGE_COULD_HAVE_BROKEN,
     SENTINEL_PATH_OWNERSHIP,
     SIGNAL_ONLY_BY_PID,
+    SILENCE_DOES_NOT_SATISFY_IT,
     TARGETED_CHECKS,
+    THE_CITATION_SAYS_WHICH_IT_IS,
+    UNRECHECKED_CLAIMS_ARE_NAMED,
     WAITED_ON,
     WIDE_BAR,
     sentence_around,
@@ -207,12 +217,16 @@ def dispatched(
     )
     try:
         assert launch.returncode == 0, launch.stdout + launch.stderr
+        # The read that reaches past the operator-facing interface is this one, so it is
+        # the line the directive below sits on: a line-scoped ignore covers the line after
+        # it, and the block that decodes what was read needs no licence of its own.
+        # llmlint: ignore[tests_mirror_real_usage] No view carries a dispatch's own prompt.
+        recorded = prompt_log.read_text(encoding="utf-8")
         # The stand-in writes this JSONL itself, one object per turn; it is test-owned on
         # both ends, so this states its schema rather than validating somebody else's.
-        # llmlint: ignore[tests_mirror_real_usage] No view carries a dispatch's own prompt.
         written = [
             cast(Mapping[str, str], json.loads(line))
-            for line in prompt_log.read_text(encoding="utf-8").splitlines()
+            for line in recorded.splitlines()
             if line.strip()
         ]
         yield Dispatched(
@@ -325,24 +339,79 @@ def test_a_dispatched_worker_is_handed_no_complete_gate_to_run(
 
 
 @pytest.mark.xdist_group("dispatched-operational-notes")
-def test_a_dispatched_worker_is_told_what_its_completion_report_must_be(
+def test_a_dispatched_worker_is_told_its_claims_must_hold_of_the_finished_tree(
     dispatched_notes: str,
 ) -> None:
     """The residue of the removed gate, arriving as a property of the finished dispatch.
 
     Six of fourteen nodes in one workstream settled `task-failed` on the ordering of
-    their completion reports rather than on a missed criterion, and a live `context` note
-    warning a dispatch about the pattern did not prevent a recurrence — which is why this
-    is in the text every dispatch is handed rather than in a note somebody remembers to
-    send.
+    their completion reports rather than on a missed criterion; the ordering demand that
+    answered it then failed six more, each with complete committed work, a green
+    deterministic tier, and no criterion found unmet. So what a dispatch is handed is the
+    property that ordering was serving, and it is asserted here rather than in the file
+    alone because a builder cloned before this change carries the old wording through
+    `onepipeline` and `oneagentgraph` unaltered. The clause exempting evidence produced on
+    purpose about an earlier or induced state travels with it, because a node was failed
+    for citing the failure its own criteria required it to observe.
     """
     for stated, missing in (
-        (REPORT_IS_LAST, "that the completion report is the last thing it produces"),
-        (REPORT_DESCRIBES_THE_FINAL_TREE, "that the report describes the tree as it finally is"),
-        (REPORTED_AFRESH, "that what it finds afterwards is fixed and then reported afresh"),
+        (
+            CLAIMS_TRUE_OF_THE_FINAL_TREE,
+            "that every claim it makes about the finished work is true of the tree as it "
+            "finally stands",
+        ),
+        (A_DELTA_SATISFIES_IT, "that a correct delta satisfies that property"),
+        (SILENCE_DOES_NOT_SATISFY_IT, "that silence after a later change satisfies nothing"),
+        (
+            A_FALSE_CLAIM_STILL_FAILS,
+            "that a claim about a check or a commit that was never run or made is false",
+        ),
+        (
+            RERUN_WHAT_A_CHANGE_COULD_HAVE_BROKEN,
+            "that a change which could have invalidated a claim is re-run against",
+        ),
+        (
+            UNRECHECKED_CLAIMS_ARE_NAMED,
+            "that the claims left un-re-checked are named instead",
+        ),
+        (
+            A_RUN_FROM_BEFORE_THE_CHANGE_IS_EVIDENCE,
+            "that citing a run taken before a change is correct evidence",
+        ),
+        (
+            AN_INDUCED_FAILURE_IS_EVIDENCE,
+            "that citing a failure induced on purpose is correct evidence",
+        ),
+        (
+            THE_CITATION_SAYS_WHICH_IT_IS,
+            "that such a citation carries which of the two it is",
+        ),
     ):
         assert stated.search(dispatched_notes), (
             f"the notes a dispatch carries no longer say {missing}"
+        )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_not_told_its_report_must_be_its_last_output(
+    dispatched_notes: str,
+) -> None:
+    """The withdrawn ordering, absent from the prompt rather than from a file.
+
+    A plan builder cloned before this change composes a task carrying the old appendix
+    verbatim, and nothing between that plan and the model would notice — so the absence
+    is asserted where a worker actually reads it. The demand is unsatisfiable by a
+    dispatch whose supervisor keeps asking after the report, and it failed six nodes with
+    complete, green work and no acceptance criterion unmet.
+    """
+    for withdrawn, what in (
+        (REPORT_IS_LAST, "that its completion report is the last thing it produces"),
+        (REPORTED_AFRESH, "that what it finds afterwards is fixed and then reported afresh"),
+    ):
+        found = withdrawn.search(dispatched_notes)
+        assert found is None, (
+            f"a dispatched worker is told {what} again ({found.group(0)!r}); that demand "
+            "cannot be met by a worker that answers its supervisor after reporting"
         )
 
 

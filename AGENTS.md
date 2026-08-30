@@ -1122,6 +1122,28 @@ and is never a command.
      gone, and finished work is failed against it. How that list is written is
      [the planner's](personas/planner.yaml); whether it would prove this node is
      yours.
+   - **A criterion about the dispatch's own report says what must be true of it,
+     never where it must sit.** This host demanded that a completion report come
+     after everything else the dispatch produced, and that anything found later be
+     repaired and the whole report written again; that demand is **withdrawn** — a
+     dispatch's conversation does not end when the worker reports, the supervisor
+     keeps asking, and answering well means running things, so every good answer
+     invalidated the report and only restating it whole complied. It failed six
+     nodes of one run in one night, each with complete committed work, a green
+     deterministic tier, and no acceptance criterion found unmet, and two of those
+     carried an escalated warning about it in their own task and failed anyway;
+     managers on other runs hand-published branches to get around judges that
+     would not accept them for it, which leaves the node settled `failed`, its
+     dependents skipped, and the run's own record no longer describing what
+     happened. What a criterion asks for instead is the property that ordering was
+     serving — **every claim the dispatch makes about the finished work is true of
+     the tree as it finally stands** — satisfied by a correct delta stated in the
+     turn that changed something as fully as by restating the whole report, and
+     not by silence. A *false* claim still fails on its merits: a report asserting
+     a check passed on a commit where no such run occurred is wrong on the facts,
+     and one node was correctly failed for it. `config/dispatch-appendix.md` is
+     where a dispatch reads this, and `orchestrator/criteria_guard.py`'s demand is
+     what makes every task state it.
    - Each node's `## Why` carries the user's own motivation rather than the
      handoff.
    - `deps` names real prerequisites, so unrelated branches stay parallel.

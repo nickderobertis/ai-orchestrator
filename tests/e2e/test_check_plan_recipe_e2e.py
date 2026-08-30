@@ -56,7 +56,19 @@ def _task(criteria: str) -> str:
 STATES_ITS_BAR = (
     "- The route accepts a valid request and rejects an invalid one.\n"
     "- A request-level test drives the route end to end and covers both paths.\n"
-    "- The dispatch closes with a completion report naming the evidence it verified."
+    "- Every claim the dispatch makes about the finished work is true of the tree as "
+    "it finally stands."
+)
+
+#: The same node whose reporting criterion says "account" rather than "claim". Every
+#: word the demand accepts is exercised through the real recipe, because a wording a
+#: plan's author may reasonably reach for and that only a unit test has ever accepted
+#: is one this journey would not notice losing.
+STATES_ITS_BAR_AS_AN_ACCOUNT = (
+    "- The route accepts a valid request and rejects an invalid one.\n"
+    "- A request-level test drives the route end to end and covers both paths.\n"
+    "- The dispatch's account of the finished work is true of the tree as it finally "
+    "stands."
 )
 
 #: The same node with the end-to-end criterion dropped. This is the shape that was
@@ -69,13 +81,17 @@ STATES_ITS_BAR = (
 #: it enforces a demand only where it is really made.
 OMITS_A_DEMAND = (
     "- The route accepts a valid request and rejects an invalid one.\n"
-    "- The dispatch closes with a completion report naming the evidence it verified."
+    "- Every claim the dispatch makes about the finished work is true of the tree as "
+    "it finally stands."
 )
 
-#: And the same node with the *report* criterion dropped instead, which is the demand
-#: the shipped role still makes. Both fixtures are here because the two are refused
-#: through different halves of the guard, and only this one exercises the role lifted
-#: out of the engine binary — the reading `AGENTS.md` records losing a dispatch to.
+#: And the same node with the *reporting* criterion dropped instead, which is the
+#: demand the shipped role still makes. Both fixtures are here because the two are
+#: refused through different halves of the guard, and only this one exercises the role
+#: lifted out of the engine binary — the reading `AGENTS.md` records losing a dispatch
+#: to. What that demand asks for is a property of the finished tree, not a final report
+#: as an artifact: the ordering it used to ask for failed six nodes with complete,
+#: committed, green work and no acceptance criterion unmet.
 OMITS_A_DEMAND_THE_ROLE_MAKES = (
     "- The route accepts a valid request and rejects an invalid one.\n"
     "- A request-level test drives the route end to end and covers both paths."
@@ -391,13 +407,26 @@ def test_project_store_replacement_removes_tasks_absent_from_the_new_plan(
     ]
 
 
-def test_a_plan_whose_node_states_its_bar_is_accepted(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "criteria",
+    [
+        pytest.param(STATES_ITS_BAR, id="as-a-claim"),
+        pytest.param(STATES_ITS_BAR_AS_AN_ACCOUNT, id="as-an-account"),
+    ],
+)
+def test_a_plan_whose_node_states_its_bar_is_accepted(tmp_path: Path, criteria: str) -> None:
     """The accepting half, and the count that says the human node was not checked.
 
     A `kind: human` node carries an action a person performs rather than a task a
     judge reads, so counting it would be counting a dispatch that never happens.
+
+    Both wordings of the reporting criterion run through the real recipe. That demand
+    stopped asking for a final report as an artifact and started asking for a property
+    of the finished tree — the ordering it replaced failed six nodes with complete,
+    committed, green work — so a plan is free to state the property in its own words,
+    and each word the demand accepts is proven at the boundary a plan's author uses.
     """
-    checked = _check_plan(_plan(tmp_path, STATES_ITS_BAR))
+    checked = _check_plan(_plan(tmp_path, criteria))
 
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "1 dispatched node(s)" in checked.stdout, checked.stdout
@@ -500,7 +529,8 @@ def test_a_demand_the_shipped_role_makes_is_refused_against_that_role(tmp_path: 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     reported = refused.stderr
     assert "route:" in reported, reported
-    assert "a completion report" in reported, reported
+    assert "an account of this dispatch's own work" in reported, reported
+    assert "true of the tree as it finally stands" in reported, reported
     assert "engineer" in reported and "onepipeline" in reported, reported
     assert "State it as a criterion" in reported, reported
 
@@ -588,17 +618,20 @@ def test_a_node_that_never_says_what_it_reports_is_refused(tmp_path: Path) -> No
 
     A branch was failed for never having "provided a final verified completion
     report" — a demand in neither its task nor the shared clause. The bar and the
-    appendix both ask a worker to report; a node whose criteria never say what it
-    reports leaves the judge to decide what that meant.
+    appendix both ask a worker to report; a node whose criteria never say anything about
+    what it claims of the finished work leaves the judge to decide what that meant. What
+    the refusal asks for is the property rather than that artifact: the ordering demand
+    that once answered this failed six nodes with complete, committed, green work.
     """
-    silent = "\n".join(
-        line for line in STATES_ITS_BAR.splitlines() if "completion report" not in line
-    )
+    silent = "\n".join(line for line in STATES_ITS_BAR.splitlines() if "claim" not in line)
 
     refused = _check_plan(_plan(tmp_path, silent))
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "a completion report" in refused.stderr, refused.stderr
+    assert "an account of this dispatch's own work" in refused.stderr, refused.stderr
+    assert "true of the tree as it finally stands" in refused.stderr, refused.stderr
+    for withdrawn in ("last thing", "closes with", "final report", "reported afresh"):
+        assert withdrawn not in refused.stderr, refused.stderr
 
 
 def test_a_node_naming_a_persona_no_dispatch_could_resolve_is_refused(tmp_path: Path) -> None:

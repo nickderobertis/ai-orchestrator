@@ -28,11 +28,17 @@ one-invocation demand. A rule this file states constrains every dispatch on this
 one that has stopped being true is a cost paid hundreds of times over — and a reason left
 behind is an instruction the next reader reconstructs.
 
-What the ordering incident left behind is held positively instead. Six of those settled
-nodes were failed on where the completion report sat rather than on a missed criterion,
-so the file now states the outcome that report must have — the last thing the dispatch
-produces, describing the tree as it finally is — and that is asserted here as a property
-rather than as a procedure for producing it.
+What the ordering incident left behind is held positively instead — and the ordering
+demand it first produced is now held **gone**. Six of those settled nodes were failed on
+where the completion report sat rather than on a missed criterion, and the file answered
+by demanding that the report be the dispatch's last output; six more were then failed on
+*that*, with complete committed work, a green deterministic tier, and no acceptance
+criterion found unmet, because a dispatch's conversation does not end when the worker
+reports. So the file now states the property that ordering was serving — every claim
+about the finished work is true of the tree as it finally stands, satisfied by a correct
+delta as much as by restating the whole report — and the withdrawn ordering is asserted
+absent, because a rule finished work cannot clear teaches everyone to route around the
+thing that enforces quality.
 
 The passages that were never about the gate are unchanged, and so are their reasons. The
 rule on waiting was written as advice about waiting on a *gate*, and readers who had read
@@ -114,16 +120,62 @@ WIDE_BAR = re.compile(
 #: where the repository publishes locally, the host's required checks where it does not.
 DOWNSTREAM = ("downstream", "merge path", "pre-push", "required checks")
 
-#: The outcome the completion report owes, in the three parts that failed six nodes: it
-#: is produced last, it describes the tree as it finally is, and anything found after it
-#: is fixed and reported again rather than left behind a report that predates it.
+#: The property the withdrawn ordering was serving, in the three parts a worker acts on:
+#: every claim about the finished work is true of the final tree, a delta stated in the
+#: turn that changed something satisfies that, and a claim about something that was never
+#: run or made is false and fails on its own account.
+CLAIMS_TRUE_OF_THE_FINAL_TREE = re.compile(
+    r"claim\s+you\s+make\s+about\s+the\s+finished\s+work\s+is\s+true\s+of\s+the\s+tree"
+    r"\s+as\s+it\s+finally\s+stands",
+    re.IGNORECASE,
+)
+A_DELTA_SATISFIES_IT = re.compile(r"correct\s+delta\s+satisfies\s+this", re.IGNORECASE)
+#: Silence after a later change is the third of those parts, and the one a worker is most
+#: likely to read the delta allowance as permitting.
+SILENCE_DOES_NOT_SATISFY_IT = re.compile(r"silence\s+does\s+not\s+satisfy\s+it", re.IGNORECASE)
+A_FALSE_CLAIM_STILL_FAILS = re.compile(
+    r"was\s+not\s+run\s+or\s+was\s+not\s+made\s*\n?\s*is\s+false", re.IGNORECASE
+)
+#: What keeps a once-true claim from becoming a false one: a change that could have
+#: invalidated it is re-run against, or the claims not re-checked are named.
+RERUN_WHAT_A_CHANGE_COULD_HAVE_BROKEN = re.compile(
+    r"re-run\s+what\s+the\s+change\s+could\s+have\s+broken", re.IGNORECASE
+)
+UNRECHECKED_CLAIMS_ARE_NAMED = re.compile(
+    r"say\s+which\s+claims\s+you\s+have\s+not\s+re-checked", re.IGNORECASE
+)
+
+#: Evidence a worker produced on purpose about a state other than the finished one. The
+#: resulting-tree property reads like a ban on it, and one node was failed for citing the
+#: failure its own criteria required it to observe. Two spellings, because they are two
+#: separately actionable allowances: a run quoted from before the change, and a failure
+#: made to happen. Each is held to the verdict that follows it, so prose that names the
+#: case without allowing it no longer passes.
+A_RUN_FROM_BEFORE_THE_CHANGE_IS_EVIDENCE = re.compile(
+    r"citation\s+of\s+a\s+run\s+taken\s+before\s+a\s+change[^.]*?is\s+correct\s+evidence",
+    re.IGNORECASE,
+)
+AN_INDUCED_FAILURE_IS_EVIDENCE = re.compile(
+    r"failure\s+induced\s+on\s+purpose\s+as\s+evidence[^.]*?is\s+correct\s+evidence",
+    re.IGNORECASE,
+)
+THE_CITATION_SAYS_WHICH_IT_IS = re.compile(
+    r"provided\s+the\s+citation\s+says\s+which\s+it\s+is", re.IGNORECASE
+)
+
+#: The withdrawn demand, in the two forms a worker would act on. Held as an absence
+#: because the file said both of these and six nodes with complete, green work were
+#: failed against them; prose that no longer argues for the rule but still states it is
+#: the rule still being enforced.
 REPORT_IS_LAST = re.compile(
     r"completion\s+report\s+is\s+the\s+last\s+thing\s+this\s+dispatch\s+produces", re.I
 )
-REPORT_DESCRIBES_THE_FINAL_TREE = re.compile(
-    r"describes\s+the\s+tree\s+as\s+it\s+finally\s+is", re.IGNORECASE
-)
 REPORTED_AFRESH = re.compile(r"fixed\s+first\s+and\s+then\s+reported\s+afresh", re.IGNORECASE)
+
+#: The heading of the section that asks for each demand to be stated as a criterion. The
+#: bullets under it are what a plan's builder copies, so a demand is asked for there or
+#: nowhere — the rest of the file recounts, argues and instructs, in the same words.
+STATE_THE_BAR = "### State the bar in `## Acceptance criteria`, not only here"
 
 #: A command put into the background, which is what the sentinel example does, and the
 #: sentinel that example polls. The pair is what makes the wait an answer about the
@@ -395,27 +447,81 @@ def test_the_appendix_scopes_each_check_and_reruns_only_the_one_that_reported(
     )
 
 
-def test_the_completion_report_is_stated_as_the_outcome_it_must_have(appendix: str) -> None:
+def test_what_a_dispatch_claims_is_stated_as_the_property_it_must_have(appendix: str) -> None:
     """The residue of the removed gate, stated as a property rather than as an order.
 
-    Six of fourteen nodes in one workstream settled `task-failed` with complete,
-    gate-green work, every verdict naming where the completion report sat rather than a
-    criterion it missed — one that the report appeared before the recorded commit and
-    gate actions. A live `context` note warning a dispatch about the pattern did not
-    prevent a recurrence, which is why this is written as what has to be true of the
-    finished dispatch: the report is last, it describes the tree as it finally is, and
-    anything found afterwards is fixed and reported again rather than left standing
-    behind a report that predates it.
+    The order came first and failed six nodes of one run in a night — complete committed
+    work, a green deterministic tier, no acceptance criterion found unmet, and two of them
+    carrying an escalated warning about the pattern in their own task. It is unsatisfiable
+    rather than unread: a dispatch's conversation does not end when the worker reports,
+    the supervisor keeps asking, and answering well means running things, so every good
+    answer invalidated the report and only restating it whole complied. What the file
+    states instead is the property that ordering was serving — every claim about the
+    finished work true of the tree as it finally stands, a delta in the turn that changed
+    something satisfying it as fully as a restated report, and a claim about a check that
+    never ran still false. Evidence produced on purpose about an earlier or induced state
+    is held here too: the property reads like a ban on it, and a node was failed for
+    citing the failure its own criteria required it to observe.
     """
     for stated, missing in (
-        (REPORT_IS_LAST, "that the completion report is the last thing the dispatch produces"),
-        (REPORT_DESCRIBES_THE_FINAL_TREE, "that it describes the tree as it finally is"),
-        (REPORTED_AFRESH, "that what is found afterwards is fixed and then reported afresh"),
+        (
+            CLAIMS_TRUE_OF_THE_FINAL_TREE,
+            "that every claim a dispatch makes about the finished work is true of the "
+            "tree as it finally stands",
+        ),
+        (A_DELTA_SATISFIES_IT, "that a correct delta satisfies that property"),
+        (SILENCE_DOES_NOT_SATISFY_IT, "that silence after a later change satisfies nothing"),
+        (
+            A_FALSE_CLAIM_STILL_FAILS,
+            "that a claim about a check or a commit that was never run or made is false",
+        ),
+        (
+            RERUN_WHAT_A_CHANGE_COULD_HAVE_BROKEN,
+            "that a change which could have invalidated a claim is re-run against",
+        ),
+        (
+            UNRECHECKED_CLAIMS_ARE_NAMED,
+            "that the claims left un-re-checked are named instead",
+        ),
+        (
+            A_RUN_FROM_BEFORE_THE_CHANGE_IS_EVIDENCE,
+            "that citing a run taken before a change is correct evidence",
+        ),
+        (
+            AN_INDUCED_FAILURE_IS_EVIDENCE,
+            "that citing a failure induced on purpose is correct evidence",
+        ),
+        (
+            THE_CITATION_SAYS_WHICH_IT_IS,
+            "that such a citation carries which of the two it is",
+        ),
     ):
         assert stated.search(appendix), (
-            f"{APPENDIX} no longer says {missing}; without it a dispatch that fixes "
-            "something after reporting leaves a report describing a tree that no longer "
-            "exists, which is what failed six nodes whose work was complete and green"
+            f"{APPENDIX} no longer says {missing}; without it the demand it replaced is "
+            "the only reading left of what a report owes, and that demand failed six "
+            "nodes whose work was complete and green"
+        )
+
+
+def test_the_appendix_no_longer_orders_where_the_completion_report_sits(
+    appendix: str,
+) -> None:
+    """The withdrawn demand, asserted absent rather than argued against.
+
+    Prose that stops arguing for a rule but still states it is the rule still being
+    enforced: a worker reads the instruction, and a judge handed the same text imports
+    it. Both spellings are held, because each is separately actionable — the report
+    being last, and anything found afterwards being fixed and then reported afresh.
+    """
+    for withdrawn, what in (
+        (REPORT_IS_LAST, "that the completion report is the last thing the dispatch produces"),
+        (REPORTED_AFRESH, "that what is found afterwards is fixed and then reported afresh"),
+    ):
+        found = withdrawn.search(appendix)
+        assert found is None, (
+            f"{APPENDIX} demands {what} again ({found.group(0)!r}). That ordering cannot "
+            "be satisfied by a dispatch whose supervisor keeps asking after the report, "
+            "and it failed six nodes with complete, green work and no criterion unmet"
         )
 
 
@@ -465,9 +571,17 @@ def test_the_appendix_asks_for_the_bar_to_be_stated_as_criteria(appendix: str) -
     completion report, which is in neither the task nor the shared clause. Asking for
     both here is what makes `just check-plan` refuse a task that omits them — the guard
     enforces a demand where it is made, and this file is one of the two places it reads.
+
+    The second demand is asked for as the *property* rather than as the artifact, and this
+    reads the section that asks rather than the whole file for that reason: both wordings
+    also occur elsewhere here — `"completion report"` where the incident is recounted, the
+    property where a worker is told it — so a whole-file assertion would go on passing
+    after the bullet asking for either had been replaced by anything at all.
     """
-    for demand in ("proven end to end", "completion report"):
-        assert demand in appendix, (
+    asked = appendix[appendix.index(STATE_THE_BAR) :]
+
+    for demand in ("proven end to end", "true of the tree as it finally stands"):
+        assert demand in asked, (
             f"{APPENDIX} no longer asks for {demand!r} as an acceptance criterion, so a "
             "node that omits it is judged on the bar's own reading of it instead"
         )

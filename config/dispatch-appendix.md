@@ -189,16 +189,42 @@ merge`. Finish the branch, commit everything, leave the tree clean, and report �
 lifecycle publishes it after you settle. Publication is explicitly **not** yours to
 perform and **not** part of your acceptance criteria.
 
-**Your completion report is the last thing this dispatch produces, and it describes the
-tree as it finally is.** Every commit you made, every check you ran, over the tree that
-exists when you stop. A report that predates your last commit describes a tree that no
-longer exists, and is read as work left half-applied — which is how six of fourteen nodes
-in one workstream settled `task-failed` while their work was complete and green, every
-verdict naming the order of the report rather than a criterion it missed. So there is
-nothing to do differently while you work and one thing that has to be true at the end:
-whatever you find after you have written the report — a check you re-ran, a file you
-touched, a finding you cleared — is fixed first and then reported afresh, so that the
-report the judge reads is about the tree the judge can see.
+**Every claim you make about the finished work is true of the tree as it finally
+stands.** That is the property you are held to, and it says nothing about where your
+report sits. This conversation does not end when you report — your supervisor keeps
+asking, and answering well means running things — so a report required to be this
+dispatch's literal final output is one no correct worker can give. What is required
+instead is that nothing you have said about the work is untrue of the tree by the time you
+stop.
+
+When work follows your report, say in that same turn what changed and what you re-ran. A
+correct delta satisfies this exactly as fully as restating the whole report does. Silence
+does not satisfy it at all. Your last substantive turn should leave a reader able to say
+what the finished tree contains and what was verified about it, whether that comes from
+one report or from a report plus the deltas after it.
+
+**A claim about a check, a test, a lint run, or a commit that was not run or was not made
+is false, and fails on its merits.** A report asserting a check passed on a commit where
+no such run occurred is that case, and one node of this host's history was correctly
+failed for it. So do not carry a claim forward across a change that could have invalidated
+it — re-run what the change could have broken, or say which claims you have not re-checked.
+
+**Evidence deliberately about an earlier or induced state is not a false claim.** Proving
+that an assertion can fail means making it fail, reading the message, and reverting;
+proving that a message used to say nothing means quoting the run from before the change.
+A citation of a run taken before a change, or of a failure induced on purpose as evidence,
+is correct evidence — provided the citation says which it is. One node of this host was
+failed for exactly that: its own criteria required its assertions be observed failing, and
+the resulting-tree property above was read as forbidding the citation that requirement
+produces.
+
+The ordering demand this replaces — that the report come after everything else, and that
+anything found later be repaired and the whole report written again — is **withdrawn**. It
+failed six of fourteen nodes in one workstream, each with complete committed work, a green
+deterministic tier, and no acceptance criterion found unmet, and two of those carried an
+escalated warning about it in their own task and failed anyway. A bar finished work
+cannot clear teaches everyone to route around the thing that enforces quality; the
+property above is what that demand was serving, and it is what survives.
 
 ### State the bar in `## Acceptance criteria`, not only here
 
@@ -213,8 +239,8 @@ the two the bar makes of every implementation dispatch:
 
 - the behavior this node adds is **proven end to end** by a test or journey that drives the
   real interface, rather than by inspection;
-- the dispatch closes with a **final completion report** naming what was verified and the
-  evidence for it.
+- every claim the dispatch makes about the finished work — what it verified, and the
+  evidence for it — is **true of the tree as it finally stands**.
 
 Criteria state properties of the finished tree; the commands that produce them belong in
 this section. `just check-plan <source:project>` refuses a task whose criteria omit a demand its

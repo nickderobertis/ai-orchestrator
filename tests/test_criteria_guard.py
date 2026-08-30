@@ -75,8 +75,21 @@ def _task(criteria: str, additional: str = APPENDIX) -> str:
     )
 
 
-#: Criteria that answer every demand the synthetic appendix and a bar can make.
+#: Criteria that answer every demand the synthetic appendix and a bar can make. The
+#: reporting one is stated as the property it now is — every claim about the finished
+#: work true of the final tree — rather than as the withdrawn ordering of the dispatch's
+#: own outputs, so the accepting path exercised here is the one a plan really writes.
 COMPLETE = (
+    "- The thing is done.\n"
+    "- A journey proves the thing end to end against the real interface.\n"
+    "- Every claim about the finished work is true of the tree as it finally stands, with "
+    "the evidence named."
+)
+
+#: The same reporting demand answered the way the withdrawn wording answered it. Kept as
+#: a case rather than replaced, because plans written before this change say it this way
+#: and a checker that started refusing them would strand correct work.
+REPORTS_BY_THE_WITHDRAWN_WORDING = (
     "- The thing is done.\n"
     "- A journey proves the thing end to end against the real interface.\n"
     "- The dispatch closes with a completion report naming the evidence."
@@ -480,6 +493,52 @@ def test_a_bar_that_demands_nothing_leaves_the_criteria_alone(appendix: Path) ->
 def test_criteria_that_answer_every_demand_are_accepted(appendix: Path) -> None:
     """The whole accepting path under the real `engineer` bar, counted rather than assumed."""
     assert check_plan(_plan(persona="engineer", task=_task(COMPLETE))) == 1
+
+
+@pytest.mark.parametrize(
+    "criteria",
+    [
+        pytest.param(COMPLETE, id="the-property"),
+        pytest.param(REPORTS_BY_THE_WITHDRAWN_WORDING, id="the-withdrawn-ordering"),
+    ],
+)
+def test_the_reporting_demand_is_answered_by_the_property_and_by_the_old_wording(
+    appendix: Path, criteria: str
+) -> None:
+    """Either wording answers it, which is the whole of what the narrowing changed.
+
+    The demand used to be answered only by criteria that named a *report*, so a node
+    stating the property this host now asks for — every claim about the finished work
+    true of the tree as it finally stands — was refused for not carrying an artifact
+    nobody wanted. The withdrawn wording still passes, because plans written before this
+    change say it that way and refusing them would strand correct work.
+    """
+    assert check_plan(_plan(persona="engineer", task=_task(criteria))) == 1
+
+
+def test_the_reporting_demand_no_longer_asks_for_a_final_report_artifact() -> None:
+    """What a node whose criteria are silent is actually told to write.
+
+    The remedy is the only place a plan's author learns what the demand wants, so it is
+    what decides whether the next plan states an ordering of the dispatch's outputs or a
+    property of the finished tree. The ordering is unsatisfiable — the conversation does
+    not end when the worker reports — and it failed six nodes of one run in a night with
+    complete committed work and no acceptance criterion unmet.
+    """
+    bar = Bar("the built-in role", "Require the worker to report what it verified.")
+
+    with pytest.raises(CriteriaError) as refused:
+        check(
+            _task("- The thing is done.\n- A journey proves it end to end."),
+            "probe",
+            bar,
+        )
+
+    reported = str(refused.value)
+    assert "an account of this dispatch's own work" in reported, reported
+    assert "true of the tree as it finally stands" in reported, reported
+    for withdrawn in ("last thing", "closes with", "final report", "reported afresh"):
+        assert withdrawn not in reported, reported
 
 
 def test_a_task_rebuilt_from_a_stale_appendix_is_refused(appendix: Path) -> None:

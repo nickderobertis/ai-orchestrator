@@ -28,6 +28,21 @@ The second pair is what :func:`resolve_bar` and :data:`DEMANDS` refuse: a demand
 that will be made of this node has to be *stated* as a criterion, so the judge checks
 a criterion the author wrote instead of one it reconstructed.
 
+What that reporting demand *asks for* has since been narrowed, and the narrowing is
+the point rather than a softening. It used to require the criteria to say that the
+dispatch produces a final report as its last artifact, which the conversational shape
+of a dispatch makes unsatisfiable: the conversation does not end when the worker
+reports, the supervisor keeps asking, and answering well means running things — so
+every good answer invalidated the report and only restating it in full complied. Six
+nodes of one run settled ``task-failed`` on that ordering in one night, each with
+complete committed work, a green deterministic tier, and no acceptance criterion found
+unmet. What :data:`DEMANDS` asks for instead is the property that ordering was serving
+— every claim the dispatch makes about the finished work is true of the tree as it
+finally stands — which a criterion can state and a worker can satisfy either by
+restating the report or by a correct delta in the turn that changed something. A
+*false* claim still fails on its merits; that is the judge's to rule on, not this
+tier's.
+
 A third shape is worse than either, because no wording of the criteria rescues it:
 a bar that forbids the dispatch changing project files, under a task that requires
 one to change. The judge is then *required* to fail the work the task is *required*
@@ -469,11 +484,17 @@ DEMANDS = (
         re.compile(r"\bend[- ]to[- ]end\b", re.I),
         "name the test or journey that proves this node's behavior end to end",
     ),
+    # Named for the demand the bar makes, and matched only for silence about it: this
+    # pattern asks whether the criteria speak to what the dispatch reports at all, never
+    # whether what they promise is true. Ruling on a claim is the judge's work over a
+    # finished tree, and a pattern that tried it would refuse the wording plans written
+    # before this demand narrowed still state it in.
     Demand(
-        "a completion report",
+        "an account of this dispatch's own work",
         re.compile(r"\b(?:report|surfac)\w*", re.I),
-        re.compile(r"\breport\w*", re.I),
-        "say what the finished dispatch reports and what evidence it names",
+        re.compile(r"\b(?:report|claim|account)\w*", re.I),
+        "say that what the dispatch reports about the finished work — what it verified "
+        "and the evidence for it — is true of the tree as it finally stands",
     ),
 )
 
