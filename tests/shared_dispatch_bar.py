@@ -1,12 +1,17 @@
 """Readers for the shared clauses every dispatch on this host is given.
 
-`config/onejudge.base.yaml` states them once: `system_prompt` is the preamble the
-worker reads before it does anything, and `user.persona` and `user.done_when` are the
-review contract and the completion criterion its judge is handed. They reach the model
-by different paths — one as a system prompt, the other two inside the supervisor's own
-turn — which is why the journeys proving each one arrives are separate. What they share
-is this file, so the readers of it live here once: a copy per journey would be somewhere
-for two tests to disagree about what it says.
+`config/onejudge.base.yaml` states them twice over: `system_prompt` is the preamble the
+worker reads before it does anything, and `user.done_when` is the completion criterion
+its judge is handed. They reach the model by different paths — one as a system prompt,
+the other inside the supervisor's own turn — which is why the journeys proving each one
+arrives are separate. What they share is this file, so the readers of it live here once:
+a copy per journey would be somewhere for two tests to disagree about what it says.
+
+`user.persona` is read here too, and only ever for its **absence**. It is the one field
+of the three that a dispatch replaces rather than merges — by a bare name resolving to a
+built-in role exactly as by a path into `personas/` — so anything stated there reaches no
+dispatch, and a reader that returned its value would invite a caller to assert something
+arrives that cannot.
 
 Read with a reader written for this shape rather than with a YAML library: the
 workspace installs none, and adding a parser as a dependency to read three blocks of a
@@ -21,7 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestrator.criteria_guard import LITERAL_HEADERS, block_scalar
+from orchestrator.criteria_guard import LITERAL_HEADERS, block_scalar, field
 from orchestrator.root import REPO_ROOT
 
 BASE_CONFIG = Path("config") / "onejudge.base.yaml"
@@ -55,16 +60,16 @@ def shared_completion_bar() -> str:
     return bar
 
 
-def shared_judge_persona() -> str:
-    """`user.persona`, as the judge is given it.
+def judge_persona_default() -> str | None:
+    """`user.persona`'s value, or ``None`` when the base config states none.
 
-    The default review contract, which a persona delta in `personas/` replaces. Folded
-    for the same reason the completion bar is: it reaches the judge as one line either
-    way, so the field's style is free to move without moving what it says.
+    Returns rather than asserts, because the only caller wants the absence: this is the
+    field a dispatch replaces, so a value here is a review contract nothing is judged
+    against. Read in both shapes a caller could reintroduce it in — a block scalar and a
+    single quoted line — so re-adding it under either fails the guard rather than one.
     """
-    _, persona = _block_scalar("persona")
-    assert persona, f"{BASE_CONFIG} states an empty judge persona default"
-    return persona
+    document = (REPO_ROOT / BASE_CONFIG).read_text(encoding="utf-8")
+    return field(document, "persona")
 
 
 def shared_agent_preamble() -> str:

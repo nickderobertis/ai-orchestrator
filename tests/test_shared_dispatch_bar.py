@@ -1,21 +1,28 @@
 """The clauses every dispatch shares say what is true of every dispatch, and stop there.
 
 `config/onejudge.base.yaml` is where this host tells a dispatch what "done" means:
-`system_prompt` is the preamble its worker reads, and `user.persona` and
-`user.done_when` are the review contract and the completion criterion its judge is
-handed. What those two say is said of a plan, a report, and a diff alike — so a demand
-that is not true of all three fails the dispatches it is false of, whatever they were
-actually asked for. Four nodes with finished, gate-green work were failed that way: by a
-demand about *how* a criterion must be proven, which only the criterion knows; and by
-one about state that exists only after the dispatch has ended, which no worker can reach
-from inside its own run.
+`system_prompt` is the preamble its worker reads, and `user.done_when` is the completion
+criterion its judge is handed. What that clause says is said of a plan, a report, and a
+diff alike — so a demand that is not true of all three fails the dispatches it is false
+of, whatever they were actually asked for. Four nodes with finished, gate-green work were
+failed that way: by a demand about *how* a criterion must be proven, which only the
+criterion knows; and by one about state that exists only after the dispatch has ended,
+which no worker can reach from inside its own run.
 
 So the completion bar is read here twice — once for what it says, and once for the
 vocabulary it may not say again. The second is the half that keeps working: a literal to
 compare against is trivially updated alongside the file it mirrors, while a re-added
-demand still carries the words of the class it belongs to. The judge's own review
-contract is read against that same vocabulary, because it carried the same over-reach
-and is handed to the same model in the same turn.
+demand still carries the words of the class it belongs to.
+
+`user.persona` used to be read against that same vocabulary and is now held **absent**,
+which is a stronger guard than narrowing it ever was. That field is replaced rather than
+merged — by a bare name resolving to a role built into the tool exactly as by a path into
+`personas/` — and every dispatch names one of the two, so whatever it said reached
+nothing. What it said last was a bound on the supervisor's authority, written after two
+incidents in which a simulated user issued rulings on the manager's behalf; it was never
+in force, and a field that reads like a protection while reaching no dispatch is the kind
+a manager stops checking. So the guard is that there is no such field, rather than that
+the field says something safe.
 
 Nothing here was dropped rather than moved: what those demands carried is now each
 node's own `## Acceptance criteria` to state, which `AGENTS.md` gives the plan's author.
@@ -48,9 +55,9 @@ import re
 import pytest
 from shared_dispatch_bar import (
     BASE_CONFIG,
+    judge_persona_default,
     shared_agent_preamble,
     shared_completion_bar,
-    shared_judge_persona,
 )
 from test_dispatch_appendix import DOWNSTREAM, WIDE_BAR, sentence_around
 
@@ -132,34 +139,26 @@ def test_the_shared_completion_bar_demands_nothing_only_some_dispatches_can_meet
     )
 
 
-@pytest.mark.parametrize("stem", UNSHAREABLE)
-def test_the_judge_persona_default_adds_no_demand_of_its_own(stem: str) -> None:
-    """The other clause the judge is handed defers to the criteria too.
+def test_the_base_config_states_no_judge_persona_at_all() -> None:
+    """The field a dispatch replaces states nothing, because it can reach nothing.
 
-    `user.done_when` was never the only place a check demand was made of every dispatch
-    alike: the default review contract required "the repository's documented checks"
-    independently of the criteria, so reducing the bar alone would have left the judge
-    told twice to fail work its task never asked to gate — and this clause is the half
-    with no `## Acceptance criteria` beside it to be read against.
+    Held as an absence rather than as a narrowing, and that is the whole of the repair.
+    A `user.persona` here is not merged with the role a node names: `oneagentgraph`
+    replaces it, whether that role is a file under `personas/` or a bare name resolving
+    to one built into the tool, and every dispatch names one of the two. So a clause
+    written here is read by nobody — which is how a bound on the supervisor's authority,
+    written after two incidents that produced exactly that failure, came to be believed
+    in force for as long as it existed while applying to nothing.
+
+    Read in both shapes it could come back in, because the reader behind
+    :func:`judge_persona_default` accepts a block scalar and a single quoted line alike.
     """
-    persona = shared_judge_persona()
-    assert not _uses(persona, stem), (
-        f"{BASE_CONFIG}'s `user.persona` uses {stem!r}, so the default review contract "
-        "demands something of every dispatch alongside its criteria rather than "
-        f"reviewing against them:\n{persona}"
-    )
-
-
-def test_the_judge_persona_default_reviews_against_the_acceptance_criteria() -> None:
-    """Adding no demand of its own is only half of it; it must still name the bar.
-
-    A contract emptied instead of narrowed would pass every parametrization above and
-    leave a dispatch with no persona reviewed against nothing at all.
-    """
-    persona = shared_judge_persona()
-    assert "acceptance criteria" in persona.lower(), (
-        f"{BASE_CONFIG}'s `user.persona` no longer points the judge at the task's "
-        f"acceptance criteria, which is the only bar it may review against:\n{persona}"
+    stated = judge_persona_default()
+    assert stated is None, (
+        f"{BASE_CONFIG} states a `user.persona` again. Every dispatch replaces that "
+        "field rather than merging it, so nothing there reaches a judge; state a review "
+        "contract in the node's own persona or its `task`, where it will be read:\n"
+        f"{stated}"
     )
 
 

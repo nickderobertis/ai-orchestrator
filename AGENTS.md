@@ -202,6 +202,10 @@ host's configured prefix rather than under a name `onevcs` knows by itself.
 **That remote answer moved between adoptions and moved the wrong way**: taken over a
 different pair on onevcs 0.15.4 the same question answered `landed: unknown`, and `no`
 is the dangerous one — it closes the question rather than leaving it open.
+`tests/test_phase_and_landing_guidance.py` re-takes this: it holds the stamp, the two
+refs, the condition, and both quoted answers to the release this checkout pins, so the
+day that pin moves the check fails and the measurement comes due rather than standing
+here describing a build nobody runs.
 
 **That inverts what this passage was asked to record, and the inversion is the useful
 part.** The correction was briefed from a manager's reading in which the `local-direct`
@@ -215,6 +219,9 @@ the trailer on `5e723477` and the remote landing's `a recorded landing`. The wea
 the remote one, for the reason above — its evidence is all in this host's state root —
 and this is stated rather than quietly amended because the earlier reading is the one a
 manager would otherwise re-derive from the same symptom.
+The same check re-takes this half, because it is the same re-take: what
+`tests/test_phase_and_landing_guidance.py` holds is the paragraph above, and the
+correction only survives while that paragraph is the one being re-measured.
 
 **That warning has two halves, and onevcs 0.14.0 moved exactly one of them.**
 
@@ -238,6 +245,9 @@ Do not try to settle it with `git diff main...branch` either — that measures f
 fork point, so a landed squash-merged branch still reports its full insertion count
 and reads as proof the work is missing. Only the files' presence on the base, or the
 squash commit's own stat, answers.
+`tests/test_phase_and_landing_guidance.py` re-takes it, holding the blob at the pinned
+release and the never-yes rule together, so a `landed.rs` that moved again is a failing
+check rather than a paragraph quietly describing an older one.
 
 *The retry half is fixed, and only forward.* onevcs 0.14.0
 (https://github.com/nickderobertis/onevcs/pull/80) links each session of a branch to
@@ -258,6 +268,8 @@ merged the day before as `eedac38 fix(views): say a judge rejected the work … 
 still answers `landed: no`, `decided
 by: content comparison`, and offers `publish-branch` as the next step, with that squash
 commit sitting in the base's own history after this branch's own fork point.
+`tests/test_phase_and_landing_guidance.py` re-takes this one too, holding the ref, its
+change request, and the answer to the release this checkout pins.
 
 **Which tier decides is not the same for every branch, and that is the reading to
 carry.** Asked of `onevcs/s-a37f615ff961`, whose change request
@@ -311,19 +323,18 @@ leave behind. The same rule is stated where briefs are written, in
 
 **The destroying half of that incident is now caught, and the rule stands
 regardless.** onevcs 0.11.1 made session close look for commits the clone holds that
-the session's branch does not, and onevcs 0.15.4 — the release pinned at
-the time — was re-driven on 2026-08-25 against the
-incident's exact shape to check it: a worker that cut `my-own-fix` from `origin/main`
-inside the session worktree and committed there had its close **refused** — *its
-worktree … holds work its branch "onevcs/s-…" does not carry — 1 commit on
-"my-own-fix" — and removing the worktree is what would have made it unreachable* —
-with the commit copied into the execution checkout first and `onevcs recoverable`
-named as the way to land it, which then listed that branch with its `publish-branch`
-line. That re-drive was taken under a throwaway `ONEVCS_HOME`, deliberately and not
-incidentally: `session open`'s first act is reclaiming run roots under the identity's
-workspace, so taking this measurement against the real state root would have raced
-the live dispatches on it. The same shape on onevcs 0.11.0 reported `closed`,
-removed the worktree, and copied nothing. So the work survives now; what does not
+the session's branch does not: a worker that cut `my-own-fix` from `origin/main` inside
+the session worktree and committed there has its close **refused** — *its worktree …
+holds work its branch "onevcs/s-…" does not carry — 1 commit on "my-own-fix" — and
+removing the worktree is what would have made it unreachable* — with the commit copied
+into the execution checkout first and `onevcs recoverable` named as the way to land it.
+onevcs 0.11.0 reported `closed`, removed the worktree, and copied nothing. That is
+written as what those two releases do rather than as a dated measurement of the pin this
+host runs, because **nothing here re-takes it** and the rule below is that a dated claim
+about an external tool names the check that re-takes it or goes. Should you take it
+again, take it under a throwaway `ONEVCS_HOME`: `session open`'s first act is reclaiming
+run roots under the identity's workspace, so a measurement against the real state root
+races the live dispatches on it. So the work survives now; what does not
 change is the brief, because the refusal only catches a worker that *committed*, and
 because a task that sends a worker off its branch has already produced the wrong tree
 whether or not the object survives.
@@ -447,6 +458,9 @@ Session `s-bbb59ee283af` closes the case: it opened 02:52:54Z and closed
 onevcs 0.11.0 the adopted release links there is no `honour_or_refuse` and no such
 refusal at all**, so read that message as history rather than as something to
 plan around.
+<!-- dated-claim: incident the dates stamp when four nodes were stranded on this host
+and when one session opened and closed; every claim here about what onevcs does is stated
+by release, and the refusal it is about does not exist at the adopted one -->
 
 Preserved stacked branches record their PR base so recovery targets the stack
 rather than the root. A plan is the one tracked hierarchical graph: its
@@ -733,7 +747,10 @@ only thing the *reader* answers differently is a bumped `timeline_schema_version
 re-measured with the rest of that shape in
 [`docs/telemetry.md`](docs/telemetry.md#seeing-the-supervisory-tier). Everything else
 the release adds is a field that stays absent and a view that stays unrendered until
-something declares a target.
+something declares a target. `tests/test_release_adoption_guidance.py` re-takes every
+number above: it reads each pin this section names out of `config/` and holds it at or
+past the floor carrying its half, so an adoption that moved one of them fails there
+rather than leaving this paragraph describing the pins before it.
 
 Five things were driven rather than read, on 2026-08-29. The pinned `onevcs --help`
 lists a
@@ -767,6 +784,10 @@ That is a statement about those runs rather than about this host: they are check
 fixtures and can never grow a release event. What fires the day this host declares a
 target is the journey that asks every registered identity, not the one that renders a
 frozen tree.
+`tests/e2e/test_release_adoption_in_force_e2e.py` is what re-takes all five, against the
+installed artifacts rather than against this paragraph: the CLI's verb group, what it
+answers for this repository, the `onevcs` the engine links, the loader's two refusals,
+and the read API behind the view.
 
 **So what remains is configuration, not adoption.** Six of the repositories dispatched
 against from here now declare their own targets, so putting the mechanism to work no
@@ -856,6 +877,9 @@ all three of them, classified by the fallback above. Any session token this host
 holds a stream for re-takes
 whichever half its stream is old or new enough for. So do not read a command-line
 events read as a test of what a run would relay.
+`tests/test_phase_and_landing_guidance.py` re-takes the claim, holding it to the pin it
+was measured on so a release that gave the command line a supported set brings this
+paragraph due.
 
 **A session's release events reach a run through the public reader, correlated by
 landing commit.** `release-probed` is written on the session's own stream and always
@@ -893,6 +917,9 @@ got before the pins moved. Elsewhere the Release phase is live rather than theor
 `onevcs release latest nickderobertis__onepipeline --target pypi` wrote a
 `release-probed` envelope carrying `"phase":"release"` onto that identity's own release
 record on 2026-08-29, which is the first release event this host has ever held.
+`tests/test_phase_and_landing_guidance.py` re-takes the pins and the floors, and
+`tests/e2e/test_release_adoption_in_force_e2e.py` re-takes the probe itself against the
+installed `onevcs`.
 
 ## What "agent" means here
 
@@ -917,7 +944,12 @@ orchestrate plans:<project>`.
 
 **That board held one plan at a time until 2026-08-29, and the retreat that worked around it
 is over.** Two defects made a second plan on the board corrupt every plan on it, and both
-were repaired upstream and adopted here rather than worked around again:
+were repaired upstream and adopted here rather than worked around again.
+`tests/test_plan_store_guidance.py` re-takes that claim: it holds the release named below
+against `config/onetaskgraph.version`, holds the tag the live lane's source is cited at to
+that same release, and requires both defects to stay named — so a pin that moved under
+this passage fails there rather than leaving it describing a board this host can no longer
+write. The two defects:
 
 - onetaskgraph's `github-projects` source **discarded the query it was handed**, so a read
   scoped to one project answered with every project's tasks. Fixed in **onetaskgraph
@@ -930,6 +962,10 @@ Both are measured rather than assumed, on this host and against the real board w
 projects on it, and both halves were re-taken on 2026-08-29 with a throwaway second project
 — `board-multiproject-proof`, issue #74 with its one task #75 — standing beside
 `plan-store-capability-repair` (#42, tasks #43-#46) and removed again afterwards.
+`tests/test_plan_store_guidance.py` re-takes both halves against the release this
+checkout pins and the source `onetaskgraph.yaml` actually configures, so a pin that moved
+under this paragraph fails there rather than leaving it describing a board this host can
+no longer write.
 
 *The read.* On the pinned onetaskgraph 0.2.12, `task list --source plans --project` answered
 `#43 #44 #45 #46` for the first project and `#75` alone for the second. **The contrast was
@@ -1136,8 +1172,17 @@ and is never a command.
    `oneagentgraph` builds in exactly five: `docs-writer`, `engineer`, `planner`,
    `researcher`, and `reviewer`. Every one of them is reviewed under
    `config/onejudge.base.yaml`'s shared acceptance-criteria clause *and* its own
-   built-in bar, both — a role replaces the shared bar only by declaring
-   `user.done_when_replaces_base`, and none of the five does. Any other name is read
+   built-in bar — but those are **two different fields**, and reading them as one
+   sentence is what hid the field this host deleted. The shared clause is
+   `user.done_when`: a role that declares its own is enforced alongside it, as `Both of
+   these must hold:`, and replaces it only by declaring `user.done_when_replaces_base`,
+   which none of the five does. Only three declare one at all — `planner`, `researcher`,
+   and `reviewer` — so an `engineer` or `docs-writer` node's completion bar is the shared
+   clause and nothing else. The role's own review contract is the other field,
+   `user.persona`, and that one is **replaced** outright and never merged, by a **bare
+   built-in name** exactly as by a file in `personas/`. Which is why the base config
+   carries no `user.persona` at all: whatever was written there reached no dispatch. See
+   [Personas and the base config](#personas-and-the-base-config). Any other name is read
    as a path relative to `graphs/`, so a repo-specific persona cannot be dispatched by
    its bare catalog name — it dispatches when named as a *path*
    (`../personas/crozier/crozier-corpus.yaml`) — and neither `orchestrator` nor
@@ -1581,23 +1626,31 @@ above; add a persona only for a genuinely distinct role or review bar. A dedicat
 several agents' independently produced work, since the simulated-user supervisor
 already reviews every dispatch.
 
-**That supervisor's authority is bounded, and the bound is stated where the bar is.**
-`config/onejudge.base.yaml`'s `user.persona` says the simulated user verifies against
-the criteria the task states and stops there: it does not issue rulings on the manager's
-behalf, redirect the dispatch onto other work, or direct a handoff to another dispatch.
-It said none of that until two incidents in one session did all three — a planner's
-simulated user composed a four-point "manager ruling" in-conversation and instructed the
-worker to post it over the run channel, and the worker complied; a worker's simulated
-user redirected a dispatch off its stated task onto unrelated lint findings and then
-told it to stop work and report the finding to an owning dispatch that did not exist. A
-simulated user that issues rulings is a second manager the real one cannot see, and a
-worker holding two instructions of equal authority resolves it by guessing.
-**Read the clause as defence in depth rather than as a confirmed cure**: both incidents
-may be fully explained by the upstream context corruption already fixed in onejudge
-0.5.2 and oneharness 0.11.0, both in force here, and nothing isolates this prose as
-either the cause or the fix. It is stated because a bound nobody wrote down is one no
-judge can be held to. A persona in `personas/` replaces that whole clause with its own
-review contract, so a role that needs the bound restates it rather than inheriting it.
+**That supervisor's authority was bounded in a field no dispatch ever read, and the
+field is gone.** `config/onejudge.base.yaml` carried a `user.persona` saying the
+simulated user verifies against the criteria the task states and stops there: that it
+does not issue rulings on the manager's behalf, redirect the dispatch onto other work, or
+direct a handoff to another dispatch. It said none of that until two incidents in one
+session did all three — a planner's simulated user composed a four-point "manager ruling"
+in-conversation and instructed the worker to post it over the run channel, and the worker
+complied; a worker's simulated user redirected a dispatch off its stated task onto
+unrelated lint findings and then told it to stop work and report the finding to an owning
+dispatch that did not exist. A simulated user that issues rulings is a second manager the
+real one cannot see, and a worker holding two instructions of equal authority resolves it
+by guessing.
+
+**But `user.persona` is replaced rather than merged, and every dispatch replaces it.** A
+bare persona name resolves to a role built into the tool and replaces it; a path resolves
+to a file and replaces it; a node names one or the other. So the bound applied to nothing
+from the day it was written, and nobody noticed for as long as it existed — this host was
+operating as though a protection were in force that never was. The field is therefore
+deleted rather than left standing: one that reads like a bound and reaches no dispatch is
+worse than no field at all, because it is the kind a manager stops checking. Saying that
+plainly is worth more than the sentence was. What a dispatch does share is
+`user.done_when`, which merges, and a role that needs this bound states it in its own
+review contract or the node's `task` states it. `tests/test_shared_dispatch_bar.py` holds
+the absence, and the two incidents may in any case be fully explained by the upstream
+context corruption fixed in onejudge 0.5.2 and oneharness 0.11.0, both in force here.
 
 Draft a new role under gitignored `scratch/personas/`, dispatch against that
 directory, and refine it from observed performance. Once proven, dispatch its
@@ -1837,6 +1890,16 @@ the ownership row, the surfaces and the DAG UI place are `onepipeline start`'s o
 and arrive either way. A caller who names a graph keeps it, exactly as `just
 orchestrate` keeps a caller's own.
 
+**`--direct` is the one flag that changes the dispatched task**, and it is the one
+exception to "the brief is the dispatched task verbatim" above. A `--direct` launch
+puts its planner in the shared canonical checkout rather than a worktree of its own,
+where it may write only to gitignored paths and may not commit — while the shared
+completion clause in `config/onejudge.base.yaml` demands every change committed of every
+dispatch alike, and a planner that did correct, verified work settled `task-failed`
+against exactly that. So the recipe appends the placement *and* the clause it is exempt
+from after the brief, which is the only text both that worker and its judge read. The
+brief still comes first and untouched; a launch with a `repo` appends nothing.
+
 **`just check-plan <source:project>` reads a project against the bar each node will
 actually be judged against**, and is the cheap read to make before launching one. It
 refuses a node whose `## Acceptance criteria` name a procedure instead of a property,
@@ -2063,11 +2126,15 @@ the more recently updated of the two, a credentialed write lane retargeted itsel
 it with nothing said, and left a draft item there on 2026-08-27. **The adopted
 onetaskgraph 0.2.12 no longer discovers anything**, and it wants a third name: read from
 that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
-at tag `v0.2.12`, which is where that lane lives and was re-read there on 2026-08-29 — the board comes from
+at tag `v0.2.12`, which is where that lane lives — the board comes from
 `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
 comes from `GH_PROJECTS_REPOSITORY`, and the lane **skips** when any of the three is
-absent, exactly as it already did without `GH_PROJECTS_TOKEN`. So the retargeting above
-is history rather than live exposure, and the cost of a missing nomination has inverted:
+absent, exactly as it already did without `GH_PROJECTS_TOKEN`. That is cited to the file
+and the tag rather than stamped with a date, because **nothing here re-takes it**: under
+the rule below a dated claim about an external tool names the check that re-takes it or
+goes, and a source a reader can open is the honest form of a claim that has none. So the
+retargeting above is history rather than live exposure, and the cost of a missing
+nomination has inverted:
 a lane nobody nominated a repository for does not run at all. This host therefore
 nominates `GH_PROJECTS_OWNER=nickderobertis`, `GH_PROJECTS_NUMBER=1` and
 `GH_PROJECTS_REPOSITORY` for that lane's own repository, in the gitignored `.env` above,
@@ -2077,6 +2144,9 @@ a worker in a worktree cannot make one for a future launch. Nothing detects its 
 either: on the release that discovered a board, a lane with no nomination looked exactly
 like a lane with a correct one until somebody read which board it wrote to; on this one
 it looks exactly like a lane whose credential is absent.
+<!-- dated-claim: incident the date stamps when a superseded release's board discovery
+wrote to the wrong project; what the adopted release does instead is cited above to its
+own source at its own tag rather than to a reading taken here -->
 
 **That third name is the lane's repository and not this source's**, and the two are
 configured in different places for a reason worth keeping straight. `GH_PROJECTS_*`
@@ -2245,6 +2315,9 @@ all reported `https://github.com/nickderobertis/ai-orchestrator.git`, resolved t
 `756e79f93796751d`, and shared the same 81 MB directory; `.nx/cache` did not exist.
 So deleting or changing `nx.json`'s setting would change no gate the wrapper runs,
 and a publication clone already replays entries a session worktree stored.
+`tests/e2e/test_nx_cache_scope_e2e.py` re-takes it against real Nx and the real
+`scripts/nx.sh` in real linked worktrees, including the originless checkout that must not
+be grouped with a repository identity.
 
 An originless Git checkout still falls back to its top-level path for the key:
 copies belonging to e2e journeys are not repository identities and must not be
@@ -2385,6 +2458,9 @@ root's occupancy lease — which no `onevcs` verb holds past its own command, so
 three hours into a dispatch was as takeable as one created a second ago. On 2026-08-22
 three dispatches of one run were destroyed within 90 seconds of launch by the next
 sibling's `session open`.
+<!-- dated-claim: incident the date stamps when three dispatches were destroyed on this
+host; what onevcs does about it is stated by release and re-taken by the check the next
+paragraph names -->
 
 **onevcs 0.14.1 fixed that — this host adopts it at 0.15.8 and runs 0.16.2 today — so the
 one-dispatch-per-identity constraint this paragraph used to impose is lifted.**
@@ -2458,11 +2534,15 @@ the judged tier clears its own findings rather than leaving closeout to integrat
 iterates with `just lint-llm-diff <base>` alone rather than paying for the whole gate
 per finding.
 `llmlint.yml` is a legitimate deliverable when a task names it; otherwise a worker
-fixes the code or adds a justified site-scoped `ignore` directive, and reports a
-rule that looks wrong or misapplied instead of editing it. Deciding when a marginal
-finding stops being worth another gate cycle—landing with a justified line-scoped
-suppression plus a tracked follow-up—is the manager's call from that surfaced
-report, never the worker's by suppressing.
+fixes the code and reports a rule that looks wrong or misapplied instead of editing it.
+**What a worker may suppress is not stated here, and that is deliberate.** This document
+used to state it twice, in two consecutive sentences that contradicted each other, while
+`config/dispatch-appendix.md` read categorically against both — three sources and three
+readings of one question. A dispatch followed one of them, cleared four findings exactly
+as that reading allowed, and had its finished work failed by a judge reading another. The policy therefore has exactly one source, and it is
+[`config/dispatch-appendix.md`](config/dispatch-appendix.md): that is the text every
+dispatched task carries, so it is the only copy a worker and its judge read together.
+Read the policy there, and amend it there.
 
 The judge behind that tier is non-deterministic, so the run itself is cached: `just
 lint-llm-diff` resolves the base ref to a commit and runs the cached Nx
@@ -2727,6 +2807,36 @@ This repo runs on agents, so the suite is the only QA loop.
   contract, the redaction rule, the coverage floor's enforceability, and the drift
   gates over the pins and the prose.
 - A recipe is not done until a journey drives it end to end in `tests/e2e/`.
+
+**A date in this document names the test that re-takes it, or says it is history.**
+`AGENTS.md` measures other people's software constantly and stamps the date on what it
+found, and that stamp is the whole problem: it is what makes a claim read as current long
+after the tool has moved, so the reader who most needs the truth gets a confident answer
+to a question nobody has asked since. Two such claims were falsified in one session here,
+each having been believed for exactly as long as it stood. So **every ISO date here is a
+claim about somebody else's software until its own paragraph says otherwise**, and a
+paragraph carrying one does one of two things. It names a test under `tests/` that
+re-takes it — the check that fails when the release behind it moves, so the claim comes
+due instead of quietly going stale; `tests/test_linked_libraries.py` is the pattern that
+generalizes, reading the pins off the installed artifact on every gate run rather than
+believing them. Or it classifies the date as stamping something that *happened* rather
+than something that is still true, with `<!-- dated-claim: incident <reason> -->` in that
+paragraph — a forensic record does not go stale, and three paragraphs here are exactly
+that. The marker is a suppression, governed by
+[`config/dispatch-appendix.md`](config/dispatch-appendix.md).
+
+`tests/test_dated_claims.py` enforces it, and the reason it triggers on the bare **date**
+rather than on how the sentence is written is that two narrower detectors both shipped
+holes. One asked for a measuring verb and missed *"held one plan at a time until
+<date>"*; widening it to bounded states still passed *"On <date>, onevcs returned X"*,
+which is a plain assertion of tool behaviour in neither shape. English has no closed
+vocabulary for asserting something, so the vocabulary was abandoned and the judgment
+moved to the author, where it is written down. What that gate still cannot do is judge
+the test a paragraph names, and that is the one gap left rather than an unstated one. A
+claim with neither a check nor a classification is not hedged and kept: the measurement
+goes, and what may stand in its place is what a release did, cited to something a reader
+can open — a file at a tag, a change request, a release number — rather than to a date on
+which somebody here happened to run it.
 
 ## Commits and merging
 

@@ -210,11 +210,18 @@ def test_a_role_carries_its_own_completion_bar_alongside_the_shared_one() -> Non
 
 
 def test_no_persona_leaves_the_generic_contract_standing() -> None:
-    """A node that names no role is judged by `config/onejudge.base.yaml` alone."""
+    """A node that names no role is judged by `config/onejudge.base.yaml` alone.
+
+    What is left of that generic contract is the shared completion clause and nothing
+    else: the base config states no `user.persona`, because every dispatch replaces that
+    field rather than merging it. So this reads the clause that does survive — a bar
+    resolving to the empty string here would be refused by `_stated` rather than passing
+    quietly, and that refusal is what this asserts the absence of.
+    """
     bar = resolve_bar(None)
 
     assert "onejudge.base.yaml" in bar.source
-    assert "Verify the requested task against the acceptance criteria it states" in bar.text
+    assert "every acceptance criterion stated in the task is met" in bar.text
 
 
 def test_a_path_named_persona_resolves_to_the_file_it_names() -> None:

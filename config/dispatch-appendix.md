@@ -111,6 +111,12 @@ judged-tier runs raced and wasted a roll, which was harmless only by luck. Read 
 has stopped growing as two commands blocking each other before you read it as one command
 working.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The source of this contract is the engine that exports the variable, and it lands in the same run as this paragraph: there is no released copy to reconcile against yet, and this task is explicitly told not to go looking for one in an installed engine. `tests/test_dispatch_appendix.py` holds these four properties and no more, so the day the engine side is adopted the drift gate has an exact set to reconcile. -->
+**Write the files this dispatch needs under `ONEPIPELINE_NODE_SCRATCH_DIR`, rather than
+under a `/tmp` path you invented.** It is an absolute path to a directory that exists and
+is writable when the dispatch starts, is unique to this dispatch, and is not removed while
+it runs.
+
 **Root-owned files after a container run.** The pre-push visual guard captures in Docker
 as root and can leave `.nx/` and `dist/` unwritable, failing the *next* check with `NX
 Permission denied (os error 13)`. There is no passwordless sudo; repair from inside a
@@ -130,9 +136,20 @@ runner; it announces itself as an unrelated test failing. One command rules it o
 
 **The judged lint tier is nondeterministic**, wherever a repository runs one. It has
 already returned opposite verdicts on an identical diff in this workstream. Clear the
-findings it names, then stop — do not re-run hunting a clean sheet, and never suppress a
-rule to move a number. If a rule looks wrong or misapplied, say so with evidence rather
-than editing it.
+findings it names, then stop — do not re-run hunting a clean sheet. If a rule looks wrong
+or misapplied, say so with evidence rather than editing it.
+
+**One suppression policy, and this is the whole of it.** A site-scoped `ignore` directive
+is permitted where the rule is genuinely misapplied at that site **and** the directive
+carries a substantive reason saying why. What is forbidden is silencing a finding you
+have not answered so that a count moves. Every suppression standing in the finished tree
+is listed in your completion report, with its site and its reason, so the manager reads
+what you left rather than discovering it. `AGENTS.md` states no suppression policy of its
+own and points here, because this file is what your judge reads beside your task: while
+that document said it twice, one dispatch added four site-scoped ignores each carrying a
+substantive reason and was failed for *"the task's categorical instruction never to
+suppress a rule"* — work that was correct under one of this repository's own readings and
+refused under the other.
 
 **`--no-verify` is not an acceptable response to a slow or inconvenient hook.** The hooks
 are this repository's enforcement point — there is no CI — so bypassing one commits work
@@ -143,6 +160,29 @@ and one of the two was a *merge* commit — a conflict resolution, which is the 
 likely commit in a dispatch to be wrong. No check caught either one; the monitor caught
 both. If a hook is slow, wait for it. If it refuses, it is telling you something about the
 commit in front of you, and the answer is to fix the commit.
+
+**Commit a coherent working piece the moment it works.** A dirty worktree does not
+survive this dispatch: what is uncommitted when your last turn ends is what nothing
+recovers — not a retry, not a recovery verb, not a manager reading the branch. So each
+piece is its own commit as you finish it, rather than one commit held back to the end.
+
+**Ask rather than stop.** When you cannot proceed without a decision that is not yours —
+a frozen contract you would have to amend, a goal that reads two ways, a constraint you
+would have to relax — put the question to your manager over `$ORCHESTRATOR_ASK_MANAGER`,
+which every dispatch carries, and go on working on whatever does not depend on the answer.
+Ending your turns with the work undone and the question unasked is the one response
+nothing can recover: a worker that reasoned about a frozen contract correctly, declined to
+amend it unilaterally, named two options for its owner, and then stopped for three turns
+lost about fifteen minutes of correct work and settled reporting `ahead of main: 0
+commit(s)`.
+
+**A GitHub rate-limit refusal that `gh api rate_limit` disagrees with is the secondary
+limiter.** The primary limit is the one that endpoint reports and the one a wait answers.
+The secondary limiter is reported by nothing, polled by nothing, and not waited out by
+polling — every further attempt extends it. So when a `gh` call is refused for a rate
+limit while `gh api rate_limit` still shows budget, stop making that call: deliver the
+result another way, name in your report what was refused and what you tried, and leave the
+retry to a person.
 
 **Publication goes through the harness.** No `git push`, no `gh pr create`, no `gh pr
 merge`. Finish the branch, commit everything, leave the tree clean, and report — the

@@ -79,25 +79,16 @@ system_prompt: |
   nothing to commit is a correct and complete outcome, not a problem to solve by
   writing a file nobody asked for. Keep the tree clean at the end.
 
-# The simulated supervisor's shared defaults. A persona overrides the generic
-# `persona` and may override the other fields.
+# The simulated supervisor's shared defaults — one clause and one turn budget. A
+# persona may override either.
 user:
-  # A plan persona replaces this with its role-specific review contract. The
-  # complete generic default keeps a graph invocation with no persona valid.
-  #
-  # The second sentence bounds the supervisor's AUTHORITY, which the first never did.
-  # AGENTS.md, "Personas and the base config", has the two incidents it answers and why
-  # it may be defence in depth rather than a proven fix.
-  #
-  # It says nothing about how a criterion is proven and names no work that lands after
-  # the dispatch, for the reason the completion bar below does not:
-  # `tests/test_shared_dispatch_bar.py` holds both clauses to that same vocabulary.
-  persona: >-
-    Verify the requested task against the acceptance criteria it states, and accept it
-    only when every one of them is met. Your authority stops there: you do not issue
-    rulings on the manager's behalf, redirect this dispatch onto other work, or direct a
-    handoff to another dispatch. Anything outside the stated criteria is the manager's
-    to decide — say so and leave it to them.
+  # There is deliberately no `persona:` here: that field is REPLACED rather than merged,
+  # by a file in `personas/` and equally by a bare name resolving to a built-in role,
+  # and every dispatch names one of the two — so a clause written here reaches nobody.
+  # AGENTS.md, "Personas and the base config", has what was here and what it cost;
+  # `tests/test_shared_dispatch_bar.py` holds the absence. `user.done_when` below is the
+  # field that does merge, which is why the one shared clause lives there.
+
   # The ONE completion bar for every dispatch, so it may only state what is true of every
   # dispatch alike; the rest belongs in each task's `## Acceptance criteria`, which is the
   # node's own bar. Never name a specific check tier here — the clause this replaced

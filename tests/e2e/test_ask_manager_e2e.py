@@ -32,13 +32,14 @@ import subprocess
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NamedTuple, NewType, TypedDict, cast
+from typing import NamedTuple, NewType, Protocol, TypedDict, cast
 
 import pytest
 from planner_channel import (
     MANAGER_PATIENCE_SECONDS,
     TOKEN,
     Manager,
+    PersistentManager,
     Surface,
     next_surface,
     next_surface_record,
@@ -95,8 +96,9 @@ OBSERVED_WAITING_AFTER_SECONDS = 35
 #: journey whose manager never answers fails in seconds rather than at the default.
 SHORT_WINDOW_SECONDS = 5
 
-#: The reply window the wrapper is given while `planner_channel.Manager` looks for the
-#: question. Deliberately the LONGER of the two, and that ordering is the point: with it
+#: The reply window the wrapper is given while a manager looks for the question — through
+#: `planner_channel.Manager`, or through `_waited_for_question` directly.
+#: Deliberately the LONGER of the two, and that ordering is the point: with it
 #: the other way round the wrapper gave up first, so a journey whose manager was merely
 #: slow reported the timeout refusal — a real behavior, just not the one it was about —
 #: and a journey whose manager genuinely failed reported nothing about why.
@@ -117,9 +119,10 @@ MISROUTED_EDIT_WINDOW_SECONDS = int(e2e_timeout(60))
 RunId = NewType("RunId", str)
 
 #: How many times `scripts/ask-manager.sh` puts one question to the channel before it
-#: gives up. Restated from the wrapper rather than imported, because it is shell; the
-#: journey that drives it fails loudly if the two disagree, since a bound higher than
-#: this leaves the wrapper still waiting and a lower one refuses before the last answer.
+#: gives up. Restated from the wrapper rather than imported, because it is shell. The
+#: journey that drives it to exhaustion reads the number back out of the refusal the
+#: wrapper writes, so the two disagreeing is that assertion failing on the wrapper's own
+#: sentence rather than a manager left holding an answer nobody came for.
 MAX_ATTEMPTS = 4
 
 #: The agent node every plan below carries. It is never dispatched — it depends on the
@@ -357,14 +360,56 @@ def _reaped(
     return asking.communicate(timeout=e2e_timeout(seconds))
 
 
-def _finish(asking: subprocess.Popen[str], *, seconds: float = 180) -> tuple[int, str, str]:
-    """Wait for one wrapper invocation and hand back what it reported."""
-    try:
-        out, err = asking.communicate(timeout=e2e_timeout(seconds))
-    except subprocess.TimeoutExpired:
-        out, err = _reaped(asking)
-        raise AssertionError(f"the wrapper never returned:\n{out}\n{err}") from None
-    return asking.returncode, out, err
+class Watched(Protocol):
+    """Whoever is playing the manager beside an ask, narrowed to what `_finish` reads.
+
+    Both `planner_channel.Manager` and `planner_channel.PersistentManager` are one, and
+    they are watched through the same one method because what matters here is the same
+    for either: whether they have already given up.
+    """
+
+    def failure(self) -> BaseException | None: ...
+
+
+#: How often `_finish` looks up from the wrapper to see whether the manager is still
+#: there. Short and unscaled: it is a polling interval rather than a hang guard, and the
+#: cost of one look is a `select` that has already timed out.
+WATCH_INTERVAL_SECONDS = 0.5
+
+
+def _finish(
+    asking: subprocess.Popen[str],
+    *,
+    seconds: float = 180,
+    manager: Watched | None = None,
+) -> tuple[int, str, str]:
+    """Wait for one wrapper invocation and hand back what it reported.
+
+    The manager is watched alongside it wherever there is one, for the reason
+    `_await_answer` in `tests/e2e/test_launch_ask_seam_e2e.py` gives: the two are one
+    round trip, and only one of the two failures is visible from this side. A manager
+    who gave up leaves the wrapper blocking for its whole reply window — longer than the
+    guard here — so waiting it out reports a killed wrapper with nothing on either pipe.
+    That is what a real gate run reported, in place of the sentence saying why nobody
+    answered.
+    """
+    limit = deadline(seconds)
+    while True:
+        try:
+            out, err = asking.communicate(timeout=WATCH_INTERVAL_SECONDS)
+        except subprocess.TimeoutExpired:
+            stopped = None if manager is None else manager.failure()
+            if stopped is not None:
+                out, err = _reaped(asking)
+                raise AssertionError(
+                    f"the manager stopped before the wrapper had its answer: {stopped}\n"
+                    f"the wrapper was still waiting, and reported:\n{out}\n{err}"
+                ) from None
+            if time.monotonic() >= limit:
+                out, err = _reaped(asking)
+                raise AssertionError(f"the wrapper never returned:\n{out}\n{err}") from None
+            continue
+        return asking.returncode, out, err
 
 
 #: Every journey that drives the live channel is pinned to one worker. Not because the
@@ -427,7 +472,7 @@ def test_the_wrapper_answers_with_the_managers_message_and_nothing_else(asked: A
     asking = _ask(asked, "Should the test key cover docs?", window=ANSWERED_WINDOW_SECONDS)
     manager = Manager(asked.run, asked.environment, [lambda token: ruling(f"{ANSWER} {token}")])
 
-    status, out, err = _finish(asking)
+    status, out, err = _finish(asking, manager=manager)
     manager.checked(asker_said=err)
 
     assert status == 0, f"the wrapper did not accept the manager's answer:\n{err}"
@@ -499,7 +544,7 @@ def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
     )
     manager = Manager(asked.run, asked.environment, [lambda _token: edit])
 
-    status, out, err = _finish(asking, seconds=MISROUTED_EDIT_WINDOW_SECONDS + 120)
+    status, out, err = _finish(asking, seconds=MISROUTED_EDIT_WINDOW_SECONDS + 120, manager=manager)
     manager.checked(asker_said=err)
 
     applied = [
@@ -551,7 +596,7 @@ def test_a_ruling_carrying_the_token_but_no_decision_is_refused(asked: Asked) ->
     undecided = [lambda token: json.dumps({"version": 1, "message": f"maybe {token}"})]
     manager = Manager(asked.run, asked.environment, undecided, send=reply_unguarded)
 
-    status, out, err = _finish(asking)
+    status, out, err = _finish(asking, manager=manager)
     manager.checked(asker_said=err)
 
     assert status != 0, f"the wrapper returned a decision-less envelope as an answer:\n{out}"
@@ -583,7 +628,7 @@ def test_a_ruling_addressed_to_another_reader_is_re_asked_rather_than_returned(
         [lambda _token: misdirected, lambda token: ruling(f"{ANSWER} {token}")],
     )
 
-    status, out, err = _finish(asking)
+    status, out, err = _finish(asking, manager=manager)
     manager.checked(asker_said=err)
 
     assert status == 0, f"the wrapper did not survive a ruling meant for another reader:\n{err}"
@@ -717,7 +762,14 @@ def test_a_live_edit_still_reaches_the_graph_while_a_question_is_pending(
     as long as a question went unanswered — so it goes through with a question pending,
     and the verb's own answer is what says it landed.
     """
-    asking = _ask(asked, "Which cursor shape should the route take?", window=SHORT_WINDOW_SECONDS)
+    # The answered window rather than the short one, for the reason that constant states:
+    # a manager has to find the question before the edit can be sent while it is pending,
+    # and a wrapper that gave up first would report the channel's own timeout refusal
+    # instead of this journey's subject. None of it is spent — the ask is reaped below as
+    # soon as the edit has landed.
+    asking = _ask(
+        asked, "Which cursor shape should the route take?", window=ANSWERED_WINDOW_SECONDS
+    )
     _waited_for_question(asked, asking)
 
     edited = reply(asked.run, asked.environment, LIVE_EDIT)
@@ -843,13 +895,21 @@ def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arm
     copies, one listener is left to claim an answer, and the orphan poisons the ask after
     it. Asserted here is that the ask still returns the manager's answer, that it really
     did re-arm rather than skipping this path, and that exactly one surface blocks.
+
+    The manager answers persistently because the re-arm window has no reader in it, and
+    the seed's own completion has already settled the run — so a reply sent there is
+    refused rather than queued. Every send is the same answer carrying the same token,
+    and what this counts is surfaces, which a re-send raises none of.
     """
     seeded = _stranded_answer(asked, "Which base does this branch merge to?")
 
     asking = _ask(asked, "Should the listing be paginated?", window=ANSWERED_WINDOW_SECONDS)
-    manager = Manager(asked.run, asked.environment, [lambda token: ruling(f"{ANSWER} {token}")])
+    manager = PersistentManager(
+        asked.run, asked.environment, lambda token: ruling(f"{ANSWER} {token}")
+    )
 
-    status, out, err = _finish(asking)
+    status, out, err = _finish(asking, manager=manager)
+    manager.stop()
     manager.checked(asker_said=err)
 
     assert status == 0, f"the wrapper did not survive a stale ruling on the channel:\n{err}"
@@ -1360,27 +1420,48 @@ def test_a_run_whose_channel_keeps_answering_other_readers_is_given_up_on(asked:
 
     Every ruling here is well-formed and none carries the token, which is exactly the
     shape that would otherwise loop.
+
+    The manager answers persistently, for the reason `planner_channel.answer_persistently`
+    records: one send is one throw of a race, and losing it wedges the wrapper instead of
+    producing the refusal this is about. Re-sending is sound where every send is the same
+    envelope, which holds here — each ruling is the same answer to somebody else's
+    question — and the bound is read off the wrapper's own sentence rather than counted
+    from the sends, because that sentence is what `MAX_ATTEMPTS` restates.
     """
     asking = _ask(asked, "Which cursor shape?", window=ANSWERED_WINDOW_SECONDS)
-    misdirected = ruling("this answers a different question")
-    # One more than the wrapper's own bound, so the last one is unread if it stopped
-    # where it promised: a manager whose answer is never taken is what this looks like.
-    manager = Manager(
-        asked.run, asked.environment, [lambda _token: misdirected for _ in range(MAX_ATTEMPTS)]
+    manager = PersistentManager(
+        asked.run, asked.environment, lambda _token: ruling("this answers a different question")
     )
 
-    status, out, err = _finish(asking)
+    status, out, err = _finish(asking, manager=manager)
+    manager.stop()
     manager.checked(asker_said=err)
 
     assert status != 0, f"the wrapper never stopped re-asking:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"
+    assert f"the last {MAX_ATTEMPTS} rulings" in err, (
+        f"the wrapper gave up at a bound this journey does not know about, so what it "
+        f"drives is not what {MAX_ATTEMPTS} says it is:\n{err}"
+    )
     assert "answers to other readers" in err and "include the token" in err, err
 
 
+# llmlint: ignore-block[e2e_not_mocked] The layer under test is the wrapper, and it is the
+# real one; what is substituted is the *input* — a channel that answers nothing, which the
+# real `onepipeline channel serve` produces only when the run settles while a question is
+# waiting, and a journey cannot end the run out from under its own question. Supplying it
+# is exactly what the published `ONEPIPELINE_BIN` seam is for, and every site that reads
+# this constant already carries the same directive; this one covers the constant itself,
+# which is where the rule attributed the finding.
 #: A `onepipeline` that answers the frame with nothing at all, at exit 0. The shape a
 #: channel takes when the run settled while the question was waiting, and the one an
 #: exit status alone cannot tell from an answer.
-SILENT_CHANNEL = "#!/usr/bin/env bash\nexit 0\n"
+#:
+#: It reads the frame before exiting, as the real verb does. One that exits without
+#: reading leaves the wrapper's `printf` writing down a pipe with no reader, and under
+#: `set -o pipefail` that is `exit 141` — a refusal rather than the silence this is about.
+SILENT_CHANNEL = "#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n"
+# llmlint: ignore-end[e2e_not_mocked]
 
 #: A `python3` that serves the frame and then refuses to judge the answer. Two
 #: programs reach it and they are told apart by the one that mentions the timeout

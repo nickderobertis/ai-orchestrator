@@ -1101,7 +1101,19 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
     )
 
 
-def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(tmp_path: Path) -> None:
+#: Every helper `scripts/plan.sh` sources, so each one's load failure is driven rather
+#: than the first one's standing in for the rest. They are sourced in sequence and each
+#: establishes a different half of the dispatch environment, so a reader cannot infer one
+#: refusal from the other: the pair went out of step exactly once, when the ask-manager
+#: source was left to strict mode while the credentials source three lines above it was
+#: not, and nothing here noticed because only the credentials half had a journey.
+SOURCED_HELPERS = ("credentials-env.sh", "ask-manager-env.sh")
+
+
+@pytest.mark.parametrize("corrupted", SOURCED_HELPERS)
+def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(
+    tmp_path: Path, corrupted: str
+) -> None:
     """A helper that is readable and then fails to load still refuses the launch, attributably.
 
     The check before the source answers "is the file there and readable", which a corrupt
@@ -1115,18 +1127,20 @@ def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(tmp_path: Pa
     alone = scripts / "plan.sh"
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
-    for present in ("ask-manager-env.sh", "ask-manager.sh"):
+    intact = {*SOURCED_HELPERS, "ask-manager.sh"} - {corrupted}
+    for present in sorted(intact):
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
         copied.chmod(0o755)
-    (scripts / "credentials-env.sh").write_text("this is ( not valid bash\n", encoding="utf-8")
+    (scripts / corrupted).write_text("this is ( not valid bash\n", encoding="utf-8")
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")
     working = tmp_path / "working"
     working.mkdir()
 
+    name = f"launch-seam-unloadable-{corrupted.removesuffix('.sh')}"
     refused = subprocess.run(  # noqa: S603 - the real recipe, against a helper that cannot load
-        [str(alone), str(brief), "--name", "launch-seam-unloadable-helper"],
+        [str(alone), str(brief), "--name", name],
         cwd=working,
         env=dict(os.environ),
         text=True,
@@ -1137,9 +1151,10 @@ def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(tmp_path: Pa
 
     assert refused.returncode != 0, refused.stdout
     assert "could not be loaded" in refused.stderr, refused.stderr
-    assert "credentials-env.sh" in refused.stderr, refused.stderr
+    assert corrupted in refused.stderr, refused.stderr
+    assert "just bootstrap" in refused.stderr, refused.stderr
     assert not (working / "scratch").exists(), (
-        "a plan was written for a launch whose credentials helper never loaded"
+        f"a plan was written for a launch whose {corrupted} never loaded"
     )
 
 

@@ -39,7 +39,6 @@ from published_surface import surface_of
 from shared_dispatch_bar import (
     shared_agent_preamble,
     shared_completion_bar,
-    shared_judge_persona,
 )
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -555,9 +554,22 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
 def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """A direct graph invocation needs no persona override."""
+    """A direct graph invocation needs no persona override, and is still judged.
+
+    What such an invocation inherits from `config/onejudge.base.yaml` is the shared
+    completion bar and nothing else: `user.persona` is gone from that file, because a
+    dispatch replaces it rather than merging it and so never read it. The bar is what
+    is left to arrive, and it has to — a graph invocation supervised against nothing at
+    all would accept whatever the worker last said, which is exactly what the deleted
+    field's `## Additional info` was mistakenly believed to prevent.
+    """
+    # llmlint: ignore-block[e2e_not_mocked] Only the paid provider process is
+    # substituted, by `_environment`, which carries its own reason at that seam; the
+    # second line names where the fake backend records the prompts. The graph, its
+    # config and its CLI are the real ones, which is what this journey is asking about.
     environment = _environment(tmp_path, oneharness_bin)
     environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
+    # llmlint: ignore-end[e2e_not_mocked]
     run = subprocess.run(
         [
             "oneagentgraph",
@@ -576,20 +588,24 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
         check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
-    # The fake backend writes this JSONL itself; PromptRecord states the one field
-    # this test consumes from that test-owned schema.
+    # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only
+    # place a supervised graph invocation's review contract is observable; no published
+    # view carries it. The fake backend writes this JSONL itself and PromptRecord states
+    # the one field consumed, so this reads a test-owned schema rather than reaching
+    # past somebody else's validation.
     prompts = [
         cast(PromptRecord, json.loads(line))["prompt"]
         for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    # Read from the file rather than quoted here: the default review contract is
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    # Read from the file rather than quoted here: the shared bar is
     # `config/onejudge.base.yaml`'s to state, and a copy of it in this journey is a
     # second source to disagree with it. `tests/test_shared_dispatch_bar.py` holds
-    # what that contract may say; this holds that it is what arrives.
-    persona = shared_judge_persona()
-    assert any(persona in " ".join(prompt.split()) for prompt in prompts), (
+    # what that clause may say; this holds that it is what arrives.
+    bar = shared_completion_bar()
+    assert any(bar in " ".join(prompt.split()) for prompt in prompts), (
         "a graph invocation with no persona override was supervised against something "
-        f"other than the generic review contract in config/onejudge.base.yaml:\n{persona}"
+        f"other than the shared completion bar in config/onejudge.base.yaml:\n{bar}"
     )
 
 

@@ -205,6 +205,52 @@ AMBIGUOUS_IN_FLIGHT = re.compile(
     re.IGNORECASE,
 )
 
+#: The per-dispatch scratch directory, and the alternative it replaces. Both halves,
+#: because a variable named without saying what it is for reads as trivia a worker
+#: skips: the whole instruction is *this instead of a `/tmp` path you invented*.
+SCRATCH_DIRECTORY = re.compile(r"ONEPIPELINE_NODE_SCRATCH_DIR")
+INSTEAD_OF_INVENTING_ONE = re.compile(
+    r"rather\s+than\s+under\s+a\s+`/tmp`\s+path\s+you\s+invented", re.IGNORECASE
+)
+#: Its contract, in the four properties a worker relies on to use it without checking:
+#: it is a path it can use from anywhere, it is there when the dispatch starts, it
+#: belongs to this dispatch alone, and nothing takes it away underneath. A variable named
+#: with no contract is one a worker tests for and falls back from, which is the `/tmp`
+#: path again with an extra branch.
+#:
+#: Exactly these four, and nothing beyond them: what the engine promises is what this
+#: file may state, and a fifth property added here would be a promise a worker relies on
+#: and nothing keeps.
+SCRATCH_CONTRACT = (
+    re.compile(r"an\s+absolute\s+path", re.IGNORECASE),
+    re.compile(r"exists\s+and\s+is\s+writable\s+when\s+the\s+dispatch\s+starts", re.I),
+    re.compile(r"unique\s+to\s+this\s+dispatch", re.IGNORECASE),
+    re.compile(r"not\s+removed\s+while\s+it\s+runs", re.IGNORECASE),
+)
+
+#: Committing as the work goes, held on the consequence rather than on the instruction:
+#: "commit often" is advice a worker weighs, and "what is uncommitted is what nothing
+#: recovers" is a fact about this host that decides it.
+COMMIT_EACH_PIECE = re.compile(
+    r"[Cc]ommit\s+a\s+coherent\s+working\s+piece\s+the\s+moment\s+it\s+works"
+)
+UNCOMMITTED_IS_LOST = re.compile(r"dirty\s+worktree\s+does\s+not\s+survive", re.IGNORECASE)
+
+#: Asking rather than stopping, and the seam it is asked over. The seam is named
+#: because a worker told to "ask its manager" with no mechanism has been told to write
+#: it in a report nobody reads until the dispatch is over.
+ASK_RATHER_THAN_STOP = re.compile(r"\*\*Ask\s+rather\s+than\s+stop\.\*\*")
+ASK_SEAM = re.compile(r"\$ORCHESTRATOR_ASK_MANAGER")
+#: The ending it refuses, which is the one a careful worker reaches: it declines to
+#: decide, says so, and stops — leaving nothing committed and nobody asked.
+STOPPING_UNASKED = re.compile(r"work\s+undone\s+and\s+the\s+question\s+unasked", re.IGNORECASE)
+
+#: The secondary rate limiter, in the two things that separate it from the primary one:
+#: what tells you which it is, and that waiting is not the answer.
+SECONDARY_LIMITER = re.compile(r"secondary\s+limiter", re.IGNORECASE)
+DISAGREEING_BUDGET = re.compile(r"gh api rate_limit")
+NOT_WAITED_OUT = re.compile(r"every\s+further\s+attempt\s+extends\s+it", re.IGNORECASE)
+
 
 @pytest.fixture(scope="module")
 def appendix() -> str:
@@ -598,3 +644,128 @@ def test_the_appendix_no_longer_forbids_running_two_gates_at_once(appendix: str)
         f"({reason.group(0)!r}); live e2e code allocates its ports through `_free_port()` "
         "and a reader handed the reason reinstates the rule"
     )
+
+
+def test_the_appendix_names_the_per_dispatch_scratch_directory(appendix: str) -> None:
+    """Where a dispatch's own files go, with the contract that lets it be used unchecked.
+
+    The alternative is not "nowhere": it is a `/tmp` path the worker made up, on a host
+    where several dispatches share `/tmp` and one of them has already read another's
+    result as its own. So the variable is named together with what it replaces, and with
+    the four properties that make a fallback branch unnecessary — a worker that has to
+    test for the directory writes the `/tmp` path anyway, in the else arm.
+
+    This file states the contract and does not provide it; the engine does. So it states
+    those four properties and stops: a worker relying on a fifth that nobody promised is
+    the next defect, and prose is where such a promise gets made by accident.
+    """
+    assert SCRATCH_DIRECTORY.search(appendix), (
+        f"{APPENDIX} no longer names ONEPIPELINE_NODE_SCRATCH_DIR, so a dispatch needing "
+        "somewhere to write invents a `/tmp` path and shares it with every other dispatch "
+        "on this host"
+    )
+    assert INSTEAD_OF_INVENTING_ONE.search(appendix), (
+        f"{APPENDIX} names the scratch directory without saying what it is instead of. A "
+        "variable with no alternative beside it reads as trivia, and the worker writes to "
+        "`/tmp` as before"
+    )
+    for stated in SCRATCH_CONTRACT:
+        assert stated.search(appendix), (
+            f"{APPENDIX} states the scratch directory without the property "
+            f"{stated.pattern!r}. A directory with no contract is one a worker probes and "
+            "falls back from, which is the invented path again with an extra branch"
+        )
+
+
+def test_the_appendix_tells_a_worker_to_commit_each_piece_as_it_works(appendix: str) -> None:
+    """Committing as the work goes, stated as what happens if it does not.
+
+    Held on the consequence as well as the instruction: "commit often" is advice a
+    worker weighs against tidiness, while "a dirty worktree does not survive this
+    dispatch" is a fact about this host that settles it. The shared preamble in
+    `config/onejudge.base.yaml` says the same thing, and this file is where a worker
+    reads it beside the operational detail — one of the two alone has already been read
+    as a preference.
+    """
+    assert COMMIT_EACH_PIECE.search(appendix), (
+        f"{APPENDIX} no longer tells a worker to commit each coherent piece as it works, "
+        "so a dispatch that ends early takes finished work with it"
+    )
+    assert UNCOMMITTED_IS_LOST.search(appendix), (
+        f"{APPENDIX} asks for commits without saying what an uncommitted tree costs. The "
+        "instruction is weighed against tidiness unless the consequence is beside it"
+    )
+
+
+def test_the_appendix_tells_a_worker_to_ask_rather_than_stop(appendix: str) -> None:
+    """The ending a careful worker reaches, and the seam that replaces it.
+
+    A worker that meets a decision which is not its own and declines to make it is doing
+    the right thing up to the point where it stops: one reasoned about a frozen contract
+    correctly, named two options for its owner, and then ended three turns with nothing
+    committed and nobody asked — about fifteen minutes of correct work reported as `ahead
+    of main: 0 commit(s)`. So the seam is named rather than left as "ask your manager",
+    which a worker satisfies by writing it in a report read after the dispatch is over.
+    """
+    assert ASK_RATHER_THAN_STOP.search(appendix), (
+        f"{APPENDIX} no longer tells a worker to ask rather than stop, so a decision fork "
+        "it cannot pass ends the dispatch instead of reaching the manager"
+    )
+    assert ASK_SEAM.search(appendix), (
+        f"{APPENDIX} tells a worker to ask without naming $ORCHESTRATOR_ASK_MANAGER, the "
+        "seam every dispatch carries. Told only to ask, a worker writes the question in "
+        "its report, which is read after it has already settled"
+    )
+    assert STOPPING_UNASKED.search(appendix), (
+        f"{APPENDIX} does not name the ending it is refusing. The failure is not a worker "
+        "that asked badly; it is one that stopped with the work undone and the question "
+        "unasked, and a rule that does not say so reads as advice about phrasing"
+    )
+
+
+def test_the_appendix_says_a_rate_limit_gh_disagrees_with_is_the_secondary_one(
+    appendix: str,
+) -> None:
+    """The one rate limit that polling makes worse, told apart by the thing that reports it.
+
+    Both halves are required. Without the test — a refusal naming a rate limit while
+    `gh api rate_limit` still shows budget — a worker cannot tell which limiter it hit,
+    and the primary one genuinely is waited out. Without the consequence, a worker that
+    identifies it correctly still retries, because retrying is what a rate limit usually
+    asks for.
+    """
+    assert SECONDARY_LIMITER.search(appendix), (
+        f"{APPENDIX} no longer names GitHub's secondary limiter, so a worker reads every "
+        "rate-limit refusal as the primary one and waits out a limit that is not there"
+    )
+    assert DISAGREEING_BUDGET.search(appendix), (
+        f"{APPENDIX} names the secondary limiter without the read that tells it apart. "
+        "`gh api rate_limit` reporting budget beside a refusal is the whole signal; "
+        "without it the distinction is one a worker cannot make"
+    )
+    assert NOT_WAITED_OUT.search(appendix), (
+        f"{APPENDIX} does not say that a further attempt extends the secondary limit. A "
+        "worker that identified it correctly still retries, because that is what a rate "
+        "limit normally asks for"
+    )
+
+
+def test_the_appendix_is_still_the_one_source_a_task_appendix_is_built_from(
+    appendix: str,
+) -> None:
+    """Whatever else it says, it stays the block a task's `## Additional info` is.
+
+    `orchestrator.criteria_guard.check_appendix` refuses a task that does not carry this
+    file's whole content, so every addition above has to leave it a document that opens
+    at that heading and is embeddable verbatim. Driven through that function rather than
+    asserted about the text, because the function is what a plan is really refused by.
+    """
+    from orchestrator.criteria_guard import CriteriaError, check_appendix
+
+    assert appendix.lstrip().startswith("## Additional info"), (
+        f"{APPENDIX} no longer opens at the heading a task's appendix section is, so a "
+        f"task built from it carries the block under no heading:\n{appendix[:120]}"
+    )
+    check_appendix(f"## What\nSomething.\n\n{appendix.strip()}\n", "carrying-it")
+    with pytest.raises(CriteriaError, match="current operational appendix"):
+        check_appendix("## What\nSomething.\n", "carrying-none")

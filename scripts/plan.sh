@@ -57,8 +57,13 @@
 # worktree at all — it costs the clone, and a planner authoring nothing has no branch
 # to leave. It is a working directory nobody owns exclusively, so a dispatch launched
 # that way **may write only to gitignored paths, may not commit, and may not leave the
-# checkout on any branch but its base.** Nothing here enforces that; the last planner
-# that needed it was told so by hand, which is what this paragraph replaces.
+# checkout on any branch but its base.** That is now in the dispatched task rather than
+# only here: `DIRECT_PLACEMENT_NOTE` is appended to the brief for a `--direct` launch,
+# because the shared completion clause in `config/onejudge.base.yaml` demands "every
+# change this dispatch made committed" of every dispatch alike and a `--direct` one may
+# not commit at all. A planner that did correct, verified work settled `task-failed`
+# against exactly that. The shared clause is right, is shared, and does not move; the
+# exemption belongs in the task of the one dispatch it is true of.
 #
 # The journal, the ownership row, the planner surfaces, and the run's place in the DAG
 # UI are `onepipeline start`'s own — the ledger it writes and the channel it serves —
@@ -120,6 +125,27 @@ DEFAULT_DAG_GRAPH="off"
 #: appending one over the caller's own would refuse the launch outright.
 DAG_GRAPH_FLAG="--dag-graph"
 
+#: What a `--direct` dispatch is told, appended to the brief as part of its own task.
+#: Stated as the placement plus the one clause it is exempt from, in that order: a
+#: dispatch reading only "may not commit" beside a bar demanding every change committed
+#: holds two instructions of equal authority and resolves it by guessing, which is the
+#: failure this text exists to end.
+DIRECT_PLACEMENT_NOTE="
+
+## Additional info
+
+**This dispatch works in a checkout it does not own, so it commits nothing.** It was
+launched with \`--direct\`, which dispatches it into the shared canonical checkout that
+several orchestrators use rather than into a worktree of its own. So it may write only to
+gitignored paths, may not commit, and may not leave the checkout on any branch but its
+base.
+
+That exempts it from one clause of the shared completion bar every dispatch on this host
+is judged against — \"with every change this dispatch made committed and nothing
+half-applied left behind\". Here there is nothing to commit, and a clean \`git status\` is
+the correct and complete outcome: the plan written to a gitignored path is the
+deliverable, and committing it would be the failure rather than the proof."
+
 #: The one node's id. It is what `just status` and the DAG UI label the dispatch.
 NODE_ID="plan"
 
@@ -157,17 +183,26 @@ SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_-]*$'
 # Writes the one-node plan. The brief is read here and embedded verbatim: it IS the
 # node's task, in the `## What` / `## Why` / `## Acceptance criteria` template every
 # task this repository dispatches is written in, so anything that reformatted it
-# would be editing the manager's words on the way to the planner.
+# would be editing the manager's words on the way to the planner. The one addition is
+# `DIRECT_PLACEMENT_NOTE`, appended after the brief for a `--direct` launch and only
+# then: it states where that dispatch works and which clause of the shared completion
+# bar it is therefore exempt from. Appended rather than woven in, so the manager's own
+# words are still the whole of what precedes it.
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-name, brief, persona, node_id, turns, repo, execution, title = sys.argv[1:9]
+name, brief, persona, node_id, turns, repo, execution, title, direct_note = sys.argv[1:10]
 task = pathlib.Path(brief).read_text(encoding="utf-8")
 node = {"id": node_id, "persona": persona, "task": task}
 if repo:
     node["repo"] = repo
     node["execution_checkout"] = execution
     node["title"] = title
+else:
+    # A direct node works in the launch directory, and the shared completion bar
+    # demands every change committed. Saying so in the task is the only place the
+    # dispatch and its judge both read it.
+    node["task"] = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
 if turns:
     node["max_turns"] = int(turns)
 plan = {
@@ -366,7 +401,10 @@ if [ ! -f "$ask_manager_helper" ] || [ ! -r "$ask_manager_helper" ]; then
         "restore it from the repository or run 'just bootstrap', then retry"
 fi
 # shellcheck source=scripts/ask-manager-env.sh
-. "$ask_manager_helper"
+if ! . "$ask_manager_helper"; then
+    fail "the ask-manager helper at $ask_manager_helper is readable but could not be loaded" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
 export_ask_manager plan || exit $?
 
 # Both checked rather than left to `set -e`, which would exit with whatever the
@@ -376,7 +414,7 @@ mkdir -p "$PLAN_DIRECTORY" || fail "the plan directory $PLAN_DIRECTORY could not
     "check that this checkout is writable, then retry"
 plan="$PLAN_DIRECTORY/$name.md"
 "$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$max_turns" \
-    "$repo" "$execution" "$TITLE_PREFIX$name" \
+    "$repo" "$execution" "$TITLE_PREFIX$name" "$DIRECT_PLACEMENT_NOTE" \
     | "$python" -m orchestrator.project_store .plans >/dev/null || {
     # `|| :` so a removal that fails cannot replace the diagnostic below with its own
     # exit; the partial plan is then named by that diagnostic rather than silently kept.
@@ -431,8 +469,6 @@ trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could no
 # spend a second judged turn on. A run that did not settle successfully records nothing,
 # and a planner working in its own worktree — which is the default placement — writes
 # its plan somewhere this snapshot never saw, so there is simply nothing to record.
-# llmlint: ignore[boundary_inputs_validated] `onepipeline start` validates its own surface; restating it here is the drift this repository gates against.
-# llmlint: ignore[tool_output_is_signal] This is `just orchestrate`'s attached launch with a plan written first: streaming the run as it goes is what a manager stays attached for, and the one line this script owns — the plan it wrote and the command that answers the planner — is printed above.
 #
 # A closeout that fails carries its own status out, rather than being swallowed under a
 # green launch: what it failed to do is record what this run authored, and a plan
@@ -443,6 +479,8 @@ trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could no
 # without breaking the host are driven — a settled run recording what it authored, and
 # an unsettled one recording nothing — in tests/e2e/test_plan_review_e2e.py.
 status=0
+# One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
+# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; and this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the one line this script owns, the plan it wrote and the command that answers the planner, is printed above.
 "$script_dir/onepipeline.sh" start "$project" ${forwarded[@]+"${forwarded[@]}"} ${observer[@]+"${observer[@]}"} || status=$?
 if [ "$status" -eq 0 ]; then
     # llmlint: ignore[changed_behavior_has_e2e] The one ending left is a settled run whose closeout then fails outright, which now takes an unreadable snapshot or an unreadable review bar rather than any plan on disk; a project it cannot record is passed over instead, which `tests/test_plan_review.py` drives.

@@ -214,6 +214,7 @@ def answer_persistently(
     stopping: threading.Event,
     *,
     seconds: float = MANAGER_PATIENCE_SECONDS,
+    seen: list[Surface] | None = None,
 ) -> None:
     """Answer this run's blocking question, and keep answering until somebody stops.
 
@@ -230,7 +231,10 @@ def answer_persistently(
     moments with no reader at all, and that is not a failing manager.
 
     Surfaces keep being read alongside, because handing one out is what opens the reply
-    rendezvous at all: a re-ask that nobody reads can be answered by nobody.
+    rendezvous at all: a re-ask that nobody reads can be answered by nobody. They are
+    recorded into `seen` where a caller asks for them, exactly as `answer_each` records
+    the ones it read: a journey counting what one ask put in front of a manager has to
+    count the ones this read too, or the answer depends on which manager it hired.
     """
     limit = deadline(seconds)
     token: str | None = None
@@ -239,7 +243,10 @@ def answer_persistently(
             if token is not None:
                 return
             raise AssertionError(f"run {run} never surfaced a question carrying a token")
-        message = next_surface(run, environment)
+        surface = next_surface_record(run, environment)
+        if surface is not None and seen is not None:
+            seen.append(surface)
+        message = None if surface is None else surface["message"]
         found = None if message is None else TOKEN.search(message)
         if found is not None:
             token = found.group(0)
@@ -266,6 +273,7 @@ class PersistentManager:
         seconds: float = MANAGER_PATIENCE_SECONDS,
     ) -> None:
         self._failures: list[BaseException] = []
+        self._surfaces: list[Surface] = []
         self._stopping = threading.Event()
         self._thread = threading.Thread(
             target=self._play, args=(run, environment, compose, seconds), daemon=True
@@ -280,9 +288,22 @@ class PersistentManager:
         seconds: float,
     ) -> None:
         try:
-            answer_persistently(run, environment, compose, self._stopping, seconds=seconds)
+            answer_persistently(
+                run, environment, compose, self._stopping, seconds=seconds, seen=self._surfaces
+            )
         except BaseException as error:  # noqa: BLE001 - re-raised by `checked` below
             self._failures.append(error)
+
+    @property
+    def surfaces(self) -> list[Surface]:
+        """Every surface this manager read, as `Manager.surfaces` reports the same thing.
+
+        A persistent manager keeps reading while it re-sends, so it is the one that sees
+        the surfaces a re-arming ask raises after the first. A journey counting what one
+        ask put in front of a manager reads them here and drains whatever is still queued
+        afterwards, which together is every surface.
+        """
+        return list(self._surfaces)
 
     def stop(self) -> None:
         """End the watch after the send in flight, if any."""

@@ -45,6 +45,7 @@ from fake_backend import (
 )
 from project_fixtures import read_project_plan
 from scratch_identity import seeded
+from shared_dispatch_bar import shared_completion_bar
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -772,6 +773,108 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
         _just("stop", str(shipped["name"]), environment=environment, seconds=60)
         # llmlint: ignore[suppressions_justified] The CLI fixture validates this title.
         _remove_project(cast(str, shipped["name"]))
+
+
+#: The run a `--direct` launch is made under here, kept apart from every other launch
+#: in this module so the plan it writes is unambiguously its own.
+DIRECT_RUN = RunId("plan-recipe-direct")
+
+#: What the `--direct` task has to say, in the two parts that failed a dispatch when
+#: only one of them was said. The placement is what the recipe already printed on its
+#: own receipt; the exemption is the half that was nowhere, and it is the half a judge
+#: reads — the shared completion clause in `config/onejudge.base.yaml` demands "every
+#: change this dispatch made committed" of every dispatch alike, and a `--direct`
+#: planner may not commit at all.
+DIRECT_PLACEMENT = "may write only to\ngitignored paths, may not commit"
+DIRECT_EXEMPTION = (
+    "with every change this dispatch made committed and nothing\nhalf-applied left behind"
+)
+DIRECT_OUTCOME = "a clean `git status` is\nthe correct and complete outcome"
+
+
+@pytest.mark.reads_docs
+def test_a_direct_launch_states_its_commit_exemption_in_the_task_it_dispatches(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """`--direct` says in the dispatched task what the shared bar would otherwise fail it for.
+
+    A `--direct` dispatch works in the shared canonical checkout, so it may write only to
+    gitignored paths and may not commit — and the one completion clause every dispatch on
+    this host is judged against demands every change committed. A planner that did
+    correct, verified work settled `task-failed` against exactly that. The clause is
+    right and is shared, so it does not move; the exemption is stated in the task of the
+    one dispatch it is true of, which is the only place both the worker and its judge
+    read it.
+
+    Read out of the prompt the dispatched worker was really given, which is where a
+    worker meets this and the only place it can be observed: a recipe that composed the
+    task correctly and never got it as far as the dispatch would pass any read of what it
+    wrote and fail the one thing the exemption is for.
+
+    Attached rather than detached, unlike every other launch here, because the dispatch
+    *is* the subject: a detached launch returns before the turn that carries this.
+
+    The exemption is quoted from `config/onejudge.base.yaml` through
+    `shared_completion_bar()`, not restated: a task naming a bar the base config no
+    longer states would exempt a dispatch from nothing.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    # llmlint: ignore-block[e2e_not_mocked] Only the paid provider process is
+    # substituted, by `_environment`, which carries its own reason at that seam;
+    # `REAL_ONEHARNESS_BIN` points the fake backend's passthrough at the real
+    # `oneharness`, so it un-doubles rather than doubles. `just plan`, the recipe and
+    # the launch are the real ones.
+    environment = _environment(tmp_path)
+    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
+    recorded = tmp_path / "turns.jsonl"
+    environment[PROMPT_LOG_ENV] = str(recorded)
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    launch = _just("plan", str(brief), "--name", DIRECT_RUN, "--direct", environment=environment)
+    try:
+        assert launch.returncode == 0, f"`just plan --direct` failed:\n{launch.stderr}"
+        assert "--direct dispatches it into this checkout" in launch.stderr, (
+            "the launch did not report itself as a direct placement, so whatever it "
+            f"dispatched is not the shape this exemption is about:\n{launch.stderr}"
+        )
+        # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the
+        # only place a dispatched task is observable; no published view carries it. The
+        # fake backend writes this JSONL itself and TurnRecord states the schema it owns
+        # on both ends, so this reads a test-owned file rather than reaching past
+        # somebody else's validation.
+        turns = [
+            cast(TurnRecord, json.loads(line))
+            for line in recorded.read_text(encoding="utf-8").splitlines()
+        ]
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        dispatched = [
+            _flattened(turn["prompt"]) for turn in turns if _member(turn) == WORKER_MEMBER
+        ]
+        assert dispatched, f"no dispatched turn was recorded in {recorded}"
+
+        assert any(_flattened(BRIEF) in prompt for prompt in dispatched), (
+            "the brief did not reach the dispatch verbatim; the manager's words are the "
+            f"task and everything the recipe appends comes after them:\n{dispatched}"
+        )
+        for stated, what in (
+            (DIRECT_PLACEMENT, "that it works in a checkout it does not own and may not commit"),
+            (DIRECT_EXEMPTION, "which clause of the shared bar it is exempt from"),
+            (DIRECT_OUTCOME, "what the correct outcome is instead"),
+        ):
+            assert any(_flattened(stated) in prompt for prompt in dispatched), (
+                f"the dispatched task does not say {what}, so the worker and its judge "
+                f"read the shared bar with nothing in the task that answers it:\n{dispatched}"
+            )
+        assert _flattened(DIRECT_EXEMPTION) in _flattened(shared_completion_bar()), (
+            "the task quotes a demand `config/onejudge.base.yaml` no longer makes, so it "
+            f"exempts this dispatch from nothing:\n{shared_completion_bar()}"
+        )
+    finally:
+        _just("stop", DIRECT_RUN, environment=environment, seconds=60)
+        _remove_project(DIRECT_RUN)
 
 
 class Refusal(NamedTuple):

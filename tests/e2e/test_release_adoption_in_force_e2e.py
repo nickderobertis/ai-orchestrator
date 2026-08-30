@@ -40,7 +40,9 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
+from typing import NotRequired, TypedDict, cast
 
 import pytest
 from project_fixtures import local_project
@@ -60,7 +62,15 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This marker is not a
+# tier the default run hides: `orchestrator:test-checkouts` is a target of this same
+# project that runs exactly `-m reads_checkouts`, deliberately uncached, and the uniform
+# target set `just check` runs includes it. The rule's remedy — its own project, so `nx
+# affected` can skip it — is the opposite of what this tier needs, because its subject is
+# state outside the workspace and a memo keyed on this workspace would describe whatever
+# that state was when it was recorded. AGENTS.md states that requirement.
 pytestmark = pytest.mark.reads_checkouts
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 #: The verb group release adoption exists to add, and the six subcommands under it.
 #: All six, because the section describes what each one is for and a build carrying
@@ -88,6 +98,18 @@ RELEASE_SUBCOMMANDS = (
 #: has a release to await, and a set that only had to be non-empty would go on passing
 #: while the one they care about dropped out. `AGENTS.md`'s "Sequencing a node behind a
 #: release" names this same list, so a change upstream comes due in the prose as well.
+#:
+#: Asserted against each checkout's **fetched remote base** rather than against what
+#: `onevcs` answers here now, and the difference is the whole reason this constant is
+#: usable at all. `onevcs release targets` reads the publication checkout's working
+#: tree, which several managers share: a checkout sitting on somebody's branch answers
+#: `unreadable`, and one whose base is simply behind its origin answers `undeclared` —
+#: indistinguishable, from here, from a repository that declares nothing. Taken that
+#: way this same list measured six declaring identities in one run, one in the next, and
+#: none in the publication that was refused for it, while nothing upstream had moved.
+#: A remote-tracking ref moves only when somebody fetches, never when a worktree is
+#: checked out or reset, so reading the declaration there is a reading of the repository
+#: rather than of what another manager's dispatch happens to be doing.
 DECLARING_IDENTITIES = {
     "github.com/nickderobertis/oneagentgraph": 3,
     "github.com/nickderobertis/oneharness": 6,
@@ -127,6 +149,41 @@ DEFAULT_ADOPTION = "fast"
 #: installs it — so a listed identity can be one no `onevcs` verb can resolve at all.
 NOT_REGISTERED = "is not a registered repository"
 
+DECLARATION = "release-targets.toml"
+
+#: How a checkout's fetched base is resolved. `origin/HEAD` is what a clone records
+#: when it was made, and is asked first because it is the remote's own answer; the two
+#: fallbacks are for a checkout that never recorded one — three of this host's do not —
+#: and are tried rather than guessed, since a ref that does not resolve is skipped.
+REMOTE_BASES = ("origin/HEAD", "origin/main", "origin/master")
+
+
+class Declaration(TypedDict):
+    """What a `release targets` response says about the repository's own declaration.
+
+    `state` is the one field every state carries; each of the others belongs to a
+    single state — `reason` to `unreadable`, `looked_in` to `undeclared` — which is
+    what the two `NotRequired`s record, so a read of the wrong one is a type error
+    here rather than a `KeyError` in the middle of a journey over fourteen identities.
+    """
+
+    state: str
+    reason: NotRequired[str]
+    looked_in: NotRequired[str]
+
+
+class ReleaseTargets(TypedDict):
+    """The `onevcs release targets --json` response, as far as this journey reads it.
+
+    A target carries its own name, style and probe; nothing here reads inside one, so
+    they stay mappings and only how many a repository declares is asserted on.
+    """
+
+    identity: str
+    adoption: str
+    targets: list[dict[str, object]]
+    declaration: Declaration
+
 
 def _onevcs(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -153,6 +210,52 @@ def _registry_identities() -> frozenset[str]:
         for line in listed.stdout.splitlines()
         if line and not line.startswith(" ")
     )
+
+
+def _git(checkout: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(checkout), *arguments],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+def _fetched_base(checkout: Path) -> str | None:
+    """The remote-tracking ref standing for `checkout`'s base branch, or None.
+
+    A remote-tracking ref is the one thing about a shared checkout that a concurrent
+    dispatch does not move: it advances when somebody fetches and at no other time, so
+    it says what the repository last published rather than what a worktree is currently
+    sitting on.
+    """
+    for candidate in REMOTE_BASES:
+        resolved = _git(checkout, "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}")
+        if resolved.returncode == 0:
+            return candidate
+    return None
+
+
+def _declared_at_fetched_base(checkout: Path) -> int | None:
+    """How many targets `checkout`'s repository declares at its fetched base.
+
+    None where it declares none — which covers a repository with no declaration at all
+    and one whose base this host holds no fetched copy of, because a release this host
+    has never fetched the declaration of is one it could not await either.
+
+    The document is handed to a TOML parser rather than scanned, so a `[[target]]`
+    inside a comment or a string is not counted and a malformed document fails here
+    rather than being silently read as declaring nothing.
+    """
+    base = _fetched_base(checkout)
+    if base is None:
+        return None
+    shown = _git(checkout, "show", f"{base}:{DECLARATION}")
+    if shown.returncode != 0:
+        return None
+    declared = tomllib.loads(shown.stdout).get("target", [])
+    return len(declared) or None
 
 
 def _plan(tmp_path: Path, name: str, tasks: list[dict[str, object]]) -> str:
@@ -272,6 +375,16 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
     *proven* against the registry's own listing below, not assumed from a refusal,
     because a refusal misread is exactly how an identity that does declare a target
     would go unasked.
+
+    The declaring set itself is read from each checkout's fetched base and the live
+    `onevcs` answer is cross-checked against it, for the reason `DECLARING_IDENTITIES`
+    records: several managers share these checkouts, so the working tree `onevcs`
+    reads is whatever the last dispatch left there, and the identical question
+    answered six, then one, then none across three runs of this journey while nothing
+    upstream had moved. What the cross-check keeps is the half a git read cannot give
+    — that the surface really does find and count a declaration — and it is made over
+    the checkouts that can answer today rather than over all of them, because an
+    identity whose checkout is on somebody's branch is reporting on that branch.
     """
     identities = registered_checkouts()
     assert identities, (
@@ -281,9 +394,11 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
     )
 
     held = _registry_identities()
-    declaring = {}
-    unregistered = {}
-    for identity in sorted(identities):
+    declaring: dict[str, int] = {}
+    answered_live: dict[str, int] = {}
+    unreadable: dict[str, object] = {}
+    unregistered: dict[str, str] = {}
+    for identity, checkout in sorted(identities.items()):
         reported = _onevcs(RELEASE_VERB, "targets", identity, "--json")
         if reported.returncode != 0 and NOT_REGISTERED in reported.stderr:
             assert identity not in held, (
@@ -293,14 +408,24 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
             unregistered[identity] = reported.stderr.strip()
             continue
         assert reported.returncode == 0, f"{identity}: {reported.stderr}"
-        declared = json.loads(reported.stdout)
+        # `cast` and no runtime validation, because this journey's whole subject is the
+        # installed `onevcs`'s own answer: a response that lost one of these keys must
+        # fail here as the drift it is, and the reads below raise `KeyError` naming the
+        # key. Validating first would turn that into a message about this file instead.
+        declared = cast(ReleaseTargets, json.loads(reported.stdout))
         assert declared["adoption"] == DEFAULT_ADOPTION, (
             f"{identity} resolves the {declared['adoption']!r} adoption rung rather than "
             f"{DEFAULT_ADOPTION!r}. {GUIDANCE_SECTION!r} in AGENTS.md says every node here "
             "resolves to fast unless its own plan says otherwise; that sentence is now due"
         )
-        if declared["targets"]:
-            declaring[identity] = len(declared["targets"])
+        if declared["declaration"]["state"] == "unreadable":
+            unreadable[identity] = declared["declaration"]["reason"]
+        elif declared["targets"]:
+            answered_live[identity] = len(declared["targets"])
+
+        at_base = _declared_at_fetched_base(checkout)
+        if at_base is not None:
+            declaring[identity] = at_base
 
     answered = sorted(set(identities) - set(unregistered))
     assert answered, (
@@ -313,12 +438,37 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
         f"the registered repositories declaring a release target are {declaring}, and "
         f"this repository is written against {DECLARING_IDENTITIES}. "
         f"{GUIDANCE_SECTION!r} in AGENTS.md names that same list and says which of them "
-        "a dependency can be awaited in; re-read it against what is really declared"
+        "a dependency can be awaited in; re-read it against what is really declared. "
+        "This is read from each checkout's fetched base, so an identity missing here "
+        "either stopped declaring or has not been fetched since it started"
     )
     assert THIS_REPOSITORY_IDENTITY not in declaring, (
         f"{THIS_REPOSITORY_IDENTITY} now declares a release target, so a plan of this "
         f"repository can hold on one. {GUIDANCE_SECTION!r} in AGENTS.md says it declares "
         "none and that a plan of it therefore awaits nothing; both sentences are now due"
+    )
+
+    # The surface's own half: wherever a checkout is in a state `onevcs` can read a
+    # declaration out of, what it found is what the repository declares. Asserted as
+    # agreement rather than as its own list, because the disagreements this leaves out
+    # are checkouts another manager's dispatch is working in.
+    disagreed = {
+        identity: (found, declaring.get(identity))
+        for identity, found in answered_live.items()
+        if found != declaring.get(identity)
+    }
+    assert not disagreed, (
+        f"`onevcs {RELEASE_VERB} targets` counted {{identity: (it found, the fetched base "
+        f"declares)}} {disagreed}. Where it can read a checkout at all, the surface and "
+        "the repository have to agree: a count only one of them has is either a "
+        "declaration onevcs mis-parses or one that reached the working tree without "
+        "reaching the base"
+    )
+    assert answered_live or unreadable, (
+        "no registered checkout answered a declaration at all, so nothing here proves "
+        f"`onevcs {RELEASE_VERB} targets` reads one; every identity it could reach "
+        "reported declaring nothing while the fetched bases say "
+        f"{sorted(DECLARING_IDENTITIES)} do"
     )
 
     # And the refusal an operator meets when they ask anyway, which is what tells them
