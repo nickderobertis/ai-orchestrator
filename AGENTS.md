@@ -712,17 +712,63 @@ earns no reference row and no hold whatever mode its dependents resolve to; that
 `ai-orchestrator` and seven of the other repositories registered here, and it is why
 a plan of this repository naming neither field gets exactly the run it gets today.
 
-**Under fast adoption the framework writes the reference block, so a task must not.**
-A dependency landing outside the node's own repository gains a row naming that
-dependency, its repository, its branch, the landing commit, and the release target, in
-a trailing `## Cross-repository references` block appended to that node's rendered
-task by the same rendering that appends `## Planner context`. When those releases
-arrive the node is sent one `context` note naming the versions — into the live turn
-where the dispatch has a controllable one and onto its next dispatch where it does
-not — framed as observed state and adding no acceptance criteria. So a task must
-**not** instruct a worker to go and find and pin a dependency's commit: that
-instruction competes with a block the framework has already written and a note it
-will deliver, the two answers disagree, and the worker follows the one in its task.
+**The adoption instruction a worker follows is the producer's, and the framework
+renders it at both places a consumer meets one.** A dependency landing outside the
+node's own repository gains a row naming that dependency, its repository, its branch,
+the landing commit, the release target and the version, in a trailing
+`## Cross-repository references` block appended to that node's rendered task by the
+same rendering that appends `## Planner context`. Beside those rows stands the one
+sentence in this whole mechanism that tells a worker to **do** something — move the
+pin, and how — and it is rendered from `target.adoption_instructions` in the
+**producing** repository's own `release-targets.toml`: a minijinja template, declared
+per target at declaration `schema_version` 3, resolved through the same three layers
+every other release answer is taken over. A producer that declares none falls back to
+the engine's own default sentence, so a repository that has not adopted this is
+unaffected, and so is one whose template this host cannot finish rendering — a render
+that fails or comes out empty falls back to that same default rather than failing the
+dispatch, because no worker is failed over the sentence under its reference table.
+When those releases arrive a `fast` node is sent one `context` note naming the
+versions — into the live turn where the dispatch has a controllable one and onto its
+next dispatch where it does not — carrying that same rendered instruction. **The block is rendered
+for a `published` node too**, and only the note is fast-only: a held node never held a
+git pin to move off, so the block is the one place it ever meets the version. Both
+sites enclose the rendering in the frame saying it reports observed state and adds no
+acceptance criteria, so nothing a producer writes becomes a bar a worker has to clear.
+
+**A task still writes no pinning instruction of its own, and what survives the next
+redesign is the reason rather than the rule: one question gets one answer, and the
+answer belongs to whoever knows it.** What adopting a release asks of a dependent is a
+fact the producing repository holds and a consumer can only guess at — the change
+request below records one repository on this account stating its pinning rule in its
+own manifest, twelve lines above the pins it governs, and workers who could not have
+known it getting it wrong twice. A task that writes its own instruction makes two
+answers out of one, and the worker follows the one in its task. So a planner who wants
+different words changes **the producer's own declaration**, or **the consumer's
+override** — a target of the same short name in `$ONEVCS_HOME/releases.yml` replaces
+the producer's whole and keeps its position in the order, and `declaration: ignore`
+drops the producer's layer for one rule — and never the task. Note what the override
+does not buy here: the two-layer `{% extends "producer" %}` composition onevcs
+documents on the declaration names a template this engine build does not register, so
+an override that tries to extend the producer's falls back to the default instead —
+write an override whole. This rule inverted once already, when the instruction moved
+from nowhere to the party that knows it, and the reason is what says which way it goes
+the next time the design moves.
+
+**Both halves of that are in force here, and neither is configured here — which are
+two different sentences.** The producer half is the version-control CLI's:
+`config/onevcs.version` reads 0.18.0, at or past the release carrying
+https://github.com/nickderobertis/onevcs/pull/123, which is what lets a
+`release-targets.toml` declare an instruction at all. The rendering half is the engine
+CLI's: `config/onepipeline.version` reads 0.18.3, at or past the release carrying
+https://github.com/nickderobertis/onepipeline/pull/174, which is what puts a rendered
+instruction into the block and the note. Configuration is the other question entirely.
+This host declares no `releases.yml`, so it overrides no producer's instruction and
+sets no repository rung; `ai-orchestrator` declares no release target, so a plan of
+this repository is a consumer of nothing and a producer of no instruction; and no plan
+here names `adoption` or `consumes`, so no node has been rendered one yet. A worker
+that has never met one of these rows is what an unconfigured host looks like, not what
+an absent mechanism looks like. `tests/test_release_adoption_guidance.py` holds both
+pins to the releases carrying their halves.
 
 **Under published adoption the node does not launch at all** until every such
 dependency answers released. The hold is absolute — no timeout, no deadline, no retry

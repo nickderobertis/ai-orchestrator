@@ -94,7 +94,7 @@ OWNED_STATEMENTS = (
     Owned(MANAGER.document, "is one artifact a repository publishes"),
     Owned(MANAGER.document, "a member of the vocabulary nothing here uses"),
     Owned(MANAGER.document, "There is no fifth rung, no plan-level tier, and no run-only override"),
-    Owned(MANAGER.document, "the framework writes the reference block, so a task must not"),
+    Owned(MANAGER.document, "The adoption instruction a worker follows is the producer's"),
     Owned(MANAGER.document, "A probe is not a gate"),
     Owned(MANAGER.document, "the person who has to act, or find who will"),
     # What a node that changes code owes its judge, now that this host has stopped

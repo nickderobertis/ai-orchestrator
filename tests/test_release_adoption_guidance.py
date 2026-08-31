@@ -25,6 +25,7 @@ from typing import NamedTuple
 
 import pytest
 from published_tools import PUBLISHED_TOOLS
+from test_dated_claims import unaccompanied
 from test_linked_libraries import Release
 
 from orchestrator.root import REPO_ROOT
@@ -102,11 +103,38 @@ REQUIRED_CLAIMS = (
     ),
     Claim("no fifth rung", "There is no fifth rung, no plan-level tier, and no run-only override"),
     Claim(
-        "fast adoption writes the block",
-        "the framework writes the reference block, so a task must not",
+        "the instruction is the producer's",
+        "The adoption instruction a worker follows is the producer's",
     ),
+    Claim(
+        "it is declared per target",
+        "rendered from `target.adoption_instructions` in the\n**producing** repository's own "
+        "`release-targets.toml`",
+    ),
+    Claim("the framework renders it at both sites", "at both places a consumer meets one"),
+    Claim("the block is one of the two", "`## Cross-repository references` block appended"),
     Claim("the arrival note", "sent one `context` note naming the versions"),
-    Claim("a task must not pin", "instruct a worker to go and find\nand pin a dependency's commit"),
+    Claim("a producer that declares none", "falls back to\nthe engine's own default sentence"),
+    Claim("the block reaches a published node too", "rendered\nfor a `published` node too"),
+    Claim(
+        "the rendering adds no bar",
+        "adds no\nacceptance criteria, so nothing a producer writes becomes a bar",
+    ),
+    Claim(
+        "a task writes no instruction of its own",
+        "A task still writes no pinning instruction of its own",
+    ),
+    Claim(
+        "the reason survives the rule",
+        "one question gets one answer, and the\nanswer belongs to whoever knows it",
+    ),
+    Claim("two answers out of one", "makes two\nanswers out of one"),
+    Claim(
+        "where a planner changes those words",
+        "changes **the producer's own declaration**, or **the consumer's\noverride**",
+    ),
+    Claim("the override replaces whole", "replaces\nthe producer's whole and keeps its position"),
+    Claim("and never the task", "and never the task"),
     Claim("published adoption does not launch", "the node does not launch at all"),
     Claim("the wait is indefinite", "no timeout, no deadline, no retry\nbudget"),
     Claim("the wait never fails a node", "**never fails the node**"),
@@ -150,6 +178,20 @@ REQUIRED_CLAIMS = (
     Claim("the modes reach the loader", "unknown variant `bogus`, expected `fast` or `published`"),
     Claim("a bad consumes key is refused", "which is not one of\nthis node's deps"),
     Claim("what remains is configuration", "**So what remains is configuration, not adoption.**"),
+    # In force is not configured, and the passage that inverted the pinning rule is
+    # where a reader most needs the two kept apart: a worker that has never met a
+    # rendered instruction is what an unconfigured host looks like, and nothing about
+    # that says whether the mechanism is there.
+    Claim(
+        "in force and configured are two questions",
+        "Both halves of that are in force here, and neither is configured here",
+    ),
+    Claim(
+        "an unconfigured host is not an absent mechanism",
+        "what an unconfigured host looks like, not what\nan absent mechanism looks like",
+    ),
+    Claim("this host declares no consumer document", "This host declares no `releases.yml`"),
+    Claim("no plan here names either field", "no plan\nhere names `adoption` or `consumes`"),
 )
 
 #: The vocabulary decided for this workstream: these repositories publish artifacts
@@ -405,4 +447,172 @@ def test_no_sentence_leaves_the_shared_version_to_disambiguate_itself() -> None:
         "carrying release and an adopted pin are different numbers. They were equal "
         "while this section was written and are not now, which is exactly when an "
         "unqualified number starts being read as the wrong one of the two"
+    )
+
+
+#: Where the passage that owns the adoption instruction starts, and what follows it.
+#: Read as a slice of the section rather than as a claim about line numbers, so
+#: reflowing a paragraph does not move it.
+INSTRUCTION_PASSAGE_OPENS = "**The adoption instruction a worker follows is the producer's"
+INSTRUCTION_PASSAGE_CLOSES = "**Under published adoption the node does not launch at all**"
+
+#: How this section told a planner to keep pinning out of a task before the producer
+#: could declare one. Kept verbatim rather than paraphrased, for the same reason
+#: `tests/test_dated_claims.py` keeps the wording it superseded: a gate matching a
+#: paraphrase fires on honest prose, and this is the exact text a reader would act on.
+#:
+#: It is not merely stale. Its *ground* — that any instruction in a task competes with
+#: a block the framework wrote — is what a planner would apply to the producer's own
+#: instruction, which now arrives inside that very block, so a plan written under it
+#: strips out the one sentence that tells a worker what adopting the release asks.
+SUPERSEDED_PINNING_RULE = """So a task must
+**not** instruct a worker to go and find and pin a dependency's commit: that
+instruction competes with a block the framework has already written and a note it
+will deliver, the two answers disagree, and the worker follows the one in its task."""
+
+#: The two halves of the superseded rule, either of which is enough to state it: the
+#: prohibition, and the ground it rested on. Both are refused, because either one
+#: surviving on its own is what a partial rewrite would leave behind.
+SUPERSEDED_FRAGMENTS = (
+    "instruct a worker to go and find and pin a dependency's commit",
+    "competes with a block the framework has already written",
+)
+
+
+class InstructionFloor(NamedTuple):
+    """One half of the producer-owned instruction, and what has to carry it."""
+
+    #: The pin in `config/` that decides whether this host has that half.
+    version_file: str
+    #: The release of that tool the half arrived in.
+    floor: Release
+    #: The change request that says what the release carried, which a version cannot.
+    change_request: str
+
+
+#: What carries each half of the producer-owned instruction, and the change request
+#: that says what the release carried. Floors rather than equalities, exactly as
+#: `CAPABILITY_FLOORS` above: the passage is true while each pin is at or past the
+#: release carrying its half, and a regression under it would leave the passage
+#: describing a build this host does not have — with nothing here contradicting it,
+#: since a host that declares no target and names no `consumes` runs identically.
+INSTRUCTION_FLOORS = (
+    InstructionFloor(
+        "onevcs.version",
+        Release(0, 18, 0),
+        "https://github.com/nickderobertis/onevcs/pull/123",
+    ),
+    InstructionFloor(
+        "onepipeline.version",
+        Release(0, 18, 3),
+        "https://github.com/nickderobertis/onepipeline/pull/174",
+    ),
+)
+
+
+def instruction_passage() -> str:
+    """The paragraphs that say whose the adoption instruction is, and nothing else."""
+    prose = section()
+    assert INSTRUCTION_PASSAGE_OPENS in prose, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer opens the passage that "
+        "says whose the adoption instruction is; without it a planner has nothing "
+        "telling them the producer writes it"
+    )
+    passage = prose.split(INSTRUCTION_PASSAGE_OPENS, 1)[1]
+    assert INSTRUCTION_PASSAGE_CLOSES in passage, (
+        f"{GUIDANCE_DOCUMENT}'s {GUIDANCE_SECTION!r} no longer carries the published "
+        "adoption paragraph after that passage, so its end cannot be located"
+    )
+    return INSTRUCTION_PASSAGE_OPENS + passage.split(INSTRUCTION_PASSAGE_CLOSES, 1)[0]
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("fragment", SUPERSEDED_FRAGMENTS, ids=("the prohibition", "its ground"))
+def test_the_superseded_prohibition_and_the_ground_it_rested_on_are_absent(
+    fragment: str,
+) -> None:
+    """Neither superseded wording survives; what a task owes is unchanged and unchecked.
+
+    A task still writes no pinning instruction of its own, so this is not a gate over
+    the prohibition going away — it is a gate over the two sentences that stated it as
+    a *competition* with a block the framework had already written. That ground is what
+    moved: the block now carries the producer's own instruction, so a planner reading
+    the superseded wording would strip that instruction out of a plan on account of the
+    very block delivering it. This document is the whole of what a manager reads before
+    briefing a planner, so a stale sentence here is not one to leave standing.
+    """
+    assert flat(fragment) not in flat(_text(GUIDANCE_DOCUMENT)), (
+        f"{GUIDANCE_DOCUMENT} still says {fragment!r}. The adoption instruction is the "
+        "producer's now, declared per target and rendered into the reference block and "
+        "the arrival note, so a task carrying none of its own is not a task ceding the "
+        "question to a competitor — it is one leaving the answer with the party that "
+        "knows it"
+    )
+
+
+def test_the_absence_gate_discriminates_the_rewrite_from_what_it_replaced() -> None:
+    """The gate above has to fail against the text it was written to remove.
+
+    A gate over an absence passes trivially against any prose that never said the
+    thing, including prose that never said anything, so what makes it a check rather
+    than a decoration is that the superseded text fails it. Held against that text
+    verbatim rather than against a fixture, so the discrimination is about the sentence
+    this change really removed.
+    """
+    stated = [
+        fragment
+        for fragment in SUPERSEDED_FRAGMENTS
+        if flat(fragment) in flat(SUPERSEDED_PINNING_RULE)
+    ]
+    assert stated == list(SUPERSEDED_FRAGMENTS), (
+        "the fragments this gate refuses no longer match the rule it replaced, so it "
+        "would pass against that rule and prove nothing about the rewrite"
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_passage_carries_no_dated_claim_this_repository_does_not_re_take() -> None:
+    """This repository's own rule, applied to the passage that inverted under it.
+
+    Held here as well as document-wide because the rewrite is where the temptation is:
+    the mechanism it describes is one nothing on this host runs, so its every claim is
+    about somebody else's software, and a stamp on one of those is what makes it read
+    as current long after the release behind it has moved. Applied through
+    `tests/test_dated_claims.py`'s own reader rather than a second copy of the rule.
+    """
+    offending = unaccompanied(instruction_passage())
+    assert not offending, (
+        f"{GUIDANCE_DOCUMENT}'s adoption-instruction passage carries "
+        f"{len(offending)} dated sentence(s) that name no test re-taking them and are "
+        "classified as no incident. State what the release does and cite the change "
+        "request that carried it, or name the check that fails when it moves:\n"
+        + "\n".join(f"  - {found.sentence}" for found in offending)
+    )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("carried", INSTRUCTION_FLOORS, ids=lambda carried: carried.version_file)
+def test_the_passage_names_the_release_carrying_each_half_and_the_pin_is_past_it(
+    carried: InstructionFloor,
+) -> None:
+    """The passage says both halves are in force; two pins are what makes that true.
+
+    Separate from `CAPABILITY_FLOORS` because these are different halves of the same
+    section: the surface and the modes came in earlier by both tools, and a producer's
+    instruction is carried by later releases of each. Reading one floor per version
+    file would make adopting this indistinguishable from adopting the surface.
+    """
+    passage = flat(instruction_passage())
+    assert carried.change_request in passage, (
+        f"{GUIDANCE_DOCUMENT}'s adoption-instruction passage no longer names "
+        f"{carried.change_request}, which is what says *what* the release carried; the "
+        "version alone says only which build has it"
+    )
+    adopted = _adopted(carried.version_file)
+    assert Release.parse(adopted, f"config/{carried.version_file}") >= carried.floor, (
+        f"config/{carried.version_file} reads {adopted}, below the {carried.floor} "
+        "carrying its half of the producer-owned adoption instruction. The passage "
+        "says that half is in "
+        "force here, and a host that declares no release target runs identically "
+        "either way, so nothing else on this host would report the regression"
     )
