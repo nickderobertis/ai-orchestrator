@@ -135,7 +135,7 @@ SQUASH_HALF_CLAIMS = (
     # naming the blob at the pinned release rather than to asserting one blob throughout.
     Claim(
         "the deciding module's identity is named",
-        "`ec3bea7c` at v0.15.8 and at the pinned v0.16.2",
+        "`ec3bea7c` at v0.15.8 and at the pinned v0.18.0",
     ),
     Claim(
         "the last tier can never say yes",
@@ -176,15 +176,15 @@ LANDING_RETRY_HALF_CLAIMS = (
 #: same date for a different measurement. A stamp is only evidence where it is
 #: attached to the claim it stamps.
 LANDING_MEASUREMENT_STAMP = "Re-measured {date} on the pinned onevcs {release}:"
-LANDING_MEASUREMENT_DATE = "2026-08-29"
+LANDING_MEASUREMENT_DATE = "2026-08-31"
 #: The ref the verb was actually asked about, so a later reader re-takes exactly the
 #: measurement rather than a similar one. The incident's own change request stopped
 #: answering here on 2026-08-25 — no session record correlates it any more — and a
 #: measurement nobody can re-take is not evidence, whatever it once showed.
-LANDING_MEASUREMENT_REF = "onevcs/s-107f9b4639a1"
+LANDING_MEASUREMENT_REF = "onevcs/s-89df7bad225d"
 #: The change request that ref's work landed through, which is what makes the answer
 #: below dangerous rather than merely uncertain: it merged, and the verb still says no.
-LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/142"
+LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/164"
 #: What that ref still answered, verbatim. Quoted rather than paraphrased: the
 #: whole value of the sentence is that a reader can run the verb and compare.
 LANDING_MEASUREMENT_ANSWER = "still answers `landed: no`, `decided\nby: content comparison`"
@@ -338,8 +338,8 @@ def test_the_phase_section_names_both_change_requests_that_carry_it() -> None:
 def test_the_landing_passage_keeps_the_half_no_release_has_fixed(claim: Claim) -> None:
     """The squash-merge half is true at every release, and deleting it is the danger.
 
-    `crates/onevcs/src/landed.rs` has moved since v0.14.0 — re-read at v0.16.2 on
-    2026-08-29, its four tiers, their order and its own never-yes rule are unchanged and
+    `crates/onevcs/src/landed.rs` has moved since v0.14.0 — re-read at v0.18.0 on
+    2026-08-31, its four tiers, their order and its own never-yes rule are unchanged and
     a constraint was added beside them — so
     nothing about the four tiers has moved since the incident this passage records. A
     reader who took onevcs 0.14.0's retry fix as making `content comparison`
@@ -530,14 +530,14 @@ RECOVERABLE_SPLIT_CLAIMS = (
 #: reports one ref, this one reports a pair — so the two paragraphs cannot satisfy
 #: each other's gate.
 SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, over two landings"
-SPLIT_MEASUREMENT_DATE = "2026-08-29"
+SPLIT_MEASUREMENT_DATE = "2026-08-31"
 #: Both refs, because the whole measurement is a comparison: either alone is an
 #: anecdote about one workflow rather than evidence that the workflow is what decides.
-SPLIT_MEASUREMENT_REFS = ("onevcs/s-60938a07cb2e", "onevcs/s-14e04d0b57e2")
+SPLIT_MEASUREMENT_REFS = ("onevcs/s-33cb9ccbd48f", "onevcs/s-9076ef0a25e8")
 #: The change request the remote half landed through, for the reason the sibling
 #: measurement names one: without it the quoted `unknown` reads as uncertainty rather
 #: than as the verb having lost a merge that happened.
-SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/156"
+SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/175"
 #: What each half answered with no session record, verbatim, so a later reader
 #: re-takes this measurement rather than a similar one.
 #: Both halves moved at onevcs 0.15.8 and are recorded as measured rather than as the
@@ -546,7 +546,7 @@ SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipelin
 #: half stopped being askable at all once its branch was pruned from every registered
 #: checkout after landing. The trailer it was cited for is still on `ed8c396`.
 SPLIT_MEASUREMENT_ANSWERS = (
-    "`decided by: a landing trailer on the base (5e723477…)`",
+    "`decided by: a landing trailer on the base\n(2e123d86…)`",
     "`landed: no`, `decided by:\ncontent comparison`",
 )
 #: The condition that separates the two answers. Without it the paragraph reports two

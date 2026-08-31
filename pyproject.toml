@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "Local orchestration harness: drive many onejudge processes to complete a task DAG in parallel."
 requires-python = ">=3.11"
 dependencies = [
-    "oneagentgraph-cli==0.3.13",
+    "oneagentgraph-cli==0.3.15",
     "oneharness-cli==0.11.2",
-    "onejudge==0.6.2",
+    "onejudge==0.7.0",
     "onepipeline-api-cli==0.6.4",
-    "onepipeline-cli==0.17.5",
-    "onevcs-cli==0.16.2",
+    "onepipeline-cli==0.18.3",
+    "onevcs-cli==0.18.0",
 ]
 
 [project.scripts]

@@ -3170,6 +3170,33 @@ MERGE_POLICY_PROSE = ("AGENTS.md", "docs/orchestration.md", "docs/repo-lifecycle
 #: list and a name invented in a paragraph both fail.
 POLICY_IN_PROSE = re.compile(r"`((?:local|change)-[a-z]+)`")
 
+#: Words of that shape which belong to a **different** engine vocabulary, and so are
+#: not the merge policy this sweep is looking for.
+#:
+#: The sweep's premise was that every `local-`/`change-` token in these documents is a
+#: merge policy, and onepipeline 0.18.x broke it: `change-draft` is a settlement
+#: *outcome* — what a publication held back by an unarrived release answers, beside the
+#: `complete-but-draft` status — and it is written in prose exactly as a policy is. A
+#: gate that could not tell them apart would report a correct document as naming a
+#: policy the launcher refuses.
+#:
+#: Both words are **onepipeline's**, and the crate matters because onevcs carries a
+#: near-miss: `pub const DRAFTED: &str = "change-draft"` is onepipeline v0.18.3
+#: `src/vcs.rs:133`, returned by `outcome_of(PublishOutcome::ChangeDraft)` at
+#: `src/vcs.rs:147` and paired with `complete-but-draft` at `src/graph.rs:114`, while
+#: onevcs v0.18.0 has no `DRAFTED` in its shipped source at all — what it has is
+#: `EventKind::ChangeDrafted => "change-drafted"` at `crates/onevcs/src/event.rs:486`,
+#: an event kind rather than a settlement outcome. The merge-policy vocabulary this
+#: sweep is about is onevcs's, at `crates/onevcs/src/rules.rs`'s `MergePolicy`:
+#: `LocalDirect`, `ChangeOpen`, `ChangeAuto`, `ChangeDirect`, and it did not move.
+#:
+#: Exempted by name rather than by heuristic, and the name is not an unchecked
+#: assertion: `tests/test_engine_contracts.py` reconciles the outcome vocabulary
+#: against the engine's own settlement sites, so a word that stopped being an outcome
+#: fails there. A word of this shape that is neither a policy nor an outcome still
+#: fails here, which is the invention this sweep exists to catch.
+ANOTHER_VOCABULARY = frozenset({"change-draft"})
+
 #: The retired spellings, anchored on the "old"/"older" each file introduces them
 #: with so the pattern cannot wander onto another slash-separated triple. Prose is
 #: hard-wrapped, so every gap here is any whitespace rather than a space.
@@ -3260,7 +3287,7 @@ def test_the_merge_policy_vocabulary_in_prose_is_the_published_one(
     already did once.
     """
     text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-    named = set(POLICY_IN_PROSE.findall(text))
+    named = set(POLICY_IN_PROSE.findall(text)) - ANOTHER_VOCABULARY
     assert named == set(published_merge_policies), (
         f"{relative_path} names merge policies {sorted(named)}; the launcher accepts "
         f"{sorted(published_merge_policies)}"

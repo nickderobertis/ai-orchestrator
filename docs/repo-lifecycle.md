@@ -13,19 +13,19 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.17.5**
+that source on every `just check` rather than restated: **`onepipeline` v0.18.3**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.16.2** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.18.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.16.2** as well at
+the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.18.0** as well at
 this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.17.5
-and 0.16.2. The habit that ambiguity taught is worth keeping
-rather than retiring with it — read a version here **with the tool beside it and never
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.18.3
+and 0.18.0. The habit that ambiguity taught is worth keeping rather than retiring
+with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
 here against a later pin; that is the discipline this section exists to replace, and
@@ -59,6 +59,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `change-open` | A change request is open, which the policy asked for. |
 | `done` | `queued` | The host took the merge and will land it once its checks pass. |
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
+| `complete-but-draft` | `change-draft` | Every step ran and the branch is published, and the host is holding its change request as a **draft** because a release the node adopted early has not happened yet. Deliberately neither `done` nor a failure and deliberately not settled: merging now would make the node's temporary git pin permanent in a base branch, so no dependent starts on it and no run holding one has settled. What clears it is the release arriving, which puts a new worker on the branch this node already has. |
 | `done` | *(none)* | A direct agent node — no publication to name. |
 | `waiting` | *(none)* | A `kind: human` step is ready and the branch is held for a person. |
 | `failed` | `publication-failed` | The publication started and did not land, and **nothing a further attempt could answer** ended it: a request `onevcs` refused, a seam with no implementation, or something that judged the publication turning it down where no narrower kind says which — the repository's own `commit-msg` hook refusing the composed subject, or a host that took a merge and then reported it unperformed. |
@@ -70,6 +71,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
 | `failed` | `dispatch-died` | The dispatch started and the agent worked, but the dispatch process then ended without an agent verdict; unlike a pre-work infrastructure refusal, it is not retried. |
+| `failed` | `provider-failed` | The same death, where what killed the dispatch was the **provider** — a narrowing of `dispatch-died` and not a second word for it. A node whose provider went is a node with nothing wrong with its work, so read it as the quota, auth, or outage question `just status`'s health block answers rather than looking for what the work got wrong. A node that failed its own task still settles `task-failed`, and a dispatch that died to anything else still settles `dispatch-died`. |
 | `failed` | `no-agent-progress` | Every boundary attempt was spent and the agent produced nothing. |
 | `failed` | `infrastructure-failure` | The dispatch layer refused before any work began. |
 | `failed` | `invalid-node` | The node itself could not be run as written. |
@@ -559,7 +561,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.17.5 and is refused **by its own name**, at every schema version and on a live
+v0.18.3 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -790,7 +792,7 @@ failed.
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
 2026-08-27 against the installed onepipeline 0.16.3 binary (which its SBOM and
 embedded crate paths both identified as linking onevcs 0.15.4) and re-read against the
-adopted onepipeline 0.17.5 / onevcs 0.16.2 pair, every follow-up shape
+adopted onepipeline 0.18.3 / onevcs 0.18.0 pair, every follow-up shape
 keeps the workstream's publication base:
 
 | Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
@@ -1334,7 +1336,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.17.5.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.18.3.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1408,11 +1410,17 @@ event follow is dropped, because nothing is left to read for as long as the driv
 lives. The branch and its commits are preserved; the worktree is the session's and
 goes when the session does.
 
-**A pause pushes nothing and opens nothing.** There is no draft change request at a
-pause on either engine at the adopted versions — `onepipeline` v0.17.5 has no notion
-of one and `onevcs` 0.16.2 has none to open — and nothing is published, on a local or
-a remote identity, until the last step has settled and the publication starts. A pause is
-purely local branch state.
+**A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
+reason it used to rest on is gone: both engines now have a draft change request —
+`onevcs` 0.18.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.18.3 settles the node that
+made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
+**publication** outcome, reached only once the last step has settled and the publication
+starts, and reached then only because a release the node adopted early has not happened
+yet; nothing on the pause path can produce one, on a local or a remote identity. A pause
+is still purely local branch state, and the difference now matters: a node holding a
+draft is neither paused nor settled, and reading one as the other is what a manager
+would otherwise do with `complete-but-draft`.
 
 **`attest` takes a node id, and it folds that node to `done`.** This is the part
 most worth re-reading before relying on a human step. `compile_attest` accepts one
@@ -2005,7 +2013,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.17.5 — so every number in it was a
+journey it named are absent from `onepipeline` v0.18.3 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

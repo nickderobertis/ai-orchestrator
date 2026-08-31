@@ -344,7 +344,12 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # field at all — which is exactly the re-reading this gate exists to force.
         "not a field of `Node` on onepipeline v{version} and is refused",
         "absent from `onepipeline` v{version} — so every number in it was a",
-        "`onepipeline` v{version} has no notion",
+        # The onepipeline half of the same flipped denial the sibling gate carries.
+        # It read "`onepipeline` v{version} has no notion" of a draft change request,
+        # and 0.18.x gave it one: a publication held back by an unarrived release
+        # settles its node `complete-but-draft`. The sentence moved with the fact,
+        # because the paragraph's conclusion — a pause still opens nothing — did not.
+        "`onepipeline` v{version} settles the node that made one `complete-but-draft`",
     ),
     # Where the pre-extraction dispatch wrapper's symbols are denied, and where the
     # run-scope telemetry view was re-measured. Both are per-release readings of the

@@ -200,7 +200,14 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         # that had just stopped naming the release the rename happened in.
         "docs/repo-lifecycle.md": (
             "the **`onevcs` {version}** its `Cargo.lock` resolves",
-            "`onevcs` {version} has none to open",
+            # This site used to be a *denial* — "`onevcs` {version} has none to open" —
+            # and onevcs 0.18.0 made it false: a publication can now answer
+            # `PublishOutcome::ChangeDraft`, which onepipeline settles a node
+            # `complete-but-draft` on. The gated sentence moved with the fact rather than
+            # being deleted, because the paragraph's conclusion did not move — a pause
+            # still opens nothing — and a reader who was told the reason had gone would
+            # otherwise have no way to tell that from the conclusion having gone too.
+            "`onevcs` {version} answers `PublishOutcome::ChangeDraft`",
         ),
         # The pre-extraction callout's denial: those symbols are absent from the engines
         # at named releases, and a bump that left the numbers behind would be a denial
@@ -382,10 +389,11 @@ class ProseClaim(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Measured 2026-08-25 on this host's installed
+#: between them would mean anything. Measured 2026-08-31 on this host's installed
 #: wheels: `config/oneharness.version` reads 0.11.2 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.12.1. One wheel, its own library, two numbers.
+#: against as 0.12.1 — while the engine wheel links 0.12.2. One wheel, its own
+#: library, two numbers, and neither of them the one a dispatched turn runs through.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
 #: What each dependent resolves that crate at in the adopted engine. The whole
@@ -398,8 +406,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.13", core="0.12.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.6.2", core="0.12.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.15", core="0.12.2"),
+    LinkedCore(dependent="onejudge", dependent_version="0.7.0", core="0.12.2"),
 )
 
 #: Where an operator meets the CLI-versus-core reality, and the sentence that has to
@@ -669,6 +677,71 @@ def test_the_linked_oneharness_cores_are_named_where_an_operator_meets_them() ->
             f"once; the adopted engine links {brought}, and an operator meeting "
             "disagreeing oneharness numbers has to be told which one a dispatched turn runs"
         )
+
+
+#: The sibling CLI wheels this host installs beside the engine, each of which links
+#: `oneharness-core` on its own account. Named rather than derived because what is being
+#: reconciled is a claim about *these* artifacts: the standalone CLI a recipe spawns is
+#: published from the same repository as the crate the engine links, and is not evidence
+#: about it.
+SIBLING_CLI_DISTRIBUTIONS = ("oneagentgraph-cli", "onejudge-cli")
+
+
+def _sibling_core(distribution: str) -> str:
+    """The `oneharness-core` one installed sibling CLI wheel was compiled against."""
+    installed = importlib.metadata.distribution(distribution)
+    sboms = [entry for entry in (installed.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
+    assert len(sboms) == 1, (
+        f"{distribution} must ship exactly one SBOM for the core it was built against to "
+        f"be read from; found {[str(entry) for entry in sboms]}"
+    )
+    document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
+    declared = {
+        component["version"]
+        for component in document["components"]
+        if component["name"] == UNRECONCILABLE_PIN.crate
+    }
+    assert len(declared) == 1, (
+        f"{distribution}'s SBOM declares {UNRECONCILABLE_PIN.crate} at "
+        f"{sorted(declared) or 'no version'}; this repository's prose compares one "
+        "version of it against the engine's, which nothing here can reconcile against that"
+    )
+    return declared.pop()
+
+
+def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -> None:
+    """Each sibling CLI's own core, against the one the engine resolved for that crate.
+
+    The sentence this backs is the sharpest form of the whole module's subject: the
+    `oneagentgraph` and `onejudge` a dispatch runs are compiled *into the engine wheel*,
+    and this host also installs each of them as a standalone CLI whose wheel resolved its
+    own `oneharness-core`. Those two numbers are free to differ and, on this adoption,
+    do — so a reader who measured the sibling's own wheel would be measuring an artifact
+    no dispatch loads.
+
+    Written as the pairing rather than as an inequality. An inequality would go green on
+    a build where both moved together, which is the reading it exists to deny, and would
+    fail the day the two coincide — a coincidence, not a regression. What fails here is
+    either number moving, which is the prompt to re-read the paragraph that quotes them.
+    """
+    engine = {resolved.dependent: resolved.core for resolved in LINKED_HARNESS_CORES}
+    measured = {
+        distribution: (
+            _sibling_core(distribution),
+            engine[distribution.removesuffix("-cli")],
+        )
+        for distribution in SIBLING_CLI_DISTRIBUTIONS
+    }
+
+    assert measured == {
+        "oneagentgraph-cli": ("0.12.1", "0.12.2"),
+        "onejudge-cli": ("0.12.1", "0.12.2"),
+    }, (
+        f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
+        "and AGENTS.md's \"How this pin's number compares with the linked core's\" "
+        "paragraph quotes the pair it was written against. Re-read that paragraph against "
+        "what is installed now and update it in the same change"
+    )
 
 
 # Everything above is an *internal* consistency check: the pins in `config/` against

@@ -55,6 +55,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -115,13 +116,62 @@ FAILED_HELPER_STATUS = re.compile(
 OUTCOME_OF = re.compile(r"pub fn outcome_of\(.*?\n\}", re.DOTALL)
 OUTCOME_OF_ARM = re.compile(r"=>\s*\"([a-z][a-z-]*)\"")
 
+#: The same arms read *with* the publication ending each answers for, and accepting a
+#: named constant on the right-hand side as well as a literal. `change-draft` arrived
+#: as `=> DRAFTED`, which the bare-literal pattern above cannot see at all — so the
+#: word the engine had just started settling on read as a word it had stopped writing.
+OUTCOME_OF_PAIR = re.compile(
+    r"PublishOutcome::(\w+)[^=]*?=>\s*(?:\"([a-z][a-z-]*)\"|([A-Z][A-Z_]*))"
+)
+
+#: The one settlement whose word is chosen by a **binding** rather than named at the
+#: call: the dispatch-death classifier picks between its constants and hands the
+#: result to the `failed` helper. Read as its own site because a `failed(node, word)`
+#: says nothing about which words `word` can be, and the two it can be — a dispatch
+#: that died and a provider that went — are the pair a reader of a failed node most
+#: needs told apart.
+DEATH_WORD_BINDING = re.compile(
+    r"let \([a-z_]+, ([a-z_]+)\) = match [a-z_]+ \{(.*?)\n    \};", re.DOTALL
+)
+
 #: The one site that settles a node on a word the *sibling* chose: `outcome_of`'s
 #: answer, inside a `Settlement` whose remaining fields come from a `Settlement::plain`
-#: naming the status. That status is the pairing for every word this relay can carry.
+#: whose status is **computed from the same publication**.
+#:
+#: It used to be a literal `NodeStatus::` at that call, and reading it as one is what
+#: this pattern now refuses to do. onepipeline 0.18.x made the status a function of
+#: the publication — a change held open as a draft settles somewhere a merged one does
+#: not — and the old pattern's `.*?` ran past the call it was anchored on and captured
+#: the next literal status anywhere in the crate, which is `Failed`. Nothing failed:
+#: the gate went on reconciling, against three pairings the engine has never written.
+#: So what is captured here is the **function's name**, and its arms are read below.
 RELAY_SITE = re.compile(
-    r"outcome:\s*Some\(crate::vcs::outcome_of\(.*?\.\.Settlement::plain\([^)]*?NodeStatus::(\w+),",
+    r"outcome:\s*Some\(crate::vcs::outcome_of\(.*?"
+    r"\.\.Settlement::plain\(\s*&node\.id,\s*([a-z_]+)\(&published\.outcome\),",
     re.DOTALL,
 )
+
+
+#: That function, and the arms inside it. Both halves are joined on the *sibling's*
+#: `PublishOutcome` variant rather than crossed, because crossing them would invent
+#: pairings the engine cannot write — every status against every word, when in truth
+#: one publication ending answers both questions at once.
+def _definition_of(name: str) -> re.Pattern[str]:
+    """The pattern matching the named function's definition, its whole body included."""
+    return re.compile(rf"fn {re.escape(name)}\(.*?\n\}}", re.DOTALL)
+
+
+PUBLICATION_STATUS_ARM = re.compile(
+    r"(?:onevcs::)?PublishOutcome::(\w+)[^=]*?=>\s*NodeStatus::(\w+)"
+)
+PUBLICATION_STATUS_DEFAULT = re.compile(r"\n\s*_\s*=>\s*NodeStatus::(\w+)")
+
+#: How the engine spells each status where a reader meets one. Read from the engine
+#: rather than lower-cased from the Rust identifier, which is what this gate did while
+#: every status was one word: `CompleteDraft` is written `complete-but-draft`, and a
+#: gate deriving the word from the variant would look for a status no document has and
+#: report the engine as having stopped settling on it.
+NODE_STATUS_WORD = re.compile(r"Self::(\w+)\s*=>\s*\"([a-z][a-z-]*)\",")
 
 #: The guard that keeps every failure word away from that relay. `outcome_of`'s
 #: `Failed` arm answers whatever `failure_of` decides — the residual, the unread
@@ -796,6 +846,78 @@ def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", text.replace("**", "").replace("`", "").replace("*", ""))
 
 
+def _death_word_constants(shipped: str, constants: dict[str, str]) -> set[str]:
+    """The outcome constants the dispatch-death classifier can hand the `failed` helper.
+
+    Every other settlement names its word at the call, so reading the call is the whole
+    of it. This one does not: the classifier binds a word and settles on the binding,
+    which is why `dispatch-died` — a row this table has carried since it was written —
+    silently stopped being found the release the classifier gained a second word to
+    choose between. A gate that could not see either would report the engine as having
+    dropped a settlement it makes on every dispatch that dies.
+    """
+    words: set[str] = set()
+    for binding, body in DEATH_WORD_BINDING.findall(shipped):
+        if f"failed(node, {binding})" not in shipped:
+            continue
+        words.update(name for name in re.findall(r"\b([A-Z][A-Z_]+)\b", body) if name in constants)
+    assert words, (
+        f"onepipeline {ONEPIPELINE.ref} no longer settles a dead dispatch on a word its "
+        "classifier chose, where this gate reads it; a dispatch that dies is settled "
+        "somewhere else now, and the words it settles under are paired with nothing"
+    )
+    return words
+
+
+def _publication_pairings(
+    shipped: str,
+    status_fn: str,
+    constants: dict[str, str],
+    word_for: Callable[[str], str],
+) -> set[tuple[str, str]]:
+    """What a publication settles as, joined on the ending that answers both halves.
+
+    `outcome_of` turns the sibling's `PublishOutcome` into this crate's word and the
+    status function turns the same value into a status, so the pairing is per ending
+    rather than the cross product: only a change held open as a draft settles
+    `complete-but-draft`, and pairing every status with every word would put that
+    status beside `merged`.
+
+    The `Failed` ending is deliberately not here. `RELAY_GUARD` asserts it returns
+    before this settlement, and its words are paired with the failure status by the
+    preserving read in the caller.
+    """
+    body = _region(shipped, _definition_of(status_fn), f"`{status_fn}`")
+    per_ending = dict(PUBLICATION_STATUS_ARM.findall(body))
+    default = PUBLICATION_STATUS_DEFAULT.search(body)
+    assert per_ending or default, (
+        f"onepipeline {ONEPIPELINE.ref}'s `{status_fn}` names no status this gate can "
+        "read, so every publication word has lost the status it pairs with"
+    )
+
+    pairings: set[tuple[str, str]] = set()
+    for region in OUTCOME_OF.findall(shipped):
+        for ending, literal, constant in OUTCOME_OF_PAIR.findall(region):
+            word = literal or constants.get(constant)
+            if word is None:
+                # The `Failed` ending, whose word comes from `failure_of`. Its status
+                # is read from the failure relay instead; see the docstring.
+                continue
+            status = per_ending.get(ending)
+            if status is None:
+                assert default, (
+                    f"onepipeline {ONEPIPELINE.ref} settles `{word}` on a publication "
+                    f"ending `{ending}` that `{status_fn}` neither names nor defaults"
+                )
+                status = default.group(1)
+            pairings.add((word_for(status), word))
+    assert pairings, (
+        f"onepipeline {ONEPIPELINE.ref} no longer turns a publication ending into one of "
+        "this crate's words where this gate reads it"
+    )
+    return pairings
+
+
 @pytest.fixture(scope="module")
 def engine_settlements() -> frozenset[tuple[str, str]]:
     """Every `(status, outcome)` the adopted `onepipeline` release can settle a node on.
@@ -832,7 +954,21 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
         "the path and correct the rows before relaxing this"
     )
 
-    failure_statuses = {status.lower() for status in FAILURE_RELAY.findall(shipped)}
+    status_words: dict[str, str] = dict(NODE_STATUS_WORD.findall(shipped))
+    assert status_words, (
+        f"onepipeline {ONEPIPELINE.ref} no longer spells its statuses where this gate "
+        "reads them, so every pairing below would be named with a word no reader meets"
+    )
+
+    def word_for(variant: str) -> str:
+        """The word a settled status is written as, or a failure naming the variant."""
+        assert variant in status_words, (
+            f"onepipeline {ONEPIPELINE.ref} settles a node at `NodeStatus::{variant}` and "
+            "declares no word for it, so the table cannot name the status this pairs with"
+        )
+        return status_words[variant]
+
+    failure_statuses = {word_for(status) for status in FAILURE_RELAY.findall(shipped)}
     assert failure_statuses, (
         f"onepipeline {ONEPIPELINE.ref} no longer settles a publication failure on the "
         "word `failure_of` chose where this gate reads it, so the preserving words have "
@@ -840,23 +976,26 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
     )
     preserving = _region(shipped, PRESERVING_OUTCOME, "`Preserving::outcome`")
 
-    found = {(status.lower(), outcome) for status, outcome in LITERAL_SETTLEMENTS.findall(shipped)}
+    found = {
+        (word_for(status), outcome) for status, outcome in LITERAL_SETTLEMENTS.findall(shipped)
+    }
     constants = dict(OUTCOME_CONSTANT.findall(shipped))
     found.update(
-        (helper_status.group(1).lower(), outcome) for outcome in FAILED_HELPER.findall(shipped)
+        (word_for(helper_status.group(1)), outcome) for outcome in FAILED_HELPER.findall(shipped)
     )
     found.update(
-        (helper_status.group(1).lower(), constants[name])
+        (word_for(helper_status.group(1)), constants[name])
         for name in FAILED_HELPER_CONSTANT.findall(shipped)
     )
     found.update(
-        (status.lower(), constants[name]) for status, name in CONSTANT_SETTLEMENTS.findall(shipped)
+        (word_for(status), constants[name])
+        for status, name in CONSTANT_SETTLEMENTS.findall(shipped)
     )
     found.update(
-        (relay.group(1).lower(), arm)
-        for body in OUTCOME_OF.findall(shipped)
-        for arm in OUTCOME_OF_ARM.findall(body)
+        (word_for(helper_status.group(1)), constants[name])
+        for name in _death_word_constants(shipped, constants)
     )
+    found.update(_publication_pairings(shipped, relay.group(1), constants, word_for))
     found.update(
         (status, word) for status in failure_statuses for word in OUTCOME_OF_ARM.findall(preserving)
     )
