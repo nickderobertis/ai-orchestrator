@@ -1625,17 +1625,40 @@ judgment about when an interface seam is worth a split at all.
 A split that follows an interface seam models that interface as its own node whose
 deliverable is the surface itself: the new route, method, or CLI command backed by
 a no-op or sample-data implementation, or a **new optional field** with a defined
-default and existing callers untouched. Its `task` states the contract literally —
-route with request and response fields and types, the exact signature, or the
-field name, type, and default — because the producer node and every consumer node
-restate it from there. Its acceptance criteria are satisfiable inside its own
-dispatch: the surface exists, and existing behavior is unchanged. Name it in the
-`deps` of the real implementation and of each consumer; those siblings then become
-ready together instead of serializing, and each ships against the default or sample
-behavior until the implementation lands.
+default and existing callers untouched. A seam is any agreement whose two sides can
+move independently, so this node shape carries a persistence or storage schema and
+the data model behind it, and the boundary between two internal collections of code
+— packages, modules, libraries, services within one repository — on the same terms
+as a call surface, and carries a seam none of the examples here names for the same
+reason. What varies by kind is only what its first landing looks like:
+
+- **A storage or data-model seam lands additively, reachable by the writers and
+  readers that predate it and required by none of them**: a nullable or defaulted
+  column, a key or document field the existing shape's consumers ignore, a format
+  or entry carrying a version marker old readers already tolerate. Nothing writes
+  it yet, nothing is backfilled, and the shape already there stays authoritative.
+  The migration that populates it, the switch of the authoritative read, and the
+  retirement of the old shape are the implementation's and each is a later node.
+- **A seam between internal collections of code lands as the boundary declared
+  with nothing moved across it**: the module, package or service interface exists
+  with its names, types, and ownership stated, satisfied by delegating to whatever
+  holds the behavior today, and every existing caller still reaches what it reached
+  before. Relocating the implementation behind it and re-pointing callers are later
+  nodes.
+
+Its `task` states the contract literally — route with request and response fields
+and types, the exact signature, the field name, type, and default, the columns or
+keys and what each one holds, or the names one collection of code exposes and what
+it owns — because the producer node and every consumer node restate it from there.
+Its acceptance criteria are satisfiable inside its own dispatch: the surface
+exists, and existing behavior is unchanged. Name it in the `deps` of the real
+implementation and of each consumer; those siblings then become ready together
+instead of serializing, and each ships against the default, the sample behavior,
+or the shape already in the store until the implementation lands.
 
 A consumer that finds a departure it wants — a missing field, a wrong shape, a
-better decomposition — does not change the interface. It surfaces the ordinary
+column or module boundary it would rather have drawn elsewhere, a better
+decomposition — does not change the interface. It surfaces the ordinary
 `kind: "proposal"` its dispatch already has, and the planner decides with the user
 whether to amend the contract or defer it as a follow-up. Amending it is a [live
 edit](#live-graph-edits), and which edit depends on what the node is doing: a node

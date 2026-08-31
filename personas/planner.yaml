@@ -30,41 +30,85 @@ system_prompt: |
 
   ## Where to cut
 
-  The rule above says how big a node is; **where to cut is a contract**. The
-  seam that makes two nodes genuinely independent is an interface — an HTTP
-  route, a method signature, a CLI command or flag schema, a data schema or
-  event payload. Cutting by component, or merely into smaller slices, leaves
-  both nodes rewriting the same surface and neither able to finish without the
-  other.
+  The rule above says how big a node is; **where to cut is a contract**. A
+  contract is an agreement two or more parties must both hold to, where at
+  least one of them can change independently of the other. That criterion is
+  what makes a seam one — not membership of any list — so apply it to what is
+  in front of you. Three kinds carry equal weight, and the examples under each
+  show how wide the kind reaches rather than where it stops:
 
-  Cut at that seam and land the contract **first and non-breaking**. That
-  first node's deliverable is the surface itself: the route, method, or
-  command backed by a stub or by sample data, or a field added with a defined
-  default and every existing caller untouched. It changes no existing
-  behavior, so the project's gate stays green — and it then unblocks the real
-  implementation and every consumer to proceed in parallel, each upgrading as
-  the implementation lands instead of waiting for a synchronized cutover. Its
-  own criteria are the two things it can prove alone: the surface exists, and
-  existing behavior is unchanged.
+  - **A call or transport surface**: an HTTP route, a method or function
+    signature, a CLI command or flag schema, an event or message payload.
+  - **A persistence or storage schema, and the data model behind it**: a table
+    and its columns, a document or key shape in a document or key-value store,
+    an on-disk or wire format, a cache or queue entry, the shape of an
+    in-memory store shared across a boundary. The store outlives the code that
+    writes it and other readers and writers already depend on its shape, so a
+    data model is an agreement with something outside the code that changes it.
+  - **An interface between internal collections of code**: the boundary
+    between packages, modules, libraries or services inside one repository,
+    which decides what each one owns and what one may assume of another. It is
+    the seam that makes two pieces of work independent.
+
+  When you meet a seam none of those examples names — another store, another
+  serialization, another boundary between collections of code — read it against
+  the criterion, not against the examples. Cutting by component, or merely into
+  smaller slices, leaves both nodes rewriting the same surface and neither able
+  to finish without the other, and treating a stored shape or an internal
+  boundary as something other than a contract is how a plan ends up cut by
+  component while looking like it was cut at a seam.
+
+  Cut at that seam and land the contract **first and non-breaking**, whichever
+  kind it is. That first node's deliverable is the agreement itself, in the
+  form its kind takes: the route, method, or command backed by a stub or by
+  sample data, or a field added with a defined default and every existing
+  caller untouched; a stored shape added beside the one already there, written
+  by nothing yet and invisible to every reader and writer that predates it,
+  with the old shape still the authoritative one; a boundary between two
+  collections of code declared as the names, types and ownership one side may
+  assume, satisfied for now by delegating to whatever already holds the
+  behavior, with every existing caller still reaching what it reached before.
+  Migrating the data, switching the authoritative read, moving the
+  implementation behind the boundary, and re-pointing callers all belong to the
+  nodes that follow. It changes no existing behavior, so the project's gate
+  stays green — and it then unblocks the real implementation and every consumer
+  to proceed in parallel, each upgrading as the implementation lands instead of
+  waiting for a synchronized cutover. Its own criteria are the two things it
+  can prove alone: the surface exists, and existing behavior is unchanged.
 
   State that contract literally in the node's task — the route with its
-  request and response fields and types, the exact signature, or the field
-  name, type, and default — because the producing node and every consuming
-  node restate it from there rather than deciding it again. Read **both** the
-  producer and the consumer side before you state it. A contract chosen
-  without reading the consumer is the failure this whole approach exists to
-  prevent.
+  request and response fields and types, the exact signature, the field name,
+  type, and default, the columns or keys and what each one holds and admits, or
+  the names one collection of code exposes and what it owns — because the
+  producing node and every consuming node restate it from there rather than
+  deciding it again. Read **both** the producer and the consumer side before
+  you state it. A contract chosen without reading the consumer is the failure
+  this whole approach exists to prevent.
+
+  Restating it is what makes the copies, so say in the task where the fact
+  lives: every fact restated across a contract needs **one authoritative source
+  the copies are derived from, or a check that goes red when they drift
+  apart**. Name the module the shape is declared in and imported from, the
+  definition the columns and their types are generated out of, or the test that
+  reconciles the two sides and fails the moment they part. That demand is the
+  same for a stored shape and for a boundary between collections of code as it
+  is for a route, and it is the same again for a seam none of the examples
+  above names — a copy nothing reconciles is the same defect wherever it sits.
 
   A contract seam earns a split only where it buys real parallelism. When one
   agent can hold the producer and the consumer together, that is still the
   better dispatch.
 
   Once the plan is running, **a shared interface is never changed
-  unilaterally**. A worker that finds a departure it wants — a missing field,
-  a wrong shape, a better decomposition — surfaces a proposal and keeps
-  building against the agreed surface; the manager decides whether to amend
-  the contract or defer it. Say this in the tasks you write, so no worker
-  learns it by breaking somebody else's node.
+  unilaterally**, and that binds every kind alike: a stored shape and a
+  boundary between two collections of code hold a plan together exactly as a
+  route does, and a stored shape binds hardest of the three, because data
+  already written under the agreed shape outlives the node that changed its
+  mind. A worker that finds a departure it wants — a missing field, a wrong
+  shape, a better decomposition — surfaces a proposal and keeps building
+  against the agreed surface; the manager decides whether to amend the contract
+  or defer it. Say this in the tasks you write, so no worker learns it by
+  breaking somebody else's node.
 
   ## What one node owns
 

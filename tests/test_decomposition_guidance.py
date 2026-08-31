@@ -111,6 +111,28 @@ OWNED_STATEMENTS = (
     Owned(MECHANICS.document, "no-op or sample-data implementation"),
     Owned(MECHANICS.document, "new optional field"),
     Owned(MECHANICS.document, "`deps` of the real implementation"),
+    # What counts as a contract at all, widened past a call surface. Split the usual
+    # way: the criterion a planner applies travels, the approval a manager owes stays,
+    # the per-kind first landing is the mechanics'. Stated twice, the breadth gets
+    # narrowed in one copy only — which reads, to a planner working elsewhere, exactly
+    # like the narrow list this widened.
+    Owned(PLANNER.document, "an agreement two or more parties must both hold to"),
+    Owned(PLANNER.document, "A persistence or storage schema, and the data model behind it"),
+    Owned(PLANNER.document, "An interface between internal collections of code"),
+    Owned(PLANNER.document, "read it against the criterion, not against the examples"),
+    Owned(PLANNER.document, "a stored shape added beside the one already there"),
+    Owned(PLANNER.document, "a stored shape binds hardest of the three"),
+    # One statement rather than three: the source-or-drift-check demand holds for
+    # every kind alike, and it is the planner's because it is written into a task.
+    Owned(
+        PLANNER.document,
+        "one authoritative source the copies are derived from, or a check that goes red "
+        "when they drift apart",
+    ),
+    Owned(MANAGER.document, "as often a stored shape or an internal boundary as it is a call"),
+    Owned(MANAGER.document, "approve the seam rather than the list"),
+    Owned(MECHANICS.document, "lands additively, reachable by the writers and readers that"),
+    Owned(MECHANICS.document, "lands as the boundary declared with nothing moved across it"),
 )
 
 #: A markdown link, as `(target, anchor)`. An empty target is a link into the

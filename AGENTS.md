@@ -1173,8 +1173,19 @@ and is never a command.
      shapes](docs/orchestration.md#node-shapes).
 
    Where the plan cuts at a contract seam, get **explicit user approval on that
-   contract** before dispatch — the route plus request and response fields and
-   types, the exact signature, or the field name, type, and default. It is then
+   contract** before dispatch. A seam is one wherever two parties must both hold
+   to an agreement and one of them can move without the other, so what you are
+   approving is **as often a stored shape or an internal boundary as it is a call
+   surface**: the route plus request and response fields and types, the exact
+   signature, or the field name, type, and default; the table and columns, the
+   document or key shape, the on-disk or wire layout, or the cache or queue entry
+   one node will write and others will read; or the ownership line between two
+   packages, modules or libraries — what each owns and what the other may assume
+   of it. Those are illustrations of how far the criterion reaches, so **approve
+   the seam rather than the list**: a store, a serialization, or a boundary
+   between collections of code that none of them names is the same decision and
+   earns the same approval, and a seam you wave through as "not really a
+   contract" is one every node downstream then restates its own way. It is then
    fixed for the run, and a worker that later proposes a departure from it is
    yours to decide: amend it by live edit, or defer it as a follow-up.
 
