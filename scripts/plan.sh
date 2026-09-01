@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
 # [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct]
-# [<onepipeline start flags>]`.
+# [--no-design-doc] [<onepipeline start flags>]`.
 #
 # The manager's job is writing the brief and reviewing what comes back, not
 # assembling a plan project by hand. So this recipe writes the project, and the one shape
@@ -79,9 +79,42 @@
 # host where watching it that way can say least. A caller who wants an observer names
 # one and keeps it, per flag, exactly as `just orchestrate` keeps a caller's own.
 #
-# `--name`, `--max-turns`, `--repo`, `--execution-checkout` and `--direct` are
-# consumed here; every other flag is passed to `onepipeline start` untouched,
-# `--dag-graph` included.
+# **The project has a second node, and by default every planning run writes one.** A
+# person cannot usefully review a plan node by node; what they can judge is one short
+# document — what is being built and why, the architecture, the contracts, the
+# acceptance criteria, and the planned work as a table of links. So the launch writes a
+# `design-doc` node depending on the planner node, dispatched under
+# `graphs/design-doc.yaml` with `../personas/design-doc.yaml` — a PATH, for the reason
+# the planner's persona is one — carrying the manager's brief unchanged followed by its
+# own instructions. It takes the same publication repository and execution checkout the
+# planner node takes, so it is a lifecycle node of this repository like every other.
+# `--max-turns` is deliberately the planner node's alone: the design-doc node takes its
+# persona's own budget, because a document is one read and one write rather than an
+# open-ended search.
+#
+# **That second node is why a brief now has to name the plan's qualified project id.**
+# Nothing hands one node's output to a later node, and a plan written to an ignored path
+# in the planner's own worktree does not outlive the run, so the design-doc node has no
+# other way to find the plan it is writing about. A brief therefore carries a
+# `Plan project: <source>:<project>` line and is refused without one, exactly as it is
+# refused for missing a required section — the durable instructions already tell a
+# manager to name that id when writing a brief, so this makes an existing instruction
+# enforceable rather than adding a rule. Nothing else in the brief is parsed.
+#
+# A line that is present and unusable is refused as a bad value rather than as an
+# absence: two of them are ambiguous, and taking the earlier one dispatches the document
+# writer at a plan its author may not have meant, while a value that names a project in
+# no store reported as a missing line sends a manager looking for a line already in front
+# of them.
+#
+# `--no-design-doc` is the opt-out, and it opts out of the requirement with the node:
+# with no design-doc node there is nothing that needs a project id, so a brief that
+# names none is accepted and the launch writes exactly the one-node project it wrote
+# before this.
+#
+# `--name`, `--max-turns`, `--repo`, `--execution-checkout`, `--direct` and
+# `--no-design-doc` are consumed here; every other flag is passed to `onepipeline start`
+# untouched, `--dag-graph` included.
 set -euo pipefail
 
 #: Where a generated project's record is written under the gitignored local-md root.
@@ -90,8 +123,51 @@ set -euo pipefail
 PLAN_DIRECTORY=".plans/projects"
 PLAN_SOURCE="authoring"
 
-#: The persona ref the one node carries. A path, deliberately — see the header.
+#: The persona ref the planner node carries. A path, deliberately — see the header.
 PLANNER_PERSONA="../personas/planner.yaml"
+
+#: The persona ref the design-doc node carries, and for the same reason: a bare
+#: `design-doc` resolves against the roles compiled into `oneagentgraph`, which has no
+#: such role, so the node would be refused rather than silently mis-run — but a path is
+#: what actually reaches `personas/design-doc.yaml`, and paths are resolved against
+#: `graphs/`.
+DESIGN_DOC_PERSONA="../personas/design-doc.yaml"
+
+#: The node-scope agent graph that node is dispatched under, resolved against the
+#: directory the run is launched from rather than against `graphs/`. It differs from the
+#: shipped `graphs/node-scope.yaml` in the two harness configs and nothing else: Codex
+#: leads the side that writes this document, the Claude subscriptions lead the side that
+#: reviews whether it reads plainly to somebody outside the domain.
+DESIGN_DOC_GRAPH="graphs/design-doc.yaml"
+
+#: The one statement of what the document contains, who it is for, and what it is judged
+#: on. Named in the dispatched task rather than left to the persona alone, because the
+#: task is the only text a worker and its judge both read; the persona names the same
+#: path, and neither restates the file.
+DESIGN_DOC_TEMPLATE="config/design-doc-template.md"
+
+#: The second node's id, which is what `just status` and the DAG UI label the dispatch.
+DESIGN_DOC_NODE_ID="design-doc"
+
+#: Its change-request subject, composed on the same terms as the planner node's and with
+#: the same releasable type: `.githooks/commit-msg` refuses a `docs:` subject, and a
+#: publication that reached that hook would be refused from the far side of a gate run.
+DESIGN_TITLE_PREFIX="feat(plan): design document for "
+
+#: The line a brief carries to name the plan the design-doc node reads, and the two
+#: patterns that read it. A qualified id — `<source>:<project>` — because that is what
+#: every plan store command is given, and an unqualified one names a project in no store.
+#:
+#: Declaring the line and validating its value are deliberately two steps. A brief is a
+#: manager's prose and this is the one thing parsed out of it, so a line that announces a
+#: plan project and then states an unusable one has to be refused as a bad value rather
+#: than pass unnoticed as no declaration at all — the second reading is what would send a
+#: manager looking for a line that is already there. The source half is a name, so it is
+#: held to one; the project half is whatever that store calls a project, split at the
+#: first colon exactly as `onetaskgraph` itself splits a qualified id.
+PLAN_PROJECT_LINE="Plan project: <source>:<project>"
+PLAN_PROJECT_DECLARATION='^Plan project:[[:space:]]*(.*[^[:space:]]|)[[:space:]]*$'
+PLAN_PROJECT_QUALIFIED='^[A-Za-z0-9_.-]+:[^[:space:]]+$'
 
 #: The publication repository the one node carries, and the registered safety clone its
 #: worktree is cut from. Aliases rather than paths, because `onevcs` resolves an alias
@@ -143,11 +219,66 @@ base.
 That exempts it from one clause of the shared completion bar every dispatch on this host
 is judged against — \"with every change this dispatch made committed and nothing
 half-applied left behind\". Here there is nothing to commit, and a clean \`git status\` is
-the correct and complete outcome: the plan written to a gitignored path is the
+the correct and complete outcome: what this dispatch writes to a gitignored path is the
 deliverable, and committing it would be the failure rather than the proof."
 
-#: The one node's id. It is what `just status` and the DAG UI label the dispatch.
+#: The planner node's id. It is what `just status` and the DAG UI label the dispatch.
 NODE_ID="plan"
+
+#: What the design-doc node is told, appended after the brief as the rest of its task.
+#: `@PLAN_PROJECT@` and `@TEMPLATE@` are substituted below — placeholders rather than
+#: `printf` conversions, because each appears twice and a format string reused per
+#: argument is how a two-placeholder template comes out interleaved.
+#:
+#: It opens by disowning the criteria above it, and that is the load-bearing sentence.
+#: The brief is the planner's, so its `## Acceptance criteria` state what the PLAN has to
+#: satisfy — and a judge reading a task holds the dispatch to every criterion it finds in
+#: one. A design-doc dispatch judged against the plan's criteria is one that cannot pass,
+#: because producing the plan was somebody else's node.
+#:
+#: What it does NOT do is restate the document: `config/design-doc-template.md` is the
+#: one statement of the shape, the reader, and every property the document is judged on,
+#: and a second copy here would be the copy a writer follows on the day the two drift.
+DESIGN_DOC_INSTRUCTIONS="
+
+## What this dispatch owes
+
+**Everything above is the brief a planner was given, and none of it is this dispatch's
+acceptance criteria.** Writing the plan was another node's job and it is already done.
+The brief is here because the document opens with what is being built and why, and the
+manager's own words are where those two come from. Where anything above and anything
+below disagree about what this dispatch owes, below wins.
+
+What this dispatch owes is the one short document a person reviews that plan as, instead
+of reading it node by node.
+
+Read the whole plan out of the plan store — the project record and every one of its
+tasks. The plan is
+\`@PLAN_PROJECT@\`.
+\`onetaskgraph\` is that store's command line, and \`--help\` documents what it can do.
+
+The document itself is stated in the \`ai-orchestrator\` orchestration repository, at
+\`@TEMPLATE@\`.
+That file states its sections, their order, the reader it is written for, and every
+property it is judged on, and it is the only statement of any of that — so read it before
+writing anything and follow it exactly, and where anything else disagrees with it about
+the document, that file wins.
+
+## Acceptance criteria for this dispatch
+
+- One document exists, written to that template: its sections, in that file's order, and
+  no others, satisfying every property it states of them.
+- That document is stored as a document of that plan's own project, in the same plan
+  store the plan itself is in, so a reader finds it beside the plan rather than in a
+  directory only this dispatch knows about.
+- Every task of that plan has one row in the document's planned-tasks table, and each row
+  points at its task using the location the store reports for that task — read back out
+  of the store, never composed by hand.
+- This dispatch reports where the stored document is, in the form the store reports it: a
+  link where the store puts it on a website, a path where it puts it in a file on this
+  machine.
+- Every claim this dispatch makes about the finished work is true of the tree as it
+  finally stands."
 
 #: The headings a brief has to carry, because the brief IS the dispatched task and a
 #: task is written in this template. `## Acceptance criteria` is the load-bearing one:
@@ -180,36 +311,63 @@ RUN_ID_ENV="ONEPIPELINE_RUN_ID"
 #: the dot here is what keeps the name and the run id the same string.
 SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_-]*$'
 
-# Writes the one-node plan. The brief is read here and embedded verbatim: it IS the
-# node's task, in the `## What` / `## Why` / `## Acceptance criteria` template every
+# Writes the plan. The brief is read here and embedded verbatim in **both** nodes: it
+# IS the task, in the `## What` / `## Why` / `## Acceptance criteria` template every
 # task this repository dispatches is written in, so anything that reformatted it
-# would be editing the manager's words on the way to the planner. The one addition is
-# `DIRECT_PLACEMENT_NOTE`, appended after the brief for a `--direct` launch and only
-# then: it states where that dispatch works and which clause of the shared completion
-# bar it is therefore exempt from. Appended rather than woven in, so the manager's own
-# words are still the whole of what precedes it.
+# would be editing the manager's words on the way to the dispatch. Two things are
+# appended after it, in this order and never woven in, so the manager's own words are
+# always the whole of what precedes them: `DESIGN_DOC_INSTRUCTIONS` on the design-doc
+# node, which is the rest of that node's task and the criteria it is judged against;
+# and `DIRECT_PLACEMENT_NOTE` on every node of a `--direct` launch, which states where
+# that dispatch works and which clause of the shared completion bar it is therefore
+# exempt from.
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-name, brief, persona, node_id, turns, repo, execution, title, direct_note = sys.argv[1:10]
+(name, brief, persona, node_id, turns, repo, execution, title, direct_note,
+ design_id, design_persona, design_graph, design_title, design_task) = sys.argv[1:15]
 task = pathlib.Path(brief).read_text(encoding="utf-8")
-node = {"id": node_id, "persona": persona, "task": task}
-if repo:
-    node["repo"] = repo
-    node["execution_checkout"] = execution
-    node["title"] = title
-else:
-    # A direct node works in the launch directory, and the shared completion bar
-    # demands every change committed. Saying so in the task is the only place the
-    # dispatch and its judge both read it.
-    node["task"] = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
+
+
+def placed(node, body):
+    """Give one node its placement and its task, on the terms that placement implies."""
+    if repo:
+        node["repo"] = repo
+        node["execution_checkout"] = execution
+        node["title"] = title if node["id"] == node_id else design_title
+    else:
+        # A direct node works in the launch directory, and the shared completion bar
+        # demands every change committed. Saying so in the task is the only place the
+        # dispatch and its judge both read it.
+        body = body.rstrip() + "\n\n" + direct_note.strip() + "\n"
+    node["task"] = body
+    return node
+
+
+planner = placed({"id": node_id, "persona": persona}, task)
 if turns:
-    node["max_turns"] = int(turns)
+    planner["max_turns"] = int(turns)
+tasks = [planner]
+if design_task:
+    # A per-node agent graph rather than the run-wide default: this role pairs its two
+    # sides the other way round from every other dispatch on this host, and that
+    # reversal is a property of the node rather than of the run.
+    tasks.append(
+        placed(
+            {
+                "id": design_id,
+                "persona": design_persona,
+                "deps": [node_id],
+                "agent_graph": design_graph,
+            },
+            task.rstrip() + "\n\n" + design_task.strip() + "\n",
+        )
+    )
 plan = {
     "schema_version": 3,
     "goal": {"text": f"Plan the work the manager briefed in {brief}"},
     "name": name,
-    "tasks": [node],
+    "tasks": tasks,
 }
 sys.stdout.write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 '
@@ -220,7 +378,7 @@ fail() {
 }
 
 usage() {
-    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [<onepipeline start flags>]" >&2
+    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -259,6 +417,7 @@ name=""
 max_turns=""
 repo="$DEFAULT_PUBLICATION_REPO"
 execution="$DEFAULT_EXECUTION_CHECKOUT"
+design_doc=1
 forwarded=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -313,6 +472,13 @@ while [ $# -gt 0 ]; do
             execution=""
             shift
             ;;
+        --no-design-doc)
+            # Consumed rather than forwarded: `onepipeline start` has no such option, and
+            # a launch that passed it on would be refused by the verb rather than by the
+            # caller's own opt-out.
+            design_doc=0
+            shift
+            ;;
         *)
             # Forwarded unvalidated, deliberately: every other flag is `onepipeline
             # start`'s, and it is the one thing that knows its own surface. A copy of
@@ -365,6 +531,38 @@ if { [ -n "$repo" ] && [ -z "$execution" ]; } || { [ -z "$repo" ] && [ -n "$exec
         "a node carries both or neither: name the missing one, or pass --direct alone for a dispatch that cuts no worktree"
 fi
 
+# The plan the design-doc node reads, taken from the brief and nothing else. Read after
+# the flags rather than beside the section checks above, because `--no-design-doc`
+# decides whether it is required at all — with no design-doc node there is nothing that
+# needs one, so demanding it would refuse a launch that has no use for the answer.
+#
+# The whole of what this parses out of a brief. Everything else in that file is the
+# manager's prose and reaches the dispatch untouched.
+design_instructions=""
+if [ "$design_doc" -eq 1 ]; then
+    plan_project=""
+    declared=0
+    # Every line is read rather than stopping at the first, because two declarations are
+    # ambiguous and taking the earlier one silently dispatches the design-doc node at a
+    # plan its author may not have meant.
+    while IFS= read -r line || [ -n "$line" ]; do
+        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+        if [[ "$line" =~ $PLAN_PROJECT_DECLARATION ]]; then
+            declared=$((declared + 1))
+            plan_project="${BASH_REMATCH[1]}"
+        fi
+    done < "$brief"
+    [ "$declared" -ne 0 ] || fail "the brief '$brief' names no plan project, so the design-doc node would have no plan to read" \
+        "add a line reading '$PLAN_PROJECT_LINE' naming the qualified project this plan is written to, or pass --no-design-doc to launch the planner alone"
+    [ "$declared" -eq 1 ] || fail "the brief '$brief' names $declared plan projects, so this launch cannot tell which one the design-doc node is to read" \
+        "leave exactly one '$PLAN_PROJECT_LINE' line in it, naming the plan this brief is planning"
+    # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+    [[ "$plan_project" =~ $PLAN_PROJECT_QUALIFIED ]] || fail "the brief '$brief' names plan project '$plan_project', which is not a qualified id and names a project in no store" \
+        "write the line as '$PLAN_PROJECT_LINE' — a source name, a colon, and the project inside that source"
+    design_instructions="${DESIGN_DOC_INSTRUCTIONS//@PLAN_PROJECT@/$plan_project}"
+    design_instructions="${design_instructions//@TEMPLATE@/$DESIGN_DOC_TEMPLATE}"
+fi
+
 # A run root that already exists is what makes `onepipeline` mint `<name>-2` instead,
 # so the name this recipe prints and exports would name a different — possibly live —
 # run belonging to another workstream, and a blocking question asked there would queue
@@ -415,6 +613,8 @@ mkdir -p "$PLAN_DIRECTORY" || fail "the plan directory $PLAN_DIRECTORY could not
 plan="$PLAN_DIRECTORY/$name.md"
 "$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$max_turns" \
     "$repo" "$execution" "$TITLE_PREFIX$name" "$DIRECT_PLACEMENT_NOTE" \
+    "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" "$DESIGN_DOC_GRAPH" "$DESIGN_TITLE_PREFIX$name" \
+    "$design_instructions" \
     | "$python" -m orchestrator.project_store .plans >/dev/null || {
     # `|| :` so a removal that fails cannot replace the diagnostic below with its own
     # exit; the partial plan is then named by that diagnostic rather than silently kept.

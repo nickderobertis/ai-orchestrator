@@ -77,6 +77,19 @@ def ruling(message: str) -> str:
     return json.dumps({"version": 1, "completion": True, "message": message})
 
 
+#: The surface a run raises about *itself*: its settlement write-back could not reach
+#: the plan it was launched from. Nothing a journey does causes one and nothing in this
+#: suite measures one — the projection has its own journeys — but the engine raises it on
+#: runs these journeys launch, because onepipeline 0.18.3 cannot read the `location` this
+#: checkout's plan store reports for every entity:
+#: https://github.com/nickderobertis/onepipeline/issues/179. Handed out as the manager's
+#: next surface it displaces the question a journey is waiting for, and it falsifies the
+#: premise of a journey asserting that a run raised none, so both read past it. An engine
+#: that can read the store raises none, and then this matches nothing and every reader
+#: behaves exactly as it did before.
+RUNS_OWN_PROJECTION_COMPLAINT = re.compile(r"did not take this run's projection")
+
+
 def next_surface_record(run: str, environment: dict[str, str]) -> Surface | None:
     """Read the run's next unread surface whole, exactly as a manager reads one.
 
@@ -90,17 +103,24 @@ def next_surface_record(run: str, environment: dict[str, str]) -> Surface | None
     opposite states and look identical from a polling loop: treating a refusal as
     "nothing there yet" turns every one of them into a timeout at the far end of a
     wait, with the sentence that said what was wrong thrown away on the way.
+
+    Surfaces the run raised about itself rather than about anything asked of it are
+    consumed and passed over — see `RUNS_OWN_PROJECTION_COMPLAINT` for the one that
+    is, and why a journey about the ask seam must not be handed it.
     """
-    handed = just("channel-next", run, environment=environment, seconds=60)
-    assert handed.returncode == 0, (
-        f"`just channel-next {run}` failed while reading this run's surfaces:\n"
-        f"{handed.stderr}{handed.stdout}"
-    )
-    if not handed.stdout.strip():
-        return None
-    # `cast` rather than a validating read: `onepipeline next` owns this schema and
-    # `SurfaceRead` states the part a manager consumes.
-    return cast(SurfaceRead, json.loads(handed.stdout))["surface"]
+    while True:
+        handed = just("channel-next", run, environment=environment, seconds=60)
+        assert handed.returncode == 0, (
+            f"`just channel-next {run}` failed while reading this run's surfaces:\n"
+            f"{handed.stderr}{handed.stdout}"
+        )
+        if not handed.stdout.strip():
+            return None
+        # `cast` rather than a validating read: `onepipeline next` owns this schema and
+        # `SurfaceRead` states the part a manager consumes.
+        surface = cast(SurfaceRead, json.loads(handed.stdout))["surface"]
+        if surface is None or not RUNS_OWN_PROJECTION_COMPLAINT.search(surface["message"]):
+            return surface
 
 
 def next_surface(run: str, environment: dict[str, str]) -> str | None:

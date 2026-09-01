@@ -32,7 +32,8 @@ surface, while `orchestrate` launches the tracked run and keeps its source plan 
 **A plan of this repository is stored on the `plans` GitHub Projects board.** It held
 one plan at a time until 2026-08-29, and the local Markdown store this repository retreated
 to in the meantime is gone: the two defects that forced it were repaired upstream and
-adopted here as onetaskgraph 0.2.12 and, at the adoption after the one that first
+adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
+at the adoption after the one that first
 carried the write-back repair, onepipeline 0.18.3. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
@@ -61,8 +62,10 @@ repository the credential cannot reach refuses the copy before anything is creat
 board** — five commands in that order and no other:
 
 ```sh
-just plan brief.md                     # a planner authors into `authoring`; a settled
-                                       # run's closeout records the tasks it wrote
+just plan brief.md                     # a planner authors into `authoring` and a
+                                       # design-doc node writes the document that plan
+                                       # is reviewed as; a settled run's closeout
+                                       # records the tasks it wrote
 just review-plan authoring:<project>   # the judged turn, for anything nothing has read
 just copy-plan authoring:<project>     # onto `plans`; `--to` names another destination
 just check-plan plans:<project>
@@ -176,7 +179,7 @@ The top-level session agent is the **manager**: it holds the user conversation,
 launches runs, reviews what settles, and answers surfaces. The **planner** is not
 that session. It is a dispatched onejudge worker like every other node — supervised
 by its own simulated-user judge, costing turns, settling on the ledger — whose
-deliverable is a local Markdown project, and `just plan <brief.md>` is the one-node launch that
+deliverable is a local Markdown project, and `just plan <brief.md>` is the launch that
 dispatches it. What each of the two decides is stated where that role reads it: the
 manager's in [AGENTS.md](../AGENTS.md#your-loop-as-manager), the planner's in
 [`personas/planner.yaml`](../personas/planner.yaml), which is that dispatch's own
@@ -204,6 +207,43 @@ that must cut no worktree at all: it is the old shape, it dispatches into this s
 checkout, and such a dispatch may write only to gitignored paths, may not commit, and
 may not leave the checkout on any branch but its base. Nothing enforces that, which
 is why the recipe says it on every launch that takes the flag.
+
+### The document a planning run also produces
+
+**A planning run writes two nodes, and the second one writes the document the plan is
+reviewed as.** A person cannot usefully review a plan node by node; what they can judge
+is one short document — what is being built and why, the architecture, the contracts, the
+acceptance criteria, and the planned work as a table of links, each row pointing at its
+task. So `just plan` writes a `design-doc` node depending on the planner node, dispatched
+under [`graphs/design-doc.yaml`](../graphs/design-doc.yaml) with
+[`personas/design-doc.yaml`](../personas/design-doc.yaml) named as a path, placed at the
+same publication repository and execution checkout the planner node is placed at. Its
+task is the brief unchanged, followed by its own instructions and its own acceptance
+criteria — which open by saying the criteria above them are the *plan's* rather than that
+dispatch's, because a judge holds a dispatch to every criterion it finds in its task and
+producing the plan was another node's job. What states the document itself is
+[`config/design-doc-template.md`](../config/design-doc-template.md), and nothing restates
+it: the node's task names that path, the persona names that path, and the file is the one
+statement of the shape, the reader, and every property the document is judged on.
+
+The dispatch reads the finished plan out of the store, stores what it wrote as a
+**document of that same project**, and reports where the store says that document is — a
+link where the store puts it on a website, a path where it puts it in a file on this
+machine. Storing it beside the plan rather than reporting it is the point: the reviewer
+finds it where the plan is, and follows the store's own answer rather than a path
+somebody composed.
+
+**A brief therefore names the plan's qualified project id**, on a line reading
+`Plan project: <source>:<project>`, and a brief without one is refused at the exit status
+a brief missing a required section is refused at. The second node has no other way to
+find the plan: nothing hands one node's output to a later node, and a plan written to a
+gitignored path in the planner's own worktree does not outlive the run. Nothing else in a
+brief is parsed — and a line that is *there* and unusable is refused as a bad value
+rather than as an absence, because two declarations are ambiguous and a value naming a
+project in no store, reported as a missing line, sends a manager looking for a line that
+is already in front of them. `--no-design-doc` drops the node **and** the requirement —
+with nothing that reads the plan there is nothing that needs its id — and writes exactly
+the one-node project this recipe wrote before the second node existed.
 
 The published CLIs do not know that split and nothing here renames them to it.
 Everywhere `onepipeline` and the recipes over it say *planner* — [the planner

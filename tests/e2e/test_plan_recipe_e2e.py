@@ -121,11 +121,18 @@ JUDGE_BAR = "You are a principal engineer reviewing a plan before anyone builds 
 #: The seam the dispatched planner reaches its manager through.
 ASK_MANAGER_ENV = "ORCHESTRATOR_ASK_MANAGER"
 
+#: The plan project the brief below names, which the design-doc node is given so it can
+#: read the plan the planner node wrote. Qualified, because that is what a plan store
+#: command is given and an unqualified id names a project in no store.
+PLAN_PROJECT = "authoring:cursor-shape"
+
 #: The brief this module's launch is made from, and the run it is launched under.
 #: Written to a temporary directory rather than taken from `examples/`, so the launch
 #: journeys read none of this repository's prose and stay in the code-only test tier.
-BRIEF = """## What
+BRIEF = f"""## What
 Decide whether the paginated listing's cursor is an opaque token or a node id.
+
+Plan project: {PLAN_PROJECT}
 
 ## Why
 The browser view cannot deep-link to a page until that is settled, and both halves
@@ -136,6 +143,32 @@ are blocked on the answer.
 - What an exhausted page answers is stated.
 """
 RUN = RunId("plan-recipe-e2e")
+
+#: The planner node's own id, which every launch writes and the second node depends on.
+PLANNER_NODE = "plan"
+
+#: The second node every planning launch writes, and the three refs that decide what it
+#: runs as. The persona is a PATH for the reason the planner's is: a bare `design-doc`
+#: resolves against the roles compiled into `oneagentgraph`, which has none by that name.
+#: The graph is relative to the launch directory, and the loader resolves it against that
+#: directory — which is why `agent_graph` is read back relative below wherever a run's own
+#: record is what is being read.
+DESIGN_NODE = "design-doc"
+DESIGN_PERSONA_REF = "../personas/design-doc.yaml"
+DESIGN_GRAPH_REF = "graphs/design-doc.yaml"
+AGENT_GRAPH_FIELD = "agent_graph"
+
+#: The one statement of the document this repository ships, which the design-doc node's
+#: task has to name — a worker in a worktree cannot be sent to a file by memory.
+DESIGN_TEMPLATE = "config/design-doc-template.md"
+
+#: The sentence that disowns the plan's own acceptance criteria for the design-doc node.
+#: It is the load-bearing half of that task: the brief above it states what the PLAN has
+#: to satisfy, and a judge holds a dispatch to every criterion it finds in its task.
+DESIGN_DISOWNS_THE_BRIEF = (
+    "Everything above is the brief a planner was given, and none of it is this "
+    "dispatch's acceptance criteria."
+)
 
 #: The turn budget this launch states, so the flag that carries it is proven to reach
 #: the generated node rather than only to be accepted.
@@ -177,15 +210,21 @@ class Planned(NamedTuple):
 
 
 class PlanNode(TypedDict, total=False):
-    """The one node a generated plan carries, in the fields this suite reads.
+    """One node a generated plan carries, in the fields this suite reads.
 
-    `total=False` because one absence is still the point: `done_when` is refused by the
-    loader outright, so a generated plan carrying one could never be launched at all.
+    `total=False` because a field is absent on one node or the other: only the design-doc
+    node carries `deps` and `agent_graph`, only the planner node carries `max_turns`, a
+    `--direct` launch carries no `title` or placement pair — and one absence is still the
+    point, since `done_when` is refused by the loader outright, so a generated plan
+    carrying one could never be launched at all.
     """
 
     id: str
     persona: str
     task: str
+    title: str
+    deps: list[str]
+    agent_graph: str
     max_turns: int
     repo: str
     execution_checkout: str
@@ -352,13 +391,27 @@ def _flattened(prose: str) -> str:
     return " ".join(prose.split())
 
 
+def _node(plan: PlanDocument, node_id: str) -> PlanNode:
+    """The one node of ``plan`` with that id, or a failure naming what the plan has."""
+    found = [node for node in plan["tasks"] if node.get("id") == node_id]
+    assert len(found) == 1, (
+        f"the plan carries {len(found)} node(s) called {node_id!r}; its nodes are "
+        f"{[node.get('id') for node in plan['tasks']]}"
+    )
+    return found[0]
+
+
 @pytest.mark.xdist_group("plan-recipe")
-def test_the_generated_plan_is_one_isolated_planner_node_carrying_the_brief_verbatim(
+def test_the_generated_plan_is_two_nodes_and_its_planner_is_isolated_and_carries_the_brief(
     planned: Planned,
 ) -> None:
-    """The document is exactly what a planner dispatch needs, worktree included.
+    """The plan is the planner node and the design-doc node, and this reads the first.
 
-    Every field here is one a manager would otherwise have to remember. The brief
+    Which nodes exist is asserted here because it is what everything else is read
+    against: the sibling below reads the second node, and a plan that grew a third — or
+    lost one — would leave both of them passing over a document nobody had looked at
+    whole. The planner node's own fields are the rest, and every one of them is one a
+    manager would otherwise have to remember. The brief
     reaching the node **verbatim** is the load-bearing one: it is the manager's own
     words, in the template every task this repository dispatches is written in, and a
     recipe that reformatted or summarized it on the way would be editing the request
@@ -377,9 +430,14 @@ def test_the_generated_plan_is_one_isolated_planner_node_carrying_the_brief_verb
     assert plan["schema_version"] == 3, plan
     assert plan["name"] == RUN, plan
     assert plan["goal"]["text"].strip(), "the plan states no goal"
-    assert len(plan["tasks"]) == 1, plan["tasks"]
+    # Sorted, because the order a plan's nodes are recorded in is the loader's rather
+    # than the recipe's: what the recipe decides is which nodes exist and what each one
+    # carries, and the dependency below is what decides which of them runs first.
+    assert sorted(node.get("id", "") for node in plan["tasks"]) == sorted(
+        [PLANNER_NODE, DESIGN_NODE]
+    ), plan["tasks"]
 
-    node = plan["tasks"][0]
+    node = _node(plan, PLANNER_NODE)
     assert node["task"] == BRIEF.rstrip(), (
         "the brief did not reach the node verbatim; the manager's words are the task:\n"
         f"{node['task']!r}"
@@ -398,6 +456,94 @@ def test_the_generated_plan_is_one_isolated_planner_node_carrying_the_brief_verb
         f"checkout, so its worktree is not cut from the safety clone: {node}"
     )
     assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
+
+
+@pytest.mark.xdist_group("plan-recipe")
+def test_the_generated_plan_carries_a_design_doc_node_depending_on_the_planner(
+    planned: Planned,
+) -> None:
+    """The second node is what makes a planning run produce the document a person reviews.
+
+    A person cannot usefully review a plan node by node, so the run that writes the plan
+    writes the one short document the plan is read as. Every field here decides whether
+    that happens at all. The dependency is what makes it read a *finished* plan rather
+    than a half-written one. The persona is a **path**: a bare `design-doc` resolves
+    against the roles compiled into `oneagentgraph`, which ships none by that name, so
+    nothing here would be read. The agent graph is the reason this node is not the shipped
+    node-scope member — this role pairs its two sides the other way round from every
+    other dispatch on this host, and that reversal is a property of the node. And the
+    placement pair is the planner node's own, so the document is written in an isolated
+    worktree by a lifecycle node like every other rather than in the shared checkout.
+
+    `agent_graph` is read back relative to this checkout, because the loader resolves it
+    against the directory the run was launched from before it records the plan.
+    """
+    plan = planned.plan
+    node = _node(plan, DESIGN_NODE)
+    planner = _node(plan, PLANNER_NODE)
+
+    assert node.get("deps") == [PLANNER_NODE], (
+        f"the design-doc node depends on {node.get('deps')!r}; without the planner node "
+        "it would be dispatched beside the plan it is supposed to be written from"
+    )
+    assert node["persona"] == DESIGN_PERSONA_REF, (
+        f"the design-doc node names the persona {node['persona']!r}; a bare name resolves "
+        "to a role compiled into the tool, and there is no built-in role of this name"
+    )
+    named = node.get(AGENT_GRAPH_FIELD)
+    assert named is not None and str(Path(named).relative_to(REPO_ROOT)) == DESIGN_GRAPH_REF, (
+        f"the design-doc node is dispatched under {named!r} rather than {DESIGN_GRAPH_REF}, "
+        "so its two sides are paired the way every other dispatch on this host is"
+    )
+    assert (node.get("repo"), node.get("execution_checkout")) == (
+        planner.get("repo"),
+        planner.get("execution_checkout"),
+    ), (
+        f"the design-doc node is placed at {node.get('repo')!r} / "
+        f"{node.get('execution_checkout')!r} where the planner node is placed at "
+        f"{planner.get('repo')!r} / {planner.get('execution_checkout')!r}"
+    )
+    assert node.get("title", "").startswith("feat(plan): "), (
+        f"the design-doc node's subject is {node.get('title')!r}; `.githooks/commit-msg` "
+        "refuses a subject whose type this repository does not release from"
+    )
+    assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
+
+
+@pytest.mark.xdist_group("plan-recipe")
+def test_the_design_doc_nodes_task_carries_the_brief_the_plan_and_the_template(
+    planned: Planned,
+) -> None:
+    """Its task is the brief, then the three things a writer cannot recover without it.
+
+    The brief is there because the document opens with what is being built and why, and
+    the manager's own words are where both come from — so it reaches this node verbatim
+    exactly as it reaches the planner. What follows it is everything the node cannot
+    derive: **which plan** to read, since nothing hands one node's output to a later one
+    and a plan written to an ignored path in the planner's worktree does not outlive the
+    run; **where the template is**, since a worker in a worktree cannot be sent to a file
+    by memory; and that the criteria above it are the *plan's* and not its own, which is
+    the sentence that stops a judge holding this dispatch to a bar producing the plan was
+    somebody else's node.
+    """
+    task = _node(planned.plan, DESIGN_NODE)["task"]
+
+    assert task.startswith(BRIEF.rstrip()), (
+        "the brief did not reach the design-doc node verbatim, or something precedes it; "
+        f"the manager's words are the whole of what opens this task:\n{task!r}"
+    )
+    assert PLAN_PROJECT in task[len(BRIEF.rstrip()) :], (
+        f"the design-doc node's own instructions never name the plan {PLAN_PROJECT}, so "
+        f"the dispatch has no way to find what it is writing about:\n{task!r}"
+    )
+    assert DESIGN_TEMPLATE in task, (
+        f"the design-doc node's task never names {DESIGN_TEMPLATE}, which is the only "
+        f"statement of the document's shape and of what it is judged on:\n{task!r}"
+    )
+    assert _flattened(DESIGN_DISOWNS_THE_BRIEF) in _flattened(task), (
+        "the design-doc node's task never says the criteria above it are the plan's "
+        f"rather than this dispatch's, so its judge holds it to both:\n{task!r}"
+    )
 
 
 @pytest.mark.xdist_group("plan-recipe")
@@ -747,6 +893,13 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
     it here from the shipped brief is what keeps the two the same artifact — including
     the run id, which `onepipeline` normalizes on the way (a `.` becomes a `-`), so the
     example's `name` is also the run `just plan` would tell a manager to watch.
+
+    One field is compared as the recipe wrote it rather than as the run recorded it.
+    `agent_graph` names a document relative to the directory a run is launched from, and
+    the loader resolves it against that directory before writing `plan.json` — so the
+    run's copy is an absolute path into whichever checkout launched it, and an example
+    carrying one would be a committed record of this machine. The example keeps the
+    relative ref, and the resolution is undone here.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -765,6 +918,10 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
                 / "plan.json"
             ).read_text(encoding="utf-8")
         )
+        for node in generated_plan["tasks"]:
+            named = node.get(AGENT_GRAPH_FIELD)
+            if named is not None:
+                node[AGENT_GRAPH_FIELD] = str(Path(named).relative_to(REPO_ROOT))
         assert generated_plan == shipped, (
             f"{SHIPPED_PROJECT} is not what `just plan {SHIPPED_BRIEF}` writes; "
             f"regenerate it from the brief rather than editing it by hand"
@@ -1069,6 +1226,206 @@ def test_a_brief_that_is_not_a_task_is_refused_before_a_planner_is_dispatched(
     assert refused.returncode != 0, f"a brief with {what} was launched:\n{refused.stdout}"
     reported = refused.stderr + refused.stdout
     assert names in reported, reported
+
+
+#: A brief written as a task in every way except that it names no plan project. Kept
+#: apart from `BRIEF` above, which does name one, so the two journeys below differ in
+#: exactly that line and nothing else.
+BRIEF_NAMING_NO_PLAN = """## What
+Decide whether the paginated listing's cursor is an opaque token or a node id.
+
+## Why
+The browser view cannot deep-link to a page until that is settled.
+
+## Acceptance criteria
+- The cursor's shape and its type are stated.
+"""
+
+#: A brief missing a required section, which is the refusal the one below is held to the
+#: exit status of: both are a brief that is not yet a task, so both end the same way.
+BRIEF_MISSING_A_SECTION = "## What\nDecide the cursor.\n\n## Why\nThe view is blocked.\n"
+
+
+def test_a_brief_naming_no_plan_project_is_refused_like_a_brief_missing_a_section(
+    tmp_path: Path,
+) -> None:
+    """The design-doc node has no other way to find the plan, so the brief has to name it.
+
+    Nothing hands one node's output to a later node, and a plan written to an ignored path
+    in the planner's own worktree does not outlive the run — so a launch that accepted a
+    brief naming no project would dispatch a document writer at a plan it cannot open, and
+    the manager would find out from the dispatch rather than from the launch. It is
+    refused where a brief that is not yet a task is refused, and it says what to add,
+    because a refusal a manager has to go and read the recipe to answer is one they route
+    around.
+
+    The two exit statuses are compared rather than asserted at a literal, so the pair
+    cannot part: an operator scripting `just plan` branches on the status, and a new
+    refusal that ended differently would be a second thing to branch on.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    naming_none = tmp_path / "names-no-plan.md"
+    naming_none.write_text(BRIEF_NAMING_NO_PLAN, encoding="utf-8")
+    missing_a_section = tmp_path / "thin.md"
+    missing_a_section.write_text(BRIEF_MISSING_A_SECTION, encoding="utf-8")
+    environment = _environment(tmp_path)
+
+    refused = _just("plan", str(naming_none), environment=environment)
+    compared = _just("plan", str(missing_a_section), environment=environment)
+
+    assert refused.returncode != 0, (
+        f"a brief naming no plan project was launched:\n{refused.stdout}{refused.stderr}"
+    )
+    assert refused.returncode == compared.returncode, (
+        f"a brief naming no plan project exits {refused.returncode} where a brief missing "
+        f"a required section exits {compared.returncode}; both are a brief that is not yet "
+        "a task and a caller branching on the status has to treat them alike"
+    )
+    reported = refused.stderr + refused.stdout
+    assert "names no plan project" in reported, reported
+    assert "Plan project: <source>:<project>" in reported, (
+        f"the refusal never says what line to add:\n{reported}"
+    )
+    assert "--no-design-doc" in reported, (
+        f"the refusal never names the opt-out, so the only way out of it looks like "
+        f"editing a brief that may not need one:\n{reported}"
+    )
+
+
+class UnusablePlanLine(NamedTuple):
+    """One brief that declares a plan project this launch cannot use."""
+
+    what: str
+    #: The brief as written, declaration and all.
+    brief: str
+    #: The fragment the refusal has to carry, which is what tells the two apart.
+    names: str
+
+
+#: The declarations that are present and unusable. Each is kept apart from a brief that
+#: declares nothing, because the two want opposite remedies: one is answered by adding a
+#: line, and every one of these by repairing a line that is already there.
+UNUSABLE_PLAN_LINES = (
+    UnusablePlanLine(
+        "two plan projects",
+        BRIEF_NAMING_NO_PLAN.replace(
+            "## Why",
+            "Plan project: authoring:cursor-shape\nPlan project: authoring:cursor-colour\n\n## Why",
+            1,
+        ),
+        "names 2 plan projects",
+    ),
+    UnusablePlanLine(
+        "an unqualified plan project",
+        BRIEF_NAMING_NO_PLAN.replace("## Why", "Plan project: cursor-shape\n\n## Why", 1),
+        "is not a qualified id",
+    ),
+    UnusablePlanLine(
+        "a plan project line naming nothing",
+        BRIEF_NAMING_NO_PLAN.replace("## Why", "Plan project:\n\n## Why", 1),
+        "is not a qualified id",
+    ),
+)
+
+
+@pytest.mark.parametrize("unusable", UNUSABLE_PLAN_LINES, ids=lambda row: row.what)
+def test_a_brief_declaring_a_plan_project_it_cannot_use_is_refused_as_a_bad_value(
+    tmp_path: Path, unusable: UnusablePlanLine
+) -> None:
+    """A declaration that is present and unusable is refused as one, not as an absence.
+
+    The value is read out of a manager's prose and is the only thing parsed out of it, so
+    the two ways it can be unusable are the two this launch has to tell apart from "no
+    line at all": two declarations, where taking the earlier one silently dispatches the
+    document writer at a plan its author may not have meant, and a value that names a
+    project in no store, where reporting it as a missing line sends a manager looking for
+    a line that is already in front of them.
+
+    Held to the same shape every other refusal here is: a non-zero exit, and a `plan: `
+    line stating the cause and a remedy beside it.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "unusable.md"
+    brief.write_text(unusable.brief, encoding="utf-8")
+
+    refused = _just("plan", str(brief), environment=_environment(tmp_path))
+
+    assert refused.returncode != 0, (
+        f"a brief declaring {unusable.what} was launched:\n{refused.stdout}{refused.stderr}"
+    )
+    reported = refused.stderr + refused.stdout
+    assert unusable.names in reported, reported
+    assert "names no plan project" not in reported, (
+        f"the refusal reports a declaration that is there as one that is not, so the "
+        f"remedy it offers is to add a second line:\n{reported}"
+    )
+    stated = [line for line in reported.splitlines() if line.startswith("plan: ")]
+    assert stated and all("; " in line for line in stated), (
+        f"the refusal states no remedy beside its cause:\n{reported}"
+    )
+
+
+#: The run the opt-out journey below launches under, kept apart from every other launch
+#: in this module so the plan it writes is unambiguously its own.
+NO_DESIGN_DOC_RUN = RunId("plan-recipe-no-design-doc")
+
+
+def test_the_opt_out_writes_the_one_node_project_and_forwards_no_flag_to_the_engine(
+    tmp_path: Path,
+) -> None:
+    """`--no-design-doc` drops the node, its brief requirement, and nothing else.
+
+    The document is produced by default because it is what a person approves before a plan
+    is dispatched, so opting out has to be explicit — and it has to opt out of the *whole*
+    of the node, requirement included: with nothing to read the plan there is nothing that
+    needs a project id, and demanding one would refuse a launch that has no use for the
+    answer.
+
+    The flag is consumed here rather than forwarded, and the launch succeeding is what
+    says so: `onepipeline start` is closed over its own surface and refuses a flag it does
+    not know, so a run recorded under this name is a run the flag never reached.
+
+    `--detach`, because what is under test is the document this writes and the launch it
+    makes, not the dispatches that follow.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "names-no-plan.md"
+    brief.write_text(BRIEF_NAMING_NO_PLAN, encoding="utf-8")
+    environment = _environment(tmp_path)
+
+    launch = _just(
+        "plan",
+        str(brief),
+        "--name",
+        NO_DESIGN_DOC_RUN,
+        "--detach",
+        "--no-design-doc",
+        environment=environment,
+    )
+    try:
+        assert launch.returncode == 0, (
+            "`just plan --no-design-doc` was refused, so either the flag reached "
+            f"`onepipeline start` or the brief was still held to naming a plan:\n"
+            f"{launch.stdout}{launch.stderr}"
+        )
+        run_root = Path(environment["ONEPIPELINE_RUNS_DIR"]) / NO_DESIGN_DOC_RUN
+        assert (run_root / "launch.json").is_file(), (
+            f"no run was recorded at {run_root}, so nothing says the launch was made"
+        )
+        plan = cast(PlanDocument, json.loads((run_root / "plan.json").read_text(encoding="utf-8")))
+        assert [node.get("id") for node in plan["tasks"]] == [PLANNER_NODE], (
+            f"`--no-design-doc` still wrote {[node.get('id') for node in plan['tasks']]}"
+        )
+        assert plan["tasks"][0]["task"] == BRIEF_NAMING_NO_PLAN.rstrip(), (
+            "the one node's task is not the brief verbatim; opting out of the second node "
+            f"changes nothing about the first:\n{plan['tasks'][0]['task']!r}"
+        )
+    finally:
+        _just("stop", NO_DESIGN_DOC_RUN, environment=environment, seconds=60)
+        _remove_project(NO_DESIGN_DOC_RUN)
 
 
 def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path: Path) -> None:

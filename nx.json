@@ -43,6 +43,10 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/oneharness.plan-review.toml",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/oneharness.design-doc.toml",
+      "{workspaceRoot}/oneharness.design-doc-judge.toml",
       "{workspaceRoot}/config/**/*",
       "{workspaceRoot}/graphs/**/*",
       "{workspaceRoot}/personas/**/*",
@@ -55,9 +59,11 @@
       "{workspaceRoot}/tests/plan_fixture_root.py",
       "{workspaceRoot}/tests/published_tools.py",
       "{workspaceRoot}/tests/registered_checkouts.py",
+      "{workspaceRoot}/tests/e2e/fake_backend.py",
       "{workspaceRoot}/tests/e2e/fake_codex.py",
       "{workspaceRoot}/tests/e2e/no-paid-provider/**/*",
       "{workspaceRoot}/tests/e2e/project_fixtures.py",
+      "{workspaceRoot}/tests/e2e/scratch_identity.py",
       "{workspaceRoot}/tests/e2e/waits.py"
     ],
     "nxCacheCheck": [

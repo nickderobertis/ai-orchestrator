@@ -1059,15 +1059,18 @@ destination, not a drafting surface.
 **That board held one plan at a time until 2026-08-29, and the retreat that worked around it
 is over.** Two defects made a second plan on the board corrupt every plan on it, and both
 were repaired upstream and adopted here rather than worked around again.
-`tests/test_plan_store_guidance.py` re-takes that claim: it holds the release named below
-against `config/onetaskgraph.version`, holds the tag the live lane's source is cited at to
-that same release, and requires both defects to stay named — so a pin that moved under
-this passage fails there rather than leaving it describing a board this host can no longer
-write. The two defects:
+`tests/test_plan_store_guidance.py` re-takes that claim: it holds every release this
+document names against `config/onetaskgraph.version`, holds the tag the live lane's source
+is cited at to that same release, and requires both defects to stay named — so a pin that
+moved under this passage fails there rather than leaving it describing a board this host
+can no longer write. **Both fixes are below the release this host now pins**, which is why
+neither is named here in the spelling that gate reads: a release number that reads like
+something installed here is exactly what goes stale, so a release this host has moved past
+is named relatively. The two defects:
 
 - onetaskgraph's `github-projects` source **discarded the query it was handed**, so a read
-  scoped to one project answered with every project's tasks. Fixed in **onetaskgraph
-  0.2.12**, which also declares each capability field honestly.
+  scoped to one project answered with every project's tasks. Fixed at **0.2.12**, below
+  the pin, which also declares each capability field honestly.
 - onepipeline's settlement write-back **renamed a destination project to its own native
   identifier and wrote no labels**, degrading the record it projected onto. Fixed in
   **onepipeline 0.17.2** and carried by the adopted **0.17.3**.
@@ -1081,7 +1084,7 @@ checkout pins and the source `onetaskgraph.yaml` actually configures, so a pin t
 under this paragraph fails there rather than leaving it describing a board this host can
 no longer write.
 
-*The read.* On the pinned onetaskgraph 0.2.12, `task list --source plans --project` answered
+*The read.* On the 0.2.12 this host pinned that day, `task list --source plans --project` answered
 `#43 #44 #45 #46` for the first project and `#75` alone for the second. **The contrast was
 taken by accident and is the better half of the measurement**: the same two reads twenty
 minutes earlier answered all five tasks for *both* projects, because the shared
@@ -1112,6 +1115,38 @@ and the settlement set it — worth knowing before reading a project's status co
 run's verdict, since the node's status is where the verdict actually landed. See [Which pin
 governs a dispatch](#which-pin-governs-a-dispatch) for why the engine pin is what carries the
 second fix into a dispatch.
+
+**One thing the plan store's own move to documents took away again, and it is worth
+recognising rather than re-diagnosing.** The release this host pins is the one that
+reports **where every entity is** — a `location` beside each project, task and document —
+which is what lets a design document's planned-tasks table point at each task using the
+store's own answer rather than a path somebody composed. onepipeline 0.18.3, the engine
+this host pins, spawns `onetaskgraph project show` for its settlement write-back and
+deserializes that payload strictly, so it refuses the new field by name: *unknown field
+`location`, expected one of `title`, `content`, `labels`, `metadata`, `id`, `status`,
+`url`, `created_at`, `updated_at`, `repositories`*. **Every projection therefore fails
+under this pair**, with the reason quoted verbatim and the destination left exactly as it
+was — which is the refusing-rather-than-defaulting behaviour working, and is why nothing
+is corrupted by it. What is lost is the projection itself: the plan a run was launched
+from stays behind what the run recorded, for as long as this pair is what is installed.
+The run is unaffected — nothing is settled, scheduled or failed on a projection — so
+read a settled run exactly as the paragraph below already says to, from `just results`,
+`just status` and the journal. There is no released engine that tolerates the field yet:
+onepipeline 0.18.3 was cut before the plan-store release that added it, so this is
+unadopted-because-unpublished rather than a pin left behind, and the fix is a onepipeline
+release rather than anything configurable here; it is filed as
+https://github.com/nickderobertis/onepipeline/issues/179. Recognise the message and read
+the run's own record; do not go looking for a broken board.
+
+**The two journeys that measure a settlement projection are exempt while that pair is
+installed, and the exemption is the engine's own sentence rather than a version.**
+`tests/e2e/test_onetaskgraph_host_e2e.py` still launches both runs in full; each stops and
+reports an expected failure only where the driver said it could not read the store, so a
+projection that fails any other way still fails the tier, and an engine that can read this
+store never prints that sentence and never earns the exemption whatever it is numbered.
+Deleting them instead is what would make the suite forget the guarantee, so they stay and
+come back on their own. `test_the_write_back_exemption_lasts_only_while_the_engine_refuses_this_store`
+holds that condition in both directions.
 
 **What that repair does not buy is a projection you may take on trust.** The write-back is
 still best-effort and off the reconcile loop, so a settlement that never reached the board
@@ -1177,7 +1212,10 @@ and is never a command.
    than a decision. Give it the user's motivation in the user's own terms, because
    that is the one thing no amount of reading the code recovers and it is what
    every node's `## Why` is written from. Name the repository and the qualified
-   project id the plan must create, and **brief every planner to write into the
+   project id the plan must create — that id goes on its own `Plan project:
+   <source>:<project>` line, which `just plan` reads and refuses a brief without,
+   because it is the only way the run's `design-doc` node can find the plan to write
+   the document from — and **brief every planner to write into the
    `authoring` source** — the gitignored `.plans/` root `just plan` writes — whatever
    repository the plan is of. What then happens to it differs by repository and is
    yours rather than the planner's: a plan of **this** repository is cleared there with
@@ -2064,8 +2102,8 @@ command: one
 subtask is a one-task project (`examples:scheduler-research`,
 `examples:health-endpoint`), so no running work falls outside the
 run ledger and the views built on it.
-`just plan <brief.md>` is that same launch for one shape of node: it writes the
-one-task project a manager-written brief becomes
+`just plan <brief.md>` is that same launch for one shape of work: it writes the
+project a manager-written brief becomes
 (`examples/planner-brief.example.md` → `authoring:<generated-project>`)
 and launches it. The brief is the dispatched task verbatim, so it is written in
 the `## What` / `## Why` / `## Acceptance criteria` template and refused when it is
@@ -2085,6 +2123,32 @@ plan is its own output, so there is nothing yet to compare it against; the journ
 the ownership row, the surfaces and the DAG UI place are `onepipeline start`'s own
 and arrive either way. A caller who names a graph keeps it, exactly as `just
 orchestrate` keeps a caller's own.
+
+**That project has two nodes, and by default every planning run writes both.** The
+second is `design-doc`: it depends on the planner node, is dispatched under
+`graphs/design-doc.yaml` with `../personas/design-doc.yaml` — a path, for the reason the
+planner's is one — takes the same publication repository and execution checkout the
+planner node takes, and carries the brief unchanged followed by its own instructions and
+its own acceptance criteria. What it produces is the one short document a person reviews
+the plan as, instead of reading it node by node: what is being built and why, the
+architecture, the contracts, the acceptance criteria, and the planned work as a table of
+links. It reads the finished plan out of the store, writes the document to
+`config/design-doc-template.md` — the one statement of that document's shape and of every
+property it is judged on — stores it as a document of that same project, and reports
+where the store says the document is. `--max-turns` stays the planner node's alone; the
+design-doc node takes its persona's own budget.
+
+**So a brief now names the plan's qualified project id, and is refused without one.**
+Nothing hands one node's output to a later node, and a plan written to an ignored path in
+the planner's own worktree does not outlive the run, so a `Plan project:
+<source>:<project>` line is the only way the second node can find the plan it is writing
+about. That is the same instruction [Your loop as manager](#your-loop-as-manager)
+already gives — name the repository and the qualified project id the plan must create —
+made enforceable rather than remembered, and it is refused at the exit status a brief
+missing a required section is refused at. Nothing else in a brief is parsed.
+`--no-design-doc` is the opt-out and it drops the requirement with the node: with nothing
+that reads the plan there is nothing that needs its id, so a brief naming none is
+accepted and the launch writes exactly the one-node project it wrote before.
 
 **`--direct` is the one flag that changes the dispatched task**, and it is the one
 exception to "the brief is the dispatched task verbatim" above. A `--direct` launch
@@ -2339,9 +2403,9 @@ which holds that lane's own fixtures, and number 2 *"AI Orchestrator"*, the plan
 updated ProjectV2 and wrote to whatever came back — so the moment the plans board became
 the more recently updated of the two, a credentialed write lane retargeted itself onto
 it with nothing said, and left a draft item there on 2026-08-27. **The adopted
-onetaskgraph 0.2.12 no longer discovers anything**, and it wants a third name: read from
+onetaskgraph 0.2.17 no longer discovers anything**, and it wants a third name: read from
 that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
-at tag `v0.2.12`, which is where that lane lives — the board comes from
+at tag `v0.2.17`, which is where that lane lives — the board comes from
 `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
 comes from `GH_PROJECTS_REPOSITORY`, and the lane **skips** when any of the three is
 absent, exactly as it already did without `GH_PROJECTS_TOKEN`. That is cited to the file
@@ -2865,8 +2929,9 @@ they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the
 workspace minus `docs/**` and `**/*.md`. **One tier is a project of its own rather
 than a marker of that one**: `plan-tooling:test` owns `tests/plan_tooling/`, the
 host-tool journeys over this repository's plan surface — `just check-plan`, `just
-review-plan`, the registered check script, the installed engine, and a real
-`oneharness run` — because what those cost and what answers them are both different
+review-plan`, `just plan`, the registered check script, the installed engine, and a
+real `oneharness run`, up to a whole launch driven to settlement — because what those
+cost and what answers them are both different
 from the Python suite beside them, and `nx affected` can only tell two costs apart
 where they are two projects. It is selected by **directory**, so a file added there
 joins that project by being there, and every orchestrator tier ignores the directory.

@@ -183,6 +183,30 @@ OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 #: the one action a planner takes that anything downstream of the turn can observe.
 AUTHOR_PLAN_ENV = "FAKE_BACKEND_AUTHOR_PLAN"
 
+#: Optionally have a dispatched agent turn RUN commands, chosen by a marker its own task
+#: carries.
+#:
+#: What a dispatched agent *does* is run programs in its own working directory, so this
+#: substitutes the model's decision — which commands this turn runs — and nothing below
+#: it: the programs are the real ones, they run where the dispatch runs, and every record
+#: they leave is theirs. That is the difference between a journey that proves a dispatch
+#: produced something and one that proves this file can write a path.
+#:
+#: `AUTHOR_PLAN_ENV` above is the other seam and answers a different question: a planner's
+#: deliverable is prose, and no program turns a model's prose into a plan. Where one
+#: exists — the store's own command line, for a document — the turn runs it.
+#:
+#: The marker is how a run with two dispatched nodes says which of them acts: both run as
+#: `worker`, so the member cannot tell them apart and the composed task is the only thing
+#: that can. This names a JSON file mapping a marker to the argument vectors a turn whose
+#: prompt carries that marker runs, in order.
+#:
+#: Unclaimed, unlike the one above: a supervisor sends a dispatch back for more, so this
+#: branch is reached repeatedly. A command named here is one a real turn could repeat —
+#: which is what a claim would otherwise be hiding — and what a claim would cost is a
+#: second node's commands being swallowed by the first node's having consumed the file.
+RUN_ON_MARKER_ENV = "FAKE_BACKEND_RUN_ON_MARKER"
+
 #: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
 #: A journey about a run that is *live* needs one, and a stand-in that answers at
@@ -317,6 +341,49 @@ def _author_plan(config: str | None) -> None:
         target.write_text(content, encoding="utf-8")
 
 
+def _run_on_marker(config: str | None, prompt: str, cwd: str | None) -> None:
+    """Run the commands a dispatched agent whose task carries a marker would have run.
+
+    In the dispatch's own working directory — `--cwd` is what `oneharness` hands the
+    provider, and this process's own is the member's scratch — so what a command reads
+    there is what a real dispatch would have read: the repository it was given, and the
+    configuration that repository tracks.
+
+    A command that fails is reported on stderr and the turn still answers. The turn is
+    not what a journey about this reads: what the commands did is, and a store that never
+    received the write fails the read that was the point of the journey, naming what is
+    missing rather than a harness turn's exit status.
+    """
+    instruction = os.environ.get(RUN_ON_MARKER_ENV)
+    if not instruction:
+        return
+    named = MEMBER_OF_CONFIG.search(config or "")
+    if named is None or named.group(1) != DISPATCHED_MEMBER:
+        return
+    try:
+        keyed = json.loads(Path(instruction).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    for marker, commands in keyed.items():
+        if marker not in prompt:
+            continue
+        for argv in commands:
+            ran = subprocess.run(  # noqa: S603 - a real program, where the dispatch runs it
+                argv,
+                cwd=cwd or None,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            if ran.returncode != 0:
+                print(
+                    f"fake_backend: {argv} exited {ran.returncode} in {cwd}\n"
+                    f"{ran.stdout}{ran.stderr}",
+                    file=sys.stderr,
+                )
+
+
 def _answer(argv: list[str], text: str) -> int:
     """Run the real CLI for this turn, with `text` as the provider's answer."""
     real = os.environ.get(REAL_BINARY_ENV)
@@ -386,6 +453,7 @@ def main(argv: list[str]) -> int:
         return _answer(argv, "the stand-in pacemaker reported")
     _ask_manager(config)
     _author_plan(config)
+    _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
     if scripted_answer is not None:
         # Before the delay, not after: the delay exists to hold a dispatched WORKER's
         # turn open so a run stays live, and slowing the watch is what it must not do.

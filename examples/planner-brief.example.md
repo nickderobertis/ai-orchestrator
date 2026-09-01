@@ -1,5 +1,7 @@
 # Give the read API a paginated node listing
 
+Plan project: authoring:read-api-paginated-listing
+
 ## What
 
 Design the decomposition for adding a paginated node listing to the read API: the

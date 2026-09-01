@@ -906,6 +906,8 @@ INHERITED = (
 BRIEF = """## What
 Decide whether the paginated listing's cursor is an opaque token or a node id.
 
+Plan project: authoring:cursor-shape
+
 ## Why
 The browser view cannot deep-link to a page until that is settled.
 
@@ -1042,11 +1044,15 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     accepted = _just("check-plan", f"{AUTHORING}:{authored}", cwd=checkout)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
-    (written,) = plan_store.read_tasks(f"{AUTHORING}:{run}")
-    assert plan_review.RECORD_KEY not in written.metadata, (
-        "the closeout blessed the manager-written brief the launch was made from, "
-        "which no planner reviewed"
-    )
+    # Every node of the generated project, rather than the one it used to have: a
+    # planning launch writes the planner node and a `design-doc` node beside it, and the
+    # brief is the task of both — so a closeout that blessed either would be blessing
+    # content no planner reviewed.
+    for written in plan_store.read_tasks(f"{AUTHORING}:{run}"):
+        assert plan_review.RECORD_KEY not in written.metadata, (
+            f"the closeout blessed {written.node_id!r}, whose task is the manager-written "
+            "brief the launch was made from, which no planner reviewed"
+        )
 
 
 @COPIES_THE_TRACKED_TREE

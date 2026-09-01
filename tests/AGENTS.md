@@ -30,7 +30,8 @@ Conventions for this repo's tests.
 - **A host-tool journey over the plan surface belongs to its own project.**
   `tests/plan_tooling/` is the Nx project `plan-tooling`, selected by directory
   rather than by marker: a journey there spawns the installed `onepipeline`, the
-  `just` recipes, the registered check script and a real `oneharness run`, which is
+  `just` recipes, the registered check script and a real `oneharness run` — up to a
+  whole launch driven to settlement — which is
   a different cost from the Python suite and is answered by a different set of
   files. `planToolingWorkspace` in `nx.json` is that set and `conftest.py` holds
   these tests to it, exactly as it holds the recipe tier to its own. It declares no

@@ -177,10 +177,10 @@ orchestrate *args:
 
 # Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
 # [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct]
-# [<onepipeline start flags>]`. Those five flags are the recipe's own; everything else
-# reaches `onepipeline start` untouched.
+# [--no-design-doc] [<onepipeline start flags>]`. Those six flags are the recipe's own;
+# everything else reaches `onepipeline start` untouched.
 #
-# It writes the one-task local project rather than asking a manager to remember its shape;
+# It writes the local project rather than asking a manager to remember its shape;
 # `scripts/plan.sh` states what has to be right about that shape and why. The
 # ask-manager seam every launch exports is not among them — that is
 # `scripts/onepipeline.sh`'s, for `start` and `adopt` alike — but the run id is: this
@@ -204,7 +204,14 @@ orchestrate *args:
 # the DAG UI place are `onepipeline start`'s own, so what an observer would add to a
 # planning run is a monitor watching it for drift from the plan it is what writes. A
 # caller who names one keeps it, exactly as `just orchestrate` keeps a caller's own.
-[doc('Launch a planner on a manager-written brief as a one-task local project, under a run id this launch guarantees is its own.')]
+#
+# The project has a **second** node, `design-doc`, which depends on the planner node and
+# writes the one short document a person reviews that plan as. It is why a brief carries a
+# `Plan project: <source>:<project>` line naming the plan the planner writes — nothing
+# hands one node's output to a later node — and a brief without one is refused where a
+# brief missing a required section is. `--no-design-doc` drops the node and that
+# requirement together, for the launch that wants the planner alone.
+[doc('Launch a planner on a manager-written brief as a local project, under a run id this launch guarantees is its own.')]
 plan *args:
     @./scripts/plan.sh "$@"
 

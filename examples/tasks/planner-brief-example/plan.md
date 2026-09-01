@@ -4,12 +4,14 @@ project: "planner-brief-example"
 status: "todo"
 metadata:
   "onepipeline.id": "plan"
-  "onepipeline.repo": "ai-orchestrator"
   "onepipeline.persona": "../personas/planner.yaml"
   "onepipeline.execution_checkout": "ai-orchestrator-isolated"
+  "onepipeline.repo": "ai-orchestrator"
 ---
 
 # Give the read API a paginated node listing
+
+Plan project: authoring:read-api-paginated-listing
 
 ## What
 

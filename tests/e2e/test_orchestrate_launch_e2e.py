@@ -34,6 +34,7 @@ from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN
 from harness_indirections import established_indirections, harness_routing
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
+from planner_channel import RUNS_OWN_PROJECTION_COMPLAINT
 from project_fixtures import project_from_plan, read_project_plan
 from published_surface import surface_of
 from shared_dispatch_bar import (
@@ -3400,9 +3401,11 @@ def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """Launch a run whose only node is held open, and hand it over while it runs.
 
     `--dag-graph off` deliberately: this run has no monitor and no pacemaker, so
-    nothing raises a planner surface and there is no boundary of any kind for an edit
-    to be waiting on. That is the point — an edit accepted here was accepted mid-run
-    or not at all.
+    nothing supervising it raises a planner surface and there is no boundary of any
+    kind for an edit to be waiting on. That is the point — an edit accepted here was
+    accepted mid-run or not at all. What the run may still raise is a complaint about
+    its own settlement projection, which is nobody's boundary; the journey reads past
+    it, for the reason `RUNS_OWN_PROJECTION_COMPLAINT` gives.
 
     Attached rather than detached, because a detached launch's driver exits as soon as
     the graph has nothing to schedule, and a run with no driver executes nothing an
@@ -3461,15 +3464,22 @@ def test_a_graph_edit_is_accepted_while_a_node_is_still_running(live_run: LiveRu
     """
     _dispatched(live_run)
     # Nothing has been handed out to be answered: this run has no observer, so the
-    # edit cannot be riding on a surface even accidentally.
-    pending = _just("channel-next", live_run.run, environment=live_run.environment, seconds=60)
-    assert pending.returncode == 0, pending.stderr
-    # `cast` rather than a validating read: `SurfaceRead` states the three fields this
-    # suite consumes from `onepipeline next`'s own schema, and the subscript below
-    # fails loudly if the answer is not that shape.
-    assert cast(SurfaceRead, json.loads(pending.stdout))["surface"] is None, (
+    # edit cannot be riding on a surface even accidentally. Read down rather than once,
+    # because the run's own projection complaint is not a boundary and is consumed here
+    # so that what remains is what an edit could be answering.
+    pending = None
+    for _ in range(MOST_SURFACES_A_SETTLED_RUN_QUEUES):
+        handed = _just("channel-next", live_run.run, environment=live_run.environment, seconds=60)
+        assert handed.returncode == 0, handed.stderr
+        # `cast` rather than a validating read: `SurfaceRead` states the three fields
+        # this suite consumes from `onepipeline next`'s own schema, and the subscript
+        # below fails loudly if the answer is not that shape.
+        pending = cast(SurfaceRead, json.loads(handed.stdout))["surface"]
+        if pending is None or not RUNS_OWN_PROJECTION_COMPLAINT.search(pending["message"]):
+            break
+    assert pending is None, (
         f"this run raised a planner surface, so the edit below could be answering one "
-        f"rather than reaching the reconciler mid-run:\n{pending.stdout}"
+        f"rather than reaching the reconciler mid-run:\n{pending}"
     )
 
     # No persona: `expects_no_diff` settles without a dispatch, and the launcher

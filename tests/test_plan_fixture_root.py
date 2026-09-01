@@ -66,6 +66,34 @@ def _release(peer: subprocess.Popen[str]) -> None:
     peer.wait(timeout=30)
 
 
+def _store_document(root: Path, native: str) -> str:
+    """One document record, written the way a `local-md` source holds one."""
+    documents = root / "documents"
+    documents.mkdir(parents=True, exist_ok=True)
+    (documents / f"{native}.md").write_text(
+        f'---\ntitle: "{native}"\n---\n\nA design document.\n', encoding="utf-8"
+    )
+    return native
+
+
+def test_a_sweep_reclaims_a_document_whose_writer_is_gone(tmp_path: Path) -> None:
+    """Documents are a third folder in this root, and are bounded on the same terms.
+
+    A journey that stores a design document leaves a record here exactly as one that
+    stores a plan does, and this root is shared by every tier of this suite on a host
+    that has already been filled once by an unbounded family. So a document whose writing
+    process is gone is reclaimed with the projects and tasks, and a live one is not.
+    """
+    stale = _store_document(tmp_path, f"test-{_reaped_pid()}-0-stale-doc")
+    mine = _store_document(tmp_path, f"test-{os.getpid()}-0-live-doc")
+
+    reclaimed = plan_fixture_root.sweep_dead_owners(tmp_path)
+
+    assert reclaimed == [stale], reclaimed
+    assert not (tmp_path / "documents" / f"{stale}.md").exists()
+    assert (tmp_path / "documents" / f"{mine}.md").is_file()
+
+
 def test_a_sweep_reclaims_a_record_whose_writer_is_gone(tmp_path: Path) -> None:
     """The record an exited or killed tier left behind, and only that one."""
     stale = _store(tmp_path, f"test-{_reaped_pid()}-0-stale")

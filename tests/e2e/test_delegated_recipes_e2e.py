@@ -419,7 +419,12 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     brief = checkout / BRIEF
     brief.parent.mkdir()
     brief.write_text(
-        "## What\nDecide the cursor's shape.\n\n## Why\nThe view cannot deep-link "
+        "## What\nDecide the cursor's shape.\n\n"
+        # The plan the launch's `design-doc` node reads. A brief without one is refused
+        # before anything is delegated, which for every row below would be the wrong
+        # ending: what they are about is where a recipe lands, not what a brief owes.
+        "Plan project: authoring:cursor-shape\n\n"
+        "## Why\nThe view cannot deep-link "
         "without it.\n\n## Acceptance criteria\n- The shape is stated.\n"
     )
     trace = checkout / "trace"
@@ -503,8 +508,10 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     ]
 
 
-#: The task record `just plan` writes under the local authoring source.
-GENERATED_TASK = ".plans/tasks/cursor-shape/plan.md"
+#: The two task records `just plan` writes under the local authoring source: the planner
+#: node, and the `design-doc` node that reads the plan it produces and writes the document
+#: a person reviews that plan as.
+GENERATED_TASKS = (".plans/tasks/cursor-shape/plan.md", ".plans/tasks/cursor-shape/design-doc.md")
 
 
 class NodeShape(NamedTuple):
@@ -561,24 +568,31 @@ def test_the_plan_recipe_writes_the_node_shape_it_was_asked_for(
     the document itself, for each way of asking, with the published CLI doubled so no
     planner is dispatched to prove a field. The direct shape must carry **neither**
     field: `execution_checkout` without a `repo` names a clone nothing is cut from.
+
+    Both nodes are read, because the placement is a property of the launch rather than of
+    one node: the `design-doc` node takes whatever the planner node takes, so a shape that
+    placed one of them somewhere else would put half a planning run in the shared
+    canonical checkout this repository forbids authoring in.
     """
     checkout, trace = _checkout(tmp_path)
 
     result = _run(checkout, trace, "plan", BRIEF, *shape.arguments)
 
     assert result.returncode == 0, result.stderr
-    task_record = (checkout / GENERATED_TASK).read_text(encoding="utf-8")
-    repo_match = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
-    execution_match = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
-    placed = (
-        None
-        if repo_match is None
-        else (repo_match.group(1), execution_match.group(1) if execution_match else None)
-    )
-    assert placed == shape.placement, (
-        f"`just plan {' '.join(shape.arguments)}` wrote a node placed at {placed}, so the "
-        f"planner would work somewhere other than {shape.placement}: {task_record}"
-    )
+    for generated in GENERATED_TASKS:
+        task_record = (checkout / generated).read_text(encoding="utf-8")
+        repo_match = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
+        execution_match = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
+        placed = (
+            None
+            if repo_match is None
+            else (repo_match.group(1), execution_match.group(1) if execution_match else None)
+        )
+        assert placed == shape.placement, (
+            f"`just plan {' '.join(shape.arguments)}` wrote {generated} placed at {placed}, "
+            f"so that dispatch would work somewhere other than {shape.placement}: "
+            f"{task_record}"
+        )
     assert shape.says in result.stderr, (
         f"the launch said nothing about where this planner works, which for the direct "
         f"shape is where its constraints are stated at all:\n{result.stderr}"

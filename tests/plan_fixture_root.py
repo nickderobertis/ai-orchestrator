@@ -36,8 +36,9 @@ from pathlib import Path
 #: keep, and `tests/test_plan_source_roots.py` is what reconciles the two.
 ROOT = Path("/tmp/ai-orchestrator-test-projects")
 
-#: The lock file itself, which is neither a project nor a task record and so is invisible
-#: to the source: it sits beside `projects/` and `tasks/` rather than inside either.
+#: The lock file itself, which is neither a project, a task nor a document record and so
+#: is invisible to the source: it sits beside `projects/`, `tasks/` and `documents/`
+#: rather than inside any of them.
 LOCK_NAME = ".readers.lock"
 
 #: How `tests/e2e/project_fixtures.py` names what it writes — `test-<pid>-<n>-<slug>` —
@@ -87,14 +88,27 @@ def running(pid: int) -> bool:
 
 
 def _natives(root: Path) -> set[str]:
-    """Every native project id this root holds a document or a task directory for."""
+    """Every native project id this root holds a record or a task directory for."""
     found: set[str] = set()
     projects, tasks = root / "projects", root / "tasks"
     if projects.is_dir():
-        found |= {document.stem for document in projects.glob("*.md")}
+        found |= {record.stem for record in projects.glob("*.md")}
     if tasks.is_dir():
         found |= {directory.name for directory in tasks.iterdir() if directory.is_dir()}
     return found
+
+
+def _document_natives(root: Path) -> set[str]:
+    """Every native document id this root holds.
+
+    A third folder beside `projects/` and `tasks/`, and reclaimed on the same terms: a
+    document is a record a journey wrote into a shared root, so one whose writing process
+    is gone is one nothing will read again. It is kept apart from the project ids above
+    because it is a different namespace — a document's own id, which the source addresses
+    it by — and reclaiming a document named after a project would remove the wrong record.
+    """
+    documents = root / "documents"
+    return {record.stem for record in documents.glob("*.md")} if documents.is_dir() else set()
 
 
 def _reclaim(root: Path) -> list[str]:
@@ -103,14 +117,20 @@ def _reclaim(root: Path) -> list[str]:
         owner = _OWNER.match(native)
         if owner is None or running(int(owner.group(1))):
             continue
-        # The document goes first and the task directory second, so that no moment of
-        # the removal leaves a project whose tasks the source would then fail to open.
+        # The project record goes first and the task directory second, so that no moment
+        # of the removal leaves a project whose tasks the source would then fail to open.
         (root / "projects" / f"{native}.md").unlink(missing_ok=True)
         directory = root / "tasks" / native
         if directory.is_dir():
             for child in directory.iterdir():
                 child.unlink()
             directory.rmdir()
+        reclaimed.append(native)
+    for native in sorted(_document_natives(root)):
+        owner = _OWNER.match(native)
+        if owner is None or running(int(owner.group(1))):
+            continue
+        (root / "documents" / f"{native}.md").unlink(missing_ok=True)
         reclaimed.append(native)
     return reclaimed
 

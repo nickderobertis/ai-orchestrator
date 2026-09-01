@@ -215,8 +215,16 @@ EXECUTION_ALIAS = "ai-orchestrator-isolated"
 #: The brief a `just plan` launch is made from. Written to a temporary directory rather
 #: than taken from `examples/`, so these journeys read none of this repository's prose
 #: and stay in the code-only test tier.
+#:
+#: The `Plan project:` line is what the recipe's second node is given: a planning launch
+#: writes a `design-doc` node beside the planner, and that node has no other way to find
+#: the plan it is writing about. A brief without one is refused before anything is
+#: dispatched, which for the refusal journeys below would be the wrong refusal — so it is
+#: here rather than each of them passing `--no-design-doc` to avoid it.
 BRIEF = """## What
 Decide whether the paginated listing's cursor is an opaque token or a node id.
+
+Plan project: authoring:cursor-shape
 
 ## Why
 The browser view cannot deep-link to a page until that is settled.
