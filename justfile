@@ -251,6 +251,49 @@ check-plan *args:
 review-plan *args:
     @./scripts/review-plan.sh "$@"
 
+# Copy a cleared plan onto the board this repository plans against: `just copy-plan
+# <source>:<project> [--to SOURCE] [<onetaskgraph project copy flags>]`.
+#
+# This is the step between the two recipes above, and the reason it is a command rather
+# than a habit: a plan is drafted in a local Markdown source, cleared there by `just
+# review-plan`, and only then copied onto the `plans` board it is launched from. That
+# order is the only one that works — a review record is an entry of the task's own
+# Markdown document, so a plan authored on the board can never carry one and
+# `check-plan` refuses it for want of one. Before anything is written to the
+# destination this reads the plan and refuses it when a task carries no record for what
+# it currently says, naming each such task; it spends no judged turn and reviews
+# nothing itself.
+#
+# `--to` names a different configured destination; everything else reaches
+# `onetaskgraph project copy` untouched — `--dry-run`, `--recreate`, `--match-by` —
+# rather than being re-declared by a wrapper with no opinion about them. A `--set`
+# among them configures the copy alone, so repoint a source in `onetaskgraph.yaml` or
+# through the store's own `ONETASKGRAPH_` variables, which the pre-flight read sees too.
+#
+# Exit 1 is this recipe's own refusal with nothing written, exit 3 is the destination
+# refusing a plan every task of which carried a record, and exit 2 is a plan or a
+# toolchain that could not be read at all. A plan builder branches on the difference:
+# reading the first as the second is how "nothing has reviewed this" gets retried as an
+# outage of the board.
+#
+# The install line is `just plans`'s, for its reason: session setup runs on a
+# `SessionStart` hook that a fresh worktree and a publication clone never fire, so the
+# CLI this reads is healed into this checkout's own `.venv/bin` and is the release this
+# checkout pinned rather than whichever copy another checkout provisioned last.
+# A block rather than the line-scoped directive every sibling recipe here carries, and
+# the reason is `just`'s grammar rather than a wider claim: the offending line is the
+# `orchestrator-copy-plan` invocation, a line-scoped directive covers only the line
+# after it, and `just` refuses a comment between a `[doc(...)]` attribute and the recipe
+# it annotates — so the narrowest reachable scope is this recipe. Placed in the body
+# instead it would be echoed to the operator on every run, which is the opposite of what
+# the rule asks for.
+# llmlint: ignore-block[tool_output_is_signal] the store's per-record report — one line per project and task, naming it created, updated or unchanged — is what a copy is run to produce, so it reaches the operator whole, exactly as for the `plans` reader below. This command's own output is only its refusals, each naming the next action.
+[doc('Copy a reviewed plan project, and its tasks, onto the plan board this repository launches from.')]
+copy-plan *args:
+    @./scripts/onetaskgraph-install.sh
+    @uv run orchestrator-copy-plan "$@"
+# llmlint: ignore-end[tool_output_is_signal]
+
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.
 #

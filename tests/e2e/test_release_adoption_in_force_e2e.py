@@ -88,10 +88,14 @@ RELEASE_SUBCOMMANDS = (
 )
 
 #: Which registered identities carry their own `release-targets.toml`, and how many
-#: targets each declares. Measured 2026-08-29 on the adopted onevcs 0.16.2, which is the
+#: targets each declares. First measured on the adopted onevcs 0.16.2, which is the
 #: release that started reading a repository's own declaration beside the host's — under
 #: which six of this host's registered repositories began declaring targets without
-#: anybody configuring anything here.
+#: anybody configuring anything here. `onetaskgraph` is the seventh and arrived the same
+#: way: its declaration landed as `f42cccc feat: declare the release targets this
+#: repository publishes (#127)` on that repository's own base, and this gate is what
+#: brought it due here — the publication of an unrelated branch was refused for it,
+#: which is the mechanism working rather than a cost of it.
 #:
 #: Held as the whole mapping rather than as "at least one", for the reason
 #: `LINKED_HARNESS_CORES` is: what a reader of `AGENTS.md` acts on is *which* repository
@@ -116,6 +120,7 @@ DECLARING_IDENTITIES = {
     "github.com/nickderobertis/onejudge": 3,
     "github.com/nickderobertis/onepipeline": 3,
     "github.com/nickderobertis/onepipeline-ui": 4,
+    "github.com/nickderobertis/onetaskgraph": 5,
     "github.com/nickderobertis/onevcs": 4,
 }
 

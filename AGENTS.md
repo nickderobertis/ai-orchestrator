@@ -639,10 +639,15 @@ and all three were driven on this host's installed binaries rather than read off
 change request. **What changed under this adoption is the other half of that
 sentence**, and it changed without anybody configuring anything here: onevcs 0.16.x
 reads a target from the **repository's own** `release-targets.toml` as well as from the
-host's document, and six of the fourteen repositories registered here have since landed
+host's document, and seven of the seventeen repositories registered here have since landed
 one — `oneagentgraph` (3 targets), `oneharness` (6), `onejudge` (3), `onepipeline` (3),
-`onepipeline-ui` (4), and `onevcs` (4). So a dependency landing in one of *those* now
-has a release to await. **`ai-orchestrator` declares none**, and a
+`onepipeline-ui` (4), `onetaskgraph` (5), and `onevcs` (4). So a dependency landing in one
+of *those* now has a release to await. That set is not a thing this host decides and it
+moves without warning: `onetaskgraph` joined it after the six above were counted, and what
+noticed was `tests/e2e/test_release_adoption_in_force_e2e.py` refusing the publication of
+an unrelated branch. Read the set here as the one that gate last held, and read a failure
+of it as a sibling repository having moved rather than as a defect of the branch it
+refused. **`ai-orchestrator` declares none**, and a
 repository that declares none releases nothing as far as this mechanism is concerned —
 so a plan of this repository still earns no reference row and no hold, and one
 naming neither field gets exactly the run it got before the pins moved. Read every
@@ -709,7 +714,7 @@ repository, because two nodes in one repository can legitimately want different
 targets — and its `src/release.rs` is where the chain is implemented. A repository
 that declares **no** release targets releases nothing, so a dependency landing there
 earns no reference row and no hold whatever mode its dependents resolve to; that is
-`ai-orchestrator` and seven of the other repositories registered here, and it is why
+`ai-orchestrator` and nine of the other repositories registered here, and it is why
 a plan of this repository naming neither field gets exactly the run it gets today.
 
 **The adoption instruction a worker follows is the producer's, and the framework
@@ -877,7 +882,7 @@ installed artifacts rather than against this paragraph: the CLI's verb group, wh
 answers for this repository, the `onevcs` the engine links, the loader's two refusals,
 and the read API behind the view.
 
-**So what remains is configuration, not adoption.** Six of the repositories dispatched
+**So what remains is configuration, not adoption.** Seven of the repositories dispatched
 against from here now declare their own targets, so putting the mechanism to work no
 longer starts with declaring one: it is writing a plan whose node names `adoption:
 published` and a `consumes` naming one of those targets, and deciding whether this host
@@ -1026,9 +1031,30 @@ dispatch onejudge.
 
 **A plan of this repository is stored on the `plans` GitHub Projects board** — the
 `github-projects` source `onetaskgraph.yaml` configures at owner `nickderobertis`, project
-number 2, filing its project and task issues in `nickderobertis/ai-orchestrator`. Author one
-there, read one with `just plans project show plans:<project>`, and launch one as `just
-orchestrate plans:<project>`.
+number 2, filing its project and task issues in `nickderobertis/ai-orchestrator`. Read one
+with `just plans project show plans:<project>` and launch one as `just orchestrate
+plans:<project>`.
+
+**But it is not authored there, and the order it reaches the board in is the one thing
+about this store an author most needs.** A plan is **drafted** in the `authoring` source —
+the gitignored `.plans/` root `just plan` writes into and the one every planner is briefed
+to write into — **cleared** there by `just review-plan`, **copied** onto the board by `just
+copy-plan`, **checked** with `just check-plan plans:<project>`, and launched from the
+board. `just copy-plan` refuses to copy a plan any of whose tasks carries
+no review record for what it currently says, so the ordering is enforced by a command rather
+than remembered; the commands, their exit statuses, and what reaches the store's own copy
+verb are in [How a plan gets onto that
+board](docs/orchestration.md#how-a-plan-gets-onto-that-board).
+
+**No other order works, and the refusal that says so is correct rather than a defect to
+route around.** A review record is one entry of the task's *own Markdown document*, so a
+local Markdown source is the only kind anything can write one into — a board is not a
+directory. Author on the board and `just review-plan` refuses before it spends a turn,
+naming the plugin, while `just check-plan` refuses the plan for carrying no review
+record; the author's only way out is to start again somewhere else. That refusal stays: a plan nothing has
+reviewed is how a plan written under time pressure reaches a dispatch, and both plans that
+happened to here produced finished, gate-green work a judge then rejected. The board is a
+destination, not a drafting surface.
 
 **That board held one plan at a time until 2026-08-29, and the retreat that worked around it
 is over.** Two defects made a second plan on the board corrupt every plan on it, and both
@@ -1151,12 +1177,15 @@ and is never a command.
    than a decision. Give it the user's motivation in the user's own terms, because
    that is the one thing no amount of reading the code recovers and it is what
    every node's `## Why` is written from. Name the repository and the qualified
-   project id the plan must create. A plan of **this** repository is stored on the
-   `plans` GitHub Projects board, for the reasons in [Where a plan of this repository
-   lives](#where-a-plan-of-this-repository-lives). For a
-   plan of any other repository, name the `authoring` source rooted at the gitignored
-   `.plans/` that `just plan` writes. Either source's project and task records are
-   launchable in place, and a local one need not be copied to GitHub Projects first. Do not hand
+   project id the plan must create, and **brief every planner to write into the
+   `authoring` source** — the gitignored `.plans/` root `just plan` writes — whatever
+   repository the plan is of. What then happens to it differs by repository and is
+   yours rather than the planner's: a plan of **this** repository is cleared there with
+   `just review-plan`, copied onto the `plans` board with `just copy-plan`, and launched
+   from the board, for the reasons in [Where a plan of this repository
+   lives](#where-a-plan-of-this-repository-lives); a plan of any other repository stays
+   local and is launched from there, since a local project and task record is launchable
+   in place. Do not hand
    it contracts, acceptance criteria, or a node
    breakdown: researching the code and producing those is the dispatch you are
    paying for.

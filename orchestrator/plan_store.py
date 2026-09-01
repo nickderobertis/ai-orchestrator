@@ -85,12 +85,29 @@ class StoreTask:
     deps: tuple[NodeId, ...]
 
 
-# llmlint: ignore[suppressions_justified] Open CLI JSON; consumed fields narrow at each caller.
-def store_json(arguments: Sequence[str]) -> dict[str, Any]:
-    """Read one JSON answer from the installed store CLI."""
+def store_binary() -> str:
+    """The plan-store CLI this checkout spawns, refused by name when it has none.
+
+    One source for every command here that runs it, so a read and the write beside it
+    cannot resolve two different binaries — which on this host is not a theoretical
+    difference: `config/onetaskgraph.version` is per checkout, and a copy of this
+    program provisioned by another checkout answers about a different release.
+
+    Resolved from `PATH` rather than from a path spelled here, because every recipe
+    that reaches this runs under `uv run`, which puts this checkout's own `.venv/bin`
+    first — the destination `scripts/session-setup.sh` installs the pinned release into
+    and `scripts/onetaskgraph-install.sh` heals.
+    """
     binary = shutil.which(STORE)
     if binary is None:
         raise OSError(f"{STORE} is not installed on PATH")
+    return binary
+
+
+# llmlint: ignore[suppressions_justified] Open CLI JSON; consumed fields narrow at each caller.
+def store_json(arguments: Sequence[str]) -> dict[str, Any]:
+    """Read one JSON answer from the installed store CLI."""
+    binary = store_binary()
     read = subprocess.run(
         [binary, *arguments, "--json"],
         cwd=REPO_ROOT,

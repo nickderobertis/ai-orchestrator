@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-# The three commands this repository still owns. Every other verb is a thin `just`
+# The four commands this repository still owns. Every other verb is a thin `just`
 # wrapper over a published CLI; the first exists because `just lint-llm` has to hand
 # a tool it shells out to a merged `ONEHARNESS_HISTORY_LABELS` value, and the merge
 # has to preserve an inherited value whose shape the recipe does not know.
@@ -29,6 +29,13 @@ orchestrator-check-plan = "orchestrator.plan_check:main"
 # record it writes has to be written by this repository's own code — see
 # `orchestrator/plan_review.py` for why that is structural rather than a convention.
 orchestrator-review-plan = "orchestrator.plan_review:main"
+# The fourth is the step between them: it copies a cleared plan onto the board this
+# repository launches from, refusing one whose criteria nothing has reviewed before the
+# destination is asked to hold it. It is a command of this repository rather than a bare
+# `onetaskgraph project copy` because that pre-flight has to ask the same question
+# `check-plan` asks, of the same code — a second implementation of the review key would
+# disagree with the first the moment either moved.
+orchestrator-copy-plan = "orchestrator.plan_copy:main"
 
 [dependency-groups]
 dev = [

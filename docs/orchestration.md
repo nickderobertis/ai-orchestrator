@@ -55,6 +55,68 @@ it, which is why a board can still be listed by a checkout that names none.
 a copy of a local project files its issues in the configured repository, and a
 repository the credential cannot reach refuses the copy before anything is created.
 
+### How a plan gets onto that board
+
+**A plan is drafted locally, cleared locally, copied up, checked, and launched from the
+board** — five commands in that order and no other:
+
+```sh
+just plan brief.md                     # a planner authors into `authoring`; a settled
+                                       # run's closeout records the tasks it wrote
+just review-plan authoring:<project>   # the judged turn, for anything nothing has read
+just copy-plan authoring:<project>     # onto `plans`; `--to` names another destination
+just check-plan plans:<project>
+just orchestrate plans:<project>
+```
+
+**That order is forced rather than preferred, and the reason is where a review record
+lives.** A record is one entry of the task's *own Markdown document*, so
+`orchestrator/plan_store.py`'s `WRITABLE_PLUGIN` names the local Markdown plugin and
+every other source is read-only to the writer: a board is not a directory, and `just
+review-plan` on a plan held there refuses before it spends a turn, naming the plugin.
+`just check-plan` then refuses that plan for carrying no review record. **Both refusals are correct and neither
+is routed around** — a plan nothing has reviewed is how a plan written under time
+pressure reaches a dispatch — so the board is a destination and never a drafting
+surface. An author who starts there has no way out but to start again somewhere else.
+
+**`just copy-plan` is the step that makes that order a command rather than a habit.** It
+takes one qualified project id and copies that project and the tasks in it into the
+`plans` source, or into whichever configured source `--to` names. Before it writes
+anything to the destination it reads the plan and refuses it when any task carries no
+review record for that task's *current* authored content, naming each such task and the
+command that records one. It composes rather than replaces: it spends no judged turn,
+reviews nothing itself, and changes neither of the two commands beside it.
+
+Three properties of it are worth knowing before you build on it.
+
+*It cannot disagree with `just check-plan` about what has been reviewed.* The pre-flight
+calls `orchestrator/plan_review.py`'s own `unreviewed`, which is the function the plan
+check calls, rather than restating how a record is keyed. That key covers the task's
+authored content *and* the bar it was granted under, so a second implementation would
+agree on the day it was written and diverge the first time either moved.
+
+*Its refusals are told apart by exit status,* because a builder that read one as the
+other would retry "nothing has reviewed this" as an outage of the board. **Exit 1** is
+this command's own refusal, made before the store is asked to do anything; **exit 3** is
+the destination refusing a plan every task of which carried a record; **exit 2** is a
+plan, a review bar, or a store CLI that could not be read at all, so nothing was judged
+and nothing was written.
+
+*Everything it does not recognise reaches `onetaskgraph project copy` untouched* —
+`--dry-run`, `--recreate`, `--match-by <KEY>` — rather than being re-declared by a
+wrapper with no opinion about them. One has a reach worth knowing: a `--set` among them
+configures the **copy** and not the pre-flight read, which the store makes through this
+checkout's own configuration and environment. Repoint a source in `onetaskgraph.yaml` or
+through the store's own `ONETASKGRAPH_` variables, both of which the whole command sees.
+
+The review record travels with the copy, because it is an ordinary entry of the task's
+metadata map and the copy carries that map; so `just check-plan plans:<project>` on what
+landed accepts it and spends no second judged turn.
+`tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the whole flow for real —
+drafting, clearing, a trial run that writes nothing, the copy, the record read back off
+what landed, and the check over it — against a second local store rather than the live
+board.
+
 ## What the write-back owns, and what a green run proves
 
 **What the write-back owns is the node projection, and nothing else on that record.**

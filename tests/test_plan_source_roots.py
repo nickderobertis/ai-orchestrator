@@ -22,7 +22,7 @@ import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import plan_review
+from orchestrator import plan_copy, plan_review
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -197,4 +197,36 @@ def test_no_source_a_closeout_records_into_is_unwritable() -> None:
     assert "plans" not in plan_review.PLAN_SOURCES, (
         "the 'plans' board is served by a plugin no review record can be written into, so "
         "a planning closeout must not try to record into it"
+    )
+
+
+def test_the_board_copy_plan_defaults_to_is_the_one_this_repository_plans_against() -> None:
+    """`plan_copy.BOARD` restates a name `onetaskgraph.yaml` owns, so it is reconciled here.
+
+    A source renamed there and not here does not fail loudly: `just copy-plan` naming no
+    destination would refuse at the store with "no source named …", which reads as a typo
+    in the invocation rather than as a constant that has gone stale — and the plan it was
+    about would still be sitting in the local store, unreachable by the launch that wants
+    it on the board.
+
+    Held to being *defaulted to* as well as configured, because that is the property that
+    makes it the board this repository plans against rather than merely a source it
+    knows: a destination outside `default_sources` goes unlisted by every read that names
+    no source, which is how the engine lists a project's tasks.
+    """
+    configured = read_plan_sources(_configuration())
+    assert plan_copy.BOARD in configured, (
+        f"orchestrator/plan_copy.py copies onto the {plan_copy.BOARD!r} source when a "
+        f"caller names none, which onetaskgraph.yaml no longer configures (it configures "
+        f"{sorted(configured)}); the two names are one vocabulary and move together"
+    )
+    assert plan_copy.BOARD in read_default_sources(_configuration()), (
+        f"the {plan_copy.BOARD!r} source is configured but not defaulted to, so a plan "
+        f"copied onto it is unlisted by every read that names no source — which is how "
+        f"`just check-plan` and the engine's own loader list a project's tasks"
+    )
+    assert configured[plan_copy.BOARD].plugin != WRITABLE_PLUGIN, (
+        f"the {plan_copy.BOARD!r} source is served by {WRITABLE_PLUGIN!r}, so a plan could "
+        f"be reviewed there and `just copy-plan`'s whole reason for existing — that a "
+        f"record can only be written where the plan is drafted — no longer holds"
     )
