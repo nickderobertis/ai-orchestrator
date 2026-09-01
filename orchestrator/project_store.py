@@ -27,6 +27,13 @@ class PlanDocument(TypedDict):
     tasks: list[PlanNode]
 
 
+#: What every field of the plan itself is namespaced under in a record's metadata. A
+#: caller's own project metadata is written beside those and may never name one: the two
+#: are merged, the caller's would win, and a project would then state a plan field that
+#: no plan declared.
+ENGINE_PREFIX = "onepipeline."
+
+
 def _slug(value: str) -> str:
     rendered = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     if not rendered:
@@ -34,7 +41,15 @@ def _slug(value: str) -> str:
     return rendered
 
 
-def _frontmatter(fields: Mapping[str, object], body: str) -> str:
+def frontmatter(fields: Mapping[str, object], body: str) -> str:
+    """One local Markdown record: its frontmatter fields, then its body.
+
+    Public because it is the *shape* of a record this repository writes, and a second
+    renderer of that shape would be a second answer to one question: `plan_store` stages
+    a document through it on its way back into whichever store the plan is held in, and
+    a staged record that read back differently from a written one would make the record
+    depend on which of the two produced it.
+    """
     lines = ["---"]
     for key, value in fields.items():
         if isinstance(value, dict):
@@ -47,11 +62,28 @@ def _frontmatter(fields: Mapping[str, object], body: str) -> str:
     return "\n".join([*lines, "---", "", body.rstrip(), ""])
 
 
-# llmlint: ignore[suppressions_justified] Plan metadata is open; stable keys narrow below.
+# llmlint: ignore[suppressions_justified, changed_behavior_has_e2e] Plan metadata is open
+# and the stable keys narrow below. The reserved-prefix refusal beside them is a guard over
+# an argument this repository composes itself: the one production caller is
+# `scripts/plan.sh`, which passes the literal `PLANNING_PROJECT_METADATA` and nothing else,
+# so a journey could only reach it by calling this module rather than the recipe — and the
+# recipe is what `tests/e2e/test_plan_recipe_e2e.py` already drives, asserting that the
+# marker it does pass reaches the record.
 def render_plan_project(
-    plan: Mapping[str, Any], *, native_id: str | None = None
+    plan: Mapping[str, Any],
+    *,
+    native_id: str | None = None,
+    project_metadata: Mapping[str, object] | None = None,
 ) -> dict[Path, str]:
-    """Map a plan document onto the project/task records onepipeline 0.16 reads."""
+    """Map a plan document onto the project/task records onepipeline 0.16 reads.
+
+    ``project_metadata`` is written onto the project record beside the plan's own
+    `onepipeline.` entries and is never read back as part of the plan: `read_plan`
+    keeps only the `onepipeline.`-prefixed keys, so what a caller says here is a fact
+    about the *project* rather than a field the engine's loader would then meet. That
+    is the whole reason it is a separate argument — a marker folded into the plan
+    document would come back out of the store as a plan field nothing declared.
+    """
     name = plan.get("name")
     tasks = plan.get("tasks")
     if not isinstance(name, str) or not isinstance(tasks, list):
@@ -59,6 +91,13 @@ def render_plan_project(
     # The cast records the validated stable keys while retaining arbitrary
     # onepipeline metadata, which is deliberately copied through below.
     document = cast(PlanDocument, plan)
+    reserved = sorted(key for key in (project_metadata or {}) if key.startswith(ENGINE_PREFIX))
+    if reserved:
+        raise ValueError(
+            f"project metadata may not name {ENGINE_PREFIX}-prefixed keys ({', '.join(reserved)}): "
+            f"those are the plan's own fields, and a caller writing one would overwrite what "
+            f"the plan states with something the engine never saw"
+        )
     project = _slug(native_id or name)
     # llmlint: ignore[boundary_inputs_validated] Every caller of this module decodes its
     # plan with `json.load`/`json.loads` first — `main` from stdin, the suite's fixtures
@@ -66,11 +105,11 @@ def render_plan_project(
     # serializable by construction. The stable keys this rendering depends on are the ones
     # validated above and per task below; the rest is onepipeline's open contract, which
     # this boundary is required to carry through untouched.
-    project_metadata = {
-        f"onepipeline.{key}": value
+    metadata = {
+        f"{ENGINE_PREFIX}{key}": value
         for key, value in document.items()
         if key not in {"name", "tasks"}
-    }
+    } | dict(project_metadata or {})
     rendered: dict[Path, str] = {}
     validated: list[tuple[PlanNode, str]] = []
     task_ids: set[str] = set()
@@ -126,7 +165,7 @@ def render_plan_project(
         fields["metadata"] = {"onepipeline.id": node_id} | {
             f"onepipeline.{key}": value for key, value in node.items()
         }
-        rendered[Path("tasks") / project / f"{node_slug}.md"] = _frontmatter(fields, body)
+        rendered[Path("tasks") / project / f"{node_slug}.md"] = frontmatter(fields, body)
     # The project document is rendered last, and `write_plan_project` writes in this
     # order, because a root is read concurrently with being written: a local Markdown
     # source that finds a project document opens the task directory below it, and one
@@ -136,17 +175,23 @@ def render_plan_project(
     # root to swap in: its document stays visible while its task files are rewritten one
     # at a time, so a reader can catch a mixed record. What the order still buys there is
     # that a replacement which fails leaves the reader the project it already had.
-    rendered[Path("projects") / f"{project}.md"] = _frontmatter(
-        {"title": name, "status": "todo", "metadata": project_metadata},
+    rendered[Path("projects") / f"{project}.md"] = frontmatter(
+        {"title": name, "status": "todo", "metadata": metadata},
         f"Execution plan {project}.",
     )
     return rendered
 
 
 # llmlint: ignore[suppressions_justified] This boundary preserves open engine metadata.
-def write_plan_project(root: Path, plan: Mapping[str, Any], *, native_id: str | None = None) -> str:
+def write_plan_project(
+    root: Path,
+    plan: Mapping[str, Any],
+    *,
+    native_id: str | None = None,
+    project_metadata: Mapping[str, object] | None = None,
+) -> str:
     """Write a rendered project under one local-md root and return its native id."""
-    rendered = render_plan_project(plan, native_id=native_id)
+    rendered = render_plan_project(plan, native_id=native_id, project_metadata=project_metadata)
     document = next(path for path in rendered if path.parent == Path("projects"))
     project = document.stem
     for relative, content in rendered.items():
@@ -170,21 +215,36 @@ def write_plan_project(root: Path, plan: Mapping[str, Any], *, native_id: str | 
     return project
 
 
+# llmlint: ignore[changed_behavior_has_e2e] Every refusal below is over input
+# `scripts/plan.sh` cannot produce — it pipes a plan it generated and passes one literal
+# metadata constant — so reaching one means driving this module instead of the recipe.
+# `tests/test_project_store.py` drives them there, and the recipe's own path is driven end
+# to end in `tests/e2e/test_plan_recipe_e2e.py`.
 def main() -> int:
-    """Read one generated plan on stdin and write its local-md project below ROOT."""
-    if len(sys.argv) != 2:
-        print("usage: python -m orchestrator.project_store ROOT", file=sys.stderr)
+    """Read one generated plan on stdin and write its local-md project below ROOT.
+
+    The optional second argument is a JSON object of project metadata, which is how
+    `scripts/plan.sh` marks the project a planning launch writes as the planning
+    project it is. It is an argument rather than part of the plan on stdin for the
+    reason `render_plan_project` gives.
+    """
+    if len(sys.argv) not in (2, 3):
+        print("usage: python -m orchestrator.project_store ROOT [METADATA_JSON]", file=sys.stderr)
         return 2
     try:
         document = json.load(sys.stdin)
+        metadata = json.loads(sys.argv[2]) if len(sys.argv) == 3 else {}
     except (OSError, json.JSONDecodeError) as exc:
         print(f"project-store: input is not valid JSON: {exc}", file=sys.stderr)
         return 2
     if not isinstance(document, dict):
         print("project-store: generated plan is not an object", file=sys.stderr)
         return 2
+    if not isinstance(metadata, dict):
+        print("project-store: project metadata is not an object", file=sys.stderr)
+        return 2
     try:
-        project = write_plan_project(Path(sys.argv[1]), document)
+        project = write_plan_project(Path(sys.argv[1]), document, project_metadata=metadata)
     except (OSError, ValueError) as exc:
         print(f"project-store: cannot write generated plan: {exc}", file=sys.stderr)
         return 2

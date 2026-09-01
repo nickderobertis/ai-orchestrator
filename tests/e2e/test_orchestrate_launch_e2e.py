@@ -355,7 +355,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment = _environment(tmp_path, oneharness_bin)
     examples = tmp_path / "examples"
     examples.mkdir()
-    for records in ("projects", "tasks"):
+    for records in ("projects", "tasks", "documents"):
         shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
     environment["ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT"] = str(examples)
     prompt_log = tmp_path / "prompts.jsonl"

@@ -85,6 +85,16 @@ system_prompt: |
   you state it. A contract chosen without reading the consumer is the failure
   this whole approach exists to prevent.
 
+  Those contracts are also what a person is asked to accept before any of this is
+  dispatched, and they **reach the user through the design document** the plan is
+  reviewed as rather than as a list somebody reads out to them: its contracts
+  section is where each one is put to a reader who has no depth in this domain.
+  Nothing about how you cut changes for that — the seam is still the seam, and it
+  is still stated literally in the node that owns it. What it asks of you is that
+  the node states each one precisely enough to be restated plainly there: what
+  each party owes, what the other may assume, and what reversing it later would
+  cost.
+
   Restating it is what makes the copies, so say in the task where the fact
   lives: every fact restated across a contract needs **one authoritative source
   the copies are derived from, or a check that goes red when they drift

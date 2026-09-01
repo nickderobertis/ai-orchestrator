@@ -31,9 +31,10 @@ from pathlib import Path
 
 import pytest
 from project_fixtures import local_project, reviewed
+from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_review, plan_store
+from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
 
@@ -151,6 +152,14 @@ def _stored_tasks(project: str) -> list[dict[str, object]]:
     return [one["item"] for one in items]
 
 
+def _stored_documents(project: str) -> list[dict[str, object]]:
+    """Every document of ``project``, read through `just plans` for the reason above."""
+    listed = _just("plans", "document", "list", "--project", project, "--json", seconds=90)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    items = json.loads(listed.stdout)["items"]
+    return [one["item"] for one in items]
+
+
 def _records(root: Path) -> list[str]:
     """Every record file the destination store holds, as paths below its root."""
     return sorted(str(one.relative_to(root)) for one in root.rglob("*.md")) if root.is_dir() else []
@@ -217,7 +226,12 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
 
     copy = _just("copy-plan", project, "--to", DESTINATION)
     assert copy.returncode == 0, copy.stdout + copy.stderr
+    # The plan's **document** lands beside its tasks, and that is the store's own
+    # `project copy` being composed with rather than trusted: that verb carries a project
+    # and its tasks and no document at all, so a plan copied without this arrives with
+    # nothing for a person to approve it as and can never be launched.
     assert _records(destination) == [
+        f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
     ], copy.stdout
@@ -227,6 +241,14 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     # looking at the landed task would see.
     (landed,) = _stored_tasks(copied_id)
     assert plan_review.RECORD_KEY in landed["metadata"], landed["metadata"]
+
+    # So did the approval of the document this plan is read as, and for the same reason:
+    # it is an ordinary entry of the record's own metadata map. That is what makes the
+    # order work — a plan cleared and approved where it was drafted is still cleared and
+    # approved once it reaches the store it is launched from, rather than having to be
+    # put in front of a person a second time.
+    (document,) = _stored_documents(copied_id)
+    assert design_approval.RECORD_KEY in document["metadata"], document["metadata"]
 
     # And it is a record of the content that *arrived* rather than an opaque token that
     # merely survived the copy: `check-plan` recomputes the digest over the landed task
@@ -380,6 +402,76 @@ def test_an_argument_this_recipe_has_no_opinion_about_reaches_the_store_s_copy_v
     assert again.returncode == 0, again.stdout + again.stderr
     assert "updated" in again.stdout, again.stdout
     assert _records(destination) == [
+        f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
     ], "the match key never reached the store, so it copied a second project beside the first"
+
+
+def test_a_plan_that_landed_without_its_document_says_so_rather_than_reporting_a_copy(
+    destination: Path,
+) -> None:
+    """The state an operator has to know about: the plan is there and the document is not.
+
+    A plan on the destination with nothing for a person to approve it as is a plan that
+    cannot be launched, and it looks exactly like a complete copy from the destination
+    alone. Driven by making the directory the store writes documents into read-only,
+    which stops that half and leaves the project copy before it untouched — the ordering
+    is what makes the state reachable at all.
+    """
+    project = _project("copy-partial")
+    _, _, native = project.partition(":")
+    # `reviewed` reaches this record the way an operator does — the real `just
+    # review-plan`, the real script, the real `oneharness` CLI and its response schema —
+    # and substitutes the paid provider process alone, this suite's one sanctioned double.
+    # llmlint: ignore[e2e_not_mocked] see the note above this line
+    reviewed(project)
+
+    documents = destination / "documents"
+    documents.mkdir()
+    documents.chmod(0o500)
+    try:
+        copy = _just("copy-plan", project, "--to", DESTINATION)
+    finally:
+        documents.chmod(0o700)
+
+    assert copy.returncode == 3, copy.stdout + copy.stderr
+    assert f"the plan landed in {DESTINATION!r}" in copy.stderr, copy.stderr
+    assert "nothing on" in copy.stderr and "to approve this plan as" in copy.stderr, copy.stderr
+    assert _records(destination) == [
+        f"projects/{native}.md",
+        f"tasks/{native}/route.md",
+    ], "the project copy did not land, so this is not the partial state it is about"
+
+
+def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binary(
+    destination: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ONETASKGRAPH_BIN` is the engine's pointer and that CLI's own unknown setting.
+
+    Every `ONETASKGRAPH_` name is read by the store's configuration layer, so a command
+    that inherited this one refused `bin` as an unknown field and answered nothing at all
+    — a listing, a copy and a `config show` alike. A dispatch of this repository runs
+    inside a run that may have set it, so every command here would have reported a
+    perfectly readable plan store as unreadable. Driven over the whole flow rather than at
+    one call, because each of these spawns the store for itself: the review, the approval
+    the fixture records, the pre-flight read, the project copy and the document copy.
+    """
+    # llmlint: ignore[e2e_not_mocked] The real installed CLI, named the way the engine
+    # names it; nothing is substituted, and the point is that this name is present.
+    monkeypatch.setenv("ONETASKGRAPH_BIN", str(ONETASKGRAPH_BIN))
+    project = _project("copy-under-engine-pointer")
+    _, _, native = project.partition(":")
+    # `reviewed` reaches this record the way an operator does — the real `just
+    # review-plan`, the real script, the real `oneharness` CLI and its response schema —
+    # and substitutes the paid provider process alone, this suite's one sanctioned double.
+    # llmlint: ignore[e2e_not_mocked] see the note above this line
+    reviewed(project)
+
+    copy = _just("copy-plan", project, "--to", DESTINATION)
+    assert copy.returncode == 0, copy.stdout + copy.stderr
+    assert _records(destination) == [
+        f"documents/{native}-design.md",
+        f"projects/{native}.md",
+        f"tasks/{native}/route.md",
+    ], copy.stdout + copy.stderr

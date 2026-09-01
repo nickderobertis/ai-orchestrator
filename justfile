@@ -258,6 +258,34 @@ check-plan *args:
 review-plan *args:
     @./scripts/review-plan.sh "$@"
 
+# Record the user's approval of the design document a plan is read as: `just
+# approve-design <source>:<project>`.
+#
+# This is the gate on dispatch, and the one a person is actually the subject of. A plan
+# is not what somebody outside the domain can review; the one short document
+# `config/design-doc-template.md` states is, and a planning run's `design-doc` node
+# writes it into the plan's own project. So the document goes to the user, and this
+# command records that they approved it — after which `just orchestrate` will launch that
+# plan, and before which it refuses to.
+#
+# The record goes onto the document in the plan store, so it travels with the plan
+# through `just copy-plan` exactly as a review record travels with a task: approve where
+# you draft, then copy up. It is keyed on the document's own authored content *and* on
+# that template, so editing the document leaves it unapproved and moving the template
+# leaves every approved document unapproved.
+#
+# There is no flag that skips this and none is coming; running it on an unchanged
+# document a second time writes nothing and says so. Exit 1 is a refusal — no design
+# document, or more than one, with nothing recorded either way.
+#
+# The install line is `just plans`'s, for its reason: a fresh worktree or a publication
+# clone fires no `SessionStart` hook, so the plan-store CLI this reads is healed into this
+# checkout's own `.venv/bin` at the release this checkout pinned.
+[doc("Record the user's approval of one plan project's design document.")]
+approve-design *args:
+    @./scripts/onetaskgraph-install.sh
+    @uv run orchestrator-approve-design "$@"
+
 # Copy a cleared plan onto the board this repository plans against: `just copy-plan
 # <source>:<project> [--to SOURCE] [<onetaskgraph project copy flags>]`.
 #

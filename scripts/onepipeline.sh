@@ -105,5 +105,20 @@ case "${1:-}" in
         ;;
 esac
 
+# What a plan is put in front of a person as is its design document, and their approval
+# of that document is what gates dispatch. So a launch asks before it dispatches: this is
+# the only place every shape of `just orchestrate` passes through, and refusing here is
+# what makes the gate a gate rather than a habit. `adopt` is deliberately outside it —
+# adoption attaches a fresh driver to a run whose plan was already gated when it started,
+# and there is no project on its command line to ask about.
+#
+# The launch's own arguments are handed over as they were typed rather than parsed here;
+# `orchestrator/design_approval.py` states why, and which of them it then asks the store
+# about. Its exit status is carried out unchanged: 1 is the refusal, 2 is a plan store
+# that could not be read at all.
+if [ "${1:-}" = start ]; then
+    uv run orchestrator-launch-gate "${@:2}" || exit "$?"
+fi
+
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.
 exec uv run onepipeline "$@"

@@ -62,12 +62,13 @@ repository the credential cannot reach refuses the copy before anything is creat
 board** — five commands in that order and no other:
 
 ```sh
-just plan brief.md                     # a planner authors into `authoring` and a
-                                       # design-doc node writes the document that plan
-                                       # is reviewed as; a settled run's closeout
-                                       # records the tasks it wrote
-just review-plan authoring:<project>   # the judged turn, for anything nothing has read
-just copy-plan authoring:<project>     # onto `plans`; `--to` names another destination
+just plan brief.md                       # a planner authors into `authoring` and a
+                                         # design-doc node writes the document that plan
+                                         # is reviewed as; a settled run's closeout
+                                         # records the tasks it wrote
+just review-plan authoring:<project>     # the judged turn, for anything nothing has read
+just approve-design authoring:<project>  # the user's approval of that document
+just copy-plan authoring:<project>       # onto `plans`; `--to` names another destination
 just check-plan plans:<project>
 just orchestrate plans:<project>
 ```
@@ -114,11 +115,75 @@ through the store's own `ONETASKGRAPH_` variables, both of which the whole comma
 
 The review record travels with the copy, because it is an ordinary entry of the task's
 metadata map and the copy carries that map; so `just check-plan plans:<project>` on what
-landed accepts it and spends no second judged turn.
+landed accepts it and spends no second judged turn. So does the design approval below,
+for the same reason and one record further out — which is why the copy carries the plan's
+**documents** as well as its tasks: the store's own `project copy` carries none, and a
+plan copied without its design document arrives on the board with nothing to approve.
 `tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the whole flow for real —
 drafting, clearing, a trial run that writes nothing, the copy, the record read back off
 what landed, and the check over it — against a second local store rather than the live
 board.
+
+### Approving the design document a plan is read as
+
+**A launch is refused until the user has approved the document the plan is read as.**
+That document is what a person can actually judge; the plan itself is not, and a
+node-by-node walk through it in front of somebody is a reading of the graph rather than a
+review of it. `just approve-design <source>:<project>` records that they approved one,
+and `just orchestrate` refuses a project carrying no such record before anything is
+dispatched.
+
+*What is recorded, and where.* One entry of the design document's own metadata map,
+holding a digest and the moment it was written. It goes onto the document in the plan
+store rather than into a file beside the plan, which is what makes it readable from
+whichever store the plan is held in — a directory of Markdown or a board — and what lets
+it travel with `just copy-plan` the way a review record travels with a task. It is
+*written* through `onetaskgraph document copy` rather than by editing a file, and that is
+the half that makes the sentence above true of a board as well as of a directory: the
+write goes through the store's own write side, so where a record can be written is the
+store's answer rather than this repository's. That is the difference from the plan-review
+record beside it, which is an entry of a task's own Markdown document and can therefore
+only ever be written into a directory.
+
+Two consequences of that route are worth knowing before reading a record:
+the store rewrites `onetaskgraph.origin` to name the source the write was staged from,
+because that key is its own bookkeeping of the last copy; and the write replaces the
+record whole, so it stages every field the store just reported rather than the ones this
+repository cares about.
+
+*What invalidates one.* The digest covers the document's own authored content — its
+title, the project it belongs to, and its prose — **and** the tracked template that says
+what a design document is. So editing the document after it was approved leaves it
+unapproved, and changing `config/design-doc-template.md` leaves every previously approved
+document unapproved, exactly as moving the plan-review bar invalidates every review record
+granted under the previous one. Nothing the store owns is in the digest, which is why the
+origin rewrite above does not invalidate the record in the act of writing it.
+
+*What the launch refuses, and how it says which.* Two refusals, told apart because they
+owe different next actions: a project holding **no** design document is waiting on the
+document being written, and one whose document carries **no approval for what it
+currently says** is waiting on a person reading it. Each names the project, the second
+names the document and where the store says it is, and both name `just approve-design`.
+A project holding more than one document is a third answer — which of them is the design
+document cannot be decided, so it is refused rather than guessed at.
+
+*The one exemption.* The project a **planning** launch writes is exempt, because its
+output *is* the plan and the document it will be reviewed as does not exist yet. It is
+exempt because `scripts/plan.sh` stamps that project as a planning project and the gate
+reads what the project says about itself — never because anything recognises its shape.
+A hand-written project that happens to carry a planner node and a design-doc node is not
+exempt, and a planning launch that grows a third node does not stop being.
+
+*What it is not.* It is not `just check-plan` and not `just review-plan`, and neither of
+those changes for it. Those ask whether a node's acceptance criteria would fail its
+worker for something other than its work — a machine tier, run against the plan's tasks.
+This is a person's decision about one document. Folding either into the other would let a
+plan nobody read past pass because a machine liked its wording.
+
+`tests/plan_tooling/test_approve_design_recipe_e2e.py` drives it end to end: a real
+launch refused for want of an approval, the real recipe recording one, the same launch
+then reaching the engine, an edit to the document refusing it again, and a planning
+project launching throughout.
 
 ## What the write-back owns, and what a green run proves
 

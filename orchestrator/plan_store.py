@@ -22,6 +22,19 @@ map and touches nothing else, and it refuses frontmatter it cannot edit that way
 than reformatting the file. A plan record is an operator's authored document; rewriting
 one to normalize it would make the review gate the thing that most often changes the
 content it reviews.
+
+**A document is written the other way round, and the difference is what a board can
+take.** A task's review record goes into the file because only a local Markdown source
+has a file; a *document* carries the design approval, and a plan is approved wherever it
+is held — so :func:`write_document_metadata` goes through `onetaskgraph document copy`,
+which is the store's own write side and answers for a directory and a board alike. It
+stages the document it already read into a source of its own, adds the one entry, and
+copies that over the record it came from, matched by title because the destination's
+recorded origin names whatever copy created it rather than this one. Two costs come with
+that and neither is hidden: the store rewrites `onetaskgraph.origin` to name the staging
+source, because that key is the store's own bookkeeping of the last copy; and the write
+is a whole-record replacement, so what is staged is everything the store just reported
+rather than the fields this repository happens to care about.
 """
 
 # llmlint: ignore-file[changed_behavior_has_e2e] Every refusal below is a guard over
@@ -32,6 +45,7 @@ content it reviews.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -43,6 +57,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NewType
 
+from orchestrator.project_store import frontmatter
 from orchestrator.root import REPO_ROOT
 
 #: The standalone plan-store CLI this host spawns. `config/onetaskgraph.version` pins
@@ -55,6 +70,15 @@ STORE = "onetaskgraph"
 #: page unread on every host until the first plan that needed it.
 PAGE_SIZE = 2
 
+#: What `onepipeline` names the plan-store CLI in, and what has to be **removed** from
+#: the environment of every store command this module spawns. It is the engine's way of
+#: pointing at a binary; `onetaskgraph`'s own configuration layer reads every
+#: `ONETASKGRAPH_*` name as a *setting*, so a process that inherits it refuses `bin` as an
+#: unknown field and answers nothing at all — for `config show`, for a listing, for
+#: everything. The engine strips it before it spawns; so does this, or a launch made from
+#: inside a run that set it would be refused for a plan store that is perfectly readable.
+BIN_ENV = "ONETASKGRAPH_BIN"
+
 #: The plugin whose records this module may write. Every other source is read-only
 #: here — a GitHub Projects board is not a directory, and a record written into one
 #: would go through an API this repository deliberately does not call.
@@ -66,6 +90,24 @@ WRITABLE_PLUGIN = "local-md"
 #: what a dependency edge resolves to: the two are both strings, they travel together
 #: through every function here, and mixing them addresses the wrong record.
 QualifiedTaskId = NewType("QualifiedTaskId", str)
+
+#: A document's address in the store, `<source>:<native-id>`. Its own namespace: a
+#: document and a task of one project may wear the same native id and address different
+#: records, so the two are never interchanged even though both are strings.
+QualifiedDocumentId = NewType("QualifiedDocumentId", str)
+
+#: The source name the write below stages a document under, which exists only for the
+#: length of one copy. Deliberately unlike anything `onetaskgraph.yaml` configures: it is
+#: added to the configuration of that one invocation, and a name a real source already
+#: holds would repoint that source for the command doing the writing.
+STAGING_SOURCE = "orchestrator-record-staging"
+
+#: How the copy is told which destination record it is updating. A document a plan store
+#: already holds was created by some earlier copy, so its recorded origin names *that*
+#: source rather than the staging one below — the correspondence a bare copy would
+#: follow is one this write can never satisfy, and following it would duplicate the
+#: document instead of updating it. The title is what both records share.
+MATCH_BY = "title"
 
 #: A task's id within its plan — `onepipeline.id`, the name a run's journal, its branch,
 #: and every refusal use.
@@ -104,6 +146,28 @@ def store_binary() -> str:
     return binary
 
 
+def staged_name(qualified_id: QualifiedDocumentId) -> str:
+    """What one document's staged copy is called inside the staging source.
+
+    A digest of the identity rather than the identity itself, and both halves of that
+    matter. It is **derived** because the store's own id is another program's answer about
+    another program's records, and interpolating one into a path is how a separator or a
+    `..` in it reaches the filesystem. It is **per document** because the copy that writes
+    the record leaves its own origin on the destination, and every document staged under
+    one name would then carry one correspondence between them — so the next document
+    written would match the first one's record and land on it. It is **stable** because a
+    second write of the same document should find the record the first one left.
+    """
+    return hashlib.sha256(qualified_id.encode("utf-8")).hexdigest()
+
+
+def store_environment() -> dict[str, str]:
+    """The environment a store command runs under: this process's, less :data:`BIN_ENV`."""
+    environment = dict(os.environ)
+    environment.pop(BIN_ENV, None)
+    return environment
+
+
 # llmlint: ignore[suppressions_justified] Open CLI JSON; consumed fields narrow at each caller.
 def store_json(arguments: Sequence[str]) -> dict[str, Any]:
     """Read one JSON answer from the installed store CLI."""
@@ -111,6 +175,7 @@ def store_json(arguments: Sequence[str]) -> dict[str, Any]:
     read = subprocess.run(
         [binary, *arguments, "--json"],
         cwd=REPO_ROOT,
+        env=store_environment(),
         text=True,
         capture_output=True,
         check=False,
@@ -305,6 +370,193 @@ def read_project(project: str) -> tuple[dict[str, Any], list[StoreTask]]:
     """
     records = read_tasks(project)
     return read_plan(project, records), records
+
+
+@dataclass(frozen=True)
+class StoreDocument:
+    """A validated document record returned by onetaskgraph.
+
+    Every field the store reports that a write may carry back, because
+    :func:`write_document_metadata` replaces the record whole: a field read and not
+    staged is a field the write deletes.
+    """
+
+    #: `<source>:<native>`, held to that shape where the store's answer is read. The
+    #: whole identity and nothing beside it: the store also reports the native half on
+    #: its own, and two identities that can disagree is one a record could be staged
+    #: under while being addressed by the other.
+    qualified_id: QualifiedDocumentId
+    title: str
+    content: str
+    project: str | None
+    labels: list[str]
+    repositories: list[str]
+    metadata: Mapping[str, object]
+    #: Where the store says this record is — a path for a directory, a link for a
+    #: board — reported back rather than composed. `None` when the store reports none.
+    location: Mapping[str, Any] | None
+
+
+def read_documents(project: str) -> list[StoreDocument]:
+    """Every document of ``project``, validated, in the order the store lists them.
+
+    Addressed by the qualified project id alone, which narrows the query to that
+    project's own source: a bare native id is asked of every configured source, and a
+    second source holding a project of the same name would answer for it.
+    """
+    qualified(project)
+    listed: list[Any] = []
+    page: str | None = None
+    seen_pages: set[str] = set()
+    while True:
+        arguments = ["document", "list", "--project", project, "--limit", str(PAGE_SIZE)]
+        if page is not None:
+            arguments.extend(["--page", page])
+        answer = store_json(arguments)
+        items = answer.get("items")
+        if not isinstance(items, list):
+            raise OSError(f"{STORE} returned a document listing that is not a list")
+        listed.extend(items)
+        following = answer.get("next")
+        if following is None:
+            break
+        if not isinstance(following, str) or not following:
+            raise OSError(f"{STORE} returned an invalid next-page token")
+        if following in seen_pages:
+            raise OSError(f"{STORE} returned a repeated next-page token")
+        seen_pages.add(following)
+        page = following
+    return [_document(item) for item in listed]
+
+
+# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.
+def _document(item: object) -> StoreDocument:
+    """One listed document, validated down to the fields a record is keyed and staged from.
+
+    The identity is held to a **qualified** `<source>:<native>` here rather than wherever
+    it is next used, because that is what makes :data:`QualifiedDocumentId` mean what its
+    name says: the write below takes one and has to name the source it copies into, and a
+    type whose values are only sometimes qualified pushes that check onto every caller.
+    """
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+        raise OSError(f"{STORE} returned a document without a qualified id")
+    source, separator, native = item["id"].partition(":")
+    if not separator or not source or not native:
+        raise OSError(
+            f"{STORE} addressed a document as {item['id']!r}, which is not a qualified "
+            f"`<source>:<native>` id, so there is no source to write a record back into"
+        )
+    payload = item.get("item")
+    if not isinstance(payload, dict):
+        raise OSError(f"{STORE} returned a document without an object payload")
+    title = payload.get("title")
+    content = payload.get("content")
+    project = payload.get("project")
+    labels = payload.get("labels", [])
+    repositories = payload.get("repositories", [])
+    metadata = payload.get("metadata", {})
+    location = payload.get("location")
+    if not isinstance(title, str):
+        raise OSError(f"document {item['id']} has no string title")
+    if content is not None and not isinstance(content, str):
+        raise OSError(f"document {item['id']} has non-string content")
+    if project is not None and not isinstance(project, str):
+        raise OSError(f"document {item['id']} has a non-string project")
+    if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
+        raise OSError(f"document {item['id']} has labels that are not a list of strings")
+    if not isinstance(repositories, list) or not all(
+        isinstance(repository, str) for repository in repositories
+    ):
+        raise OSError(f"document {item['id']} has repositories that are not a list of strings")
+    if not isinstance(metadata, dict):
+        raise OSError(f"document {item['id']} has metadata that is not an object")
+    if location is not None and not isinstance(location, dict):
+        raise OSError(f"document {item['id']} has a location that is not an object")
+    return StoreDocument(
+        qualified_id=QualifiedDocumentId(item["id"]),
+        title=title,
+        content=content or "",
+        project=project,
+        labels=labels,
+        repositories=repositories,
+        metadata=metadata,
+        location=location,
+    )
+
+
+def write_document_metadata(document: StoreDocument, key: str, value: object) -> None:
+    """Set one namespaced metadata entry of ``document``, wherever its store keeps it.
+
+    The record is staged whole — every field :class:`StoreDocument` carries — into a
+    local Markdown source of this call's own, and copied over the record it was read
+    from. The copy is the store's own write verb, so a board takes this write exactly as
+    a directory does; the module docstring states the two costs that come with it.
+
+    The destination the store reports is checked against the document this was asked
+    about, because the correspondence is matched by title: a second document of that
+    title would be updated silently, and a record written over the wrong document reads
+    as sound from every side afterwards.
+
+    ``document`` is one :func:`read_documents` returned, and that is where its identity
+    was held to a qualified `<source>:<native>` — the source half is what this copies
+    into, and it is the only half that reaches anything here. The native half is the
+    store's own answer about its own records and is never interpolated into a path; see
+    :func:`staged_name`.
+    """
+    # Qualified by construction: `_document` refuses an identity that is not, which is
+    # what makes this partition a read of the source half rather than a second check.
+    source = document.qualified_id.partition(":")[0]
+    fields: dict[str, object] = {"title": document.title}
+    if document.project is not None:
+        fields["project"] = document.project
+    if document.labels:
+        fields["labels"] = document.labels
+    if document.repositories:
+        fields["repositories"] = document.repositories
+    fields["metadata"] = dict(document.metadata) | {key: value}
+    name = staged_name(document.qualified_id)
+    with tempfile.TemporaryDirectory(prefix="ai-orchestrator-record-") as staging:
+        staged = Path(staging) / "documents"
+        staged.mkdir(parents=True)
+        (staged / f"{name}.md").write_text(frontmatter(fields, document.content), encoding="utf-8")
+        answer = store_json(
+            [
+                "--set",
+                f"sources.{STAGING_SOURCE}.plugin={WRITABLE_PLUGIN}",
+                "--set",
+                f"sources.{STAGING_SOURCE}.config.root={staging}",
+                "document",
+                "copy",
+                f"{STAGING_SOURCE}:{name}",
+                "--to",
+                source,
+                "--match-by",
+                MATCH_BY,
+            ]
+        )
+    written = answer.get("items")
+    if not isinstance(written, list) or len(written) != 1 or not isinstance(written[0], dict):
+        raise OSError(
+            f"{STORE} reported {len(written) if isinstance(written, list) else 0} copied "
+            f"records for {document.qualified_id}, so what it wrote cannot be told"
+        )
+    landed = written[0].get("destination")
+    if landed != document.qualified_id:
+        raise OSError(
+            f"{STORE} wrote the record onto {landed!r} rather than onto "
+            f"{document.qualified_id!r}; the two share a title and the write was matched "
+            f"by {MATCH_BY}, so leave one of them a title of its own and run this again"
+        )
+
+
+def project_record(project: str) -> Mapping[str, Any]:
+    """One qualified project's own record, as the store reports it.
+
+    Distinct from :func:`read_plan`, which keeps the `onepipeline.`-prefixed metadata
+    and drops everything else: what a *project* says about itself — that it is the plan
+    a planning launch is writing, say — is not a plan field and would be dropped there.
+    """
+    return one_item(store_json(["project", "show", project]), "project")
 
 
 def source_root(source: str) -> Path:

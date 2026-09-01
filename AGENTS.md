@@ -1038,13 +1038,16 @@ plans:<project>`.
 **But it is not authored there, and the order it reaches the board in is the one thing
 about this store an author most needs.** A plan is **drafted** in the `authoring` source —
 the gitignored `.plans/` root `just plan` writes into and the one every planner is briefed
-to write into — **cleared** there by `just review-plan`, **copied** onto the board by `just
+to write into — **cleared** there by `just review-plan`, **approved** there by `just
+approve-design`, **copied** onto the board by `just
 copy-plan`, **checked** with `just check-plan plans:<project>`, and launched from the
 board. `just copy-plan` refuses to copy a plan any of whose tasks carries
 no review record for what it currently says, so the ordering is enforced by a command rather
 than remembered; the commands, their exit statuses, and what reaches the store's own copy
 verb are in [How a plan gets onto that
-board](docs/orchestration.md#how-a-plan-gets-onto-that-board).
+board](docs/orchestration.md#how-a-plan-gets-onto-that-board). Both records are ordinary
+entries of a record's own metadata map, so both travel with the copy: a plan cleared and
+approved where it was drafted is still cleared and approved once it reaches the board.
 
 **No other order works, and the refusal that says so is correct rather than a defect to
 route around.** A review record is one entry of the task's *own Markdown document*, so a
@@ -1321,22 +1324,40 @@ and is never a command.
      that coordination live with no node. See [Node
      shapes](docs/orchestration.md#node-shapes).
 
-   Where the plan cuts at a contract seam, get **explicit user approval on that
-   contract** before dispatch. A seam is one wherever two parties must both hold
-   to an agreement and one of them can move without the other, so what you are
-   approving is **as often a stored shape or an internal boundary as it is a call
-   surface**: the route plus request and response fields and types, the exact
-   signature, or the field name, type, and default; the table and columns, the
-   document or key shape, the on-disk or wire layout, or the cache or queue entry
-   one node will write and others will read; or the ownership line between two
-   packages, modules or libraries — what each owns and what the other may assume
-   of it. Those are illustrations of how far the criterion reaches, so **approve
-   the seam rather than the list**: a store, a serialization, or a boundary
-   between collections of code that none of them names is the same decision and
-   earns the same approval, and a seam you wave through as "not really a
-   contract" is one every node downstream then restates its own way. It is then
-   fixed for the run, and a worker that later proposes a departure from it is
-   yours to decide: amend it by live edit, or defer it as a follow-up.
+   **What goes to the user is the design document, and their approval of it is
+   what gates dispatch.** A plan is not a thing a person can usefully review, and
+   walking them through it node by node is not review either — it is a reading of
+   the graph they have no way to argue with. The one short document a planning run
+   writes is what they can judge: what is being built and why, the architecture,
+   the contracts, the acceptance criteria, and the planned work as a table of
+   links, written for a technical reader with no depth in this domain. Put that
+   document in front of them, answer what they ask, and record what they decide
+   with `just approve-design <source>:<project>`. The approval **blocks the
+   dispatch**: nothing is launched until it is recorded, and `just orchestrate`
+   refuses a plan whose design document is missing or unapproved — see [Approving
+   the design document a plan is read
+   as](docs/orchestration.md#approving-the-design-document-a-plan-is-read-as) for
+   what the record covers and what invalidates it.
+
+   The plan's contract seams reach the user inside that document, as its
+   **Contracts** section, and judging whether that section would let them accept
+   or reject each one is where your own reading of the seams goes. A seam is one
+   wherever two parties must both hold to an agreement and one of them can move
+   without the other, so what the user is being asked to accept is **as often a
+   stored shape or an internal boundary as it is a call surface**: the route plus
+   request and response fields and types, the exact signature, or the field name,
+   type, and default; the table and columns, the document or key shape, the
+   on-disk or wire layout, or the cache or queue entry one node will write and
+   others will read; or the ownership line between two packages, modules or
+   libraries — what each owns and what the other may assume of it. Those are
+   illustrations of how far the criterion reaches, so **approve the seam rather
+   than the list**: a store, a serialization, or a boundary between collections of
+   code that none of them names is the same decision and earns the same approval,
+   and a seam you wave through as "not really a contract" is one every node
+   downstream then restates its own way, unread by the person who was shown the
+   document. Each one is then fixed for the run, and a worker that later proposes
+   a departure from it is yours to decide: amend it by live edit, or defer it as a
+   follow-up.
 
    Send a plan back to its planner rather than repairing it yourself when the
    repair is decomposition. Fixing it in place is the same over-reach as planning
@@ -2317,6 +2338,30 @@ it is a decision rather than an inference — a planner-authored node that later
 review is evidence to stop and look, not a reason to add a per-node planner pass. The
 closeout is scoped to what changed during the run, so the brief the *manager* wrote to
 launch it is not blessed by the planning run happening beside it.
+
+**`just approve-design <source:project>` records the user's approval of the design
+document that plan is read as, and every launch is refused until it has.** It is the
+same four properties as the review gate above, one document further out and about a
+person rather than a judge: only an approval is recorded, a record is authoritative and
+nothing re-asks, there is no flag or variable that skips it, and the key covers the bar
+as well as the content — a digest of the document's own authored content *and* of
+`config/design-doc-template.md`, so editing the document loses its approval and moving
+that template leaves every approved document unapproved. What it is **not** is a second
+opinion on the plan: `just check-plan` and `just review-plan` ask whether a node's
+criteria would fail its worker for something other than its work, which is a machine
+tier and is not this. Conflating the two would let a plan nobody read pass because a
+machine liked its wording.
+
+The record goes onto the document in the plan store rather than into a file beside it,
+which is what makes it readable from a board as well as from a directory, and it is why
+`just copy-plan` carries a plan's documents over beside its tasks — the store's own
+`project copy` carries none, and a plan copied without its design document arrives on
+the board with nothing to approve. One exemption exists and it is the only one: the
+project a **planning** launch writes, whose own output is the plan and whose design
+document does not exist until the run has produced one. It is exempt because
+`scripts/plan.sh` stamps that project as the planning project it is, rather than because
+anything recognises its shape — so a hand-written two-node project is not quietly exempt
+and a planning launch that grows a third node does not quietly lose it.
 
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking

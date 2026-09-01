@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-# The four commands this repository still owns. Every other verb is a thin `just`
+# The six commands this repository still owns. Every other verb is a thin `just`
 # wrapper over a published CLI; the first exists because `just lint-llm` has to hand
 # a tool it shells out to a merged `ONEHARNESS_HISTORY_LABELS` value, and the merge
 # has to preserve an inherited value whose shape the recipe does not know.
@@ -36,6 +36,15 @@ orchestrator-review-plan = "orchestrator.plan_review:main"
 # `check-plan` asks, of the same code — a second implementation of the review key would
 # disagree with the first the moment either moved.
 orchestrator-copy-plan = "orchestrator.plan_copy:main"
+# The fifth records the user's approval of the design document a plan is reviewed as,
+# which is the thing a person can actually judge and so the thing put in front of them.
+# It is a command of this repository because the record is keyed on this checkout's own
+# tracked template — see `orchestrator/design_approval.py`.
+orchestrator-approve-design = "orchestrator.design_approval:main"
+# The sixth is the other half of that gate and is not a verb anybody types: every launch
+# this repository makes goes through it, and it refuses a plan whose design document is
+# missing or unapproved before `onepipeline start` is reached.
+orchestrator-launch-gate = "orchestrator.design_approval:gate_main"
 
 [dependency-groups]
 dev = [

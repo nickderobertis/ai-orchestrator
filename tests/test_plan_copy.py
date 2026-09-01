@@ -21,7 +21,13 @@ from collections.abc import Sequence
 import pytest
 
 from orchestrator import plan_copy, plan_review, plan_store
-from orchestrator.plan_store import NodeId, QualifiedTaskId, StoreTask
+from orchestrator.plan_store import (
+    NodeId,
+    QualifiedDocumentId,
+    QualifiedTaskId,
+    StoreDocument,
+    StoreTask,
+)
 
 
 def _task(node_id: str, metadata: dict[str, object] | None = None) -> StoreTask:
@@ -44,8 +50,26 @@ def _reviewed(node_id: str) -> StoreTask:
     return _task(node_id, {plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}})
 
 
+def _document(native: str) -> StoreDocument:
+    """A document in the shape the store reader returns."""
+    return StoreDocument(
+        qualified_id=QualifiedDocumentId(f"authoring:{native}"),
+        title=f"Design: {native}",
+        content="## What\n\nIt.\n",
+        project="demo",
+        labels=[],
+        repositories=[],
+        metadata={},
+        location={"path": f"/test/documents/{native}.md"},
+    )
+
+
 def _reads(monkeypatch: pytest.MonkeyPatch, *tasks: StoreTask) -> None:
     monkeypatch.setattr(plan_store, "read_tasks", lambda _project: list(tasks))
+
+
+def _holds(monkeypatch: pytest.MonkeyPatch, *documents: StoreDocument) -> None:
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: list(documents))
 
 
 def test_a_task_nothing_has_reviewed_refuses_the_copy_before_the_store_is_asked(
@@ -183,6 +207,7 @@ def test_a_successful_copy_runs_the_store_s_own_verb_and_says_nothing(
 
     monkeypatch.setattr(plan_store, "store_binary", lambda: "/test/onetaskgraph")
     monkeypatch.setattr(subprocess, "run", spawn)
+    _holds(monkeypatch)
 
     assert plan_copy.copy("authoring:demo", "plans", ["--dry-run"]) == plan_copy.OK
     (command, kwargs) = invoked[0]
@@ -196,4 +221,109 @@ def test_a_successful_copy_runs_the_store_s_own_verb_and_says_nothing(
         "--dry-run",
     ]
     assert kwargs["cwd"] == plan_copy.REPO_ROOT
+    assert len(invoked) == 1, (
+        "a plan holding no document still asked the store to copy documents, and "
+        "`document copy` requires at least one id"
+    )
     assert capsys.readouterr().err == ""
+
+
+def test_the_plans_documents_go_over_after_the_project_lands(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`project copy` carries no document, and the design document is what a person approves.
+
+    So a plan copied without it arrives on the destination with nothing to approve and
+    can never be launched. Ordered after the project copy rather than beside it: a
+    document is a document *of* a project, and the destination has to hold the project
+    before it can hold one.
+    """
+    invoked: list[list[str]] = []
+
+    def spawn(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        invoked.append(list(command))
+        return subprocess.CompletedProcess(args=list(command), returncode=0)
+
+    monkeypatch.setattr(plan_store, "store_binary", lambda: "/test/onetaskgraph")
+    monkeypatch.setattr(subprocess, "run", spawn)
+    _holds(monkeypatch, _document("demo-design"), _document("demo-notes"))
+
+    assert plan_copy.copy("authoring:demo", "plans", []) == plan_copy.OK
+    assert invoked[0][:3] == ["/test/onetaskgraph", "project", "copy"]
+    assert invoked[1] == [
+        "/test/onetaskgraph",
+        "document",
+        "copy",
+        "authoring:demo-design",
+        "authoring:demo-notes",
+        "--to",
+        "plans",
+    ]
+    assert capsys.readouterr().err == ""
+
+
+def test_a_trial_run_writes_no_document_either(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--dry-run` says the whole command writes nothing, so it reaches both calls.
+
+    The one flag of the pass-through this command has an opinion about, and the reason
+    it has one: a document copy that ignored it would write while the command it belongs
+    to reported that it had not.
+    """
+    invoked: list[list[str]] = []
+
+    def spawn(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        invoked.append(list(command))
+        return subprocess.CompletedProcess(args=list(command), returncode=0)
+
+    monkeypatch.setattr(plan_store, "store_binary", lambda: "/test/onetaskgraph")
+    monkeypatch.setattr(subprocess, "run", spawn)
+    _holds(monkeypatch, _document("demo-design"))
+
+    assert plan_copy.copy("authoring:demo", "plans", ["--dry-run", "--recreate"]) == plan_copy.OK
+    assert invoked[1][-1] == plan_copy.DRY_RUN
+    assert "--recreate" not in invoked[1], (
+        "a flag of the project copy's own reached `document copy`, which is a second "
+        "reading of the store's flag grammar rather than a pass-through"
+    )
+
+
+def test_documents_that_could_not_be_copied_are_reported_against_the_landed_plan(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The plan landed and its document did not, which is a state an operator has to know.
+
+    Unreachable from a journey without breaking the store between the project copy and
+    the document copy, which is what this stands in for.
+    """
+
+    def spawn(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        returncode = 0 if list(command)[1:3] == ["project", "copy"] else 1
+        return subprocess.CompletedProcess(args=list(command), returncode=returncode)
+
+    monkeypatch.setattr(plan_store, "store_binary", lambda: "/test/onetaskgraph")
+    monkeypatch.setattr(subprocess, "run", spawn)
+    _holds(monkeypatch, _document("demo-design"))
+
+    assert plan_copy.copy("authoring:demo", "plans", []) == plan_copy.COPY_REFUSED
+    reported = capsys.readouterr().err
+    assert "the plan landed in 'plans'" in reported, reported
+    assert "nothing on 'plans' for a person to approve" in reported, reported
+
+
+def test_documents_that_could_not_be_read_are_reported_against_the_landed_plan(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of that state: the plan landed and the store stopped answering."""
+
+    def unreadable(_project: str) -> list[StoreDocument]:
+        raise OSError("onetaskgraph exited 1")
+
+    monkeypatch.setattr(plan_store, "store_binary", lambda: "/test/onetaskgraph")
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_a, **_k: subprocess.CompletedProcess(args=[], returncode=0)
+    )
+    monkeypatch.setattr(plan_store, "read_documents", unreadable)
+
+    assert plan_copy.copy("authoring:demo", "plans", []) == plan_copy.COPY_REFUSED
+    reported = capsys.readouterr().err
+    assert "its documents could not be read" in reported, reported

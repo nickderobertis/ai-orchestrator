@@ -117,6 +117,16 @@
 # untouched, `--dag-graph` included.
 set -euo pipefail
 
+#: What the project this launch writes says about itself: it is the plan a *planning*
+#: run is producing, rather than a plan to be executed. That is the one exemption from
+#: the design-document approval every launch is otherwise refused without — a planning
+#: run's output is the plan, and the document it is reviewed as does not exist until the
+#: run has written it. Stamped as a fact the project states rather than left to be
+#: recognised from its shape, so a two-node project somebody wrote by hand is not quietly
+#: exempt and a planning launch that grows a third node does not quietly lose it.
+#: `orchestrator/design_approval.py` is the one reader of this pair and states both names.
+PLANNING_PROJECT_METADATA='{"orchestrator.plan-kind": "planning"}'
+
 #: Where a generated project's record is written under the gitignored local-md root.
 #: Kept in the repository because it is the project the launch is judged against and
 #: its qualified id remains directly relaunchable with `just orchestrate`.
@@ -615,7 +625,7 @@ plan="$PLAN_DIRECTORY/$name.md"
     "$repo" "$execution" "$TITLE_PREFIX$name" "$DIRECT_PLACEMENT_NOTE" \
     "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" "$DESIGN_DOC_GRAPH" "$DESIGN_TITLE_PREFIX$name" \
     "$design_instructions" \
-    | "$python" -m orchestrator.project_store .plans >/dev/null || {
+    | "$python" -m orchestrator.project_store .plans "$PLANNING_PROJECT_METADATA" >/dev/null || {
     # `|| :` so a removal that fails cannot replace the diagnostic below with its own
     # exit; the partial plan is then named by that diagnostic rather than silently kept.
     rm -f "$plan" ".plans/tasks/$name"/*.md || :

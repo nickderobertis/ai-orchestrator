@@ -48,6 +48,7 @@ from scratch_identity import seeded
 from shared_dispatch_bar import shared_completion_bar
 from waits import timeout as e2e_timeout
 
+from orchestrator import design_approval
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, and the provider binary beneath it — the second
@@ -207,6 +208,8 @@ class Planned(NamedTuple):
     #: ledger. Captured here rather than in a test because it is a claim about this
     #: launch: what a *later* read reports is a claim about the ledger's retention.
     listed: str
+    #: The project record the recipe wrote, read before the fixture removes it again.
+    project_record: str
 
 
 class PlanNode(TypedDict, total=False):
@@ -351,6 +354,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
             ],
             run_root=Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN,
             listed=listing.stdout + listing.stderr,
+            project_record=generated.read_text(encoding="utf-8"),
         )
     finally:
         _just("stop", RUN, environment=environment, seconds=60)
@@ -667,6 +671,29 @@ def test_the_launch_prints_the_command_that_answers_this_planners_questions(
 
 
 @pytest.mark.xdist_group("plan-recipe")
+def test_the_project_a_planning_launch_writes_says_it_is_a_planning_project(
+    planned: Planned,
+) -> None:
+    """The one exemption from the design-document approval every other launch is gated on.
+
+    A planning run's output *is* the plan, so the document it will be reviewed as does
+    not exist when it is launched. It is exempt because the project says so about itself
+    and not because anything recognises its shape — a two-node project somebody wrote by
+    hand is not exempt, and this launch would not stop being exempt if it grew a third
+    node. That this launch reached a dispatch at all is the other half of the proof: the
+    gate runs on every `just plan` as it does on every `just orchestrate`, so a marker
+    the recipe stopped writing would refuse this fixture rather than reach this
+    assertion.
+    """
+    assert f'"{design_approval.PLAN_KIND}": "{design_approval.PLANNING}"' in (
+        planned.project_record
+    ), (
+        f"the project `just plan` wrote does not state {design_approval.PLAN_KIND}; a "
+        f"planning run would be refused a launch for having no design document, which is "
+        f"the one document it cannot have yet:\n{planned.project_record}"
+    )
+
+
 def test_a_planning_run_records_itself_with_no_observer_watching_it(planned: Planned) -> None:
     """The launch attaches no observer, and is on the ledger in full regardless.
 

@@ -21,7 +21,7 @@ from typing import Any
 from plan_fixture_root import ROOT as _PROJECT_ROOT
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator.project_store import write_plan_project
+from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
@@ -68,7 +68,22 @@ _HISTORY = Path(tempfile.mkdtemp(prefix="ai-orchestrator-fixture-history-"))
 
 
 def local_project(content: str, name: str) -> str:
-    """Write one unique authoring project and return its qualified id."""
+    """Write one unique authoring project, with its design document approved, and answer its id.
+
+    **The approval is part of what a launchable project is**, which is why it is here and
+    not left to each journey to remember. A launch is refused against a project whose
+    design document is missing or unapproved, so a fixture that wrote only the plan would
+    produce a project no `just orchestrate` could start — and every journey that launches
+    one would be asserting about that refusal instead of about what it came to test.
+
+    The document is written the way the project and its tasks are, through this
+    repository's own record renderer rather than by hand, and the approval is recorded by
+    the real `just approve-design` — the same seam `reviewed` below reaches its own record
+    through, so no journey built on this begins from state the exercised interface cannot
+    produce. What the recipe *decides* is proven in
+    `tests/plan_tooling/test_approve_design_recipe_e2e.py`; what it does here is put a
+    fixture project into the one state a launch accepts.
+    """
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
     native = f"test-{os.getpid()}-{next(_PROJECT_SEQUENCE)}-{slug}"
     plan = json.loads(content)
@@ -76,7 +91,61 @@ def local_project(content: str, name: str) -> str:
         raise ValueError("a plan fixture must be a JSON object")
     plan.setdefault("name", native)
     write_plan_project(_PROJECT_ROOT, plan, native_id=native)
-    return f"test-fixtures:{native}"
+    project = f"test-fixtures:{native}"
+    _designed(native)
+    approved(project)
+    return project
+
+
+def approved(project: str) -> str:
+    """Record the user's approval of ``project``'s design document, and answer its id.
+
+    Through the real recipe rather than in process, and that is not only for realism: the
+    approval key is a digest of `config/design-doc-template.md`, so computing one here
+    would be the code tier reading prose its cache key deliberately does not cover — and
+    the tier's answer does not depend on what that template says, only on the approval
+    having been recorded under whatever it currently is.
+    """
+    recording = subprocess.run(
+        ["just", "approve-design", project],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if recording.returncode != 0:
+        raise AssertionError(
+            f"the fixture could not approve {project} through `just approve-design`: "
+            f"{recording.stdout}{recording.stderr}"
+        )
+    return project
+
+
+def _designed(native: str) -> None:
+    """Write the design document a fixture project is launched against.
+
+    Its title carries the project's own unique native id, and that is load-bearing rather
+    than cosmetic: a record is copied over the destination it matches **by title**, and
+    this root is shared by every tier of this suite at once, so two documents sharing a
+    title would let one project's approval land on another's document.
+    """
+    documents = _PROJECT_ROOT / "documents"
+    documents.mkdir(parents=True, exist_ok=True)
+    (documents / f"{native}-design.md").write_text(
+        frontmatter(
+            {"title": f"Design: {native}", "project": native},
+            f"## What\n\nThe fixture plan {native}.\n\n"
+            "## Why\n\nA journey needs a project it can launch.\n\n"
+            "## Architecture\n\nOne project, its tasks, and this document.\n\n"
+            "## Contracts\n\nNone: nothing outside this fixture reads it.\n\n"
+            "## Acceptance criteria\n\nThe journey that launched it passes.\n\n"
+            "## Planned tasks\n\n"
+            "| Task | What it delivers | Depends on | Where it lives |\n"
+            "| --- | --- | --- | --- |\n"
+            f"| the plan's own tasks | the fixture | none | {_PROJECT_ROOT}/tasks/{native} |\n",
+        ),
+        encoding="utf-8",
+    )
 
 
 def project_from_plan(plan: Path, name: str | None = None) -> str:

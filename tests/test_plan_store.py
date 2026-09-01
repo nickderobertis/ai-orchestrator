@@ -332,3 +332,279 @@ def test_an_entry_further_down_the_block_is_replaced_rather_than_duplicated(
     assert written.count('"orchestrator.plan-review"') == 1
     assert '{"key": "new"}' in written
     assert '  "onepipeline.persona": "engineer"' in written
+
+
+#: One document as the store reports it, in the fields the reader narrows to.
+DOCUMENT = {
+    "id": "demo:demo-design",
+    "item": {
+        "id": "demo-design",
+        "title": "Design: demo",
+        "content": "## What\n\nA route.\n",
+        "project": "demo",
+        "labels": ["design"],
+        "repositories": [],
+        "metadata": {"onetaskgraph.origin": "drafted:demo-design"},
+        "location": {"path": "/test/documents/demo-design.md"},
+    },
+}
+
+
+def _listing(*pages: object) -> Callable[[Sequence[str]], dict[str, object]]:
+    """Answer one `document list` page per call, in order."""
+    remaining = list(pages)
+
+    def read(arguments: Sequence[str]) -> dict[str, object]:
+        assert list(arguments)[:2] == ["document", "list"]
+        answer = remaining.pop(0)
+        assert isinstance(answer, dict)
+        return answer
+
+    return read
+
+
+def test_every_page_of_a_projects_documents_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Paging is a contract this reader depends on, exactly as it is for tasks."""
+    second = {"id": "demo:demo-notes", "item": dict(DOCUMENT["item"], id="demo-notes")}
+    monkeypatch.setattr(
+        plan_store,
+        "store_json",
+        _listing({"items": [DOCUMENT], "next": "page-2"}, {"items": [second], "next": None}),
+    )
+    documents = plan_store.read_documents("demo:demo")
+    assert [document.qualified_id for document in documents] == [
+        "demo:demo-design",
+        "demo:demo-notes",
+    ]
+    assert documents[0].labels == ["design"]
+    assert documents[0].location == {"path": "/test/documents/demo-design.md"}
+    assert documents[0].metadata == {"onetaskgraph.origin": "drafted:demo-design"}
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ({"items": "not a list"}, "not a list"),
+        ({"items": [DOCUMENT], "next": ""}, "invalid next-page token"),
+        ({"items": ["not an object"]}, "without a qualified id"),
+        ({"items": [{"id": "demo:x"}]}, "without an object payload"),
+        ({"items": [{"id": "demo:x", "item": {"title": 1}}]}, "no string title"),
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "content": 1}}]},
+            "non-string content",
+        ),
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "project": 1}}]},
+            "non-string project",
+        ),
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "labels": "no"}}]},
+            "labels that are not",
+        ),
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "repositories": [1]}}]},
+            "repositories that are not",
+        ),
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "metadata": []}}]},
+            "metadata that is not an object",
+        ),
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "location": "here"}}]},
+            "location that is not an object",
+        ),
+        # The identity is held to a qualified `<source>:<native>` here rather than
+        # wherever it is next used, because the write copies into the source half — a
+        # type whose values are only sometimes qualified pushes that check onto every
+        # caller, and the one that matters writes a record.
+        ({"items": [{"id": "demo-design", "item": {"id": "x", "title": "t"}}]}, "not a qualified"),
+    ],
+)
+def test_a_document_listing_this_cannot_account_for_is_refused(
+    answer: dict[str, object], expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another program's records, narrowed at the boundary rather than trusted past it."""
+    monkeypatch.setattr(plan_store, "store_json", _listing(answer))
+    with pytest.raises(OSError, match=expected):
+        plan_store.read_documents("demo:demo")
+
+
+def test_a_repeated_page_token_is_refused_rather_than_followed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A store that answers its own token again would page for as long as it was asked."""
+    page = {"items": [DOCUMENT], "next": "page-2"}
+    monkeypatch.setattr(plan_store, "store_json", _listing(page, page))
+    with pytest.raises(OSError, match="repeated next-page token"):
+        plan_store.read_documents("demo:demo")
+
+
+def _document(
+    *,
+    project: str | None = "demo",
+    labels: list[str] | None = None,
+    repositories: list[str] | None = None,
+) -> plan_store.StoreDocument:
+    """One read document, in the shape the writer stages back.
+
+    Keyword parameters rather than a merged mapping, so what a test may vary is stated
+    and typed: the shape a `**overrides` helper takes is `object`, which types the call
+    site as accepting anything and needs an escape at the constructor to get back out.
+    """
+    return plan_store.StoreDocument(
+        qualified_id=plan_store.QualifiedDocumentId("demo:demo-design"),
+        title="Design: demo",
+        content="## What\n\nA route.\n",
+        project=project,
+        labels=["design"] if labels is None else labels,
+        repositories=(
+            ["github.com/nickderobertis/some-service"] if repositories is None else repositories
+        ),
+        metadata={"onetaskgraph.origin": "drafted:demo-design"},
+        location={"path": "/test/documents/demo-design.md"},
+    )
+
+
+def test_a_document_record_is_staged_whole_and_copied_over_the_record_it_came_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The write is a whole-record replacement, so what is staged is everything read.
+
+    A field read and not staged is a field this write deletes, which is why the staged
+    record is asserted in full rather than only for the entry being added.
+    """
+    staged: dict[str, str] = {}
+
+    def read(arguments: Sequence[str]) -> dict[str, object]:
+        given = list(arguments)
+        root = next(
+            value.split("=", 1)[1]
+            for value in given
+            if value.startswith("sources.") and "root" in value
+        )
+        staged["record"] = (
+            Path(root) / "documents" / f"{plan_store.staged_name(_document().qualified_id)}.md"
+        ).read_text(encoding="utf-8")
+        staged["command"] = " ".join(given)
+        return {"items": [{"source": "x", "action": "updated", "destination": "demo:demo-design"}]}
+
+    monkeypatch.setattr(plan_store, "store_json", read)
+    plan_store.write_document_metadata(_document(), "orchestrator.design-approval", {"key": "abc"})
+
+    assert f"--match-by {plan_store.MATCH_BY}" in staged["command"]
+    name = plan_store.staged_name(_document().qualified_id)
+    assert f"{plan_store.STAGING_SOURCE}:{name} --to demo" in staged["command"]
+    assert "demo-design" not in name, (
+        "the staged record is named after the store's own answer, which is what reaches a "
+        "path when that answer carries a separator or a traversal component"
+    )
+    record = staged["record"]
+    assert 'title: "Design: demo"' in record
+    assert 'project: "demo"' in record
+    assert 'labels: ["design"]' in record
+    assert 'repositories: ["github.com/nickderobertis/some-service"]' in record
+    assert '"onetaskgraph.origin": "drafted:demo-design"' in record
+    assert '"orchestrator.design-approval": {"key": "abc"}' in record
+    assert "## What" in record
+
+
+def test_a_record_written_onto_another_document_is_refused_rather_than_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The correspondence is matched by title, so the destination is checked.
+
+    A second document of that title would be updated silently, and a record written over
+    the wrong document reads as sound from every side afterwards.
+    """
+    monkeypatch.setattr(
+        plan_store,
+        "store_json",
+        lambda _arguments: {"items": [{"destination": "demo:something-else"}]},
+    )
+    with pytest.raises(OSError, match="rather than onto 'demo:demo-design'"):
+        plan_store.write_document_metadata(_document(), "orchestrator.design-approval", {})
+
+
+def test_a_copy_that_reports_no_single_record_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the store wrote cannot be told from an answer naming none or several."""
+    monkeypatch.setattr(plan_store, "store_json", lambda _arguments: {"items": []})
+    with pytest.raises(OSError, match="reported 0 copied records"):
+        plan_store.write_document_metadata(_document(), "orchestrator.design-approval", {})
+
+
+def test_a_document_with_neither_project_nor_labels_stages_neither_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A field the store reports as absent is staged as absent rather than as empty."""
+    staged: dict[str, str] = {}
+
+    def read(arguments: Sequence[str]) -> dict[str, object]:
+        root = next(
+            value.split("=", 1)[1]
+            for value in arguments
+            if value.startswith("sources.") and "root" in value
+        )
+        staged["record"] = (
+            Path(root) / "documents" / f"{plan_store.staged_name(_document().qualified_id)}.md"
+        ).read_text(encoding="utf-8")
+        return {"items": [{"destination": "demo:demo-design"}]}
+
+    monkeypatch.setattr(plan_store, "store_json", read)
+    plan_store.write_document_metadata(
+        _document(project=None, labels=[], repositories=[]), "k", "v"
+    )
+    assert "project:" not in staged["record"]
+    assert "labels:" not in staged["record"]
+    assert "repositories:" not in staged["record"]
+
+
+def test_a_projects_own_record_is_read_whole_rather_than_narrowed_to_the_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What a project says about itself is not a plan field, so `read_plan` would drop it."""
+    monkeypatch.setattr(
+        plan_store,
+        "store_json",
+        lambda _arguments: {
+            "items": [
+                {"item": {"title": "demo", "metadata": {"orchestrator.plan-kind": "planning"}}}
+            ]
+        },
+    )
+    assert plan_store.project_record("demo:demo")["metadata"] == {
+        "orchestrator.plan-kind": "planning"
+    }
+
+
+def test_the_engines_name_for_the_store_binary_is_kept_out_of_the_stores_own_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ONETASKGRAPH_BIN` is the engine's pointer and the store's unknown setting.
+
+    Every `ONETASKGRAPH_*` name is read by that CLI's own configuration layer, so a
+    process that inherits this one refuses `bin` as an unknown field and answers nothing
+    at all — a listing and a `config show` alike. The engine strips it before it spawns;
+    so does this, or a command run from inside a run that set it would report a plan
+    store that is perfectly readable as unreadable.
+    """
+    monkeypatch.setenv(plan_store.BIN_ENV, "/test/stub-onetaskgraph")
+    monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", "demo")
+    environment = plan_store.store_environment()
+    assert plan_store.BIN_ENV not in environment
+    assert environment["ONETASKGRAPH_DEFAULT_SOURCES"] == "demo", (
+        "stripping the engine's pointer took the store's own configuration with it"
+    )
+
+
+def test_two_documents_stage_under_two_names_and_one_document_always_under_its_own() -> None:
+    """The name is per document and stable, and both halves are what the copy needs.
+
+    Per document, because the write leaves its own origin on the destination: two
+    documents staged under one name would carry one correspondence between them, and the
+    second written would land on the first one's record. Stable, because a second write of
+    the same document has to find the record the first one left.
+    """
+    first = plan_store.QualifiedDocumentId("demo:demo-design")
+    second = plan_store.QualifiedDocumentId("demo:other-design")
+    assert plan_store.staged_name(first) != plan_store.staged_name(second)
+    assert plan_store.staged_name(first) == plan_store.staged_name(first)

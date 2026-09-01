@@ -177,7 +177,7 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
     adopted = tmp_path / "adopted-run"
     examples = tmp_path / "examples"
     examples.mkdir()
-    for records in ("projects", "tasks"):
+    for records in ("projects", "tasks", "documents"):
         shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
     environment = {
         **_environment(adopted),

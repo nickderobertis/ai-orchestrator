@@ -491,6 +491,22 @@ def _run(
     )
 
 
+#: The command `scripts/onepipeline.sh` puts every launch through before it reaches the
+#: engine: the design-document approval gate. It is derived from the published line below
+#: rather than restated per row, and that is the claim rather than a saving — **every**
+#: `onepipeline start` this repository makes is gated, so a row that could name it and did
+#: not would be a launch that got past.
+LAUNCH_GATE = "uv run orchestrator-launch-gate"
+STARTS = "uv run onepipeline start "
+
+
+def _gated(published: str) -> tuple[str, ...]:
+    """The gate line a launch owes, and nothing for a command line that launches nothing."""
+    if not published.startswith(STARTS):
+        return ()
+    return (f"{LAUNCH_GATE} {published.removeprefix(STARTS)}",)
+
+
 @pytest.mark.reads_recipes
 @pytest.mark.parametrize("delegation", DELEGATIONS, ids=lambda row: " ".join(row.invocation))
 def test_a_delegated_recipe_reaches_its_published_verb(
@@ -503,6 +519,7 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
         *delegation.before,
+        *_gated(delegation.published),
         delegation.published,
         *delegation.then,
     ]

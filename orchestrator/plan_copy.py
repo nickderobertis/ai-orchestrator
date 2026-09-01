@@ -19,6 +19,14 @@ content — the same question `just check-plan` asks, answered by calling
 keyed. A second implementation of that key would be a second answer to one question, and
 would disagree with the first the moment either moved.
 
+**The plan's documents are copied beside it, and that is not an extra.** The store's
+`project copy` carries the project and its tasks and no document at all, while what a
+person approves a plan as is its **design document** — so a plan copied without it arrives
+on the board with nothing to approve and can never be launched. The documents go over as a
+second call to the store's own `document copy`, after the project landed, and the approval
+travels with them the way a review record travels with a task: it is an ordinary entry of
+the metadata map the copy carries. Approve where you draft, then copy up.
+
 **Copying is a write, so its refusals are told apart by exit status.** :data:`UNREVIEWED`
 is this command's own refusal, made before the store is asked to do anything;
 :data:`COPY_REFUSED` is the destination refusing a plan every task of which carried a
@@ -44,9 +52,16 @@ from orchestrator.root import REPO_ROOT
 #: settlements are projected back to the project it was launched from.
 BOARD = "plans"
 
-#: The store verb this composes with. Named here because both the invocation and the
+#: The store verbs this composes with. Named here because both the invocation and the
 #: refusal that reports its exit status have to agree about what was run.
 COPY = ("project", "copy")
+COPY_DOCUMENTS = ("document", "copy")
+
+#: The one flag of the pass-through this command has an opinion about, and the reason it
+#: has one: `--dry-run` says the whole command writes nothing, so a document copy that
+#: ignored it would write while the command it belongs to was reporting that it had not.
+#: Every other flag is the project copy's own and is not restated, guessed at, or split.
+DRY_RUN = "--dry-run"
 
 #: Nothing was refused and the destination holds the plan.
 OK = 0
@@ -172,6 +187,7 @@ def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:
     completed = subprocess.run(
         [binary, *COPY, project, "--to", destination, *passthrough],
         cwd=REPO_ROOT,
+        env=plan_store.store_environment(),
         check=False,
     )
     if completed.returncode != 0:
@@ -183,6 +199,60 @@ def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:
             f"that {destination!r} is a source `just plans sources list` names and that "
             f"its credential and repository reach it, then run this command again — a "
             f"copy that partly landed is resumed by repeating it",
+            file=sys.stderr,
+        )
+        return COPY_REFUSED
+    return _documents(binary, project, destination, passthrough)
+
+
+def _documents(binary: str, project: str, destination: str, passthrough: Sequence[str]) -> int:
+    """Copy ``project``'s documents after its project record landed, and report the same way.
+
+    Read through `orchestrator/plan_store.py` rather than by asking the store for ids in a
+    second shape, and skipped outright when the plan holds none: `document copy` requires
+    at least one id, so a plan with no document would otherwise refuse the whole command
+    for having nothing to do.
+
+    A document that a *previous* copy already put on the destination carries that copy's
+    recorded origin, so the store updates it rather than duplicating it and nothing has to
+    say how the two correspond.
+    """
+    try:
+        documents = plan_store.read_documents(project)
+    # tests/test_plan_copy.py drives this: reaching it through the recipe means breaking
+    # the store between the pre-flight read above and this one.
+    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
+    except OSError as exc:
+        print(
+            f"copy-plan: the plan landed in {destination!r}, but its documents could not be "
+            f"read out of {project}: {exc}. The design document a person approves this plan "
+            f"as may not be there; run this command again once the store answers",
+            file=sys.stderr,
+        )
+        return COPY_REFUSED
+    if not documents:
+        return OK
+    dry_run = [DRY_RUN] if DRY_RUN in passthrough else []
+    completed = subprocess.run(
+        [
+            binary,
+            *COPY_DOCUMENTS,
+            *(str(document.qualified_id) for document in documents),
+            "--to",
+            destination,
+            *dry_run,
+        ],
+        cwd=REPO_ROOT,
+        env=plan_store.store_environment(),
+        check=False,
+    )
+    if completed.returncode != 0:
+        print(
+            f"copy-plan: the plan landed in {destination!r}, but {plan_store.STORE} "
+            f"{' '.join(COPY_DOCUMENTS)} exited {completed.returncode} carrying its "
+            f"{len(documents)} document(s) over, and reported why above. Until they land "
+            f"there is nothing on {destination!r} for a person to approve this plan as, so "
+            f"run this command again — a copy that partly landed is resumed by repeating it",
             file=sys.stderr,
         )
         return COPY_REFUSED

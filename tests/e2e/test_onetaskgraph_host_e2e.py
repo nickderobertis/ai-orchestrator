@@ -30,7 +30,7 @@ from published_tools import ONETASKGRAPH_BIN
 from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 
-from orchestrator.project_store import write_plan_project
+from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
@@ -49,7 +49,12 @@ LOCAL_PROJECT = _ProjectId("launch")
 #: The same project as every recipe here names it: qualified by the `authoring` source
 #: `onetaskgraph.yaml` roots at this checkout's `.plans`, which these journeys point
 #: elsewhere per run. Derived rather than restated, so the native id has one source.
-LOCAL_QUALIFIED = f"authoring:{LOCAL_PROJECT}"
+AUTHORING_SOURCE = "authoring"
+LOCAL_QUALIFIED = f"{AUTHORING_SOURCE}:{LOCAL_PROJECT}"
+#: Where that source's root is named, for the store and for every process it spawns.
+#: One spelling, because a journey pointing it one way and a helper reading it another
+#: would leave a plan authored in one directory and approved in a second.
+AUTHORING_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__CONFIG__ROOT"
 #: The one task that project holds, named once so the copy journey can assert which
 #: issues a copy created rather than only how many.
 LOCAL_TASK_TITLE = "test: launch local project"
@@ -614,7 +619,7 @@ def _prepare_plan_sources(root: Path) -> dict[str, str]:
     """
     return {
         "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
-        "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT": str(root),
+        AUTHORING_ROOT_ENV: str(root),
     }
 
 
@@ -630,6 +635,15 @@ def _plan_environment(root: Path) -> dict[str, str]:
 
 
 def _write_local_project(root: Path) -> None:
+    """Write the launchable local plan these journeys read, copy and launch.
+
+    Its design document is written and approved here because a launch is refused without
+    one — the plan is put in front of a person as that document, and nothing here is
+    about that gate. Approved through the real recipe rather than by writing a record by
+    hand, so no journey here begins from state the exercised interface cannot produce,
+    and the authoring root is named in that command's own environment because the store
+    resolves it from there and every journey here points it somewhere of its own.
+    """
     write_plan_project(
         root,
         {
@@ -645,6 +659,31 @@ def _write_local_project(root: Path) -> None:
                 }
             ],
         },
+    )
+    documents = root / "documents"
+    documents.mkdir(parents=True, exist_ok=True)
+    (documents / f"{LOCAL_PROJECT}-design.md").write_text(
+        frontmatter(
+            {"title": f"Design: {LOCAL_PROJECT}", "project": LOCAL_PROJECT},
+            "## What\n\nOne probe.\n\n## Why\n\nA launch needs a plan.\n\n"
+            "## Architecture\n\nOne node.\n\n## Contracts\n\nNone.\n\n"
+            "## Acceptance criteria\n\nThe node settles.\n\n## Planned tasks\n\n"
+            "| Task | What it delivers | Depends on | Where it lives |\n"
+            "| --- | --- | --- | --- |\n"
+            f"| {LOCAL_TASK_TITLE} | the probe | none | {root}/tasks/{LOCAL_PROJECT} |\n",
+        ),
+        encoding="utf-8",
+    )
+    recording = subprocess.run(
+        ["just", "approve-design", LOCAL_QUALIFIED],
+        cwd=REPO_ROOT,
+        env={**os.environ, AUTHORING_ROOT_ENV: str(root)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert recording.returncode == 0, (
+        f"the fixture could not approve {LOCAL_QUALIFIED}: {recording.stdout}{recording.stderr}"
     )
 
 

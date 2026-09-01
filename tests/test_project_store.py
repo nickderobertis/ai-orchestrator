@@ -130,3 +130,39 @@ def test_main_reports_malformed_input_and_write_failures(
     monkeypatch.setattr(sys, "stdin", io.StringIO('{"name":"p","tasks":[]}'))
     assert project_store.main() == 2
     assert "cannot write generated plan" in capsys.readouterr().err
+
+
+def test_a_projects_own_metadata_is_written_beside_the_plans_and_never_read_back_as_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """How `scripts/plan.sh` marks the project a planning launch writes.
+
+    Written unprefixed and beside the plan's own `onepipeline.` entries, because it is a
+    fact about the project rather than a field the engine's loader would then meet: a
+    marker folded into the plan document would come back out of the store as a plan field
+    nothing declared, and the loader refuses one of those by name.
+    """
+    monkeypatch.setattr(sys, "argv", ["project-store", str(tmp_path), '{"a.kind": "planning"}'])
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"name":"marked","tasks":[]}'))
+    assert project_store.main() == 0
+    record = (tmp_path / "projects/marked.md").read_text(encoding="utf-8")
+    assert '"a.kind": "planning"' in record
+    assert '"onepipeline.a.kind"' not in record
+
+    monkeypatch.setattr(sys, "argv", ["project-store", str(tmp_path), '["not an object"]'])
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"name":"marked","tasks":[]}'))
+    assert project_store.main() == 2
+    assert "project metadata is not an object" in capsys.readouterr().err
+
+
+def test_project_metadata_may_not_overwrite_a_field_of_the_plan_itself() -> None:
+    """The two maps are merged and the caller's would win, so the plan's half is reserved.
+
+    A project that stated an `onepipeline.` field no plan declared would be read back as a
+    plan carrying it, and the engine's loader would meet a field nobody wrote.
+    """
+    with pytest.raises(ValueError, match="may not name onepipeline"):
+        project_store.render_plan_project(
+            {"name": "marked", "tasks": []},
+            project_metadata={"onepipeline.concurrency": 99},
+        )

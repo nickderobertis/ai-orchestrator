@@ -70,7 +70,7 @@ OWNED_STATEMENTS = (
     # to escalate — and the two rules a top-level session breaks most expensively.
     Owned(MANAGER.document, "Decide whether to dispatch a planner at all"),
     Owned(MANAGER.document, "the complete gate can prove it"),
-    Owned(MANAGER.document, "explicit user approval on that contract"),
+    Owned(MANAGER.document, "their approval of it is what gates dispatch"),
     Owned(MANAGER.document, "high-value to put in front of the user"),
     Owned(MANAGER.document, "A watch is armed before you turn to anything else"),
     Owned(MANAGER.document, "Silence must never be indistinguishable from progress"),
@@ -133,6 +133,20 @@ OWNED_STATEMENTS = (
     Owned(MANAGER.document, "approve the seam rather than the list"),
     Owned(MECHANICS.document, "lands additively, reachable by the writers and readers that"),
     Owned(MECHANICS.document, "lands as the boundary declared with nothing moved across it"),
+    # What a person is asked to accept, and when. The split is the same one again and
+    # the reason is sharper here than anywhere else: the planner's half travels into a
+    # repository where none of this harness exists, so it says where a contract is put
+    # to the user and nothing about the command that records the answer; the manager's
+    # half is the decision and the blocking condition on dispatch; the mechanics are the
+    # record, what invalidates it, and what a launch refuses without it. A copy of the
+    # manager's half in the persona is an instruction to run a command that is not
+    # there, and a copy of the mechanics in either is the half that goes stale the first
+    # time the record moves.
+    Owned(PLANNER.document, "reach the user through the design document"),
+    Owned(
+        MECHANICS.document,
+        "A launch is refused until the user has approved the document the plan is read as",
+    ),
 )
 
 #: A markdown link, as `(target, anchor)`. An empty target is a link into the
