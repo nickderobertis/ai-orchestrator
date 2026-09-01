@@ -1865,6 +1865,27 @@ exists to prevent. The primary Claude identity is last everywhere:
   keeps a finite `timeout`. It is also the one side here with `stream = false`, which
   is forced rather than chosen — oneharness validates a structured answer against the
   complete response, so `stream = true` and `schema_file` cannot both hold.
+- **Design-doc writing side** (the document a plan is reviewed as) —
+  `oneharness.design-doc.toml`, named by `graphs/design-doc.yaml`'s `worker` member as
+  its **agent** side. **This role's pairing is the reverse of every other one here**,
+  and both halves of it are why it needs two files of its own: Codex leads the side
+  that writes, because this host prefers its Claude subscriptions on the side that
+  judges whether the prose reads plainly to a non-specialist — which is what this
+  document is for. Past both Codex identities it reaches the alternate Claude
+  subscriptions in the worker's own relative order, on the working model tier, with the
+  primary Claude identity last. A finite `timeout`, for the reason the pacemaker's and
+  the drafter's are finite: the role reads one plan, writes one document, and stops, so
+  an unbounded turn can only ever mean a wedged one.
+- **Design-doc reviewing side** — `oneharness.design-doc-judge.toml`, that member's
+  **judge** side, and the other half of the reversal: both alternate Claude
+  subscriptions first, then both Codex identities, then the primary Claude one. It is
+  the one supervisory side here that does **not** take `oneharness.judge.toml`'s
+  cheaper tier, because that file trades review depth for loop overhead across every
+  dispatch on this host while this review *is* the deliverable's quality bar. Its own
+  finite `timeout` is shorter than the writer's, since the turns are not the same size.
+  Nothing on this host launches under `graphs/design-doc.yaml` yet — a plan node names
+  it with `agent_graph` — so a run that names neither the graph nor
+  `../personas/design-doc.yaml` is unaffected by either file.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
   `scripts/llmlint-oneharness.sh`; the same supervisory order. It is **no longer
   codex-only**.

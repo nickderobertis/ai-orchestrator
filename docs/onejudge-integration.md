@@ -42,6 +42,20 @@ differs in one field only; [Choosing a deadline per
 side](#choosing-a-deadline-per-side) is why, and re-merging the two is a silent
 regression rather than a tidy-up.
 
+One role pairs those two sides the **other way round**, and it is the only one here
+that does. `graphs/design-doc.yaml` runs the role that reads a finished plan and writes
+the one short design document a person reviews it as: its agent side is
+`oneharness.design-doc.toml`, which leads with both Codex identities, and its judge side
+is `oneharness.design-doc-judge.toml`, which leads with both alternate Claude
+subscriptions. The reason is what that judge is asked to do — decide whether the
+document reads plainly to a technical product manager with no depth in the domain — so
+this host puts its Claude subscriptions on the side making that call and Codex on the
+side writing to the template. That judge side is also the one supervisory side here
+that keeps the working model tier rather than `oneharness.judge.toml`'s cheaper one,
+because this review *is* the deliverable's quality bar. Both name all five identities
+with the primary Claude subscription last, and both state their own finite deadline;
+neither is shared with any other member, for the reason the pacemaker's is not.
+
 Edit those files to change the harness or model on a side for every run on this
 host. One run changes it with graph config-ref overrides, the only way to give
 the two sides *different* identities without moving concurrent runs; that pair is
@@ -382,6 +396,20 @@ rather than through isolation: all three of its Claude variants are
 Anthropic credentials, selecting Claude's default `$HOME/.claude` identity and
 never an alternate account.
 
+The **design-doc role reverses the reversal**, and is the one place on this host where
+the identity order is chosen for what a side is good at rather than for what it must not
+queue in front of. `oneharness.design-doc.toml` writes the document and leads with both
+Codex identities; `oneharness.design-doc-judge.toml` reviews it and leads with both
+alternate Claude subscriptions, on `claude-opus-5` rather than the judge config's
+`claude-sonnet-5`. What that reviewer decides is whether the prose reads plainly to a
+non-specialist, which is the document's whole purpose, so the cheaper-supervisor trade
+every other judged tier makes is the wrong one here. Past their leading pair each reaches
+the other provider's two identities and then `claude-code:primary`, so both name all five
+and neither loses a quota once everything ahead of it is exhausted.
+`tests/e2e/test_design_doc_graph_e2e.py` reads both orders back through the graph that
+routes them, and `tests/e2e/test_oneharness_timeout_e2e.py` reads them beside every other
+config's from the real CLI.
+
 **llmlint** uses `oneharness.llmlint.toml` through
 `scripts/llmlint-oneharness.sh`, and is **no longer Codex-only**: it carries the
 same five identities in the same supervisory order. That trade is deliberate — a
@@ -559,6 +587,8 @@ of that check, not a second declaration of it. -->
 | Judge / simulated user | `oneharness.judge.toml` | **none**, the release default |
 | Worker agent | `oneharness.toml` | **none**, the release default |
 | LLM lint | `oneharness.llmlint.toml` | **none**, the release default |
+| design-doc writer | `oneharness.design-doc.toml` | 900s, stated |
+| design-doc reviewer | `oneharness.design-doc-judge.toml` | 600s, stated |
 
 The monitor is the exception because of what one of its turns *is*: a watch that
 lasts as long as the run does — reading the detailed stream, judging it, and
@@ -1176,7 +1206,8 @@ dispatch a stamp belongs to, while this caller created the path it matches.
   `ONEHARNESS_TIMEOUT` any more**, and nothing should: since oneharness 0.7.0 an
   absent per-turn deadline means *no* deadline, and the worker, judge, and llmlint
   configs take that default deliberately while `oneharness.orchestrator.toml`,
-  `oneharness.check-in.toml`, and `oneharness.pr-author.toml` set their own. The
+  `oneharness.check-in.toml`, `oneharness.pr-author.toml`,
+  `oneharness.design-doc.toml`, and `oneharness.design-doc-judge.toml` set their own. The
   variable is process-wide for a whole graph run and beats every file, so setting it
   moves every member at once — see [Choosing a deadline per
   side](#choosing-a-deadline-per-side). `onepipeline start` takes no `--timeout`

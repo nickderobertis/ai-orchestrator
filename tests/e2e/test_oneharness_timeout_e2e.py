@@ -8,6 +8,13 @@ long as the run lasts inside one turn and must have NO deadline, while the
 configuration oneharness itself reports for the file `graphs/dag-scope.yaml` names,
 so a re-shared config or a dropped setting fails here rather than silently killing
 a watch at the pacemaker's deadline again.
+
+The same read covers each side's **identity chain**, for the sides whose chain is the
+reason they have a config at all. `graphs/design-doc.yaml`'s two are that case: this
+host pairs Claude on the side that works with Codex on the side that supervises
+everywhere else, and that one role reverses it — so a chain quietly restored to the
+ordinary order would leave the graph, the personas catalog and the prose all describing
+a reversal the files no longer carry.
 """
 
 from __future__ import annotations
@@ -64,6 +71,42 @@ PLAN_REVIEW_CONFIG = REPO_ROOT / "oneharness.plan-review.toml"
 #: The reviewer's per-turn deadline, as that file states it. Exact for the same reason
 #: the other two are: what matters is that it is finite and chosen.
 REVIEWER_DEADLINE_SECONDS = 300
+
+#: The design-doc role's own graph, and the member whose two sides it re-pairs. Its
+#: configs are the fifth and sixth copies of this routing, and the only pair on this host
+#: whose identity orders are the reverse of the ordinary one: Codex leads the side that
+#: writes the document, the Claude subscriptions lead the side that reviews it. Separate
+#: files for the reason every copy is separate — the sides that share an identity order
+#: do not share a deadline — and separate from each *other* for the reversal itself.
+DESIGN_DOC_GRAPH = REPO_ROOT / "graphs" / "design-doc.yaml"
+DESIGN_DOC_MEMBER = "worker"
+
+#: Their per-turn deadlines, as those two files state them. Exact for the same reason the
+#: three above are, and different from each other because the turns are not the same
+#: size: the writer reads a whole plan and composes a document, the reviewer reads one
+#: document and answers. Both are backstops against a wedged turn rather than budgets.
+DESIGN_DOC_WRITER_DEADLINE_SECONDS = 900
+DESIGN_DOC_REVIEWER_DEADLINE_SECONDS = 600
+
+#: The identity order each of those two sides must resolve. Held here as well as in
+#: `tests/e2e/test_design_doc_graph_e2e.py`, and deliberately: that journey asks whether
+#: the graph still routes each side to the file carrying its order, and this one asks
+#: what the whole set of this host's turn configs resolves — a chain dropped from either
+#: file is a lost quota, which is the property every config in the map below shares.
+DESIGN_DOC_WRITER_CHAIN = [
+    "codex",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
+DESIGN_DOC_REVIEWER_CHAIN = [
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "codex",
+    "codex:alternate",
+    "claude-code:primary",
+]
 
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
@@ -265,15 +308,21 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all seven turn configs together from oneharness's effective values."""
+    """Prove all nine turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
-    assert len({monitor, pacemaker, drafter, PLAN_REVIEW_CONFIG}) == 4, (
+    writer = _named_config(DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "agent.oneharness_config")
+    design_doc_reviewer = _named_config(
+        DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "judge.oneharness_config"
+    )
+    own = {monitor, pacemaker, drafter, PLAN_REVIEW_CONFIG, writer, design_doc_reviewer}
+    assert len(own) == 6, (
         f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), the "
-        f"pr-author drafter ({drafter}) and the plan reviewer ({PLAN_REVIEW_CONFIG}) "
-        "must each name their own oneharness config; re-sharing one is what gives a "
-        "scheduled member no deadline, which fails silently"
+        f"pr-author drafter ({drafter}), the plan reviewer ({PLAN_REVIEW_CONFIG}), the "
+        f"design-doc writer ({writer}) and the design-doc reviewer "
+        f"({design_doc_reviewer}) must each name their own oneharness config; re-sharing "
+        "one is what gives a scheduled member no deadline, which fails silently"
     )
 
     configs = {
@@ -284,6 +333,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "pacemaker": pacemaker,
         "drafter": drafter,
         "reviewer": PLAN_REVIEW_CONFIG,
+        "design-doc writer": writer,
+        "design-doc reviewer": design_doc_reviewer,
     }
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
@@ -345,6 +396,27 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "oneharness.plan-review.toml must name the schema a verdict is validated "
         "against; without it an unvalidated answer is recorded as a review"
     )
+
+    for side, deadline_seconds, chain in (
+        ("design-doc writer", DESIGN_DOC_WRITER_DEADLINE_SECONDS, DESIGN_DOC_WRITER_CHAIN),
+        ("design-doc reviewer", DESIGN_DOC_REVIEWER_DEADLINE_SECONDS, DESIGN_DOC_REVIEWER_CHAIN),
+    ):
+        assert effective[side]["timeout"] == {
+            "value": deadline_seconds,
+            "source": str(configs[side]),
+        }, (
+            f"the {side} must retain its explicit finite {deadline_seconds}-second "
+            "deadline: this role is a bounded job that reads its input, produces one "
+            "document and stops, so an unbounded turn can only ever mean a wedged one"
+        )
+        assert effective[side]["harnesses"]["value"] == chain, (
+            f"the {side} resolves "
+            f"{effective[side]['harnesses']['value']}, not {chain}; this one role pairs "
+            "Codex on the side that writes with Claude on the side that reviews — the "
+            "reverse of every other pairing here — and every chain names all five "
+            "identities with the primary Claude subscription last, so a dropped one is a "
+            "quota this host loses entirely"
+        )
 
     # The split duplicated a routing, so hold the copy to one intended difference.
     # Anything else that drifts here is a pacemaker quietly authenticating, billing,
