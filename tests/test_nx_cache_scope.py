@@ -43,6 +43,8 @@ from pathlib import Path
 
 from conftest import READS_CHECKOUTS_MARKER, READS_DOCS_MARKER, READS_RECIPES_MARKER
 from nx_inputs import (
+    ASK_SEAM_ROOT,
+    ASK_SEAM_SCOPED,
     CHECKOUT_SCOPED,
     CODE_SCOPED,
     CODE_WORKSPACE,
@@ -366,7 +368,7 @@ def _reprovisioning_tests() -> list[str]:
     found: list[str] = []
     # Every journey module of the suite, not one directory of them: a journey that
     # re-provisions this checkout constrains scheduling wherever it lives, and the
-    # journeys now span two test projects. Still the `_e2e` naming rather than every
+    # journeys now span three test projects. Still the `_e2e` naming rather than every
     # test module, because a unit test that *reads* `session-setup.sh` runs none of it.
     for module in sorted(REPO_ROOT.joinpath("tests").rglob("test_*_e2e.py")):
         source = module.read_text(encoding="utf-8")
@@ -452,10 +454,10 @@ def _selection(command: str) -> list[str]:
     """The arguments that decide what one tier collects, from its real command.
 
     Taken from the command rather than from its `-m` expression alone, because a tier
-    selects by path as well: the `plan-tooling` project names a directory and every
-    orchestrator tier ignores it. A partition derived from
+    selects by path as well: the `plan-tooling` and `ask-seam` projects each name a
+    directory and every orchestrator tier ignores both. A partition derived from
     the markers alone would report the orchestrator tiers covering the suite while the
-    directory the host-tool project owns was collected by nobody.
+    directories the host-tool projects own were collected by nobody.
     """
     _, _, tail = command.partition("uv run pytest ")
     assert tail, command
@@ -489,14 +491,16 @@ def _collected(selection: list[str]) -> set[str]:
 
 
 #: Every tier that runs part of this suite, as the file and target that declares it.
-#: Six, across two projects, and every one of them is a target of the project whose
+#: Seven, across three projects, and every one of them is a target of the project whose
 #: directory holds the tests it collects: the `plan-tooling` project owns the host-tool
 #: journeys over the plan surface in two targets — one keyed on what they read, one on
-#: the whole workspace for the journeys that copy this checkout — and the orchestrator
-#: project owns the rest in four.
+#: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
+#: owns the host-tool journeys over the ask seam in one, and the orchestrator project
+#: owns the rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
+    (f"{ASK_SEAM_ROOT}/project.json", ASK_SEAM_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
@@ -505,7 +509,7 @@ SUITE_TIERS = (
 
 
 def test_every_tier_of_the_suite_partitions_it_between_them() -> None:
-    """Six selections, one suite: no test may be collected twice or not at all.
+    """Seven selections, one suite: no test may be collected twice or not at all.
 
     The tiers exist because they are keyed on different trees, and a test lands in
     exactly one of them — in the project whose directory holds it, and then in the

@@ -138,7 +138,7 @@ PROMPT_LOG_ENV = "FAKE_BACKEND_PROMPT_LOG"
 #: which is the whole point: what a launch establishes is exactly what its dispatches
 #: have, and measurement is the only thing that says which launch shape establishes
 #: what. Both `ONEPIPELINE_RUN_ID` and `ORCHESTRATOR_ASK_MANAGER` are read this way by
-#: `tests/e2e/test_launch_ask_seam_e2e.py`, whose journeys own the current answers.
+#: `tests/ask_seam/test_launch_ask_seam_e2e.py`, whose journeys own the current answers.
 ENVIRONMENT_KEYS_ENV = "FAKE_BACKEND_ENVIRONMENT_KEYS"
 
 #: The seam a dispatched agent reaches its manager through, run by the branch below

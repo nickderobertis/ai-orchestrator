@@ -534,7 +534,7 @@ reads it from there; the copy already at the shared path is left alone, because 
 belongs to whichever checkout put it there and removing shared host state is not this
 installer's to do. `tests/e2e/test_onetaskgraph_host_e2e.py` provisions two checkouts at
 two pins under one `HOME` and asserts each verifies its own, and
-`tests/e2e/test_ask_manager_e2e.py` sandboxes `HOME` and plants a wrong-pinned copy at
+`tests/ask_seam/test_ask_manager_e2e.py` sandboxes `HOME` and plants a wrong-pinned copy at
 the once-shared path, first on `PATH`, so that a launch resolving this checkout's own is
 a positive result rather than an accident of search order.
 
@@ -2379,7 +2379,7 @@ a dispatch of a detached or adopted run met its first fork with the wrapper ther
 no run for it to ask on, and every brief had to be written to be answerable without
 asking. `just plan` is the exception that stayed sound throughout, because it writes
 the plan and exports the id itself.
-`tests/e2e/test_launch_ask_seam_e2e.py` measures both halves per launch shape,
+`tests/ask_seam/test_launch_ask_seam_e2e.py` measures both halves per launch shape,
 and its run-id journey fails on the detached and adopted shapes below the bump.
 `scripts/ask-manager-env.sh` is the wrapper's one source and `scripts/onepipeline.sh`
 is where a launch takes it, so a read-only view — which dispatches nobody — takes it
@@ -2412,7 +2412,7 @@ silence. No refusal, diagnostic, or log carries a value, and nothing had to be t
 about this file for that to hold past the loader:
 `orchestrator/redaction.py` and `scripts/preserved-log.sh` hide credential-shaped
 values found in the **process environment**, which is precisely where this puts them.
-`tests/e2e/test_launch_ask_seam_e2e.py` reads a name back out of a real dispatch's own
+`tests/ask_seam/test_launch_ask_seam_e2e.py` reads a name back out of a real dispatch's own
 environment, per launch shape, and `tests/test_credential_dialect_drift.py` reconciles
 the dialect against onetaskgraph's own parser in the uncached tier — a copied shape that
 nothing reconciles is how the first version of this loader came to export
@@ -2988,6 +2988,20 @@ whole-workspace key while `plan-tooling:test` collects the rest under
 it does here: it routes a test between the targets of the project that owns it, never
 out of that project into another one's tier, so the cost of running it is charged to
 the code `nx affected` would select for it.
+**A second project is the same judgment over a second host-tool surface**:
+`ask-seam:test` owns `tests/ask_seam/`, the journeys over the seam a dispatched agent
+asks its manager through — the real `scripts/ask-manager.sh`, the real `onepipeline
+channel serve` it asks through, and the real launches that decide what a dispatch is
+given to ask with. Every one of them spends a real launch, which is what an unrelated
+edit stops paying for once the cost is a project of its own; its key is
+`askSeamWorkspace`. It has **one** target rather than two, because nothing there reads
+this repository's prose — so `reads_docs` routes nothing out of it, and a prose read
+there is a read outside its only key and fails in `conftest.py` rather than being
+routed. What that split does *not* buy is scheduling: `--dist loadgroup` serialises
+one pytest process, so the constraint holding the toolchain writers and the
+deadline-based channel journeys apart no longer covers them once they are two Nx
+targets — as it already did not cover `orchestrator:test` against
+`orchestrator:test-recipes`, which holds writers of its own.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
 scripts it builds its two worktrees from. A documentation edit stops charging for
 the whole suite. Where no key would be right the tier is **uncached** instead:

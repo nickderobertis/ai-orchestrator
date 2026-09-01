@@ -86,7 +86,7 @@ test *nx_args:
 # and the workers are nearly free.
 test-e2e:
     # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
-    @uv run pytest tests/e2e tests/plan_tooling -n 4 --dist loadgroup
+    @uv run pytest tests/e2e tests/plan_tooling tests/ask_seam -n 4 --dist loadgroup
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:

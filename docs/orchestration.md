@@ -997,7 +997,7 @@ The frame it writes is the shape the table above gives `channel serve`: kind
 pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
-the launch, measured per shape by `tests/e2e/test_launch_ask_seam_e2e.py`: **every
+the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
 node dispatch of a run carries it as of onepipeline 0.18.3**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
@@ -1017,6 +1017,32 @@ which would be restating how a run id is minted; the journey reads it back and
 checks it names the one run that launch created. An observer member carries the
 run's id too, so finding the variable says which run a process is *under* and never
 that it is a dispatch.
+
+**Naming the run is half of reaching it; the other half is knowing where that run's
+records are.** `onepipeline` finds a run under `ONEPIPELINE_RUNS_DIR`, and under a
+*relative* `runs` when nothing names one — and a lifecycle dispatch works in a session
+worktree, which has no `runs` directory and is not the checkout the launch ran from. So
+an ask made from one was refused `no such run '<run>' under runs`, with the question
+never reaching the channel and no surface raised: silent from the manager's side, and a
+worker told to ask left guessing after all. The wrapper now resolves that directory
+before it serves, and states it to `channel serve` as an environment value rather than
+by changing directory — which is what keeps a `--file` path and a piped question the
+*caller's*, relative to wherever the agent ran the wrapper.
+
+Two rungs, each corroborated against `launch.json`, the file `onepipeline` discovers a
+run by. First the question the CLI is about to ask: is this run under the directory it
+would look in? Yes leaves the environment untouched, which is the branch every ask from
+the checkout root takes. No passes that directory over — the run id identifies the work
+and a runs root is only how to find it — for `ONEPIPELINE_NODE_SCRATCH_DIR`, the one
+thing a dispatch carries that names its own run's directory, walked up to the ancestor
+named for this run that holds a launch record. **The checkout the wrapper itself lives
+in is deliberately not a rung**: it is usually also where the launch ran, but nothing
+ties the two, and asking confidently on the wrong store is worse than being refused.
+Where neither rung answers, nothing is exported and the ask stays where it was, for
+`serve` to refuse naming what it looked under. That the engine keeps a dispatch's
+scratch under its run's own directory is `onepipeline`'s to change, so
+`tests/ask_seam/test_launch_ask_seam_e2e.py` measures it against a real dispatch of
+every launch shape rather than restating it.
 `ORCHESTRATOR_ASK_MANAGER_NODE`
 optionally attaches the surface to a node, and a node the run does not have is a
 fatal refusal rather than a retry.
@@ -1109,7 +1135,7 @@ timeout measures is the wrapper's own, fifty minutes rather than `serve`'s ~30
 seconds, and `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it.
 
 `scripts/ask-manager.sh` states each of those checks against what measured it, and
-`tests/e2e/test_ask_manager_e2e.py` drives every one against a real run's channel.
+`tests/ask_seam/test_ask_manager_e2e.py` drives every one against a real run's channel.
 
 ### Read profiles
 

@@ -29,6 +29,12 @@ RECIPE_WORKSPACE = "recipeWorkspace"
 #: repository's plan surface drive and read. Narrower than the whole workspace by the
 #: prose those journeys never open, which is what makes editing `docs/` free of them.
 PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
+#: The key `ask-seam:test` is memoized on: what the host-tool journeys over the seam a
+#: dispatched agent asks its manager through drive and read. Narrower than the whole
+#: workspace by the prose those journeys never open, and by the e2e helpers they never
+#: import — named one by one rather than as a directory, so a journey added beside them
+#: does not silently start invalidating this tier.
+ASK_SEAM_WORKSPACE = "askSeamWorkspace"
 #: The key `workspace:check-nx-cache` is memoized on: what that script reads.
 NX_CACHE_CHECK = "nxCacheCheck"
 #: The tier that runs the bulk of the Python suite across xdist workers.
@@ -69,6 +75,20 @@ PLAN_TOOLING_DOCS_SCOPED = "test-docs"
 #: so a file added here joins this project by being here, and which of the project's two
 #: targets runs it is the only thing its markers decide.
 PLAN_TOOLING_ROOT = "tests/plan_tooling"
+
+#: The project whose test target owns the host-tool journeys over the ask seam — the
+#: real `scripts/ask-manager.sh`, the real `onepipeline channel serve` it asks through,
+#: and the real launches that decide what a dispatch is given to ask with. A project of
+#: its own for the reason `plan-tooling` is one: every journey here spends a real launch,
+#: which is a cost `nx affected` can only keep off an unrelated edit where it is a
+#: separate project. It declares no Python distribution either, for the same reason.
+ASK_SEAM_PROJECT = "ask-seam"
+#: That project's one test target. One rather than two, deliberately: nothing here reads
+#: this repository's prose, and an empty tier is a partition the suite gate cannot check.
+ASK_SEAM_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore. Path-selected, as
+#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+ASK_SEAM_ROOT = "tests/ask_seam"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

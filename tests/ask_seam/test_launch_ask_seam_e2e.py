@@ -56,7 +56,7 @@ from fake_backend import (
 )
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import PersistentManager, just, ruling
-from project_fixtures import project_from_plan
+from project_fixtures import helper, project_from_plan
 from scratch_identity import seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -66,8 +66,8 @@ from orchestrator.root import REPO_ROOT
 #: The stand-in for the paid model, and the provider binary beneath it — the second is
 #: what covers a single-sided member, which runs oneharness in process and so spawns no
 #: CLI for the first to be.
-FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
-FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
+FAKE_BACKEND = helper("fake_backend.py")
+FAKE_CODEX = helper("fake_codex.py")
 
 #: A launching session these journeys state rather than inherit, and everything else an
 #: enclosing dispatch would otherwise decide for them. `ONEPIPELINE_RUN_ID` is the one
@@ -124,6 +124,19 @@ RUN_ID = Input(
     "guessing at one, so an unset one is a question that is never asked",
 )
 REQUIRED_INPUTS = (ASK_WRAPPER, RUN_ID)
+
+#: Deliberately not one of those. An ask made from the checkout the launch ran from
+#: needs none of it, so the wrapper's header calls it optional and this file measures it
+#: anyway — the gate above is one-directional for exactly this case. What it buys is the
+#: half of the seam a *lifecycle* dispatch depends on: that dispatch's working directory
+#: is a session worktree, `onepipeline` looks for a run under a relative `runs` when
+#: nothing names one, and this variable is the only thing in the environment that says
+#: where the run's records actually are.
+NODE_SCRATCH = Input(
+    "ONEPIPELINE_NODE_SCRATCH_DIR",
+    "the one thing a dispatch carries that names its own run's directory, which "
+    "`scripts/ask-manager.sh` walks up to find the runs root from a worktree",
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -194,7 +207,7 @@ ASK_WINDOW_SECONDS = int(e2e_timeout(ANSWERED_SECONDS * 2))
 #: to one xdist worker: several of these racing the rest of a full suite is what turns a
 #: round trip through real recipes into one that outlives the window it was given.
 #:
-#: `tests/e2e/test_ask_manager_e2e.py`'s group, deliberately, rather than one of this
+#: `tests/ask_seam/test_ask_manager_e2e.py`'s group, deliberately, rather than one of this
 #: module's own. Two groups is two workers, and everything in both is a live planner
 #: channel with a manager thread driving real recipes at it — measured, a suite running
 #: the two beside each other left that module's wrapper waiting past its own deadline.
@@ -330,7 +343,7 @@ def _environment(
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
     environment[PROMPT_LOG_ENV] = str(turns)
     environment[ENVIRONMENT_KEYS_ENV] = ",".join(
-        [*(required.name for required in REQUIRED_INPUTS), CREDENTIAL_NAME]
+        [*(required.name for required in REQUIRED_INPUTS), NODE_SCRATCH.name, CREDENTIAL_NAME]
     )
     if record is not None:
         environment[ASK_QUESTION_ENV] = ASK_QUESTION
@@ -819,6 +832,57 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
         "plan_detached",
     ],
 )
+def test_every_launch_gives_its_dispatch_a_scratch_directory_under_its_own_run(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """The drift gate over the layout the wrapper resolves a runs root from.
+
+    `scripts/ask-manager.sh` walks up from this variable looking for the directory named
+    for its run that holds a `launch.json`, and takes that directory's parent as the runs
+    root. The walk is written not to assume a depth, but it does depend on the engine
+    putting a dispatch's scratch somewhere under the run's own directory — which is
+    `onepipeline`'s to change and nothing here owns.
+
+    Measured against a real dispatch of every launch shape rather than restated, because
+    the failure mode of drift is silent in exactly the direction that matters: the walk
+    would find nothing, the ask would fall back to the relative `runs` it used to use,
+    and a lifecycle worker would go back to being refused with no surface raised. Its
+    own journeys stand up a scratch directory of this shape by hand — these runs reach
+    no dispatch of their own — so this is where that shape is held to the producer.
+    """
+    # `getfixturevalue` answers `Any` because the fixture is chosen by name at run time;
+    # every name this case is parametrized over is a `Dispatch` fixture declared above.
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    scratch = Path(_given(dispatch, NODE_SCRATCH))
+    assert scratch.is_absolute(), (
+        f"a dispatch of run {dispatch.run} was given a relative {NODE_SCRATCH.name} "
+        f"({scratch}); it is {NODE_SCRATCH.why}, and a relative one names a different "
+        "directory for every caller"
+    )
+
+    own = Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"]) / dispatch.run
+    assert scratch.is_relative_to(own), (
+        f"a dispatch of run {dispatch.run} was given {scratch}, which is not under that "
+        f"run's own directory {own}; the wrapper finds the runs root by walking up from "
+        "it, so an ask from a worktree has nothing left to resolve"
+    )
+    assert (own / "launch.json").is_file(), (
+        f"run {dispatch.run} has no launch record at {own / 'launch.json'}; that file is "
+        "what the walk stops at, so a run without one cannot be found from a worktree"
+    )
+
+
+@pytest.mark.xdist_group(LAUNCH_GROUP)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "orchestrate_attached",
+        "orchestrate_detached",
+        "orchestrate_adopted",
+        "plan_attached",
+        "plan_detached",
+    ],
+)
 def test_every_launch_exports_repository_credentials_onto_its_dispatch(
     shape: str, request: pytest.FixtureRequest
 ) -> None:
@@ -1090,7 +1154,7 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
     alone = scripts / "plan.sh"
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
-    for present in (helper for helper in LAUNCH_ENVIRONMENT_HELPERS if helper != missing):
+    for present in (named for named in LAUNCH_ENVIRONMENT_HELPERS if named != missing):
         (scripts / present).write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")

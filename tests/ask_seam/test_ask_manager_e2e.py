@@ -30,7 +30,7 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple, NewType, Protocol, TypedDict, cast
 
@@ -48,7 +48,7 @@ from planner_channel import (
     reply_unguarded,
     ruling,
 )
-from project_fixtures import project_from_plan
+from project_fixtures import helper, project_from_plan
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -65,8 +65,8 @@ ASK_MANAGER_FILES = (ASK_MANAGER, REPO_ROOT / "scripts" / "ask-manager-contract.
 #: reached by these runs — a human gate dispatches nothing — and both are named for
 #: the same reason a seatbelt is worn on a short drive: a plan that came to dispatch
 #: would otherwise spend real provider quota from a suite.
-FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
-FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
+FAKE_BACKEND = helper("fake_backend.py")
+FAKE_CODEX = helper("fake_codex.py")
 
 #: A launching session these journeys state rather than inherit: this suite runs
 #: inside a dispatch whose own harness session would otherwise own the runs.
@@ -349,20 +349,29 @@ def _ask(
     *arguments: str,
     window: int = SHORT_WINDOW_SECONDS,
     overrides: dict[str, str] | None = None,
+    dropping: tuple[str, ...] = (),
     stdin: str | None = None,
+    cwd: Path = REPO_ROOT,
 ) -> subprocess.Popen[str]:
     """Start the real wrapper the way a dispatched agent runs it.
 
     Always in a session of its own, so that the wrapper and the `channel serve` it
     starts are one process group `_reaped` can end in one signal.
+
+    `cwd` and `dropping` are what let a journey ask from somewhere other than this
+    checkout, as a lifecycle dispatch does. Removing a name is a separate seam from
+    overriding one on purpose: what a dispatch's environment says about the runs root is
+    *nothing at all*, and an override can only ever say something.
     """
     environment = dict(asked.environment)
     environment["ONEPIPELINE_RUN_ID"] = asked.run
     environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(window)
     environment.update(overrides or {})
+    for name in dropping:
+        environment.pop(name, None)
     asking = subprocess.Popen(  # noqa: S603 - the real wrapper, as an agent runs it
         [str(ASK_MANAGER), *arguments],
-        cwd=REPO_ROOT,
+        cwd=cwd,
         env=environment,
         text=True,
         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
@@ -433,7 +442,7 @@ def _finish(
     """Wait for one wrapper invocation and hand back what it reported.
 
     The manager is watched alongside it wherever there is one, for the reason
-    `_await_answer` in `tests/e2e/test_launch_ask_seam_e2e.py` gives: the two are one
+    `_await_answer` in `tests/ask_seam/test_launch_ask_seam_e2e.py` gives: the two are one
     round trip, and only one of the two failures is visible from this side. A manager
     who gave up leaves the wrapper blocking for its whole reply window — longer than the
     guard here — so waiting it out reports a killed wrapper with nothing on either pipe.
@@ -1178,6 +1187,248 @@ def test_the_question_can_be_piped_in_or_read_from_a_file(asked: Asked, tmp_path
         (
             "a question piped in on stdin",
             lambda: _ask(asked, window=ANSWERED_WINDOW_SECONDS, stdin=f"{question}\n"),
+        ),
+    ):
+        asking = form()
+        try:
+            assert question in _waited_for_question(asked, asking, named=named), question
+        finally:
+            _reaped(asking)
+
+
+#: The answer a manager gives a question asked from a worktree, so what comes back can
+#: be compared to it whole exactly as the round trip from this checkout is.
+WORKTREE_ANSWER = "Amend the node's task; a context note reaches no judge."
+
+#: The question file the worktree journey names by a RELATIVE path, from a directory
+#: that is not this checkout. Distinctive rather than `question.txt` so that a wrapper
+#: resolving it against the checkout root cannot find one there by accident, and so a
+#: reader of a failure knows which file was meant.
+WORKTREE_QUESTION_FILE = "ask-from-a-worktree.question.txt"
+
+
+class Dispatched(NamedTuple):
+    """Where a lifecycle dispatch asks from, and what its environment says about the run."""
+
+    #: The directory the wrapper is run in — a session worktree, never this checkout.
+    worktree: Path
+    #: What the dispatch's environment adds, over the launching session's.
+    overrides: dict[str, str]
+    #: What it does not carry at all, which is the half an override cannot express.
+    unset: tuple[str, ...]
+
+
+def _as_a_dispatch(asked: Asked, tmp_path: Path) -> Dispatched:
+    """The environment and working directory a lifecycle dispatch really asks from.
+
+    Measured on this host, inside a dispatch of a lifecycle node, rather than assumed:
+    `ONEPIPELINE_RUNS_DIR` is **not** set, `ONEPIPELINE_NODE_SCRATCH_DIR` is set to an
+    absolute `<runs-root>/<run>/scratch/<pid>-<n>`, and the working directory is the
+    session worktree — which is somewhere else entirely and has no `runs` directory of
+    its own. That combination is the whole defect: `onepipeline` resolves a run under a
+    relative `runs` when nothing names one, so the question was refused `no such run
+    '<run>' under runs` and no surface was ever raised for a manager to notice.
+
+    The scratch directory is created here because these runs reach no dispatch — the
+    frontier is a human gate — so the engine never composes one. That shape is the
+    engine's to change, so it is not asserted here:
+    `tests/ask_seam/test_launch_ask_seam_e2e.py` holds it against a real dispatch of every
+    launch shape, and this stands up what that measures.
+    """
+    runs_root = Path(asked.environment["ONEPIPELINE_RUNS_DIR"])
+    scratch = runs_root / asked.run / "scratch" / "e2e-0"
+    scratch.mkdir(parents=True)
+    assert (runs_root / asked.run / "launch.json").is_file(), (
+        f"run {asked.run} has no launch record under {runs_root}; the wrapper corroborates "
+        "a runs root against that file, so a journey without one proves nothing"
+    )
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    assert not (worktree / "runs").exists(), (
+        f"{worktree} holds a `runs` directory, so an ask made from it would resolve the "
+        "run through the caller's own directory and this journey would pass either way"
+    )
+    return Dispatched(
+        worktree=worktree,
+        overrides={"ONEPIPELINE_NODE_SCRATCH_DIR": str(scratch)},
+        unset=("ONEPIPELINE_RUNS_DIR",),
+    )
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_a_question_asked_from_a_lifecycle_worktree_reaches_its_own_runs_channel(
+    asked: Asked, tmp_path: Path
+) -> None:
+    """The round trip an agent actually makes: asked from the worktree it was dispatched into.
+
+    Every journey above asks with `ONEPIPELINE_RUNS_DIR` naming the run store, which is
+    why the defect survived them: with it set the working directory does not matter, and
+    it is exactly what a real dispatch does not carry.
+    """
+    dispatch = _as_a_dispatch(asked, tmp_path)
+    asking = _ask(
+        asked,
+        "Should the amendment name the property or the mechanism?",
+        window=ANSWERED_WINDOW_SECONDS,
+        overrides=dispatch.overrides,
+        dropping=dispatch.unset,
+        cwd=dispatch.worktree,
+    )
+    manager = Manager(
+        asked.run, asked.environment, [lambda token: ruling(f"{WORKTREE_ANSWER} {token}")]
+    )
+
+    status, out, err = _finish(asking, manager=manager)
+    manager.checked(asker_said=err)
+
+    assert status == 0, f"a question asked from a worktree did not reach its run:\n{err}"
+    assert TOKEN.sub("", out).strip() == WORKTREE_ANSWER, out
+
+
+#: Every shape of `ONEPIPELINE_NODE_SCRATCH_DIR` that says nothing about where this run
+#: is: none at all, one that is not absolute, and an absolute one under no run of this
+#: store. Each is a state the wrapper must leave the ask in rather than resolve it out
+#: of, because the alternative is a plausible path nobody is reading.
+#:
+#: The relative one is not a variation on the other two. The wrapper walks a path by
+#: stripping its last component, and that strip is a fixpoint once no `/` is left — so a
+#: relative scratch directory walks to its first component and loops there. Measured
+#: against a copy of the wrapper without its absolute-path guard, the ask never returns;
+#: here it is refused in seconds like the rest.
+UNINFORMATIVE_SCRATCH: dict[str, Callable[[Path], str | None]] = {
+    "no scratch directory at all": lambda _: None,
+    "a relative scratch directory": lambda _: "scratch/e2e-0",
+    "a scratch directory under no run": lambda under: str(under / "elsewhere" / "scratch"),
+}
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+@pytest.mark.parametrize("shape", sorted(UNINFORMATIVE_SCRATCH))
+def test_a_dispatch_whose_environment_names_no_run_store_is_refused_rather_than_guessed_at(
+    asked: Asked, tmp_path: Path, shape: str
+) -> None:
+    """With no evidence to resolve, the ask stays where it was and says so.
+
+    A wrapper that fell back to a plausible-looking directory would put the question
+    somewhere no manager reads and report success — the failure this seam exists to
+    remove, arriving through the repair for it.
+    """
+    dispatch = _as_a_dispatch(asked, tmp_path)
+    named = UNINFORMATIVE_SCRATCH[shape](tmp_path)
+    overrides = dict(dispatch.overrides)
+    if named is None:
+        overrides.pop("ONEPIPELINE_NODE_SCRATCH_DIR")
+    else:
+        overrides["ONEPIPELINE_NODE_SCRATCH_DIR"] = named
+
+    asking = _ask(
+        asked,
+        "Which store is this question asked on?",
+        overrides=overrides,
+        dropping=dispatch.unset,
+        cwd=dispatch.worktree,
+    )
+    status, out, err = _finish(asking)
+
+    assert status == 2, f"{shape} was resolved into a runs root rather than refused:\n{err}{out}"
+    assert f"no such run '{asked.run}' under runs" in err, (
+        f"the refusal for {shape} does not name the run and the directory it was looked "
+        f"for under, which is what an agent has to read to repair it:\n{err}"
+    )
+    assert out == "", (
+        f"a refused ask put something on stdout, which a caller reads as an answer:\n{out}"
+    )
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_a_runs_root_that_does_not_hold_this_run_is_passed_over_for_the_dispatchs_own(
+    asked: Asked, tmp_path: Path
+) -> None:
+    """A stated runs root is checked against this run's records, not taken on being set.
+
+    The two states an inherited `ONEPIPELINE_RUNS_DIR` can be in look identical from the
+    variable alone: the launch's own store, which must be passed through untouched, or a
+    value that reached this process some other way — a manager's read, inherited — naming
+    a store this run is not in. So the one here exists and holds another run's records,
+    which is what a bare existence check would wave through.
+    """
+    dispatch = _as_a_dispatch(asked, tmp_path)
+    elsewhere = tmp_path / "another-hosts-runs"
+    (elsewhere / "some-other-run").mkdir(parents=True)
+    (elsewhere / "some-other-run" / "launch.json").write_text("{}", encoding="utf-8")
+    asking = _ask(
+        asked,
+        "Which store is this question asked on?",
+        window=ANSWERED_WINDOW_SECONDS,
+        overrides={**dispatch.overrides, "ONEPIPELINE_RUNS_DIR": str(elsewhere)},
+        cwd=dispatch.worktree,
+    )
+    manager = Manager(
+        asked.run, asked.environment, [lambda token: ruling(f"{WORKTREE_ANSWER} {token}")]
+    )
+
+    status, out, err = _finish(asking, manager=manager)
+    manager.checked(asker_said=err)
+
+    assert status == 0, (
+        f"a runs root holding another run was taken for this one's, so the question "
+        f"never reached run {asked.run}:\n{err}"
+    )
+    assert TOKEN.sub("", out).strip() == WORKTREE_ANSWER, out
+
+
+@pytest.mark.xdist_group(CHANNEL_GROUP)
+def test_every_way_of_asking_from_a_worktree_still_reads_the_callers_own_files(
+    asked: Asked, tmp_path: Path
+) -> None:
+    """Finding the run moved the runs root and nothing else the wrapper reads.
+
+    A `--file` path is the caller's, relative to where the agent ran the wrapper, so a
+    fix that reached the run by changing directory would re-root it silently — one quiet
+    failure traded for another. Hence a RELATIVE path, readable only from where the ask
+    was made.
+    """
+    dispatch = _as_a_dispatch(asked, tmp_path)
+    question = "Which of the two schemas should the route answer in?"
+    (dispatch.worktree / WORKTREE_QUESTION_FILE).write_text(f"{question}\n", encoding="utf-8")
+    # One at a time, and named, for the reason
+    # `test_the_question_can_be_piped_in_or_read_from_a_file` gives: three asks at once
+    # would raise three surfaces under one run id, and which one a read handed back
+    # would become the subject instead of the way of asking.
+    for named, form in (
+        (
+            "a question passed as an argument",
+            lambda: _ask(
+                asked,
+                question,
+                window=ANSWERED_WINDOW_SECONDS,
+                overrides=dispatch.overrides,
+                dropping=dispatch.unset,
+                cwd=dispatch.worktree,
+            ),
+        ),
+        (
+            "a question read from a --file path relative to the asking directory",
+            lambda: _ask(
+                asked,
+                "--file",
+                WORKTREE_QUESTION_FILE,
+                window=ANSWERED_WINDOW_SECONDS,
+                overrides=dispatch.overrides,
+                dropping=dispatch.unset,
+                cwd=dispatch.worktree,
+            ),
+        ),
+        (
+            "a question piped in on stdin",
+            lambda: _ask(
+                asked,
+                window=ANSWERED_WINDOW_SECONDS,
+                overrides=dispatch.overrides,
+                dropping=dispatch.unset,
+                cwd=dispatch.worktree,
+                stdin=f"{question}\n",
+            ),
         ),
     ):
         asking = form()

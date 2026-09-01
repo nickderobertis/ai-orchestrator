@@ -34,7 +34,7 @@
 # edit the monitor addressed to the engine, delivered here because this call happened
 # to be the next reader. The adopted release routes a reply by the halves it carries,
 # so that envelope now stays on the command path and never reaches this rendezvous;
-# `tests/e2e/test_ask_manager_e2e.py` measures that from the reply verb's own answer.
+# `tests/ask_seam/test_ask_manager_e2e.py` measures that from the reply verb's own answer.
 # Both checks below are kept anyway, and are what an agent has left if a release
 # regresses to arrival order. In this order:
 #
@@ -77,7 +77,7 @@
 # their terminal. `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` governs that wait exactly
 # (measured 5s -> 5.03s, 12s -> 11.89s) and appears in no `--help` output — it was
 # found in the pinned binary — so it is a surface that can drift, and
-# `tests/e2e/test_ask_manager_e2e.py` pins it. Relying on a caller to export it is
+# `tests/ask_seam/test_ask_manager_e2e.py` pins it. Relying on a caller to export it is
 # what would silently return this to the 30-second default.
 #
 # Environment:
@@ -85,10 +85,16 @@
 #       depends on the launch: `just plan` exports it, and so does an attached
 #       `just orchestrate` — a detached or adopted one does not, and an observer member
 #       carries the run's id as well as a dispatch does. Measured per shape by
-#       `tests/e2e/test_launch_ask_seam_e2e.py`. So finding a value says which run this
+#       `tests/ask_seam/test_launch_ask_seam_e2e.py`. So finding a value says which run this
 #       process is under and never that it is a dispatch, and an unset one is refused
 #       rather than guessed at.
 #   ONEPIPELINE_BIN                           (optional) which onepipeline answers.
+#   ONEPIPELINE_RUNS_DIR                      (optional) where the run's records live.
+#       Read to be checked and otherwise left alone: one that holds this run is passed
+#       through untouched, and only one that does not is passed over.
+#   ONEPIPELINE_NODE_SCRATCH_DIR              (optional) the dispatch's own scratch
+#       directory, which sits under the run's directory and is how an ask made from a
+#       lifecycle worktree finds the runs root. See the resolution below.
 #   ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS  (optional) the reply window.
 #   ORCHESTRATOR_ASK_MANAGER_NODE             (optional) the node the question is
 #       about, so the engine can attach the surface to it. `serve` refuses a node the
@@ -285,6 +291,41 @@ if [ -n "$node" ]; then
     # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
     [[ "$node" =~ $ASK_MANAGER_SAFE_REFERENCE ]] || fail "ORCHESTRATOR_ASK_MANAGER_NODE is '$node', which this wrapper will not put in a frame as a node" \
         "a node id is one word of letters, digits, '_', '.', and '-'; check it against the nodes 'just status $run' lists, or unset it to ask about the run as a whole"
+fi
+
+# Where this run's records live, which is not where the ask is being made from.
+# `onepipeline` looks under `ONEPIPELINE_RUNS_DIR`, and under a *relative* `runs` when
+# nothing names one — so an ask from a lifecycle worktree was refused `no such run
+# '<run>' under runs`, raising no surface for anybody to notice. See
+# docs/orchestration.md for the resolution below and why each rung is where it is.
+#
+# Three constraints the code cannot state for itself:
+#   * The runs root is NAMED rather than reached by `cd`. A `--file` path and a piped
+#     question are the caller's, and changing directory would re-root them silently.
+#   * `$root`, this wrapper's own checkout, is deliberately not a rung. It is usually
+#     also where the launch ran, but nothing ties the two, and asking confidently on
+#     the wrong store is worse than being refused.
+#   * The scratch path must be absolute: `%/*` is a fixpoint on a component holding no
+#     `/`, so a relative one walks to its first component and loops there forever.
+if [ ! -f "${ONEPIPELINE_RUNS_DIR:-runs}/$run/launch.json" ]; then
+    case "${ONEPIPELINE_NODE_SCRATCH_DIR:-}" in
+        /*) candidate="$ONEPIPELINE_NODE_SCRATCH_DIR" ;;
+        *) candidate="" ;;
+    esac
+    # Stopping at the ancestor named for THIS run that carries a launch record, rather
+    # than at a counted depth: how many components separate the two is the engine's
+    # layout to change, and `tests/ask_seam/test_launch_ask_seam_e2e.py` is what holds
+    # it to putting a dispatch's scratch under the run at all.
+    while [ -n "$candidate" ]; do
+        if [ "${candidate##*/}" = "$run" ] && [ -n "${candidate%/*}" ] &&
+            [ -f "$candidate/launch.json" ]; then
+            export ONEPIPELINE_RUNS_DIR="${candidate%/*}"
+            break
+        fi
+        candidate="${candidate%/*}"
+    done
+    # Nothing found leaves the ask where it was, for `serve` to refuse naming what it
+    # looked under: a guess would send the question where no manager reads.
 fi
 
 window="${ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS:-$DEFAULT_TIMEOUT_SECONDS}"

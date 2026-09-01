@@ -27,7 +27,13 @@ Conventions for this repo's tests.
   documentation edit replay a stale verdict. The autouse guard in `conftest.py`
   fails such a test; mark it `@pytest.mark.reads_docs` and it runs in the
   whole-workspace target of the project that owns it.
-- **A host-tool journey over the plan surface belongs to its own project.**
+- **A host-tool journey belongs to its own project.** There are two, each selected by
+  directory rather than by marker: `tests/plan_tooling/` is `plan-tooling`, over the
+  plan surface, and `tests/ask_seam/` is `ask-seam`, over the seam a dispatched agent
+  asks its manager through. `ask-seam` has one target rather than two, because nothing
+  there reads this repository's prose; `askSeamWorkspace` is its key, and a prose read
+  there fails in `conftest.py` instead of being routed to a target that does not exist.
+  The rest of this note is written about `plan-tooling` and is true of both:
   `tests/plan_tooling/` is the Nx project `plan-tooling`, selected by directory
   rather than by marker: a journey there spawns the installed `onepipeline`, the
   `just` recipes, the registered check script and a real `oneharness run` — up to a

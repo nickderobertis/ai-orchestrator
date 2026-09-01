@@ -20,11 +20,13 @@ import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import plan_fixture_root
 import pytest
 from nx_inputs import (
+    ASK_SEAM_ROOT,
+    ASK_SEAM_WORKSPACE,
     CODE_WORKSPACE,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_WORKSPACE,
@@ -38,6 +40,15 @@ from registered_checkouts import listed_checkout_paths
 from orchestrator.root import REPO_ROOT
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
+#: The directories under this checkout that git ignores and Nx therefore never hashes.
+#: A read of one is toolchain state rather than the tree under judgement, so **no** input
+#: declaration could cover it and holding a key to one is a demand nothing can satisfy.
+#: `tests/test_nx_cache_scope.py` states the same rule from the other side, in what it
+#: will accept as covered at all. Measured rather than anticipated: a session-scoped
+#: fixture asking `importlib.metadata` for an installed distribution's version opens that
+#: distribution's `METADATA` under `.venv`, and every journey of one project failed for
+#: reading a path no key names and none could.
+UNHASHED_DIRECTORIES = frozenset({".venv", "node_modules", ".git", ".nx"})
 #: The marker that moves a test from its project's narrow key to that project's
 #: whole-workspace one. Its one source is `pyproject.toml`'s marker registration, and
 #: the `test` / `test-docs` targets of both `orchestrator` and `plan-tooling` select on
@@ -47,10 +58,26 @@ READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
 READS_RECIPES_MARKER = "reads_recipes"
-#: The directory the `plan-tooling` project owns. Tests there are routed by *path*
-#: rather than by marker — the project boundary is the tier — so the guards below ask
-#: where a test lives rather than what it declares.
-PLAN_TOOLING_DIRECTORY = PLAN_TOOLING_ROOT
+
+
+#: Every directory a project of its own owns, and the key that project's test target is
+#: memoized on. Tests there are routed by *path* rather than by marker — the project
+#: boundary is the tier — so the guards below ask where a test lives rather than what it
+#: declares. `docs_tier` says whether that project has a second, whole-workspace target
+#: for `reads_docs` to route a test into: `plan-tooling` does, for the journeys that copy
+#: this checkout, and `ask-seam` does not, so a prose read there is a read outside its
+#: only key rather than a routing instruction.
+class OwnedProject(NamedTuple):
+    """One directory-owned test project, in what the read guards need of it."""
+
+    key: str
+    docs_tier: bool
+
+
+OWNED_PROJECTS = {
+    PLAN_TOOLING_ROOT: OwnedProject(key=PLAN_TOOLING_WORKSPACE, docs_tier=True),
+    ASK_SEAM_ROOT: OwnedProject(key=ASK_SEAM_WORKSPACE, docs_tier=False),
+}
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes
 #: through — which lives outside this workspace and so outside every `nx.json` key.
@@ -193,6 +220,24 @@ def _outside_the_code_key(file: object, globs: list[str]) -> str | None:
     return relative
 
 
+def _outside_a_key(file: object, globs: list[str]) -> str | None:
+    """The repository path ``file`` names when no glob in ``globs`` covers it.
+
+    `None` for anything a cache key has no business describing: a value that is not a
+    path at all, one outside this checkout, and one under a directory Nx never hashes.
+    """
+    if not isinstance(file, str | os.PathLike):
+        return None
+    try:
+        named = os.fspath(file)
+    except TypeError:
+        return None
+    relative = repository_relative(named)
+    if relative is None or relative.split("/", 1)[0] in UNHASHED_DIRECTORIES:
+        return None
+    return None if covers(globs, relative) else relative
+
+
 @pytest.fixture(autouse=True)
 def _code_key_reads_are_declared(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
@@ -224,9 +269,9 @@ def _code_key_reads_are_declared(
         return
     if request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None:
         return
-    # A test of the `plan-tooling` project is keyed on that project's own input, which
-    # covers the prose it reads; the guard below this one is what holds it to that key.
-    if _in_plan_tooling(request):
+    # A test of a directory-owned project is keyed on that project's own input rather
+    # than on this one; the guard below this one is what holds it to that key.
+    if _owned_project(request) is not None:
         return
     # Resolved before the wrapper is installed: reading the declaration through the
     # guard that consults it is a loop waiting for its first prose-shaped path.
@@ -254,52 +299,59 @@ def _code_key_reads_are_declared(
     monkeypatch.setattr(io, "open", guarded)
 
 
-def _in_plan_tooling(request: pytest.FixtureRequest) -> bool:
-    """Whether this test belongs to the `plan-tooling` project rather than a marker tier."""
+def _owned_project(request: pytest.FixtureRequest) -> OwnedProject | None:
+    """The directory-owned project this test belongs to, or `None` for a marker tier."""
     module = repository_relative(request.node.path)
-    return module is not None and module.startswith(f"{PLAN_TOOLING_DIRECTORY}/")
+    if module is None:
+        return None
+    for directory, owned in OWNED_PROJECTS.items():
+        if module.startswith(f"{directory}/"):
+            return owned
+    return None
 
 
 @pytest.fixture(autouse=True)
-def _plan_tooling_reads_are_declared(
+def _owned_project_reads_are_declared(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Hold the `plan-tooling` project to the key its verdict is memoized on.
+    """Hold a directory-owned project to the key its verdict is memoized on.
 
-    That project exists because its journeys cost what a host tool costs — the installed
-    engine, the `just` recipes, the registered check script, a real `oneharness run` —
-    and are answered by a much narrower set of files than the workspace: this
-    repository's configuration, personas, scripts and modules, and not its prose. A
-    narrower claim needs the same enforcement the recipe tier gets, for the same reason:
-    a read outside the key is a file that can change this project's answer without
-    changing its hash.
+    Those projects exist because their journeys cost what a host tool costs — the
+    installed engine, the `just` recipes, a real launch, a real `oneharness run` — and
+    are answered by a much narrower set of files than the workspace: this repository's
+    configuration, personas, scripts and modules, and not its prose. A narrower claim
+    needs the same enforcement the recipe tier gets, for the same reason: a read outside
+    the key is a file that can change that project's answer without changing its hash.
 
     The routing is by directory rather than by marker, which is the whole point of the
-    project — so a file added there is held to this key by being there, with nothing to
+    project — so a file added there is held to its key by being there, with nothing to
     declare and nothing that can be forgotten. The one exception is a journey that
     builds a **copy** of this checkout: copying is itself a read of everything git
-    tracks, so those carry `reads_docs` and are collected by this project's *own*
+    tracks, so those carry `reads_docs` and are collected by their project's *own*
     whole-workspace target instead, where that is exactly what their verdict depends
-    on. The marker moves such a journey between this project's two keys rather than out
-    of the project, so its cost stays charged to the code `nx affected` selects it for.
+    on. The marker moves such a journey between one project's two keys rather than out
+    of the project, so its cost stays charged to the code `nx affected` selects it for —
+    which is why it is honoured only where that second target exists. Where it does not,
+    a prose read is a read outside the project's only key and fails here.
     """
-    if not _in_plan_tooling(request) or request.node.get_closest_marker(READS_DOCS_MARKER):
+    owned = _owned_project(request)
+    if owned is None:
         return
-    globs = named_input_globs(PLAN_TOOLING_WORKSPACE)
+    if owned.docs_tier and request.node.get_closest_marker(READS_DOCS_MARKER):
+        return
+    globs = named_input_globs(owned.key)
     opener = builtins.open
 
     # `Any` for the same reason the two guards around it use it: this stands in for
     # `open` itself, whose return type is chosen by arguments this forwards untouched.
     def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
-        if isinstance(file, str | os.PathLike):
-            relative = repository_relative(os.fspath(file))
-            if relative is not None and not covers(globs, relative):
-                raise AssertionError(
-                    f"{request.node.name} reads {relative}, which the "
-                    f"{PLAN_TOOLING_WORKSPACE} key does not cover; add the path to that "
-                    f"key in nx.json, or this project replays a verdict recorded before "
-                    f"the file it depends on last moved"
-                )
+        uncovered = _outside_a_key(file, globs)
+        if uncovered is not None:
+            raise AssertionError(
+                f"{request.node.name} reads {uncovered}, which the {owned.key} key does "
+                f"not cover; add the path to that key in nx.json, or this project "
+                f"replays a verdict recorded before the file it depends on last moved"
+            )
         return opener(file, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "open", guarded)
@@ -341,14 +393,13 @@ def _recipe_reads_are_declared(
     # `open` itself, whose return type is chosen by arguments this wrapper forwards
     # untouched.
     def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
-        if isinstance(file, str | os.PathLike):
-            relative = repository_relative(os.fspath(file))
-            if relative is not None and not covers(globs, relative):
-                raise AssertionError(
-                    f"{request.node.name} reads {relative}, which the recipe test key "
-                    f"does not cover; drop @pytest.mark.{READS_RECIPES_MARKER} so it runs "
-                    "in a tier keyed on that path"
-                )
+        uncovered = _outside_a_key(file, globs)
+        if uncovered is not None:
+            raise AssertionError(
+                f"{request.node.name} reads {uncovered}, which the recipe test key "
+                f"does not cover; drop @pytest.mark.{READS_RECIPES_MARKER} so it runs "
+                "in a tier keyed on that path"
+            )
         return opener(file, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "open", guarded)

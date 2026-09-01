@@ -59,7 +59,7 @@ RULING_SOURCE_USE = "$ASK_MANAGER_RULING_SOURCE"
 #: their list of required inputs is written in. Read textually rather than imported: it
 #: is a pytest module whose import would collect fixtures, and reading a declaration is
 #: what every other gate in this file does.
-LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "e2e" / "test_launch_ask_seam_e2e.py"
+LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "ask_seam" / "test_launch_ask_seam_e2e.py"
 CHECKED_INPUT = re.compile(r'Input\(\s*"([A-Z0-9_]+)"')
 
 #: How `scripts/ask-manager.sh` declares an environment variable it cannot ask without,
