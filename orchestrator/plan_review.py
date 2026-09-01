@@ -129,8 +129,25 @@ Hold this one task to the parts of that bar which apply to a single node: that i
 acceptance criteria genuinely prove the work is functional, that they could not all be
 satisfied while the goal the task states is missed, that each one is satisfiable by the
 worker inside its own dispatch, and that none of them names a procedure, a spelling, or
-a perishable fact — a release number, a dependency version, a line count — in place of
-the property it stands in for.
+a perishable fact in place of the property it stands in for.
+
+A fact is perishable when it can move on its own between this task being written and
+its node being dispatched, so that finished, correct work fails against it: "the newest
+release at the time of writing", a floor a later publication overtakes, a line count.
+Two things are not perishable, and refusing either makes the criteria vaguer than the
+work rather than more precise. An **immutable anchor** names a fixed point that can
+never move — a commit sha, a tag, a release already published — and is exactly what a
+criterion should pin to. And a **release or version that is the subject of the task** —
+a node whose whole job is adopting a named release — is the property itself rather than
+a stand-in for one, so that number belongs in its criteria and there is nothing behind
+it to ask for instead. Refuse a version literal only where the task's subject is
+something else and the number is standing in for a property that outlives it.
+
+For each acceptance criterion, name to yourself the fixture, input, or repository state
+that would make it fail. A criterion with no such state is decorative: it reads as
+satisfied whatever the dispatch does, so it can never be what stops bad work, and it
+hides the absence of a criterion that would. Refuse a criterion you cannot falsify that
+way, saying what you looked for and did not find.
 
 A task whose `kind` is "human" is the one exception, and it is a different question
 rather than a softer one. Nothing is dispatched from it: it names an action an external
@@ -152,7 +169,7 @@ class Verdict(TypedDict):
 
     Stated here as well as in `config/plan-review-verdict.schema.json` because the
     schema is what oneharness validates and this is what decides whether a record is
-    written: the two have to agree, and `tests/e2e/test_plan_review_e2e.py` drives a
+    written: the two have to agree, and `tests/plan_tooling/test_plan_review_e2e.py` drives a
     real turn through both.
     """
 

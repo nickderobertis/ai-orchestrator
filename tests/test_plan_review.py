@@ -323,7 +323,7 @@ def test_the_bar_fingerprint_covers_the_question_it_asks(
     reads from the root it is handed. The prompt is a constant of this module instead,
     so it reaches the digest by a different route and a regression dropping it is
     invisible to that test — the pass would go on standing under a question nobody
-    asked. `tests/e2e/test_plan_review_e2e.py` drives the same property through the
+    asked. `tests/plan_tooling/test_plan_review_e2e.py` drives the same property through the
     real command surface; this is the tier that answers in milliseconds.
     """
     before = plan_review.bar_fingerprint()
@@ -788,7 +788,7 @@ def test_a_second_planning_runs_project_is_recorded_too(
 
     No journey drives this, and that is deliberate rather than a gap: reaching it means
     two overlapping real planning runs, which is the very thing
-    `tests/e2e/test_plan_review_e2e.py`'s closeout journeys give each launch a plan
+    `tests/plan_tooling/test_plan_review_e2e.py`'s closeout journeys give each launch a plan
     store of its own to avoid — a peer's window spanning one of theirs is what failed a
     publication gate before they did.
     """

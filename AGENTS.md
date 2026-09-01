@@ -2067,6 +2067,25 @@ against exactly that. So the recipe appends the placement *and* the clause it is
 from after the brief, which is the only text both that worker and its judge read. The
 brief still comes first and untouched; a launch with a `repo` appends nothing.
 
+**A plan's *structure* is the engine's to decide, and this recipe asks it rather than
+re-deciding it.** `just check-plan` runs `onepipeline plan check`, which makes every
+refusal `onepipeline start` would make and then hands the loaded plan to each registered
+check — this repository's own being `scripts/plan-check.sh`. So a pre-dispatch refusal is
+a launch refusal by construction. It was a second implementation of the loader's rules
+until this change, and a second implementation drifts both ways: it reported three
+structural errors sound that the launch then refused — a node naming its repository in
+both `repositories` and `onepipeline.repo`, an `onepipeline.deps` used for an edge between
+two nodes of one plan, and a stepped node that also carried a `task` — costing five launch
+attempts on one plan; and it false-refused twice, once quoting a match that began in one
+criterion and ended at the word `git` in "real git repositories" three criteria later,
+because an unpaired backtick let inline-code pairing run past its own criterion. Every
+refusal now names its **source** — `engine`, or the registered check — and an accepted
+plan's line names which loader read it, because against an engine carrying no `plan
+check` the same checks still run directly and leave every structural refusal for the
+launch to make. Two shapes worth knowing before you read a refusal as this repository's:
+the engine requires a persona on every agent node, and refuses a `kind: human` node that
+carries a persona, a repository, or any other execution field.
+
 **`just check-plan <source:project>` reads a project against the bar each node will
 actually be judged against**, and is the cheap read to make before launching one. It
 refuses a node whose `## Acceptance criteria` name a procedure instead of a property,
@@ -2814,7 +2833,22 @@ narrowings that earn their keep answer at the scope their tests read:
 and keeps the whole-workspace key; `orchestrator:test-recipes` runs the journeys
 that drive `just` recipes and shell scripts under `recipeWorkspace`, exactly what
 they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the
-workspace minus `docs/**` and `**/*.md`.
+workspace minus `docs/**` and `**/*.md`. **One tier is a project of its own rather
+than a marker of that one**: `plan-tooling:test` owns `tests/plan_tooling/`, the
+host-tool journeys over this repository's plan surface — `just check-plan`, `just
+review-plan`, the registered check script, the installed engine, and a real
+`oneharness run` — because what those cost and what answers them are both different
+from the Python suite beside them, and `nx affected` can only tell two costs apart
+where they are two projects. It is selected by **directory**, so a file added there
+joins that project by being there, and every orchestrator tier ignores the directory.
+The project has **two** targets rather than one, because the three journeys that build
+a *copy* of this checkout read everything git tracks — copying the tracked tree is
+reading all of it — so `plan-tooling:test-docs` collects those under the
+whole-workspace key while `plan-tooling:test` collects the rest under
+`planToolingWorkspace`. `reads_docs` is what chooses between the two, and that is all
+it does here: it routes a test between the targets of the project that owns it, never
+out of that project into another one's tier, so the cost of running it is charged to
+the code `nx affected` would select for it.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
 scripts it builds its two worktrees from. A documentation edit stops charging for
 the whole suite. Where no key would be right the tier is **uncached** instead:

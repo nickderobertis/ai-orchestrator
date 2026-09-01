@@ -86,7 +86,7 @@ test *nx_args:
 # and the workers are nearly free.
 test-e2e:
     # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
-    @uv run pytest tests/e2e -n 4 --dist loadgroup
+    @uv run pytest tests/e2e tests/plan_tooling -n 4 --dist loadgroup
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
@@ -209,12 +209,23 @@ plan *args:
     @./scripts/plan.sh "$@"
 
 # Read a qualified plan project against the bar each of its nodes will actually be
-# judged against: `just check-plan <source>:<project>`. What it refuses and why is
-# `orchestrator/criteria_guard.py`'s to say; two things about the *result* are this
-# seam's. Exit 1 is a refusal, naming the node, the demand, and where that demand is
-# made; exit 2 is a project that could not be read at all, so nothing was judged — a
-# plan builder branches on the difference. And it reads the project only: it launches
-# nothing, spends no provider turn, and is safe to run beside live work.
+# judged against, and against the engine's own plan loader: `just check-plan
+# <source>:<project>`.
+#
+# The structure of a plan is decided by `onepipeline plan check`, which runs every
+# refusal `onepipeline start` would make, so a pre-dispatch refusal is a launch refusal
+# by construction. This repository's own checks run beside it as a registered `--check`
+# script, `scripts/plan-check.sh`: the review bar each node resolves to, this host's
+# operational appendix, and whether anything has reviewed the criteria. Against an engine
+# carrying no such verb the same checks run directly, and the accepted line names which
+# path read the plan, because the narrower one leaves the structural refusal for the
+# launch to make. AGENTS.md carries what re-implementing the loader cost.
+#
+# Two things about the *result* are this seam's. Exit 1 is a refusal, each naming its
+# source — `engine` or the registered check — the node, the field, and the reason; exit 2
+# is a project that could not be read or a check that could not be run, so nothing was
+# judged. A plan builder branches on the difference. And it reads the project only: it
+# launches nothing, spends no provider turn, and is safe to run beside live work.
 [doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
 check-plan *args:
     @uv run orchestrator-check-plan "$@"

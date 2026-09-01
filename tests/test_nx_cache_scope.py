@@ -37,6 +37,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -48,6 +49,10 @@ from nx_inputs import (
     COVERAGE_SCOPED,
     DOCS_SCOPED,
     NX_CACHE_CHECK,
+    PLAN_TOOLING_DOCS_SCOPED,
+    PLAN_TOOLING_PROJECT,
+    PLAN_TOOLING_ROOT,
+    PLAN_TOOLING_SCOPED,
     RECIPE_SCOPED,
     RECIPE_WORKSPACE,
     covers,
@@ -161,6 +166,16 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
             f"orchestrator:{target} runs from the workspace root over the whole tree, "
             "so its cached verdict must be keyed on the whole workspace"
         )
+    # The plan-tooling project's second target is the same claim about a second
+    # project: the journeys it collects copy this checkout, so what they read is
+    # everything git tracks and no narrower key could describe their verdict.
+    host_tools = json.loads(
+        (REPO_ROOT / f"{PLAN_TOOLING_ROOT}/project.json").read_text(encoding="utf-8")
+    )
+    assert host_tools["targets"][PLAN_TOOLING_DOCS_SCOPED]["inputs"] == [WHOLE_WORKSPACE], (
+        f"{PLAN_TOOLING_PROJECT}:{PLAN_TOOLING_DOCS_SCOPED} collects the journeys that "
+        "copy this checkout, so its cached verdict must be keyed on the whole workspace"
+    )
     llmlint = _nx_config()["targetDefaults"]["lint-llm-diff"]["inputs"]
     assert llmlint[0] == WHOLE_WORKSPACE, (
         "the llmlint tier judges the whole workspace diff and shares this one key"
@@ -168,7 +183,7 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
 
 
 def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhere() -> None:
-    """Reconcile the four places the marker name is independently written down.
+    """Reconcile the places the marker name is independently written down.
 
     Each marker names a routing decision, not a label: pytest registers it,
     `conftest.py` enforces it, and the Nx targets select on it. Those declarations
@@ -176,6 +191,13 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     one would leave a tier silently selecting nothing — and a `test` tier that ran
     the prose contracts anyway, keyed on a workspace without prose, is the false
     green this whole file exists to prevent.
+
+    A marker routes a test between the targets of the project whose directory holds
+    it, and never out of that project: which project owns a test is decided by where
+    it lives, so the cost of running it is charged to the code `nx affected` would
+    select for it. So every orchestrator tier ignores the directory the host-tool
+    project owns, and that project selects between its own two keys with the same
+    marker the orchestrator project uses between its four.
     """
     manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     registered = re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE)
@@ -211,12 +233,33 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
         marked = re.search(r"-m '?(not )?(\w+)'?", targets[target]["command"])
         assert marked is not None and marked.group(1) is None
 
+    # The same marker routes inside the project that owns the host-tool journeys, and
+    # there it chooses between that project's own two targets rather than handing a
+    # test to another project's tier. Both halves are asserted together because only
+    # the pair partitions: a project whose narrow target deselects a marker no target
+    # of its own collects has stopped running those tests, and one whose targets both
+    # collect them runs them twice against two different keys.
+    host_tools = json.loads(
+        (REPO_ROOT / f"{PLAN_TOOLING_ROOT}/project.json").read_text(encoding="utf-8")
+    )["targets"]
+    assert f"-m 'not {READS_DOCS_MARKER}'" in host_tools[PLAN_TOOLING_SCOPED]["command"]
+    assert f"-m {READS_DOCS_MARKER}" in host_tools[PLAN_TOOLING_DOCS_SCOPED]["command"]
+    # And no other project may collect that directory, or its cost is charged to a key
+    # that does not describe it.
+    for target in (DOCS_SCOPED, RECIPE_SCOPED, CHECKOUT_SCOPED, *CODE_KEYED):
+        assert f"--ignore={PLAN_TOOLING_ROOT}" in targets[target]["command"], (
+            f"orchestrator:{target} collects {PLAN_TOOLING_ROOT}, which the "
+            f"{PLAN_TOOLING_PROJECT} project owns"
+        )
+
 
 #: Every place the parallel worker contract is independently written down. It is a
 #: contract because the number was chosen by measurement against this host — see
 #: `docs/repo-lifecycle.md` — and a recipe that quietly drifted to a different one
 #: would stop being evidence for the tier the gate actually runs.
 PARALLEL_SITES = (
+    (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
+    (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
@@ -243,7 +286,7 @@ def _worker_contracts(path: str, target: str) -> list[tuple[str, str]]:
 
 
 def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
-    """The worker count and distribution are one contract, written in five places.
+    """The worker count and distribution are one contract, written in seven places.
 
     Nothing derives them from a shared value — pytest takes them as command-line
     flags and Nx targets are literal commands — so the reconciliation has to be a
@@ -321,7 +364,11 @@ def _collected_groups(tmp_path: Path) -> dict[str, str]:
 def _reprovisioning_tests() -> list[str]:
     """Every test whose body runs *this* checkout's own provisioning, as `<module>::<name>`."""
     found: list[str] = []
-    for module in sorted((REPO_ROOT / "tests" / "e2e").glob("test_*_e2e.py")):
+    # Every journey module of the suite, not one directory of them: a journey that
+    # re-provisions this checkout constrains scheduling wherever it lives, and the
+    # journeys now span two test projects. Still the `_e2e` naming rather than every
+    # test module, because a unit test that *reads* `session-setup.sh` runs none of it.
+    for module in sorted(REPO_ROOT.joinpath("tests").rglob("test_*_e2e.py")):
         source = module.read_text(encoding="utf-8")
         if OWN_PROVISIONING not in source:
             continue
@@ -395,14 +442,43 @@ def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
     )
 
 
-def _collected(selector: str) -> set[str]:
-    """Every test id pytest selects for one marker expression, from a real collection.
+#: The flags that decide how a tier *runs* rather than what it collects. Dropped before
+#: a target's own arguments are replayed as a collection, because `-n 4` and a coverage
+#: report change nothing about which tests a selector names.
+_RUNNER_FLAGS = frozenset({"-n", "--dist"})
+
+
+def _selection(command: str) -> list[str]:
+    """The arguments that decide what one tier collects, from its real command.
+
+    Taken from the command rather than from its `-m` expression alone, because a tier
+    selects by path as well: the `plan-tooling` project names a directory and every
+    orchestrator tier ignores it. A partition derived from
+    the markers alone would report the orchestrator tiers covering the suite while the
+    directory the host-tool project owns was collected by nobody.
+    """
+    _, _, tail = command.partition("uv run pytest ")
+    assert tail, command
+    selection: list[str] = []
+    skip = False
+    for argument in shlex.split(tail):
+        if skip:
+            skip = False
+        elif argument in _RUNNER_FLAGS:
+            skip = True
+        elif not argument.startswith(("--cov", "--no-cov")):
+            selection.append(argument)
+    return selection
+
+
+def _collected(selection: list[str]) -> set[str]:
+    """Every test id one tier's own arguments select, from a real collection.
 
     No extra ``-q``: the repository's own ``addopts`` already carries one, and a
     second turns the listing into per-file counts that cannot be compared as sets.
     """
     collected = subprocess.run(
-        ["uv", "run", "pytest", "--collect-only", "--no-cov", "-m", selector],
+        ["uv", "run", "pytest", "--collect-only", "--no-cov", *selection],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -412,31 +488,50 @@ def _collected(selector: str) -> set[str]:
     return {line.strip() for line in collected.stdout.splitlines() if "::" in line}
 
 
-def test_the_four_tiers_partition_the_suite_between_them() -> None:
-    """Four selectors, one suite: no test may be collected twice or not at all.
+#: Every tier that runs part of this suite, as the file and target that declares it.
+#: Six, across two projects, and every one of them is a target of the project whose
+#: directory holds the tests it collects: the `plan-tooling` project owns the host-tool
+#: journeys over the plan surface in two targets — one keyed on what they read, one on
+#: the whole workspace for the journeys that copy this checkout — and the orchestrator
+#: project owns the rest in four.
+SUITE_TIERS = (
+    (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
+    (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
+    ("orchestrator/project.json", CODE_SCOPED),
+    ("orchestrator/project.json", DOCS_SCOPED),
+    ("orchestrator/project.json", RECIPE_SCOPED),
+    ("orchestrator/project.json", CHECKOUT_SCOPED),
+)
+
+
+def test_every_tier_of_the_suite_partitions_it_between_them() -> None:
+    """Six selections, one suite: no test may be collected twice or not at all.
 
     The tiers exist because they are keyed on different trees, and a test lands in
-    exactly one of them by marker. That is the shape that loses a test in silence —
-    a typo in any of the four expressions leaves tests no invocation collects, and
-    a suite that runs fewer tests reports the same green as one that runs them all.
-    So the partition is derived from the real targets and checked against real
+    exactly one of them — in the project whose directory holds it, and then in the
+    target of that project whose key matches what it reads. That is the shape that
+    loses a test in silence: a typo in any selection, or a directory a project claims
+    and no tier collects, leaves tests no invocation runs, and a suite that runs fewer
+    tests reports the same green as one that runs them all. So the partition is derived
+    from the real commands — paths, ignores and markers alike — and checked against real
     collections rather than read off the JSON.
     """
-    targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
-        "targets"
+    parts = [
+        _collected(
+            _selection(
+                json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))["targets"][target][
+                    "command"
+                ]
+            )
+        )
+        for path, target in SUITE_TIERS
     ]
-    selectors = [
-        re.search(r"-m '?([^'\s]+(?: [^'-][^']*)?)'?", targets[target]["command"])
-        for target in (CODE_SCOPED, DOCS_SCOPED, RECIPE_SCOPED, CHECKOUT_SCOPED)
-    ]
-    assert all(selectors), f"a tier no longer selects on a marker: {selectors}"
-    parts = [_collected(found.group(1)) for found in selectors if found is not None]
 
     for first in range(len(parts)):
         for second in range(first + 1, len(parts)):
             overlap = parts[first] & parts[second]
             assert not overlap, f"two tiers both collect {sorted(overlap)[:5]}"
-    whole = _collected("")
+    whole = _collected([])
     collected = set().union(*parts)
     assert collected == whole, (
         f"the tiers no longer cover the suite: {sorted(whole - collected)[:5]} is "

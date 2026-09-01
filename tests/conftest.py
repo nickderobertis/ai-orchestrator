@@ -26,6 +26,8 @@ import plan_fixture_root
 import pytest
 from nx_inputs import (
     CODE_WORKSPACE,
+    PLAN_TOOLING_ROOT,
+    PLAN_TOOLING_WORKSPACE,
     RECIPE_WORKSPACE,
     covers,
     named_input_globs,
@@ -36,13 +38,19 @@ from registered_checkouts import listed_checkout_paths
 from orchestrator.root import REPO_ROOT
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
-#: The marker that moves a test from the code-only key to the whole-workspace one.
-#: Its one source is `pyproject.toml`'s marker registration, and `orchestrator`'s
-#: `test` / `test-docs` targets select on it.
+#: The marker that moves a test from its project's narrow key to that project's
+#: whole-workspace one. Its one source is `pyproject.toml`'s marker registration, and
+#: the `test` / `test-docs` targets of both `orchestrator` and `plan-tooling` select on
+#: it. It routes between the targets of one project and never between projects: which
+#: project owns a test is decided by where the test lives.
 READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
 READS_RECIPES_MARKER = "reads_recipes"
+#: The directory the `plan-tooling` project owns. Tests there are routed by *path*
+#: rather than by marker — the project boundary is the tier — so the guards below ask
+#: where a test lives rather than what it declares.
+PLAN_TOOLING_DIRECTORY = PLAN_TOOLING_ROOT
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes
 #: through — which lives outside this workspace and so outside every `nx.json` key.
@@ -216,6 +224,10 @@ def _code_key_reads_are_declared(
         return
     if request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None:
         return
+    # A test of the `plan-tooling` project is keyed on that project's own input, which
+    # covers the prose it reads; the guard below this one is what holds it to that key.
+    if _in_plan_tooling(request):
+        return
     # Resolved before the wrapper is installed: reading the declaration through the
     # guard that consults it is a loop waiting for its first prose-shaped path.
     globs = named_input_globs(CODE_WORKSPACE)
@@ -238,6 +250,58 @@ def _code_key_reads_are_declared(
 
     # `pathlib` reaches the same function through the `io` module rather than
     # `builtins`, so a guard on one alone would miss every `Path.read_text`.
+    monkeypatch.setattr(builtins, "open", guarded)
+    monkeypatch.setattr(io, "open", guarded)
+
+
+def _in_plan_tooling(request: pytest.FixtureRequest) -> bool:
+    """Whether this test belongs to the `plan-tooling` project rather than a marker tier."""
+    module = repository_relative(request.node.path)
+    return module is not None and module.startswith(f"{PLAN_TOOLING_DIRECTORY}/")
+
+
+@pytest.fixture(autouse=True)
+def _plan_tooling_reads_are_declared(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hold the `plan-tooling` project to the key its verdict is memoized on.
+
+    That project exists because its journeys cost what a host tool costs — the installed
+    engine, the `just` recipes, the registered check script, a real `oneharness run` —
+    and are answered by a much narrower set of files than the workspace: this
+    repository's configuration, personas, scripts and modules, and not its prose. A
+    narrower claim needs the same enforcement the recipe tier gets, for the same reason:
+    a read outside the key is a file that can change this project's answer without
+    changing its hash.
+
+    The routing is by directory rather than by marker, which is the whole point of the
+    project — so a file added there is held to this key by being there, with nothing to
+    declare and nothing that can be forgotten. The one exception is a journey that
+    builds a **copy** of this checkout: copying is itself a read of everything git
+    tracks, so those carry `reads_docs` and are collected by this project's *own*
+    whole-workspace target instead, where that is exactly what their verdict depends
+    on. The marker moves such a journey between this project's two keys rather than out
+    of the project, so its cost stays charged to the code `nx affected` selects it for.
+    """
+    if not _in_plan_tooling(request) or request.node.get_closest_marker(READS_DOCS_MARKER):
+        return
+    globs = named_input_globs(PLAN_TOOLING_WORKSPACE)
+    opener = builtins.open
+
+    # `Any` for the same reason the two guards around it use it: this stands in for
+    # `open` itself, whose return type is chosen by arguments this forwards untouched.
+    def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(file, str | os.PathLike):
+            relative = repository_relative(os.fspath(file))
+            if relative is not None and not covers(globs, relative):
+                raise AssertionError(
+                    f"{request.node.name} reads {relative}, which the "
+                    f"{PLAN_TOOLING_WORKSPACE} key does not cover; add the path to that "
+                    f"key in nx.json, or this project replays a verdict recorded before "
+                    f"the file it depends on last moved"
+                )
+        return opener(file, *args, **kwargs)
+
     monkeypatch.setattr(builtins, "open", guarded)
     monkeypatch.setattr(io, "open", guarded)
 

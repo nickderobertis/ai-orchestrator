@@ -75,7 +75,6 @@ the wrong one here would validate every plan against a bar no dispatch is given.
 
 from __future__ import annotations
 
-import argparse
 import re
 import shutil
 import sys
@@ -441,12 +440,33 @@ OUT_OF_DISPATCH = (
     "deploy",
 )
 
+
+class Procedure(NamedTuple):
+    """One way a criterion names an invocation, and what may follow it anyway."""
+
+    pattern: re.Pattern[str]
+    why: str
+    #: What may stand immediately after a match without the criterion being a demand
+    #: to run anything. ``None`` where nothing may.
+    exempt: re.Pattern[str] | None = None
+
+
+#: This repository's own plan-reading recipes, which a criterion **about** the plan
+#: tooling has to be able to name. "`just check-plan` refuses a plan naming its
+#: repository twice" states what that command does, and the node whose job is to make
+#: it do that cannot say so without naming it. None of these runs over a worker's own
+#: change — they read, review, or launch a plan — so naming one is never the "run this
+#: exact invocation" demand :data:`PROCEDURE` exists to refuse, which is what makes
+#: this an exemption rather than a hole: `just gate` and `just check` are still
+#: refused, and they are the ones a judge fails finished work on the spelling of.
+PLAN_TOOLING = re.compile(r"\s*(?:check-plan|review-plan|orchestrate|plans)\b")
+
 # Procedure rather than property. A criterion naming an invocation is one a judge
 # can fail on spelling.
 PROCEDURE = (
-    (re.compile(r"`[^`]*\bjust\s"), "names a `just` invocation"),
-    (re.compile(r"&&"), "names a chained shell command"),
-    (re.compile(r"`[^`]*\b(npm|pnpm|nx|cargo|pytest|git)\s"), "names a shell invocation"),
+    Procedure(re.compile(r"`[^`]*\bjust\s"), "names a `just` invocation", PLAN_TOOLING),
+    Procedure(re.compile(r"&&"), "names a chained shell command"),
+    Procedure(re.compile(r"`[^`]*\b(npm|pnpm|nx|cargo|pytest|git)\s"), "names a shell invocation"),
 )
 
 # A criterion with no content of its own. Deferring to prose elsewhere gives the
@@ -579,6 +599,50 @@ def criteria_items(block: str) -> Iterator[str]:
         yield "\n".join(current)
 
 
+def _invocation(block: str) -> tuple[re.Match[str], str] | tuple[None, None]:
+    """The first invocation ``block`` names that is a demand to run it, and why.
+
+    Every match is read against its own exemption before it is reported, so a
+    criterion naming this repository's plan tooling is passed over and scanning
+    continues — one criterion may name `just check-plan` and the next `just gate`,
+    and stopping at the first match would report neither or the wrong one.
+    """
+    for procedure in PROCEDURE:
+        for named in procedure.pattern.finditer(block):
+            if procedure.exempt is not None and procedure.exempt.match(block, named.end()):
+                continue
+            return named, procedure.why
+    return None, None
+
+
+def check_backticks_pair(block: str, node_id: str) -> None:
+    """Raise :class:`CriteriaError` for a criterion whose inline code never closes.
+
+    Every pattern below reads inline code by pairing backticks, and an unpaired one
+    pairs with the next criterion's instead: the run then spans criteria the author
+    wrote separately, and the refusal quotes a match that begins in one and ends in
+    another. One such block held seventeen backticks and was refused for "naming a
+    shell invocation", quoting a span that ended at the word `git` inside the phrase
+    "real git repositories" three criteria later — a refusal about nothing, whose only
+    correction was to make a sound criterion vaguer.
+
+    So the imbalance is refused first and by name, before any pattern reads the block.
+    It is counted per criterion rather than over the whole block, which answers both
+    halves of the same question: a block whose total is odd has at least one criterion
+    whose own count is odd, and quoting that one criterion is what tells its author
+    where the stray backtick is.
+    """
+    for criterion in criteria_items(block):
+        if criterion.count("`") % 2:
+            raise CriteriaError(
+                f"{node_id}: a criterion leaves a backtick run unclosed "
+                f"({_condensed(criterion)!r}). Inline code is read by pairing backticks, "
+                f"so an unclosed run pairs with the next criterion's and every check over "
+                f"this block quotes a span crossing criteria their author wrote apart. "
+                f"Close the run, or drop the stray backtick."
+            )
+
+
 def permitting_roles() -> tuple[str, ...]:
     """The shipped roles whose bar does **not** forbid this dispatch changing the tree.
 
@@ -700,6 +764,7 @@ def check(task: str, node_id: str, bar: Bar) -> None:
     """Raise :class:`CriteriaError` if ``task`` would be judged on something it omits."""
     prose, block = _split(task)
 
+    check_backticks_pair(block, node_id)
     lowered = block.lower()
     for phrase in OUT_OF_DISPATCH:
         if phrase in lowered:
@@ -730,14 +795,13 @@ def check(task: str, node_id: str, bar: Bar) -> None:
             f"dispatched makes finished work fail against it. State the property that "
             f"version stands in for instead."
         )
-    for pattern, why in PROCEDURE:
-        named = pattern.search(block)
-        if named:
-            raise CriteriaError(
-                f"{node_id}: criteria {why} ({named.group(0)!r}). Criteria state properties; "
-                f"put the command in '## Additional info' and say that running the pieces "
-                f"separately is fine."
-            )
+    named, why = _invocation(block)
+    if named is not None:
+        raise CriteriaError(
+            f"{node_id}: criteria {why} ({named.group(0)!r}). Criteria state properties; "
+            f"put the command in '## Additional info' and say that running the pieces "
+            f"separately is fine."
+        )
     check_changes_allowed(block, node_id, bar)
     check_demands(prose, block, node_id, bar)
 
@@ -854,7 +918,7 @@ def dispatched_nodes(plan: object) -> Iterator[Node]:
     # sets `tasks` on every plan it assembles, so a project whose store answer has no task
     # arrives here as an empty list rather than a missing key. The two refusals below this
     # one are reachable from a real project and are driven by
-    # tests/e2e/test_check_plan_recipe_e2e.py.
+    # tests/plan_tooling/test_check_plan_recipe_e2e.py.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
     if "tasks" not in document:
         raise CriteriaError(
@@ -916,20 +980,69 @@ def check_plan(plan: object) -> int:
     return checked
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Check a qualified plan project before it is launched, from `just check-plan`."""
-    parser = argparse.ArgumentParser(
-        description=(
-            "Refuse a plan whose node would be judged against a demand its task does not state."
-        )
+#: The executable this repository's checks are registered as, which
+#: :mod:`orchestrator.plan_check` hands the engine's own plan check. Passed relative to
+#: the working directory that command gives the verb, which is this checkout's root.
+PLAN_CHECK_SCRIPT = Path("scripts") / "plan-check.sh"
+
+#: How the two paths name themselves in what they print. An operator reading an accepted
+#: plan has to know which loader read it, because only one of them is the launch's own
+#: and the other leaves a structural refusal for the launch to make.
+THROUGH_ENGINE = (
+    f"read through `{ENGINE} plan check`, with this repository's checks registered as "
+    f"{PLAN_CHECK_SCRIPT.as_posix()}"
+)
+DIRECTLY = (
+    f"read with this repository's checks alone: the `{ENGINE}` this command resolved "
+    f"carries no `plan check`, so the engine's own loader did not read this plan and a "
+    f"launch may still refuse its structure"
+)
+
+
+class Counted(NamedTuple):
+    """How many dispatched nodes an accepted plan states, or why that is unknown."""
+
+    #: The count, or ``None`` when the plan could not be re-read to take one.
+    nodes: int | None
+    #: What stopped that read, for the line that has to say the count is missing.
+    reason: str | None = None
+
+
+def accepted(counted: Counted, path: str) -> str:
+    """What an accepted plan reports, in one wording both paths print.
+
+    The count is what stops a plan whose nodes were all skipped for the wrong reason
+    reading like a clean one — so where it is unknown the line says so, and why, rather
+    than printing a zero that means something else entirely.
+    """
+    read = (
+        f"{counted.nodes} dispatched node(s) state the bar they are judged against"
+        if counted.nodes is not None
+        else f"every dispatched node states the bar it is judged against, though how "
+        f"many there are is unknown here: {counted.reason}"
     )
-    parser.add_argument("project", metavar="SOURCE:PROJECT")
-    args = parser.parse_args(argv)
+    return (
+        f"check-plan: {read}, and every task carries a review record for its current "
+        f"authored content ({path})"
+    )
+
+
+def check_directly(project: str) -> int:
+    """Check ``project`` with this repository's checks alone, against an engine with no
+    `plan check`.
+
+    The path this command took before the engine had a verb to register a check with,
+    kept rather than deleted because it is the answer for a host whose engine predates
+    that verb — and because it is the same checks over the same plan, so the two paths
+    agree by construction rather than by being kept in step. What it cannot do is make
+    the loader's own refusals: those are the engine's, and a plan checked this way is
+    still refused by the launch for a structural error this never looks at.
+    """
     try:
-        plan, records = plan_store.read_project(args.project)
+        plan, records = plan_store.read_project(project)
     except (OSError, ValueError) as exc:
         print(
-            f"check-plan: cannot read project {args.project}: {exc}; pass the qualified "
+            f"check-plan: cannot read project {project}: {exc}; pass the qualified "
             "project id you are about to hand `just orchestrate`",
             file=sys.stderr,
         )
@@ -975,13 +1088,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"check-plan: {len(unreviewed)} task(s) carry no review record for their current "
             f"authored content: {named}. Nothing has reviewed those criteria, which is how "
             f"a plan written under time pressure reaches a dispatch. Review them with "
-            f"`just review-plan {args.project}`, which records a pass only for a plan held "
+            f"`just review-plan {project}`, which records a pass only for a plan held "
             f"in a local Markdown store.",
             file=sys.stderr,
         )
         return 1
-    print(
-        f"check-plan: {checked} dispatched node(s) state the bar they are judged against, "
-        f"and every task carries a review record for its current authored content"
-    )
+    print(accepted(Counted(checked), DIRECTLY))
     return 0

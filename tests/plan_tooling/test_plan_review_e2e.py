@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 from nx_workspace import copy_working_tree
-from project_fixtures import local_project
+from project_fixtures import helper, local_project
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_review, plan_store
@@ -42,13 +42,18 @@ from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
 
-pytestmark = pytest.mark.reads_docs
+#: This suite is its own Nx project, `plan-tooling`, rather than a marker tier of the
+#: orchestrator project: every journey here spawns the installed `onepipeline`, the
+#: `just` recipes, the registered check script and — through `just review-plan` — a real
+#: `oneharness run`, which is a different cost from the Python suite beside it and is
+#: answered by a different set of files. `tests/plan_tooling/project.json` names that
+#: set as `planToolingWorkspace`, and `tests/conftest.py` holds these tests to it.
 
 #: The paid provider's stand-in, and the guard covering the identities
 #: `ONEHARNESS_BIN_*` cannot reach. `just review-plan` spawns the real `oneharness run`,
 #: so the provider binary is the seam — exactly as it is for the change-request drafter.
-FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
-PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
+FAKE_CODEX = helper("fake_codex.py")
+PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
 #: Criteria that answer every demand the tracked appendix and the shipped `engineer`
 #: bar make, so the only thing left for a journey here to measure is the review record.
@@ -329,7 +334,13 @@ def test_turning_a_dispatched_node_into_a_human_one_invalidates_its_record(
     same prose once nobody is dispatched from it — and the reverse is the reading that
     costs: an action a reviewer cleared as an external step would otherwise keep its
     record while becoming a task a judge holds to acceptance criteria it does not have.
-    Driven the way an operator changes a node's shape, by editing the stored record.
+    Driven the way an operator changes a node's shape, by editing the stored record. The
+    edit replaces the persona rather than standing a `kind` beside it, because the engine's
+    own loader refuses a node carrying both — "a human node has no dispatch, so no persona
+    or turn budget" — and refuses a human node that still names a repository, so a plan
+    holding those fields together is one no project can reach. Isolating `kind` from
+    `persona` in the key is therefore `tests/test_plan_review.py`'s to do; what a real
+    project can show is that the shape change invalidates the record at all.
     """
     project = _human_project("review-human-rekinded")
     assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
@@ -339,10 +350,12 @@ def test_turning_a_dispatched_node_into_a_human_one_invalidates_its_record(
     written = document.read_text(encoding="utf-8")
     reviewed_as = '  "onepipeline.persona": "engineer"'
     assert reviewed_as in written, written
-    document.write_text(
-        written.replace(reviewed_as, f'  "onepipeline.kind": "human"\n{reviewed_as}'),
-        encoding="utf-8",
+    rekinded = "\n".join(
+        line
+        for line in written.replace(reviewed_as, '  "onepipeline.kind": "human"').splitlines()
+        if not line.startswith("repositories:")
     )
+    document.write_text(f"{rekinded}\n", encoding="utf-8")
 
     refused = _just("check-plan", project)
     assert refused.returncode == 1, refused.stdout + refused.stderr
@@ -392,7 +405,9 @@ def test_rewiring_a_dependency_invalidates_only_the_record_of_the_node_it_moved(
     refused = _just("check-plan", project)
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "no review record" in refused.stderr, refused.stderr
-    assert "1 task(s)" in refused.stderr, refused.stderr
+    # One refusal, against the node that moved: the two whose edges did not move are
+    # named nowhere, which is what says the record is per task rather than per plan.
+    assert refused.stderr.count("no review record") == 1, refused.stderr
     assert "gate" in refused.stderr, refused.stderr
     assert {node: _record_of(project, node) for node in ("route", "docs")} == standing
 
@@ -595,6 +610,15 @@ BAR_HALVES = (
 )
 
 
+#: What a journey building a copy of this checkout reads: everything git tracks, since
+#: that is what it copies and hands a real tool. So these three stay in the
+#: whole-workspace tier rather than joining the narrow key this project's other journeys
+#: are memoized on — a key that dropped a path one of them copies would replay a verdict
+#: for a tree it never ran against.
+COPIES_THE_TRACKED_TREE = pytest.mark.reads_docs
+
+
+@COPIES_THE_TRACKED_TREE
 @pytest.mark.parametrize(("half", "move"), BAR_HALVES, ids=[named for named, _ in BAR_HALVES])
 def test_moving_the_review_bar_invalidates_every_record_granted_under_it(
     tmp_path: Path, half: str, move: Callable[[Path], None]
@@ -853,7 +877,7 @@ def test_the_plan_store_this_gate_writes_into_is_not_tracked() -> None:
 
 #: The stand-in for the paid model at the seam a dispatched two-party member reaches
 #: it through, which is where a planning run's own worker turn arrives.
-FAKE_BACKEND = Path(__file__).resolve().parent / "fake_backend.py"
+FAKE_BACKEND = helper("fake_backend.py")
 
 #: Where `just plan` writes the brief's own project, and where the planner below
 #: authors its plan. A record is written into it by this repository's code and by
@@ -962,6 +986,7 @@ def _a_checkout_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     return checkout
 
 
+@COPIES_THE_TRACKED_TREE
 def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     tmp_path: Path, oneharness_bin: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1024,6 +1049,7 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     )
 
 
+@COPIES_THE_TRACKED_TREE
 def test_a_planning_run_that_did_not_settle_records_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1077,3 +1103,131 @@ def test_a_planning_run_that_did_not_settle_records_nothing(
     )
     refused = _just("check-plan", f"{AUTHORING}:{authored}", cwd=checkout)
     assert refused.returncode == 1, refused.stdout + refused.stderr
+
+
+#: A node whose whole job is adopting a named release. The number is not standing in
+#: for a property here — it *is* the property, and asking for "the property that version
+#: stands in for" leaves criteria that cannot say which release was adopted.
+ADOPTS_A_RELEASE = (
+    "- The engine pin names the release whose lockfile resolves the linked fix, and the "
+    "installed binary reports that same release.\n"
+    "- A journey reads the pin and the installed binary and holds them together.\n"
+    "- The dispatch closes with a completion report naming its evidence."
+)
+
+#: A node pinned to a commit sha. A sha never moves, so it is the opposite of a
+#: perishable fact — it is the anchor a measurement is worth anything against.
+PINS_A_COMMIT = (
+    "- The measurement names the commit `ed68466c` it was taken over, so a later reader "
+    "can retake it against the same tree.\n"
+    "- A journey drives the measurement end to end.\n"
+    "- The dispatch closes with a completion report naming its evidence."
+)
+
+#: A criterion no repository state could falsify. It reads as satisfied whatever the
+#: dispatch does, so it can never be what stops bad work — and it occupies the place a
+#: criterion that would have.
+DECORATIVE = (
+    "- The implementation is of good quality and fits the codebase.\n"
+    "- A journey drives the change end to end.\n"
+    "- The dispatch closes with a completion report naming its evidence."
+)
+
+#: What a judge refusing on the falsifiability question answers.
+REFUSES_AS_DECORATIVE = {
+    "passes": False,
+    "reason": "criterion 1 names no repository state that could make it fail",
+}
+
+
+def _prompts(path: Path) -> list[str]:
+    """Every prompt the scripted provider was given, whitespace-normalized, in order.
+
+    Normalized because a prompt is prose wrapped at whatever column its source is
+    written to: an assertion on a phrase that happens to straddle a line break fails
+    for the wrapping rather than for the words, and the wrapping is not the contract.
+    """
+    return [
+        " ".join(json.loads(line)["prompt"].split())
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _reviewed_prompt(tmp_path: Path, project: str, *answers: object) -> tuple[str, object]:
+    """The prompt one real `just review-plan` delivered, beside what the recipe did.
+
+    The prompt is read out of the provider's own log rather than composed here, so what
+    is asserted is the instruction the reviewer was handed through the real recipe, the
+    real script, the real `oneharness run` and its response schema — not a string this
+    test rebuilt. Only the paid model is scripted, which is the one thing a journey
+    cannot drive: what a model decides is neither deterministic nor free, so what these
+    journeys own is the bar it is given and what this repository does with its answer.
+    """
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, *answers)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+    reviewed = _just("review-plan", project, environment=environment)
+    (prompt,) = _prompts(log)
+    return prompt, reviewed
+
+
+def test_the_reviewer_is_told_a_release_that_is_the_tasks_subject_is_not_perishable(
+    tmp_path: Path,
+) -> None:
+    """The exemption, in the reviewer's own instructions, over the task it is for.
+
+    Getting one two-node plan past this reviewer took fourteen rounds, all on one
+    criterion: the newest release was refused as perishable, a floor as too weak, a
+    concrete floor as perishable again, and an immutable commit sha passed at round
+    eleven and was refused at round fourteen. Every accommodation removed an anchor, so
+    the criteria ended vaguer than the planner wrote them — in order to satisfy a check
+    whose whole purpose is precision.
+    """
+    prompt, reviewed = _reviewed_prompt(
+        tmp_path, _project("review-adoption", ADOPTS_A_RELEASE), PASSES
+    )
+
+    assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
+    assert "release or version that is the subject of the task" in prompt, prompt
+    assert "is the property itself rather than a stand-in for one" in prompt, prompt
+    assert "there is nothing behind it to ask for instead" in prompt, prompt
+    # And it is that task the exemption was delivered over, rather than some other one.
+    assert "The engine pin names the release" in prompt, prompt
+
+
+def test_the_reviewer_is_told_an_immutable_anchor_is_not_a_perishable_fact(
+    tmp_path: Path,
+) -> None:
+    """The other half: a commit sha is a fixed point, so pinning to one is not the error."""
+    prompt, reviewed = _reviewed_prompt(tmp_path, _project("review-anchor", PINS_A_COMMIT), PASSES)
+
+    assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
+    assert "immutable anchor" in prompt, prompt
+    assert "a commit sha, a tag, a release already published" in prompt, prompt
+    assert "is exactly what a criterion should pin to" in prompt, prompt
+    assert "ed68466c" in prompt, prompt
+
+
+def test_the_reviewer_is_asked_what_state_would_falsify_each_criterion(
+    tmp_path: Path,
+) -> None:
+    """The question the manager loop makes and this bar did not, and what a refusal does.
+
+    A criterion nothing could falsify is decorative: it reads as satisfied whatever the
+    dispatch does, so it cannot be what stops bad work — and it is the shape that let a
+    criterion naming a boolean literal the shipped code negated go through. Driven with
+    the provider refusing on that ground, because what this repository owns is the
+    question asked and what is done with the answer: the reason reaches the operator,
+    and nothing is recorded.
+    """
+    project = _project("review-decorative", DECORATIVE)
+
+    prompt, refused = _reviewed_prompt(tmp_path, project, REFUSES_AS_DECORATIVE)
+
+    assert "name to yourself the fixture, input, or repository state" in prompt, prompt
+    assert "decorative" in prompt, prompt
+    assert "Refuse a criterion you cannot falsify that way" in prompt, prompt
+    assert "it can never be what stops bad work" in prompt, prompt
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert REFUSES_AS_DECORATIVE["reason"] in refused.stderr, refused.stderr
+    assert _record_of(project, "route") is None, "a refusal recorded a pass"

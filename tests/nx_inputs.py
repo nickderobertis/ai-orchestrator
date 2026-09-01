@@ -25,6 +25,10 @@ CODE_WORKSPACE = "codeWorkspace"
 #: The key `orchestrator:test-recipes` is memoized on: what the recipe journeys
 #: drive, plus the modules that define and collect them.
 RECIPE_WORKSPACE = "recipeWorkspace"
+#: The key `plan-tooling:test` is memoized on: what the host-tool journeys over this
+#: repository's plan surface drive and read. Narrower than the whole workspace by the
+#: prose those journeys never open, which is what makes editing `docs/` free of them.
+PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: The key `workspace:check-nx-cache` is memoized on: what that script reads.
 NX_CACHE_CHECK = "nxCacheCheck"
 #: The tier that runs the bulk of the Python suite across xdist workers.
@@ -41,6 +45,31 @@ RECIPE_SCOPED = "test-recipes"
 #: Deliberately unmemoized: no `nx.json` key could cover either, so any memo would be a
 #: verdict on whatever they looked like when it was recorded.
 CHECKOUT_SCOPED = "test-checkouts"
+#: The project whose test target owns the host-tool journeys over the plan surface —
+#: `just check-plan`, `just review-plan`, the registered check script, the installed
+#: engine and a real `oneharness run`. A project rather than a marker tier of the
+#: orchestrator project, because what those journeys cost and what answers them are both
+#: different from the Python suite beside them, and `nx affected` can only tell the two
+#: apart where they are two projects. It declares **no Python distribution**: there is
+#: one `pyproject.toml` and one `uv.lock` in this repository and this project runs that
+#: workspace's own pytest over a directory, so the Nx project graph gains a target
+#: rather than the Python workspace gaining a member.
+PLAN_TOOLING_PROJECT = "plan-tooling"
+#: That project's own test target, keyed on the narrow set its journeys read.
+PLAN_TOOLING_SCOPED = "test"
+#: That project's second target: the journeys that build a **copy** of this checkout,
+#: keyed on the whole workspace because copying the tracked tree is reading all of it.
+#: A target of the project that owns them rather than a marker handing them to another
+#: project's tier — the two costs are two keys, and a tier whose tests live in one
+#: project while another project's target collects them is a cost `nx affected` cannot
+#: attribute to the code that moved it.
+PLAN_TOOLING_DOCS_SCOPED = "test-docs"
+#: The directory that project owns, which every other project's tiers ignore.
+#: Path-selected rather than marker-selected: the project boundary is what routes these,
+#: so a file added here joins this project by being here, and which of the project's two
+#: targets runs it is the only thing its markers decide.
+PLAN_TOOLING_ROOT = "tests/plan_tooling"
+
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:
 #: it is seconds of work, and a floor that always runs is one no replay can skip.

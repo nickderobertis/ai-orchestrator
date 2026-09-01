@@ -986,8 +986,8 @@ replays as a failure, and a tree the suite would fail can no longer replay a pas
 The suite waits on subprocesses rather than on compute — a serial run holds one
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
-`orchestrator:test-recipes`, `orchestrator:test-checkouts`, and `just test-e2e` all
-run `-n 4 --dist loadgroup`.
+`orchestrator:test-recipes`, `orchestrator:test-checkouts`, `plan-tooling:test`,
+`plan-tooling:test-docs`, and `just test-e2e` all run `-n 4 --dist loadgroup`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its

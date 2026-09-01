@@ -1,0 +1,30 @@
+{
+  "name": "plan-tooling",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_tooling",
+  "tags": [
+    "scope:plan-tooling",
+    "type:tests"
+  ],
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_tooling -m 'not reads_docs' --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "planToolingWorkspace"
+      ]
+    },
+    "test-docs": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_tooling -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
+    }
+  }
+}

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -35,10 +36,16 @@ import pytest
 from project_fixtures import project_from_plan, reviewed
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_store
 from orchestrator.criteria_guard import APPENDIX, OUT_OF_DISPATCH
 from orchestrator.root import REPO_ROOT
 
-pytestmark = pytest.mark.reads_docs
+#: This suite is its own Nx project, `plan-tooling`, rather than a marker tier of the
+#: orchestrator project: every journey here spawns the installed `onepipeline`, the
+#: `just` recipes, the registered check script and — through `just review-plan` — a real
+#: `oneharness run`, which is a different cost from the Python suite beside it and is
+#: answered by a different set of files. `tests/plan_tooling/project.json` names that
+#: set as `planToolingWorkspace`, and `tests/conftest.py` holds these tests to it.
 
 
 def _task(criteria: str) -> str:
@@ -132,7 +139,7 @@ def _check_project(
     only the paid provider scripted — because since the review gate landed a plan
     nothing has reviewed is refused before its criteria are read at all, and what these
     journeys are about is the criteria. The gate itself is
-    `tests/e2e/test_plan_review_e2e.py`'s subject, which reviews nothing in advance.
+    `tests/plan_tooling/test_plan_review_e2e.py`'s subject, which reviews nothing in advance.
     """
     if ":" in project and not project.endswith(":absent"):
         reviewed(project)
@@ -478,6 +485,7 @@ def test_check_plan_reads_every_page_of_a_multi_page_project(tmp_path: Path) -> 
     plan.write_text(
         json.dumps(
             {
+                "schema_version": 3,
                 "name": "check-plan-paged-e2e",
                 "tasks": [
                     {"id": f"human-{index}", "kind": "human", "task": f"Approve {index}."}
@@ -663,56 +671,70 @@ def _with_node(plan: Path, **fields: object) -> Path:
     return plan
 
 
-@pytest.mark.parametrize(
-    "persona",
-    (
-        pytest.param(None, id="no-persona"),
-        pytest.param("../personas/orchestrator.yaml", id="by-path"),
-    ),
-)
-def test_every_way_a_node_names_its_bar_resolves_through_the_recipe(
-    tmp_path: Path, persona: str | None
-) -> None:
-    """The two resolutions besides a shipped name, driven where an operator uses them.
+PERSONA_BY_PATH = "../personas/orchestrator.yaml"
 
-    A node with no `persona` is left with the base config's generic contract, and one
-    naming a path relative to `graphs/` gets that file's — the only shape in
-    `personas/` a dispatch reads. Neither resolution may make the guard fall over or
-    stop refusing: a plan that omits a demand is still refused under both, and which
-    source the demand came from is what the shipped-name journey above asserts.
+
+def test_a_persona_named_by_path_resolves_through_the_recipe(tmp_path: Path) -> None:
+    """The one resolution besides a shipped name that a real project can carry.
+
+    A `persona` naming a path relative to `graphs/` is the only shape in `personas/` a
+    dispatch reads, and it must neither make the checks fall over nor stop them
+    refusing: a plan that omits a demand is still refused under it, and which source
+    the demand came from is what the shipped-name journey above asserts.
+
+    The third resolution — a node with **no** persona at all, left with the base
+    config's generic contract — has no journey because no plan can reach it: the
+    engine's own loader refuses an agent node that names none, which the field journey
+    below drives. `tests/test_criteria_guard.py` is what covers that resolution, and
+    the reason it is worth keeping there is that this repository does not own the rule
+    that makes it unreachable.
     """
-    accepted = _check_plan(_with_node(_plan(tmp_path, STATES_ITS_BAR), persona=persona))
+    accepted = _check_plan(_with_node(_plan(tmp_path, STATES_ITS_BAR), persona=PERSONA_BY_PATH))
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
-    refused = _check_plan(_with_node(_plan(tmp_path, OMITS_A_DEMAND), persona=persona))
+    refused = _check_plan(_with_node(_plan(tmp_path, OMITS_A_DEMAND), persona=PERSONA_BY_PATH))
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "proof end to end" in refused.stderr, refused.stderr
 
 
 @pytest.mark.parametrize(
-    ("fields", "reason"),
+    ("fields", "reason", "source"),
     (
-        pytest.param({"persona": "../../elsewhere.yaml"}, "outside this checkout", id="escaped"),
-        pytest.param({"persona": 7}, "`persona` is int", id="persona-not-a-name"),
-        pytest.param({"task": None}, "states no `task` string", id="no-task"),
-        pytest.param({"kind": "review"}, "`kind` is 'review'", id="unknown-kind"),
-        pytest.param({"steps": 3}, "`steps` is int", id="steps-not-a-list"),
-        pytest.param({"steps": ["one"]}, "`steps[0]` is str", id="step-not-an-object"),
+        pytest.param(
+            {"persona": "../../elsewhere.yaml"},
+            "outside this checkout",
+            "scripts/plan-check.sh",
+            id="escaped",
+        ),
+        pytest.param({"persona": 7}, "persona: invalid type", "engine", id="persona-not-a-name"),
+        pytest.param({"persona": None}, "needs a persona", "engine", id="no-persona"),
+        pytest.param({"task": None}, "needs task prose", "engine", id="no-task"),
+        pytest.param({"kind": "review"}, "unknown variant `review`", "engine", id="unknown-kind"),
+        pytest.param({"steps": 3}, "steps: invalid type", "engine", id="steps-not-a-list"),
+        pytest.param(
+            {"steps": ["one"]}, "steps[0]: invalid type", "engine", id="step-not-an-object"
+        ),
     ),
 )
 def test_a_node_whose_own_fields_are_wrong_is_refused_by_the_field(
-    tmp_path: Path, fields: dict[str, object], reason: str
+    tmp_path: Path, fields: dict[str, object], reason: str, source: str
 ) -> None:
     """A plan is a document some other tool wrote, so its shape is untrusted here too.
 
-    Each of these reaches the operator as a diagnostic naming the field, rather than
-    as whatever exception reaching into the wrong shape happened to produce.
+    Each of these reaches the operator as a diagnostic naming the field, rather than as
+    whatever exception reaching into the wrong shape happened to produce. **Which
+    loader says so is asserted beside the reason**, because that is the whole of what
+    registering these checks with `onepipeline plan check` bought: every shape below but
+    the first is the engine's own to refuse now, so a refusal here is the refusal a
+    launch would make rather than one this repository reconstructed — and the
+    reconstruction is what passed three of these and false-refused twice.
     """
     refused = _check_plan(_with_node(_plan(tmp_path, STATES_ITS_BAR), **fields))
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert reason in refused.stderr, refused.stderr
+    assert f"check-plan: {source}: " in refused.stderr, refused.stderr
 
 
 class Drafted(NamedTuple):
@@ -1021,37 +1043,615 @@ class Malformed(NamedTuple):
     #: The value the plan node states, which reaches the task record as
     #: `onepipeline.steps` and comes back out of `_project_plan` unchanged.
     steps: object
-    #: The refusal's opening, naming the field the plan's author has to fix.
-    field: str
-    #: The record path the refusal sends them to, which must exist in this checkout.
-    example: str
+    #: What the loader's refusal says about it, naming the field and the value.
+    reason: str
+    #: How this case is named in the parametrization.
+    named: str
 
 
 #: Both refusals a real qualified project can reach: a store record's `onepipeline.`
-#: metadata is arbitrary JSON — nothing between the plan's author and this guard
+#: metadata is arbitrary JSON — nothing between the plan's author and the loader
 #: narrows it — so a `steps` that is not a list, and one whose entries are not
-#: objects, are the two shapes that arrive here malformed.
+#: objects, are the two shapes that arrive malformed.
 MALFORMED_STEPS = (
-    Malformed(3, "route's `steps` is int, not a list", "examples/tasks/tracked-release/service.md"),
-    Malformed(
-        ["one"],
-        "route's `steps[0]` is str, not an object",
-        "examples/tasks/tracked-release/",
-    ),
+    Malformed(3, "steps: invalid type: integer `3`", "steps-not-a-list"),
+    Malformed(["one"], 'steps[0]: invalid type: string "one"', "step-not-an-object"),
 )
 
 
-@pytest.mark.parametrize("malformed", MALFORMED_STEPS, ids=lambda item: item.field)
+@pytest.mark.parametrize("malformed", MALFORMED_STEPS, ids=lambda item: item.named)
 def test_a_malformed_step_is_refused_against_the_plan_input_the_recipe_reads(
     tmp_path: Path, malformed: Malformed
 ) -> None:
-    """The refusal names the store record to fix and an example this checkout has."""
+    """The refusal names the node and the field, and says which loader made it.
+
+    A stepped node reaches the engine's own loader as `onepipeline.steps` metadata, so
+    what refuses a malformed one is the loader a launch runs — and the refusal names
+    where the value came from, which is the reserved metadata key on the task record its
+    author edits.
+    """
     refused = _check_plan(_with_node(_plan(tmp_path, STATES_ITS_BAR), steps=malformed.steps))
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     reported = refused.stderr
-    assert malformed.field in reported, reported
-    assert "task record" in reported, reported
-    assert "JSON" not in reported, reported
-    assert malformed.example in reported, reported
-    assert (REPO_ROOT / malformed.example).exists(), reported
+    assert malformed.reason in reported, reported
+    assert "check-plan: engine: " in reported, reported
+    assert "route" in reported, reported
+    assert "`onepipeline.<field>` metadata keys on its task" in reported, reported
+
+
+#: The engine's own loader is what decides a plan's structure now, and the accepted
+#: line says so. An operator reading "accepted" has to know which loader read the plan,
+#: because the direct path leaves every structural refusal for the launch to make.
+THROUGH_THE_ENGINE = "read through `onepipeline plan check`"
+
+
+def _task_document(project: str) -> Path:
+    """The stored record of this plan's one dispatched node, for an edit no plan states.
+
+    Two of the three structural errors below cannot be written as plan JSON at all —
+    `orchestrator/project_store.py` renders a node's repository into exactly one of the
+    two places, and turns `deps` into store dependency edges — so the shape that
+    actually reached a launch is reached the way it arose, by editing the record.
+    """
+    source, _ = plan_store.qualified(project)
+    (task,) = [one for one in plan_store.read_tasks(project) if one.node_id == "route"]
+    _, _, native = task.qualified_id.partition(":")
+    return plan_store.task_document(source, native)
+
+
+def _with_metadata(project: str, entry: str) -> str:
+    """``project`` with one more `onepipeline.` metadata entry on its dispatched node."""
+    document = _task_document(project)
+    written = document.read_text(encoding="utf-8")
+    anchor = '  "onepipeline.id": "route"'
+    assert anchor in written, written
+    document.write_text(written.replace(anchor, f"{anchor}\n{entry}", 1), encoding="utf-8")
+    return project
+
+
+class Structural(NamedTuple):
+    """One structural error that reached a launch, and what the refusal must name."""
+
+    #: How the stored record is made to carry it.
+    entry: str
+    #: The field the refusal names.
+    field: str
+    #: A phrase of the loader's own reason, so the refusal is this error's and not
+    #: some other one the same edit happens to produce.
+    reason: str
+
+
+#: The three that were reported sound by this repository's own re-implementation of the
+#: loader and then refused by the launch — five wasted attempts on one plan. Each is now
+#: the engine's to refuse, which is the whole of why they are driven here: a refusal
+#: this recipe makes is a refusal the launch makes, by construction.
+STRUCTURAL = (
+    Structural(
+        '  "onepipeline.repo": "https://github.com/nickderobertis/some-service"',
+        "repo",
+        "names a repository in both",
+    ),
+    Structural('  "onepipeline.deps": ["approve"]', "deps", "cross-DAG"),
+)
+
+
+@pytest.mark.parametrize("structural", STRUCTURAL, ids=lambda item: item.field)
+def test_a_structural_error_that_reached_a_launch_is_refused_by_the_recipe(
+    tmp_path: Path, structural: Structural
+) -> None:
+    """A shape the launch refuses is refused here, naming the node and the field."""
+    project = _with_metadata(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)), structural.entry)
+
+    refused = _check_project(project)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: engine: " in refused.stderr, refused.stderr
+    assert "route" in refused.stderr, refused.stderr
+    assert f": {structural.field}: " in refused.stderr, refused.stderr
+    assert structural.reason in refused.stderr, refused.stderr
+
+
+def test_a_stepped_node_that_also_carries_a_task_is_refused(tmp_path: Path) -> None:
+    """The third of the three, which a plan can state directly.
+
+    A node with `steps` takes its persona and its prose from them, so one carrying a
+    `task` as well states two answers to the same question — and which one a dispatch
+    would be judged against is exactly what nobody can say.
+    """
+    plan = _plan(tmp_path, STATES_ITS_BAR)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    document["tasks"][0]["steps"] = [
+        {"id": "build", "persona": "engineer", "task": _task(STATES_ITS_BAR)}
+    ]
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    refused = _check_plan(plan)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: engine: " in refused.stderr, refused.stderr
+    # The loader names whichever of the three fields a stepped node may not restate it
+    # reached first; which one that is belongs to the engine, and the node and the
+    # reason are what the plan's author acts on.
+    assert re.search(r"check-plan: engine: route: (task|persona|max_turns): ", refused.stderr), (
+        refused.stderr
+    )
+    assert "takes its persona, task, and turn budget from them" in refused.stderr, refused.stderr
+
+
+#: Seventeen backticks: eight pairs and one stray, spread over criteria their author
+#: wrote apart. It is the block that was refused for "naming a shell invocation",
+#: quoting a span that began in one criterion and ended at the word `git` in "real git
+#: repositories" three criteria later.
+UNBALANCED_BACKTICKS = (
+    "- `orchestrator/plan_check.py` answers on `stdout` and exits `0` whether or not it "
+    "refused.\n"
+    "- The refusal names the `node`, the `field`, and the `reason` its loader gave.\n"
+    "- A plan carrying `onepipeline.deps for an in-plan edge is refused.\n"
+    "- The journeys drive real `git` repositories rather than fixtures of them.\n"
+    "- `scripts/plan-check.sh` reads the plan from standard input.\n"
+    "- Every claim the dispatch makes about the finished work is true of the tree as "
+    "it finally stands.\n"
+    "- The behavior is proven end to end by a journey driving the real recipe."
+)
+
+
+def test_a_criteria_block_with_an_unbalanced_backtick_run_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    """The imbalance is named, and the quote stays inside the criterion that has it.
+
+    Seventeen backticks is an odd number, so inline-code pairing runs on past the
+    criterion the stray one is in and every later pattern reads a span its author never
+    wrote. Refusing that by name is what turns an unactionable refusal about a shell
+    invocation into one sentence naming the stray backtick.
+    """
+    assert UNBALANCED_BACKTICKS.count("`") == 17, "this fixture no longer holds the imbalance"
+
+    refused = _check_plan(_plan(tmp_path, UNBALANCED_BACKTICKS))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "backtick run unclosed" in refused.stderr, refused.stderr
+    # The quote is the one criterion that carries the stray backtick, and nothing from
+    # the criteria on either side of it.
+    assert "onepipeline.deps for an in-plan edge" in refused.stderr, refused.stderr
+    assert "real `git` repositories" not in refused.stderr, refused.stderr
+    assert "answers on stdout" not in refused.stderr, refused.stderr
+    assert "shell invocation" not in refused.stderr, refused.stderr
+
+
+#: This repository's own plan-reading recipes, named as the nouns a criterion about the
+#: plan tooling has to be able to name. The node whose job is to change what
+#: `just check-plan` refuses cannot state its criteria without naming it, and none of
+#: these is a check a worker runs over its own change.
+NAMES_THE_PLAN_RECIPES = (
+    "- `just check-plan` refuses a plan whose node names its repository twice.\n"
+    "- `just review-plan` records a pass and never a refusal.\n"
+    "- `just orchestrate` launches the plan it is given without reading it again.\n"
+    "- `just plans` lists the project the plan was written into.\n"
+    "- Every claim the dispatch makes about the finished work is true of the tree as "
+    "it finally stands.\n"
+    "- The behavior is proven end to end by a journey driving the real recipe."
+)
+
+
+def test_a_criterion_naming_this_repositorys_plan_recipes_is_accepted(tmp_path: Path) -> None:
+    """The exemption, and its bound: `just gate` in the same block is still refused.
+
+    Both halves in one journey, because the exemption is only sound while the refusal
+    it makes room for still fires — an exemption that swallowed every `just` invocation
+    would be the hole rather than the fix.
+    """
+    accepted = _check_plan(_plan(tmp_path, NAMES_THE_PLAN_RECIPES))
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+    refused = _check_plan(_plan(tmp_path, f"{NAMES_THE_PLAN_RECIPES}\n- `just gate` is green."))
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "`just` invocation" in refused.stderr, refused.stderr
+
+
+def test_the_recipe_says_the_engines_own_loader_read_the_plan(tmp_path: Path) -> None:
+    """An accepted plan names which loader read it, because they accept different amounts."""
+    accepted = _check_plan(_plan(tmp_path, STATES_ITS_BAR))
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert THROUGH_THE_ENGINE in accepted.stdout, accepted.stdout
+    assert "scripts/plan-check.sh" in accepted.stdout, accepted.stdout
+
+
+def _older_engine(root: Path) -> Path:
+    """An engine of the shape this recipe's direct path exists for.
+
+    A real binary refusing `plan check` the way a release before that verb does, rather
+    than a flag on the recipe: the path is chosen by asking the engine what it carries,
+    so the only honest way to drive the other answer is to give it an engine that
+    answers differently. Kept outside `PATH` deliberately — the roles a node's persona
+    resolves to are still read out of the installed binary, so shadowing that would
+    change what is being compared.
+    """
+    directory = root / "older-engine"
+    directory.mkdir(parents=True, exist_ok=True)
+    binary = directory / "onepipeline"
+    # llmlint: ignore[e2e_not_mocked] An engine carrying no `plan check` is not an
+    # artifact this repository can install — it is a release older than the verb — so
+    # the substitute is the absence of that one verb and nothing else. Everything the
+    # journey then drives is real: the recipe, the wrapper, this repository's own
+    # checks, the review bar lifted out of the *installed* engine, and the store.
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print(\"error: unrecognized subcommand 'check'\", file=sys.stderr)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    return binary
+
+
+@pytest.mark.parametrize(
+    ("criteria", "code"),
+    (
+        pytest.param(STATES_ITS_BAR, 0, id="accepted"),
+        pytest.param(OMITS_A_DEMAND, 1, id="refused"),
+    ),
+)
+def test_both_paths_reach_the_same_verdict_on_one_plan(
+    tmp_path: Path, criteria: str, code: int
+) -> None:
+    """The recipe works against an engine with no `plan check`, and agrees with itself.
+
+    The two paths refuse different amounts — only the engine's own loader makes the
+    structural refusals — but over a plan whose structure is sound they are the same
+    checks over the same nodes, so they must reach the same verdict. What differs is
+    the sentence naming which one read it, because an operator on the narrower path is
+    owed the knowledge that a launch may still refuse this plan's structure.
+    """
+    project = project_from_plan(_plan(tmp_path, criteria))
+    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
+
+    through = _check_project(project)
+    directly = _check_project(project, environment=direct)
+
+    assert through.returncode == code, through.stdout + through.stderr
+    assert directly.returncode == code, directly.stdout + directly.stderr
+    if code == 0:
+        assert THROUGH_THE_ENGINE in through.stdout, through.stdout
+        assert "carries no `plan check`" in directly.stdout, directly.stdout
+        assert "1 dispatched node(s)" in through.stdout, through.stdout
+        assert "1 dispatched node(s)" in directly.stdout, directly.stdout
+    else:
+        assert "proof end to end" in through.stderr, through.stderr
+        assert "proof end to end" in directly.stderr, directly.stderr
+        # Through the verb the refusal names the check that made it; directly there is
+        # only one loader, so there is no source to name.
+        assert "check-plan: scripts/plan-check.sh: route: task: " in through.stderr, through.stderr
+        assert "check-plan: route: " in directly.stderr, directly.stderr
+
+
+def _loaded_plan(project: str, root: Path) -> str:
+    """The plan document the engine's own `plan check` hands a registered check.
+
+    Captured from the verb rather than rebuilt here, so what the script below is driven
+    with is the document it actually receives — including the store's whole `metadata`
+    map, which is where this repository's review record travels.
+    """
+    recorder = root / "record-check.sh"
+    captured = root / "captured.json"
+    recorder.write_text(
+        f'#!/usr/bin/env sh\ncat > "{captured}"\necho \'{{"refusals": []}}\'\n',
+        encoding="utf-8",
+    )
+    recorder.chmod(0o755)
+    read = subprocess.run(
+        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(recorder)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert captured.is_file(), read.stdout + read.stderr
+    return captured.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("criteria", "refuses"),
+    (
+        pytest.param(STATES_ITS_BAR, False, id="accepting"),
+        pytest.param(OMITS_A_DEMAND, True, id="refusing"),
+    ),
+)
+def test_the_registered_check_answers_a_plan_document_on_its_own_stdin(
+    tmp_path: Path, criteria: str, refuses: bool
+) -> None:
+    """The contract the verb reads this repository's checks through, driven directly.
+
+    Exit 0 either way is the half worth driving: a non-zero exit means the check could
+    not be run, and the verb reports that separately rather than as an accept — so a
+    refusal that exited non-zero would be read as a broken check and a plan nobody
+    judged.
+    """
+    project = reviewed(project_from_plan(_plan(tmp_path, criteria)))
+
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input=_loaded_plan(project, tmp_path),
+        env=os.environ | {"ORCHESTRATOR_PLAN_CHECK_PROJECT": project},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    answer = json.loads(answered.stdout)
+    if not refuses:
+        assert answer == {"refusals": []}, answer
+    else:
+        (refusal,) = answer["refusals"]
+        assert refusal["node"] == "route", refusal
+        assert refusal["field"] == "task", refusal
+        assert "proof end to end" in refusal["reason"], refusal
+
+
+def test_the_registered_check_does_not_import_from_an_inherited_module_path(
+    tmp_path: Path,
+) -> None:
+    """A `PYTHONPATH` the verb was spawned with may not reach this check's interpreter.
+
+    The verb spawns a registered check with the environment it was handed, so that
+    variable is whatever ran `just check-plan` — or whatever ran the thing that ran it.
+    Every entry on it is a directory the interpreter imports from *before* the standard
+    library, so a `json.py` left there answers this check's own reads, and an empty entry
+    means the working directory the verb was run in. Prepending this checkout's root does
+    not help: the root only wins for names it actually holds.
+
+    Driven with a hostile entry that would stop the interpreter outright, because a
+    subtler one would be indistinguishable from the check working.
+    """
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    (hostile / "json.py").write_text(
+        "raise SystemExit('an inherited module path answered this check')\n", encoding="utf-8"
+    )
+    project = reviewed(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)))
+
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input=_loaded_plan(project, tmp_path),
+        env=os.environ
+        | {
+            "ORCHESTRATOR_PLAN_CHECK_PROJECT": project,
+            "PYTHONPATH": f"{hostile}:",
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    assert json.loads(answered.stdout) == {"refusals": []}, answered.stdout
+
+
+def _unreadable_engine(root: Path) -> Path:
+    """An engine whose `plan check` answers something no reader could act on.
+
+    The verb's answer is another program's output, and a build that changed its shape —
+    or a wrapper between the two that wrote to the same stream — would otherwise reach
+    an operator as a plan silently accepted. This is what that looks like from outside.
+    """
+    directory = root / "unreadable-engine"
+    directory.mkdir(parents=True, exist_ok=True)
+    binary = directory / "onepipeline"
+    # llmlint: ignore[e2e_not_mocked] The engine this checkout installs answers exactly
+    # one way, so an unreadable answer is a shape no real artifact here can produce.
+    # Only that one answer is substituted; the recipe and the wrapper reading it are real.
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if sys.argv[1:] == ['plan', 'check', '--help']:\n"
+        "    raise SystemExit(0)\n"
+        "print('not a json answer')\n"
+        "print('onepipeline: something went wrong', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    return binary
+
+
+def test_an_engine_answering_nothing_readable_is_not_reported_as_an_accepted_plan(
+    tmp_path: Path,
+) -> None:
+    """Exit 2 and say so: an answer nobody can read is not a plan that passed."""
+    project = project_from_plan(_plan(tmp_path, STATES_ITS_BAR))
+
+    refused = _check_project(
+        project,
+        environment=os.environ
+        | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_unreadable_engine(tmp_path))},
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "answered nothing this command could read" in refused.stderr, refused.stderr
+    assert "onepipeline: something went wrong" in refused.stderr, refused.stderr
+    assert "dispatched node(s)" not in refused.stdout, refused.stdout
+
+
+def test_the_registered_check_reports_a_plan_it_cannot_read_as_unrunnable(tmp_path: Path) -> None:
+    """A check that answers nothing usable exits non-zero, and the verb says so.
+
+    Both halves in one journey: the script's own refusal, and what the verb does with a
+    check that exits non-zero — reported as a check that could not be run rather than as
+    a plan that passed, which is the one reading that would let unreviewed criteria
+    through.
+    """
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input="{not json",
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert answered.returncode == 2, answered.stdout + answered.stderr
+    assert "not valid JSON" in answered.stderr, answered.stderr
+    assert answered.stdout == "", answered.stdout
+
+    refusing = tmp_path / "refusing-check.sh"
+    refusing.write_text("#!/usr/bin/env sh\ncat > /dev/null\necho boom >&2\nexit 3\n", "utf-8")
+    refusing.chmod(0o755)
+    project = reviewed(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)))
+
+    read = subprocess.run(
+        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(refusing), "--json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert read.returncode == 2, read.stdout + read.stderr
+    answer = json.loads(read.stdout)
+    assert answer["accepted"] is False, answer
+    (unrunnable,) = answer["unrunnable"]
+    assert unrunnable["exit_code"] == 3, unrunnable
+    assert "boom" in unrunnable["stderr"], unrunnable
+
+
+def test_an_engine_named_but_not_runnable_is_refused_rather_than_read_as_a_refusal(
+    tmp_path: Path,
+) -> None:
+    """A value naming nothing runnable must not read as an engine that lacks the verb.
+
+    The two exits are the same from outside a spawn, and reading one as the other takes
+    the narrower direct path over a plan the operator meant to have checked whole — so
+    the recipe says which it was and judges nothing.
+    """
+    project = project_from_plan(_plan(tmp_path, STATES_ITS_BAR))
+
+    refused = _check_project(
+        project,
+        environment=os.environ
+        | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(tmp_path / "no-such-engine")},
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "ORCHESTRATOR_PLAN_CHECK_ENGINE" in refused.stderr, refused.stderr
+    assert "not an executable" in refused.stderr, refused.stderr
+    assert "dispatched node(s)" not in refused.stdout, refused.stdout
+
+
+@pytest.mark.parametrize(
+    "interpreter",
+    (
+        pytest.param("/nowhere/python3", id="path-to-nothing"),
+        # A directory carries the execute bit for traversal, so a permission check alone
+        # calls one an interpreter and the failure then arrives from `exec`.
+        pytest.param("/tmp", id="path-to-a-directory"),
+        pytest.param("no-such-interpreter", id="bare-name-nothing-has"),
+    ),
+)
+def test_the_registered_check_refuses_an_interpreter_it_cannot_run(interpreter: str) -> None:
+    """The script says which interpreter it could not run and what provisions one.
+
+    The check is spawned by the engine with no shell around it, so a failure here
+    reaches an operator as whatever the adapter says — and `exec: not found` names
+    neither the value that was wrong nor the command that fixes it.
+    """
+    refused = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input='{"tasks": []}',
+        env=os.environ | {"ORCHESTRATOR_PYTHON": interpreter},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert interpreter in refused.stderr, refused.stderr
+    assert "not an executable interpreter" in refused.stderr, refused.stderr
+    assert "just bootstrap" in refused.stderr, refused.stderr
+    assert refused.stdout == "", refused.stdout
+
+
+def test_a_plan_the_engine_accepts_and_this_reader_cannot_says_so_rather_than_refusing(
+    tmp_path: Path,
+) -> None:
+    """An accepted plan stays accepted when only the count is out of reach.
+
+    The count is re-read from the store rather than reported back by the registered
+    check, because the only channel a spawned check has to its wrapper is a file and a
+    file whose path that wrapper hands over in the environment is a write any symlink on
+    the way to it can redirect. That read can fail where the engine's did not, and a
+    task carrying two repositories is a real project where it does — the engine takes
+    the first and accepts, `orchestrator/plan_store.py` refuses the record. Turning that
+    into a refusal would be this repository's reader deciding a plan's structure again,
+    which is exactly what registering the check retired.
+    """
+    # Reviewed while the record is still one this repository can read, then retargeted:
+    # a task's repositories are outside the review key by design, so the record stands.
+    project = reviewed(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)))
+    document = _task_document(project)
+    written = document.read_text(encoding="utf-8")
+    named = '["github.com/nickderobertis/some-service"]'
+    assert named in written, written
+    document.write_text(
+        written.replace(named, '["github.com/nickderobertis/some-service", "github.com/x/y"]'),
+        encoding="utf-8",
+    )
+
+    accepted = subprocess.run(
+        ["just", "check-plan", project],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "how many there are is unknown here" in accepted.stdout, accepted.stdout
+    assert "more than one repository" in accepted.stdout, accepted.stdout
+    assert "carries a review record" in accepted.stdout, accepted.stdout
+    assert "dispatched node(s)" not in accepted.stdout, accepted.stdout
+
+
+def test_the_registered_check_run_with_no_project_names_the_command_shape(
+    tmp_path: Path,
+) -> None:
+    """A check driven by hand still says what to run, without inventing a project id.
+
+    The project reaches this file only through the wrapper's environment, so a check
+    run any other way has none — and a refusal about a missing review record whose
+    remedy named nothing would send its reader to a command that cannot work.
+    """
+    project = project_from_plan(_plan(tmp_path, STATES_ITS_BAR))
+    environment = {
+        key: value for key, value in os.environ.items() if key != "ORCHESTRATOR_PLAN_CHECK_PROJECT"
+    }
+
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input=_loaded_plan(project, tmp_path),
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    refusals = json.loads(answered.stdout)["refusals"]
+    assert {one["node"] for one in refusals} == {"route", "approve"}, refusals
+    for refusal in refusals:
+        assert refusal["field"] == "metadata", refusal
+        assert "just review-plan <source>:<project>" in refusal["reason"], refusal

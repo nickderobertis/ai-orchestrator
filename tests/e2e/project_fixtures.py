@@ -26,10 +26,37 @@ from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
 
+#: Where the suite's shared stand-ins live: this module's own directory, and the only
+#: spelling of it that survives a test module moving to another project.
+HELPERS = Path(__file__).resolve().parent
+
+
+def helper(name: str) -> Path:
+    """One shared stand-in, refused by name when this checkout does not have it.
+
+    Every caller reaches a stand-in through here rather than deriving it from its own
+    `__file__`, because a caller that derives it is one move away from naming a path
+    that does not exist — and a *paid provider's* stand-in that does not exist is not a
+    stand-in at all. `ONEHARNESS_BIN_CODEX` naming nothing makes oneharness fall through
+    to a real identity, and a `PATH` entry that is not a directory guards nothing, so
+    the journey spends real turns and passes while doing it. That is not hypothetical:
+    moving these two suites into their own project broke exactly this, and the first
+    thing that said so was a review verdict no fixture had scripted.
+    """
+    found = HELPERS / name
+    if not found.exists():
+        raise AssertionError(
+            f"the suite's shared stand-in {name!r} is not at {found}; a journey "
+            f"substituting a path this checkout does not have routes its turn to the "
+            f"real provider and spends it"
+        )
+    return found
+
+
 #: The paid provider's stand-in and the guard covering the identities `ONEHARNESS_BIN_*`
 #: cannot reach, so `reviewed` below spends a real review turn without spending money.
-_FAKE_CODEX = Path(__file__).resolve().parent / "fake_codex.py"
-_PAID_PROVIDER_GUARD = Path(__file__).resolve().parent / "no-paid-provider"
+_FAKE_CODEX = helper("fake_codex.py")
+_PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
 #: What the scripted reviewer answers. One passing verdict, repeated for every task:
 #: `tests/e2e/fake_codex.py` reuses its last scripted answer once the list runs out.

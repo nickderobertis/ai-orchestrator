@@ -25,8 +25,28 @@ Conventions for this repo's tests.
 - **A test that reads this repository's prose declares it.** `orchestrator:test` is
   keyed on the workspace minus its documentation, so an undeclared read would let a
   documentation edit replay a stale verdict. The autouse guard in `conftest.py`
-  fails such a test; mark it `@pytest.mark.reads_docs` and it runs in
-  `orchestrator:test-docs`, which keeps the whole-workspace key.
+  fails such a test; mark it `@pytest.mark.reads_docs` and it runs in the
+  whole-workspace target of the project that owns it.
+- **A host-tool journey over the plan surface belongs to its own project.**
+  `tests/plan_tooling/` is the Nx project `plan-tooling`, selected by directory
+  rather than by marker: a journey there spawns the installed `onepipeline`, the
+  `just` recipes, the registered check script and a real `oneharness run`, which is
+  a different cost from the Python suite and is answered by a different set of
+  files. `planToolingWorkspace` in `nx.json` is that set and `conftest.py` holds
+  these tests to it, exactly as it holds the recipe tier to its own. It declares no
+  Python distribution: this repository is one uv workspace with one `pyproject.toml`
+  and one `uv.lock`, and this is an Nx target over a directory of it. A journey that
+  builds a **copy** of this checkout reads everything git tracks, so it is keyed on the
+  whole workspace instead — but by a target of *this* project, never by handing it to
+  another project's tier: the directory decides which project pays, and a marker only
+  decides which of that project's keys the payment is memoized on.
+- **A shared stand-in is reached through `project_fixtures.helper`, never through a
+  test module's own `__file__`.** A module that derives the path itself names a file
+  relative to wherever it currently sits, so moving it substitutes a path this
+  checkout does not have — and a *paid provider's* stand-in that does not exist is not
+  a stand-in: oneharness falls through to the real identity and the journey spends
+  real turns while passing. `helper` lives beside the stand-ins and refuses a name
+  this checkout does not carry, so that failure is an import error rather than a bill.
 - **A test that drives a recipe declares that too.** `orchestrator:test-recipes` is
   keyed on the `justfile`, `scripts/**`, the root manifests, and the modules that
   collect those tests — much narrower, so the same guard is stricter about it: a

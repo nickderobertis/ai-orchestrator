@@ -14,7 +14,7 @@ resolves to a role compiled into the `oneagentgraph` **that binary links** — n
 that resolution against the real binary this checkout installs, so a release that
 moves a role moves what this guard demands, with nothing here to update.
 
-`tests/e2e/test_check_plan_recipe_e2e.py` drives the same guard through the real
+`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the same guard through the real
 `just check-plan` over the real tracked appendix; the tests here are the ones that
 can state a synthetic bar and a synthetic appendix, which is what makes each
 refusal attributable to one cause.
@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import criteria_guard, plan_review, plan_store
+from orchestrator import criteria_guard, plan_check, plan_review, plan_store
 from orchestrator.criteria_guard import (
     CRITERIA_HEADING,
     Bar,
@@ -42,12 +42,12 @@ from orchestrator.criteria_guard import (
     check_appendix,
     check_changes_allowed,
     check_demands,
+    check_directly,
     check_plan,
     criteria_block,
     criteria_items,
     dispatched_nodes,
     field,
-    main,
     permitting_roles,
     resolve_bar,
     yaml_fragment,
@@ -403,6 +403,60 @@ def test_the_criteria_block_stops_at_the_next_heading_of_any_depth() -> None:
     assert criteria_block(_task("- One thing.")).strip() == "- One thing."
 
 
+#: This repository's own plan-reading recipes, named as the nouns a criterion about the
+#: plan tooling has to be able to name. A `just` invocation is exempt only where the
+#: recipe it names reads, reviews, or launches a plan: none of those is a check a worker
+#: runs over its own change, so naming one is never the "run this exact invocation"
+#: demand the procedure check exists to refuse.
+PLAN_TOOLING_CRITERIA = (
+    "- `just check-plan` refuses a plan whose node names its repository twice.\n"
+    "- `just review-plan` records a pass and never a refusal.\n"
+    "- `just orchestrate` launches the plan it is given.\n"
+    "- `just plans` lists the project the plan was written into."
+)
+
+
+def test_a_criterion_naming_this_repositorys_plan_recipes_is_not_a_procedure() -> None:
+    """The exemption, and the refusal it makes room for, in one place.
+
+    Scanning continues past an exempt match rather than stopping at it, so a block that
+    names the plan tooling *and* a gate is still refused for the gate — an exemption
+    that stopped the scan would be the hole rather than the fix.
+    """
+    check(_task(f"{PLAN_TOOLING_CRITERIA}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+    with pytest.raises(CriteriaError, match="`just` invocation"):
+        check(
+            _task(f"{PLAN_TOOLING_CRITERIA}\n- `just gate` is green.\n{COMPLETE}"),
+            "probe",
+            NOTHING_DEMANDED,
+        )
+
+
+def test_a_criterion_leaving_a_backtick_run_unclosed_is_refused_by_name() -> None:
+    """The imbalance is named, and the quote stays inside the criterion that has it.
+
+    An unpaired backtick pairs with the next criterion's, so every later pattern reads
+    a span its author never wrote — which is how one block was refused for "naming a
+    shell invocation", quoting a match that ended at the word `git` in "real git
+    repositories" three criteria later.
+    """
+    block = (
+        "- A plan carrying `onepipeline.deps for an in-plan edge is refused.\n"
+        "- The journeys drive real `git` repositories rather than fixtures of them.\n"
+        f"{COMPLETE}"
+    )
+
+    with pytest.raises(CriteriaError) as refused:
+        check(_task(block), "probe", NOTHING_DEMANDED)
+
+    reported = str(refused.value)
+    assert "backtick run unclosed" in reported
+    assert "onepipeline.deps for an in-plan edge" in reported
+    assert "real `git` repositories" not in reported
+    assert "shell invocation" not in reported
+
+
 def test_a_task_with_no_criteria_at_all_is_refused() -> None:
     with pytest.raises(CriteriaError, match="Acceptance criteria"):
         check("## What\n\nNo bar at all.\n", "probe", NOTHING_DEMANDED)
@@ -616,7 +670,7 @@ def test_the_command_accepts_a_plan_that_states_its_bar(
         plan_store, "read_project", lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [])
     )
 
-    assert main(["authoring:complete"]) == 0
+    assert check_directly("authoring:complete") == 0
     assert "1 dispatched node(s)" in capsys.readouterr().out
 
 
@@ -629,7 +683,7 @@ def test_the_command_refuses_a_plan_that_does_not(
         lambda _: (_plan(persona="engineer", task=_task("- The thing is done.")), []),
     )
 
-    assert main(["authoring:incomplete"]) == 1
+    assert check_directly("authoring:incomplete") == 1
     assert "check-plan:" in capsys.readouterr().err
 
 
@@ -647,7 +701,7 @@ def test_the_command_reports_a_checkout_that_cannot_answer_what_the_bar_is(
         plan_store, "read_project", lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [])
     )
 
-    assert main(["authoring:complete"]) == 2
+    assert check_directly("authoring:complete") == 2
     reported = capsys.readouterr().err
     assert "review configuration" in reported, reported
     assert "just bootstrap" in reported, reported
@@ -660,7 +714,7 @@ def test_the_command_separates_an_unreadable_plan_from_a_refused_one(
     monkeypatch.setattr(
         plan_store, "read_project", lambda _: (_ for _ in ()).throw(OSError("missing"))
     )
-    assert main(["authoring:absent"]) == 2
+    assert check_directly("authoring:absent") == 2
     assert "cannot read" in capsys.readouterr().err
 
 
@@ -866,7 +920,7 @@ def test_the_command_refuses_a_task_nothing_has_reviewed(
         ),
     )
 
-    assert main(["authoring:probe"]) == 1
+    assert check_directly("authoring:probe") == 1
     reported = capsys.readouterr().err
     assert "no review record" in reported, reported
     assert "probe" in reported, reported
@@ -891,7 +945,7 @@ def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
         plan_review, "_verdict", lambda _: pytest.fail("a recorded pass spent a judged turn")
     )
 
-    assert main(["authoring:probe"]) == 0
+    assert check_directly("authoring:probe") == 0
     assert "carries a review record" in capsys.readouterr().out
 
 
@@ -910,7 +964,7 @@ def test_the_command_reports_a_checkout_that_cannot_answer_what_the_review_bar_i
         lambda *_: (_ for _ in ()).throw(OSError("no such file")),
     )
 
-    assert main(["authoring:probe"]) == 2
+    assert check_directly("authoring:probe") == 2
     reported = capsys.readouterr().err
     assert "fingerprint the review bar" in reported, reported
     assert "just bootstrap" in reported, reported
@@ -1017,11 +1071,36 @@ def _store_process_double(tmp_path: Path, mode: str) -> dict[str, str]:
     return os.environ | {
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "STORE_DOUBLE_MODE": mode,
+        # The store is this command's own to read only on the direct path; through the
+        # engine's `plan check` the store is the engine's to read and its refusals are
+        # the engine's to report. So this drives the path whose diagnostics it is about.
+        plan_check.ENGINE_ENV: str(_engine_without_plan_check(tmp_path)),
     }
 
 
+def _engine_without_plan_check(tmp_path: Path) -> Path:
+    """An engine of the shape this command's direct path exists for.
+
+    Deliberately outside `PATH`: the roles a node's persona resolves to are still read
+    out of the installed binary, so shadowing that would answer a different question
+    from the one the caller is asking.
+    """
+    directory = tmp_path / "older-engine"
+    directory.mkdir(exist_ok=True)
+    binary = directory / "onepipeline"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print(\"error: unrecognized subcommand 'check'\", file=sys.stderr)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    return binary
+
+
 @pytest.mark.parametrize("mode,message", (("invalid-json", "invalid JSON"), ("edge", "edge")))
-def test_check_plan_process_reports_malformed_store_responses(
+def test_the_direct_path_reports_malformed_store_responses(
     tmp_path: Path, mode: str, message: str
 ) -> None:
     read = subprocess.run(

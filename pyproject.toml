@@ -22,7 +22,7 @@ orchestrator-history-labels = "orchestrator.labels:main"
 # no published CLI knows how to do: the bar is composed from this host's own base
 # config and the role `onepipeline` links, and the plan is refused before a launch
 # spends a dispatch on a node its own judge would fail on procedure.
-orchestrator-check-plan = "orchestrator.criteria_guard:main"
+orchestrator-check-plan = "orchestrator.plan_check:main"
 # The third spends the judged turn that clears a plan's authored content: `check-plan`
 # refuses a task carrying no review record for what it currently says, and this is what
 # records one. It is a command of this repository rather than a wrapper because the
@@ -61,6 +61,12 @@ warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# pytest's own import path for this suite's shared modules, so `project_fixtures` and
+# `waits` resolve from whichever directory a tier collects rather than only from the one
+# pytest happens to have inserted for the files it is collecting. It declares nothing
+# about packaging: these are test helpers of this single uv workspace, not a second
+# distribution for another project to depend on.
+pythonpath = ["tests", "tests/e2e"]
 addopts = "-q"
 tmp_path_retention_count = 3
 markers = [

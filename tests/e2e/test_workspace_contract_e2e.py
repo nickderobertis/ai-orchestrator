@@ -108,7 +108,9 @@ def test_test_e2e_recipe_names_the_real_tier_without_recursing_into_itself() -> 
     result = _run("just", "--dry-run", "test-e2e")
 
     assert result.returncode == 0, result.stderr
-    assert "uv run pytest tests/e2e -n 4 --dist loadgroup" in result.stderr
+    assert "uv run pytest tests/e2e tests/plan_tooling -n 4 --dist loadgroup" in result.stderr, (
+        result.stderr
+    )
 
 
 def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
