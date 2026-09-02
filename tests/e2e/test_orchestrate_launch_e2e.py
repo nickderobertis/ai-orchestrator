@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -2065,12 +2066,56 @@ def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
 #: measured below has to be equal to.
 OBSERVED_RUN = "observer-environment-e2e"
 
+#: The driver's own sentence when the graph it attached stops watching, quoted verbatim
+#: from a real attached launch on the installed engine. Read from the producer rather
+#: than paraphrased, so a message that moves fails here rather than leaving the
+#: precondition below quietly unreached.
+#:
+#: This is the whole precondition, and `OBSERVER DEAD` on `just status` deliberately is
+#: not part of it. That verdict is about a **live** run, and on an engine whose frontier
+#: keeps advancing the run settles moments after the observer goes — so `just status`
+#: answers `SETTLED` and the verdict is never observable. Reading it as a precondition
+#: made this journey pass only on the engine whose frontier had wedged, which is the one
+#: engine it is not written for.
+STOPPED_WATCHING = (
+    "the observer graph for '{run}' has stopped watching; the run is still being driven"
+)
+
+#: How long an attached launch is given to come back once the driver has said its
+#: observer graph stopped watching. It bounds *whether* the launcher returns rather than
+#: how promptly — the installed onepipeline 0.18.4 takes about two seconds and
+#: onepipeline 0.19.0 never returns at all — so it is generous and load-scaled through
+#: `waits.deadline`. Nothing here is measuring latency, and a window that expired under
+#: load would report a wedge that is not there.
+HANDBACK_SECONDS = 180.0
+
+
+class ObservedLaunch(NamedTuple):
+    """One attached launch, observed from before its observer graph died until after.
+
+    Four answers, because the journeys below ask two different questions of the same
+    expensive launch: what the observer member's own environment was, and whether the
+    launcher ever came back once that member had gone. The second question's own
+    precondition travels with them rather than failing the fixture, so a launch whose
+    observer outlived the wait still answers the first — one expensive launch should
+    not lose a measurement it already took to a question it could not reach.
+    """
+
+    environment: dict[str, str]
+    #: The precondition of the handback question rather than an answer to it: the driver
+    #: said its observer graph had stopped watching.
+    observer_died: bool
+    handed_back: bool
+    #: `just status` and the launcher's own captured stream together, because a failure
+    #: needs both — the driver's sentence is in one and the run's state in the other.
+    reported: str
+
 
 @pytest.fixture(scope="module")
-def observed_environment(
+def observed_launch(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> dict[str, str]:
-    """The environment a real launch starts its observer member's judge side in.
+) -> Iterator[ObservedLaunch]:
+    """A real launch, watched across the death of the observer graph attached to it.
 
     An observer graph is attached by path and nothing else about it is this
     repository's to choose, so the graph here is `graphs/dag-scope.yaml`'s monitor
@@ -2086,6 +2131,16 @@ def observed_environment(
     Two nodes rather than one, so the run has work left while the monitor completes
     the exchange this measurement reads. A journey that raced settlement would report
     a missing export as a missing variable.
+
+    The launch is driven as a process this fixture polls rather than as a call it
+    waits on, and that is the whole shape of it. The installed engine hands back, but
+    onepipeline 0.19.0 does not once its observer graph has died, so a fixture that
+    waited on the call would never return there — and would not even be interruptible,
+    because a launcher whose grandchildren still hold the captured pipes outlives the
+    kill that a timeout sends. Polling costs nothing against an engine that returns
+    and is what makes the one that does not fail this suite in a bounded time instead
+    of hanging it. So the stream goes to a file, every wait is bounded, and both
+    questions below are answered from state rather than from a return.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -2135,28 +2190,101 @@ def observed_environment(
         encoding="utf-8",
     )
 
-    launch = _just(
-        "orchestrate",
-        project_from_plan(plan),
-        "--dag-graph",
-        str(graph),
-        environment=environment,
-    )
-    try:
-        assert launch.returncode == 0, f"{launch.stdout}\n{launch.stderr}"
-        assert recorded.is_file(), (
-            "the observer member's judge side never ran, so this launch measured "
-            f"nothing:\n{launch.stdout}\n{launch.stderr}"
+    stream = tmp_path / "launch.log"
+    with stream.open("w", encoding="utf-8") as sink:
+        launcher = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--dag-graph",
+                str(graph),
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+            # Its own process group, so this fixture can end the whole launch tree it
+            # started without ever deriving a process to signal from `ps` — which is
+            # what the manager doctrine forbids and what would reach another
+            # workstream's run.
+            start_new_session=True,
         )
-        # `onepipeline`'s own environment, as it handed it to the graph it attached.
-        return cast(dict[str, str], json.loads(recorded.read_text(encoding="utf-8")))
+    try:
+        yield _observe(launcher, recorded, stream, environment)
     finally:
-        _just("stop", OBSERVED_RUN, environment=environment, seconds=60)
+        _end(launcher, environment)
+
+
+def _observe(
+    launcher: subprocess.Popen[str],
+    recorded: Path,
+    stream: Path,
+    environment: dict[str, str],
+) -> ObservedLaunch:
+    """Take both measurements off one live launch, and prove each precondition first."""
+    watching = deadline(300)
+    while not recorded.is_file():
+        if launcher.poll() is not None:
+            pytest.fail(
+                "the launch ended before the observer member's judge side ran, so this "
+                f"measured nothing:\n{stream.read_text(encoding='utf-8')}"
+            )
+        if time.monotonic() >= watching:
+            pytest.fail(
+                "the observer member's judge side never ran, so this launch measured "
+                f"nothing:\n{stream.read_text(encoding='utf-8')}"
+            )
+        time.sleep(0.05)
+    # Cast rather than validated: the probe standing in for the observer member's judge
+    # side is this suite's own, it writes `os.environ` and nothing else, and a journey
+    # that re-validated its output would be asserting about the probe instead of about
+    # what `onepipeline` handed the member.
+    observed = cast(dict[str, str], json.loads(recorded.read_text(encoding="utf-8")))
+
+    # The precondition, from the driver's own words on the stream this fixture captured.
+    # A launcher that has already exited is still read for it: on an engine that keeps
+    # advancing, the observer dies and the run settles within moments of each other, so
+    # the sentence and the exit can both be in the past by the time this loop opens.
+    dying = deadline(300)
+    announced = STOPPED_WATCHING.format(run=OBSERVED_RUN)
+    while announced not in stream.read_text(encoding="utf-8") and time.monotonic() < dying:
+        time.sleep(0.5)
+    watched = stream.read_text(encoding="utf-8")
+
+    # Bounds whether the launcher comes back at all, not how promptly. See
+    # `HANDBACK_SECONDS`.
+    handing_back = deadline(HANDBACK_SECONDS)
+    while launcher.poll() is None and time.monotonic() < handing_back:
+        time.sleep(0.5)
+    status = _just("status", OBSERVED_RUN, environment=environment, seconds=60)
+    return ObservedLaunch(
+        observed,
+        announced in watched,
+        launcher.poll() is not None,
+        f"{status.stdout}\n{watched}",
+    )
+
+
+def _end(launcher: subprocess.Popen[str], environment: dict[str, str]) -> None:
+    """Stop the run through the supported verb, then reap the launcher it left behind."""
+    _just("stop", OBSERVED_RUN, environment=environment, seconds=60)
+    if launcher.poll() is not None:
+        return
+    # `just stop` ends the run; the wedged launcher attached to it is a separate
+    # process and is this fixture's own to reap, in the group it was started in.
+    os.killpg(os.getpgid(launcher.pid), signal.SIGTERM)
+    try:
+        launcher.wait(timeout=e2e_timeout(30))
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(launcher.pid), signal.SIGKILL)
+        launcher.wait(timeout=e2e_timeout(30))
 
 
 @pytest.mark.xdist_group("observer-environment")
 def test_a_launch_names_its_run_to_the_graph_watching_it(
-    observed_environment: dict[str, str],
+    observed_launch: ObservedLaunch,
 ) -> None:
     """`onepipeline` exports `ONEPIPELINE_RUN_ID` to an observer member, set to the run.
 
@@ -2173,10 +2301,57 @@ def test_a_launch_names_its_run_to_the_graph_watching_it(
     pacemaker take their run from the composed task, which is this graph's own
     contract. The export is documented, so it is measured.
     """
-    assert observed_environment.get(RUN_ID_ENV) == OBSERVED_RUN, (
+    environment = observed_launch.environment
+    assert environment.get(RUN_ID_ENV) == OBSERVED_RUN, (
         f"the observer member was started with {RUN_ID_ENV}="
-        f"{observed_environment.get(RUN_ID_ENV)!r}, not {OBSERVED_RUN!r}; re-measure "
+        f"{environment.get(RUN_ID_ENV)!r}, not {OBSERVED_RUN!r}; re-measure "
         "the export and correct every document that states it, in this change"
+    )
+
+
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker] This adds no launch to the
+# tier: the `observed_launch` fixture is module-scoped and already existed for the
+# journey below it, so this reads a second answer off a launch `tests/e2e` was already
+# spending. Splitting `tests/e2e` into its own Nx project is a restructuring of the
+# whole tier and is not something one added assertion should carry.
+@pytest.mark.xdist_group("observer-environment")
+def test_an_attached_launch_hands_back_once_its_observer_graph_has_died(
+    observed_launch: ObservedLaunch,
+) -> None:
+    """An attached launch still terminates once its observer graph has died.
+
+    The precondition is the driver's own sentence, not `OBSERVER DEAD` from `just
+    status`: that verdict is about a live run, and on an engine whose frontier keeps
+    advancing the run settles moments after the observer goes, so the verdict is never
+    observable and reading it would make this pass only on the engine it exists to
+    catch. The return itself then comes by whichever of the three paths the run
+    reaches — here the graph completing — because what onepipeline#188 takes away is
+    every path at once, a frontier that stops being able to reach any of them.
+
+    `AGENTS.md` carries the measurement, the issue, and why
+    `config/onepipeline.version` is held; none of that is restated here.
+
+    `test_a_shipped_plan_launches_and_settles` holds the same property for the shipped
+    `graphs/dag-scope.yaml`, whose monitor stays alive for the run. Holding both is
+    what would show the blast radius widening.
+    """
+    assert observed_launch.observer_died, (
+        "the driver never said its observer graph had stopped watching, so the question "
+        "below was never reached. The probe answers a non-completion and onejudge "
+        "settles the repeated no-op exchange that follows; an engine that no longer "
+        "settles it, or one whose sentence has moved, has moved this precondition and "
+        f"this journey has to be re-measured against what it does now:\n"
+        f"{observed_launch.reported}"
+    )
+    assert observed_launch.handed_back, (
+        "the attached launch was still attached "
+        f"{HANDBACK_SECONDS:.0f}s after its observer graph stopped watching, so this "
+        "engine has the wedge of "
+        "https://github.com/nickderobertis/onepipeline/issues/188 — the launcher never "
+        "comes back and the frontier stops with it. Read the run through `just runs` "
+        "and `just status` and stop it with `just stop`; if this engine was adopted "
+        "deliberately, that issue and the `AGENTS.md` paragraph recording it are what "
+        f"come due with it:\n{observed_launch.reported}"
     )
 
 

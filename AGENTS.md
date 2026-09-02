@@ -505,7 +505,7 @@ host looking current while a real run came out empty.
 | `config/onevcs.version` | The CLI the manager verbs run: `publish-branch`, `repo-recover`, `recoverable`, `work-status`, `integrate`, `repos`, `sweep`. | Which onevcs a dispatched node **publishes through** — that is the linked one. |
 | `config/onejudge.version` | The PyPI `onejudge` distribution session setup installs and verifies, `onejudge_sdk` import included. | The `onejudge` crate a dispatched two-party member settles on — that is the linked one. |
 | `config/oneharness.version` | The `oneharness` CLI the wrapper scripts and the smoke spawn. | `oneharness-core`, the library that CLI is itself compiled against and that the engine links on its own account — a different artifact this pin does not name, and which is at a different release from it today. |
-| `config/onepipeline-ui.version` | The read API wheel and the browser bundle `just dag-ui` serves as one release. | Anything a dispatch runs; nothing in a run reads it. |
+| `config/onepipeline-ui.version` | The read API wheel and the browser bundle `just dag-ui` serves as one release — including the `onepipeline` that wheel statically links, which is **ahead** of the row above today; see [Why the engine pin is held below the read API's](#why-the-engine-pin-is-held-below-the-read-apis). | Anything a dispatch runs; nothing in a run reads it. |
 | `config/onetaskgraph.version` | The standalone `onetaskgraph` CLI this host spawns to read and write plans. | Any library linked into `onepipeline`; the engine wheel's bill of materials does not contain this separately spawned executable. |
 
 **The CLI pins are reconciled against the engine's own resolution, not moved one at
@@ -516,6 +516,59 @@ a sibling pin behind is a failing check rather than a silent divergence, and the
 manager verbs stay on the same `onevcs` a dispatch publishes through. That is a
 narrower guarantee than it sounds and worth stating exactly: it makes the two
 *agree*, and it is the SBOM that decides which value they agree on.
+
+### Why the engine pin is held below the read API's
+
+`config/onepipeline.version` reads **0.18.4** while `config/onepipeline-ui.version`
+reads **0.7.0**, and those two numbers are further apart than they look: the read API
+that release ships statically links **onepipeline 0.19.0**. That is deliberate on both
+sides and it is the one place on this host where a pin is knowingly held behind a
+published release, so it is written down rather than left to be re-derived from a
+lockfile.
+
+**Why the engine CLI is held.** onepipeline 0.19.0 is the release that repairs the
+settlement write-back's refusal of the plan store's `location` field
+([the episode](#where-a-plan-of-this-repository-lives)), and the same release replaces
+that refusal with something worse: the write-back rewrites the **destination's own**
+records, putting a synthetic `onepipeline-writeback:<hex>` identity in place of each
+record's `onetaskgraph.origin` and of every `depends_on` edge, so a plan cannot be read
+back once any run of it has settled —
+https://github.com/nickderobertis/onepipeline/issues/189. A refusal that leaves the
+destination byte-identical is a failure this host can see and recover from; a rewrite of
+the records is not. So the pin stays until that issue closes.
+
+**Why the Observatory did not have to wait for it.** The read API is a separate artifact
+with its own copy of the engine compiled in. Measured on this host's installed wheels:
+`onepipeline-api-cli` 0.7.0's own CycloneDX SBOM declares `onepipeline` 0.19.0, and a
+reader started from it answers `{"status":"ok","onepipeline_version":"0.19.0"}` on
+`/healthz` while `onepipeline --version` answers `0.18.4`. So everything the adopted
+Observatory reads runs on 0.19.0's run-reading, and nothing in
+[`docs/dag-ui.md`](docs/dag-ui.md) is waiting on the engine pin. This is the general
+shape of the entry in the table above rather than an exception to it: that table says
+which pin governs a **dispatch**, and a read API governs no dispatch at all.
+
+**What brings the hold due, and it is not a version comparison.** Two journeys of this
+repository's own suite already fail on the rewrite, for the reason rather than for the
+number: `tests/plan_tooling/test_plan_review_e2e.py::test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else`
+settles a real planning run and reads its plan back, which under 0.19.0 fails with
+`unknown dependency targets … onepipeline-writeback:…`, and
+`tests/e2e/test_plan_recipe_e2e.py::test_the_project_a_planning_launch_writes_says_it_is_a_planning_project`
+fails on the same rewrite re-emitting the record. Neither reads a pin, so a bump made
+before that issue closes is refused by the behaviour it would reintroduce, and a bump
+made after it closes passes with nothing here to widen by hand. What no check can read is
+the issue's own state: that is the one thing to confirm by hand before moving this pin,
+and `orchestrator/plan_store.py` names it in the failure so the next reader is sent to
+the issue rather than to the store. What *raises* the question in the first place is
+already here and needs nothing added: `tests/test_linked_libraries.py` reads the registry
+on every gate run and warns —
+`onepipeline-cli 0.18.4 is installed and PyPI publishes 0.19.0; the pins in config/ are
+reconciled against the older wheel, so adopting is a decision to make between runs` —
+so the hold is visible on every run rather than only to whoever remembers it.
+
+**One thing the hold costs, and it is the one already described below**: no settlement is
+projected back onto the plan it was launched from, because the write-back this engine
+performs is the refusing one. That is the state the two exempted projection journeys and
+the paragraphs on the plan store are about, and it has not changed.
 
 **One hazard came with that archive, and it is now closed at the place it came from.**
 Session setup installed `onetaskgraph` into `$HOME/.local/bin`, which every checkout of
@@ -823,12 +876,13 @@ independently at every adoption since — so a bare number in this section may b
 four things, and every one of them is written with its tool beside it. The view that shows
 which release carried each landed node, and every release event, is **onepipeline-ui
 0.6.3** (https://github.com/nickderobertis/onepipeline-ui/pull/36), and
-`config/onepipeline-ui.version` reads 0.6.4, past that floor — a release with **two** artifacts, the
+`config/onepipeline-ui.version` reads 0.7.0, past that floor — a release with **two** artifacts, the
 `onepipeline-api-cli` wheel behind `just telemetry-server` and the `onepipeline-ui` npm
 bundle behind `just dag-ui`, which move together or serve one release's view against
-another's data. What that third half changes on this host is almost nothing, and saying
-so is the point: with no target declared there is no release event in any run, so the
-only thing the *reader* answers differently is a bumped `timeline_schema_version`,
+another's data. What that third half changes about *release* rendering on this host is
+nothing, and saying so is the point: with no target declared there is no release event
+in any run, so on that score the only thing the *reader* ever answered differently is a
+bumped `timeline_schema_version`,
 re-measured with the rest of that shape in
 [`docs/telemetry.md`](docs/telemetry.md#seeing-the-supervisory-tier). Everything else
 the release adds is a field that stays absent and a view that stays unrendered until
@@ -1139,16 +1193,29 @@ with only one line on the driver's own stderr saying so, which a detached run wr
 log nobody opens. Read a settled run exactly as the paragraph below already says to, from
 `just results`, `just status` and the journal, and do not go looking for a broken board.
 
-**That state is accepted rather than safe, and what ends it is an engine release.** The
+**That state is accepted rather than safe, and the repair for it is released and
+deliberately not adopted — which is the part to read before reaching for the pin.** The
 repair belongs to the engine and not to this repository: the settlement write-back has to
 read the store's answer leniently instead of refusing every field it does not recognise.
-It is filed as https://github.com/nickderobertis/onepipeline/issues/179 and in flight at
-https://github.com/nickderobertis/onepipeline/pull/181, and **no released engine carries
-it**, so the refusal stands at every plan-store release from the one that added `location`
-upward. Pinning the store back below that release is not an escape either: it would trade
-the occasional visible refusal on the copy path described below for the invisible
-permanent loss this paragraph is about, which is the wrong direction. What is **not** in
-question is a second field hiding behind the first: `tests/e2e/test_onetaskgraph_host_e2e.py`
+It was filed as https://github.com/nickderobertis/onepipeline/issues/179, landed as
+https://github.com/nickderobertis/onepipeline/pull/181, and **onepipeline 0.19.0 carries
+it** — so the sentence that used to stand here, that no released engine did, is history.
+What replaced the refusal in that release is worse than the refusal, which is why
+`config/onepipeline.version` is held at 0.18.4: the same write-back now **rewrites the
+destination's own records**, replacing each one's `onetaskgraph.origin` and every
+`depends_on` edge with a synthetic `onepipeline-writeback:<hex>` identity that exists only
+as scratch under `runs/<run>/writeback/`, so a plan cannot be read back at all after any
+run of it settles. It is filed as
+https://github.com/nickderobertis/onepipeline/issues/189 with the decoded evidence.
+**Trading a refusal that leaves the destination untouched for a rewrite that destroys it
+is the wrong direction**, and it is the same wrong direction as pinning the store back
+below the release that added `location`: both swap a visible, recoverable failure for a
+silent, permanent one. So the hold is on the engine CLI and nothing else — see
+[Why the engine pin is held below the read
+API's](#why-the-engine-pin-is-held-below-the-read-apis).
+
+What is **not** in question is a second field hiding behind the first:
+`tests/e2e/test_onetaskgraph_host_e2e.py`
 reads the field set the installed store answers a project item with and the field set the
 installed engine's own refusal says it accepts, and compares them — the two differ by
 `location` and by nothing else. That comparison is the only way to know it, because a
@@ -1721,7 +1788,39 @@ you want it. `--all` bypasses profiles entirely.
 the run's merged events, and returns when the run **settles** — the
 graph completed, a blocking planner surface is waiting on you, or nothing is
 driving the run any more (exit 3, and the state to intervene in). Ctrl-C detaches
-without stopping the run. Pass `--detach` when a run should go unattended — several
+without stopping the run.
+**One of those three return paths is broken on onepipeline 0.19.0 — a release this host
+does not run, and this is here so it stays that way knowingly.** An attached launch whose
+*observer graph* has died does not return at all under it: the installed 0.18.4 hands back
+rc=0 about two seconds after the observer settles, and 0.19.0 is still attached five
+minutes later, measured A/B with the plan, the graph, the environment and the provider
+stand-in all held. The shipped `graphs/dag-scope.yaml` is unaffected on either engine — a
+launch under it returns in about five seconds — because its monitor stays alive for the
+run, so an ordinary `just orchestrate` hands back. What the regression reaches is the
+state this document already tells you to watch for: `OBSERVER DEAD` on a live run, which
+has lasted two hours here. In that state the attached launcher would be wedged rather than
+waiting, and the frontier wedged with it: the driver goes on saying the run is still being
+driven while a node whose dependency has settled sits `ready — queued for dispatch` and is
+never dispatched, so none of the three return paths is ever reached. **If you ever meet
+that, read the run through `just runs` and `just status` and stop it with `just stop`,
+rather than reading a launcher that never returns as a run that has not settled.**
+It is reported upstream as
+https://github.com/nickderobertis/onepipeline/issues/188, and what holds it here is
+`tests/e2e/test_orchestrate_launch_e2e.py::test_an_attached_launch_hands_back_once_its_observer_graph_has_died`
+— which asserts the return path against **whatever engine is installed**, from the
+engine's own words rather than from a pin comparison: it drives a launch until the driver
+says the observer graph stopped watching, and fails if the launcher is still attached
+after that. So an engine carrying
+this wedge fails that check on adoption instead of hanging the suite, which is what a
+journey that merely waited on the launcher did. What that journey deliberately does
+**not** key on is `OBSERVER DEAD` from `just status`: that verdict is about a live run,
+and on an engine whose frontier keeps advancing the run settles moments after the
+observer goes — so the verdict is never observable, and reading it as the precondition
+would make the check pass only on the wedged engine it exists to catch. It is not the check that governs
+`config/onepipeline.version`; [that hold has a heavier
+reason](#why-the-engine-pin-is-held-below-the-read-apis).
+
+Pass `--detach` when a run should go unattended — several
 runs supervised at once, where you launch each one and come back to it — and
 `just monitor <run-id>` re-attaches to any of them, streaming the same events
 without the settle-and-return contract the foreground launch has. Do **not**
@@ -2809,6 +2908,21 @@ view is the `onepipeline-ui` bundle — so `just dag-ui` puts the two behind one
 and `just dag-ui-screens` photographs that bundle at every viewport in the matrix,
 printing the gitignored per-invocation gallery it wrote. Operational detail lives in
 [`docs/dag-ui.md`](docs/dag-ui.md).
+**Serving this host's own runs root is cheap now and it still leaves runs out, and the
+second half is the one to carry.** The cost is repaired: through `onepipeline-api` 0.6.5
+the reader surveyed the whole root per request — a run list in 17 to 40 seconds, a
+browser a minute and a half before its first list, and one idle tab holding 98% of a
+core — and on the adopted 0.7.0 the same measurements read 0.09-0.17 s, 0.01-0.32 s, and
+0.00% of a core. Everything that repair reaches is the *reader's*, which is why it landed
+here while `config/onepipeline.version` stayed at 0.18.4: that wheel carries its own
+onepipeline 0.19.0. What did **not** move is which roots are served: every run root the
+adopted engine wrote is, including a run launched from a plan-store project, which the
+reader before 0.6.5 refused outright; none of the 141 this repository's own
+pre-adoption implementation wrote is, and neither those nor the roots holding no launch
+record are reported — they are simply absent, so a run an operator cannot see reads the
+same as one the reader lost. The measurements are in [What this host's own runs root
+costs to
+serve](docs/dag-ui.md#what-this-hosts-own-runs-root-costs-to-serve-and-what-it-leaves-out).
 `just sweep` reclaims the dead working directories this host accumulates, by
 composing the **two** published verbs that own them rather than reimplementing
 either: `oneagentgraph sweep` for the scratch a dispatch leaves behind, and `onevcs

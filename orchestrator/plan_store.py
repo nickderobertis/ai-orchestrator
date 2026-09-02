@@ -79,6 +79,39 @@ PAGE_SIZE = 2
 #: inside a run that set it would be refused for a plan store that is perfectly readable.
 BIN_ENV = "ONETASKGRAPH_BIN"
 
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The producer of this
+# string is onepipeline 0.19.0, which this host deliberately does not install — holding
+# `config/onepipeline.version` below it is the whole point of the change this constant
+# came in with — so there is no installed artifact to generate it from or reconcile it
+# against. It is a recogniser for records nothing here authors rather than a contract
+# either side must hold to: a producer that changes its source or encoding makes this
+# stop matching, and the reader falls back to the bare unresolvable-target refusal it
+# gave before, which is a degraded diagnostic and never a wrong answer.
+#: The source `onepipeline`'s settlement write-back stages a projection in, and the one
+#: it must never leave behind in a record it wrote back. onepipeline 0.19.0 replaces a
+#: settled record's own `onetaskgraph.origin` and every `depends_on` edge with an
+#: identity under this source — which exists only as scratch beneath `runs/<run>/` — so
+#: the plan cannot be read back at all afterwards. It is
+#: https://github.com/nickderobertis/onepipeline/issues/189, and it is why
+#: `config/onepipeline.version` is held at 0.18.4. Named here rather than left to
+#: surface as a bare unresolvable id, because the id decodes to hex and reads like a
+#: corrupt store rather than like the engine that wrote it.
+WRITE_BACK_SOURCE = "onepipeline-writeback"
+
+#: What a reader is told when a dependency edge points into that source. The engine and
+#: the issue are both named: a plan whose edges were rewritten is unreadable for a
+#: reason nothing in the store can report.
+WRITE_BACK_REWROTE = (
+    f"the plan's dependency edges point into `{WRITE_BACK_SOURCE}:`, which is the "
+    "scratch source onepipeline 0.19.0's settlement write-back rewrites a settled "
+    "record's own origin and edges into, so this plan can no longer be read back — "
+    "https://github.com/nickderobertis/onepipeline/issues/189. "
+    "`config/onepipeline.version` is held at 0.18.4 for this; an engine past that pin "
+    "is what produced these records"
+)
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
 #: The plugin whose records this module may write. Every other source is read-only
 #: here — a GitHub Projects board is not a directory, and a record written into one
 #: would go through an API this repository deliberately does not call.
@@ -307,9 +340,11 @@ def _with_dependencies(records: list[StoreTask]) -> list[StoreTask]:
                     )
         unknown = [target for target in targets if target not in ids]
         if unknown:
+            rewritten = any(target.startswith(f"{WRITE_BACK_SOURCE}:") for target in unknown)
             raise OSError(
                 f"{STORE} returned unknown dependency targets for "
                 f"{record.qualified_id}: {', '.join(unknown)}"
+                + (f" — {WRITE_BACK_REWROTE}" if rewritten else "")
             )
         resolved.append(
             StoreTask(

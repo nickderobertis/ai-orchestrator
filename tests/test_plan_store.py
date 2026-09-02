@@ -15,13 +15,22 @@ that narrowly is refused rather than rewritten.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypedDict
 
+import plan_fixture_root
 import pytest
 
 from orchestrator import plan_store
+
+#: The source `onetaskgraph.yaml` roots at `plan_fixture_root.ROOT`, which
+#: `tests/test_plan_source_roots.py` holds that configuration to. Spelled here so the
+#: journey below reads through the store's own configured source rather than through a
+#: root this module points at, which is the difference between exercising the real
+#: reader and exercising a temporary directory.
+FIXTURE_SOURCE = "test-fixtures"
 
 
 class Setting(TypedDict):
@@ -608,3 +617,72 @@ def test_two_documents_stage_under_two_names_and_one_document_always_under_its_o
     second = plan_store.QualifiedDocumentId("demo:other-design")
     assert plan_store.staged_name(first) != plan_store.staged_name(second)
     assert plan_store.staged_name(first) == plan_store.staged_name(first)
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is a recorded
+# observation of what a really rewritten record looks like, not a second statement of a
+# contract: it was read off `onetaskgraph`'s own answer for a plan an onepipeline 0.19.0
+# run had settled, and the release that produces it is one this host deliberately does
+# not install. There is nothing installed to reconcile it against, and a producer that
+# changed its spelling would leave the reader with the bare refusal it gave before.
+#: How a task's own id is spelled inside the identity onepipeline 0.19.0's write-back
+#: leaves behind: hex of the ASCII bytes, under a source that is a run's own scratch.
+#: Written out rather than composed by the test, so the fixture below is the shape read
+#: off a really corrupted record rather than the shape this module expects.
+_REWRITTEN_EDGE = "onepipeline-writeback:6669727374"  # 66697273 74 -> "first"
+
+
+def _rewritten_project(root: Path, native: str) -> None:
+    """A local Markdown project whose one dependency edge names the write-back's scratch.
+
+    The records are written by hand because no supported path produces them: they are
+    what a settled plan looks like *after* an engine this host does not pin has rewritten
+    it, and the point of the journey is that the reader recognises records nothing here
+    would ever author.
+    """
+    (root / "projects").mkdir(parents=True, exist_ok=True)
+    (root / "projects" / f"{native}.md").write_text(
+        f'---\ntitle: "{native}"\nstatus: "todo"\nmetadata:\n'
+        '  "onepipeline.schema_version": 3\n---\n\nA settled plan.\n',
+        encoding="utf-8",
+    )
+    tasks = root / "tasks" / native
+    tasks.mkdir(parents=True, exist_ok=True)
+    (tasks / "first.md").write_text(
+        f'---\ntitle: "first"\nstatus: "done"\nproject: "{native}"\nmetadata:\n'
+        '  "onepipeline.id": "first"\n  "onepipeline.persona": "engineer"\n'
+        "---\n\n## What\n\nFirst.\n",
+        encoding="utf-8",
+    )
+    (tasks / "second.md").write_text(
+        f'---\ntitle: "second"\nstatus: "done"\nproject: "{native}"\ndepends_on:\n'
+        f"- id: {_REWRITTEN_EDGE}\n  kind: blocks\n  item: task\nmetadata:\n"
+        '  "onepipeline.id": "second"\n  "onepipeline.persona": "engineer"\n'
+        "---\n\n## What\n\nSecond.\n",
+        encoding="utf-8",
+    )
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+def test_a_plan_the_write_back_rewrote_is_refused_by_naming_the_engine_that_rewrote_it() -> None:
+    """A rewritten plan is refused by naming the engine that rewrote it.
+
+    Driven through the real `onetaskgraph` rather than a doubled `store_json`, because
+    what is in question is that the store reports these edges as dependency targets at
+    all: a reader written against an assumed spelling would pass against a double and
+    miss the real records.
+    """
+    root = plan_fixture_root.ROOT
+    native = f"test-{os.getpid()}-writeback-rewrite"
+    _rewritten_project(root, native)
+
+    with pytest.raises(OSError) as refused:
+        plan_store.read_project(f"{FIXTURE_SOURCE}:{native}")
+
+    reported = str(refused.value)
+    assert _REWRITTEN_EDGE in reported, reported
+    assert "onepipeline 0.19.0" in reported, reported
+    assert "https://github.com/nickderobertis/onepipeline/issues/189" in reported, reported
+    assert "config/onepipeline.version` is held at 0.18.4" in reported, reported

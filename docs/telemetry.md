@@ -239,10 +239,11 @@ served them.
    that is a different fix from a dead driver.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.6.4**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.7.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because that crate has no registered checkout
    on this host and its CLI dumps no schema, so a bump is what re-opens this
-   paragraph: `timeline_schema_version` 7, spans of kind `run`, `dispatch`, `node`,
+   paragraph: `telemetry_schema_version` 15 on the envelope, where 0.6.5 served 14;
+   `timeline_schema_version` 7, spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
@@ -284,11 +285,17 @@ served them.
    a phase only a live run exhibits cannot be re-measured off a finished one at all.
    Re-measure the two by hand against those named runs on a bump; do not go looking
    for a phase a stopped run can no longer be in.
-   **The listing is the live runs, and a settled one leaves it.** `GET /api/v2/runs`
-   carried every run read here whose `phase` was `waiting` or `surfacing` and none
-   whose phase was `settled` or `finished` — but a settled run's timeline is still
-   served in full by id. So a run an operator knows finished, missing from the view's
-   list, is this rather than a reader that lost it.
+   **The default listing is the live runs, and a settled one leaves it — but the
+   filter is on the run's `state`, not on its run span's `phase`.** Reading those two
+   as one is the mistake to avoid: over this host's own 454-run root `GET
+   /api/v2/runs` carried no run whose `state` was `settled` and *did* carry runs whose
+   `state` was `driver-dead` and whose run-span `phase` read `finished`, alongside
+   `waiting`, `surfacing` and `deciding`. A settled run's timeline is still served in
+   full by id, so a run an operator knows finished and cannot see in the list is this
+   rather than a reader that lost it — and **`?include_settled=true` is how the rest
+   are asked for**, which is what the browser bundle sends. What no parameter changes
+   is the page size: `limit` is capped at 50, so the whole of a 385-run answer is
+   eight cursor-paged requests.
    <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These field names
    have no authoritative declaration this host can read: `onepipeline-api` is in no
    registered checkout, its source is in neither the `onepipeline` repository nor the
@@ -300,15 +307,13 @@ served them.
    measured on, so a pin bump fails the gate and re-opens it. Reconciling the fields
    themselves needs a registered checkout of that crate or a schema verb on its CLI,
    and is tracked as follow-up. -->
-3. **What 0.6.3 changed here, and it is one number.** Serving the same runs from
-   0.6.2 and 0.6.3 side by side is what dates this section. The adopted 0.6.4 changes
-   nothing on either route: its whole diff against 0.6.3 is that repository's own
-   release-target declaration, its release probe, and CI, so every measurement below
-   is read at 0.6.3 and stands at the pin. The whole delta is
+3. **What 0.6.3 changed here, and it is one number; what 0.6.5 changed is on the
+   other route.** Serving the same runs from
+   0.6.2 and 0.6.3 side by side is what dates this section. The whole 0.6.3 delta is
    `timeline_schema_version` 6 becoming 7: on the six runs checked in under
    `tests/fixtures/timeline-runs/` and on `dag-ui-truth`, `issue-27`, and
    `pr-author-body` from this host's own runs root, every other byte of the timeline
-   response is identical, and the conversation route is byte-identical too. That is
+   response was identical, and the conversation route was byte-identical too. That is
    what the release *adds* rather than what it changes — 0.6.3 renders which release
    carried each landed node, and no run on this host has a release event in it,
    because `ai-orchestrator` declares no release target and no plan launched from here
@@ -319,6 +324,26 @@ served them.
    a browser opened on a real recorded run draws no release row from data that has
    none — and `tests/e2e/test_release_adoption_in_force_e2e.py` holds the half about
    this host, by asking every registered identity whether it declares a target.
+   **0.6.5 — the release between that one and the adopted 0.7.0 — leaves the timeline
+   route alone and repairs the conversation route**, and the two halves of that were
+   measured side by side by serving one runs root from a 0.6.4 and a 0.6.5
+   `onepipeline-api` at once. The timeline response is
+   byte-identical on all six checked-in fixtures and on this host's own
+   `dag-ui-observability-2` and `report-shape`, at `telemetry_schema_version` 14 and
+   `timeline_schema_version` 7 on both. The conversation route is byte-identical
+   wherever a dispatch had one party — every conversation the six fixtures carry —
+   and **halves** where a dispatch had two: `report-shape`'s
+   `node-scope-1787485697614-425057.worker` is served as **8 turns by 0.6.4 and 4 by
+   0.6.5**, because the supervisor's relayed side was being read as rows of its own.
+   Each duplicate row carried the *previous* turn's reply as its `user`, an empty
+   `assistant`, a null `model` and no usage at all, so a reader saw the agent's answer
+   again on the user side and the transcript ran at twice its length. 0.6.5 serves the
+   agent's side as the transcript, and gives each of the four turns its own `model`
+   — `claude-opus-5`, where 0.6.4 served null on every turn of that conversation. The
+   accounting is unmoved: the duplicate rows carried no usage, so the per-turn `costUsd`
+   figures sum to the same total on both. That is the repair
+   https://github.com/nickderobertis/onepipeline-ui/pull/44 describes, met on this
+   host's own data.
 4. **What 0.6.2 changed, and what is still missing.** Kept because it is the release
    that made the transcript a view worth opening, and the accounting defect it fixed
    is the kind a reader cannot eyeball. What moved is the **conversation route**,

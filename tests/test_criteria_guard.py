@@ -1415,5 +1415,11 @@ def test_project_plan_rejects_a_dependency_on_an_unlisted_task(
         return {"items": [{"to": {"id": "s:p/missing"}}]}
 
     monkeypatch.setattr(plan_store, "store_json", store)
-    with pytest.raises(OSError, match="unknown dependency targets"):
+    with pytest.raises(OSError, match="unknown dependency targets") as refused:
         plan_store.read_project("s:p")
+
+    # An ordinary unresolvable target is a plan somebody wrote wrong, so it gets the
+    # bare refusal. The settlement write-back's own rewrite is the one that also names
+    # the engine and the issue, and holding this apart is what says that sentence is
+    # about the rewrite rather than about every missing edge.
+    assert plan_store.WRITE_BACK_SOURCE not in str(refused.value)
