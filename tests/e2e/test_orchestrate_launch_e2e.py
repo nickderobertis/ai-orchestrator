@@ -3182,7 +3182,7 @@ POLICY_IN_PROSE = re.compile(r"`((?:local|change)-[a-z]+)`")
 #: policy the launcher refuses.
 #:
 #: Both words are **onepipeline's**, and the crate matters because onevcs carries a
-#: near-miss: `pub const DRAFTED: &str = "change-draft"` is onepipeline v0.18.3
+#: near-miss: `pub const DRAFTED: &str = "change-draft"` is onepipeline v0.18.4
 #: `src/vcs.rs:133`, returned by `outcome_of(PublishOutcome::ChangeDraft)` at
 #: `src/vcs.rs:147` and paired with `complete-but-draft` at `src/graph.rs:114`, while
 #: onevcs v0.18.0 has no `DRAFTED` in its shipped source at all — what it has is

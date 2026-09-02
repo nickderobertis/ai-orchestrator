@@ -219,6 +219,18 @@ ASK_WINDOW_SECONDS = int(e2e_timeout(ANSWERED_SECONDS * 2))
 #: rather than two.
 LAUNCH_GROUP = SHARED_TOOLCHAIN_GROUP
 
+#: Every test in this module, rather than the launches alone. `repository_credentials_file`
+#: below is autouse and `scope="module"`, so it runs once per worker that receives *any*
+#: test from here — the refusal journeys included, which launch nothing and so read as free
+#: to scatter. They are not: its create is `O_EXCL` against one shared `.env`, so two
+#: workers reaching it together is one of them erroring in setup before its test runs.
+#:
+#: Measured rather than reasoned about. On a developer's checkout a `.env` already exists,
+#: every worker takes the appending branch, and the module passes; on a publication clone
+#: there is none, all four workers take the creating branch at once, and five tests error
+#: in setup and refuse the push. `tests/test_nx_cache_scope.py` holds the rule.
+pytestmark = pytest.mark.xdist_group(LAUNCH_GROUP)
+
 #: The two checkouts the node `just plan` writes names, as `scripts/plan.sh` defaults
 #: them. Each launch below seeds a scratch pair under exactly these names, so the
 #: recipe's own defaults resolve against a registry of the journey's own.
@@ -759,7 +771,6 @@ def _given(dispatch: Dispatch, required: Input) -> str:
     return value
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize(
     "shape", ["orchestrate_attached", "orchestrate_detached", "orchestrate_adopted"]
 )
@@ -786,7 +797,6 @@ def test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run(
     )
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize(
     "shape", ["orchestrate_attached", "orchestrate_detached", "orchestrate_adopted"]
 )
@@ -821,7 +831,6 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
     )
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize(
     "shape",
     [
@@ -872,7 +881,6 @@ def test_every_launch_gives_its_dispatch_a_scratch_directory_under_its_own_run(
     )
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize(
     "shape",
     [
@@ -905,7 +913,6 @@ def test_every_launch_exports_repository_credentials_onto_its_dispatch(
     )
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize("shape", ["plan_attached", "plan_detached"])
 @pytest.mark.parametrize("required", REQUIRED_INPUTS, ids=lambda row: row.name)
 def test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs(
@@ -928,7 +935,6 @@ def test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs(
     assert given.strip(), f"{required.name} reached the dispatch blank, and it is {required.why}"
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 def test_a_plan_launch_tells_its_dispatch_the_run_it_actually_created(
     plan_detached: Dispatch,
 ) -> None:
@@ -942,7 +948,6 @@ def test_a_plan_launch_tells_its_dispatch_the_run_it_actually_created(
     assert _given(plan_detached, RUN_ID) == plan_detached.run
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 @pytest.mark.parametrize("shape", ["orchestrate_attached", "plan_attached", "plan_detached"])
 def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand(
     shape: str, request: pytest.FixtureRequest
@@ -972,7 +977,6 @@ def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_han
     assert asked["err"] == "", f"a successful ask reported something on stderr:\n{asked['err']}"
 
 
-@pytest.mark.xdist_group(LAUNCH_GROUP)
 def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_another_run(
     plan_detached: Dispatch, tmp_path: Path
 ) -> None:

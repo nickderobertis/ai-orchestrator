@@ -107,8 +107,12 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # a bump has to re-open them exactly as it re-opens the six before them. The ninth is
     # the release whose write-back stopped renaming a destination project and dropping its
     # labels, which is what returned this repository's plans to the board — a third
-    # behavioural literal, re-opened by a bump for the same reason as the two above.
-    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 9},
+    # behavioural literal, re-opened by a bump for the same reason as the two above. The
+    # tenth is the release whose write-back stopped retrying a refused projection four
+    # times a second and started backing it off, which is a fourth behavioural literal and
+    # is re-opened by a bump for the same reason: the retry rate an operator is told about
+    # is the release's, and a stale number describes an outage nobody would recognise.
+    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 10},
 }
 
 

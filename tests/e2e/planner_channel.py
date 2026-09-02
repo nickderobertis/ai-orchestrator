@@ -80,7 +80,7 @@ def ruling(message: str) -> str:
 #: The surface a run raises about *itself*: its settlement write-back could not reach
 #: the plan it was launched from. Nothing a journey does causes one and nothing in this
 #: suite measures one — the projection has its own journeys — but the engine raises it on
-#: runs these journeys launch, because onepipeline 0.18.3 cannot read the `location` this
+#: runs these journeys launch, because onepipeline 0.18.4 cannot read the `location` this
 #: checkout's plan store reports for every entity:
 #: https://github.com/nickderobertis/onepipeline/issues/179. Handed out as the manager's
 #: next surface it displaces the question a journey is waiting for, and it falsifies the

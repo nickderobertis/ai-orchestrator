@@ -77,7 +77,7 @@ runs each:
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.18.3 and the
+Three consequences, the first two re-measured against onepipeline 0.18.4 and the
 oneagentgraph 0.3.15 it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
@@ -191,7 +191,7 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.3.15` at onepipeline v0.18.3. Read that
+oneagentgraph `onepipeline` links, which is `0.3.15` at onepipeline v0.18.4. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed wheel is the source and

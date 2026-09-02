@@ -369,7 +369,7 @@ pinned branch instead of cutting a second one on the same name, and **continue**
 pinned branch nothing holds — opening the worktree at that branch's tip and
 merging the base into it — rather than refusing the pin. Both are what let a retry
 reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.18.3**, never `config/onevcs.version`:
+plan node is the adopted onepipeline 0.18.4**, never `config/onevcs.version`:
 onepipeline links onevcs, oneagentgraph, and onejudge as Rust libraries, so a
 dispatch runs the copy that release resolved, while `config/onevcs.version` pins
 the onevcs *CLI* the manager verbs run — `publish-branch`, `recoverable`,
@@ -401,9 +401,9 @@ repository's prose to it. Both were re-taken on this host's installed artifacts 
 2026-08-31 and agree line for line.
 
 **Read the locks after that measurement, and in this order.** `git show
-v0.18.3:Cargo.lock`, at the tag of the release actually *installed*, is
+v0.18.4:Cargo.lock`, at the tag of the release actually *installed*, is
 corroboration that should agree: onepipeline's requirement is
-`onevcs = "0.18.0"` at v0.18.3 and its lock still resolves onevcs 0.18.0.
+`onevcs = "0.18.0"` at v0.18.4 and its lock still resolves onevcs 0.18.0.
 **At this tag the requirement and the lock can no longer be told apart, and that is the
 state to read most carefully.** All three reconciled requirements — `onevcs = "0.18.0"`,
 `oneagentgraph = "0.3.15"`, `onejudge = "0.7.0"` — name the exact release their lock
@@ -421,7 +421,7 @@ installed binary is measured first rather than last. The fourth requirement is t
 that moved an earlier adoption: `oneharness-core = "0.8"` at v0.14.0 became `"0.12"` at
 v0.14.2, which is the whole mechanism behind the two-version split collapsing —
 onepipeline's own workspace was holding a core four minors behind the one its dependents
-resolved — and it is still `"0.12"` at v0.18.3.
+resolved — and it is still `"0.12"` at v0.18.4.
 `origin/main`'s
 lock answers a different question — what the *next* release would link — and is
 evidence about this host only by coincidence. The ordering matters because a lock
@@ -764,7 +764,7 @@ two different sentences.** The producer half is the version-control CLI's:
 `config/onevcs.version` reads 0.18.0, at or past the release carrying
 https://github.com/nickderobertis/onevcs/pull/123, which is what lets a
 `release-targets.toml` declare an instruction at all. The rendering half is the engine
-CLI's: `config/onepipeline.version` reads 0.18.3, at or past the release carrying
+CLI's: `config/onepipeline.version` reads 0.18.4, at or past the release carrying
 https://github.com/nickderobertis/onepipeline/pull/174, which is what puts a rendered
 instruction into the block and the note. Configuration is the other question entirely.
 This host declares no `releases.yml`, so it overrides no producer's instruction and
@@ -815,7 +815,7 @@ both of the first two now have. The release-targets surface — those four verbs
 links is past it too, so a dispatch resolves a release over the surface as well. The
 adoption modes merged as https://github.com/nickderobertis/onepipeline/pull/113 and are
 carried by the **engine CLI** at onepipeline 0.13.0, the first release cut after it;
-`config/onepipeline.version` reads 0.18.3, past that floor too. Those two carrying
+`config/onepipeline.version` reads 0.18.4, past that floor too. Those two carrying
 numbers are equal and are about different tools; nothing here should be read off the
 number alone. The two **pins** beside them are not equal: they carried one number for
 the two adoptions ending 2026-08-24, parted at the one on 2026-08-25, and have moved
@@ -837,7 +837,7 @@ number above: it reads each pin this section names out of `config/` and holds it
 past the floor carrying its half, so an adoption that moved one of them fails there
 rather than leaving this paragraph describing the pins before it.
 
-Five things were driven rather than read, on 2026-08-31. The pinned `onevcs --help`
+Five things were driven rather than read, on 2026-09-01. The pinned `onevcs --help`
 lists a
 `release` verb group whose six subcommands are `targets`, `discover`, `latest`,
 `status`,
@@ -855,13 +855,13 @@ producer half, which is why the same verb against an `onepipeline` checkout answ
 `declaration: declared: 3 target(s)` and lists `crate`, `pypi`, and `npm`. That surface
 runs end to end here rather than merely loading: `onevcs release latest <onepipeline>
 --target pypi` runs the release probe that repository
-checks in beside its own declaration and answers `released: 0.18.3`, which is the
+checks in beside its own declaration and answers `released: 0.18.4`, which is the
 release this change adopts.
 **A producer declaration is read at the publication checkout's base, so a checkout left
-on a branch answers nothing** — and this host's `onepipeline` publication checkout was
-on one when this was taken, which is why the two answers above were re-driven against a
-throwaway `ONEVCS_HOME` and a clean clone rather than against the registered alias. What
-the registered one said instead is the message to recognise: `declaration: unreadable:
+on a branch answers nothing** — and that is the one condition to check before reading a
+`declaration:` line at all. Every answer above was taken against the registered alias
+with its checkout at `main`; on the previous re-take that checkout was on a branch, and
+what it said instead is the message to recognise: `declaration: unreadable:
 the publication checkout … has "<branch>" checked out rather than the base "main", and a
 script probe runs at the base; `onevcs sync` puts it back` — which reads like a
 repository that declares nothing and is a checkout somebody left dirty. And a plan node's two fields
@@ -998,7 +998,7 @@ cannot hide the session series, and the paced read that picks up a settled node'
 releases — arrived in **onepipeline 0.14.0**
 (https://github.com/nickderobertis/onepipeline/pull/117). Both floors are behind this
 host: `config/onevcs.version` reads 0.18.0 and
-`config/onepipeline.version` reads 0.18.3, and the adopted engine links onevcs
+`config/onepipeline.version` reads 0.18.4, and the adopted engine links onevcs
 0.18.0, so a dispatch resolves a phase over the same release the manager verbs do.
 **Those two numbers are not one number**, which they were for the two adoptions ending
 2026-08-24 and have not been since — read each with the tool beside it. What
@@ -1076,7 +1076,8 @@ is named relatively. The two defects:
   the pin, which also declares each capability field honestly.
 - onepipeline's settlement write-back **renamed a destination project to its own native
   identifier and wrote no labels**, degrading the record it projected onto. Fixed in
-  **onepipeline 0.17.2** and carried by the adopted **0.17.3**.
+  https://github.com/nickderobertis/onepipeline/pull/149 and carried by the adopted
+  onepipeline 0.18.4.
 
 Both are measured rather than assumed, on this host and against the real board with two
 projects on it, and both halves were re-taken on 2026-08-29 with a throwaway second project
@@ -1120,26 +1121,39 @@ governs a dispatch](#which-pin-governs-a-dispatch) for why the engine pin is wha
 second fix into a dispatch.
 
 **One thing the plan store's own move to documents took away again, and it is worth
-recognising rather than re-diagnosing.** The release this host pins is the one that
-reports **where every entity is** — a `location` beside each project, task and document —
-which is what lets a design document's planned-tasks table point at each task using the
-store's own answer rather than a path somebody composed. onepipeline 0.18.3, the engine
-this host pins, spawns `onetaskgraph project show` for its settlement write-back and
-deserializes that payload strictly, so it refuses the new field by name: *unknown field
-`location`, expected one of `title`, `content`, `labels`, `metadata`, `id`, `status`,
-`url`, `created_at`, `updated_at`, `repositories`*. **Every projection therefore fails
-under this pair**, with the reason quoted verbatim and the destination left exactly as it
-was — which is the refusing-rather-than-defaulting behaviour working, and is why nothing
-is corrupted by it. What is lost is the projection itself: the plan a run was launched
-from stays behind what the run recorded, for as long as this pair is what is installed.
-The run is unaffected — nothing is settled, scheduled or failed on a projection — so
-read a settled run exactly as the paragraph below already says to, from `just results`,
-`just status` and the journal. There is no released engine that tolerates the field yet:
-onepipeline 0.18.3 was cut before the plan-store release that added it, so this is
-unadopted-because-unpublished rather than a pin left behind, and the fix is a onepipeline
-release rather than anything configurable here; it is filed as
-https://github.com/nickderobertis/onepipeline/issues/179. Recognise the message and read
-the run's own record; do not go looking for a broken board.
+recognising rather than re-diagnosing.** The release this host pins reports **where every
+entity is** — a `location` beside each project, task and document — which is what lets a
+design document's planned-tasks table point at each task using the store's own answer
+rather than a path somebody composed. onepipeline 0.18.4, the engine this host pins,
+spawns `onetaskgraph project show` for its settlement write-back and deserializes that
+payload strictly, so it refuses the new field by name: *unknown field `location`, expected
+one of `title`, `content`, `labels`, `metadata`, `id`, `status`, `url`, `created_at`,
+`updated_at`, `repositories`*. **Every projection therefore fails under this pair**, with
+the reason quoted verbatim and the destination left exactly as it was — which is the
+refusing-rather-than-defaulting behaviour working, and is why nothing is corrupted by it.
+What is lost is the projection itself: the plan a run was launched from stays behind what
+the run recorded, for as long as this pair is what is installed. **And the run settles
+green while that happens**, because the write-back is best-effort and off the reconcile
+loop — nothing is settled, scheduled or failed on a projection, so the board goes stale
+with only one line on the driver's own stderr saying so, which a detached run writes to a
+log nobody opens. Read a settled run exactly as the paragraph below already says to, from
+`just results`, `just status` and the journal, and do not go looking for a broken board.
+
+**That state is accepted rather than safe, and what ends it is an engine release.** The
+repair belongs to the engine and not to this repository: the settlement write-back has to
+read the store's answer leniently instead of refusing every field it does not recognise.
+It is filed as https://github.com/nickderobertis/onepipeline/issues/179 and in flight at
+https://github.com/nickderobertis/onepipeline/pull/181, and **no released engine carries
+it**, so the refusal stands at every plan-store release from the one that added `location`
+upward. Pinning the store back below that release is not an escape either: it would trade
+the occasional visible refusal on the copy path described below for the invisible
+permanent loss this paragraph is about, which is the wrong direction. What is **not** in
+question is a second field hiding behind the first: `tests/e2e/test_onetaskgraph_host_e2e.py`
+reads the field set the installed store answers a project item with and the field set the
+installed engine's own refusal says it accepts, and compares them — the two differ by
+`location` and by nothing else. That comparison is the only way to know it, because a
+write-back that refuses the first field it does not recognise stops there and can never
+reveal a second one behind it.
 
 **The two journeys that measure a settlement projection are exempt while that pair is
 installed, and the exemption is the engine's own sentence rather than a version.**
@@ -1151,13 +1165,61 @@ Deleting them instead is what would make the suite forget the guarantee, so they
 come back on their own. `test_the_write_back_exemption_lasts_only_while_the_engine_refuses_this_store`
 holds that condition in both directions.
 
+**What refuses this host's copies is GitHub's *second* rate limiter, and both halves of the
+answer to it are now in force.** The primary limit is the hourly budget `gh api rate_limit`
+reports and a wait answers; the secondary one is a burst limiter over content-creating
+requests, which that endpoint does not report and which every further attempt extends. A
+copy of a plan-sized project is a burst of a few dozen content-creating mutations inside a
+few seconds, so it is the secondary limiter a copy trips — and this host tripped it, and
+was then told the wrong thing about it. Two repairs answer that, in two repositories, and
+this adoption brings in both.
+
+*The engine half.* onepipeline https://github.com/nickderobertis/onepipeline/pull/176,
+carried by the adopted onepipeline 0.18.4, stops the settlement write-back retrying a
+refused projection about four times a second and backs it off from a prompt first retry to
+a one-minute ceiling, resetting after a recovery. That retry rate was itself holding the
+board under the pressure the limiter was refusing — and it is what makes the projection
+breakage above cheap while it lasts, which is why that breakage is worth accepting rather
+than waiting out.
+
+*The store half.* onetaskgraph https://github.com/nickderobertis/onetaskgraph/pull/173,
+carried by the adopted onetaskgraph 0.2.18: it reads GitHub's own limiter vocabulary out of
+a refusal's `message` rather than off its status, and it spaces a copy's content-creating
+mutations at 60000/80 ms — the fastest rate that cannot exceed GitHub's published
+per-minute ceiling. Before it, every release answered both refusals with one sentence —
+*authentication for this source failed: GitHub rejected the configured credential with HTTP
+403 Forbidden* — which is what sent an operator off to widen a token that was never the
+trouble while every retry extended the refusal.
+
+Both halves of what the adopted store release does are driven against the binary this
+checkout installs, in `tests/e2e/test_onetaskgraph_host_e2e.py`, against a loopback GraphQL
+fixture standing in for the board — which the source accepts as an `endpoint` for a test
+server, and which is the only way to ask without performing the very mutation burst in
+question. `tests/plan_store_pin.py` holds the floor those journeys are written against, and
+both read it by comparison rather than by a flag, so a pin moved back below it asserts the
+older behaviour with nobody having to remember either number. Handed two `403`s that differ
+only in whether the body carries GitHub's limiter wording, the adopted release now parts
+them: the credential sentence above for the bare one, and for the other *GitHub's secondary
+rate limit refused this source while reading the board … That limiter is not the primary API
+budget: `gh api rate_limit` reports the primary budget and does not report this one … next:
+leave this board alone for a few minutes, then run the command again — or raise
+pacing.min_mutation_interval_ms on this source so it writes more slowly*. Its copy's nine
+content-creating mutations land 0.751s to 0.752s apart over about 6.0s, where the same copy
+under `pacing.min_mutation_interval_ms: 0` leaves them under a millisecond apart as the
+control — without which a loaded host would satisfy the paced assertion on its own. **So a
+rate-limited copy here is no longer a diagnosis to distrust**: `just copy-plan` can still be
+refused, and when it is, the refusal names the limiter and the setting that answers it, and
+widening the token is still the wrong response.
+
 **What that repair does not buy is a projection you may take on trust.** The write-back is
 still best-effort and off the reconcile loop, so a settlement that never reached the board
 settles the run exactly like one that did — measured again here, where that same throwaway
 plan settled `complete`, `just status` reported `1/1 done SETTLED complete`, and its
 projection had failed outright on a GitHub secondary rate limit. The only thing that said so
 was one line on the driver's own stderr; adopting the settled run again re-ran the write-back,
-which then landed. So a settled run is evidence about the run and none at all about the board. Read [what the write-back owns,
+which then landed. Backing that retry off changes none of it: it stops the projection making
+the refusal worse, and it neither reports the failure anywhere else nor holds the run open
+until the board agrees. So a settled run is evidence about the run and none at all about the board. Read [what the write-back owns,
 and what a green run proves](docs/orchestration.md#what-the-write-back-owns-and-what-a-green-run-proves)
 before treating a settled board as the record of a run.
 
@@ -1702,7 +1764,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.18.3 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.18.4 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -2369,7 +2431,7 @@ question to its manager over the run's own channel instead of guessing at a
 decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
-dispatch of a run carries it as of onepipeline 0.18.3**, composed where the dispatch
+dispatch of a run carries it as of onepipeline 0.18.4**, composed where the dispatch
 is made. That is a statement about the release in force and **not** about where the
 behaviour arrived: `executor::dispatch_env` composes the pair, and it has done so
 since onepipeline **0.8.1** (https://github.com/nickderobertis/onepipeline/pull/76).
@@ -2448,9 +2510,9 @@ which holds that lane's own fixtures, and number 2 *"AI Orchestrator"*, the plan
 updated ProjectV2 and wrote to whatever came back — so the moment the plans board became
 the more recently updated of the two, a credentialed write lane retargeted itself onto
 it with nothing said, and left a draft item there on 2026-08-27. **The adopted
-onetaskgraph 0.2.17 no longer discovers anything**, and it wants a third name: read from
+onetaskgraph 0.2.18 no longer discovers anything**, and it wants a third name: read from
 that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
-at tag `v0.2.17`, which is where that lane lives — the board comes from
+at tag `v0.2.18`, which is where that lane lives — the board comes from
 `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
 comes from `GH_PROJECTS_REPOSITORY`, and the lane **skips** when any of the three is
 absent, exactly as it already did without `GH_PROJECTS_TOKEN`. That is cited to the file
@@ -2539,7 +2601,7 @@ timeline spans — `rollup` spans labelled `agent_role: orchestrator` — but a 
 measured here carried none, and the bounded local capture that used to back-fill
 them exists nowhere on the adopted stack; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
-cannot fully answer: on the adopted onepipeline 0.18.3 a run whose journal does not hold
+cannot fully answer: on the adopted onepipeline 0.18.4 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
 is the one line that makes the rest unprovable, so read it before acting on a node
 those views show as never settled. It used to be said only on the driver's stderr,
@@ -2595,7 +2657,7 @@ measurement's own output verbatim. Three reads reach them: `just monitor <run-id
 their own.
 
 **What `just transcript` renders on the release this host has is the calls *and*
-their outputs.** Re-measured on the adopted onepipeline 0.18.3 against the same
+their outputs.** Re-measured on the adopted onepipeline 0.18.4 against the same
 recorded run this used to be measured on, which is what closed a defect a manager
 had to be warned about here: each turn prints one `tool_call` line per call, carrying
 the tool's name and the argument string its producer recorded, and one `tool_result`
@@ -3035,7 +3097,7 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.18.3
+graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.18.4
 they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries

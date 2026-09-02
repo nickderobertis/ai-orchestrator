@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 at the adoption after the one that first
-carried the write-back repair, onepipeline 0.18.3. The whole of that reasoning —
+carried the write-back repair, onepipeline 0.18.4. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -192,7 +192,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.18.3. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.18.4. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -219,9 +219,24 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.18.3; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.18.4; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
+
+**A projection that keeps failing is now spaced rather than hammered.** onepipeline
+https://github.com/nickderobertis/onepipeline/pull/176, carried by the adopted onepipeline
+0.18.4, backs a failing write-back off from a prompt first retry to a one-minute ceiling
+instead of retrying about four times a second, resets that schedule once it recovers, and
+still retries until the projection lands; closeout still attempts the terminal projection,
+and stopping or settling stays prompt during a long backoff. The reason is GitHub's
+secondary rate limiter: a refused projection retried four times a second is what keeps the
+board under the pressure that refused it, so the retry was extending its own outage. An
+operator still gets one failure message per outage and one when it ends, and the failure
+message now says the attempts are being spaced out. What that does **not** change is
+anything in the paragraph below — see [Where a plan of this repository
+lives](../AGENTS.md#where-a-plan-of-this-repository-lives) for the other half of that
+limiter, which is the plan-store repair this host adopts beside this one, and for what
+this host accepts in order to run it.
 
 **But write-back is best-effort, and a green run therefore proves nothing about the
 plan store.** It runs on its own worker off the reconcile loop, store reads never
@@ -326,7 +341,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.18.3 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.18.4 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -448,7 +463,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.18.3 by dumping both sides of a monitor member's whole
+  against onepipeline 0.18.4 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -760,7 +775,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.18.3 in the judge command's own environment on a real
+  measured against onepipeline 0.18.4 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -954,7 +969,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.18.3 answers `{"reply":0,"state":"applied"}` and records
+a real run on onepipeline 0.18.4 answers `{"reply":0,"state":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
 it applies it a **second** time. The same measurement, re-submitted, comes back
@@ -998,7 +1013,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.18.3**, composed where the
+node dispatch of a run carries it as of onepipeline 0.18.4**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -2702,7 +2717,7 @@ and `note`, and omitting it means `auto`:
 Live delivery is `oneagentgraph interrupt` against **the dispatch's own control
 socket**, so it reaches a node only once something of that dispatch has reported a
 member; before then there is no turn to address and `auto` falls through to the next
-dispatch. The three modes and the two endings above are read from onepipeline 0.18.3,
+dispatch. The three modes and the two endings above are read from onepipeline 0.18.4,
 where `Deliver` is still `auto` / `live` / `next` and `Delivery` still `live` /
 `deferred`. That they *work* was measured on a live run under an earlier release and
 has not been re-taken since: a note sent to a worker three hours into its dispatch

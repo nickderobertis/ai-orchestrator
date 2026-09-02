@@ -382,6 +382,92 @@ def _reprovisioning_tests() -> list[str]:
     return found
 
 
+#: A path every worker of the suite shares one copy of. A fixture that mutates one is
+#: the reason a whole module has to land on a single worker, whatever its individual
+#: tests do — which is what `_module_scope_checkout_writers` looks for.
+SHARED_CHECKOUT_ROOT = "REPO_ROOT"
+
+
+def _module_scope_checkout_writers() -> dict[str, str]:
+    """Journey modules whose *setup* mutates this checkout, by module name and fixture.
+
+    Read from the fixture rather than from the tests, because that is where this
+    constraint comes from and the tests are what hides it. A `scope="module"` fixture
+    runs once per **worker that receives any test from the module**, not once per
+    module: `--dist loadgroup` scatters the tests that name no group, so a module whose
+    setup writes a shared path has that setup racing itself across workers while every
+    test in it looks independent.
+    """
+    found: dict[str, str] = {}
+    for module in sorted(REPO_ROOT.joinpath("tests").rglob("test_*_e2e.py")):
+        source = module.read_text(encoding="utf-8")
+        for fixture in ast.walk(ast.parse(source)):
+            if not isinstance(fixture, ast.FunctionDef):
+                continue
+            for decorator in fixture.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                keywords = {
+                    keyword.arg: keyword.value for keyword in decorator.keywords if keyword.arg
+                }
+                scope = keywords.get("scope")
+                autouse = keywords.get("autouse")
+                broad = isinstance(scope, ast.Constant) and scope.value in {"module", "session"}
+                always = isinstance(autouse, ast.Constant) and autouse.value is True
+                body = ast.get_source_segment(source, fixture) or ""
+                if broad and always and SHARED_CHECKOUT_ROOT in body:
+                    found[module.name] = fixture.name
+    return found
+
+
+def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
+    tmp_path: Path,
+) -> None:
+    """An autouse module-scoped fixture constrains its whole module, not its callers.
+
+    `repository_credentials_file` in `tests/ask_seam/test_launch_ask_seam_e2e.py` adds a
+    name to this checkout's own `.env` and puts the original bytes back afterwards. It is
+    `scope="module"` and `autouse`, so it runs once per worker that receives *any* test
+    from that module — and its create is `O_EXCL`, so two workers reaching it together
+    means one of them raises `FileExistsError` before its test starts.
+
+    That is not hypothetical. The five tests of that module which named no group were
+    scattered across the other workers by `--dist loadgroup`, and every one of them
+    errored in setup on a publication clone — where, unlike a developer's checkout,
+    there is no `.env` for the fixture to append to, so all four workers took the
+    creating branch at once. The gate refused the push and the branch could not land.
+
+    The rule the older reasoning got wrong was to ask what each test's *body* does:
+    refusal journeys launch no run and wait on no deadline, so leaving them ungrouped
+    read as free. Setup is what they share, and setup is not free.
+    """
+    writers = _module_scope_checkout_writers()
+    assert writers, (
+        "no journey module declares an autouse module-scoped fixture that touches "
+        f"{SHARED_CHECKOUT_ROOT}; this scan is looking for the shape that forces a "
+        "module onto one worker, and finding none means it has stopped matching"
+    )
+
+    groups = _collected_groups(tmp_path)
+    for module, fixture in sorted(writers.items()):
+        collected = {node: group for node, group in groups.items() if f"/{module}::" in node}
+        assert collected, f"{module} declares {fixture} but collected no tests"
+
+        scattered = sorted(node for node, group in collected.items() if not group)
+        assert not scattered, (
+            f"{module}::{fixture} is autouse and module-scoped, so it runs on every "
+            f"worker that receives a test from {module}; these name no xdist group and "
+            f"so are scattered across workers by `--dist loadgroup`, running that "
+            f"fixture concurrently against one shared checkout: {scattered}"
+        )
+
+        named = sorted(set(collected.values()))
+        assert len(named) == 1, (
+            f"{module} resolves to {named}. `--dist loadgroup` serialises one group "
+            f"name and never two, so {fixture} would still run on two workers at once"
+        )
+
+
 def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
     tmp_path: Path,
 ) -> None:
@@ -401,9 +487,15 @@ def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
 
     Read off a real collection, so the assertion is about the items the scheduler will
     see rather than about how any of them happens to be spelled. A test in those modules
-    that declares no group is out of scope rather than a failure: those are the refusal
-    journeys, which launch no run and wait on no deadline. What may not happen is one of
-    them naming a *second* group.
+    that declares no group is out of scope *here* rather than a failure: those are the
+    refusal journeys, which launch no run and wait on no deadline. What may not happen is
+    one of them naming a *second* group.
+
+    That allowance is about test bodies and reaches no further, which is the distinction
+    it cost a refused push to learn: a module whose *setup* writes this checkout
+    constrains every test in it whatever their bodies do, and
+    :func:`test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker` is what
+    refuses an ungrouped test there.
     """
     groups = _collected_groups(tmp_path)
     readers = {

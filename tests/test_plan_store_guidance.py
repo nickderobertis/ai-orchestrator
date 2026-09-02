@@ -25,6 +25,14 @@ the release before it. The release check is deliberately a closed one — every
 `onetaskgraph <version>` in that document is the adopted one — so a release this host no
 longer runs is named relatively, as *the release below the adopted one*, rather than by
 a number that reads like something installed here.
+
+One release is nameable beside the adopted one, and only while it has to be: the floor
+`tests/plan_store_pin.py` declares, on a host pinned below it. A pin behind a fix on
+purpose reads exactly like a pin nobody moved, so a document describing one is required
+to say so and to quote what it is trading for — and at or past that floor both the
+widening and the requirement fall away on their own, because they are derived from the
+pin rather than set beside it. This host is at the floor, so a passage still saying the
+pin is held fails here.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ import re
 
 import pytest
 from plan_sources import read_default_sources, read_plan_sources
+from plan_store_pin import BLOCKED_BY, PACING_FLOOR, held_below_the_pacing_floor
 
 from orchestrator.root import REPO_ROOT
 
@@ -99,12 +108,49 @@ def _named_in_prose(name: str) -> str:
 
 
 def test_the_release_the_manager_document_names_is_the_release_this_host_installs() -> None:
-    """`AGENTS.md` names the adopted onetaskgraph, and names the pin's own value."""
+    """`AGENTS.md` names the adopted onetaskgraph, and names the pin's own value.
+
+    A closed set of one, widened to two by exactly one thing: a **declared hold**. While
+    `config/onetaskgraph.version` sits below `PACING_FLOOR` the document has to be able to
+    name the release it is held below, or it cannot say what this host is missing. At or
+    past that floor the set narrows back to one on its own, which is where this host is:
+    the release is simply the one installed, and a passage still naming another comes due
+    here rather than standing as a note about a bump that already happened.
+    """
     adopted = _adopted_release()
+    nameable = {adopted} | ({PACING_FLOOR} if held_below_the_pacing_floor() else set())
     stated = set(re.findall(r"onetaskgraph (\d+\.\d+\.\d+)", _document(MANAGER)))
-    assert stated == {adopted}, (
+    assert stated == nameable, (
         f"{MANAGER} names onetaskgraph {sorted(stated)} where config/onetaskgraph.version "
-        f"reads {adopted}; re-date that passage with the release this host installs"
+        f"reads {adopted} and the release(s) it may also name are {sorted(nameable)}; "
+        "re-date that passage with the release this host installs"
+    )
+
+
+def test_the_manager_document_says_the_plan_store_pin_is_held_and_what_blocks_it() -> None:
+    """A pin held below a release carrying a fix says so, or it reads as an oversight.
+
+    This is the one shape of staleness the release check above cannot catch: a pin that
+    is behind on purpose looks exactly like a pin nobody moved, and the next reader
+    either bumps it — trading an occasional visible refusal on the copy path for a
+    silent write-back refusal that loses every settlement projection — or spends the
+    diagnosis again. So a host below the floor has to name the release it is held below
+    and quote what it is trading for, and a host at or past it has to stop saying so:
+    this one is past it, and a sentence left behind would describe a hold that ended.
+    """
+    text = _flat(_document(MANAGER))
+    held = held_below_the_pacing_floor()
+    says_held = "`config/onetaskgraph.version` is deliberately held below it" in text
+    assert says_held is held, (
+        f"config/onetaskgraph.version reads {_adopted_release()} against a "
+        f"{PACING_FLOOR} floor, so {MANAGER} "
+        + ("has to say the pin is held" if held else "must stop saying the pin is held")
+    )
+    if not held:
+        return
+    assert BLOCKED_BY in text, (
+        f"{MANAGER} has to quote {BLOCKED_BY} — the refusal a hold is trading for — or a "
+        "reader cannot tell a deliberate hold from a pin nobody moved"
     )
 
 

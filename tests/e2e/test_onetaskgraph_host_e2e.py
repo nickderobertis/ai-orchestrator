@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -25,6 +26,11 @@ from onetaskgraph_release import (
     installed_binary,
     release_fixture,
     run_installer,
+)
+from plan_store_pin import (
+    PACING_FLOOR,
+    adopted_release,
+    held_below_the_pacing_floor,
 )
 from published_tools import ONETASKGRAPH_BIN
 from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
@@ -429,6 +435,11 @@ class _GraphQLRequest:
 
     query: str
     variables: dict[str, object]
+    #: When the fixture read this request, on the monotonic clock. Recorded here rather
+    #: than derived afterwards because the pacing journey below measures the *gaps*
+    #: between the mutations a copy sends, and a gap is only observable at the far end
+    #: of the wire — the source's own scheduling is invisible from outside it.
+    received: float
 
     @classmethod
     def from_json(cls, body: bytes) -> _GraphQLRequest:
@@ -441,7 +452,17 @@ class _GraphQLRequest:
             raise ValueError("GraphQL request requires a query string")
         if not isinstance(variables, dict):
             raise ValueError("GraphQL request requires a variables object")
-        return cls(query=query, variables=variables)
+        return cls(query=query, variables=variables, received=time.monotonic())
+
+    @property
+    def is_mutation(self) -> bool:
+        """Whether this document creates content, which is what GitHub's second limiter counts.
+
+        Read off the document the way the source reads it — a GraphQL document whose
+        first word is `mutation` — rather than from the operation table above, so a
+        document the fixture has not been taught still counts as a write here.
+        """
+        return self.query.lstrip().startswith("mutation")
 
     @property
     def operation(self) -> _Operation:
@@ -495,15 +516,87 @@ _OPERATIONS: dict[str, _Operation] = {
 BOARD = _Board()
 
 
+@dataclass(frozen=True)
+class _Refusal:
+    """One response GitHub refuses a request with, as the status and body it sends.
+
+    Both journeys that use one send the **same** forbidden status and differ only in
+    what the body says about itself, because that is the distinction under test: a
+    forbidden status carrying none of GitHub's limiter vocabulary really is a token
+    that lacks a permission, and one carrying it is the burst limiter. A fixture that
+    varied the status too would prove the source reads the status, which is the reading
+    that sent operators to change a credential.
+    """
+
+    status: int
+    body: dict[str, object]
+
+
+#: What GitHub answers a burst of content creation with, published as prose at
+#: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api. The
+#: source matches on this text rather than on the status, for the reason above.
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] One copy here and the
+# other in GitHub's prose: nothing machine-readable to generate from or reconcile
+# against, and observing the real refusal would mean performing the burst that earns it.
+# The half this repository can reach — the installed CLI's classifier against this body —
+# is what the journey below asserts.
+SECONDARY_LIMIT = _Refusal(
+    status=403,
+    body={
+        "message": (
+            "You have exceeded a secondary rate limit. Please wait a few minutes "
+            "before you try again."
+        )
+    },
+)
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+#: The same status with nothing about a limit in it, which is a credential this token
+#: lacks. Named beside its sibling because one without the other proves nothing: a
+#: source that called every refusal a rate limit would pass the first journey alone.
+FORBIDDEN = _Refusal(
+    status=403, body={"message": "Resource not accessible by personal access token"}
+)
+#: GitHub's published ceiling on content-generating requests, per minute (same page as
+#: :data:`SECONDARY_LIMIT`), and the shortest interval that cannot exceed it. Written as
+#: the division because the number is GitHub's rather than this repository's: a literal
+#: 0.75 would read as a figure somebody here chose.
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The same boundary as
+# the directive above. What this repository can gate — that the installed CLI paces at
+# this bound — the journey below asserts over the gaps its copy really left, so a release
+# that moved its interval in either direction fails against this number.
+CONTENT_CREATION_PER_MINUTE = 80
+SHIPPED_MUTATION_INTERVAL = 60 / CONTENT_CREATION_PER_MINUTE
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+def _mutation_gaps(requests: list[_GraphQLRequest]) -> list[float]:
+    """The intervals between consecutive content-creating requests, in seconds.
+
+    Queries are excluded rather than merely uncounted: only the mutations are what
+    GitHub's second limiter counts, and a copy interleaves board reads with its writes,
+    so a gap measured over every request would be shortened by the reads between them.
+    """
+    sent = [request.received for request in requests if request.is_mutation]
+    return [later - earlier for earlier, later in zip(sent, sent[1:], strict=False)]
+
+
 class _GitHubFixture(BaseHTTPRequestHandler):
     requests: ClassVar[list[_GraphQLRequest]]
+    #: What every request is refused with, or `None` to answer the board normally.
+    refusal: ClassVar[_Refusal | None] = None
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         length = int(self.headers["Content-Length"])
         request = _GraphQLRequest.from_json(self.rfile.read(length))
         self.requests.append(request)
-        body = json.dumps(self._answer(request)).encode()
-        self.send_response(200)
+        if self.refusal is not None:
+            self._send(self.refusal.status, self.refusal.body)
+            return
+        self._send(200, self._answer(request))
+
+    def _send(self, status: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -568,15 +661,20 @@ class _GitHubFixture(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _serving_board() -> Iterator[dict[str, str]]:
+def _serving_board(refusal: _Refusal | None = None) -> Iterator[dict[str, str]]:
     """Serve the board fixture, yielding the environment that points `plans` at it.
 
     The board is reset per journey rather than shared: it is mutated by the writes a
     copy performs, so a second journey reading the residue of the first would report a
     board somebody else's copy filled in.
+
+    ``refusal`` makes every request come back as one GitHub refusal instead. It is a
+    property of the server rather than of a call because what a caller sees is the
+    diagnostic the source composes, and the source retries before it composes one.
     """
     BOARD.reset()
     _GitHubFixture.requests = []
+    _GitHubFixture.refusal = refusal
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GitHubFixture)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
@@ -591,6 +689,7 @@ def _serving_board() -> Iterator[dict[str, str]]:
         server.shutdown()
         thread.join()
         server.server_close()
+        _GitHubFixture.refusal = None
 
 
 def _prepare_plan_sources(root: Path) -> dict[str, str]:
@@ -803,6 +902,175 @@ def test_project_copy_is_refused_when_the_configured_repository_is_unreachable(
     )
 
 
+#: How a refusal journey asks for the report rather than the wait. Empty on a pin below
+#: the floor, because the release it would name has no pacing settings at all and asking
+#: for one is refused before the copy starts — which is itself asserted below.
+_REPORT_PROMPTLY: dict[str, str] = {} if held_below_the_pacing_floor() else {"retry_budget_ms": "0"}
+
+
+def _refusal_sentence(result: subprocess.CompletedProcess[str]) -> str:
+    """The one line of a refused copy that says what went wrong.
+
+    The recipe prints the commands it runs and `just` prints its own failure after, so
+    a comparison over whole stderr would be comparing the wrapper's noise as much as
+    the store's answer.
+    """
+    said = [line for line in result.stderr.splitlines() if line.startswith("onetaskgraph:")]
+    assert said, f"a refused copy has to say why on stderr: {result.stderr}"
+    return said[0]
+
+
+def _copy_to_the_board(
+    root: Path, remote: dict[str, str], **pacing: str
+) -> subprocess.CompletedProcess[str]:
+    """Copy this journey's local project onto the fixture board, under some pacing.
+
+    One helper because the journeys below differ only in what the fixture answers and
+    how fast the source is allowed to write; the copy itself is the same one an
+    operator performs with `just copy-plan`, run here at the store verb so what is
+    measured is the source's own request stream.
+    """
+    environment = _plan_environment(root)
+    environment.update(remote)
+    for setting, value in pacing.items():
+        environment[f"ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__{setting.upper()}"] = value
+    # llmlint: ignore-block[tests_mirror_real_usage] `just plans` is an operator recipe,
+    # not a private seam below one: `just copy-plan` adds a review pre-flight and then
+    # runs this very verb with its streams uncaptured, so what an operator reads is
+    # identical, and its own journey is `tests/plan_tooling/test_copy_plan_recipe_e2e.py`.
+    return subprocess.run(
+        ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
+# inputs as every journey beside them, so `nx affected` already selects the whole file
+# together and a project of two functions would buy no selection — the split-by-cost
+# shape this rule is named against. They run in `orchestrator:test`, keyed `codeWorkspace`.
+# llmlint: ignore-block[shell_test_tiers_stay_split] Neither is a shell test: both are
+# Python journeys spawning the installed plan-store CLI, so there is no shell suite here
+# to keep split from anything.
+def test_a_secondary_rate_limit_is_told_apart_from_a_credential_this_token_lacks(
+    tmp_path: Path,
+) -> None:
+    """The installed CLI's answer to GitHub's burst limiter, whichever release is pinned.
+
+    Both halves send the same forbidden status and differ only in what the body says,
+    which is the whole of the distinction: the copies this host runs were being refused
+    by the secondary limiter and reported as a permission problem, so an operator went
+    and widened a token that was never the trouble while every retry extended the
+    refusal. Driven against the binary this checkout installs rather than read off a
+    release note, because the question is about the program this checkout spawns.
+
+    On a pin below :data:`PACING_FLOOR` the two answers are the *same* sentence, and
+    asserting that is what would keep such a pin honest — a note saying this host still
+    reports a limiter as a credential would otherwise outlive the release that stopped
+    it. This host is at that floor, so that branch is not taken and the assertions
+    below it are the measurement.
+    """
+    _write_local_project(tmp_path)
+    with _serving_board(refusal=SECONDARY_LIMIT) as remote:
+        limited = _copy_to_the_board(tmp_path, remote, **_REPORT_PROMPTLY)
+    with _serving_board(refusal=FORBIDDEN) as remote:
+        forbidden = _copy_to_the_board(tmp_path, remote, **_REPORT_PROMPTLY)
+
+    assert limited.returncode != 0, limited.stdout
+    assert forbidden.returncode != 0, forbidden.stdout
+    if held_below_the_pacing_floor():
+        assert _refusal_sentence(limited) == _refusal_sentence(forbidden), (
+            f"onetaskgraph {adopted_release()} is below the {PACING_FLOOR} that tells "
+            "these two apart, so both have to come back as the same credential "
+            "sentence; one of them naming a limiter means this pin has reached that "
+            "floor and the branch below is the measurement to keep"
+        )
+        assert "credential" in _refusal_sentence(limited), (
+            "a release below the floor reports a burst-limiter refusal as a credential "
+            f"problem, and this one said: {_refusal_sentence(limited)}"
+        )
+        return
+
+    said = limited.stderr.lower()
+    assert "secondary rate limit" in said, (
+        "a burst-limiter refusal has to name that limiter, or an operator reads it as a "
+        f"credential problem: {limited.stderr}"
+    )
+    assert "pacing.min_mutation_interval_ms" in limited.stderr, (
+        "the report has to name the setting that answers this limiter, since polling it "
+        f"only extends it: {limited.stderr}"
+    )
+    assert "rate limit" not in forbidden.stderr.lower(), (
+        "a forbidden status saying nothing about a limit is a permission this token "
+        f"lacks, and reporting it as a rate limit is the opposite error: {forbidden.stderr}"
+    )
+
+
+def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
+    """How fast a copy writes, measured at the far end of the wire.
+
+    A gap between two mutations is only observable where they land, so the fixture is
+    what times them; the source's own scheduling is invisible from outside it.
+
+    On a pin below :data:`PACING_FLOOR` what is asserted is the burst — every mutation
+    of a copy inside a few milliseconds — and that the pacing setting which would answer
+    for it is not a field such a release has. At or past the floor, which is where this
+    host is, the shipped interval is asserted instead, read as GitHub's own published
+    ceiling on content-generating requests rather than as a number chosen here, with an
+    unpaced run as the control: without one a loaded test host would satisfy the paced
+    assertion on its own.
+    """
+    _write_local_project(tmp_path)
+    with _serving_board() as remote:
+        shipped = _copy_to_the_board(tmp_path, remote)
+        as_shipped = _mutation_gaps(_GitHubFixture.requests)
+
+    assert shipped.returncode == 0, shipped.stdout + shipped.stderr
+    assert len(as_shipped) >= 2, (
+        "a copy of one project and one task sends several content-creating mutations; "
+        f"this sent {len(as_shipped) + 1}"
+    )
+
+    if held_below_the_pacing_floor():
+        assert max(as_shipped) < SHIPPED_MUTATION_INTERVAL / 2, (
+            f"onetaskgraph {adopted_release()} sends a copy's mutations as one burst, "
+            f"and this one left gaps of up to {max(as_shipped):.3f}s — if it is pacing "
+            f"them, the {PACING_FLOOR} behaviour has arrived and the branch below is "
+            "the measurement to keep"
+        )
+        with _serving_board() as remote:
+            configured = _copy_to_the_board(tmp_path, remote, min_mutation_interval_ms="0")
+        assert configured.returncode != 0, configured.stdout
+        assert "'pacing' was unexpected" in configured.stderr, (
+            "a release below the floor has no pacing settings at all, so asking for one "
+            f"is refused as an unknown property; this said: {configured.stderr}"
+        )
+        return
+
+    with _serving_board() as remote:
+        unpaced = _copy_to_the_board(tmp_path, remote, min_mutation_interval_ms="0")
+        burst = _mutation_gaps(_GitHubFixture.requests)
+
+    assert unpaced.returncode == 0, unpaced.stdout + unpaced.stderr
+    assert min(burst) < SHIPPED_MUTATION_INTERVAL / 2, (
+        "the control has to burst, or the paced assertion below would pass on a slow "
+        f"host alone; its shortest gap was {min(burst):.3f}s"
+    )
+    assert min(as_shipped) >= SHIPPED_MUTATION_INTERVAL * 0.9, (
+        "every content-creating mutation has to be spaced by the shipped interval; the "
+        f"shortest gap this copy left was {min(as_shipped):.3f}s of "
+        f"{SHIPPED_MUTATION_INTERVAL}s"
+    )
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
 def test_missing_remote_credential_keeps_local_plan_launchable(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
@@ -883,7 +1151,7 @@ def _exempt_while_the_engine_cannot_read_this_store(
     """Stop a write-back journey the installed engine has already refused to perform.
 
     The two journeys that call this measure what a settlement projects back onto the
-    plan it was launched from, and under onepipeline 0.18.3 against onetaskgraph 0.2.17
+    plan it was launched from, and under onepipeline 0.18.4 against onetaskgraph 0.2.18
     no settlement is projected at all: the engine refuses the store's payload for its
     `location` field, leaves the destination exactly as it was, and says so on the
     driver's own stderr. That is an external released binary and not this repository's
@@ -946,6 +1214,101 @@ def test_the_write_back_exemption_lasts_only_while_the_engine_refuses_this_store
     assert not _engine_cannot_read_this_store(_driver(_PROJECTING_DRIVER_STREAM), _driver(""))
     assert _engine_cannot_read_this_store(
         _driver(_PROJECTING_DRIVER_STREAM), _driver(_REFUSING_DRIVER_STREAM)
+    )
+
+
+#: The accepted field list out of the engine's own refusal. serde names every field it
+#: would have taken after `expected one of`, and stops that list at the position report
+#: — so the whole set is readable from one refusal, where the unknown field it names is
+#: only ever the first one it met.
+_ACCEPTED_BY_THE_WRITE_BACK = re.compile(r"expected one of (?P<fields>`[^\n]*?`) at line")
+
+
+def _fields_the_write_back_accepts(stderr: str) -> set[str] | None:
+    """Every field name the installed engine says it would have accepted, or `None`.
+
+    `None` is a driver that refused nothing, which is the answer an engine reading this
+    store gives and is why this returns rather than raising: there is no list to read
+    because there was no refusal, and that is the outcome this repository is waiting
+    for rather than a parse failure.
+    """
+    named = _ACCEPTED_BY_THE_WRITE_BACK.search(stderr)
+    if named is None:
+        return None
+    return set(re.findall(r"`([^`]+)`", named.group("fields")))
+
+
+def _fields_the_store_answers_with(body: str, project_id: _ProjectId) -> set[str]:
+    """Every key the store puts on one project item, read off its own `--json` answer."""
+    payload = json.loads(body)
+    for entry in payload["items"]:
+        item = entry["item"]
+        if item.get("id") == project_id:
+            return set(item)
+    raise ValueError(f"the store answered with no project {project_id!r}")
+
+
+def test_the_store_answers_with_exactly_one_field_the_write_back_does_not_accept(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """How far apart the two shapes are, read from both ends rather than inferred.
+
+    The engine deserializes the store's project item under `deny_unknown_fields`, so it
+    refuses at the **first** field it does not recognise and names only that one. A
+    reader who took the refusal at face value would learn that `location` is unaccepted
+    and nothing at all about what stands behind it — and would go on believing the two
+    shapes are one field apart while a bump that ended `location` uncovered the next.
+    So neither end is inferred from the other: the field set is read off the store's own
+    `--json` answer, the accepted set off the `expected one of` list the engine's own
+    refusal carries, and the two are compared whole.
+
+    An engine that reads this store refuses nothing and prints no list, which is the
+    stronger answer and the one this asserts instead — see
+    `_exempt_while_the_engine_cannot_read_this_store` for what ends the refusal.
+    """
+    _write_local_project(tmp_path)
+    environment = _launch_environment(tmp_path / "execution", oneharness_bin)
+    environment.update(_prepare_plan_sources(tmp_path))
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
+
+    shown = subprocess.run(
+        ["just", "plans", "project", "show", LOCAL_QUALIFIED, "--json"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    answered = _fields_the_store_answers_with(shown.stdout, LOCAL_PROJECT)
+
+    launched = subprocess.run(
+        ["just", "orchestrate", LOCAL_QUALIFIED, "--dag-graph", "off"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    accepted = _fields_the_write_back_accepts(launched.stderr)
+    if accepted is None:
+        assert not _engine_cannot_read_this_store(launched), (
+            "the driver said it could not read this store but named no accepted field "
+            f"list, so neither shape can be read from it: {launched.stderr}"
+        )
+        return
+
+    assert answered - accepted == {"location"}, (
+        "the store answers with a field the write-back does not accept beyond "
+        f"`location`: {sorted(answered - accepted)} — every one of those refuses a "
+        "projection, and a bump that ends `location` alone would uncover the next"
+    )
+    assert accepted - answered == set(), (
+        "the write-back accepts a field this store never answers with: "
+        f"{sorted(accepted - answered)}; the two shapes have parted in the other "
+        "direction and the refusal above is no longer the whole story"
     )
 
 
