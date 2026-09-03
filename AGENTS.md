@@ -1690,8 +1690,14 @@ and is never a command.
 
 This is the most critical rule of the arrangement. Dispatched work runs for hours
 after the turn that launched it; with nothing watching, the project runs
-unsupervised and the user is in the dark. It is an **invariant, not a mechanism**,
-and more than one mechanism satisfies it:
+unsupervised and the user is in the dark. **The rule names one command — `just
+watch` (4 below) — and the five numbered properties beside it are what watching
+means and what that recipe owes.** It was an invariant satisfied by whatever loop
+each supervisor invented for as long as nothing had a command behind it, and every
+loop invented here went silent differently: one missed four destructive edits
+entirely and only learned of them when the run died, another filtered out the single
+line that says a question is waiting and stayed quiet while twenty-six updates queued
+and one question was asked three times, with every other indicator green throughout.
 
 1. **A watch is armed before you turn to anything else** — not after the next
    step, not when convenient. A launch is not finished until its watch is up.
@@ -1703,9 +1709,34 @@ and more than one mechanism satisfies it:
 3. **A foreground attach alone is not an armed watch.** It dies with the turn that
    started it. Run the attached launch **plus** an independent watch, neither
    depending on the other.
-4. **Any mechanism meeting 1-3 is acceptable** — a `just channel-next` loop, an
-   out-of-band poll on `just status` that emits on state change, a scheduled
-   wake-up. The invariant is what is named here; the tool is yours to pick.
+4. **`just watch` is the command the rule names**, and it is what meets 1-3 in one
+   invocation rather than in a loop somebody writes. It blocks; it emits one line
+   per meaningful event and a heartbeat line per interval of silence, so silence
+   and death are distinguishable from outside; **every heartbeat states how many
+   planner surfaces are unread and of which kinds**, which is property 5 satisfied
+   by construction rather than by remembering; it returns on one of four terminal
+   conditions — the run settled, a blocking surface waiting, nothing driving the
+   run, the wait elapsed — each with its own exit status, so a caller branches on
+   the status instead of matching prose; and it prints a cursor a later watch
+   resumes from without repeating itself. Read the statuses and the options off
+   `just --list` and the recipe's own comment; `scripts/watch-run.sh` restates
+   them in one place and `tests/test_watch_surface_drift.py` reconciles that
+   restatement against the installed engine.
+
+   **Exactly one exception, and it is the one this recipe cannot serve:**
+   supervising several runs at once, which is a shape a per-run watch has no
+   answer for. Arm one watch per run where you can, and where you cannot, an
+   out-of-band poll that emits on state change is acceptable **only** while it
+   meets the same five properties — including 5, which is the one such a poll
+   loses first. Nothing else is an exception: "the loop I wrote works" is what
+   every silent watch here was, and neither cost nor convenience earns one.
+
+   **It is inert until the pin that carries the verb is adopted here.**
+   `config/onepipeline.version` decides which engine a command of this host runs,
+   and the blocking watch verb this delegates to arrived on the engine after the
+   recipe did. Until that pin names a release carrying it, `just watch` says so in
+   one line — naming that pin — and watches nothing; while that is true, watch by
+   the exception's shape above, held to the same five properties.
 5. **The watch must emit on the unread-surface line specifically.** This is a
    HARD REQUIREMENT: the `N planner update(s) waiting (…kinds…), unread for T` line
    that `just runs` and `just status` add per affected run has to reach you, and

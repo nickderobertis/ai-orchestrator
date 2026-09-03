@@ -550,6 +550,19 @@ history-show *args:
 monitor *args:
     @./scripts/onepipeline.sh monitor "$@"
 
+# Watch one run until something a supervisor has to act on happens: `just watch
+# <run-id> [OPTIONS]`. AGENTS.md's watch rule states what a watch owes and why this
+# exists rather than a loop over `just monitor`.
+#
+# Its options and terminal exit statuses are deliberately not restated here:
+# `scripts/watch-run.sh --print-surface` prints them, and that is what
+# `tests/test_watch_surface_drift.py` reconciles against the installed engine. A copy in
+# this comment is a copy that gate does not read.
+# llmlint: ignore[tool_output_is_signal] Watching a run as it happens is the whole of what this command is for; the per-event and per-heartbeat lines are its product, and the unread-surface count inside a heartbeat is the one signal AGENTS.md forbids filtering out.
+[doc('Watch one run, blocking, with heartbeats that carry the unread-surface count; see AGENTS.md and `scripts/watch-run.sh --print-surface`.')]
+watch *args:
+    @./scripts/watch-run.sh "$@"
+
 # Session timing and usage, for every run or one named run.
 # `--breakdown` renders the operator timing view.
 telemetry *args:

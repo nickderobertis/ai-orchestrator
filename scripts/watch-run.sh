@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# `just watch <run-id>` — the one command this host watches a run with, and the command
+# AGENTS.md's watch rule names. That rule states why watching needs a command at all and
+# what a watch owes; this file states only what this wrapper does about it.
+#
+# Three things, none of which the engine's verb does for it. It asks the installed
+# engine whether it has the verb at all, because this recipe lands before the pin that
+# carries it. It reads the verb's **machine-readable** form and composes the operator's
+# lines from fields, never from the verb's own prose. And it treats everything crossing
+# that boundary — the run it was named, the stream, the cursor — as untrusted input,
+# because two of those end up inside a command line an operator copies.
+set -euo pipefail
+
+# The pin that carries the verb. Named in the refusal below rather than compared
+# against a number here: what decides is whether the installed engine has the verb,
+# and a version comparison would have to be widened by hand at the carrying release
+# and would go on refusing if that guess were wrong.
+ENGINE_PIN="config/onepipeline.version"
+
+# What this wrapper exits with when it cannot do its job at all: no run named, no verb
+# to delegate to, or — the one that matters most — a machine-readable stream it could
+# not read. It is deliberately none of the four terminal conditions below, because the
+# whole point of those four is that a caller branches on them, and a status that could
+# mean either "the run settled" or "this watch could not tell" is worth nothing.
+EXIT_CANNOT_WATCH=2
+
+# Everything this reaches — the engine wrapper, the renderer — is named relative to this,
+# and its failure is refused here rather than left to `set -e`, so a checkout this cannot
+# resolve itself in says which command could not start rather than nothing at all.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
+if ! root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; then
+  echo "watch: this could not resolve the checkout it lives in from ${BASH_SOURCE[0]}, so it cannot reach the engine wrapper or the renderer it watches through. Run 'just watch' from a checkout of this repository; nothing was watched." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+
+# The two tables below copy somebody else's interface, and are the one place this
+# repository states that copy: `--print-surface` renders them, and the recipe, the
+# journeys and the gate all read them from there.
+
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` is the gate over this table; it reconciles nothing only while no engine offering the verb is installed, exempts itself on exactly that condition, and is held to it in both directions, so the reconciliation comes due when the pin moves.
+WATCH_OPTIONS=(--wait --heartbeat-every --cursor --until --filter --all --json)
+
+# Every terminal condition, as `status:name:phrase`. Four of them, each with its own
+# exit status so a caller branches on the status rather than on prose. `3` is the
+# status the engine already assigns to "nothing is driving this run"; `1` and `2` are
+# already spoken for as its queued and refused, so the two remaining conditions take
+# the free statuses above them.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] gated by the same check, under the same exemption, as the option table above.
+WATCH_CONDITIONS=(
+  "0:settled:the run settled"
+  "3:nothing-driving:nothing is driving this run — the state to intervene in"
+  "4:blocking-surface:a blocking planner surface is waiting to be answered"
+  "5:wait-elapsed:the wait elapsed with the run still live"
+)
+
+# The gate's input rather than an operator's: one row per option and per status, read by
+# `tests/test_watch_surface_drift.py`. It is not a mode anybody watches a run with.
+# llmlint: ignore[tool_output_is_signal] a table of rows is what the reader of this asked for; one line could not carry it.
+print_surface() {
+  local option entry
+  echo "verb watch"
+  echo "pin $ENGINE_PIN"
+  for option in "${WATCH_OPTIONS[@]}"; do echo "option $option"; done
+  for entry in "${WATCH_CONDITIONS[@]}"; do
+    local rest=${entry#*:}
+    echo "status ${entry%%:*} ${rest%%:*}"
+  done
+}
+
+phrase_for() {
+  local entry
+  for entry in "${WATCH_CONDITIONS[@]}"; do
+    if [ "${entry%%:*}" = "$1" ]; then
+      local rest=${entry#*:}
+      echo "${rest#*:}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "${1:-}" = --print-surface ]; then
+  print_surface
+  exit 0
+fi
+
+if [ "$#" -eq 0 ]; then
+  echo "watch: name the run to watch: just watch <run-id> [--wait SECONDS] [--heartbeat-every SECONDS] [--cursor CURSOR] [--until CONDITION] [--filter SPEC | --all]" >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+
+# The run this is a watch of. Every line below names it — the terminal summary, and the
+# resume command an operator copies — so it is found rather than assumed to be first,
+# and then checked rather than trusted. An invocation of nothing but options names no
+# run at all, and a run carrying a space or a shell metacharacter would compose a resume
+# command that does something other than resume a watch, so both are refused: this is
+# somebody else's word being put into a command line, which is the same boundary the
+# renderer holds the verb's own cursor to.
+run=
+skip=0
+for argument in "$@"; do
+  if [ "$skip" -eq 1 ]; then
+    skip=0
+    continue
+  fi
+  case "$argument" in
+    --all | --json) ;;
+    --*=*) ;;
+    --*) skip=1 ;;
+    *)
+      run="$argument"
+      break
+      ;;
+  esac
+done
+
+if [ -z "$run" ]; then
+  echo "watch: these arguments name no run to watch, only options. Name the run first: just watch <run-id> [--wait SECONDS] [--heartbeat-every SECONDS] [--cursor CURSOR] [--until CONDITION] [--filter SPEC | --all]" >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+if ! [[ "$run" =~ ^[A-Za-z0-9._:+/=-]{1,256}$ ]]; then
+  echo "watch: '$run' is not a run id this will put into a command line — a run id is an opaque token, and this one carries characters a copied resume command would not survive. Name the run as 'just runs' lists it." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+
+# Does the installed engine have the verb at all? Asked as a **positive** question of
+# the root's own command list rather than by probing the verb and reading a failure as
+# its absence: a probe that fails for any other reason — a broken install, an engine
+# that cannot start — would be reported as a missing verb, sending an operator to adopt
+# a release that was never the trouble. So an engine that cannot be asked at all is its
+# own answer, carrying what the engine itself said.
+if ! engine_help=$("$root/scripts/onepipeline.sh" --help 2>&1); then
+  # The engine's own words reach a terminal here, so they are stripped of control
+  # characters and bounded first — for the reason `scripts/watch-render.py` strips a
+  # record's fields, and because a failing engine is exactly the one whose output is
+  # least likely to be well formed.
+  said=$(printf '%s' "$engine_help" | tr -d '\000-\010\013\014\016-\037\177' | tr '\n' ' ' | cut -c1-500)
+  echo "watch: the onepipeline installed here could not be asked what verbs it has, so this cannot tell whether it offers a watch verb. It said: ${said:-nothing at all}. Repair the installation — 'just bootstrap' reinstalls the pinned releases — and retry." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+if ! grep -qE '^[[:space:]]+watch([[:space:]]|$)' <<<"$engine_help"; then
+  echo "watch: the onepipeline installed here offers no watch verb, so there is nothing for this recipe to delegate to. The verb is a sibling change on the engine, and what carries it here is $ENGINE_PIN — adopt an engine release carrying it and this command works. Until then, watch the run with 'just monitor <run-id>' beside 'just status <run-id>', and read the unread-surface line yourself." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+
+# What is handed to the verb: the caller's own arguments, plus the machine-readable form
+# this reads. A caller who asked for it themselves is not given it twice.
+#
+# llmlint: ignore[boundary_inputs_validated] The verb is the authority on its own command line, and these reach it as an argv array rather than a shell string, so nothing is interpreted on the way. Validating option names and arity here would mean a second copy of the engine's surface — the very duplication the drift gate exists to prevent — and would refuse an option the engine grew before this repository noticed. What this *does* validate is every value it re-emits itself: the run above and the cursor the renderer hands back, both of which end up inside a command line an operator copies.
+forwarded=("$@")
+asked_for_json=0
+for argument in "$@"; do
+  if [ "$argument" = --json ]; then asked_for_json=1; fi
+done
+if [ "$asked_for_json" -eq 0 ]; then forwarded+=(--json); fi
+
+# The repository's own interpreter when this is a provisioned checkout, and the system
+# one otherwise — the renderer is stdlib-only precisely so both work. Resolved before
+# the pipeline rather than named inside it: an unresolvable `python3` there dies as the
+# shell's own `command not found` in the middle of what looks like a watch, and a
+# supervisor reads that as the run having gone wrong rather than as this checkout
+# missing the interpreter the renderer needs.
+python="$root/.venv/bin/python3"
+if [ ! -x "$python" ]; then
+  python=$(command -v python3 || true)
+fi
+if [ -z "$python" ]; then
+  echo "watch: this needs a python3 to read the watch verb's machine-readable output with, and there is none — neither $root/.venv/bin/python3 nor a python3 on PATH. Provision this checkout with 'just bootstrap', or put a python3 on PATH; nothing was watched." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+
+# Where the renderer leaves the cursor for the resume hint below. Its own failure is
+# named here for the reason above: `mktemp`'s bare diagnostic says nothing about what
+# this command was doing or what to do next, and under `set -e` it would end the watch
+# with no line of this command's own.
+if ! cursor_file=$(mktemp); then
+  echo "watch: this could not create the temporary file it reads the resume cursor back through, in ${TMPDIR:-/tmp} — nothing was watched. Check that directory exists and is writable, or point TMPDIR at one that is, and retry." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+# `|| true` because this runs on the way out: a trap command that fails is a trap that
+# can replace the terminal status this command chose with one of its own, and which of
+# the four conditions ended the watch is the whole of what a caller branches on.
+trap 'rm -f "$cursor_file" || true' EXIT
+
+set +e
+# llmlint: ignore[tool_output_is_signal] Watching a run as it happens is the whole of what this command is for: the per-event and per-heartbeat lines the renderer writes are its product, and the unread-surface count inside a heartbeat is the one signal AGENTS.md forbids filtering out.
+"$root/scripts/onepipeline.sh" watch "${forwarded[@]}" |
+  "$python" "$root/scripts/watch-render.py" --cursor-file "$cursor_file"
+# Both halves in one read: an assignment is itself a command, so reading
+# `PIPESTATUS[0]` into a variable is what replaces the array before the second half
+# can be read out of it.
+statuses=("${PIPESTATUS[@]}")
+set -e
+engine_status=${statuses[0]}
+render_status=${statuses[1]}
+
+# **An unreadable stream is a failure, and never one of the four conditions.** The
+# whole of what this wrapper knows about a run comes from two things the verb produced
+# together — its machine-readable stream and its exit status — and a stream this could
+# not read is a stream whose events, heartbeats and unread-surface counts never reached
+# the caller. Handing back the engine's status anyway would report a run as settled on
+# the strength of a channel that carried nothing, which is exactly the silence-read-as-
+# progress this command exists to end: the operator sees a clean exit and stops looking.
+# So the refusal replaces the terminal status rather than being printed beside it.
+if [ "$render_status" -ne 0 ]; then
+  echo "watch: ${run:-the run}: the watch verb exited $engine_status, but its machine-readable output could not be read — the diagnostic above names each record that could not be read. Nothing was watched that this can vouch for, so no terminal condition is reported: read the run with 'just status ${run:-<run-id>}' and treat this watch as not having happened." >&2
+  exit "$EXIT_CANNOT_WATCH"
+fi
+
+# The renderer writes this file only when a terminal record named a cursor it was
+# willing to hand back, so an empty or absent one is the ordinary "no cursor this time".
+# A read that fails is a real anomaly — this file is the script's own `mktemp` — but it
+# loses the resume hint and nothing else, because the watch is over and its terminal
+# condition already read. So it is named here and the watch still reports its ending,
+# rather than dying on `cat`'s own diagnostic past a watch that succeeded.
+cursor=
+if [ -s "$cursor_file" ]; then
+  # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own `mktemp` becomes unreadable between the renderer writing it and this line; no journey can produce that without racing the filesystem the test itself runs on.
+  if ! cursor=$(cat "$cursor_file"); then
+    echo "watch: the watch itself was read whole, but its resume cursor could not be read back from $cursor_file, so no resume command is printed below. The ending reported below stands; start the next watch without --cursor, and it repeats what this one already showed." >&2
+    cursor=
+  fi
+fi
+resume=
+if [ -n "$cursor" ]; then
+  resume=" — resume with 'just watch ${run:-<run-id>} --cursor $cursor'"
+fi
+
+# One summary line past the stream already written: which of the four terminal
+# conditions ended the watch, and the command that resumes from where it stopped.
+# llmlint: ignore[tool_output_is_signal] Reducing this away would leave a caller with an exit status and no statement of what happened, and the resume command with nowhere to be printed.
+if phrase=$(phrase_for "$engine_status"); then
+  echo "watch: ${run:-the run}: $phrase$resume"
+else
+  echo "watch: ${run:-the run}: the watch verb ended at exit status $engine_status, which is none of its four terminal conditions — 1 and 2 are the engine's own queued and refused. Read the run with 'just status ${run:-<run-id>}' to see where it stands$resume" >&2
+fi
+
+exit "$engine_status"

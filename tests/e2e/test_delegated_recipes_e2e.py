@@ -12,6 +12,19 @@ CLI itself is doubled, at the boundary below the seam under test: each engine is
 proven in its own repository, and running a real `onepipeline start` here would
 launch agents.
 
+llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] Every
+test in this module is `reads_recipes`, so the property is file-wide rather than about any
+one row. That marker is this repository's tier mechanism rather than a shortcut around
+one: it runs four tiers over one Nx project, keyed on four `nx.json` named inputs, and
+`orchestrator:test-recipes` is a target of that same project keyed on `recipeWorkspace` —
+the justfile, `scripts/**` and the modules that collect these tests, which is exactly what
+this table drives. `tests/conftest.py` fails a marked test that opens anything outside that
+key and `tests/test_nx_cache_scope.py` holds the four selectors to a partition of the
+suite, so the tier is enforced rather than declared. A project per delegated recipe is also
+the opposite of what this file is for: `tests/AGENTS.md` states that a delegated recipe's
+journey *is* its row here, in one table, so that a recipe which starts naming a different
+verb fails in one place rather than in an operator's terminal.
+
 llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage] The published CLIs are
 the boundary these wrappers delegate *to*, so a double there is what makes the
 delegation observable; the recipes, the wrapper scripts, and the shell they run in are
@@ -84,6 +97,12 @@ WRAPPER_SCRIPTS = (
     # `just sweep` goes through this one, which composes the two published sweep
     # verbs and writes the trailer neither of them can.
     "sweep.sh",
+    # `just watch` goes through this one, which asks the installed engine whether it
+    # has the verb at all and pipes its machine-readable form through the renderer
+    # beside it — so a checkout without either would delegate through a wrapper that
+    # cannot run.
+    "watch-run.sh",
+    "watch-render.py",
 )
 
 
@@ -260,6 +279,16 @@ DELEGATIONS = (
     Delegation("status", ("run-1",), "uv run onepipeline status run-1"),
     Delegation("host", (), "uv run onepipeline host"),
     Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
+    # The watch recipe reads the engine's own command list before it delegates — the
+    # recipe landed before the pin that carries the verb — and appends the
+    # machine-readable form it reads, because reading the verb's human lines is one of
+    # the two failures the verb replaces.
+    Delegation(
+        "watch",
+        ("run-1", "--wait", "600", "--heartbeat-every", "60"),
+        "uv run onepipeline watch run-1 --wait 600 --heartbeat-every 60 --json",
+        before=("uv run onepipeline --help",),
+    ),
     Delegation("results", ("run-1",), "uv run onepipeline results run-1"),
     Delegation("transcript", ("run-1",), "uv run onepipeline transcript run-1"),
     # The optional node operand, which is what turns a whole run's transcript into one
@@ -431,11 +460,19 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     uv = checkout / "bin/uv"
     # Records the whole command line, and the reply envelope when one is piped in:
     # a verdict recipe's product is the envelope, so a trace without it would say
-    # nothing about the recipe under test.
+    # nothing about the recipe under test. It also answers the engine's own command
+    # list, because `just watch` reads that list before it delegates — asking whether
+    # the installed engine has the verb at all — and a double that answered nothing
+    # would make every row of this table watch a verb it had just been told is absent.
     uv.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+if [ "$*" = "run onepipeline --help" ]; then
+  echo "Commands:"
+  echo "  watch       Watch one run until something a supervisor has to act on happens"
+  exit 0
+fi
 if [ ! -t 0 ]; then
   while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
 fi
