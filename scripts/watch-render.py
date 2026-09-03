@@ -27,15 +27,20 @@ subprocess, resolving this repository's interpreter when one exists and a bare
 llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The whole of this file is
 one restatement of the engine's wire shape — the record kinds, the `unread` fields, the
 field aliases, and the terminal record's condition and cursor — so the directive is
-file-scoped because the property is, not to clear one site. There is deliberately no gate
-reconciling it: no engine offering the watch verb is installed here, so there is nothing
-to reconcile against, and a gate asserting nothing would read like one that had.
-`tests/test_watch_surface_drift.py` gates the two halves the plan did fix — the options
-and the exit statuses — and is exempt on that same condition, which is the drift signal
-that arrives first when the pin moves. What stands in for a gate meanwhile is that
+file-scoped because the property is, not to clear one site. What can be reconciled
+against the installed engine is, and it is next door:
+`tests/test_watch_surface_drift.py` drives the verb into every terminal condition a
+static runs root can produce and compares the pairing it answers with. What cannot is
+this rendering, and that is a property of the artifact rather than an omission — the
+engine's wire shape is declared in its own repository and in nothing the wheel installs,
+so a gate here would be a second copy of the guess. What stands in for one is that
 nothing here is read strictly: an unrecognised kind renders whole, a missing field
 degrades to a named absence, and an unusable one says so — so a drifted wire shape shows
-on the watch's own face rather than passing as a count somebody could act on.
+on the watch's own face rather than passing as a count somebody could act on. The whole
+of that guess was wrong once already, and silently: written before any engine offered the
+verb, it keyed on a `kind` field the verb does not write, so every record fell to the
+`record` fallback and the resume cursor reached the wrapper from nothing. What caught it
+was running `just watch` against a real run, which is what to do after moving the pin.
 """
 
 from __future__ import annotations
@@ -80,12 +85,22 @@ class RecordKind(StrEnum):
 
     One line per meaningful event, one heartbeat per interval of silence, and the
     terminal record naming the condition the verb returned on and the cursor a later
-    watch resumes from.
+    watch resumes from. Each record says which it is under :data:`KIND_FIELD`.
     """
 
     EVENT = "event"
     HEARTBEAT = "heartbeat"
-    TERMINAL = "terminal"
+    TERMINAL = "return"
+
+
+#: The field each record names its own kind in. Not `kind`, which is what the *event*
+#: inside an event record uses for its own kind — the two are different vocabularies at
+#: two levels, and reading the outer record by the inner field is what made every record
+#: here fall to the unrecognised-kind fallback.
+KIND_FIELD = "watch"
+#: Where an event record carries the event. The record is an envelope: its own fields say
+#: what kind of watch record it is, and the whole engine envelope sits under this one.
+EVENT_FIELD = "event"
 
 
 # `Any` rather than a narrower type because these are records decoded from another
@@ -133,7 +148,10 @@ def _unread(record: dict[str, Any]) -> str:
     unread = record.get("unread")
     if not isinstance(unread, dict):
         return "unread surfaces: not reported by this record"
-    total = unread.get("total")
+    total = next(
+        (unread[name] for name in ("count", "total") if name in unread),
+        None,
+    )
     counted = (
         total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else None
     )
@@ -165,23 +183,77 @@ def _named_kinds(kinds: object) -> str:
             # count, so it is rendered as text under the same stripping and bound every
             # other field gets; only the counts beside them are type-checked, because
             # only a count reads as something to act on.
-            named = ", ".join(_one_line(kind) for kind in kinds)
+            named = ", ".join(_kind_entry(entry) for entry in kinds if _kind_entry(entry))
         case _:
             named = ""
     return f" ({named})" if named else ""
+
+
+def _event(record: dict[str, Any]) -> str:
+    """One event record's own line: when, whose, what, and what it said.
+
+    The event is an envelope of the engine's own — a `ts`, a `kind`, `labels` naming the
+    run and the node, and a `payload` whose shape is that kind's — so the node comes out
+    of the labels and the detail out of the payload rather than off the record itself. A
+    payload this cannot summarise is rendered whole and bounded, which is the same
+    degrade every other field here takes: what a supervisor must never get is silence.
+    """
+    envelope = record.get(EVENT_FIELD)
+    if not isinstance(envelope, dict):
+        return _one_line(json.dumps(record, sort_keys=True))
+    at = _text(envelope, "ts", "at", "timestamp", "time")
+    labels = envelope.get("labels")
+    payload = envelope.get("payload")
+    parts = [
+        _text(envelope, "kind", "name", "type") or "(unnamed event)",
+        _text(labels, "node", "step") if isinstance(labels, dict) else "",
+        _detail(payload),
+    ]
+    said = "  ".join(part for part in parts if part)
+    return f"{at}  {said}" if at else said
+
+
+def _detail(payload: object) -> str:
+    """What one event said, out of the payload whose shape is that event kind's.
+
+    The kinds a watch relays carry different fields — a settlement its outcome, a
+    surface its message, a stop its reason — so the ones worth a line are named and
+    anything else is rendered whole and bounded rather than dropped. A payload that is
+    not an object at all is still what the verb sent, so it is rendered too.
+    """
+    if not isinstance(payload, dict):
+        return _text({"payload": payload}, "payload")
+    return _text(payload, "message", "reason", "detail", "outcome", "status") or (
+        _one_line(json.dumps(payload, sort_keys=True)) if payload else ""
+    )
+
+
+def _kind_entry(entry: object) -> str:
+    """One entry of an unread-kinds list: a bare name, or a name with its own count.
+
+    Both shapes say the same thing and the verb writes the second — `{"kind": …,
+    "count": …}` — where an older reading of this contract expected the first. A count
+    that is not a count is dropped and the name kept, for the reason `_unread` gives:
+    only a number reads as something to act on.
+    """
+    if not isinstance(entry, dict):
+        return _one_line(entry)
+    named = _text(entry, "kind", "name")
+    count = entry.get("count")
+    if not named:
+        return ""
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        return f"{named} {count}"
+    return named
 
 
 def _render(record: dict[str, Any]) -> str:
     """One line for one record, composed from its fields."""
     at = _text(record, "at", "timestamp", "time")
     stamped = f"{at}  " if at else ""
-    match record.get("kind"):
+    match record.get(KIND_FIELD):
         case RecordKind.EVENT:
-            named = _text(record, "event", "name", "type")
-            node = _text(record, "node")
-            detail = _text(record, "detail", "message", "summary")
-            parts = [part for part in (named, node, detail) if part]
-            return f"event      {stamped}{'  '.join(parts) or '(unnamed event)'}"
+            return f"event      {_event(record)}"
         case RecordKind.HEARTBEAT:
             return f"heartbeat  {stamped}{_unread(record)}"
         case RecordKind.TERMINAL:
@@ -259,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             continue
-        if record.get("kind") == RecordKind.TERMINAL:
+        if record.get(KIND_FIELD) == RecordKind.TERMINAL:
             named = record.get("cursor")
             if named is not None and not (isinstance(named, str) and _CURSOR.match(named)):
                 unusable += 1

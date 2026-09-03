@@ -685,4 +685,9 @@ def test_a_plan_the_write_back_rewrote_is_refused_by_naming_the_engine_that_rewr
     assert _REWRITTEN_EDGE in reported, reported
     assert "onepipeline 0.19.0" in reported, reported
     assert "https://github.com/nickderobertis/onepipeline/issues/189" in reported, reported
-    assert "config/onepipeline.version` is held at 0.18.4" in reported, reported
+    assert "repaired in onepipeline 0.20.0" in reported, reported
+    # The refusal says the records came from that one release rather than from this
+    # host's pin, because the recogniser outlives the repair: a plan carried here from a
+    # host that ran 0.19.0 still carries the rewrite, and a reader told to move a pin
+    # that has already moved would be sent to fix the wrong thing.
+    assert "nothing this host installs writes them" in reported, reported

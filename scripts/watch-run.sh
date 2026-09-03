@@ -37,20 +37,23 @@ fi
 # repository states that copy: `--print-surface` renders them, and the recipe, the
 # journeys and the gate all read them from there.
 
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` is the gate over this table; it reconciles nothing only while no engine offering the verb is installed, exempts itself on exactly that condition, and is held to it in both directions, so the reconciliation comes due when the pin moves.
-WATCH_OPTIONS=(--wait --heartbeat-every --cursor --until --filter --all --json)
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` is the gate over this table, and it reconciles it against the installed engine's own `watch --help` on every uncached run.
+WATCH_OPTIONS=(--timeout --tick-interval --cursor --until --filter --all)
 
 # Every terminal condition, as `status:name:phrase`. Four of them, each with its own
 # exit status so a caller branches on the status rather than on prose. `3` is the
 # status the engine already assigns to "nothing is driving this run"; `1` and `2` are
 # already spoken for as its queued and refused, so the two remaining conditions take
 # the free statuses above them.
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] gated by the same check, under the same exemption, as the option table above.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` drives the installed verb into every condition a static runs root can produce and compares the pairing against these rows. Two of the four cannot be: `surface-waiting` and `elapsed` are answers about a *live* run, and the engine proves liveness from the driving process rather than from the ledger, so a run root carrying a forged lock still answers `nothing-driving` — a fixture that got past that would assert this repository's guess at what the engine inspects, which is not a reconciliation. Those two are declared in that module's `UNDRIVABLE_CONDITIONS`, the declaration is asserted to be exactly them in both directions so the set cannot quietly grow, and `tests/e2e/test_watch_recipe_e2e.py` holds this wrapper's branching on all four.
+# Each name is the engine's **own** word for the condition, as its terminal record
+# spells it, so the gate below compares the two for equality rather than reading one
+# for the other. Its own phrasing is what a caller sees.
 WATCH_CONDITIONS=(
   "0:settled:the run settled"
   "3:nothing-driving:nothing is driving this run — the state to intervene in"
-  "4:blocking-surface:a blocking planner surface is waiting to be answered"
-  "5:wait-elapsed:the wait elapsed with the run still live"
+  "4:surface-waiting:a blocking planner surface is waiting to be answered"
+  "5:elapsed:the wait elapsed with the run still live"
 )
 
 # The gate's input rather than an operator's: one row per option and per status, read by
@@ -85,7 +88,7 @@ if [ "${1:-}" = --print-surface ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-  echo "watch: name the run to watch: just watch <run-id> [--wait SECONDS] [--heartbeat-every SECONDS] [--cursor CURSOR] [--until CONDITION] [--filter SPEC | --all]" >&2
+  echo "watch: name the run to watch: just watch <run-id> [--timeout SECONDS] [--tick-interval SECONDS] [--cursor CURSOR] [--until surface|settled] [--filter SPEC | --all]" >&2
   exit "$EXIT_CANNOT_WATCH"
 fi
 
@@ -104,7 +107,7 @@ for argument in "$@"; do
     continue
   fi
   case "$argument" in
-    --all | --json) ;;
+    --all) ;;
     --*=*) ;;
     --*) skip=1 ;;
     *)
@@ -115,7 +118,7 @@ for argument in "$@"; do
 done
 
 if [ -z "$run" ]; then
-  echo "watch: these arguments name no run to watch, only options. Name the run first: just watch <run-id> [--wait SECONDS] [--heartbeat-every SECONDS] [--cursor CURSOR] [--until CONDITION] [--filter SPEC | --all]" >&2
+  echo "watch: these arguments name no run to watch, only options. Name the run first: just watch <run-id> [--timeout SECONDS] [--tick-interval SECONDS] [--cursor CURSOR] [--until surface|settled] [--filter SPEC | --all]" >&2
   exit "$EXIT_CANNOT_WATCH"
 fi
 if ! [[ "$run" =~ ^[A-Za-z0-9._:+/=-]{1,256}$ ]]; then
@@ -143,16 +146,14 @@ if ! grep -qE '^[[:space:]]+watch([[:space:]]|$)' <<<"$engine_help"; then
   exit "$EXIT_CANNOT_WATCH"
 fi
 
-# What is handed to the verb: the caller's own arguments, plus the machine-readable form
-# this reads. A caller who asked for it themselves is not given it twice.
+# What is handed to the verb: the caller's own arguments, unchanged. The verb writes
+# **both** forms unconditionally — the operator's lines on standard error and one NDJSON
+# record per line on standard output — so there is no machine-readable form to ask for
+# and none to ask for twice. This reads the second descriptor, which is the one the
+# renderer below is pointed at.
 #
 # llmlint: ignore[boundary_inputs_validated] The verb is the authority on its own command line, and these reach it as an argv array rather than a shell string, so nothing is interpreted on the way. Validating option names and arity here would mean a second copy of the engine's surface — the very duplication the drift gate exists to prevent — and would refuse an option the engine grew before this repository noticed. What this *does* validate is every value it re-emits itself: the run above and the cursor the renderer hands back, both of which end up inside a command line an operator copies.
 forwarded=("$@")
-asked_for_json=0
-for argument in "$@"; do
-  if [ "$argument" = --json ]; then asked_for_json=1; fi
-done
-if [ "$asked_for_json" -eq 0 ]; then forwarded+=(--json); fi
 
 # The repository's own interpreter when this is a provisioned checkout, and the system
 # one otherwise — the renderer is stdlib-only precisely so both work. Resolved before

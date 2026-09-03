@@ -59,15 +59,44 @@ RUN = "run-1"
 AT_LENGTH = "unreadable " * 80
 
 
-def _record(kind: str, at: str, **fields: object) -> str:
+def _record(kind: str, at: str, /, **fields: object) -> str:
     """One line of the machine-readable stream the doubled verb writes.
 
-    The payload stays a mapping because that is what it is — another program's JSON,
-    whose fields this repository reads leniently on purpose — but every record is built
-    through here, so a journey states the kind and the stamp rather than repeating the
-    two keys every record carries.
+    A record names its own kind under `watch` — not `kind`, which is what the *event*
+    inside an event record uses for its own kind. The two vocabularies at two levels are
+    the shape the engine really writes, and reading the outer record by the inner field
+    is the mistake this double exists to keep this repository's reader from making again.
+
+    ``at`` is the stamp a record carries, and only an event record carries one: the
+    engine puts it on the envelope inside, so this puts it there too, and a caller that
+    passes no stamp gets a record with none. The payload stays a mapping because that is
+    what it is — another program's JSON, whose fields this repository reads leniently on
+    purpose.
+
+    Both parameters are positional-only, because an event's envelope carries a key named
+    `kind` of its own and a keyword parameter of that name would collide with it.
     """
-    return json.dumps({"kind": kind, "at": at, **fields})
+    if kind == "event":
+        envelope = dict(fields)
+        if at:
+            envelope["ts"] = at
+        return json.dumps({"watch": "event", "event": envelope})
+    return json.dumps({"watch": kind, **({"at": at} if at else {}), **fields})
+
+
+def _event(at: str, kind: str, node: str = "", **payload: object) -> str:
+    """One event record, in the envelope shape the engine relays an event inside.
+
+    Composed rather than spelled per journey because the envelope is three levels — the
+    record, the event, and its `labels` and `payload` — and a journey that built one by
+    hand would be restating the shape rather than using it.
+    """
+    envelope: dict[str, object] = {"kind": kind}
+    if node:
+        envelope["labels"] = {"node": node}
+    if payload:
+        envelope["payload"] = payload
+    return _record("event", at, **envelope)
 
 
 #: One stream carrying every record kind the contract names: a meaningful event, a
@@ -75,14 +104,19 @@ def _record(kind: str, at: str, **fields: object) -> str:
 #: and the cursor a later watch resumes from.
 STREAM = "\n".join(
     (
-        _record("event", "T1", event="node-settled", node="adopt", detail="done"),
-        _record("heartbeat", "T2", unread={"total": 2, "kinds": {"finding": 1, "monitor": 1}}),
+        _event("T1", "node-settled", "adopt", outcome="done"),
         _record(
-            "terminal",
-            "T3",
+            "heartbeat",
+            "",
+            unread={"count": 2, "kinds": [{"kind": "finding", "count": 1}, {"kind": "monitor"}]},
+        ),
+        _record(
+            "return",
+            "",
             condition="settled",
+            exit=0,
             cursor="c-42",
-            unread={"total": 2, "kinds": {"finding": 1}},
+            unread={"count": 2, "kinds": [{"kind": "finding", "count": 1}]},
         ),
     )
 )
@@ -241,7 +275,7 @@ def test_a_heartbeats_unread_surface_count_reaches_the_caller(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stderr
     heartbeat = [line for line in result.stdout.splitlines() if line.startswith("heartbeat")]
-    assert heartbeat == ["heartbeat  T2  2 planner update(s) unread (finding 1, monitor 1)"]
+    assert heartbeat == ["heartbeat  2 planner update(s) unread (finding 1, monitor)"]
 
 
 #: Every render shape the wrapper composes, as `(record, the line it must produce)`. The
@@ -250,29 +284,37 @@ def test_a_heartbeats_unread_surface_count_reaches_the_caller(tmp_path: Path) ->
 #: left to whichever record a journey happened to use.
 RENDERED = (
     (
-        _record("event", "T1", event="node-settled", node="adopt", detail="done"),
+        _event("T1", "node-settled", "adopt", outcome="done"),
         "event      T1  node-settled  adopt  done",
     ),
     (_record("event", "T1"), "event      T1  (unnamed event)"),
     (
-        _record("heartbeat", "T1", unread={"total": 0, "kinds": {}}),
+        _record("heartbeat", "T1", unread={"count": 0, "kinds": []}),
         "heartbeat  T1  no planner update is unread",
     ),
     (
-        _record("heartbeat", "T1", unread={"total": 3, "kinds": ["finding", "monitor"]}),
+        _record("heartbeat", "T1", unread={"count": 3, "kinds": ["finding", "monitor"]}),
         "heartbeat  T1  3 planner update(s) unread (finding, monitor)",
     ),
     (
-        _record("heartbeat", "T1", unread={"total": 3, "kinds": {"finding": "lots"}}),
+        _record(
+            "heartbeat",
+            "T1",
+            unread={"count": 3, "kinds": [{"kind": "finding", "count": 1}, {"kind": "monitor"}]},
+        ),
+        "heartbeat  T1  3 planner update(s) unread (finding 1, monitor)",
+    ),
+    (
+        _record("heartbeat", "T1", unread={"count": 3, "kinds": {"finding": "lots"}}),
         "heartbeat  T1  3 planner update(s) unread",
     ),
     (
-        _record("terminal", "T1", unread={"total": 1, "kinds": {"finding": 1}}),
+        _record("return", "T1", unread={"count": 1, "kinds": {"finding": 1}}),
         "terminal   T1  (unnamed condition); 1 planner update(s) unread (finding 1)",
     ),
     (
         _record("wind-change", "T1", note="new"),
-        'record     T1  {"at": "T1", "kind": "wind-change", "note": "new"}',
+        'record     T1  {"at": "T1", "note": "new", "watch": "wind-change"}',
     ),
     # A record kind this build has never seen is rendered whole, and is still another
     # program's — so it reaches the terminal under the same bound every known field has,
@@ -280,35 +322,42 @@ RENDERED = (
     # escape, so what a supervisor reads is the six characters rather than a cursor move.
     (
         _record("wind-change", "T1", note="new\u001bceased"),
-        'record     T1  {"at": "T1", "kind": "wind-change", "note": "new\\u001bceased"}',
+        'record     T1  {"at": "T1", "note": "new\\u001bceased", "watch": "wind-change"}',
     ),
     (
         _record("wind-change", "T1", note="y" * 400),
-        f'record     T1  {{"at": "T1", "kind": "wind-change", "note": "{"y" * 155}…',
+        f'record     T1  {{"at": "T1", "note": "{"y" * 178}…',
     ),
     (
-        _record("event", "T1", event="node-settled", node="adopt\u001b[2Kdone"),
+        _event("T1", "node-settled", "adopt\u001b[2Kdone"),
         "event      T1  node-settled  adopt [2Kdone",
     ),
     (
-        _record("event", "T1", event="node-settled", detail="x" * 400),
+        _event("T1", "node-settled", message="x" * 400),
         f"event      T1  node-settled  {'x' * 200}…",
     ),
-    # The three fields a watch line is composed of are each read under more than one
-    # name, because the record is another program's JSON and this repository reads it
-    # leniently rather than strictly — a stamp under `timestamp`, an event under `name`,
-    # a detail under `summary`. Each alias is a line an operator would otherwise not get,
+    # An event record whose envelope is not an object at all is still another program's
+    # record: it is rendered whole under the same bound rather than dropped, because a
+    # watch that showed nothing for a line the verb sent is the silence this ends.
+    (
+        json.dumps({"watch": "event", "event": "node-settled"}),
+        'event      {"event": "node-settled", "watch": "event"}',
+    ),
+    # The fields a watch line is composed of are each read under more than one name,
+    # because the record is another program's JSON and this repository reads it leniently
+    # rather than strictly — a stamp under `timestamp`, an event kind under `name`, a
+    # detail under `summary`. Each alias is a line an operator would otherwise not get,
     # so each is driven rather than left to whichever spelling a landed engine picks.
     (
         _record("event", "", timestamp="T2", name="node-settled"),
         "event      T2  node-settled",
     ),
     (
-        _record("event", "", time="T3", type="node-started", message="dispatching"),
+        _record("event", "", time="T3", type="node-started", payload={"message": "dispatching"}),
         "event      T3  node-started  dispatching",
     ),
     (
-        _record("event", "T4", event="node-settled", summary="one commit"),
+        _event("T4", "node-settled", detail="one commit"),
         "event      T4  node-settled  one commit",
     ),
 )
@@ -352,7 +401,7 @@ def test_a_resumed_watch_carries_the_cursor_the_first_one_printed(tmp_path: Path
     resumed = _watch(checkout, trace, RUN, "--cursor", "c-42", stream="", exit_status=0)
 
     assert resumed.returncode == 0, resumed.stderr
-    assert f"uv run onepipeline watch {RUN} --cursor c-42 --json" in trace.read_text().splitlines()
+    assert f"uv run onepipeline watch {RUN} --cursor c-42" in trace.read_text().splitlines()
     # The second watch emitted only what its own stream carried: a resumed watch that
     # replayed the first one's events would be a watch nobody can read.
     assert "node-settled" not in resumed.stdout
@@ -450,10 +499,10 @@ def test_an_engine_that_cannot_be_asked_is_not_reported_as_one_without_the_verb(
 #: one this watch reports on. Together they are every branch of the wrapper's argument
 #: reading: a value-taking option, one written with `=`, and the two that take none.
 OPTIONS_BEFORE_THE_RUN = (
-    ("--wait", "600"),
+    ("--timeout", "600"),
     ("--filter=monitor",),
     ("--all",),
-    ("--json",),
+    ("--tick-interval", "5"),
     ("--all", "--cursor", "c-7"),
 )
 
@@ -477,8 +526,8 @@ def test_a_field_carrying_terminal_escapes_cannot_rewrite_what_the_watch_reporte
     checkout, trace = _checkout(tmp_path)
     stream = "\n".join(
         (
-            _record("event", "T1", event="node-settled", detail="done\u001b[1;32m fine"),
-            _record("heartbeat", "T2", unread={"total": 1, "kinds": {"find\u001b[2Jing": 1}}),
+            _event("T1", "node-settled", detail="done\u001b[1;32m fine"),
+            _record("heartbeat", "T2", unread={"count": 1, "kinds": {"find\u001b[2Jing": 1}}),
         )
     )
 
@@ -505,7 +554,7 @@ def test_an_invocation_of_nothing_but_options_names_no_run_and_is_refused(
     """
     checkout, trace = _checkout(tmp_path)
 
-    result = _watch(checkout, trace, "--wait", "600", "--all")
+    result = _watch(checkout, trace, "--timeout", "600", "--all")
 
     assert result.returncode == 2
     assert "name no run to watch, only options" in result.stderr
@@ -536,7 +585,7 @@ def test_a_run_that_is_not_an_opaque_token_is_refused_before_it_reaches_a_comman
 def test_the_run_is_found_whichever_option_shape_precedes_it(
     tmp_path: Path, before: tuple[str, ...]
 ) -> None:
-    """`--wait 600` is an option and its value, not a run — and neither is `--all`.
+    """`--timeout 600` is an option and its value, not a run — and neither is `--all`.
 
     The run is what every line this wrapper writes is about: the terminal summary and
     the resume command both name it. Reading an option, or an option's value, as the run
@@ -553,21 +602,23 @@ def test_the_run_is_found_whichever_option_shape_precedes_it(
 
 
 @pytest.mark.reads_recipes
-def test_a_caller_who_asked_for_the_machine_readable_form_is_not_given_it_twice(
-    tmp_path: Path,
-) -> None:
-    """The wrapper needs `--json` and adds it; a caller who typed it keeps exactly one.
+def test_the_caller_s_own_arguments_are_all_the_verb_is_given(tmp_path: Path) -> None:
+    """The wrapper adds nothing to the command line it was handed.
 
-    A repeated flag is a refusal on most command lines, so appending it unconditionally
-    would turn a caller's own correct invocation into a watch that never started.
+    It used to append `--json`, because the surface it was written against — before any
+    engine offered the verb — was guessed to have one. The verb that exists writes both
+    forms unconditionally, the operator's lines on standard error and the machine form on
+    standard output, so there is nothing to ask for; appending an option the verb does not
+    take is a watch refused before it watches anything, which is the failure the drift
+    gate over this wrapper exists to catch.
     """
     checkout, trace = _checkout(tmp_path)
 
-    result = _watch(checkout, trace, RUN, "--json", stream=STREAM, exit_status=0)
+    result = _watch(checkout, trace, RUN, "--tick-interval", "5", stream=STREAM, exit_status=0)
 
     assert result.returncode == 0, result.stderr
     delegated = [line for line in trace.read_text().splitlines() if "watch" in line]
-    assert delegated == [f"uv run onepipeline watch {RUN} --json"]
+    assert delegated == [f"uv run onepipeline watch {RUN} --tick-interval 5"]
 
 
 @pytest.mark.reads_recipes
@@ -596,12 +647,12 @@ def test_a_run_named_after_an_option_is_still_the_run_this_watch_reports_on(
     """An operator types the run first; a caller need not, and gets its own run named back.
 
     The run is what every line this wrapper writes is about — the terminal summary and
-    the resume command both name it — so reading `--wait` as the run would put the wrong
+    the resume command both name it — so reading `--timeout` as the run would put the wrong
     word in front of a supervisor and compose a resume command that watches nothing.
     """
     checkout, trace = _checkout(tmp_path)
 
-    result = _watch(checkout, trace, "--wait", "600", RUN, stream=STREAM, exit_status=4)
+    result = _watch(checkout, trace, "--timeout", "600", RUN, stream=STREAM, exit_status=4)
 
     assert result.returncode == 4
     assert f"watch: {RUN}: a blocking planner surface is waiting" in result.stdout
@@ -647,7 +698,7 @@ def test_a_cursor_that_is_not_an_opaque_token_is_refused_rather_than_handed_back
     chose, so the watch reports that it can vouch for nothing rather than guessing.
     """
     checkout, trace = _checkout(tmp_path)
-    stream = _record("terminal", "T1", condition="settled", cursor="$(id) later")
+    stream = _record("return", "T1", condition="settled", cursor="$(id) later")
 
     result = _watch(checkout, trace, RUN, stream=stream, exit_status=0)
 

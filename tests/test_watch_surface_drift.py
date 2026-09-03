@@ -14,17 +14,28 @@ Neither side of the reconciliation is a table kept here: the wrapper's own
 The two checks that ask the engine anything are in the uncached tier, because their
 subject is an installed producer rather than this workspace: a memo keyed on this tree
 would replay a green across the very upgrade they exist to catch. The checks that drive
-the comparison itself, and the one that drives the exemption's own condition, read
-nothing outside this workspace and stay in the memoized tier.
+the comparison itself read nothing outside this workspace and stay in the memoized tier.
 
-**The exemption is the whole of what stands between this and a check that quietly
-passes.** No engine offering the verb is installed here yet, so until
-`config/onepipeline.version` names a release carrying it there is nothing to reconcile
-against. Skipping would be a pass nobody earned, so those xfail, name the reason, and —
-held by the companion below — come back on their own when the pin moves. What the
-exemption must not also suspend is knowing the comparison *works*, which is why it is a
-pure function driven below: an exempt check whose logic nobody has seen bite is one
-trusted from its first green.
+**The exit statuses are reconciled by driving the verb, not by reading its help.** This
+module used to parse an `Exit status:` table out of `onepipeline watch --help`, written
+speculatively while no engine offered the verb; the engine that does documents its
+statuses in its own repository and puts none of that in `--help`, so that read could only
+ever have failed. What the installed verb *does* carry is the pairing itself: its final
+NDJSON record is `{"watch":"return", …, "condition": …, "exit": …}`, which is the engine
+naming a condition and the status it is returning for it in one place. So each terminal
+condition this host can drive the verb into is driven, and the pair it answers with is
+compared against this repository's table for equality.
+
+**Two of the four cannot be produced against a static runs root, and they are declared
+rather than skipped.** `surface-waiting` and `elapsed` are answers about a run that is
+*live* — one with a blocking surface waiting, one still being driven when the wait runs
+out — and the engine proves liveness from the driving process itself rather than from the
+ledger, which is why a run root with a forged lock still answers `nothing-driving`.
+Forging a driver to reach them would be a fixture asserting this repository's own guess at
+what the engine inspects. They are named in `UNDRIVABLE_CONDITIONS` with that reason, the
+declaration is asserted to be exactly those two, and the wrapper's own branching on all
+four is held end to end by `tests/e2e/test_watch_recipe_e2e.py`, which doubles the verb
+precisely because no real run can be made to produce all four on demand.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] The
 marker is this repository's tier mechanism rather than a shortcut around one: it runs
@@ -40,17 +51,50 @@ marker that stopped routing is a failing check rather than a test nothing runs.
 
 from __future__ import annotations
 
-import re
+import json
+import os
 import subprocess
+from typing import NamedTuple
 
 import pytest
-from published_surface import Surface, surface_of
+from published_surface import surface_of
 
 from orchestrator.root import REPO_ROOT
 
 #: The wrapper whose restatement is under test, and the verb it restates.
 WRAPPER = REPO_ROOT / "scripts" / "watch-run.sh"
 WATCH = ("watch",)
+#: The engine this host installed, read from this checkout's own environment rather
+#: than from PATH: a sibling checkout's copy is a different release and would be
+#: reconciled against the wrong surface.
+ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+#: The recorded runs this drives the verb over. Checked in, so what the engine is asked
+#: is fixed by this tree rather than by whatever this host happens to have run.
+RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
+#: How long the verb is given. `0` reads the store once and returns, which is what makes
+#: a terminal condition observable off a run that is not going to change again.
+READ_ONCE = "0"
+
+
+class Terminal(NamedTuple):
+    """One ending the verb reported, as the verb's own record spells it."""
+
+    #: The engine's own word for the condition.
+    condition: str
+    #: The status it returned for it.
+    exit: int
+
+
+#: The two conditions no static runs root can produce, and why. Both are answers about a
+#: run that is **live** — one with a blocking surface waiting to be answered, one still
+#: being driven when the wait runs out — and the engine proves a run is being driven from
+#: the driving process rather than from anything in the ledger: a run root carrying a
+#: forged `owner.lock` naming a live process still answers `nothing-driving`. A fixture
+#: that got past that would be asserting this repository's own guess at what the engine
+#: inspects, which is the opposite of a reconciliation. They are declared here so the set
+#: cannot quietly grow, and the wrapper's branching on all four is held end to end by
+#: `tests/e2e/test_watch_recipe_e2e.py`, which doubles the verb for exactly this reason.
+UNDRIVABLE_CONDITIONS = frozenset({"surface-waiting", "elapsed"})
 
 
 def _engine_pin() -> str:
@@ -64,32 +108,6 @@ def _engine_pin() -> str:
         if kind == "pin":
             return rest
     raise AssertionError("the wrapper's surface names no engine pin")
-
-
-def _offers_the_watch_verb(surface: Surface) -> bool:
-    """Whether this engine surface has the verb at all.
-
-    Kept apart from the exemption below so that the condition — the whole of what
-    decides when these checks reconcile anything — is a plain function a test can
-    drive, rather than something only observable by a check exempting itself.
-    """
-    return WATCH[0] in surface.subcommands(())
-
-
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The condition is the
-# installed engine's own answer rather than a pin comparison, and it is the condition
-# this repository's bar for the watch surface fixes; the companion below holds it in
-# both directions. A verb that disappeared after adoption would not go unreported
-# either: `scripts/watch-run.sh` refuses at exit 2 in its own words, naming the pin,
-# before it watches anything.
-def _exempt_while_the_engine_offers_no_watch_verb(surface: Surface) -> None:
-    """Stop a reconciliation the installed engine has nothing to answer."""
-    if not _offers_the_watch_verb(surface):
-        pytest.xfail(
-            f"the pinned onepipeline offers no `{WATCH[0]}` verb, so there is no engine "
-            f"surface to reconcile this repository's restatement against; {_engine_pin()} "
-            "is what carries it here"
-        )
 
 
 def _restated_options() -> frozenset[str]:
@@ -131,112 +149,93 @@ def _restatement() -> list[tuple[str, str]]:
     return rows
 
 
-#: A heading in clap's help output, e.g. `Options:` or `Exit status:`.
-_SECTION = re.compile(r"^(?P<name>[A-Za-z][A-Za-z ]*):$")
-
-#: One entry under the exit-status section: the status, then what the verb returns it
-#: for. Two spaces or more, because clap lays a status table out the way it lays out
-#: options — a single space would also match a sentence of prose that opens with a
-#: number.
-_STATUS_ENTRY = re.compile(r"^\s+(?P<code>\d+)\s{2,}(?P<described>\S.*?)\s*$")
-
-
-def _stem(word: str) -> str:
-    """One word of a condition name, with its inflection dropped.
-
-    The engine documents a condition in a sentence and this repository names it in a
-    slug, so `wait-elapsed` has to be recognised in "the wait elapsed" and
-    `nothing-driving` in "nothing is driving this run". Matching the slug's words
-    literally would fail on every tense; matching them as bare substrings would pass on
-    almost anything. Stems are the middle: enough to survive "settles" against
-    `settled`, not enough for "blocking" to be found in a line about waiting.
-    """
-    for suffix in ("ing", "ed", "es", "s"):
-        if word.endswith(suffix) and len(word) > len(suffix) + 2:
-            return word[: -len(suffix)]
-    return word
-
-
-def _documented_conditions(help_text: str) -> dict[int, str]:
-    """Each exit status the verb documents, and the condition it documents it for.
-
-    Read as a table rather than searched for as digits. A check that only asked whether
-    each number appears somewhere in the help would pass on a `--wait 5` in an example,
-    on a version string, and — the failure that matters — on an engine that kept all
-    four statuses and swapped which condition two of them mean, which is a watch
-    reporting a settled run while a blocking question waits.
-    """
-    found: dict[int, str] = {}
-    section = ""
-    for line in help_text.splitlines():
-        heading = _SECTION.match(line)
-        if heading is not None:
-            section = heading.group("name")
-            continue
-        if "exit" not in section.casefold():
-            continue
-        entry = _STATUS_ENTRY.match(line)
-        if entry is not None:
-            found[int(entry.group("code"))] = entry.group("described")
+def _recorded_runs() -> list[str]:
+    """The checked-in runs the verb is driven over."""
+    found = sorted(entry.name for entry in RECORDED_RUNS.iterdir() if entry.is_dir())
+    assert found, (
+        f"{RECORDED_RUNS} holds no recorded runs, so the verb cannot be driven into any "
+        "terminal condition and the pairing below would be reconciled against nothing"
+    )
     return found
 
 
-def _disagreements(restated: dict[int, str], documented: dict[int, str]) -> list[str]:
-    """Every place this repository's status table and the verb's own disagree.
+def terminal_record(stdout: str) -> Terminal | None:
+    """The ending the verb reported, out of the NDJSON it wrote on standard output.
 
-    Both directions, because both are wrong in ways a caller pays for: a status this
-    branches on that the verb no longer returns is a terminal condition never reported,
-    and a status the verb returns that this does not know is a run whose ending is read
-    as "none of the four".
+    Pure and separate from the run below so the parsing is provable without an engine:
+    the verb writes one record per line and only the last is terminal, and a build that
+    stopped writing one has to fail here rather than be read as some other condition.
     """
-    if not documented:
-        return [
-            "the verb's own help documents no exit-status table at all, so nothing "
-            "pairs a status with the condition it means"
-        ]
+    for line in reversed(stdout.splitlines()):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("watch") != "return":
+            continue
+        condition, status = record.get("condition"), record.get("exit")
+        if isinstance(condition, str) and isinstance(status, int):
+            return Terminal(condition=condition, exit=status)
+    return None
+
+
+def _observed() -> dict[str, Terminal]:
+    """Every terminal condition the installed verb can be driven into here, by run.
+
+    Driven rather than read out of the verb's help, which documents no status table at
+    all: the pairing lives in the verb's own terminal record, which is the engine naming
+    a condition and the status it returns for it in one place.
+    """
+    found: dict[str, Terminal] = {}
+    for run in _recorded_runs():
+        answered = subprocess.run(
+            [str(ENGINE), *WATCH, run, "--timeout", READ_ONCE],
+            text=True,
+            capture_output=True,
+            timeout=120,
+            check=False,
+            env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(RECORDED_RUNS)},
+        )
+        reported = terminal_record(answered.stdout)
+        assert reported is not None, (
+            f"`onepipeline {WATCH[0]} {run}` wrote no terminal record on standard "
+            f"output, so what it ended on cannot be read from it. It exited "
+            f"{answered.returncode} and said:\n{answered.stderr}"
+        )
+        assert reported.exit == answered.returncode, (
+            f"`onepipeline {WATCH[0]} {run}` reported `exit: {reported.exit}` in its own "
+            f"terminal record and exited {answered.returncode}. A caller branches on the "
+            "status, so a record that disagrees with it is worse than no record"
+        )
+        found[run] = reported
+    return found
+
+
+def disagreements(restated: dict[int, str], observed: dict[str, Terminal]) -> list[str]:
+    """Every place this repository's status table and the verb's own answers disagree.
+
+    Compared for **equality** on the condition's name rather than by looking for the
+    wrapper's words inside the verb's prose. The wrapper names each condition with the
+    engine's own word, so there is nothing to interpret, and a swap — the shape that
+    keeps every number and changes what two of them mean — is exactly what an equality
+    catches and a prose search does not.
+    """
     found: list[str] = []
-    for code, condition in sorted(restated.items()):
-        described = documented.get(code)
-        if described is None:
+    for run, reported in sorted(observed.items()):
+        named = restated.get(reported.exit)
+        if named is None:
             found.append(
-                f"exit status {code} is this repository's `{condition}`, and the verb "
-                f"documents no status {code}"
+                f"the verb answered `{reported.condition}` at exit status "
+                f"{reported.exit} on run {run!r}, and this repository branches on no "
+                f"such status"
             )
-            continue
-        unnamed = [
-            word
-            for word in condition.split("-")
-            if re.search(rf"\b{re.escape(_stem(word))}", described, re.IGNORECASE) is None
-        ]
-        if unnamed:
+        elif named != reported.condition:
             found.append(
-                f"exit status {code} is this repository's `{condition}`, and the verb "
-                f"documents it as {described!r}, which names none of: {', '.join(unnamed)}"
-            )
-    for code, described in sorted(documented.items()):
-        if code not in restated:
-            found.append(
-                f"the verb documents exit status {code} as {described!r}, and this "
-                "repository branches on no such status"
+                f"the verb answered `{reported.condition}` at exit status "
+                f"{reported.exit} on run {run!r}, and this repository calls status "
+                f"{reported.exit} `{named}`"
             )
     return found
-
-
-def _watch_help() -> str:
-    """The pinned engine's own help for the verb, for the statuses it documents."""
-    binary = REPO_ROOT / ".venv" / "bin" / "onepipeline"
-    reported = subprocess.run(
-        [str(binary), *WATCH, "--help"],
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=False,
-    )
-    assert reported.returncode == 0, (
-        f"`onepipeline {WATCH[0]} --help` exited {reported.returncode}, so what the verb "
-        f"documents cannot be read from it:\n{reported.stderr}"
-    )
-    return reported.stdout
 
 
 @pytest.mark.reads_checkouts
@@ -247,7 +246,6 @@ def test_every_option_this_repository_passes_is_one_the_engines_watch_verb_takes
     surface wants every option that moved, not the alphabetically first one.
     """
     surface = surface_of("onepipeline")
-    _exempt_while_the_engine_offers_no_watch_verb(surface)
 
     missing = sorted(option for option in _restated_options() if not surface.accepts(WATCH, option))
 
@@ -259,166 +257,103 @@ def test_every_option_this_repository_passes_is_one_the_engines_watch_verb_takes
 
 
 @pytest.mark.reads_checkouts
-def test_every_exit_status_is_paired_with_the_condition_the_verb_documents_it_for() -> None:
+def test_every_status_the_verb_returns_is_paired_with_the_condition_this_repository_gives_it() -> (
+    None
+):
     """A status that kept its number and changed its meaning is the dangerous drift.
 
     The wrapper decides which of the four terminal conditions happened from the verb's
     exit status alone — that is the point of the verb, and the alternative is matching
-    prose, which is how a watch here reported a healthy dispatch dead. So each status is
-    reconciled against the condition the verb *documents it for*, out of the verb's own
-    status table. Asking only whether the digit occurs somewhere in the help would be no
-    check at all: `0`, `3`, `4` and `5` occur in examples, defaults and version strings,
-    and an engine that swapped `4` and `5` would pass while `just watch` reported the
-    wait elapsing every time a blocking question was waiting to be answered.
+    prose, which is how a watch here reported a healthy dispatch dead. So each status
+    the installed verb really returns is paired against the condition the verb itself
+    names in the same record, and against what this repository calls that status.
     """
-    surface = surface_of("onepipeline")
-    _exempt_while_the_engine_offers_no_watch_verb(surface)
+    observed = _observed()
+    assert observed, "the verb was driven over no run, so nothing was reconciled"
 
-    disagreements = _disagreements(_restated_statuses(), _documented_conditions(_watch_help()))
+    disagreed = disagreements(_restated_statuses(), observed)
 
-    assert not disagreements, (
+    assert not disagreed, (
         f"`{WRAPPER.name}`'s exit statuses and the pinned onepipeline's `{WATCH[0]}` verb "
         "disagree:\n"
-        + "\n".join(f"  - {entry}" for entry in disagreements)
-        + f"\nReconcile the wrapper's restatement with the engine adopted at {_engine_pin()} — "
-        f"and if the verb documents its statuses somewhere other than `onepipeline "
-        f"{WATCH[0]} --help`, reconcile this check against that place rather than "
-        "widening it"
+        + "\n".join(f"  - {entry}" for entry in disagreed)
+        + f"\nReconcile the wrapper's restatement with the engine adopted at {_engine_pin()}"
     )
 
 
-def _engine_surface(*subcommands: str) -> Surface:
-    """One engine's command tree offering exactly `subcommands` at its root.
+@pytest.mark.reads_checkouts
+def test_the_conditions_no_recorded_run_can_produce_are_exactly_the_declared_ones() -> None:
+    """The declaration cannot quietly grow, and it cannot quietly stop applying.
 
-    Composed rather than read off the installed binary, because the condition below has
-    to be driven in the direction this host cannot currently produce: no engine offering
-    the watch verb is installed here, so an engine that *does* offer it exists only as
-    this. It is not a second restatement of the contract — nothing about the verb's
-    options or statuses is stated here, only whether the root has a verb by that name,
-    which is the whole of what the exemption turns on.
+    Both directions, because each is a way this gate stops reconciling without failing.
+    A condition that became drivable and stayed declared is one nobody is driving; a
+    condition that stopped being drivable and was not declared would leave the set the
+    checks above reconcile shrinking with nothing said about it.
     """
-    return Surface(
-        "onepipeline",
-        frozenset({(), *((name,) for name in subcommands)}),
-        {(): frozenset({"--help"})} | {(name,): frozenset() for name in subcommands},
+    driven = {reported.condition for reported in _observed().values()}
+    named = set(_restated_statuses().values())
+
+    assert driven == named - UNDRIVABLE_CONDITIONS, (
+        f"the installed verb answers {sorted(driven)} over the recorded runs, and this "
+        f"repository names {sorted(named)} less the declared {sorted(UNDRIVABLE_CONDITIONS)}. "
+        "Add a recorded run that produces a newly drivable condition and take it out of "
+        "UNDRIVABLE_CONDITIONS, or say why one that was drivable no longer is"
     )
 
 
-def test_the_exemption_lasts_only_while_the_installed_engine_offers_no_watch_verb() -> None:
-    """The two reconciliations above come back the moment an engine with the verb is here.
+def test_the_terminal_record_is_read_as_the_verbs_own_pairing() -> None:
+    """What is read out of the verb's output is the pairing, not a status seen anywhere.
 
-    Their exemption is the one thing between a released engine this repository has not
-    adopted and a gate that has quietly stopped reconciling anything, so what it is
-    conditioned on is asserted rather than assumed — and asserted in both directions,
-    because only one of them is observable on this host. An engine without the verb
-    earns the exemption and the reason names the verb and the pin that carries it; an
-    engine with the verb earns nothing, and the checks reconcile.
-
-    Driven through the exemption itself and not only through the predicate beneath it:
-    what a reader has to trust is that an engine offering the verb cannot reach an
-    `xfail`, and a predicate returning `True` is one `not` away from that being false.
+    Driven as a pure function so the parsing is provable without an engine in a
+    particular state: the verb writes one record per line, only the last is terminal, and
+    a build that stopped writing one has to be a failure rather than some other reading.
     """
-    without = _engine_surface("start", "monitor", "next")
-    offering = _engine_surface("start", "monitor", "next", WATCH[0])
-
-    assert not _offers_the_watch_verb(without)
-    assert _offers_the_watch_verb(offering)
-
-    with pytest.raises(pytest.xfail.Exception) as exempted:
-        _exempt_while_the_engine_offers_no_watch_verb(without)
-    reason = str(exempted.value)
-    assert WATCH[0] in reason
-    assert _engine_pin() in reason
-
-    # No exemption, and therefore no `xfail`: the reconciliations run for real. Caught
-    # and re-raised as a failure rather than simply called, because an `xfail` escaping
-    # here would report *this* check as exempt too — the one shape of breakage that
-    # would leave the whole reconciliation suspended and every tier still green.
-    try:
-        _exempt_while_the_engine_offers_no_watch_verb(offering)
-    except pytest.xfail.Exception as exempted:
-        raise AssertionError(
-            f"an engine offering the `{WATCH[0]}` verb earned the exemption anyway, so "
-            f"adopting one at {_engine_pin()} would reconcile nothing: {exempted}"
-        ) from exempted
-
-
-def _help_documenting(statuses: dict[int, str]) -> str:
-    """A verb's help page documenting exactly `statuses`, in the shape clap renders one.
-
-    Composed rather than quoted, and composed from whatever the caller passes rather
-    than from a copy of the engine's own table: there is no engine offering this verb to
-    copy from, and a fixture that pretended to be one would be a second restatement of
-    the contract with nothing reconciling it. What these checks are about is the
-    parsing and the pairing, and both are exercised by a table this repository already
-    owns every word of.
-    """
-    documented = "\n".join(f"  {code}  {text}" for code, text in sorted(statuses.items()))
-    return (
-        "Watch one run until something a supervisor has to act on happens\n\n"
-        "Usage: onepipeline watch [OPTIONS] <RUN>\n\n"
-        f"Exit status:\n{documented}\n\n"
-        "Options:\n      --wait <SECONDS>  how long to wait before giving up\n"
+    stream = (
+        '{"watch":"event","event":{"kind":"node-settled"}}\n'
+        '{"watch":"heartbeat","run_id":"r","unread":{"count":0}}\n'
+        '{"watch":"return","run_id":"r","condition":"settled","exit":0,"cursor":"1:r:9"}\n'
     )
 
-
-def _documented_as_restated() -> dict[int, str]:
-    """A help table that agrees with the wrapper, phrased as the verb would phrase it."""
-    return {
-        code: f"the watch returned {condition.replace('-', ' ')}"
-        for code, condition in _restated_statuses().items()
-    }
-
-
-def test_the_status_table_is_read_as_a_table_rather_than_as_digits_in_the_help() -> None:
-    """What is parsed out of the verb's help is the pairing, not the presence of a number.
-
-    This runs whether or not an engine with the verb is installed, deliberately: the two
-    checks above are exempt until one is, and a comparison nothing exercises in the
-    meantime is a comparison nobody has ever seen work.
-    """
-    documented = _documented_as_restated()
-
-    assert _documented_conditions(_help_documenting(documented)) == documented
-    # A number outside the status table is not a status: the `--wait <SECONDS>` line and
-    # the usage line are both in that help and neither contributes one.
-    assert _documented_conditions("Usage: onepipeline watch\n  --wait 5  seconds\n") == {}
+    assert terminal_record(stream) == Terminal(condition="settled", exit=0)
+    # A stream with no terminal record is not some other ending: it is unreadable.
+    assert terminal_record('{"watch":"event","event":{}}\n') is None
+    assert terminal_record("") is None
+    # A line that is not JSON at all is skipped rather than fatal — the verb's own human
+    # form goes to the other descriptor, and a caller that merged them still has a record.
+    assert terminal_record(
+        'not json\n{"watch":"return","run_id":"r","condition":"elapsed","exit":5}\n'
+    ) == Terminal(condition="elapsed", exit=5)
+    # A record missing either half of the pairing answers neither half of it.
+    assert terminal_record('{"watch":"return","condition":"settled"}\n') is None
 
 
-def test_the_reconciliation_names_a_swapped_a_missing_and_an_unknown_exit_status() -> None:
+def test_the_reconciliation_names_a_swapped_and_an_unknown_exit_status() -> None:
     """The comparison bites on every shape of drift, and is quiet on agreement.
 
     A swap is the shape that keeps every number and changes what two of them mean, and
-    it is the one a presence check cannot see — so it is asserted first and by name.
+    it is the one a check that only asked whether a status was known cannot see — so it
+    is asserted first and by name.
     """
     restated = _restated_statuses()
-    documented = _documented_conditions(_help_documenting(_documented_as_restated()))
+    agreeing = {
+        f"run-{status}": Terminal(condition=condition, exit=status)
+        for status, condition in restated.items()
+    }
 
-    assert _disagreements(restated, documented) == []
+    assert disagreements(restated, agreeing) == []
 
     moved = sorted(restated)[-2:]
-    swapped = dict(documented) | {
-        moved[0]: documented[moved[1]],
-        moved[1]: documented[moved[0]],
+    swapped = dict(agreeing) | {
+        f"run-{moved[0]}": Terminal(condition=restated[moved[1]], exit=moved[0]),
+        f"run-{moved[1]}": Terminal(condition=restated[moved[0]], exit=moved[1]),
     }
-    named = _disagreements(restated, swapped)
+    named = disagreements(restated, swapped)
     assert len(named) == 2
-    for code in moved:
-        assert any(f"exit status {code}" in entry for entry in named)
+    for status in moved:
+        assert any(f"exit status {status}" in entry for entry in named)
 
-    dropped = {code: text for code, text in documented.items() if code != moved[0]}
-    assert _disagreements(restated, dropped) == [
-        f"exit status {moved[0]} is this repository's `{restated[moved[0]]}`, and the "
-        f"verb documents no status {moved[0]}"
-    ]
-
-    added = dict(documented) | {7: "the watch was interrupted"}
-    assert _disagreements(restated, added) == [
-        "the verb documents exit status 7 as 'the watch was interrupted', and this "
+    unknown = {"run-7": Terminal(condition="interrupted", exit=7)}
+    assert disagreements(restated, unknown) == [
+        "the verb answered `interrupted` at exit status 7 on run 'run-7', and this "
         "repository branches on no such status"
-    ]
-
-    assert _disagreements(restated, {}) == [
-        "the verb's own help documents no exit-status table at all, so nothing pairs a "
-        "status with the condition it means"
     ]

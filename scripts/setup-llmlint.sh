@@ -16,12 +16,23 @@
 # llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): `set -e` is omitted so a flaky install can't abort the hook — the script owns its exit codes and always exits 0; success logs progress while failures log-and-continue rather than block startup; and the toolchain is installed from PyPI (`uv tool install llmlint-cli`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
-# Floor: llmlint >= 0.3.29, whose built-in judge prompt requires every distinct
-# violation of a failing rule to be reported — for every rule, not only those
-# setting `require_line_attribution`. It subsumes the 0.3.25 floor's role=llmlint
-# labeling that keeps judge telemetry separate from agent telemetry.
+# Floor: llmlint >= 0.4.1, which keys the on-disk plugin cache by the version it
+# fetched and revalidates a stale entry instead of keeping the first version a host
+# ever saw. Below it a long-lived host silently pins every plugin at whatever it first
+# resolved, so a rule a plugin has since added is reported as an unknown rule and a
+# suppression naming it fails — while a fresh checkout's CI passes over the same tree.
+# That cost two dispatches here. `llmlint plugins list` is the same release's way of
+# seeing it: per entry, its pin, the version it resolved, and when the origin last
+# confirmed it.
+#
+# It subsumes the 0.3.29 floor, whose judge prompt requires every distinct violation of
+# a failing rule to be reported, and the 0.3.25 floor's role=llmlint labelling that keeps
+# judge telemetry separate from agent telemetry. It also crosses 0.4.0, which is
+# breaking: positional `FILES` are intersected with the configured file globs rather
+# than replacing them. Nothing here passes positional files — `just lint-llm-diff` scopes
+# by `--diff` — so this host is unaffected by that half.
 # llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; installer behavior is unchanged.
-readonly LLMLINT_MIN="0.3.29"
+readonly LLMLINT_MIN="0.4.1"
 readonly BIN_DIR="$HOME/.local/bin"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }

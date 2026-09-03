@@ -138,7 +138,7 @@ TURN_USAGE_FIGURES = (
 #: here rather than read from the response, because reading it from the response is what
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
-TIMELINE_SCHEMA_VERSION = 7
+TIMELINE_SCHEMA_VERSION = 8
 
 #: The word every one of the adopted view's release surfaces is built out of — its
 #: heading, all three wait states, and the row naming what a node adopted. Matched as

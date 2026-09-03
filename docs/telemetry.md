@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.18.4 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.21.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,22 +143,26 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.11.2/0.7.0 upgrade (`config/oneharness.version` and
+after the 0.11.3/0.7.0 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
-this paragraph whenever either pin moves. That re-check has now been made twice
+this paragraph whenever either pin moves. That re-check has now been made three times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
-could classify. For this one it was re-taken on 2026-08-29 by spending a real
+could classify. For each of the two since, it was re-taken by spending a real
 `oneagentgraph smoke` turn on the adopted pair, through this repository's own agent
 wrapper and with `ONEHARNESS_HISTORY_DIR` pointed at a throwaway store, and reading the
 record it wrote: at history
 schema 1.1 the `usage` block is `input_tokens`, `output_tokens`, `cache_read_tokens`,
-`cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered —
-that turn's chain selected `claude-code:alternate` first and so wrote no fallen-through
-record to compare, which the 2026-08-25 re-take of the same measurement did. Nothing an accounting reader reads is
+`cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered. Both
+of those turns' chains selected `claude-code:alternate` first and so wrote no
+fallen-through record to compare, which the earlier re-take of the same measurement did.
+The oneharness half of this pin's own bump is a **classification** change — a completed
+billed turn is no longer reported as a failure — so what it could have moved is
+`status` and `failure_kind` on the record rather than the `usage` block, and neither
+moved on a turn that succeeded. Nothing an accounting reader reads is
 renamed, retyped, or re-meant, which is why the boundary sentence names the pair
 these records are written under rather than the older one they were first taken on. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
@@ -239,11 +243,11 @@ served them.
    that is a different fix from a dead driver.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.7.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.7.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because that crate has no registered checkout
    on this host and its CLI dumps no schema, so a bump is what re-opens this
    paragraph: `telemetry_schema_version` 15 on the envelope, where 0.6.5 served 14;
-   `timeline_schema_version` 7, spans of kind `run`, `dispatch`, `node`,
+   `timeline_schema_version` 8, where 0.7.0 served 7; spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
@@ -324,8 +328,8 @@ served them.
    a browser opened on a real recorded run draws no release row from data that has
    none — and `tests/e2e/test_release_adoption_in_force_e2e.py` holds the half about
    this host, by asking every registered identity whether it declares a target.
-   **0.6.5 — the release between that one and the adopted 0.7.0 — leaves the timeline
-   route alone and repairs the conversation route**, and the two halves of that were
+   **0.6.5 — an earlier release, and one of the two whose whole delta is on the other
+   route — leaves the timeline route alone and repairs the conversation route**, and the two halves of that were
    measured side by side by serving one runs root from a 0.6.4 and a 0.6.5
    `onepipeline-api` at once. The timeline response is
    byte-identical on all six checked-in fixtures and on this host's own
@@ -344,6 +348,28 @@ served them.
    figures sum to the same total on both. That is the repair
    https://github.com/nickderobertis/onepipeline-ui/pull/44 describes, met on this
    host's own data.
+   **What 0.7.2 changed for a reader is one number, and the rest of that release is
+   the browser bundle's.** Serving one runs root from a 0.7.0 and the adopted 0.7.2
+   `onepipeline-api` at once — the three runs under `tests/fixtures/timeline-runs/`
+   that carry a run-scope timeline — the whole delta is `timeline_schema_version` 7
+   becoming 8. Every other byte of the run-scope timeline is identical, the
+   conversation route is byte-identical, `/api/v2/runs` is identical but for its own
+   `observed_at` clock, `telemetry_schema_version` stays 15, and both readers answer
+   `/healthz` with `{"status":"ok","onepipeline_version":"0.19.0"}` — the same linked
+   engine, so nothing about what these runs are read *through* moved. What 0.7.1 added
+   is the reason for the number: a ready node's queue is served as spans, and none of
+   these recorded runs has a node still waiting to be dispatched, so there is nothing
+   here for it to serve. 0.7.2's own addition — one flat run list, a row refreshed by
+   name, a live run that opens — is entirely the npm bundle's; the run list this reader
+   serves it from did not move. `tests/e2e/test_dag_ui_serving_e2e.py` holds the
+   number, so a reader that moved it again fails there.
+   **Both those releases carry a `release-status: publish-failed` banner and both are
+   nonetheless published**, which is worth recognising rather than re-diagnosing: the
+   job that failed on each is `verify-npm`, a check *after* the publish, and a later
+   `Published smoke` run succeeded. npm serves `onepipeline-ui` 0.7.1 and 0.7.2 and
+   PyPI serves `onepipeline-api-cli` 0.7.1 and 0.7.2 — and this host installed the pair
+   and drove them, which is the evidence the banner is about propagation rather than
+   about the artifacts.
 4. **What 0.6.2 changed, and what is still missing.** Kept because it is the release
    that made the transcript a view worth opening, and the accounting defect it fixed
    is the kind a reader cannot eyeball. What moved is the **conversation route**,

@@ -373,24 +373,38 @@ def test_a_zero_work_subscription_429_hands_the_turn_to_the_next_identity(
     assert turn.attempted["codex"].text == FALLBACK_ANSWER
 
 
-def test_the_same_429_after_billed_work_still_stops_the_chain(
+def test_the_same_429_after_billed_work_never_reaches_the_next_identity(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
     """Work already paid for is never re-run on the next candidate's quota.
 
-    The failure this fall-through is for and the one it must refuse are the same
-    record apart from what the harness billed, so the classifier reading tokens
-    rather than error text is the whole guarantee — and a fall-through that widened
-    to cover this case would silently double every rejected turn's cost.
+    The fall-through this refuses and the one beside it are the same record apart from
+    what the harness billed, so the classifier reading tokens rather than error text is
+    the whole guarantee — and a fall-through that widened to cover this case would
+    silently double every rejected turn's cost.
+
+    **What the record is called changed under oneharness 0.11.3 and this property did
+    not**, which is why the two are asserted apart. Through 0.11.2 the same record was a
+    `rate_limit` failure and the turn exited 1; that release reconciled the contradiction
+    in it — a completed run, billed, carrying an intermediate rate-limit signal — in
+    favour of the completion, so the candidate is `ok` and the turn exits 0
+    ([oneharness#1277](https://github.com/nickderobertis/oneharness/pull/1277)). It is the
+    repair for two dispatches whose finished work was discarded, about $24.72 and both
+    completion reports. The chain still stops here, which is the half this journey is
+    named for.
     """
     turn = _agent_turn(tmp_path, oneharness_bin, WORKED_REJECTION)
 
-    assert turn.exit_code == 1
+    assert turn.exit_code == 0, turn.stderr
     assert turn.ran == "claude-code"
     assert turn.fell_through == ()
-    assert turn.attempted["claude-code"].failure_kind == "rate_limit"
+    assert turn.attempted["claude-code"].status == "ok"
+    assert turn.attempted["claude-code"].failure_kind is None
     assert turn.attempted["claude-code"].output_tokens == 340
-    # The next identity was never reached, so its quota was never touched.
+    # The next identity was never reached, so its quota was never touched. This is the
+    # property, and it is the one thing the reclassification above must not have moved:
+    # a completed billed turn read as a success that then *fell through* would bill the
+    # work twice, which is the outcome both readings exist to prevent.
     assert "codex" not in turn.attempted
     assert FALLBACK_ANSWER not in turn.stdout
 

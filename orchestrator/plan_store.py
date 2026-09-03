@@ -80,22 +80,25 @@ PAGE_SIZE = 2
 BIN_ENV = "ONETASKGRAPH_BIN"
 
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The producer of this
-# string is onepipeline 0.19.0, which this host deliberately does not install — holding
-# `config/onepipeline.version` below it is the whole point of the change this constant
-# came in with — so there is no installed artifact to generate it from or reconcile it
-# against. It is a recogniser for records nothing here authors rather than a contract
-# either side must hold to: a producer that changes its source or encoding makes this
-# stop matching, and the reader falls back to the bare unresolvable-target refusal it
-# gave before, which is a degraded diagnostic and never a wrong answer.
+# string is onepipeline 0.19.0, a release this host has never installed — it was held
+# below it while the rewrite stood, and is now past the 0.20.0 that repaired it — so
+# there is no installed artifact to generate it from or reconcile it against. It is a
+# recogniser for records nothing here authors rather than a contract either side must
+# hold to: a producer that changes its source or encoding makes this stop matching, and
+# the reader falls back to the bare unresolvable-target refusal it gave before, which is
+# a degraded diagnostic and never a wrong answer.
 #: The source `onepipeline`'s settlement write-back stages a projection in, and the one
-#: it must never leave behind in a record it wrote back. onepipeline 0.19.0 replaces a
+#: it must never leave behind in a record it wrote back. onepipeline 0.19.0 replaced a
 #: settled record's own `onetaskgraph.origin` and every `depends_on` edge with an
 #: identity under this source — which exists only as scratch beneath `runs/<run>/` — so
-#: the plan cannot be read back at all afterwards. It is
-#: https://github.com/nickderobertis/onepipeline/issues/189, and it is why
-#: `config/onepipeline.version` is held at 0.18.4. Named here rather than left to
-#: surface as a bare unresolvable id, because the id decodes to hex and reads like a
-#: corrupt store rather than like the engine that wrote it.
+#: the plan could not be read back at all afterwards. It is
+#: https://github.com/nickderobertis/onepipeline/issues/189, repaired by
+#: https://github.com/nickderobertis/onepipeline/pull/191 in onepipeline 0.20.0.
+#:
+#: **The recogniser outlives the repair on purpose.** It is about *records*, not about
+#: this host's pin: a plan carried here from a host that ran 0.19.0 still carries the
+#: rewrite, and the id decodes to hex and reads like a corrupt store rather than like
+#: the engine that wrote it.
 WRITE_BACK_SOURCE = "onepipeline-writeback"
 
 #: What a reader is told when a dependency edge points into that source. The engine and
@@ -103,11 +106,11 @@ WRITE_BACK_SOURCE = "onepipeline-writeback"
 #: reason nothing in the store can report.
 WRITE_BACK_REWROTE = (
     f"the plan's dependency edges point into `{WRITE_BACK_SOURCE}:`, which is the "
-    "scratch source onepipeline 0.19.0's settlement write-back rewrites a settled "
+    "scratch source onepipeline 0.19.0's settlement write-back rewrote a settled "
     "record's own origin and edges into, so this plan can no longer be read back — "
-    "https://github.com/nickderobertis/onepipeline/issues/189. "
-    "`config/onepipeline.version` is held at 0.18.4 for this; an engine past that pin "
-    "is what produced these records"
+    "https://github.com/nickderobertis/onepipeline/issues/189, repaired in onepipeline "
+    "0.20.0. These records were written by an engine at that one release; nothing this "
+    "host installs writes them"
 )
 
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]

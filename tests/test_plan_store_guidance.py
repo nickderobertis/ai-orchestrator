@@ -286,3 +286,32 @@ def test_the_manager_document_says_the_board_source_is_never_repointed() -> None
         f"{MANAGER} has to say why the `{BOARD}` source is never repointed: a live run's "
         "settlements are projected back to the project it was launched from"
     )
+
+
+def test_the_manager_document_says_which_landing_this_pin_does_not_carry() -> None:
+    """A landed fix that ships in no artifact is the one shape no pin gate can catch.
+
+    `config/onetaskgraph.version` names a release archive, and the change that put that
+    repository's shell scripts into its own project graph touches no crate source — so
+    release-plz cut nothing for it, there is no version to move to, and every check in
+    this repository that reads a pin passes whether or not anybody knows the fix exists.
+    A reader reconciling which landed fixes are in force here therefore finds one with no
+    pin behind it and no failing check to explain that, and the reading available to them
+    is the wrong one: a bump nobody made. One dispatch of this repository was already
+    failed on it. So the document is held to naming that landing, citing where it landed,
+    and saying the fix is in force by merging rather than by adoption.
+    """
+    text = _flat(_document(MANAGER))
+    assert "https://github.com/nickderobertis/onetaskgraph/pull/273" in text, (
+        f"{MANAGER} has to cite the change request that put onetaskgraph's shell scripts "
+        "into its project graph; a claim about a landing with no release behind it is "
+        "readable only against the landing itself"
+    )
+    assert "touches no crate source" in text, (
+        f"{MANAGER} has to say why no release carries that landing — it touches no crate "
+        "source, so there is no versioned artifact for release-plz to bump"
+    )
+    assert "**is in force**, by merging" in text, (
+        f"{MANAGER} has to say that fix is in force by merging; a landed fix left "
+        "unclassified reads as one this host has failed to adopt"
+    )

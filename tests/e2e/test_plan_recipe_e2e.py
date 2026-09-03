@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -685,9 +686,18 @@ def test_the_project_a_planning_launch_writes_says_it_is_a_planning_project(
     the recipe stopped writing would refuse this fixture rather than reach this
     assertion.
     """
-    assert f'"{design_approval.PLAN_KIND}": "{design_approval.PLANNING}"' in (
-        planned.project_record
-    ), (
+    # Read as the entry it is rather than matched as a spelling. The store writes a
+    # record's metadata in its own serialization and has changed it — a string value was
+    # JSON-quoted through onetaskgraph 0.2.18 and is a plain YAML scalar now — so a
+    # journey pinned to one of those spellings fails on a plan that carries the marker
+    # perfectly well, which is the opposite of what it is for.
+    stated = re.search(
+        rf'^\s*"?{re.escape(design_approval.PLAN_KIND)}"?:\s*"?'
+        rf'{re.escape(design_approval.PLANNING)}"?\s*$',
+        planned.project_record,
+        re.MULTILINE,
+    )
+    assert stated is not None, (
         f"the project `just plan` wrote does not state {design_approval.PLAN_KIND}; a "
         f"planning run would be refused a launch for having no design document, which is "
         f"the one document it cannot have yet:\n{planned.project_record}"

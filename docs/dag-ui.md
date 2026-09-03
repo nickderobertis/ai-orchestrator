@@ -67,13 +67,15 @@ separately, and the reader links whatever its release was built against. So the
 two are expected to differ; what the field is for is being able to say which
 reader is answering rather than assuming it.
 
-**Today they differ by design and in this host's favour**, which is the reading to
-carry rather than the numbers: `config/onepipeline.version` is held at 0.18.4 for a
-settlement write-back defect that has nothing to do with reading runs, while the
-adopted `onepipeline-ui` 0.7.0 statically links onepipeline 0.19.0 and so already
-serves that release's run-reading. Nothing about the Observatory is waiting on that
-pin, and this is the surface that says so — measured here rather than argued from the
-manifest, which is what `/healthz` is for.
+**Today they differ the other way round from the way they used to, and the reading to
+carry is that neither number constrains the other**: the adopted `onepipeline-ui` 0.7.2
+statically links onepipeline 0.19.0 while `config/onepipeline.version` reads 0.21.0, so
+the reader answers runs through an engine two releases behind the CLI a dispatch runs.
+It was the reverse for two adoptions — the engine pin was held at 0.18.4 for a
+settlement write-back defect that had nothing to do with reading runs, and the
+Observatory was adopted anyway because the reader carries its own engine. That hold is
+over and this surface is still the one that says which engine is answering, measured
+here rather than argued from the manifest, which is what `/healthz` is for.
 
 `tests/e2e/test_dag_ui_serving_e2e.py` holds a freshly started pair to the
 adopted release from that same served surface: the bundle handed back is the npm
@@ -83,8 +85,9 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.7.0**, the release `config/onepipeline-ui.version` pins, is the
-one that shows which release carried each landed node, alongside every release event.
+**`onepipeline-ui` 0.7.2**, the release `config/onepipeline-ui.version` pins, carries
+what 0.6.3 added: it shows which release carried each landed node, alongside every
+release event.
 Opening a node whose dependency was adopted `published` shows what it waited on and
 the versions that arrived; opening one held shows what it is held on, whether that is
 an automated probe or a person's release step.
@@ -103,7 +106,7 @@ be a `release-targets.toml` at its own root, or a `releases.yml` under
 What 0.6.3's *reader* answered differently is one number — `timeline_schema_version`,
 which it serves at 7 where 0.6.2 served 6, with every other byte of the timeline and
 conversation responses identical on the runs compared. 0.6.5 — the release between
-that one and the adopted 0.7.0 — leaves the timeline route exactly there and repairs
+that one and 0.7.0 — leaves the timeline route exactly there and repairs
 the **conversation** route: a two-party
 dispatch's transcript is the agent's turns, where every release before it read the
 supervisor's relayed side as rows of its own and served the conversation at twice its
@@ -199,7 +202,8 @@ over this host's own root a first page of the run list answered in 17 to 40 seco
 *warm*, a run detail or a run-scoped timeline in about 20, and a browser — one page
 load, one `/api/v2/events` subscription, one run list, then the selected run's detail
 and timeline — sat on `Loading execution history…` for over a minute and a half before
-showing anything. **0.7.0 bounds that**, and it is the difference between a view an
+showing anything. **0.7.0 bounds that** — and the adopted 0.7.2 keeps it, which is why the numbers below
+are that release's rather than this pin's — and it is the difference between a view an
 operator opens and one they avoid: on the same root the same request answers in
 **0.09-0.17 s** warm, against 41 s on the first cold one; a run detail in
 **0.01-0.32 s**; and a live run's run-scoped timeline in **0.14 s**. Its
@@ -218,10 +222,11 @@ spent a core of this host on it. On 0.7.0 the same measurement over the same roo
 Both halves arrived together, in
 [onepipeline-ui#46](https://github.com/nickderobertis/onepipeline-ui/pull/46), which is
 also what moved the reader's own linked engine: `/healthz` answers `0.19.0` where 0.6.5
-answered `0.18.3`. That is **past** the 0.18.4 `config/onepipeline.version` holds the
-engine CLI at, and it is the reason the Observatory could be adopted while that pin
+answered `0.18.3`. That was **past** the 0.18.4 `config/onepipeline.version` held the
+engine CLI at then, and it is the reason the Observatory could be adopted while that pin
 stayed put — the reader carries its own copy of the engine and reads runs with it,
-whatever the CLI a dispatch runs is. **What that release did
+whatever the CLI a dispatch runs is. That independence is what still holds now the pin
+has moved past the reader's own engine instead. **What that release did
 not touch is which roots are served** — the paragraph above still holds, and the 141
 pre-adoption roots are still absent from the listing with no reason given.
 

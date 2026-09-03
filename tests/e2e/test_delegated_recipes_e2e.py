@@ -279,14 +279,16 @@ DELEGATIONS = (
     Delegation("status", ("run-1",), "uv run onepipeline status run-1"),
     Delegation("host", (), "uv run onepipeline host"),
     Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
-    # The watch recipe reads the engine's own command list before it delegates — the
-    # recipe landed before the pin that carries the verb — and appends the
-    # machine-readable form it reads, because reading the verb's human lines is one of
-    # the two failures the verb replaces.
+    # The watch recipe reads the engine's own command list before it delegates, so an
+    # engine without the verb is refused in this repository's own words rather than by
+    # whatever the engine says to an unknown subcommand. What it forwards is the
+    # caller's arguments and nothing else: the verb writes both forms unconditionally —
+    # the operator's lines on standard error, the machine-readable one on standard
+    # output — so there is nothing to ask for.
     Delegation(
         "watch",
-        ("run-1", "--wait", "600", "--heartbeat-every", "60"),
-        "uv run onepipeline watch run-1 --wait 600 --heartbeat-every 60 --json",
+        ("run-1", "--timeout", "600", "--tick-interval", "60"),
+        "uv run onepipeline watch run-1 --timeout 600 --tick-interval 60",
         before=("uv run onepipeline --help",),
     ),
     Delegation("results", ("run-1",), "uv run onepipeline results run-1"),

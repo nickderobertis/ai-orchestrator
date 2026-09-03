@@ -106,6 +106,37 @@ def _configured_repository() -> _Repository:
 
 
 CONFIGURED_REPOSITORY = _configured_repository()
+
+
+def _configured_project_number() -> int:
+    """The board number the committed `plans` source names.
+
+    Read out of the file under test for the reason the repository above is: an issue
+    carries its board membership on `projectItems`, and the source keeps only the entry
+    whose `project.number` is the one it was configured with. A fixture holding its own
+    copy of that number would answer every issue as held by this board however the file
+    had been repointed, which is the one thing a membership read exists to tell apart.
+    """
+    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+    named = re.search(r"^\s+project_number:\s*(\d+)\s*$", text, re.MULTILINE)
+    if named is None:
+        raise ValueError("onetaskgraph.yaml names no project_number for its `plans` source")
+    return int(named.group(1))
+
+
+CONFIGURED_PROJECT_NUMBER = _configured_project_number()
+
+
+def _configured_owner() -> str:
+    """The board owner the committed `plans` source names."""
+    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+    named = re.search(r"^\s+owner:\s*(\S+)\s*$", text, re.MULTILINE)
+    if named is None:
+        raise ValueError("onetaskgraph.yaml names no owner for its `plans` source")
+    return named.group(1)
+
+
+CONFIGURED_OWNER = _configured_owner()
 #: A repository under the same owner that the board fixture answers as invisible, which
 #: is what GitHub answers for one that does not exist or that the token cannot see.
 UNREACHABLE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="not-a-repository")
@@ -269,40 +300,86 @@ class _Issue:
     parent_id: _IssueNodeId | None = None
     sub_issues: int = 0
 
+    def field_values(self) -> dict[str, object]:
+        """This row's board field values, as both routes to it select them.
+
+        One method rather than a copy per route: the board's own `items` connection and
+        an issue's `projectItems` select the same field values, and the whole of what
+        the source relies on is that an issue reached either way resolves to one item.
+        """
+        return {
+            "nodes": [
+                {
+                    "name": "Todo",
+                    "field": {
+                        "id": STATUS_FIELD_ID,
+                        "name": "Status",
+                        "options": [option.rendered() for option in STATUS_OPTIONS],
+                    },
+                }
+            ],
+            "pageInfo": {"hasNextPage": False},
+        }
+
+    def content(self) -> dict[str, object]:
+        """The issue itself, as every document that reaches it selects it."""
+        return {
+            "__typename": "Issue",
+            "id": self.content_id,
+            "title": self.title,
+            "body": self.body,
+            "url": f"https://github.com/{CONFIGURED_REPOSITORY}/issues/{self.item_id}",
+            "createdAt": "2026-08-26T00:00:00Z",
+            "updatedAt": "2026-08-26T00:00:00Z",
+            "state": "OPEN",
+            "stateReason": None,
+            "repository": {"nameWithOwner": str(CONFIGURED_REPOSITORY)},
+            "parent": None if self.parent_id is None else {"id": self.parent_id},
+            "subIssuesSummary": {"total": self.sub_issues},
+            "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+
     def item(self) -> dict[str, object]:
+        """This issue as a row of the board's own `items` connection."""
         return {
             "id": self.item_id,
-            "fieldValues": {
+            "fieldValues": self.field_values(),
+            "content": self.content(),
+        }
+
+    def board_issue(self) -> dict[str, object]:
+        """This issue as the source reaches it away from the board's item connection.
+
+        The board half rides along on `projectItems` — the row's own id and its field
+        values — which is what lets a search, a node-id read and a sub-issue read all
+        resolve to the item a board walk would have produced. The membership is filed
+        under the configured board's number, because an entry for any other board is
+        one this source is required not to answer for.
+        """
+        return self.content() | {
+            "projectItems": {
                 "nodes": [
                     {
-                        "name": "Todo",
-                        "field": {
-                            "id": STATUS_FIELD_ID,
-                            "name": "Status",
-                            "options": [option.rendered() for option in STATUS_OPTIONS],
-                        },
+                        "id": self.item_id,
+                        "project": {"number": CONFIGURED_PROJECT_NUMBER},
+                        "fieldValues": self.field_values(),
                     }
                 ],
                 "pageInfo": {"hasNextPage": False},
-            },
-            "content": {
-                "__typename": "Issue",
-                "id": self.content_id,
-                "title": self.title,
-                "body": self.body,
-                "url": f"https://github.com/{CONFIGURED_REPOSITORY}/issues/{self.item_id}",
-                "createdAt": "2026-08-26T00:00:00Z",
-                "updatedAt": "2026-08-26T00:00:00Z",
-                "state": "OPEN",
-                "stateReason": None,
-                "repository": {"nameWithOwner": str(CONFIGURED_REPOSITORY)},
-                "parent": None if self.parent_id is None else {"id": self.parent_id},
-                "subIssuesSummary": {"total": self.sub_issues},
-                "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
-            },
+            }
         }
 
 
+# llmlint: ignore-block[e2e_not_mocked] GitHub's Projects GraphQL API is the one boundary
+# these journeys cannot drive for real, and the reason is the subject: driving it means
+# writing to a live board and performing the very burst of content-creating mutations the
+# pacing journey exists to measure, against an account whose other board holds this
+# repository's plans. What is doubled stops at the wire — the installed `onetaskgraph`
+# binary, `just plans`, the recipes and the shell around them are all real, and the source
+# accepts an `endpoint` for exactly this. The fixture is stateful and answers the source's
+# own documents rather than a canned reply, so a source that changed what it asks for
+# fails here naming the operation, which is how the adopted release's move off the board
+# walk was caught.
 class _Board:
     """One Projects v2 board, mutated by the writes the source performs against it.
 
@@ -368,6 +445,55 @@ class _Board:
                 }
             }
         }
+
+    def search_response(self, search: str) -> dict[str, object]:
+        """The issues of this board a search finds, narrowed the way GitHub narrows one.
+
+        The `in:title "…"` qualifier is honoured rather than ignored: the source
+        compares a title for equality afterwards, so a fixture answering every search
+        with the whole board would pass a source that had stopped scoping its search at
+        all — and scoping it is the whole of what this read buys over walking the board.
+        """
+        wanted = _TITLE_QUALIFIER.search(search)
+        found = [
+            issue
+            for issue in self.issues
+            if wanted is None or _unescaped(wanted.group("title")) in issue.title
+        ]
+        return {
+            "data": {
+                "search": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [issue.board_issue() for issue in found],
+                }
+            }
+        }
+
+    def node_response(self, node_id: object) -> dict[str, object]:
+        """One issue by its own node id, or the null GitHub answers an unheld one with."""
+        for issue in self.issues:
+            if issue.content_id == node_id:
+                return {"data": {"node": issue.board_issue()}}
+        return {"data": {"node": None}}
+
+    def sub_issues_response(self, node_id: object) -> dict[str, object]:
+        """One issue's sub-issues, which is how this board reports a project's tasks."""
+        for issue in self.issues:
+            if issue.content_id != node_id:
+                continue
+            children = [held for held in self.issues if held.parent_id == issue.content_id]
+            return {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "subIssues": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [child.board_issue() for child in children],
+                        },
+                    }
+                }
+            }
+        return {"data": {"node": None}}
 
     def create_issue(self, variables: dict[str, object]) -> dict[str, object]:
         payload = variables.get("input")
@@ -490,6 +616,9 @@ class _GraphQLRequest:
 
 class _Operation(StrEnum):
     BOARD = "board"
+    SEARCH = "search"
+    ISSUE = "issue"
+    SUB_ISSUES = "subIssues"
     REPOSITORY = "repository"
     DEPENDENCIES = "dependencies"
     CREATE_ISSUE = "createIssue"
@@ -504,6 +633,9 @@ class _Operation(StrEnum):
 #: substring of each one and is what tells a board read from the writes that follow it.
 _OPERATIONS: dict[str, _Operation] = {
     "repositoryOwner": _Operation.BOARD,
+    "search(query:": _Operation.SEARCH,
+    "subIssues(first:": _Operation.SUB_ISSUES,
+    "node(id:$id){__typename ...BoardIssue}": _Operation.ISSUE,
     "{repository(owner:": _Operation.REPOSITORY,
     "blockedBy(first:": _Operation.DEPENDENCIES,
     "createIssue(": _Operation.CREATE_ISSUE,
@@ -512,6 +644,19 @@ _OPERATIONS: dict[str, _Operation] = {
     "addSubIssue(": _Operation.ADD_SUB_ISSUE,
     "updateIssue(": _Operation.UPDATE_ISSUE,
 }
+
+#: The title qualifier the source narrows a board search with, and the two characters
+#: GitHub's quoting grammar gives a meaning inside a quoted phrase. Both are the
+#: source's own spelling: it escapes a backslash and a double quote before it sends
+#: one, so a fixture that read the qualifier literally would find no issue whose title
+#: contains either.
+_TITLE_QUALIFIER = re.compile(r'in:title "(?P<title>(?:[^"\\]|\\.)*)"')
+
+
+def _unescaped(quoted: str) -> str:
+    """One quoted search phrase, as the title the source was looking for."""
+    return quoted.replace('\\"', '"').replace("\\\\", "\\")
+
 
 BOARD = _Board()
 
@@ -616,6 +761,12 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         match operation:
             case _Operation.BOARD:
                 return BOARD.board_response()
+            case _Operation.SEARCH:
+                return BOARD.search_response(request.string("search"))
+            case _Operation.ISSUE:
+                return BOARD.node_response(request.variables.get("id"))
+            case _Operation.SUB_ISSUES:
+                return BOARD.sub_issues_response(request.variables.get("id"))
             case _Operation.REPOSITORY:
                 return self._repository(request.repository)
             case _Operation.DEPENDENCIES:
@@ -690,6 +841,9 @@ def _serving_board(refusal: _Refusal | None = None) -> Iterator[dict[str, str]]:
         thread.join()
         server.server_close()
         _GitHubFixture.refusal = None
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 def _prepare_plan_sources(root: Path) -> dict[str, str]:
@@ -815,12 +969,27 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
         "the board is a container of projects and not a project, and this read "
         f"returned its own title among {titles}"
     )
-    board_reads = [
-        request for request in _GitHubFixture.requests if request.operation is _Operation.BOARD
+    # The committed pair reaches the fixture as the *scope of a search* rather than as
+    # the arguments of a board walk: the adopted release reads a board's projects by
+    # searching its issues, so `project:<owner>/<number>` is where those two values now
+    # appear on the wire. Asserted as that scope rather than as any board read, because
+    # a walk is what this release stopped doing — a journey still demanding one would
+    # fail on the improvement.
+    searches = [
+        request for request in _GitHubFixture.requests if request.operation is _Operation.SEARCH
     ]
-    assert board_reads
-    assert board_reads[0].variables["owner"] == "nickderobertis"
-    assert board_reads[0].variables["number"] == 2
+    asked = [str(request.operation) for request in _GitHubFixture.requests]
+    assert searches, (
+        "the adopted release reads this board by searching its issues; the source made "
+        f"no such request, and asked instead for {asked}"
+    )
+    assert all(
+        f"project:{CONFIGURED_OWNER}/{CONFIGURED_PROJECT_NUMBER} " in request.string("search")
+        for request in searches
+    ), (
+        "every board search has to be scoped to the configured owner and project "
+        f"number, and this read sent {[request.string('search') for request in searches]}"
+    )
 
 
 def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Path) -> None:

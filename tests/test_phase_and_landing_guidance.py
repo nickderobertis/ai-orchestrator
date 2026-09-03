@@ -135,7 +135,7 @@ SQUASH_HALF_CLAIMS = (
     # naming the blob at the pinned release rather than to asserting one blob throughout.
     Claim(
         "the deciding module's identity is named",
-        "`ec3bea7c` at v0.15.8 and at the pinned v0.18.0",
+        "`23b7489c` at the pinned v0.19.0",
     ),
     Claim(
         "the last tier can never say yes",
@@ -176,18 +176,22 @@ LANDING_RETRY_HALF_CLAIMS = (
 #: same date for a different measurement. A stamp is only evidence where it is
 #: attached to the claim it stamps.
 LANDING_MEASUREMENT_STAMP = "Re-measured {date} on the pinned onevcs {release}:"
-LANDING_MEASUREMENT_DATE = "2026-08-31"
+LANDING_MEASUREMENT_DATE = "2026-09-03"
 #: The ref the verb was actually asked about, so a later reader re-takes exactly the
-#: measurement rather than a similar one. The incident's own change request stopped
-#: answering here on 2026-08-25 — no session record correlates it any more — and a
-#: measurement nobody can re-take is not evidence, whatever it once showed.
-LANDING_MEASUREMENT_REF = "onevcs/s-89df7bad225d"
-#: The change request that ref's work landed through, which is what makes the answer
-#: below dangerous rather than merely uncertain: it merged, and the verb still says no.
-LANDING_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/164"
-#: What that ref still answered, verbatim. Quoted rather than paraphrased: the
+#: measurement rather than a similar one. Each adoption has needed a fresh one: a ref
+#: stops answering here within a cycle or two of landing, and a measurement nobody can
+#: re-take is not evidence, whatever it once showed.
+LANDING_MEASUREMENT_REF = "onevcs/s-ff9f80a40177"
+#: The landing commit this branch's work reached, which is what makes the answer below a
+#: repair rather than a reprieve: the tier that found it now names it instead of
+#: declining into a comparison that answered `no` over a change request that had merged.
+#: A commit rather than a change request, and named for what it is — the previous
+#: measurement's evidence was a change request URL and this one's is the commit the
+#: verb's own `decided by:` line prints.
+LANDING_MEASUREMENT_LANDING = "4f03130b46b94716dc115f3888e9bae32cf74c9d"
+#: What that ref answered, verbatim. Quoted rather than paraphrased: the
 #: whole value of the sentence is that a reader can run the verb and compare.
-LANDING_MEASUREMENT_ANSWER = "still answers `landed: no`, `decided\nby: content comparison`"
+LANDING_MEASUREMENT_ANSWER = "`landed:\nin part`"
 
 
 def _text(relative_path: str) -> str:
@@ -400,9 +404,9 @@ def test_the_landing_passage_dates_its_measurement_to_the_release_it_was_taken_o
         f"{LANDING_MEASUREMENT_REF}, which is the ref the verb was asked about and the "
         "only way a later reader re-takes this measurement rather than a similar one"
     )
-    assert LANDING_MEASUREMENT_CHANGE_REQUEST in passage, (
+    assert LANDING_MEASUREMENT_LANDING in passage, (
         f"{GUIDANCE_DOCUMENT}'s paragraph stamped {stamp!r} no longer names "
-        f"{LANDING_MEASUREMENT_CHANGE_REQUEST}, the change request that ref's work "
+        f"{LANDING_MEASUREMENT_LANDING}, the change request that ref's work "
         "landed through. Without it the quoted answer reads as uncertainty rather than "
         "as the verb contradicting a merge that happened"
     )
@@ -530,23 +534,25 @@ RECOVERABLE_SPLIT_CLAIMS = (
 #: reports one ref, this one reports a pair — so the two paragraphs cannot satisfy
 #: each other's gate.
 SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, over two landings"
-SPLIT_MEASUREMENT_DATE = "2026-08-31"
+SPLIT_MEASUREMENT_DATE = "2026-09-03"
 #: Both refs, because the whole measurement is a comparison: either alone is an
 #: anecdote about one workflow rather than evidence that the workflow is what decides.
-SPLIT_MEASUREMENT_REFS = ("onevcs/s-33cb9ccbd48f", "onevcs/s-9076ef0a25e8")
+#:
+#: A third pair, and the churn is the point rather than an annoyance: each adoption's
+#: refs are pruned from every registered checkout within a cycle or two, so a passage
+#: that kept the old ones would be quoting a measurement nobody on this host can take.
+SPLIT_MEASUREMENT_REFS = ("onevcs/s-66a2a7717cf7", "onevcs/s-cb9964229280")
 #: The change request the remote half landed through, for the reason the sibling
-#: measurement names one: without it the quoted `unknown` reads as uncertainty rather
+#: measurement names one: without it the quoted answer reads as uncertainty rather
 #: than as the verb having lost a merge that happened.
-SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/175"
+SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/191"
 #: What each half answered with no session record, verbatim, so a later reader
 #: re-takes this measurement rather than a similar one.
-#: Both halves moved at onevcs 0.15.8 and are recorded as measured rather than as the
-#: adoption before them found them: the remote half's answer degraded from `unknown` to
-#: `no` — the dangerous one, because it closes the question — and the `local-direct`
-#: half stopped being askable at all once its branch was pruned from every registered
-#: checkout after landing. The trailer it was cited for is still on `ed8c396`.
+#: The remote half is unmoved across three adoptions and is still the dangerous one; the
+#: `local-direct` half is quoted at the tier that decided it, which the trailer-prefix
+#: rewrite beside it in the same paragraph is what proves is really being read.
 SPLIT_MEASUREMENT_ANSWERS = (
-    "`decided by: a landing trailer on the base\n(2e123d86…)`",
+    "`decided by: a landing trailer on the base\n(8d92fade…)`",
     "`landed: no`, `decided by:\ncontent comparison`",
 )
 #: The condition that separates the two answers. Without it the paragraph reports two
