@@ -23,16 +23,26 @@ isolation took: a real removal pass is worth running only once the report has na
 `tmp_path` as the roots it will sweep.
 
 What the command covers and why is docs/orchestration.md, "The recorded run".
+
+llmlint: ignore-file[shell_test_tiers_stay_split] Which Nx project owns this module is
+a property of the module, not of any journey in it: it has driven real host tools —
+`just`, both published sweep verbs, real `git` — since it was written. Splitting it out
+is a follow-up.
+llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] Same site, same
+follow-up: this module declares no marker-based tier and the project it sits in is
+pre-existing.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import textwrap
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from waits import timeout as e2e_timeout
@@ -95,6 +105,12 @@ def _declared_block(constant: str) -> list[str]:
 #: instead. Read rather than restated, for the reason `_declared` gives: a successful
 #: sweep is one line, so the clause is part of the verdict rather than a note under it.
 FREE_SPACE_CLAUSE = _declared("FREE_SPACE_CLAUSE")
+
+#: The family that is not a directory and that no sweep examines: the preserved
+#: unpublished branches holding the workspaces the verbs above retained. It is named in
+#: the one-line verdicts as well as in the trailer, because the one line is what an
+#: operator reads on almost every sweep.
+PRESERVED_BRANCH_CLAUSE = _declared("PRESERVED_BRANCH_CLAUSE")
 FREE_SPACE_LINES = [
     f"    {line}" if index == 0 else line
     for index, line in enumerate(_declared_block("FREE_SPACE_NOTE"))
@@ -106,7 +122,7 @@ FREE_SPACE_LINES = [
 #: filling up looks like the first and reads like the second.
 NOTHING_EXAMINED = (
     f"just sweep: nothing reclaimed — no candidate was examined; every family ({FAMILIES}) "
-    f"was empty; {FREE_SPACE_CLAUSE}."
+    f"was empty; {PRESERVED_BRANCH_CLAUSE}; {FREE_SPACE_CLAUSE}."
 )
 
 
@@ -114,7 +130,8 @@ def nothing_reclaimed(examined: int) -> str:
     """The short form for a sweep that judged candidates and could take none of them."""
     return (
         f"just sweep: nothing reclaimed — {examined} candidate(s) examined across every "
-        f"family ({FAMILIES}), all live or within retention; {FREE_SPACE_CLAUSE}."
+        f"family ({FAMILIES}), all live or within retention; {PRESERVED_BRANCH_CLAUSE}; "
+        f"{FREE_SPACE_CLAUSE}."
     )
 
 
@@ -122,7 +139,7 @@ def reclaimed(taken: int, examined: int) -> str:
     """The short form for a sweep that took something and left nothing to act on."""
     return (
         f"just sweep: reclaimed {taken} of {examined} candidate(s) examined — every "
-        f"family examined: {FAMILIES}; {FREE_SPACE_CLAUSE}."
+        f"family examined: {FAMILIES}; {PRESERVED_BRANCH_CLAUSE}; {FREE_SPACE_CLAUSE}."
     )
 
 
@@ -167,6 +184,12 @@ UV_LOCK_TRANSIENT = "uv-eff31e9f3b703349.lock"
 #: a count of the root, which is the all-clear-shaped answer the trailer exists to stop
 #: giving one root up.
 UV_LOCK_PATTERN = _declared("UV_LOCK_TRANSIENT")
+
+#: How many directories under the pre-adoption worktree root the entry reads out one at
+#: a time before folding the rest into a tally by class. Read from the wrapper for the
+#: reason `_declared` gives: the fold is what the journey below is about, and a
+#: restatement would let the two drift apart while both stayed green.
+NAMED_DIRECTORIES = int(_declared("WORKTREE_NAMED_DIRECTORIES"))
 
 #: An entry under the host scratch root shaped like the one that really fills this
 #: host: `nx` writes one of these per invocation, never reuses one, and never removes
@@ -229,6 +252,17 @@ def _git(*arguments: str, cwd: Path | None = None) -> None:
         check=True,
         capture_output=True,
     )
+
+
+class Borrowed(NamedTuple):
+    """A worktree under the pre-adoption root and the checkout that lent it.
+
+    Named rather than a pair, because every journey below reads both and which is which
+    is the whole distinction the reading draws.
+    """
+
+    tree: Path
+    lender: Path
 
 
 class Host:
@@ -325,11 +359,106 @@ class Host:
             _age(root, age_hours)
         return root
 
-    def legacy_worktree(self, name: str) -> Path:
-        """One directory under the pre-adoption worktree root nothing here may reclaim."""
+    def leftover_content(self, name: str) -> Path:
+        """One leftover under that root that is no git working tree at all.
+
+        Deliberately a plain directory and not a git working tree, because that is what
+        this root really holds: measured on the host this composition was written for,
+        not one of its directories was a git repository at all while the trailer
+        retained the whole root on the claim that every one of them was a registered
+        worktree its lender still listed.
+        """
         directory = self.worktrees / name
         directory.mkdir(parents=True)
         (directory / "payload").write_bytes(b"\0" * 4096)
+        return directory
+
+    def registered_worktree(self, name: str, *, branch: str) -> Borrowed:
+        """One directory under that root that really is a registered worktree.
+
+        A real `git worktree add` from a real lender rather than a tree that looks the
+        part: the whole point of the reading is that it asks git, so a stand-in would
+        prove only that this journey can write whatever the reading looks for.
+        """
+        lender = self.root / f"lender-{name}"
+        _git("init", "--quiet", str(lender))
+        _git("commit", "--quiet", "--allow-empty", "-m", "lender", cwd=lender)
+        directory = self.worktrees / name
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        _git("worktree", "add", "--quiet", str(directory), "-b", branch, cwd=lender)
+        return Borrowed(tree=directory, lender=lender)
+
+    def repository_with_a_separate_git_dir(self, name: str) -> Path:
+        """One directory under that root whose `.git` is a file and whose lender is none.
+
+        The shape the classification has to tell from a registered worktree and cannot
+        tell by the `.git` file alone: `git init --separate-git-dir` puts the git
+        directory elsewhere and leaves a `.git` file pointing at it, exactly as a
+        worktree does. What parts them is where that read lands — a lender's
+        registration, or a git directory of this repository's own — so a stand-in would
+        prove only that this journey can write what the reading looks for.
+        """
+        directory = self.worktrees / name
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        _git(
+            "init",
+            "--quiet",
+            f"--separate-git-dir={self.root / f'elsewhere-{name}'}",
+            str(directory),
+        )
+        _git("commit", "--quiet", "--allow-empty", "-m", "own", cwd=directory)
+        return directory
+
+    def submodule_of_another_repository(self, name: str) -> Borrowed:
+        """One directory under that root whose objects live in a superproject's store.
+
+        The third shape whose `.git` is a file: a submodule resolves under its
+        superproject's `.git/modules/`, which is neither a lender's worktree
+        registration nor a git directory of its own. Calling it a repository of its own
+        would tell an operator its commits are theirs to publish from here and send them
+        to `rm` for a checkout `git submodule deinit` owns. A real `git submodule add`
+        from a real superproject, for the reason the worktree above is a real one.
+
+        The superproject is the directory the worktree root sits in, because `git
+        submodule add` will only put a submodule inside its superproject's own working
+        tree — so a superproject somewhere else and a `mv` afterwards would leave a
+        `.git` file this classification is precisely the reading of.
+        """
+        superproject = self.worktrees.parent
+        origin = self.root / f"origin-{name}"
+        _git("init", "--quiet", str(origin))
+        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=origin)
+        superproject.mkdir(parents=True, exist_ok=True)
+        _git("init", "--quiet", str(superproject))
+        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=superproject)
+        self.worktrees.mkdir(parents=True, exist_ok=True)
+        _git(
+            # A file path is the only kind of origin this journey can have, and git
+            # refuses one over its `file://` transport by default.
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "--quiet",
+            str(origin),
+            str(self.worktrees / name),
+            cwd=superproject,
+        )
+        return Borrowed(tree=self.worktrees / name, lender=superproject)
+
+    def own_repository(self, name: str, *, committed: bool = True) -> Path:
+        """One directory under that root that is a repository rather than a worktree.
+
+        It borrows nobody's object store, so no lender lists it and none can remove it
+        — a different reading and a different owner from the worktree above. Left
+        without a commit, its `HEAD` names a branch that does not exist yet, which is
+        the one shape whose branch the reading cannot resolve.
+        """
+        directory = self.worktrees / name
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        _git("init", "--quiet", str(directory))
+        if committed:
+            _git("commit", "--quiet", "--allow-empty", "-m", "own", cwd=directory)
         return directory
 
 
@@ -338,12 +467,22 @@ def host(tmp_path: Path) -> Host:
     return Host(tmp_path)
 
 
-def sweep(host: Host, *arguments: str) -> subprocess.CompletedProcess[str]:
-    """The real recipe, against the roots this journey owns."""
+def sweep(
+    host: Host, *arguments: str, environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """The real recipe, against the roots this journey owns.
+
+    `environment` is for a journey that injects a fault at one of the wrapper's
+    external dependencies — by putting a stand-in for a tool ahead of the installed one
+    on `PATH`, so the wrapper's own lookup resolves the stand-in and never reaches the
+    real program. The recipe, the wrapper and every line of its reporting still run end
+    to end; what is replaced is one dependency at that boundary, and what is asserted is
+    what the wrapper reports when that dependency comes back a failure.
+    """
     return subprocess.run(
         ["just", "sweep", *arguments],
         cwd=REPO_ROOT,
-        env=host.environment,
+        env=host.environment if environment is None else environment,
         check=False,
         text=True,
         capture_output=True,
@@ -420,7 +559,7 @@ def test_the_report_names_every_family_examined_and_every_family_it_could_not(
     are claimed as examined and the other two as not, and no name is in both lists.
     """
     host.workspace("onevcs-s-aaaaaaaaaaaa", finished=False)
-    host.legacy_worktree("nickderobertis__llmlint")
+    host.leftover_content("nickderobertis__llmlint")
     host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
 
     result = sweep(host, "--dry-run")
@@ -548,7 +687,7 @@ def test_a_family_neither_verb_examined_keeps_both_reports_and_the_trailer(
     is the all-clear that filled this host's disk.
     """
     dead = host.scratch("dead", held=False)
-    legacy = host.legacy_worktree("nickderobertis__llmlint")
+    legacy = host.leftover_content("nickderobertis__llmlint")
 
     result = sweep(host, "--min-age-hours", "0")
 
@@ -755,6 +894,367 @@ def test_a_scratch_root_holding_only_examined_scratch_and_this_recipes_lock_is_q
     assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
     assert str(host.temp) not in result.stdout
     assert loose.exists(), "a file this recipe only measures was removed"
+    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
+
+
+def test_each_directory_under_the_worktree_root_is_reported_as_what_it_actually_is(
+    host: Host,
+) -> None:
+    """The retention reason is read of that root rather than asserted of it.
+
+    The trailer used to keep the whole root on one sentence — that every directory below
+    it was a registered git worktree whose lender still listed it and whose branch could
+    still hold unpublished work. On the host it was written for, not one of them was a
+    git working tree at all: the reason read as evidence and had never been checked, and
+    a reason nothing checks is worse than no reason. So both shapes are on this root at
+    once here and each has to earn its own reading and its own owner — the worktree the
+    one it always claimed, the leftover a different one.
+    """
+    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/keep")
+    leftover = host.leftover_content("nickderobertis__onevcs")
+    own = host.own_repository("nickderobertis__onevcs-fork")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert (
+        f"{borrowed.tree.name} — a registered worktree of its lender, on feat/keep in "
+        f"{borrowed.lender}" in entry
+    ), entry
+    assert f"{leftover.name} — not a git working tree at all" in entry, entry
+    assert re.search(rf"{own.name} — a git repository of its own, on \w+", entry), entry
+    assert "A registered worktree can still hold a branch nothing has published" in entry, entry
+    assert "just recoverable names the verb for" in entry, entry
+    assert "What is not a git working tree holds no branch and no lender lists it" in entry, entry
+    assert "A git repository of its own borrows no lender and is listed by none" in entry, entry
+    assert all(directory.exists() for directory in (borrowed.tree, leftover, own)), (
+        "a root this sweep only reports on was reclaimed"
+    )
+
+
+def test_a_worktree_its_lender_no_longer_lists_is_not_reported_as_one_that_is(
+    host: Host,
+) -> None:
+    """The reading asks git, which is the only thing that can answer this one.
+
+    This directory has a `.git` and everything else a registered worktree has; what it
+    does not have any more is the lender that lent it, which somebody deleted or moved
+    out from under it. From the outside the two are indistinguishable. Nothing can
+    publish from it and no `git worktree remove` will reach it, so the owner it gets is
+    the one for a tree that reaches no history rather than the one that sends an operator
+    to a registry its entry is not in — deliberately not one that claims a lender, since
+    a `.git` git will not read is equally what a corrupt standalone repository leaves and
+    this reading cannot tell those two apart.
+    """
+    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/lost")
+    # The lender itself, not the registration inside it: a checkout somebody deleted or
+    # moved is how this really happens, and reaching in to delete git's own admin entry
+    # would manufacture the state through an interface no operator has.
+    shutil.rmtree(borrowed.lender)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert f"{borrowed.tree.name} — a working tree carrying a .git that git cannot read" in entry, (
+        entry
+    )
+    assert "A .git git cannot read reaches no history" in entry, entry
+    assert "a registered worktree of its lender" not in entry, entry
+
+
+def test_a_repository_whose_git_directory_is_elsewhere_is_not_read_as_a_worktree(
+    host: Host,
+) -> None:
+    """A `.git` file is not what makes a worktree, and this is the shape that proves it.
+
+    `git init --separate-git-dir` leaves exactly what a registered worktree leaves — a
+    `.git` file naming a git directory somewhere else — so a reading that stopped at
+    that file would send an operator to a lender that does not exist and to a `git
+    worktree remove` that reaches nothing. What parts them is where the file points: a
+    lender keeps its registration under `<lender>/.git/worktrees/<name>`, and a
+    repository of its own keeps its objects. Both shapes are on this root at once here,
+    because telling them apart is the only thing this reading is for.
+    """
+    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/keep")
+    elsewhere = host.repository_with_a_separate_git_dir("nickderobertis__onevcs-split")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(rf"{elsewhere.name} — a git repository of its own, on \w+", entry), entry
+    assert f"{elsewhere.name} — a registered worktree" not in entry, entry
+    # The worktree beside it still earns the reading it always had, so this is the two
+    # being told apart rather than the classification collapsing onto one answer.
+    assert (
+        f"{borrowed.tree.name} — a registered worktree of its lender, on feat/keep in "
+        f"{borrowed.lender}" in entry
+    ), entry
+    assert "A git repository of its own borrows no lender and is listed by none" in entry, entry
+    assert all(directory.exists() for directory in (borrowed.tree, elsewhere)), (
+        "a root this sweep only reports on was reclaimed"
+    )
+
+
+def test_a_submodule_is_not_read_as_a_repository_whose_objects_are_its_own(
+    host: Host,
+) -> None:
+    """The third `.git`-file shape, and the one whose owner is somebody else's command.
+
+    A submodule's git directory is elsewhere like a worktree's and is not a lender's
+    registration like a repository's, so the two readings beside it both let it through
+    to "a git repository of its own" — which would tell an operator its commits are
+    theirs to publish from here and send them to remove by hand a checkout that
+    `git submodule deinit` in the superproject owns. What parts it from the repository
+    beside it is that git names a superproject working tree for it and nothing for the
+    other, so both are on this root at once.
+    """
+    borrowed = host.submodule_of_another_repository("nickderobertis__vendored")
+    own = host.own_repository("nickderobertis__standalone")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert (
+        f"{borrowed.tree.name} — a submodule of another repository, on " in entry
+        and f" in {borrowed.lender}" in entry
+    ), entry
+    assert f"{borrowed.tree.name} — a git repository of its own" not in entry, entry
+    assert f"{borrowed.tree.name} — a registered worktree" not in entry, entry
+    # The repository beside it keeps the reading it always had, so this is the two being
+    # told apart rather than the classification collapsing onto the new answer.
+    assert re.search(rf"{own.name} — a git repository of its own, on \w+", entry), entry
+    assert "A submodule holds its objects in the superproject named beside it" in entry, entry
+    assert "git submodule deinit" in entry, entry
+    assert all(directory.exists() for directory in (borrowed.tree, own)), (
+        "a root this sweep only reports on was reclaimed"
+    )
+
+
+def test_a_repository_whose_branch_cannot_be_read_still_says_what_the_directory_is(
+    host: Host,
+) -> None:
+    """A reading that fails halfway is still a reading, and says which half it got.
+
+    A repository with no commit yet has a `HEAD` naming a branch that does not exist,
+    so git answers what the directory *is* and refuses to answer what it is on. The
+    class is what carries the owner, so it is the half that must survive: reporting the
+    whole directory as unreadable over a branch name would send an operator to check a
+    root that answered perfectly well.
+    """
+    unborn = host.own_repository("nickderobertis__fresh", committed=False)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert f"{unborn.name} — a git repository of its own, on an unreadable branch" in entry, entry
+    assert "A git repository of its own borrows no lender and is listed by none" in entry, entry
+
+
+def test_past_the_named_directories_the_worktree_root_folds_into_a_tally_by_class(
+    host: Host,
+) -> None:
+    """The fold has to drop the tail, and the tail has to be the part that can wait.
+
+    A root of leftovers with one real worktree among them is the shape that decides
+    this: named in file order the worktree can fall off the end behind ten directories
+    holding nothing, and the one directory with unpublished work in it is the one an
+    operator needed to see. So the listing is ordered by what the reading found, the
+    fold takes the least actionable, and what it took is accounted for by class rather
+    than as a bare remainder — a count of eleven with nothing said about them is the
+    same unanswered question one root up.
+    """
+    kept = host.registered_worktree("zz-still-borrowed", branch="feat/keep")
+    for index in range(10):
+        host.leftover_content(f"leftover-{index}")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    listed = [line.strip() for line in entry.splitlines() if line.startswith(" " * 6)]
+    readings = [line for line in listed if re.match(r"^(zz-still-borrowed|leftover-\d) — ", line)]
+    assert "across 11 directories." in entry, entry
+    assert listed[0].startswith(f"{kept.tree.name} — a registered worktree of its lender"), listed
+    assert len(readings) == NAMED_DIRECTORIES, readings
+    assert "… and 3 more, unnamed here. In all: 1 a registered worktree, 10 not a git" in entry, (
+        entry
+    )
+
+
+def test_a_worktree_root_holding_no_directory_at_all_says_that_rather_than_classifying(
+    host: Host,
+) -> None:
+    """A root of loose files is a family with bytes in it and nothing to classify.
+
+    It is not the same as a root nothing could be read of, and it is not the same as an
+    empty one either — an empty root is no family and says nothing at all. This one has
+    a size, so it is named, and what it holds is not work: no branch is in it and no
+    lender lists any of it.
+    """
+    host.worktrees.mkdir(parents=True)
+    (host.worktrees / "repos.json").write_bytes(b"\0" * 4096)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert f"{host.worktrees} — " in entry, entry
+    assert "across 0 directories." in entry, entry
+    assert "No directory is under it at all: what it holds is loose entries" in entry, entry
+    assert "none is classified here" not in entry, "a readable root took the unreadable phrase"
+
+
+def test_a_worktree_root_holding_nothing_is_not_a_family_and_says_nothing(
+    host: Host,
+) -> None:
+    """An empty root is nothing to act on, and reporting it would never stop.
+
+    The sections print when a family this run found went unexamined, so a root that
+    exists and holds nothing would keep the long form on for ever over a directory with
+    nothing in it — and what a reader learns to skim past is the trailer naming the
+    family nothing looked at.
+    """
+    host.worktrees.mkdir(parents=True)
+    dead = host.scratch("dead", held=False)
+
+    result = sweep(host, "--min-age-hours", "0")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
+    assert str(host.worktrees) not in result.stdout, "an empty root was reported as a family"
+    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
+
+
+def test_each_scratch_name_group_says_how_recently_anything_in_it_was_written(
+    host: Host,
+) -> None:
+    """A size alone cannot tell an accumulation from a dead one, and only one is news.
+
+    The residue of a leak that was fixed weeks ago and the cache that is filling this
+    root right now are the same number of bytes, so a group reported by size alone tells
+    an operator nothing about whether to care. The recency is what parts them: two
+    groups here, identical but for when anything in them was last written.
+    """
+    # Each age carries a margin past the boundary it is asserted at, because the sweep
+    # floors an age into whole units and reads the clock in whole seconds: a fixture
+    # written exactly five minutes ago reports 4m or 5m depending on where in the
+    # second it landed.
+    filling = host.unowned(f"{NX_CACHE_FAMILY}3a91b2c", payload=256 * 1024)
+    _age(filling, 5.5 / 60)
+    recent = host.unowned("nds-audit", payload=192 * 1024)
+    _age(recent, 2 + 5 / 60)
+    residue = host.unowned("node-compile-cache", payload=128 * 1024)
+    _age(residue, 40 * 24 + 1)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(rf"{filling.name} — [\d.]+ KiB, newest written 5m ago", entry), entry
+    assert re.search(rf"{recent.name} — [\d.]+ KiB, newest written 2h ago", entry), entry
+    assert re.search(rf"{residue.name} — [\d.]+ KiB, newest written 40d ago", entry), entry
+    assert "a group nothing writes to any more is residue" in entry, entry
+
+
+def test_a_group_stamped_in_the_future_reads_as_written_now_rather_than_as_a_negative_age(
+    host: Host,
+) -> None:
+    """A clock that disagrees with a filesystem is a thing that happens on real hosts.
+
+    A copy that preserved a stamp from a machine running ahead, or a root on a mount
+    whose clock drifted, leaves an entry written "after" the sweep reads it. There is no
+    honest age to report for that, and the two dishonest ones both mislead: a negative
+    number reads as a defect in the sweep, and an unsigned one reads as the oldest thing
+    on the root. It is reported as freshly written, which is the reading that cannot
+    send an operator to clear it — and it falls out of the first band rather than out of
+    a clamp, which is why this journey is what says so.
+    """
+    ahead = host.unowned("node-compile-cache", payload=4096)
+    _age(ahead, -48)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(rf"{ahead.name} — [\d.]+ KiB, newest written just now", entry), entry
+
+
+def test_a_group_whose_newest_write_cannot_be_read_says_so_rather_than_reading_as_never(
+    host: Host,
+) -> None:
+    """A missing recency degrades to a phrase, because a missing one is not a very old one.
+
+    The size and the recency come from two walks over the same root, and anything the
+    size walk lists that the timestamp walk did not reach has no recency to report. The
+    directory below is a deterministic instance of that: its name matches the `uv` lock
+    pattern the timestamp walk skips, while `du` lists it like any other directory. Read
+    as "never written" it would be the oldest thing on the root and the one an operator
+    would clear first, which is exactly the wrong answer to have invented.
+    """
+    unstamped = host.unowned(UV_LOCK_TRANSIENT, payload=256 * 1024)
+    stamped = host.unowned("node-compile-cache", payload=4096)
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert re.search(
+        rf"{re.escape(unstamped.name)} — [\d.]+ KiB, newest write unreadable", entry
+    ), entry
+    assert re.search(rf"{stamped.name} — [\d.]+ KiB, newest written just now", entry), entry
+    assert unstamped.exists(), "a directory this recipe only measures was removed"
+
+
+def test_the_preserved_unpublished_branches_are_named_with_the_verb_that_answers_them(
+    host: Host,
+) -> None:
+    """The family that holds the rest, named where an operator reads the rest.
+
+    A workspace is retained because a branch in it has not been published, so a sweep's
+    retentions are that family's shadow — and until it was named here an operator read
+    the shadow with no way to see what cast it or which verb answers it. It is not a
+    family of directories, so no sweep examines it and none can: judging one means
+    deciding whether work should land.
+
+    It is named in both places a verdict is read. The long form here carries it with the
+    verb, and the short form the journey below is about carries the same in one line.
+    """
+    host.leftover_content("nickderobertis__llmlint")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert "preserved unpublished branches" in entry, entry
+    assert "just recoverable names every one of them" in entry, entry
+    assert "preserved unpublished branches" not in examined(result.stdout), (
+        "a family no sweep examines was claimed as examined"
+    )
+
+
+def test_the_standing_family_does_not_take_the_short_form_away_from_a_quiet_sweep(
+    host: Host,
+) -> None:
+    """Naming it everywhere must not make the long form unconditional.
+
+    The preserved branches are unexamined on every host and at every moment, so an entry
+    that decided whether the sections print would print them for ever — and what a
+    reader learns to skim past is the trailer naming the family nothing looked at, which
+    is the whole thing the rationing protects. So this family is named in the one line
+    instead, and the one line stays one line.
+    """
+    dead = host.scratch("dead", held=False)
+
+    result = sweep(host, "--min-age-hours", "0")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
+    assert PRESERVED_BRANCH_CLAUSE in result.stdout, "the one line left the family unnamed"
     assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
 
 
@@ -1009,6 +1509,52 @@ def test_asking_for_help_answers_and_sweeps_nothing(host: Host, flag: str) -> No
     assert dead.exists(), "asking for help swept"
 
 
+def test_the_help_accounts_for_every_family_no_verb_here_sweeps(host: Host) -> None:
+    """`--help` describes the three unswept families, and a description is a contract.
+
+    It is what an operator reads before running this at all, so its account of the
+    families neither verb reaches is the first thing they believe about them — and it
+    was the one part of that account nothing held to a real report. A help text naming
+    two families where a run reports three, or promising a removal this recipe does not
+    make, would stay green for ever.
+    """
+    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/keep")
+    kept = host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
+    dead = host.scratch("dead", held=False)
+
+    helped = sweep(host, "--help")
+    # A real sweep rather than a rehearsal: the promise below is that nothing under
+    # either root is removed, and only a run that removes something proves it. The
+    # floor is named so that the one directory that should go is old enough to go —
+    # the retention this recipe defaults to would otherwise keep it and leave the
+    # promise proven by a sweep that removed nothing at all.
+    ran = sweep(host, "--min-age-hours", "0")
+
+    assert helped.returncode == 0, helped.stderr
+    assert ran.returncode == 0, ran.stderr
+    # Each family the help claims, by the name the help gives it and with the owner it
+    # sends the reader to. `$TMPDIR` and `~/.ai-orchestrator/worktrees` are how the help
+    # names two roots whose resolved paths differ per host, which is why these are the
+    # tokens rather than this journey's own directories.
+    for named in (
+        "host scratch root ($TMPDIR, or /tmp)",
+        "pre-adoption ~/.ai-orchestrator/worktrees root",
+        "preserved unpublished branches",
+        "just recoverable",
+        "Nothing here removes anything in any of them",
+    ):
+        assert named in helped.stdout, f"the help does not account for {named}"
+    # Three claimed, and three is what a run that has all of them reports: an entry
+    # starts at two spaces and its own lines are indented further, so this counts
+    # families rather than lines. A fourth family added to the report without the help
+    # gaining it fails here, which is the drift this holds against.
+    entries = [line for line in not_examined(ran.stdout).splitlines() if re.match(r"  \S", line)]
+    assert len(entries) == 3, entries
+    assert borrowed.tree.exists(), "a root the help promises to leave alone was reclaimed"
+    assert kept.exists(), "an entry the help promises to leave alone was reclaimed"
+    assert not dead.exists(), "the promise came from a sweep that reclaimed nothing"
+
+
 #: A root nothing can read is the one way to make `find` and `du` fail here without
 #: substituting either, and root reads a mode-000 directory regardless. The journeys
 #: below say so rather than passing vacuously.
@@ -1031,7 +1577,7 @@ def test_a_legacy_root_this_sweep_cannot_read_is_still_named_and_the_trailer_sti
     operator `find`'s bare errno. So the numbers degrade, the root is still named,
     and the exit still belongs to the verbs.
     """
-    host.legacy_worktree("nickderobertis__llmlint")
+    host.leftover_content("nickderobertis__llmlint")
     host.worktrees.chmod(0o000)
     try:
         result = sweep(host, "--dry-run")
@@ -1044,6 +1590,12 @@ def test_a_legacy_root_this_sweep_cannot_read_is_still_named_and_the_trailer_sti
         in not_examined(result.stdout)
     )
     assert "check the root with ls -ld" in not_examined(result.stdout)
+    # The reading of what each directory is degrades with the numbers rather than
+    # inventing a class for a directory it could not reach: an unlisted root gets the
+    # phrase, and every directory under it stays unclassified rather than becoming
+    # leftover content somebody is then told to remove by hand.
+    assert "none is classified here" in not_examined(result.stdout), result.stdout
+    assert "not a git working tree" not in not_examined(result.stdout), result.stdout
     for family in ONEAGENTGRAPH_FAMILIES + ONEVCS_FAMILIES:
         assert family in examined(result.stdout), "a failed measurement cost a verb its report"
 
@@ -1059,8 +1611,8 @@ def test_a_legacy_root_whose_size_cannot_be_measured_keeps_the_count_it_could_ge
     instead would understate exactly the family this trailer exists to stop
     understating.
     """
-    unreadable = host.legacy_worktree("nickderobertis__llmlint")
-    host.legacy_worktree("nickderobertis__onevcs")
+    unreadable = host.leftover_content("nickderobertis__llmlint")
+    readable = host.leftover_content("nickderobertis__onevcs")
     unreadable.chmod(0o000)
     try:
         result = sweep(host, "--dry-run")
@@ -1068,10 +1620,77 @@ def test_a_legacy_root_whose_size_cannot_be_measured_keeps_the_count_it_could_ge
         unreadable.chmod(0o755)
 
     assert result.returncode == 0, result.stderr
-    assert f"{host.worktrees} — an unmeasurable size across 2 directories." in not_examined(
-        result.stdout
+    entry = not_examined(result.stdout)
+    assert f"{host.worktrees} — an unmeasurable size across 2 directories." in entry
+    assert "check the root with ls -ld" in entry
+    # The reading degrades per directory as well as per number: the one that cannot be
+    # read says so, and the one beside it is still read. Calling the unreadable one
+    # leftover content — which is what a `.git` test that could not stat answers — would
+    # send an operator to remove a directory nothing here has looked inside.
+    assert f"{unreadable.name} — unreadable, so what it is could not be read" in entry, entry
+    assert f"{readable.name} — not a git working tree at all" in entry, entry
+    assert "A directory whose reading this sweep could not finish is" in entry, entry
+
+
+# llmlint: ignore-block[e2e_not_mocked] Fault injection at an external dependency
+# boundary rather than a substitution of the layer under test; the docstring below
+# states how and why, and the `awk` journey further down states the same pattern.
+def test_a_worktree_reading_git_cannot_finish_is_unclassified_rather_than_a_repository(
+    host: Host, tmp_path: Path
+) -> None:
+    """The reading's own last question can fail, and a "no" is the answer it must not give.
+
+    Once a directory has resolved a git directory that is not a lender's registration,
+    one question is left: whether a superproject owns that storage. Git answers it, and
+    a failed answer is not a negative one — taking it for a negative names a
+    superproject's checkout a repository whose commits are its own and sends an
+    operator to remove by hand a tree `git submodule deinit` owns. So the failure takes
+    the class a reading that could not finish takes, and the directory is reported as
+    unclassified with the owner that says to look before removing.
+
+    The failure is arranged the way the `awk` one below is: a stand-in named `git` goes
+    ahead of the installed one on `PATH` and forwards every invocation to the real git
+    except that one question, which it refuses. Nothing above that boundary is
+    substituted — the real `just sweep`, the real wrapper, and every line of its
+    reporting run end to end — and it is the only way to reach this branch, because a
+    directory git can resolve at all is one it answers this question about.
+    """
+    own = host.own_repository("nickderobertis__standalone")
+    stand_ins = tmp_path / "path-stand-ins"
+    stand_ins.mkdir()
+    refuses = stand_ins / "git"
+    refuses.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            for argument in "$@"; do
+              if [ "$argument" = "--show-superproject-working-tree" ]; then
+                exit 1
+              fi
+            done
+            exec {shutil.which("git")} "$@"
+            """
+        )
     )
-    assert "check the root with ls -ld" in not_examined(result.stdout)
+    refuses.chmod(0o755)
+    # Ahead of the installed `git` rather than in place of it: nothing is modified
+    # outside this journey's own `tmp_path`, and the substitution lasts exactly as long
+    # as the `PATH` this one invocation is given.
+    environment = dict(host.environment)
+    environment["PATH"] = f"{stand_ins}{os.pathsep}{environment['PATH']}"
+
+    result = sweep(host, "--dry-run", environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert f"{own.name} — unreadable, so what it is could not be read" in entry, entry
+    assert f"{own.name} — a git repository of its own" not in entry, entry
+    assert f"{own.name} — a submodule of another repository" not in entry, entry
+    assert "A directory whose reading this sweep could not finish is" in entry, entry
+    assert own.exists(), "a root this sweep only reports on was reclaimed"
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 @needs_unprivileged
@@ -1130,6 +1749,65 @@ def test_a_scratch_root_this_sweep_can_only_partly_read_reports_a_floor_not_a_to
         not_examined(result.stdout),
     ), not_examined(result.stdout)
     assert "the family is at least this large" in not_examined(result.stdout)
+
+
+# llmlint: ignore-block[e2e_not_mocked] Fault injection at an external dependency
+# boundary rather than a substitution of the layer under test; the docstring below
+# states how and why, since it is the one place in this module that does it.
+def test_a_scratch_measurement_that_cannot_run_says_so_rather_than_reporting_a_zero(
+    host: Host, tmp_path: Path
+) -> None:
+    """The other way that measurement fails: the root reads fine and the tool does not.
+
+    Every journey above makes the *root* fail — a directory nothing can read, a subtree
+    nothing can walk. This makes the measurement fail instead, which is the case the two
+    cannot reach: `find` answers, so the entry count is real, while the `awk` that turns
+    one walk into a size and its name groups comes back a failure. The report has to
+    keep the number it got and say the other one is missing, because a family reported
+    as `0 KiB` is one an operator reads as empty — and this family is the one that
+    filled this host's disk.
+
+    How the failure is arranged, stated plainly because it is the one place in this
+    module that does it: a stand-in named `awk` is written into a directory put ahead of
+    the installed one on `PATH`, so the wrapper's own lookup finds the stand-in and the
+    real `awk` is never called. That is fault injection at an external dependency
+    boundary. Nothing above that boundary is substituted — the real `just sweep`, the
+    real wrapper, its real `find` and `du`, and every line of its reporting run end to
+    end — and every assertion below is on the wrapper's own output.
+    """
+    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
+    dead = host.scratch("dead", held=False, age_hours=5)
+    # Ahead of the installed `awk` rather than in place of it: nothing is modified
+    # outside this journey's own `tmp_path`, and the substitution lasts exactly as long
+    # as the `PATH` this one invocation is given.
+    stand_ins = tmp_path / "path-stand-ins"
+    stand_ins.mkdir()
+    refuses = stand_ins / "awk"
+    refuses.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+    refuses.chmod(0o755)
+    environment = dict(host.environment)
+    environment["PATH"] = f"{stand_ins}{os.pathsep}{environment['PATH']}"
+
+    result = sweep(host, environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    # The count survives and the size does not, which is the whole distinction: one
+    # measurement failed and the report says which. One entry rather than two, because
+    # the reclaimable directory beside it carries `oneagentgraph`'s own prefix and is
+    # left out of this family's numbers as a family a verb above examined.
+    assert f"{host.temp} — an unmeasurable size across 1 entries" in entry, entry
+    assert "A number above is missing rather than zero" in entry, entry
+    # No name group is claimed, because the measurement that would have grouped them is
+    # the one that failed. Reporting the largest of nothing is what a zero would be.
+    assert "Those are its largest by name" not in entry, entry
+    assert not dead.exists(), (
+        "a dependency that failed after both verbs had swept stopped the sweep "
+        "reclaiming, which is the one thing this degrade may never do"
+    )
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 @pytest.mark.parametrize(

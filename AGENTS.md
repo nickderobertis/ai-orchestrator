@@ -3005,10 +3005,21 @@ a number that reads like an all-clear, and this host has been in exactly that st
 Two consequences to read rather than infer: a verb that **fails** moves its families
 into the not-examined list and the other verb still sweeps, with the recipe exiting
 non-zero so the gap shows in the status as well as the report; and the pre-adoption
-`~/.ai-orchestrator/worktrees` root is **reported with its size, never reclaimed** —
-every directory under it is a *registered* git worktree whose lender still lists it
-and whose branch can still hold unpublished work, so land or discard that branch
-(`just recoverable` names the verb) and then `git worktree remove` it in the lender.
+`~/.ai-orchestrator/worktrees` root is **reported with its size, never reclaimed**, with
+what each directory under it *is* read out of git rather than asserted of the root. That
+reading replaced a claim nothing had ever checked — that every directory under it was a
+registered git worktree whose lender still listed it and whose branch could still hold
+unpublished work — which on this host is false of all of them, and a retention reason
+nothing checks is worse than none because it reads as evidence. Each directory now earns
+its own line and its own owner: a registered worktree names its branch and its lender and
+sends you to `just recoverable` and then `git worktree remove` there; a repository of its
+own, a submodule whose objects are a superproject's, a working tree its lender no longer
+lists, leftover content that is no git tree at all, and a directory this sweep could not
+read each say so and each get the action that follows from it. **A third family is named beside those two and swept by nothing either:
+the preserved unpublished branches**, which are what hold most of the retained workspaces
+above and which `just recoverable` answers — named in the one-line verdict as well as the
+trailer, deliberately uncounted, since counting them asks every registered identity and
+costs more than the sweep around it.
 **The host scratch root is the second reported-never-reclaimed family, and it is the
 one that filled this disk.** `$TMPDIR`, or `/tmp`: `oneagentgraph` writes the family
 it owns there and reaches nothing else, `onevcs` writes nothing there at all, and
@@ -3019,8 +3030,13 @@ to 2 MB free, and stopped every dispatch on this host while every sweep that day
 reported success. The trailer now names it with its size, its entry count, and its
 largest three name groups with trailing ids folded together — because the producer
 was 3,646 directories of one `nx` cache, which reads as an unrelated long tail in any
-per-directory listing. Nothing here removes any of it: doing so means implementing
-the proof both verbs already have, which is their work rather than this wrapper's.
+per-directory listing — and each of those groups with how recently anything in it was
+written, which is what parts a cache still filling this root from the residue of a leak
+somebody fixed weeks ago. Nothing here removes any of it: doing so means implementing
+the proof both verbs already have, which is their work rather than this wrapper's — and
+that is the reason all three unswept families are named by the composing report rather
+than handed to a sweeper, since a foreign tool's directory and a branch's fate are both
+outside the non-reference proof that makes those verbs safe to run unattended.
 `docs/orchestration.md` records what the trailer leaves out of that measurement and
 why.
 

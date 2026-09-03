@@ -2006,7 +2006,7 @@ left nothing to act on prints a short form naming the families it judged, how ma
 candidates it looked at, and how many it took, and prints no sections at all:
 
 ```text
-just sweep: reclaimed 1 of 2 candidate(s) examined — every family examined: oneagentgraph runs, temp; onevcs publications, recoveries; free space (df -h) is what says this host has room, not this line.
+just sweep: reclaimed 1 of 2 candidate(s) examined — every family examined: oneagentgraph runs, temp; onevcs publications, recoveries; preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one; free space (df -h) is what says this host has room, not this line.
 ```
 
 **Two of its readings look alike and are opposite pieces of news, so they are two
@@ -2017,8 +2017,8 @@ because there was nothing to judge has said almost nothing about this host. Read
 a clean bill of health:
 
 ```text
-just sweep: nothing reclaimed — 3 candidate(s) examined across every family (oneagentgraph runs, temp; onevcs publications, recoveries), all live or within retention; free space (df -h) is what says this host has room, not this line.
-just sweep: nothing reclaimed — no candidate was examined; every family (oneagentgraph runs, temp; onevcs publications, recoveries) was empty; free space (df -h) is what says this host has room, not this line.
+just sweep: nothing reclaimed — 3 candidate(s) examined across every family (oneagentgraph runs, temp; onevcs publications, recoveries), all live or within retention; preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one; free space (df -h) is what says this host has room, not this line.
+just sweep: nothing reclaimed — no candidate was examined; every family (oneagentgraph runs, temp; onevcs publications, recoveries) was empty; preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one; free space (df -h) is what says this host has room, not this line.
 ```
 
 **And no figure any of them prints is what says this host has room** — which is why
@@ -2050,13 +2050,32 @@ inside one, and three cases are worth reading rather than inferring:
   status as well as in the report. Silently absent from both lists is the one
   outcome the trailer exists to rule out.
 - **The pre-adoption `~/.ai-orchestrator/worktrees` root is reported, never
-  reclaimed.** It is the family that has actually filled this host's disk, and it is
-  neither verb's: every directory under it is a *registered* git worktree, still
-  listed by the checkout that lent it, still able to hold a branch nothing has
-  published. So the trailer names it with its size and its directory count and stops
-  — land or discard that branch first (`just recoverable` names the verb for it),
-  then remove the tree with `git worktree remove` in the lender. A root that cannot
-  be walked or measured is still named, without the number it could not get.
+  reclaimed — and what each directory under it *is* is read rather than asserted.**
+  The trailer used to retain the whole root on one sentence: that every directory
+  under it was a registered git worktree, still listed by the checkout that lent it,
+  still able to hold a branch nothing had published. On this host that was false —
+  the lenders register no worktrees and the directories below it are not git
+  repositories at all — and a retention reason nothing checks is worse than no
+  reason, because it reads as evidence. So the reading is now asked of git, per
+  directory, and each one is reported as whatever it turns out to be: **a registered
+  worktree of its lender**, on the branch it holds and naming that lender — land or
+  discard the branch first (`just recoverable` names the verb for it), then remove
+  the tree with `git worktree remove` there; **a git repository of its own**, whose
+  commits are its own to publish or copy out; **a submodule of another repository**,
+  naming the superproject whose object store holds it and whose `git submodule deinit`
+  owns it rather than an `rm` here; **a working tree carrying a `.git` git
+  cannot read**, which reaches no history and so can be published from by nothing —
+  deliberately not called stranded from a lender, because a deleted lender and a corrupt
+  repository leave that alike and the read cannot tell them apart; **not a git working
+  tree at all**, which is leftover content rather than work; or **unreadable**, which is
+  unclassified rather than empty. The owner of each class present is printed under the listing, so
+  no directory is named without one. The listing is ordered by what the reading found
+  rather than by name — a directory that can still hold unpublished work first,
+  leftover content last — because past eight directories the tail is folded into a
+  tally by class, and the tail is where the fold should fall. A root that cannot be
+  walked or measured is still named, without the number it could not get and with
+  every directory under it left unclassified rather than guessed at, and a root
+  holding nothing at all is not a family and says nothing.
 - **The host scratch root is reported, never reclaimed, and it is the one that
   filled this disk.** `$TMPDIR` — `/tmp` unless something set it — is where
   `oneagentgraph` writes the family it owns and reaches nothing else, and where
@@ -2066,7 +2085,15 @@ inside one, and three cases are worth reading rather than inferring:
   trailer names it with its size, its entry count, and its largest three name groups
   with each trailing id folded into the name in front of it — because the producer
   that filled it was 3,646 directories of one `nx` cache, which reads as a long tail
-  of unrelated small ones in any per-directory listing. The count is of entries
+  of unrelated small ones in any per-directory listing. **Each group also says how
+  recently anything in it was written**, which is the one thing a size cannot say and
+  the thing that decides whether an operator should care: the residue of a leak that
+  was fixed weeks ago and the cache filling this root right now are the same number of
+  bytes, and only one of them is news. It is the newest top-level entry in the group,
+  read from a second walk under the same exclusions the count applies; a group the
+  size walk listed that the timestamp walk did not reach says its recency is
+  unreadable rather than reading as never written, which would make it the oldest
+  thing on the root and the first thing somebody cleared. The count is of entries
   rather than of directories because that is what fills a device and what the
   reclamation was accounted in — 11,127 of 60,208 entries, for 48 GB. Exactly two
   things are left out of it, and both are named: what `oneagentgraph` prefixed, since
@@ -2079,6 +2106,32 @@ inside one, and three cases are worth reading rather than inferring:
   already have, which is their work and not this wrapper's. A root that cannot be
   walked is still named, without the number it could not get, and a root only partly
   readable reports its size as a floor rather than as a total.
+- **The preserved unpublished branches are named as a family of their own**, with
+  `just recoverable` as the verb that answers them. They are not directories, so no
+  sweep examines them and none can: judging one means deciding whether its work should
+  land, which is not a proof either verb can make. They are named because they are
+  what *holds* the workspaces above from being reclaimed — a sweep's retentions are
+  this family's shadow, and until it was named an operator read the shadow with no way
+  to see what cast it. It is named in the one-line verdicts as well as in the trailer,
+  since the one line is what a sweep usually prints; it is deliberately **not**
+  counted, because `onevcs recoverable` is the only thing that can take that count and
+  it asks every registered identity, costing more than the whole sweep around it. And
+  it deliberately does **not** decide whether the sections print: it is unexamined on
+  every host and at every moment, so letting it decide would make the long form
+  unconditional and take the short form away from every sweep there was nothing to act
+  on.
+- **Why those three are the composition's and not either sweeper's.** The obvious
+  alternative is to teach `oneagentgraph sweep` or `onevcs sweep` to reclaim them.
+  Both verbs judge a candidate on proven non-reference and each owns the directories
+  it wrote; these three are accumulations of tools neither of them wrote — a build
+  cache and a package store under the host scratch root, the leftovers of a layout
+  this host used before either verb existed, and branches, which are not directories
+  at all. Handing one to a sweeper means giving it a proof it cannot make: nothing
+  tells it what a foreign tool's directory is for, and whether a preserved branch
+  should land is a judgement about work rather than about liveness. That
+  provable-or-nothing property is what makes those verbs safe to run unattended, so
+  the answer is to name the owner rather than to widen the sweeper — and the owner is
+  named in the composing report, which is `scripts/sweep.sh`.
 - **The trailer restates each verb's family names** rather than pointing back at a
   report an operator has to scroll through. That restatement is held against what
   the installed verbs report examining, in `tests/e2e/test_sweep_e2e.py`, so a

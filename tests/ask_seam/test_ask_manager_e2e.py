@@ -409,6 +409,43 @@ def _ask(
     return asking
 
 
+#: How long `_reaped` goes on re-signalling a group that still has a member in it, and
+#: how long it waits between passes. Bounded rather than open-ended: a member that will
+#: not go is a leak to report through `_no_survivors`, not a reason to hang the suite.
+REAP_GRACE_SECONDS = 10
+REAP_INTERVAL_SECONDS = 0.1
+
+
+def _grouped(leader: int) -> list[int]:
+    """Every live process in `leader`'s process group except the leader itself.
+
+    Read out of `/proc` rather than asked with `killpg(pgid, 0)`, for two reasons that
+    both make the kernel's answer the wrong one. The leader stays in its own group as a
+    zombie until `communicate` reaps it, so `killpg` reports a member for the whole
+    window whatever else is going on; and the question here is precisely about
+    *everybody else*, since the leader is the one member already accounted for.
+    """
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == leader:
+            continue
+        try:
+            stat = (entry / "stat").read_bytes()
+        except OSError:
+            # It exited between the listing and the read, which is the outcome this
+            # is looking for anyway.
+            continue
+        # `comm` is parenthesized and may itself hold spaces and parentheses, so the
+        # fields are taken from the last `)` rather than by splitting the whole line:
+        # after it come state, ppid, and pgrp, in that order.
+        after = stat.rpartition(b")")[2].split()
+        if len(after) < 3 or after[0] == b"Z":
+            continue
+        if int(after[2]) == leader:
+            found.append(int(entry.name))
+    return found
+
+
 def _reaped(
     asking: subprocess.Popen[str],
     *,
@@ -425,11 +462,24 @@ def _reaped(
     `start_new_session` in `_ask` is what makes valid. The lookup would race a wrapper
     that has just exited, and its answer would then be this test runner's own group —
     the one group that must never be signalled here.
+
+    Signalled until the group is empty rather than once, because one pass is not the
+    same as one group. `scripts/ask-manager.sh` asks up to `MAX_ATTEMPTS` times and
+    forks a `channel serve` per attempt, and `killpg` signals the members the kernel
+    finds as it walks the list — so a server forked while that walk is in progress is
+    in the group and past the point the walk had reached, and lives on. That survivor
+    is what `_no_survivors` then fails the whole journey's teardown over, which is a
+    refused publication for a race in the reaping rather than anything about the seam.
     """
-    # A group already gone is the state this is for; the pipes are still drained below,
-    # because draining them is also what reaps the wrapper.
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(asking.pid, sending)
+    limit = deadline(REAP_GRACE_SECONDS)
+    while True:
+        # A group already gone is the state this is for; the pipes are still drained
+        # below, because draining them is also what reaps the wrapper.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(asking.pid, sending)
+        if not _grouped(asking.pid) or time.monotonic() >= limit:
+            break
+        time.sleep(REAP_INTERVAL_SECONDS)
     return asking.communicate(timeout=e2e_timeout(seconds))
 
 

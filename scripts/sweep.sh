@@ -4,7 +4,7 @@
 # neither reaches. What an operator does about each family, and why the sections are
 # rationed, is docs/orchestration.md, "The recorded run".
 #
-# Four constraints shape the code:
+# Five constraints shape the code:
 #
 # 1. Both verbs run whatever the other did, and a failed one contributes its families
 #    to the not-examined list rather than being absent from both.
@@ -14,9 +14,18 @@
 #    a phrase rather than to `set -e`.
 # 4. Three cases decide the output, at one `if` near the bottom. A dry run prints the
 #    sections because they are what it was asked for; a verb that failed or a family
-#    neither examined prints them because they are the operator's next action; a sweep
-#    that judged everything and left nothing to act on is one line, so the sections
-#    mean something when they are there.
+#    this run *found* and neither examined prints them because they are the operator's
+#    next action; a sweep that judged everything and left nothing to act on is one line,
+#    so the sections mean something when they are there.
+# 5. Every family this report names is in exactly one of two places: swept by a verb
+#    named here, or not swept and carrying an owner — a verb that owns it, or an
+#    operator action stated concretely enough to take. A family named with neither is
+#    what turns `reclaimed nothing` into an all-clear.
+#
+# The three unswept families are named here rather than handed to either sweeper: both
+# judge a candidate on proven non-reference, and neither can prove what a foreign tool's
+# directory is for or whether a branch should land. Which families, and why an owner
+# beats a wider sweeper: docs/orchestration.md, "The recorded run".
 #
 # llmlint: ignore-file[boundary_inputs_validated] Option shapes are checked below,
 # before either verb runs. `--min-age-hours`'s value is the verbs' to judge and they do
@@ -52,8 +61,13 @@ read those counts out of, prints both reports and the trailer naming what was le
 unlooked-at. `--dry-run` always prints them: it removes nothing, so those reports are
 the answer it was asked for.
 
-The host scratch root — $TMPDIR, or /tmp — is one of those families. It is measured
-and named there, and nothing here removes anything under it.
+Three families are named there and swept by nothing, each with an owner instead: the
+host scratch root ($TMPDIR, or /tmp), the pre-adoption ~/.ai-orchestrator/worktrees root
+— whose directories are read one by one and reported as whatever each actually is — and
+the preserved unpublished branches that hold the workspaces above from being reclaimed,
+which `just recoverable` names. Nothing here removes anything in any of them: both verbs
+this composes remove a directory only once they can prove no live process names it, and
+that proof is theirs to make rather than this wrapper's.
 USAGE
 }
 
@@ -204,6 +218,13 @@ unswept() {
 examined=()
 unexamined=()
 
+# How many of the not-examined entries below are families this run *found*, as against
+# the standing one it always names. Constraint 4 branches on this rather than on the
+# length of `unexamined`: a family that is unexamined on every host by construction —
+# the preserved branches at the bottom — would otherwise make the trigger permanently
+# true and take the one-line form away from every sweep there was nothing to act on.
+discovered_unexamined=0
+
 if [ "$oneagentgraph_status" -eq 0 ]; then
   examined+=("oneagentgraph $ONEAGENTGRAPH_FAMILIES — reported above")
 else
@@ -216,41 +237,259 @@ else
   unexamined+=("$(unswept onevcs "$ONEVCS_FAMILIES" "$onevcs_status")")
 fi
 
-# The pre-adoption worktree root: neither verb's, and never this one's to delete —
-# every directory under it is a *registered* git worktree whose lender still lists it
-# and whose branch can still hold unpublished work. Named and measured, nothing more.
+#: How many directories under the pre-adoption worktree root the entry reads out one
+#: at a time before folding the rest into a tally by class. Eight rather than the three
+#: name groups the scratch root gets: nothing writes to this root any more, so it only
+#: shrinks, and each directory here needs its own action where a scratch name group
+#: needs one action for the whole group.
+WORKTREE_NAMED_DIRECTORIES=8
+
+# What one directory under the pre-adoption worktree root actually is, asked of git
+# rather than asserted of the root — because the reason it used to be retained under was
+# false of every directory on this host, and a reason nothing checks reads as evidence.
+#
+# Prints a class and a tab and whatever detail that class carries. Every read here is
+# allowed to fail into a class of its own rather than into a confidently wrong one.
+worktree_class() {
+  local directory="$1" gitdir lender branch superproject
+  if [ ! -r "$directory" ] || [ ! -x "$directory" ]; then
+    printf 'unreadable\t'
+    return 0
+  fi
+  if [ ! -e "$directory/.git" ]; then
+    printf 'orphan\t'
+    return 0
+  fi
+  # Deliberately not "stranded from a lender": all this establishes is that a `.git` is
+  # there and git will not read it, which a deleted lender and a corrupt repository
+  # reach alike.
+  # llmlint: ignore[tool_output_is_signal] Not a failure path of this recipe, and not a tool run for its output: this is one classifying read per directory, and the class it returns IS what the report is for — every class below carries its own owner and next action, so a failed read degrades to a stated class rather than to a bare "no". Letting git's stderr through instead would interleave one diagnostic per directory into a report that must stay quiet on success, which is the same half of this rule the measurement degrades above cite.
+  if ! gitdir="$(git -C "$directory" rev-parse --absolute-git-dir 2>/dev/null)"; then
+    printf 'unresolved\t'
+    return 0
+  fi
+  # llmlint: ignore[tool_output_is_signal] Same read, for the branch this tree holds; reason at the first of them. The phrase stands in for the branch name inside a line whose own class already carries the operator's next action.
+  branch="$(git -C "$directory" rev-parse --abbrev-ref HEAD 2>/dev/null)" ||
+    branch='an unreadable branch'
+  # A `.git` file rather than a directory says the git directory is somewhere else; it
+  # does not say a lender registered this tree, because a submodule and a repository cut
+  # with --separate-git-dir have one too. What says it is the shape of the directory the
+  # read above resolved to: git puts a lender's registration at
+  # `<lender>/.git/worktrees/<name>` with a `gitdir` file in it, and puts a submodule's
+  # under `modules/` instead. Resolving through that registration *is* the lender still
+  # listing this tree — delete it and the read above stops resolving — so anything
+  # else is a repository whose objects are its own rather than a worktree of somebody.
+  if [ -f "$directory/.git" ] && [ -f "$gitdir/gitdir" ]; then
+    case "$gitdir" in
+      */worktrees/*)
+        lender="${gitdir%/worktrees/*}"
+        printf 'worktree\t%s in %s' "$branch" "${lender%/.git}"
+        return 0
+        ;;
+    esac
+  fi
+  # A submodule's git directory is elsewhere too, under its superproject's `modules/`,
+  # so the read above leaves it looking like a repository whose storage is its own —
+  # which it is not, and calling it one would tell an operator its commits are theirs to
+  # publish from here. Asked of git rather than pattern-matched off the resolved path:
+  # this read prints the superproject's working tree for a submodule and nothing at all
+  # for a plain repository, one cut with --separate-git-dir, or a registered worktree.
+  # Its failure is a class of its own rather than a "no", for the reason every read
+  # here is: measured, this one exits non-zero only where the directory is no
+  # repository at all, which the resolve above has already ruled out — so a failure
+  # here is git answering differently from how it answers today, and taking that for a
+  # "not a submodule" would name a superproject's checkout a repository whose commits
+  # are its own and send an operator to remove it by hand.
+  # llmlint: ignore[tool_output_is_signal] Same read, for the superproject question; reason at the first of them. Its failure is deliberately its own class rather than a "not a submodule", as the paragraph above it says.
+  if ! superproject="$(git -C "$directory" rev-parse --show-superproject-working-tree 2>/dev/null)"; then
+    printf 'unreadable\t'
+    return 0
+  fi
+  if [ -n "$superproject" ]; then
+    printf 'submodule\t%s in %s' "$branch" "$superproject"
+    return 0
+  fi
+  printf 'repository\t%s' "$branch"
+}
+
+# What a directory of each class is, and whose it is to remove. Printed once per class
+# actually present, under the directories that earned it: an owner an operator cannot
+# act on is the half of "not swept" that makes a family reported rather than answered.
+worktree_owner() {
+  case "$1" in
+    worktree)
+      printf 'A registered worktree can still hold a branch nothing has published:'
+      printf '\n      land or discard that branch — just recoverable names the verb for'
+      printf '\n      it — then remove the tree with git worktree remove in its lender.'
+      ;;
+    repository)
+      printf 'A git repository of its own borrows no lender and is listed by none:'
+      printf '\n      its commits are its own, so publish or copy out what you need and'
+      printf '\n      then remove it by hand.'
+      ;;
+    submodule)
+      printf 'A submodule holds its objects in the superproject named beside it, so'
+      printf '\n      what is here is a checkout of that: publish or copy out anything'
+      printf '\n      committed only here, then remove it with git submodule deinit in'
+      printf '\n      that superproject rather than by hand.'
+      ;;
+    unresolved)
+      printf 'A .git git cannot read reaches no history, so nothing can publish'
+      printf '\n      from this one: whatever it borrowed or held is gone or broken.'
+      printf '\n      Read what is in the files, copy out what you need, and remove it'
+      printf '\n      by hand.'
+      ;;
+    orphan)
+      printf 'What is not a git working tree holds no branch and no lender lists it:'
+      printf '\n      it is leftover content rather than work, yours to read and remove'
+      printf '\n      by hand.'
+      ;;
+    unreadable)
+      printf 'A directory whose reading this sweep could not finish is'
+      printf '\n      unclassified rather than empty: check it with ls -ld and with'
+      printf '\n      git -C it status, then re-run before removing anything.'
+      ;;
+  esac
+}
+
+# The pre-adoption worktree root: neither verb's, and never this one's to delete. What
+# each directory under it is gets read rather than asserted, so a directory that really
+# is a lender's worktree keeps the reason it earns and one that is not is named as what
+# it is with an owner of its own.
 legacy_worktrees="${AI_ORCHESTRATOR_HOME:-$HOME/.ai-orchestrator}/worktrees"
-if [ -d "$legacy_worktrees" ]; then
+
+# The whole entry, or nothing at all when this root holds nothing. A function for the
+# early return, and for the same reason the host scratch root has one: an empty root is
+# not a family, and reporting it as one would keep the long form on for ever over a
+# directory with nothing in it.
+worktree_root_entry() {
+  [ -d "$legacy_worktrees" ] || return 0
+
   # Constraint 3, at one of the two places that can breach it: this root belongs to
-  # other checkouts and is the likeliest here to be unreadable, and both measurements
-  # here run *after* both verbs have swept, so a `find` or `du` that aborted would
+  # other checkouts and is the likeliest here to be unreadable, and every measurement
+  # here runs *after* both verbs have swept, so a `find` or `du` that aborted would
   # discard both reports and this trailer for a bare errno. Each number degrades to a
-  # phrase instead.
-  legacy_incomplete=0
-  if ! legacy_count="$(find "$legacy_worktrees" -mindepth 1 -maxdepth 1 -type d 2>/dev/null |
-    wc -l)"; then
-    legacy_count='an unreadable number of'
-    legacy_incomplete=1
+  # phrase instead, and so does the reading of what each directory is.
+  local incomplete=0 unread=0 folded=0 entries='' count=0 size tally=''
+  local directory reading class detail sentence label row
+  local -a named=() classes=() rows=()
+  local -A class_counts=()
+
+  # Every top-level entry rather than only the directories, because this is the test
+  # for whether there is a family here at all: a root holding nothing is silent.
+  # llmlint: ignore[tool_output_is_signal] Not a failure path of this recipe: both verbs have already swept and the trailer IS the answer, so this degrades one measurement to a stated phrase carrying its own next action and the sweep still succeeds. Letting find's stderr through instead would interleave per-entry noise into the report on runs that succeed, which is the quiet-on-success half of this same rule.
+  if ! entries="$(find "$legacy_worktrees" -mindepth 1 -maxdepth 1 2>/dev/null |
+    LC_ALL=C sort)"; then
+    unread=1
+    incomplete=1
+    count='an unreadable number of'
+  elif [ -z "$entries" ]; then
+    return 0
   fi
-  if ! legacy_size="$(du -sh -- "$legacy_worktrees" 2>/dev/null | cut -f1)" ||
-    [ -z "$legacy_size" ]; then
-    legacy_size='an unmeasurable size'
-    legacy_incomplete=1
+  # llmlint: ignore[tool_output_is_signal] Same degrade, for the worktree root's size; reason at the first of them.
+  if ! size="$(du -sh -- "$legacy_worktrees" 2>/dev/null | cut -f1)" || [ -z "$size" ]; then
+    size='an unmeasurable size'
+    incomplete=1
   fi
-  unexamined+=("$(
-    printf '%s' "$legacy_worktrees — $legacy_size across $legacy_count directories."
-    printf '\n    No verb here reclaims one: these are registered git worktrees rather than'
-    printf '\n    scratch — each is still listed by the checkout that lent it, and each can'
-    printf '\n    still hold a branch nothing has published. Land or discard that branch'
-    printf '\n    first — just recoverable names the verb for it — then remove the tree'
-    printf '\n    with git worktree remove in the lender.'
-    if [ "$legacy_incomplete" -ne 0 ]; then
-      printf '\n    A number above is missing rather than zero, because this sweep could'
-      printf '\n    not get it: check the root with ls -ld and re-run. A disk-usage'
-      printf '\n    account that silently leaves this family out is the failure the'
-      printf '\n    trailer exists to prevent.'
+
+  # One reading per directory. Ordered by what the reading found rather than by name,
+  # because the fold below drops the tail: a directory that can still hold an
+  # unpublished branch is the one an operator has to act on, and name order would let
+  # it fall off the end behind ten leftovers. Within a class, by name, so a root read
+  # twice reports the same way twice.
+  if [ "$unread" -eq 0 ]; then
+    while IFS= read -r directory; do
+      if [ -z "$directory" ] || [ ! -d "$directory" ]; then
+        continue
+      fi
+      count=$((count + 1))
+      reading="$(worktree_class "$directory")"
+      class="${reading%%$'\t'*}"
+      detail="${reading#*$'\t'}"
+      case "$class" in
+        worktree) sentence="a registered worktree of its lender, on $detail" ;;
+        repository) sentence="a git repository of its own, on $detail" ;;
+        submodule) sentence="a submodule of another repository, on $detail" ;;
+        unresolved) sentence='a working tree carrying a .git that git cannot read' ;;
+        unreadable) sentence='unreadable, so what it is could not be read' ;;
+        orphan) sentence='not a git working tree at all' ;;
+      esac
+      class_counts[$class]=$((${class_counts[$class]:-0} + 1))
+      rows+=("$class"$'\t'"${directory##*/} — $sentence")
+    done <<<"$entries"
+    # One pass per class, in the order below, over rows the walk above already put in
+    # name order — so the listing is class-major and name-minor with no second sort to
+    # ask, and therefore with no sort whose failure could hand the loop a short listing
+    # that reads exactly like a root with fewer directories in it.
+    for class in worktree repository submodule unresolved unreadable orphan; do
+      [ -n "${class_counts[$class]+set}" ] || continue
+      if [ "${#rows[@]}" -ne 0 ]; then
+        for row in "${rows[@]}"; do
+          [ "${row%%$'\t'*}" = "$class" ] || continue
+          if [ "${#named[@]}" -lt "$WORKTREE_NAMED_DIRECTORIES" ]; then
+            named+=("      ${row#*$'\t'}")
+          else
+            folded=$((folded + 1))
+          fi
+        done
+      fi
+      classes+=("$class")
+      case "$class" in
+        worktree) label='a registered worktree' ;;
+        repository) label='a repository of its own' ;;
+        submodule) label='a submodule of another repository' ;;
+        unresolved) label='carrying an unreadable .git' ;;
+        unreadable) label='unreadable' ;;
+        orphan) label='not a git working tree' ;;
+      esac
+      [ -z "$tally" ] || tally="$tally, "
+      tally="$tally${class_counts[$class]} $label"
+    done
+  fi
+
+  printf '%s' "$legacy_worktrees — $size across $count directories."
+  printf '\n    No verb here reclaims one, and what each of them is is read rather than'
+  printf '\n    assumed:'
+  if [ "${#named[@]}" -ne 0 ]; then
+    printf '\n%s' "$(printf '%s\n' "${named[@]}")"
+    # The tally answers the question the fold opens and only that one, so it is printed
+    # only when something was folded: with every directory listed above it, it is a
+    # second reading of a list the reader has just read.
+    if [ "$folded" -ne 0 ]; then
+      printf '\n      … and %d more, unnamed here. In all: %s.' "$folded" "$tally"
     fi
-  )")
+    # Guarded by length rather than by a `${array[@]+...}` alternate, so the expansion
+    # itself stays quoted: a class name is a word this script chose, but an unquoted
+    # expansion is a habit that outlives the values it was safe for.
+    if [ "${#classes[@]}" -ne 0 ]; then
+      for class in "${classes[@]}"; do
+        printf '\n      %s' "$(worktree_owner "$class")"
+      done
+    fi
+  elif [ "$unread" -ne 0 ]; then
+    printf '\n      What each of them is could not be read, so none is classified here:'
+    printf '\n      check the root with ls -ld and re-run before removing anything under'
+    printf '\n      it.'
+  else
+    printf '\n      No directory is under it at all: what it holds is loose entries,'
+    printf '\n      which hold no branch and which no lender lists — yours to read and'
+    printf '\n      remove by hand.'
+  fi
+  if [ "$incomplete" -ne 0 ]; then
+    printf '\n    A number above is missing rather than zero, because this sweep could'
+    printf '\n    not get it — either the root would not answer or the measurement over'
+    printf '\n    it would not: check the root with ls -ld and re-run, and read a repeat'
+    printf '\n    over a root that lists fine as the measurement here being broken'
+    printf '\n    rather than the root. A disk-usage account that silently leaves this'
+    printf '\n    family out is the failure the trailer exists to prevent.'
+  fi
+  return 0
+}
+
+legacy_entry="$(worktree_root_entry)"
+if [ -n "$legacy_entry" ]; then
+  unexamined+=("$legacy_entry")
+  discovered_unexamined=$((discovered_unexamined + 1))
 fi
 
 #: The prefix `oneagentgraph` puts on every directory of the family it owns under the
@@ -276,9 +515,16 @@ UV_LOCK_TRANSIENT='uv-*.lock'
 SCRATCH_NAMED_GROUPS=3
 
 #: The one measurement of that root: its size on the first line, then the largest name
-#: groups under it. One `awk` rather than a pipeline per number because the walk above
-#: is the expensive part and this reads its output twice for nothing otherwise — and
-#: because a `head` closing a pipe early is a SIGPIPE this script would exit on.
+#: groups under it, each with how recently anything in it was written. One `awk` rather
+#: than a pipeline per number because the walk above is the expensive part and this
+#: reads its output twice for nothing otherwise — and because a `head` closing a pipe
+#: early is a SIGPIPE this script would exit on.
+#:
+#: It reads two streams, told apart by the listing walk labelling its own lines while
+#: `du`'s keep the two fields it writes. A group the size walk listed that the listing
+#: walk did not reach reports its recency as unreadable rather than as never written; a
+#: directory whose name matches the excluded lock pattern is one way that happens. Why
+#: a size alone is not enough: docs/orchestration.md, "The recorded run".
 # shellcheck disable=SC2016 # `$1` and `$2` below are awk fields, not shell
 # parameters: expanding them here would hand awk an empty program.
 SCRATCH_MEASUREMENT='
@@ -305,7 +551,35 @@ function stem(name,   previous, tail) {
   return name
 }
 
+# How long ago a group was last written, in the coarsest unit that still separates
+# "something is writing this now" from "nothing has touched it in a month". A group
+# whose newest timestamp this sweep could not get says that, rather than taking the
+# missing number for a very old one.
+function recency(newest,   seconds) {
+  if (newest == "") return "newest write unreadable"
+  # A stamp ahead of this clock — a copy that preserved one, a mount whose clock drifted
+  # — makes this negative, and the first band takes it: reported as freshly written,
+  # which is the one reading that cannot send somebody to clear it. No clamp, because a
+  # clamp here would be a branch nothing can reach and nothing could exercise.
+  seconds = now - newest
+  if (seconds < 60) return "newest written just now"
+  if (seconds < 3600) return sprintf("newest written %dm ago", int(seconds / 60))
+  if (seconds < 172800) return sprintf("newest written %dh ago", int(seconds / 3600))
+  return sprintf("newest written %dd ago", int(seconds / 86400))
+}
+
 BEGIN { FS = "\t" }
+
+# One timestamp per top-level entry, from the same walk that counted them, so what is
+# excluded from the count is excluded from here too.
+$1 == "time" {
+  name = $3
+  sub(/^.*\//, "", name)
+  if (index(name, prefix) == 1) next
+  key = stem(name)
+  if (!(key in written) || $2 + 0 > written[key]) written[key] = $2 + 0
+  next
+}
 
 {
   size = $1 + 0
@@ -332,9 +606,11 @@ END {
     }
     if (best == "") break
     if (members[best] > 1)
-      printf "      %s and %d more like it — %s\n", example[best], members[best] - 1, human(grouped[best])
+      printf "      %s and %d more like it — %s, %s\n", example[best], members[best] - 1,
+        human(grouped[best]), recency((best in written) ? written[best] : "")
     else
-      printf "      %s — %s\n", example[best], human(grouped[best])
+      printf "      %s — %s, %s\n", example[best], human(grouped[best]),
+        recency((best in written) ? written[best] : "")
     delete grouped[best]
   }
 }
@@ -351,28 +627,45 @@ scratch_root="${TMPDIR:-/tmp}"
 scratch_root_entry() {
   [ -d "$scratch_root" ] || return 0
 
-  local incomplete=0 partial=0 count size measured largest
+  local incomplete=0 partial=0 count size measured written clock streams largest
+  local -a listed=()
   # Every top-level entry, files as well as directories: a loose file fills a device
   # as well as a directory does, and the account this family is reported for was taken
   # in entries. What `oneagentgraph` prefixed is out because a verb above examined it.
   # The size is the whole root's less that family, so a loose file is in both numbers
   # even though `du -d 1` lists no file for it to be a name group.
-  if ! count="$(find "$scratch_root" -mindepth 1 -maxdepth 1 \
+  # It also carries one timestamp per entry, because the recency below has to describe
+  # the entries the count was taken over — and because one walk has one way to fail,
+  # where a second walk beside it would have a degrade of its own that nothing could
+  # reach independently of this one.
+  # llmlint: ignore[tool_output_is_signal] Same degrade, for the scratch root's listing; reason at the first of them.
+  if ! written="$(find "$scratch_root" -mindepth 1 -maxdepth 1 \
     ! -name "$ONEAGENTGRAPH_SCRATCH_PREFIX*" ! -name "$UV_LOCK_TRANSIENT" \
-    2>/dev/null | wc -l)"; then
+    -printf 'time\t%T@\t%p\n' 2>/dev/null)"; then
     count='an unreadable number of'
+    written=''
     incomplete=1
-  elif [ "$count" -eq 0 ]; then
+  elif [ -z "$written" ]; then
     # The root exists and holds nothing this recipe's verbs did not examine or write,
     # so there is no family to report — the same silence the pre-adoption worktree root
     # keeps when it is not on this host at all.
     return 0
+  else
+    # Counted with builtins alone, so the count of a listing this sweep already holds
+    # has nothing left in it that could fail after both verbs have swept.
+    mapfile -t listed <<<"$written"
+    count="${#listed[@]}"
   fi
 
   # One walk answers both the size and the shape: `-x` keeps it off anything mounted
   # under the root, and `-d 1` lists each top-level directory beside the total, which
   # is what the name groups below are built from.
+  # llmlint: ignore[tool_output_is_signal] Same degrade, for the scratch root's size; reason at the first of them.
   measured="$(du -kx -d 1 -- "$scratch_root" 2>/dev/null)" || partial=1
+  # A timestamp is only an age against a clock. Bash's own, rather than `date`: it is a
+  # builtin with nothing to spawn and nothing to fail, so there is no clock-read failure
+  # to report here and no branch for one that nothing could exercise.
+  printf -v clock '%(%s)T' -1
   # A root this sweep could not list is a root whose total cannot be trusted either:
   # `du` reports what it could reach, and reporting that as the family's size would
   # understate exactly the family this trailer exists to stop understating.
@@ -381,14 +674,37 @@ scratch_root_entry() {
     largest=''
     incomplete=1
   else
-    largest="$(printf '%s\n' "$measured" | awk \
+    # Two streams into one `awk`, joined by `printf` alone: the timestamp walk labels
+    # its own lines, so nothing has to relabel `du`'s and no pipeline sits between the
+    # measurements and the reader whose failure could pass unnoticed.
+    streams="$(
+      printf '%s\n' "$measured"
+      [ -z "$written" ] || printf '%s\n' "$written"
+    )"
+    # Constraint 3 again, and this is the last thing that can breach it: every command
+    # from here to the end of the entry runs after both verbs have swept, so each one
+    # that could fail is asked rather than assumed. A measurement that falls over here
+    # takes the same phrase an unreadable root takes.
+    # llmlint: ignore[tool_output_is_signal] Same degrade, for the scratch measurement; reason at the first of them.
+    if ! largest="$(printf '%s\n' "$streams" | awk \
       -v root="$scratch_root" \
       -v prefix="$ONEAGENTGRAPH_SCRATCH_PREFIX" \
       -v groups="$SCRATCH_NAMED_GROUPS" \
-      "$SCRATCH_MEASUREMENT")"
-    size="$(printf '%s\n' "$largest" | head -n 1)"
-    largest="$(printf '%s\n' "$largest" | tail -n +2)"
-    [ "$partial" -eq 0 ] || size="at least $size"
+      -v now="$clock" \
+      "$SCRATCH_MEASUREMENT")" || [ -z "$largest" ]; then
+      size='an unmeasurable size'
+      largest=''
+      incomplete=1
+    # llmlint: ignore[tool_output_is_signal] Same degrade, for splitting that measurement's own answer; reason at the first of them.
+    elif ! size="$(printf '%s\n' "$largest" | head -n 1)" ||
+      ! largest="$(printf '%s\n' "$largest" | tail -n +2)" ||
+      [ -z "$size" ]; then
+      size='an unmeasurable size'
+      largest=''
+      incomplete=1
+    else
+      [ "$partial" -eq 0 ] || size="at least $size"
+    fi
   fi
 
   printf '%s' "$scratch_root — $size across $count entries, and no verb here examines"
@@ -396,9 +712,12 @@ scratch_root_entry() {
   if [ -n "$largest" ]; then
     printf '\n%s' "$largest"
     printf '\n    Those are its largest by name, each trailing id folded into the name'
-    printf '\n    in front of it. What oneagentgraph prefixes %s is left' \
+    printf '\n    in front of it, and each saying how recently anything in it was'
+    printf '\n    written — a group nothing writes to any more is residue, where one'
+    printf '\n    written minutes ago is still filling this root. What oneagentgraph'
+    printf '\n    prefixes %s is left out of every number here:' \
       "$ONEAGENTGRAPH_SCRATCH_PREFIX"
-    printf '\n    out of every number here: that family is its own and was judged above.'
+    printf '\n    that family is its own and was judged above.'
   fi
   # The one thing under this root in neither list unless it is named here. Constraint 4
   # rations the sections, so this is one sentence and it is unconditional: a reader who
@@ -417,15 +736,38 @@ scratch_root_entry() {
   fi
   if [ "$incomplete" -ne 0 ]; then
     printf '\n    A number above is missing rather than zero, because this sweep could'
-    printf '\n    not get it: check the root with ls -ld and re-run. A disk-usage'
-    printf '\n    account that silently leaves this family out is the failure the'
-    printf '\n    trailer exists to prevent.'
+    printf '\n    not get it — either the root would not answer or the measurement over'
+    printf '\n    it would not: check the root with ls -ld and re-run, and read a repeat'
+    printf '\n    over a root that lists fine as the measurement here being broken'
+    printf '\n    rather than the root. A disk-usage account that silently leaves this'
+    printf '\n    family out is the failure the trailer exists to prevent.'
   fi
   return 0
 }
 
 scratch_entry="$(scratch_root_entry)"
-[ -z "$scratch_entry" ] || unexamined+=("$scratch_entry")
+if [ -n "$scratch_entry" ]; then
+  unexamined+=("$scratch_entry")
+  discovered_unexamined=$((discovered_unexamined + 1))
+fi
+
+#: The family that is not a directory: the branches holding most of the workspaces above
+#: from being reclaimed. Named and deliberately not counted — `onevcs recoverable` is the
+#: only thing that can count them and it asks every registered identity, which measured
+#: about a minute and a half against a sweep that is otherwise seconds.
+PRESERVED_BRANCHES="preserved unpublished branches — branches rather than directories,
+    and what holds most of the workspaces above from being reclaimed. No sweep examines
+    them and none can: judging one means deciding whether its work should land, which
+    is not a proof either verb can make. just recoverable names every one of them,
+    where it lives, why its workstream stopped, and the verb that lands it — and this
+    trailer does not count them, because taking that count asks every registered
+    identity and costs more than the whole sweep around it."
+
+# Appended after the two families this run went looking for, and outside the count that
+# decides whether the sections print: this entry is true on every host and at every
+# moment, so letting it decide would make the long form unconditional and take the
+# one-line form away from every sweep that had nothing to act on.
+unexamined+=("$PRESERVED_BRANCHES")
 
 # The long form: each verb's report as it wrote it, then the trailer neither can.
 print_sections() {
@@ -489,6 +831,11 @@ if [ "$counts_readable" -ne 0 ]; then
   reclaimed_candidates=$((counted_values[1] + counted_values[3]))
 fi
 
+#: The standing family, said in the one-line forms too. The one line is what an
+#: operator reads on almost every sweep, and a family that is never examined and never
+#: named there is one an operator never learns is holding the rest.
+PRESERVED_BRANCH_CLAUSE='preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one'
+
 #: The clause every verdict below ends with, because the number in front of it is the
 #: one a reader mistakes for an all-clear. A sweep takes only what it can *prove* dead,
 #: in the families named beside it, so what says this host has room is free space.
@@ -509,7 +856,7 @@ if [ "$dry_run" -ne 0 ]; then
   # which family, retained for what reason — that the flag exists to ask.
   # llmlint: ignore[tool_output_is_signal] a rehearsal is its report; reason above.
   print_sections
-elif [ "${#unexamined[@]}" -ne 0 ] ||
+elif [ "$discovered_unexamined" -ne 0 ] ||
   [ "$oneagentgraph_status" -ne 0 ] ||
   [ "$onevcs_status" -ne 0 ]; then
   # Exiting 0 here does not mean there was nothing to report. A family neither verb
@@ -533,16 +880,18 @@ elif [ "$examined_candidates" -eq 0 ]; then
   # because the state below says the opposite thing with the same number: a host whose
   # families are empty and a host whose every candidate is alive both reclaim nothing,
   # and only one of them is evidence that the sweep is working.
-  printf 'just sweep: nothing reclaimed — no candidate was examined; every family (%s; %s) was empty; %s.\n' \
-    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" "$FREE_SPACE_CLAUSE"
+  printf 'just sweep: nothing reclaimed — no candidate was examined; every family (%s; %s) was empty; %s; %s.\n' \
+    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
+    "$PRESERVED_BRANCH_CLAUSE" "$FREE_SPACE_CLAUSE"
 elif [ "$reclaimed_candidates" -eq 0 ]; then
-  printf 'just sweep: nothing reclaimed — %d candidate(s) examined across every family (%s; %s), all live or within retention; %s.\n' \
+  printf 'just sweep: nothing reclaimed — %d candidate(s) examined across every family (%s; %s), all live or within retention; %s; %s.\n' \
     "$examined_candidates" "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
-    "$FREE_SPACE_CLAUSE"
+    "$PRESERVED_BRANCH_CLAUSE" "$FREE_SPACE_CLAUSE"
 else
-  printf 'just sweep: reclaimed %d of %d candidate(s) examined — every family examined: %s; %s; %s.\n' \
+  printf 'just sweep: reclaimed %d of %d candidate(s) examined — every family examined: %s; %s; %s; %s.\n' \
     "$reclaimed_candidates" "$examined_candidates" \
-    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" "$FREE_SPACE_CLAUSE"
+    "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
+    "$PRESERVED_BRANCH_CLAUSE" "$FREE_SPACE_CLAUSE"
 fi
 
 # A sweeper that failed leaves a family unswept, and an operator watching for a full
