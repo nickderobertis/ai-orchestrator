@@ -1792,6 +1792,23 @@ three older non-blocking ones, the first read handed out the blocking one, and
 three further reads handed out the others while `pending` stayed on it throughout.
 Nothing changed about what a queue-jumping surface *is*: everything the monitor and
 the pacemaker raise is still non-blocking by construction.
+**`delivered` is a transport receipt, and the refusal that reads it as more than that
+is `just channel-reply`'s.** `onepipeline reply` answers `{"reply":N,"state":"delivered"}`
+whatever the envelope carried: the engine took it and handed it to whoever was waiting,
+and that is the whole of what the word claims. Whether the waiting reader can *use* what
+arrived is a different question, and the reader that cannot is
+`scripts/ask-manager.sh` — a dispatched agent's blocking question, which acts only on a
+JSON object carrying a boolean `completion` **and** echoing the correlation token its
+question minted, and discards anything else with nothing on the channel to say so. So
+that pair is checked in the replying recipe, before the envelope is sent, where you are
+still there to write another: an envelope that cannot be a ruling, and a ruling that
+echoes no token, are each refused naming what is missing, with the pending question left
+pending. An envelope carrying `commands` is a graph edit rather than an answer and goes
+through untouched, because a manager most needs to steer exactly while a question is
+unanswered. Reaching `onepipeline reply` directly bypasses all of that and gets the
+transport receipt alone — which is what one question asked four times and answered four
+times, every reply reporting success, looks like from a manager's terminal.
+
 - **Steer a running dispatch with a `context` edit, never with `oneagentgraph
   interrupt` by hand.** These are not alternatives: a `context` edit *is* an
   interrupt against that dispatch's control socket, wrapped so the lever's own events

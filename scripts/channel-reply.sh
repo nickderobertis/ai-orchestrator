@@ -2,19 +2,15 @@
 # Send one reply envelope over the live channel: `just channel-reply <RUN> [FILE]`.
 #
 # The envelope reaches `onepipeline reply` exactly as it was given — this adds no
-# field, rewrites nothing, and forwards the caller's own arguments. What it adds is one
-# refusal, for the one case that is provably unusable.
+# field, rewrites nothing, and forwards the caller's own arguments. What it adds is a
+# refusal, for the envelope that provably cannot answer the question waiting.
 #
-# **`onepipeline reply` answers `{"reply":N,"state":"delivered"}` whatever the envelope
-# carried**, because `delivered` is a transport receipt: the engine took the envelope
-# and handed it to whoever was waiting. Whether the waiting reader can *use* it is a
-# different question, and the reader that cannot is `scripts/ask-manager.sh`: its
-# classifier acts only on a JSON object carrying a boolean `completion` and discards
-# everything else with nothing on the channel to say so. Three replies omitting
-# `completion` were each reported delivered and each discarded, the asking planner
-# re-asked twice — minting a new correlation token each time and reporting that the
-# call had returned no usable text — and it stayed blocked for about thirty-five
-# minutes while its manager had every reason to believe it had been answered.
+# `onepipeline reply` reports `delivered` whatever the envelope carried, which is a
+# transport receipt rather than a claim the waiting reader could use it. The reader
+# that cannot is `scripts/ask-manager.sh`: it acts only on a ruling — a JSON object
+# carrying a boolean `completion` — that also echoes the correlation token its question
+# minted, because a reply here is claimed by whichever reader arrives next. It discards
+# anything else in silence, which is why both halves are judged before the send.
 #
 # So an envelope the pending question cannot use is refused **here**, at the point it
 # is sent, where the person who wrote it is still there to write another. The pending
@@ -28,10 +24,10 @@
 #     `scripts/ask-manager.sh` mints — which `scripts/ask-manager-contract.sh` declares,
 #     so this file never spells it. Nothing else on this channel has a reader that
 #     discards what it cannot parse;
-#   * it judges the envelope against that script's own rule, sourced from
+#   * it judges the envelope against **both** of that script's rules, sourced from
 #     `scripts/ask-manager-contract.sh` rather than restated, because a check that
 #     disagreed with the reader it protects would refuse usable replies while passing
-#     unusable ones;
+#     unusable ones. Both, because being a ruling is only half of being an answer;
 # The envelope reaches the verb on its stdin whichever shape it arrived in, which is
 # the one thing here that is not pure pass-through and is deliberate: the bytes judged
 # and the bytes sent must be the same bytes, and a caller's file is theirs to change
@@ -73,11 +69,19 @@ QUEUE_PATH="channel/queue.json"
 #
 #   0  send it — nothing blocking is pending, the pending surface is somebody else's
 #      kind, the queue could not be read, the envelope carries `commands` and so is an
-#      edit rather than an answer, or the envelope is a usable ruling
-#   1  refuse it — the reason is on stdout
+#      edit rather than an answer, or the envelope is a usable ruling echoing the token
+#   1  refuse it — it cannot be a ruling at all; why is on stdout
+#   2  refuse it — it is a ruling that does not echo the pending question's token, so
+#      the waiting wrapper would read it as another reader's; the token to echo is on
+#      stdout
 #
-# `ruling_refusal` is `scripts/ask-manager-contract.sh`'s and is embedded above this by
-# the caller; see that file for why it is not restated here.
+# Two statuses rather than one because the repair differs and the manager is still
+# there to make it: a missing `completion` is an envelope to rewrite, and a missing
+# token is the same envelope with one string added to its `message`.
+#
+# `ruling_refusal`, `pending_token` and `answer_echoes` are
+# `scripts/ask-manager-contract.sh`'s and are embedded above this by the caller; see
+# that file for why they are not restated here.
 GUARD_PROGRAM='
 import json, sys
 
@@ -92,7 +96,10 @@ pending = queue.get("pending") if isinstance(queue, dict) else None
 if not isinstance(pending, dict) or pending.get("blocking") is not True:
     sys.exit(0)
 waiting = pending.get("message")
-if not isinstance(waiting, str) or prefix not in waiting:
+if not isinstance(waiting, str):
+    sys.exit(0)
+token = pending_token(waiting, prefix)
+if token is None:
     sys.exit(0)
 try:
     sent = json.loads(envelope)
@@ -101,10 +108,13 @@ except ValueError:
 if isinstance(sent, dict) and "commands" in sent:
     sys.exit(0)
 refusal = ruling_refusal(envelope)
-if refusal is None:
-    sys.exit(0)
-sys.stdout.write(refusal)
-sys.exit(1)
+if refusal is not None:
+    sys.stdout.write(refusal)
+    sys.exit(1)
+if not answer_echoes(envelope, token):
+    sys.stdout.write(token)
+    sys.exit(2)
+sys.exit(0)
 '
 
 fail() {
@@ -179,14 +189,18 @@ runs_root="${!RUNS_ROOT_ENV:-$DEFAULT_RUNS_ROOT}"
 guard_status=0
 # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
 if [[ "$run" =~ $ASK_MANAGER_SAFE_REFERENCE ]]; then
-    refusal=$("$python" -c "$ASK_MANAGER_RULING_SOURCE$GUARD_PROGRAM" \
+    guard_said=$("$python" -c "$ASK_MANAGER_RULING_SOURCE$ASK_MANAGER_TOKEN_SOURCE$GUARD_PROGRAM" \
         "$runs_root/$run/$QUEUE_PATH" "$ASK_MANAGER_TOKEN_PREFIX" <"$staged") || guard_status=$?
 fi
 case "$guard_status" in
     0) ;;
     1)
-        fail "run $run is waiting on an agent's blocking question and this envelope cannot answer it: $refusal" \
+        fail "run $run is waiting on an agent's blocking question and this envelope cannot answer it: $guard_said" \
             "that question came from the ask-manager wrapper, which acts only on a JSON object carrying a boolean 'completion' and discards anything else without saying so — send one, echoing the question's token in its 'message'; the question is still pending"
+        ;;
+    2)
+        fail "run $run is waiting on an agent's blocking question and this envelope does not echo that question's correlation token, so the agent waiting on it would read the answer as another reader's and discard it" \
+            "put $guard_said verbatim into the reply's 'message' and send it again; the question is still pending"
         ;;
     *)
         # Reachable only when the judging helper itself could not run — a broken or

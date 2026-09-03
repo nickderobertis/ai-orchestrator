@@ -235,6 +235,7 @@ def answer_persistently(
     *,
     seconds: float = MANAGER_PATIENCE_SECONDS,
     seen: list[Surface] | None = None,
+    send: Send | None = None,
 ) -> None:
     """Answer this run's blocking question, and keep answering until somebody stops.
 
@@ -255,8 +256,14 @@ def answer_persistently(
     recorded into `seen` where a caller asks for them, exactly as `answer_each` records
     the ones it read: a journey counting what one ask put in front of a manager has to
     count the ones this read too, or the answer depends on which manager it hired.
+
+    `send` is `answer_each`'s seam and is here for the same reason: a journey whose
+    subject is an envelope `just channel-reply` refuses to send needs the engine
+    underneath it, and re-sending an envelope the recipe refuses would re-send nothing
+    at all — which reads from the asking side as a manager who never answered.
     """
     limit = deadline(seconds)
+    sending = reply if send is None else send
     token: str | None = None
     while not stopping.is_set():
         if time.monotonic() >= limit:
@@ -271,7 +278,7 @@ def answer_persistently(
         if found is not None:
             token = found.group(0)
         if token is not None:
-            reply(run, environment, compose(token))
+            sending(run, environment, compose(token))
         time.sleep(0.2)
 
 
@@ -291,12 +298,13 @@ class PersistentManager:
         compose: Callable[[str], str],
         *,
         seconds: float = MANAGER_PATIENCE_SECONDS,
+        send: Send | None = None,
     ) -> None:
         self._failures: list[BaseException] = []
         self._surfaces: list[Surface] = []
         self._stopping = threading.Event()
         self._thread = threading.Thread(
-            target=self._play, args=(run, environment, compose, seconds), daemon=True
+            target=self._play, args=(run, environment, compose, seconds, send), daemon=True
         )
         self._thread.start()
 
@@ -306,10 +314,17 @@ class PersistentManager:
         environment: dict[str, str],
         compose: Callable[[str], str],
         seconds: float,
+        send: Send | None,
     ) -> None:
         try:
             answer_persistently(
-                run, environment, compose, self._stopping, seconds=seconds, seen=self._surfaces
+                run,
+                environment,
+                compose,
+                self._stopping,
+                seconds=seconds,
+                seen=self._surfaces,
+                send=send,
             )
         except BaseException as error:  # noqa: BLE001 - re-raised by `checked` below
             self._failures.append(error)

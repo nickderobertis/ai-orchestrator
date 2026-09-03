@@ -21,6 +21,7 @@ seam nowhere at all, unnoticed for every run this host had ever driven.
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 from orchestrator.root import REPO_ROOT
 
@@ -52,8 +53,29 @@ CONTRACT_CONSUMERS = (
     REPO_ROOT / "scripts" / "ask-manager.sh",
     REPO_ROOT / "scripts" / "channel-reply.sh",
 )
-RULING_SOURCE_DECLARATION = "ASK_MANAGER_RULING_SOURCE='"
-RULING_SOURCE_USE = "$ASK_MANAGER_RULING_SOURCE"
+
+
+#: The two rules both ends embed, and the two names each is reached by. Two rather than
+#: one because being a ruling and echoing the pending question's token are separate
+#: properties of an envelope, and an end that read only the first would wave through the
+#: well-formed decision the other end then discards as another reader's.
+class ContractRule(NamedTuple):
+    """One shared rule, by the two names it is reached under.
+
+    Named rather than positional because the two are not interchangeable: one is how the
+    contract file *declares* the rule and the other is how a consumer *embeds* it, and a
+    gate that compared the wrong one against the wrong file would pass while the two ends
+    drifted apart.
+    """
+
+    declaration: str
+    use: str
+
+
+CONTRACT_RULES = (
+    ContractRule("ASK_MANAGER_RULING_SOURCE='", "$ASK_MANAGER_RULING_SOURCE"),
+    ContractRule("ASK_MANAGER_TOKEN_SOURCE='", "$ASK_MANAGER_TOKEN_SOURCE"),
+)
 
 #: The journeys that measure what each launch shape hands a dispatch, and the shape
 #: their list of required inputs is written in. Read textually rather than imported: it
@@ -232,20 +254,23 @@ def test_both_ends_of_the_channel_read_one_statement_of_what_a_reply_must_carry(
 
     Two processes judge the same envelope minutes apart and at opposite ends of the
     channel: `just channel-reply` decides whether what is being sent can answer the
-    question waiting, and `scripts/ask-manager.sh` decides whether what came back is a
-    ruling it may act on. A second copy of that rule fails in the direction nobody sees
+    question waiting, and `scripts/ask-manager.sh` decides whether what came back is an
+    answer it may act on. A second copy of either rule fails in the direction nobody sees
     — an envelope the recipe waved through and the wrapper then discarded is reported
     `delivered` and read by nobody, which is the whole failure the recipe was added to
-    close. So each consumer must *embed* the shared source rather than restate it, and
-    the token prefix a pending question is recognized by must live in one file.
+    close, and it has arrived by both doors: once through a reply that was no ruling, and
+    once through a ruling that echoed no token. So each consumer must *embed* both shared
+    sources rather than restate either, and the token prefix a pending question is
+    recognized by must live in one file.
     """
     shared = CONTRACT_HELPER.read_text(encoding="utf-8")
     prefix = SHELL_TOKEN_PREFIX.search(shared)
     assert prefix is not None, f"{CONTRACT_HELPER.name} declares no ASK_MANAGER_TOKEN_PREFIX"
-    assert RULING_SOURCE_DECLARATION in shared, (
-        f"{CONTRACT_HELPER.name} no longer declares {RULING_SOURCE_DECLARATION}, which is "
-        "the rule both ends of the channel embed"
-    )
+    for rule in CONTRACT_RULES:
+        assert rule.declaration in shared, (
+            f"{CONTRACT_HELPER.name} no longer declares {rule.declaration}, which is one of "
+            "the rules both ends of the channel embed"
+        )
 
     grammar = SHELL_GRAMMAR.search(shared)
     assert grammar is not None, f"{CONTRACT_HELPER.name} declares no reference grammar"
@@ -256,10 +281,11 @@ def test_both_ends_of_the_channel_read_one_statement_of_what_a_reply_must_carry(
             f"scripts/{consumer.name} no longer sources {CONTRACT_HELPER.name}, so what it "
             "treats as a usable reply is its own opinion rather than the one rule"
         )
-        assert RULING_SOURCE_USE in written, (
-            f"scripts/{consumer.name} no longer embeds {RULING_SOURCE_USE} in the program "
-            "it judges with, so it decides usability some other way"
-        )
+        for rule in CONTRACT_RULES:
+            assert rule.use in written, (
+                f"scripts/{consumer.name} no longer embeds {rule.use} in the program it "
+                "judges with, so it decides usability some other way"
+            )
 
     for what, value in (
         ("correlation-token prefix", prefix.group("prefix")),

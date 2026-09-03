@@ -79,3 +79,57 @@ def ruling_refusal(raw):
         )
     return None
 '
+
+#: The other half of that rule, and the half a well-formed envelope can still fail: an
+#: answer is *this* question's only when it echoes the correlation token the question
+#: carries. Stated here for the same reason the ruling rule is — two processes decide it
+#: minutes apart at opposite ends of the channel, and a second copy is what would let the
+#: recipe wave through an envelope the wrapper then discards in silence.
+#:
+#: `pending_token` reads what a surface asks to be echoed; `answer_echoes` decides
+#: whether an envelope carries it. Both are embedded beside `ASK_MANAGER_RULING_SOURCE`
+#: rather than folded into it, because they answer a different question about a
+#: different pair of inputs and a caller that wants one may not want the other.
+# shellcheck disable=SC2034  # read by the sourcing script, not by this file
+ASK_MANAGER_TOKEN_SOURCE='
+import json
+
+
+def pending_token(message, prefix):
+    """The token a pending surface asks an answer to echo, or None when it carries none.
+
+    A token is the declared prefix together with the value following it, through the end
+    of that line — the whole of what a question asks for back, rather than the half that
+    varies, so that both ends compare the same bytes. Whatever is on that line is the
+    token: a surface carrying the prefix is a question this reader must guard, and
+    holding the value to a shape as well would let a surface it did not recognize pass a
+    reply through unjudged, which is the silence the guard exists to close.
+
+    The first marked line is the only one asked, which is why scripts/ask-manager.sh
+    states its protocol at the head of the surface: below the body, a question quoting an
+    older token would decide what an answer has to echo, and the guard would demand the
+    wrong one.
+    """
+    for line in message.splitlines():
+        _, marked, rest = line.partition(prefix)
+        if marked:
+            return prefix + rest.strip()
+    return None
+
+
+def answer_echoes(raw, token):
+    """Whether this envelope answers the question that minted the given token.
+
+    Read from the one field that scripts/ask-manager.sh takes the text of an answer
+    out of: an envelope echoing the token anywhere else is one that wrapper would
+    discard, so echoing it anywhere else is not echoing it.
+    """
+    try:
+        answer = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(answer, dict):
+        return False
+    message = answer.get("message")
+    return isinstance(message, str) and token in message
+'

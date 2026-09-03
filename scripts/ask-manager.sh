@@ -141,12 +141,16 @@ TIMEOUT_REASON="the channel timed out waiting for a verdict"
 
 #: What a correlation token looks like on the wire. The prefix is
 #: `scripts/ask-manager-contract.sh`'s, sourced above, because `just channel-reply` now
-#: recognizes a pending question by it too; the rest is here, for the three uses that
-#: would otherwise drift apart: the token this question mints, the pattern that decides
-#: a drawn ruling echoes *somebody else's*, and `tests/e2e/planner_channel.py`'s `TOKEN`,
-#: which is what a manager is played by. `tests/test_planner_seam_contracts.py`
-#: reconciles this with that one, because a classifier reading a shape the minter stopped
-#: producing would call every foreign answer this question's own.
+#: recognizes a pending question by it too; the rest is here, and stays here, because it
+#: is what this wrapper *mints* and classifies by rather than anything the two ends agree
+#: on — the reply recipe reads a pending surface's token as whatever follows the prefix,
+#: and holding that to a shape would let a surface it did not recognize pass a reply
+#: through unjudged. Three uses would otherwise drift apart: the token this question
+#: mints, the pattern that decides a drawn ruling echoes *somebody else's*, and
+#: `tests/e2e/planner_channel.py`'s `TOKEN`, which is what a manager is played by.
+#: `tests/test_planner_seam_contracts.py` reconciles this with that one, because a
+#: classifier reading a shape the minter stopped producing would call every foreign
+#: answer this question's own.
 TOKEN_BYTES=12
 TOKEN_PATTERN="${ASK_MANAGER_TOKEN_PREFIX}[0-9a-f]{24}(?![0-9a-f])"
 
@@ -181,10 +185,14 @@ for message, blocking in ((sys.stdin.read(), True), (sys.argv[1], False)):
 # answer. Exit codes rather than a printed verdict, so the shell branches on a status
 # and stdout stays the manager message on the one path that has one.
 #
-# Whether an answer is a ruling at all is `scripts/ask-manager-contract.sh`'s to say,
-# embedded above rather than restated: `just channel-reply` refuses an envelope this
-# would discard, and a second copy of the condition is what would let the two ends
-# disagree about which replies are usable.
+# Neither half of what makes an answer this question's is decided here. Whether an
+# envelope is a ruling at all, and whether it echoes the token this question minted, are
+# both `scripts/ask-manager-contract.sh`'s to say and are embedded above rather than
+# restated: `just channel-reply` refuses an envelope this would discard, and a second
+# copy of either condition is what would let the two ends disagree about which replies
+# are usable. What stays here is the reading of a token that is somebody *else's*, which
+# is this wrapper's own question about which repair it needs rather than a rule the two
+# ends share.
 #
 #   0  this question's answer, on stdout
 #   10 the channel answered its own timeout
@@ -198,7 +206,7 @@ for message, blocking in ((sys.stdin.read(), True), (sys.argv[1], False)):
 # again. A ruling echoing none was the manager answering this very surface without the
 # echo, which consumed it — and a run with no blocking surface left pending stops
 # accepting replies at all, so that case has to put the question back.
-CLASSIFY_PROGRAM="$ASK_MANAGER_RULING_SOURCE"'
+CLASSIFY_PROGRAM="$ASK_MANAGER_RULING_SOURCE$ASK_MANAGER_TOKEN_SOURCE"'
 import json, re, sys
 
 timeout_reason, token, foreign = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -210,12 +218,12 @@ if ruling_refusal(raw) is not None:
 answer = json.loads(raw)
 if answer.get("reason") == timeout_reason:
     sys.exit(10)
-message = answer.get("message")
-if not isinstance(message, str) or token not in message:
+if not answer_echoes(raw, token):
     sys.stdout.write(excerpt)
+    message = answer.get("message")
     somebody_elses = isinstance(message, str) and re.search(foreign, message)
     sys.exit(12 if somebody_elses else 13)
-sys.stdout.write(message)
+sys.stdout.write(answer["message"])
 '
 
 fail() {
@@ -348,16 +356,24 @@ minted=$(od -An -N"$TOKEN_BYTES" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') ||
     "check that the 'od' and 'tr' first on this PATH behave as coreutils' do, then ask again"
 token="$ASK_MANAGER_TOKEN_PREFIX$minted"
 
-asked="$question
+# The protocol leads and the question follows, which is deliberate and is the half of
+# this surface a truncating reader must keep. Appended after the body it was the first
+# thing a reader that cut the message lost — and losing it loses the one thing that
+# decides whether the answer can be matched at all, leaving a manager to write a reply
+# nothing can claim. Leading with it also settles which token a reader extracts: the
+# rule in scripts/ask-manager-contract.sh takes the first line carrying the prefix, and
+# at the head that line is this wrapper's rather than anything the question quotes.
+asked="An agent working on run $run is blocked on the question below until you answer it.
+Reply with 'just channel-reply $run', sending a JSON object that carries a boolean
+'completion' and states your decision in its 'message' — and echo this token verbatim
+inside that 'message', so your answer is matched to this question rather than to another
+reader. A reply on this channel is claimed by whichever reader reaches it next, so an
+answer that does not carry the token is treated as somebody else's and a listener
+re-arms. The token to echo:
+$token
 
 --
-This question was asked by an agent working on run $run, which is blocked until you
-answer. Reply with 'just channel-reply $run' and include this token verbatim in your
-reply's message, so your answer is matched to this question rather than to another
-reader: $token
-
-A reply on this channel is claimed by whichever reader reaches it next, so an answer
-that does not carry the token is treated as somebody else's and a listener re-arms."
+$question"
 
 # What a re-arm says, and why it is deliberately not the question a second time. The
 # question is already pending as this run's one blocking surface and stays the thing to
@@ -365,15 +381,17 @@ that does not carry the token is treated as somebody else's and a listener re-ar
 # still rides along, because a manager who answers here anyway has to be matched to the
 # question rather than to another reader — but nothing here asks them to.
 rearmed="A listener re-armed on run $run. This note needs no answer of its own.
+If you answer here regardless, echo this token verbatim inside your reply's 'message',
+so your answer is matched to the pending question rather than to another reader:
+$token
 
+--
 An agent's blocking question is already pending on this channel and is still the surface
 to answer. The listener waiting for that answer was handed a ruling addressed to another
 reader instead — a reply here is claimed by whichever reader reaches one next — so it is
 waiting again, and it is what will receive the answer to the pending question.
 
-Answer the question, not this note. If you answer here regardless, include this token
-verbatim so your answer is matched to that question rather than to another reader:
-$token"
+Answer the question, not this note."
 
 # Each helper is checked rather than left to `set -e`, which would exit with whatever
 # the helper printed and no repair — the one shape of failure this wrapper exists to
