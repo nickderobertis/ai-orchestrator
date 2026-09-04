@@ -313,11 +313,105 @@ OWN_PROVISIONING = 'REPO_ROOT / "scripts" / "session-setup.sh"'
 #: access to it, and the module-level tuple that spreads the same pair.
 SHARED_INSTALL_DECORATOR = "shares_workspace_install"
 
-#: The modules whose journeys wait on a deadline they do not control while every step
-#: they take is a `just` recipe — a wrapper process and a manager thread both blocking
-#: on `uv run`, which waits on the very lock a journey re-provisioning this checkout
-#: holds. They are the readers; the scan above finds the writers.
-DEADLINE_CHANNEL_MODULES = ("test_ask_manager_e2e.py", "test_launch_ask_seam_e2e.py")
+#: What begins driving a run: `onepipeline start` drives a DAG to settlement and
+#: `adopt` attaches a fresh driver to one. Written out here rather than parsed out of
+#: the launcher's shell, and reconciled against it by
+#: :func:`test_the_launch_verbs_this_scan_looks_for_are_the_launchers_own` — the drift
+#: gate, so a verb added to or dropped from `scripts/onepipeline.sh` fails there rather
+#: than leaving this scan quietly looking for a launch surface that has moved. Which
+#: scripts and which recipes *reach* those verbs stays derived, so a launcher added,
+#: renamed, or dropped anywhere on that path moves the answer on its own.
+LAUNCH_VERBS = ("start", "adopt")
+
+REACHES_A_LAUNCH = re.compile(rf"onepipeline\.sh\"?\s+(?:{'|'.join(LAUNCH_VERBS)})\b")
+
+#: The launcher whose own `case` arm decides which verbs are a launch, and the shape of
+#: a `case` arm in it. The arm is matched rather than the verbs, so the gate below reads
+#: whatever that script now lists instead of looking for what this module expects.
+LAUNCHER = "scripts/onepipeline.sh"
+CASE_ARM = re.compile(r"^ +([a-z][a-z-]*(?: *\| *[a-z][a-z-]*)*)\)$", re.MULTILINE)
+
+#: The `just` recipe this repository documents as *the* launch, asserted below so that a
+#: `JUST_RECIPE` which has stopped matching recipe bodies fails on a named absence
+#: rather than on an empty set that also looks like a launch surface having gone.
+DOCUMENTED_LAUNCH_RECIPE = "orchestrate"
+
+JUST_RECIPE = re.compile(r"^([a-z][a-z0-9-]*)[^\n:]*:\n((?:[ \t]+.*\n?)*)", re.MULTILINE)
+
+
+def _launching_recipes() -> frozenset[str]:
+    """Every `just` recipe whose body reaches a launch, directly or through one script.
+
+    Two levels rather than every level, because `just plan` reaches the engine through
+    a script of its own rather than on its recipe line, and that is as far as this
+    follows: a recipe reaching a launch through a second script it does not itself name
+    is not found here. That bound is what the scan can establish from the files it
+    reads, and it is stated because the answer reads like a complete one. A module that
+    types one of these recipe names is a reader
+    of the toolchain the writers above rewrite: every step of the round trip it then
+    waits on is a `just` recipe blocking on `uv run`, which waits on the very lock a
+    journey re-provisioning this checkout holds.
+    """
+    indirect = {
+        f"scripts/{script.name}"
+        for script in sorted(REPO_ROOT.joinpath("scripts").glob("*.sh"))
+        if REACHES_A_LAUNCH.search(script.read_text(encoding="utf-8"))
+    }
+    launches = re.compile(
+        "|".join([REACHES_A_LAUNCH.pattern, *(re.escape(path) for path in sorted(indirect))])
+    )
+    recipes = JUST_RECIPE.findall((REPO_ROOT / "justfile").read_text(encoding="utf-8"))
+    return frozenset(name for name, body in recipes if launches.search(body))
+
+
+def _names_a_launch(tree: ast.AST, recipes: frozenset[str]) -> bool:
+    """Whether this tree's syntax names one of those recipes in a `just` invocation.
+
+    Named for what it can establish, which is that the verb is *written* in one of those
+    shapes rather than that it is reached. It reads syntax, so it cannot tell an argv
+    list that is executed from one that is only built — and it deliberately does not try:
+    a false positive pins one test to a worker that was already carrying the module,
+    and a false negative is the defect this whole check exists to catch.
+
+    Read from the syntax rather than from a name, so that neither half is a convention
+    a module can drift out of. Both spellings the journeys use are the same shape:
+    `just("orchestrate", ...)` and `_just("orchestrate", ...)` pass the verb as the
+    first positional argument of a call to a just-runner, and `_attached(["just",
+    "plan", ...])` passes it as the second word of an argv list. Matching the verb as a
+    bare string instead would match every line of prose that names one.
+    """
+    for node in ast.walk(tree):
+        match node:
+            case ast.Call(
+                func=ast.Name(id=str(called)) | ast.Attribute(attr=str(called)),
+                args=[ast.Constant(value=str(verb)), *_],
+            ) if called.lstrip("_") == "just" and verb in recipes:
+                return True
+            case ast.List(elts=[ast.Constant(value="just"), ast.Constant(value=str(verb)), *_]) if (
+                verb in recipes
+            ):
+                return True
+    return False
+
+
+def _modules_naming_a_launch(root: str, recipes: frozenset[str]) -> list[str]:
+    """Every test module under `root` whose syntax names a launch, by file name.
+
+    Per module rather than per test, because a launch is not a property of the body that
+    types it. `asked` in `tests/ask_seam/test_ask_manager_e2e.py` is function-scoped and
+    spends a real `just orchestrate` for every test that names it, refusal journeys
+    included; the launch fixtures in `tests/ask_seam/test_launch_ask_seam_e2e.py` are
+    module-scoped, so they run once per worker that receives *any* test from there. In
+    both directions the module is what carries the cost, and a test that looks inert
+    beside them is scattered by `--dist loadgroup` onto a worker where it launches a run
+    anyway.
+    """
+    return [
+        module.name
+        for module in sorted(REPO_ROOT.joinpath(root).rglob("test_*.py"))
+        if _names_a_launch(ast.parse(module.read_text(encoding="utf-8")), recipes)
+    ]
+
 
 #: A pytest plugin that records the xdist group each *collected* test resolves to.
 #: Read from a collection rather than from the source, because the group is what an
@@ -420,6 +514,35 @@ def _module_scope_checkout_writers() -> dict[str, str]:
     return found
 
 
+def test_the_launch_verbs_this_scan_looks_for_are_the_launchers_own() -> None:
+    """`LAUNCH_VERBS` is a restatement, so this is the gate that keeps it honest.
+
+    `scripts/onepipeline.sh` decides which verbs are a launch — its own comment calls
+    them "every shape of launch this repository has" — and it decides it in a `case`
+    arm, which is where the credentials and the ask seam are exported. Reading that arm
+    here rather than re-deriving the scan from it keeps the shell out of
+    :data:`REACHES_A_LAUNCH`, and still fails the day a third shape of launch is added
+    or one of these two stops being one.
+
+    The arm is required to be the file's only one, because "the first arm" would make
+    which arm was read a silent choice: a `case` added above it would move this gate
+    onto a different question while it went on passing.
+    """
+    launcher = REPO_ROOT / LAUNCHER
+    arms = CASE_ARM.findall(launcher.read_text(encoding="utf-8"))
+    assert len(arms) == 1, (
+        f"{LAUNCHER} carries {len(arms)} `case` arm(s) — {arms} — where this gate reads "
+        "exactly one, so which of them decides a launch is no longer unambiguous"
+    )
+
+    declared = frozenset(verb.strip() for verb in arms[0].split("|"))
+    assert declared == frozenset(LAUNCH_VERBS), (
+        f"{LAUNCHER} treats {sorted(declared)} as a launch while this module scans for "
+        f"{sorted(LAUNCH_VERBS)}; correct `LAUNCH_VERBS`, because a verb missing from it "
+        "leaves every journey that spends that launch free to scatter across workers"
+    )
+
+
 def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
     tmp_path: Path,
 ) -> None:
@@ -486,26 +609,50 @@ def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
     group, but that every one of them resolves to the same one.
 
     Read off a real collection, so the assertion is about the items the scheduler will
-    see rather than about how any of them happens to be spelled. A test in those modules
-    that declares no group is out of scope *here* rather than a failure: those are the
-    refusal journeys, which launch no run and wait on no deadline. What may not happen is
-    one of them naming a *second* group.
+    see rather than about how any of them happens to be spelled. The readers are found
+    the same way — which modules name a launching `just` recipe, over the recipes
+    derived from the `justfile` — so what may scatter is decided by something this check
+    reads.
 
-    That allowance is about test bodies and reaches no further, which is the distinction
-    it cost a refused push to learn: a module whose *setup* writes this checkout
-    constrains every test in it whatever their bodies do, and
-    :func:`test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker` is what
-    refuses an ungrouped test there.
+    Inside a module that names one, nothing may scatter, whatever its tests look like.
+    The premise this replaces allowed an ungrouped test there on the ground that the
+    refusal journeys launch no run: their bodies do not, and their fixtures do. Asking
+    what a test's *body* does is the same mistake
+    :func:`test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker` records.
     """
     groups = _collected_groups(tmp_path)
+    recipes = _launching_recipes()
+    assert DOCUMENTED_LAUNCH_RECIPE in recipes, (
+        f"`just {DOCUMENTED_LAUNCH_RECIPE}` is the launch this repository documents, and "
+        f"this scan did not find it among {sorted(recipes)}: either the recipe stopped "
+        f"reaching /{REACHES_A_LAUNCH.pattern}/, or `JUST_RECIPE` has stopped reading "
+        "recipe bodies out of the justfile"
+    )
+
+    launching = _modules_naming_a_launch(ASK_SEAM_ROOT, recipes)
+    assert launching, (
+        f"no test module under {ASK_SEAM_ROOT} names {sorted(recipes)}; that is the whole "
+        "of what those journeys do, so finding none means this scan has stopped matching "
+        "rather than that the constraint has lifted"
+    )
+
     readers = {
         node: group
         for node, group in groups.items()
-        if group and any(f"/{module}::" in node for module in DEADLINE_CHANNEL_MODULES)
+        if any(f"/{module}::" in node for module in launching)
     }
     assert readers, (
-        f"no test collected from {DEADLINE_CHANNEL_MODULES} declares an xdist group, so "
-        "nothing there is serialised against the journeys that re-provision this checkout"
+        f"{launching} name a launch but collected no tests, so nothing there is "
+        "serialised against the journeys that re-provision this checkout"
+    )
+
+    scattered = sorted(node for node, group in readers.items() if not group)
+    assert not scattered, (
+        f"these are collected from {launching}, which launch runs through `just "
+        f"{'`/`just '.join(sorted(recipes))}`, and declare no xdist group — so "
+        f"`--dist loadgroup` scatters them across workers, where each spends a real "
+        f"launch beside the journeys that are polling `just` recipes through the `uv` "
+        f"lock it holds: {scattered}"
     )
 
     writers = {

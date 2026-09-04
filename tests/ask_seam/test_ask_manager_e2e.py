@@ -535,11 +535,11 @@ def _finish(
         return asking.returncode, out, err
 
 
-#: Every journey that drives the live channel is pinned to one worker. Not because the
-#: channel is shared — each launches its own run under its own runs root — but because
-#: each one is a wrapper process and a manager thread both waiting on `just` recipes,
-#: and four of those racing the rest of a full suite is what turned a several-second
-#: round trip into one that outlived the window it was given.
+#: Every journey in this module is pinned to one worker. Not because the channel is
+#: shared — each launches its own run under its own runs root — but because each one is
+#: a wrapper process and a manager thread both waiting on `just` recipes, and four of
+#: those racing the rest of a full suite is what turned a several-second round trip into
+#: one that outlived the window it was given.
 #:
 #: `tests/e2e/nx_workspace.py`'s group, because every one of those `just` recipes
 #: reaches its tool through `uv run`, which waits on the exclusive lock a journey
@@ -548,6 +548,14 @@ def _finish(
 #: another worker, which is not a constraint at all: `--dist loadgroup` serialises one
 #: group name, never two.
 CHANNEL_GROUP = SHARED_TOOLCHAIN_GROUP
+
+#: Applied to the module rather than per journey, because what has to be serialised is
+#: launching a run and `asked` is what launches one — function-scoped, so the refusal
+#: journeys spend a real `just orchestrate` and `just stop` exactly as the round trips
+#: do, however inert their bodies read. One `pytestmark` rather than a decorator per
+#: test, so a journey added here cannot miss it; `tests/test_nx_cache_scope.py` holds
+#: the rule and records what an ungrouped one cost.
+pytestmark = pytest.mark.xdist_group(CHANNEL_GROUP)
 
 
 def _waited_for_question(
@@ -593,7 +601,6 @@ ANSWER = "Key it on the whole workspace; the narrower key would replay a stale v
 PROTOCOL_SEPARATOR = "\n--\n"
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_wrapper_answers_with_the_managers_message_and_nothing_else(asked: Asked) -> None:
     """The happy round trip: an agent asks, a manager answers, the agent reads the answer.
 
@@ -614,7 +621,6 @@ def test_the_wrapper_answers_with_the_managers_message_and_nothing_else(asked: A
     assert err == "", f"a successful ask reported something on stderr:\n{err}"
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_round_trip_survives_a_differently_pinned_tool_at_the_once_shared_path(
     asked: Asked,
 ) -> None:
@@ -661,7 +667,6 @@ def test_the_round_trip_survives_a_differently_pinned_tool_at_the_once_shared_pa
     assert TOKEN.sub("", out).strip() == ANSWER, out
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_channels_own_timeout_ruling_is_refused_rather_than_returned(asked: Asked) -> None:
     """A synthesized verdict is worse than no verdict, because it is actionable.
 
@@ -685,7 +690,6 @@ def test_the_channels_own_timeout_ruling_is_refused_rather_than_returned(asked: 
     assert "synthesized its own ruling" in err and "no manager answered" in err, err
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
     asked: Asked,
 ) -> None:
@@ -756,7 +760,6 @@ def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_ruling_carrying_the_token_but_no_decision_is_refused(asked: Asked) -> None:
     """Echoing the token does not make an envelope a ruling.
 
@@ -785,7 +788,6 @@ def test_a_ruling_carrying_the_token_but_no_decision_is_refused(asked: Asked) ->
     assert "is not a ruling" in err, err
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_ruling_addressed_to_another_reader_is_re_asked_rather_than_returned(
     asked: Asked,
 ) -> None:
@@ -879,7 +881,6 @@ def _pending(asked: Asked) -> dict[str, object] | None:
     return cast(dict[str, object] | None, json.loads(queue.read_text(encoding="utf-8"))["pending"])
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_an_envelope_the_pending_question_cannot_use_is_refused_where_it_is_sent(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -994,7 +995,6 @@ def _unechoing_rulings(token: str) -> tuple[UnechoingRuling, ...]:
 REPLY_ROUTES = ("on stdin", "from a file")
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_ruling_that_does_not_echo_the_pending_questions_token_is_refused_where_it_is_sent(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -1058,7 +1058,6 @@ def test_a_ruling_that_does_not_echo_the_pending_questions_token_is_refused_wher
     assert TOKEN.sub("", out).strip() == ANSWER, out
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_live_edit_still_reaches_the_graph_while_a_question_is_pending(
     asked: Asked,
 ) -> None:
@@ -1100,7 +1099,6 @@ def test_a_live_edit_still_reaches_the_graph_while_a_question_is_pending(
 QUOTED_TOKEN = f"ask-manager-token:{'b' * 24}"
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_token_a_reply_must_echo_is_the_one_at_the_head_of_the_surface(
     asked: Asked,
 ) -> None:
@@ -1214,7 +1212,6 @@ def _asked_by_another_minter(asked: Asked, question: str) -> subprocess.Popen[st
     return serving
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_question_whose_token_this_checkout_could_not_mint_is_still_guarded(
     asked: Asked,
 ) -> None:
@@ -1300,7 +1297,6 @@ def _compare_both_routes(asked: Asked, state: str) -> None:
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_reply_with_no_blocking_question_pending_behaves_as_it_did_before(
     asked: Asked,
 ) -> None:
@@ -1370,7 +1366,6 @@ def _stranded_answer(asked: Asked, question: str) -> str:
     return found.group(0)
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arms(
     asked: Asked,
 ) -> None:
@@ -1441,7 +1436,6 @@ def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arm
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_frame_the_channel_refuses_is_fatal_rather_than_retried(asked: Asked) -> None:
     """A refused submission is a cause to report, not a condition to wait out.
 
@@ -1469,7 +1463,6 @@ def test_a_frame_the_channel_refuses_is_fatal_rather_than_retried(asked: Asked) 
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_wrapper_sets_a_reply_window_longer_than_the_published_default(asked: Asked) -> None:
     """The window is the wrapper's own, and not a thing a caller has to remember.
 
@@ -1494,7 +1487,6 @@ def test_the_wrapper_sets_a_reply_window_longer_than_the_published_default(asked
         _reaped(asking)
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_question_reaches_the_manager_as_the_surface_they_read(asked: Asked) -> None:
     """What the manager reads is how to answer, and then the agent's question.
 
@@ -1528,7 +1520,6 @@ def test_the_question_reaches_the_manager_as_the_surface_they_read(asked: Asked)
         _reaped(asking)
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_question_of_several_words_reaches_the_manager_whole(asked: Asked) -> None:
     """An unquoted question is joined rather than truncated at its first word.
 
@@ -1544,7 +1535,6 @@ def test_a_question_of_several_words_reaches_the_manager_whole(asked: Asked) -> 
         _reaped(asking)
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_an_explicitly_named_onepipeline_is_the_one_that_reaches_the_manager(
     asked: Asked,
 ) -> None:
@@ -1571,7 +1561,6 @@ def test_an_explicitly_named_onepipeline_is_the_one_that_reaches_the_manager(
         _reaped(asking)
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_the_question_can_be_piped_in_or_read_from_a_file(asked: Asked, tmp_path: Path) -> None:
     """All three input forms reach the same surface, so a long question needs no quoting.
 
@@ -1662,7 +1651,6 @@ def _as_a_dispatch(asked: Asked, tmp_path: Path) -> Dispatched:
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_question_asked_from_a_lifecycle_worktree_reaches_its_own_runs_channel(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -1709,7 +1697,6 @@ UNINFORMATIVE_SCRATCH: dict[str, Callable[[Path], str | None]] = {
 }
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 @pytest.mark.parametrize("shape", sorted(UNINFORMATIVE_SCRATCH))
 def test_a_dispatch_whose_environment_names_no_run_store_is_refused_rather_than_guessed_at(
     asked: Asked, tmp_path: Path, shape: str
@@ -1747,7 +1734,6 @@ def test_a_dispatch_whose_environment_names_no_run_store_is_refused_rather_than_
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_runs_root_that_does_not_hold_this_run_is_passed_over_for_the_dispatchs_own(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -1784,7 +1770,6 @@ def test_a_runs_root_that_does_not_hold_this_run_is_passed_over_for_the_dispatch
     assert TOKEN.sub("", out).strip() == WORKTREE_ANSWER, out
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_every_way_of_asking_from_a_worktree_still_reads_the_callers_own_files(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -2027,6 +2012,9 @@ def dispatched_turns(
     try:
         assert launch.returncode == 0, f"the launch did not settle:\n{launch.stdout}{launch.stderr}"
         assert turns.is_file(), f"no harness turn was recorded at {turns}"
+        # `cast` rather than a validating read: `tests/e2e/fake_backend.py` writes these
+        # lines and `TurnRecord` states the two fields read off them, so a validator here
+        # would restate that stand-in's own shape and fail on a turn it grew a field for.
         return [
             cast(TurnRecord, json.loads(line))
             for line in turns.read_text(encoding="utf-8").splitlines()
@@ -2045,7 +2033,6 @@ def _turns_of(turns: list[TurnRecord], member: str) -> list[TurnRecord]:
     return found
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_dispatched_agent_is_given_the_run_it_belongs_to(
     dispatched_turns: list[TurnRecord],
 ) -> None:
@@ -2070,7 +2057,6 @@ def test_a_dispatched_agent_is_given_the_run_it_belongs_to(
     )
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_an_observer_member_cannot_tell_its_run_from_an_enclosing_one_by_that_variable(
     dispatched_turns: list[TurnRecord],
 ) -> None:
@@ -2166,7 +2152,6 @@ def test_a_checkout_without_the_shared_contract_is_refused_rather_than_judging_a
     assert "just bootstrap" in refused.stderr, refused.stderr
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_run_whose_channel_keeps_answering_other_readers_is_given_up_on(asked: Asked) -> None:
     """Re-asking is bounded, so a misrouted channel ends in a refusal rather than forever.
 
@@ -2273,7 +2258,6 @@ def _wrapper_in(scripts: Path) -> Path:
     ][0]
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_channel_that_answers_with_nothing_is_reported_rather_than_read_as_an_answer(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -2297,7 +2281,6 @@ def test_a_channel_that_answers_with_nothing_is_reported_rather_than_read_as_an_
     assert "closed without answering" in err, err
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_toolchain_that_cannot_judge_the_answer_says_so_rather_than_falling_through(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -2349,7 +2332,6 @@ exit 4
 """
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_question_that_cannot_be_encoded_is_refused_before_the_channel_is_reached(
     asked: Asked, tmp_path: Path
 ) -> None:
@@ -2397,7 +2379,6 @@ echo " AA BB CC DD EE FF AA BB CC DD EE FF"
 """
 
 
-@pytest.mark.xdist_group(CHANNEL_GROUP)
 def test_a_token_the_classifier_could_not_match_is_refused_before_anything_is_asked(
     asked: Asked, tmp_path: Path
 ) -> None:

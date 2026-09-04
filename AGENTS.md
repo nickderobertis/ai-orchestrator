@@ -3494,7 +3494,18 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   re-provision this checkout and the deadline-based channel journeys that wait on
   `uv run` while they do therefore spell that one constant, and
   `tests/test_nx_cache_scope.py::test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group`
-  reads the group each *collected* item resolves to and fails on a second name.
+  reads the group each *collected* item resolves to and fails on a second name — and on
+  an item that names none, wherever it was collected from a module that launches a run.
+  **Which module launches is read rather than listed**, from the syntax of a `just
+  orchestrate` or `just plan` call, because the question a body answers is the wrong
+  one: thirteen refusal journeys of `tests/ask_seam/test_ask_manager_e2e.py` looked
+  inert and every one of them took a function-scoped fixture that spends a real launch,
+  so `--dist loadgroup` scattered thirteen launches onto the workers whose round trips
+  were polling `just` recipes through the lock those launches held — which is how four
+  consecutive publication gates came to fail on branches touching none of it. It does
+  not account for every failure of that tier: an intermittent hang with the same
+  reported shape survives this repair and is scoped as separate work, so read a fresh
+  one as that rather than as this constraint having slipped.
 - **Tests are realistic, not mocked.** What this repository still owns is its
   command surface, so the suite drives the *real* `just` recipes, the real wrapper
   scripts, the real `oneharness` CLI, and real Nx. The published CLIs a recipe
