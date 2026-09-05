@@ -34,6 +34,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple, NewType
 
 import pytest
 from nx_workspace import WORKSPACE_INSTALL_MARKS
@@ -64,15 +65,20 @@ INSTALLED_BUNDLE = REPO_ROOT / "node_modules" / "onepipeline-ui"
 #: this host's own runs root is not reproducible: runs are added and reclaimed
 #: continuously, so a journey reading it would assert against a different tree on every
 #: invocation.
+#: A recorded run's own id, and a dispatched conversation's. Both are ordinary strings
+#: on the wire, and both are read by routes that take one or the other — so naming them
+#: apart is what stops a conversation id being handed to a route that wants a run.
+RunId = NewType("RunId", str)
+ConversationId = NewType("ConversationId", str)
 TIMELINE_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 #: The smallest recorded run still exhibiting the whole per-node tier — a node, its
 #: worker dispatch, and its gate run — which is what makes a 60KB fixture enough.
-RECORDED_RUN = "orchestrator-gate-fix-findings-2"
+RECORDED_RUN = RunId("orchestrator-gate-fix-findings-2")
 #: A second run, for the half the first one has no occasion to show: it published and
 #: it queued behind a lock, so it carries the `publication`, `lock-wait` and
 #: `pr-author` spans, and it settled, so it carries a `finished` phase and drops out
 #: of the listing. Several runs rather than one because none exhibits every kind.
-SETTLED_RUN = "relink-race"
+SETTLED_RUN = RunId("relink-race")
 #: A third, for the supervisory tier: its pacemaker completed a turn and settled, which
 #: is what makes a `dispatch` span exist at all. Neither run above has one — a run whose
 #: observer never finished a turn records the members and no conversation.
@@ -84,11 +90,11 @@ SETTLED_RUN = "relink-race"
 #:   below declares its own: a recording nobody can tell apart from an edited one is
 #:   evidence of nothing. Nothing read from this fixture touches that payload — the
 #:   journeys below read span shape — and its 623 events are otherwise untouched.
-SUPERVISED_RUN = "dag-ui-conversation"
+SUPERVISED_RUN = RunId("dag-ui-conversation")
 #: A fourth, for the publication that reached its base: it is the one recorded here
 #: whose publication span reads `merged`, and it reached that state without ever
 #: carrying a change-request reference.
-MERGED_RUN = "gate-parity-2"
+MERGED_RUN = RunId("gate-parity-2")
 #: A fifth, for the `orchestrator` half of `agent_role`, and the one fixture here that
 #: is **derived rather than recorded** — so its provenance is bounded on purpose:
 #:
@@ -105,7 +111,7 @@ MERGED_RUN = "gate-parity-2"
 #:   as a real directive and refuses, so checking the run in is not open to us.
 #: * Rewritten: one field, `labels["onepipeline.run_id"]`, to this fixture's own id, so
 #:   a reader cannot mistake six events for the run they came from.
-SUPERVISING_RUN = "dag-ui-truth-monitor-slice"
+SUPERVISING_RUN = RunId("dag-ui-truth-monitor-slice")
 #: A sixth, and the only one here checked in **with its `reports/` directory**, which is
 #: what makes it the one that can hold the conversation view to anything. Every other
 #: fixture carries `events.jsonl` alone, and a run's events record that a turn happened;
@@ -121,9 +127,9 @@ SUPERVISING_RUN = "dag-ui-truth-monitor-slice"
 #: hazard that keeps `dag-ui-truth` out of this directory), and its second turn is one
 #: its supervisor asked for and the agent answered, so the release's whole delta is
 #: visible in a two-turn conversation.
-REPORTED_RUN = "triage-by-root-cause-2"
+REPORTED_RUN = RunId("triage-by-root-cause-2")
 #: That run's worker dispatch, whose two report turns the conversation route serves.
-REPORTED_CONVERSATION = "node-scope-1787317190418-2313512.worker"
+REPORTED_CONVERSATION = ConversationId("node-scope-1787317190418-2313512.worker")
 #: The five figures a turn accounts for itself with. Named rather than inlined because
 #: the assertion below is that a turn carries *all* of them, and a list that drifted
 #: shorter would weaken that into whichever ones still happened to be served.
@@ -162,10 +168,18 @@ RENDER_SETTLED = {"overall": "WALL TIME", "graph": "task-failed"}
 #: an operator, and a script under `scripts/` would owe a journey of its own.
 #:
 #: Playwright is the workspace's own devDependency and reports where it installed its
-#: browser, so nothing here hardcodes a cache path.
+#: browser, so nothing here hardcodes a cache path. It is required by an absolute path
+#: under the workspace root rather than by bare name, because `bun` resolves a bare
+#: `require` from the *script's* own directory and this script is written into a pytest
+#: temporary directory outside the workspace — so a bare name resolved to nothing, and
+#: `bun` silently installed the newest playwright from the registry instead of the one
+#: `bun.lock` pins. That stayed invisible while the two happened to agree and broke the
+#: moment they did not: the fetched release wanted a browser build the workspace's own
+#: install had never downloaded. A test that reaches the network for an unpinned
+#: dependency is not testing the workspace, so the path is explicit.
 RENDER_DRIVER = """
-const { chromium } = require('playwright');
-const [url, width, height, settled] = process.argv.slice(2);
+const [root, url, width, height, settled] = process.argv.slice(2);
+const { chromium } = require(root + '/node_modules/playwright');
 const browser = await chromium.launch({ args: ['--no-sandbox'] });
 const page = await browser.newPage({
   viewport: { width: Number(width), height: Number(height) },
@@ -231,6 +245,18 @@ def _stop(*processes: subprocess.Popen[str]) -> None:
             process.communicate()
 
 
+class Answer(NamedTuple):
+    """One HTTP answer, in the three fields every assertion here reads off it.
+
+    A named triple rather than a bare tuple: these are read positionally in a dozen
+    places, and `status, body, kind` in the wrong order is a passing test.
+    """
+
+    status: int
+    body: bytes
+    content_type: str
+
+
 @dataclass
 class Served:
     """The bundle server this recipe started, and the read API it was pointed at."""
@@ -238,13 +264,13 @@ class Served:
     base: str
     api: str
 
-    def get(self, path: str) -> tuple[int, bytes, str]:
+    def get(self, path: str) -> Answer:
         request = urllib.request.Request(f"{self.base}{path}")
         try:
             with urllib.request.urlopen(request, timeout=e2e_timeout(10)) as response:
-                return response.status, response.read(), response.headers.get_content_type()
+                return Answer(response.status, response.read(), response.headers.get_content_type())
         except urllib.error.HTTPError as refused:
-            return refused.code, refused.read(), refused.headers.get_content_type()
+            return Answer(refused.code, refused.read(), refused.headers.get_content_type())
 
 
 def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
@@ -557,22 +583,15 @@ def test_a_dispatchs_report_turns_carry_their_own_text_tools_and_usage(
     output, and no token or cost figures — so what is asserted is each of those three,
     per turn, off the route the view reads them from.
 
-    Three of the assertions below fail on 0.6.1 and they fail separately, which is why
-    they are made together rather than as one summary check. On that release this
-    dispatch's second turn is served with a null `assistant`, both turns are served
-    with a null `model`, and the second turn carries — instead of its own usage — a
-    copy of the whole dispatch's totals. So a reader saw one turn's reply where there
-    were two, and adding the turns up billed the dispatch's every token twice:
-    $2.29377 + $3.190103 against a report that records $3.190103 spent.
+    Assistant text, model and usage are asserted per turn and separately, because they
+    fail separately: a reader can be served one turn's reply where there were two, or a
+    turn carrying the whole dispatch's totals instead of its own. The surrounding
+    assertions — the route answering, the transcript belonging to this node, the turn
+    count — keep those three from passing vacuously.
 
-    The rest pass on both releases and are here to keep the three honest: a route that
-    404s, a transcript belonging to another node, or a turn count that moved would each
-    make the three vacuous rather than failing.
-
-    The cost identity is the assertion worth keeping longest, because it is the only
-    one a wrong answer cannot satisfy by accident. Text and figures merely being
-    *present* would pass on totals attributed to the wrong turn; per-turn costs adding
-    up to exactly what the report says the dispatch cost cannot.
+    The cost identity is the one worth keeping longest: presence alone passes on totals
+    attributed to the wrong turn, while per-turn costs summing to the dispatch's own
+    recorded spend cannot.
     """
     status, body, _ = served_recorded.get(
         f"/api/v2/runs/{REPORTED_RUN}/conversations/{REPORTED_CONVERSATION}"
@@ -593,6 +612,13 @@ def test_a_dispatchs_report_turns_carry_their_own_text_tools_and_usage(
             "this is the operator's own report — the view has only the tool calls to show"
         )
         assert turn["model"], f"turn {position} names no model: {turn['model']!r}"
+        # Exactly these, not merely these: a subset check would let the reader grow a
+        # sixth figure this list never learned about, which is the drift the list is
+        # here to catch rather than a gap it may quietly tolerate.
+        assert set(turn["usage"]) == set(TURN_USAGE_FIGURES), (
+            f"turn {position} accounts for itself with {sorted(turn['usage'])}, "
+            f"where this file's one list of the figures says {sorted(TURN_USAGE_FIGURES)}"
+        )
         missing = [figure for figure in TURN_USAGE_FIGURES if turn["usage"].get(figure) is None]
         assert not missing, f"turn {position} accounts for itself without {missing}"
 
@@ -694,7 +720,7 @@ def test_the_served_bundle_is_the_adopted_release(served: Served) -> None:
     assert served.get("/")[1] == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
 
 
-def _rendered(served: Served, tmp_path: Path, run: str, view: str) -> str:
+def _rendered(served: Served, tmp_path: Path, run: RunId, view: str) -> str:
     """The text a browser shows for one view of `run`, from the bundle this pair serves.
 
     A real browser against the real proxy, because every cheaper stand-in answers a
@@ -708,6 +734,7 @@ def _rendered(served: Served, tmp_path: Path, run: str, view: str) -> str:
         [
             "bun",
             str(driver),
+            str(REPO_ROOT),
             f"{served.base}/?run={urllib.parse.quote(run)}&view={view}",
             str(width),
             str(height),
@@ -736,17 +763,11 @@ def test_the_adopted_bundle_renders_a_real_runs_root_in_a_browser(
     read for, the liveness verdict the API reports for it, and, in the Graph view, the
     node with the outcome that failed it.
 
-    **The verdict is read from the API rather than written down here**, and that is a
-    repair. This asserted the literal `driver-dead` until 2026-08-25, which was the
-    token the `onepipeline-ui` **0.6.2** bundle rendered; 0.6.3 does not contain that
-    string at all, and neither does the read API's wire vocabulary. The assertion
-    survived main's 0.6.3 bump because the worktree that ran it still had 0.6.2
-    installed — `bun install` reconciles rather than replaces, so a moved pin reached
-    the lockfile and not `node_modules`. That is the exact failure `AGENTS.md` records
-    for `onepipeline-ui` 0.3.3 under a 0.5.0 pin, met a second time. Asking the API
-    what it says and requiring the page to show *that* is a claim the next bundle bump
-    cannot quietly falsify: it fails when the view stops rendering the verdict, and it
-    does not fail when the verdict itself is spelled differently.
+    **The verdict is read from the API rather than written down here.** A literal spelled
+    into this file is a claim about one bundle release, and it goes stale silently — it
+    fails only once something reinstalls, which is later than the bump that broke it.
+    Asking the API what it says and requiring the page to show *that* fails when the view
+    stops rendering the verdict and does not fail when the verdict is spelled differently.
     """
     overall = _rendered(served_recorded, tmp_path, RECORDED_RUN, "overall")
 
@@ -1030,6 +1051,14 @@ def test_the_recipe_refuses_an_environment_value_that_is_not_one(
     assert reason in result.stderr
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] These four journeys drive the server's
+# refusal paths, and each one needs a repository state `just dag-ui` cannot be asked to
+# produce: an address file that is not an address, a fabricated one to prove the file is
+# what the proxy reads, an absent published bundle, and a bundle directory holding
+# nothing. The recipe reads this checkout's own config and its real installed bundle, so
+# through it none of these four conditions can be reached at all — running the server
+# under a fabricated root is the only way to observe a refusal that only occurs when the
+# configuration is broken. The journeys above drive the recipe itself for real.
 def test_a_read_api_address_file_that_is_not_one_is_refused(tmp_path: Path) -> None:
     """A misshapen address would become a proxy target that fails later as a 502.
 
@@ -1149,20 +1178,31 @@ def test_a_named_bundle_directory_that_holds_none_names_the_variable(tmp_path: P
     assert "DAG_UI_DIST must name a directory holding a published bundle" in result.stderr
 
 
+# llmlint: ignore-end[tests_mirror_real_usage]
+# llmlint: ignore-block[tests_mirror_real_usage] This whole test is a drift gate over the
+# two recipes' own text, not a behavioural journey, and the property it holds has no
+# behavioural signature: a script carrying a hardcoded literal equal to the configured
+# address serves byte-identical answers, so every operator-facing route through it passes
+# while the second copy sits there waiting to drift. Both halves are that same gate — the
+# dry run reads what the recipe would run without starting a server, and the loop reads
+# whether either script restates the address. Reading the source is the only thing that can
+# see either, which is why `tests/test_watch_surface_drift.py` and
+# `tests/test_lost_turn_wire_contract.py` read theirs. The journeys either side of this one
+# start both servers for real and drive them over HTTP and a browser.
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
     """`just dag-ui` finds `just telemetry-server` only while they agree on it."""
     address = READ_API_ADDRESS.read_text(encoding="utf-8").strip()
     host, _, port = address.partition(":")
     assert host and port.isdigit(), address
 
-    served = subprocess.run(
+    dry_run = subprocess.run(
         ["just", "--dry-run", "telemetry-server", "--host", host],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
     )
-    assert served.returncode == 0, served.stderr
+    assert dry_run.returncode == 0, dry_run.stderr
 
     # Neither script may carry its own copy of the address: that is the drift this
     # file exists to prevent, and a literal here would be a third one.
@@ -1170,3 +1210,4 @@ def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
         text = (REPO_ROOT / script).read_text(encoding="utf-8")
         assert "read-api.address" in text, f"{script} must read the address from its one source"
         assert address not in text, f"{script} restates the read API address"
+    # llmlint: ignore-end[tests_mirror_real_usage]

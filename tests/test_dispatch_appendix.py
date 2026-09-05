@@ -737,7 +737,7 @@ def test_the_appendix_no_longer_forbids_running_two_gates_at_once(appendix: str)
 
     It rested on this repository's e2e configs binding fixed ports, and they do not:
     live e2e code allocates through `_free_port()` in
-    `tests/e2e/test_dag_ui_serving_e2e.py`, the remaining `43xx` literals are recorded
+    `tests/dag_ui/test_dag_ui_serving_e2e.py`, the remaining `43xx` literals are recorded
     fixtures under `tests/fixtures/`, and the port literals left in live test code are
     rendered-command and argument-validation assertions that bind nothing. Measured
     besides: on 2026-08-24 two managers' judged tiers ran concurrently — one node's

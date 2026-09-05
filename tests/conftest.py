@@ -28,6 +28,8 @@ from nx_inputs import (
     ASK_SEAM_ROOT,
     ASK_SEAM_WORKSPACE,
     CODE_WORKSPACE,
+    DAG_UI_ROOT,
+    DAG_UI_WORKSPACE,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_WORKSPACE,
     RECIPE_WORKSPACE,
@@ -77,6 +79,7 @@ class OwnedProject(NamedTuple):
 OWNED_PROJECTS = {
     PLAN_TOOLING_ROOT: OwnedProject(key=PLAN_TOOLING_WORKSPACE, docs_tier=True),
     ASK_SEAM_ROOT: OwnedProject(key=ASK_SEAM_WORKSPACE, docs_tier=False),
+    DAG_UI_ROOT: OwnedProject(key=DAG_UI_WORKSPACE, docs_tier=False),
 }
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes

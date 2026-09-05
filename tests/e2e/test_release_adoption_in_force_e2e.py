@@ -23,7 +23,7 @@ loader that reads a plan:
 * the read API `just telemetry-server` runs, which is the third half's own artifact
   and the one a claim about the view rests on.
 
-The view half is measured further in `tests/e2e/test_dag_ui_serving_e2e.py`, because
+The view half is measured further in `tests/dag_ui/test_dag_ui_serving_e2e.py`, because
 what a view does is what it serves: that journey starts both recipes on one origin
 and reads the release surface out of the bundle a browser would have got.
 
@@ -578,7 +578,7 @@ def test_the_read_api_the_view_is_served_from_is_the_adopted_release() -> None:
 
     `config/onepipeline-ui.version` names a release published as both a wheel and an
     npm package, and only the wheel can be asked its own version. The bundle half is
-    read where it is served, in `tests/e2e/test_dag_ui_serving_e2e.py`, which is the
+    read where it is served, in `tests/dag_ui/test_dag_ui_serving_e2e.py`, which is the
     only place a bundle can honestly be asked anything.
     """
     adopted = (REPO_ROOT / "config" / "onepipeline-ui.version").read_text("utf-8").strip()

@@ -77,7 +77,7 @@ Observatory was adopted anyway because the reader carries its own engine. That h
 over and this surface is still the one that says which engine is answering, measured
 here rather than argued from the manifest, which is what `/healthz` is for.
 
-`tests/e2e/test_dag_ui_serving_e2e.py` holds a freshly started pair to the
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds a freshly started pair to the
 adopted release from that same served surface: the bundle handed back is the npm
 half installed at `config/onepipeline-ui.version`, and the reader answering links
 the engine the adopted wheel links. So a bump that installs one release and
@@ -122,7 +122,7 @@ accounting does not move, because the duplicate rows carried no usage: the per-t
 moved the reader's own linked `onepipeline`, which is what `/healthz` reports: 0.6.4
 answered `0.7.3` and 0.6.5 answers `0.18.3`, still not
 `config/onepipeline.version` and still not expected to be.
-`tests/e2e/test_dag_ui_serving_e2e.py` holds this in a browser: it opens one desktop
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds this in a browser: it opens one desktop
 viewport on the pair over a real recorded run and asserts that the page renders — the
 run's goal, its counters, its failed node — and that no release row is on it, in either
 view, with no span the read API serves carrying a release either. Read that as a check

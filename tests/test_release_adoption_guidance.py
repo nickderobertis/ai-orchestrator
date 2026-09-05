@@ -15,7 +15,7 @@ question: *which* document may say a thing. This one answers whether the manager
 document still says all of it, and whether what it says about this host is still
 true. `tests/e2e/test_release_adoption_in_force_e2e.py` is the third: it drives the
 installed artifacts, which is the only thing that can prove what this host can and
-cannot do rather than assert it, and `tests/e2e/test_dag_ui_serving_e2e.py` is where
+cannot do rather than assert it, and `tests/dag_ui/test_dag_ui_serving_e2e.py` is where
 the view half of that is driven, because a view is proved by serving it.
 """
 

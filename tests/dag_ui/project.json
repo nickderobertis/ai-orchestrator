@@ -1,0 +1,21 @@
+{
+  "name": "dag-ui",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/dag_ui",
+  "tags": [
+    "scope:dag-ui",
+    "type:tests"
+  ],
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/dag_ui --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "dagUiWorkspace"
+      ]
+    }
+  }
+}

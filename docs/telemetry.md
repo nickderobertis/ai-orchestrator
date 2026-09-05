@@ -268,7 +268,7 @@ served them.
    is the mistake this paragraph most invites.** The reader declares none of it, so
    each list is the set of values *observed*, and a value missing from one is
    unmeasured rather than impossible. What is held rather than observed is what
-   `tests/e2e/test_dag_ui_serving_e2e.py` serves six checked-in runs to assert: every
+   `tests/dag_ui/test_dag_ui_serving_e2e.py` serves six checked-in runs to assert: every
    span kind above except `human-wait`, each one's fields and parentage, the `waiting`,
    `surfacing`, `settled`, and `finished` phases, both the `open` and `merged`
    publication statuses, and both supervisory `agent_role`s. One of those runs is
@@ -324,7 +324,7 @@ served them.
    has yet named `adoption` or `consumes` for a node in one of the six registered
    repositories that do declare one. So a reader who
    opens a node and finds no release row is looking at an undeclared target, not an
-   unadopted release. `tests/e2e/test_dag_ui_serving_e2e.py` holds the rendering half —
+   unadopted release. `tests/dag_ui/test_dag_ui_serving_e2e.py` holds the rendering half —
    a browser opened on a real recorded run draws no release row from data that has
    none — and `tests/e2e/test_release_adoption_in_force_e2e.py` holds the half about
    this host, by asking every registered identity whether it declares a target.
@@ -361,7 +361,7 @@ served them.
    these recorded runs has a node still waiting to be dispatched, so there is nothing
    here for it to serve. 0.7.2's own addition — one flat run list, a row refreshed by
    name, a live run that opens — is entirely the npm bundle's; the run list this reader
-   serves it from did not move. `tests/e2e/test_dag_ui_serving_e2e.py` holds the
+   serves it from did not move. `tests/dag_ui/test_dag_ui_serving_e2e.py` holds the
    number, so a reader that moved it again fails there.
    **Both those releases carry a `release-status: publish-failed` banner and both are
    nonetheless published**, which is worth recognising rather than re-diagnosing: the

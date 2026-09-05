@@ -116,6 +116,27 @@
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock"
+    ],
+    "dagUiWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/config/onepipeline-ui.version",
+      "{workspaceRoot}/scripts/dag-ui.sh",
+      "{workspaceRoot}/scripts/dag-ui-server.js",
+      "{workspaceRoot}/scripts/telemetry-server.sh",
+      "{workspaceRoot}/tests/dag_ui/**/*",
+      "!{workspaceRoot}/tests/dag_ui/**/*.md",
+      "{workspaceRoot}/tests/conftest.py",
+      "{workspaceRoot}/tests/nx_inputs.py",
+      "{workspaceRoot}/tests/published_tools.py",
+      "{workspaceRoot}/tests/fixtures/timeline-runs/**/*",
+      "{workspaceRoot}/tests/e2e/nx_workspace.py",
+      "{workspaceRoot}/tests/e2e/waits.py"
     ]
   },
   "targetDefaults": {

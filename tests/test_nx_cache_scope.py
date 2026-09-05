@@ -49,6 +49,8 @@ from nx_inputs import (
     CODE_SCOPED,
     CODE_WORKSPACE,
     COVERAGE_SCOPED,
+    DAG_UI_ROOT,
+    DAG_UI_SCOPED,
     DOCS_SCOPED,
     NX_CACHE_CHECK,
     PLAN_TOOLING_DOCS_SCOPED,
@@ -730,16 +732,18 @@ def _collected(selection: list[str]) -> set[str]:
 
 
 #: Every tier that runs part of this suite, as the file and target that declares it.
-#: Seven, across three projects, and every one of them is a target of the project whose
+#: Eight, across four projects, and every one of them is a target of the project whose
 #: directory holds the tests it collects: the `plan-tooling` project owns the host-tool
 #: journeys over the plan surface in two targets — one keyed on what they read, one on
 #: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
-#: owns the host-tool journeys over the ask seam in one, and the orchestrator project
-#: owns the rest in four.
+#: owns the host-tool journeys over the ask seam in one, the `dag-ui` project owns the
+#: journeys that render the Observatory in a real browser in one, and the orchestrator
+#: project owns the rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
     (f"{ASK_SEAM_ROOT}/project.json", ASK_SEAM_SCOPED),
+    (f"{DAG_UI_ROOT}/project.json", DAG_UI_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
@@ -748,7 +752,7 @@ SUITE_TIERS = (
 
 
 def test_every_tier_of_the_suite_partitions_it_between_them() -> None:
-    """Seven selections, one suite: no test may be collected twice or not at all.
+    """Eight selections, one suite: no test may be collected twice or not at all.
 
     The tiers exist because they are keyed on different trees, and a test lands in
     exactly one of them — in the project whose directory holds it, and then in the

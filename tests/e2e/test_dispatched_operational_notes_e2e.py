@@ -482,7 +482,7 @@ def test_a_dispatched_worker_is_not_told_to_avoid_a_concurrent_gate(
     """The deleted rule, absent from what a worker is handed rather than from a file.
 
     It rested on this repository's e2e configs binding fixed ports; live e2e code
-    allocates through `_free_port()` in `tests/e2e/test_dag_ui_serving_e2e.py` instead,
+    allocates through `_free_port()` in `tests/dag_ui/test_dag_ui_serving_e2e.py` instead,
     and on 2026-08-24 two managers' judged tiers ran concurrently and both completed. The
     reason is asserted gone beside the instruction, because a reason left in the prompt is
     an instruction a worker reconstructs from it.

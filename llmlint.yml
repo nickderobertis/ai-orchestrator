@@ -25,6 +25,7 @@ history:
 plugins:
   - "https://raw.githubusercontent.com/nickderobertis/llmlint/main/assets/config_lint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/base.llmlint.yml@1"
+  - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/shapes/skills-repo.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/project-graph.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/python.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/bash.llmlint.yml@1"
@@ -96,7 +97,7 @@ rules:
         # bump adopts also cannot be exercised from here: a release state renders only
         # from a release event, a run carries one only where a repository declares a
         # release target, and no repository registered on this host declares one. What
-        # *is* provable is proven — `tests/e2e/test_dag_ui_serving_e2e.py` drives the
+        # *is* provable is proven — `tests/dag_ui/test_dag_ui_serving_e2e.py` drives the
         # adopted bundle through a real browser and asserts the empty release row
         # deliberately, so the absence is gated rather than merely unproven. The
         # exclusion is per-rule, so every other rule still judges these files
