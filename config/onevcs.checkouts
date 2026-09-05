@@ -50,12 +50,16 @@
 ~/.ai-orchestrator/repos/nickderobertis__onevcs
 
 # Other repositories dispatched against from this host.
+~/.ai-orchestrator/repos/nickderobertis__allowlister-remote
 ~/.ai-orchestrator/repos/nickderobertis__crozier
 ~/.ai-orchestrator/repos/nickderobertis__dero-skills
+~/.ai-orchestrator/repos/nickderobertis__ev-trip-planner
 ~/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site
 ~/.ai-orchestrator/repos/nickderobertis__notignored
 ~/.ai-orchestrator/repos/nickderobertis__onetaskgraph
 ~/.ai-orchestrator/repos/nickderobertis__screencomp
 ~/.ai-orchestrator/repos/nickderobertis__spanish-language-tutor
+~/.ai-orchestrator/repos/petsinc__cd-chat-tool-call-challenge
+~/.ai-orchestrator/repos/petsinc__referral-app
 ~/projects/notignored
 ~/projects/org-apps

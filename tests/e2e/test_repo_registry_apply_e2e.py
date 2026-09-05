@@ -66,14 +66,21 @@ RULE_MATCH = re.compile(
 POLICY_EXCEPTIONS = {
     "github.com/nickderobertis/ai-orchestrator": ("local-direct", "none"),
     "github.com/nickderobertis/spanish-language-tutor": ("local-direct", "none"),
+    "github.com/petsinc/cd-chat-tool-call-challenge": ("change-open", "required"),
     "github.com/petsinc/org-apps": ("change-open", "required"),
+    "github.com/petsinc/referral-app": ("change-open", "required"),
 }
 #: What every *other* ruled identity publishes under: a single-owner `nickderobertis`
 #: repository whose change request merges itself once its merge path passes. The
 #: golden covers this for the identities that predate the adoption; a rule written
-#: since — `llmlint` was the first, `notignored` the latest — is covered by nothing
-#: else, so a new sibling given a policy of its own fails here rather than at its
-#: first publication.
+#: since — `llmlint` was the first, `allowlister-remote` and `ev-trip-planner` the
+#: latest — is covered by nothing else, so a new sibling given a policy of its own
+#: fails here rather than at its first publication.
+#:
+#: The exceptions above are read the same way and are the reason this is a record
+#: rather than an owner test: every `petsinc` identity here is a team repository whose
+#: change request stays ready-for-review, and reading that off the owner would make a
+#: `petsinc` repository quietly given `change-auto` pass.
 SIBLING_POLICY = ("change-auto", "none")
 
 RepoType = Literal["single-owner", "team"]

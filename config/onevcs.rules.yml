@@ -84,11 +84,19 @@ rules:
     publication: local-direct
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: allowlister-remote}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: crozier}
     publication: change-auto
     approvals: none
 
   - match: {host: github.com, owner: nickderobertis, name: dero-skills}
+    publication: change-auto
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: ev-trip-planner}
     publication: change-auto
     approvals: none
 
@@ -147,11 +155,20 @@ rules:
     publication: local-direct
     approvals: none
 
-  # The one team repository on this host. `change-open` leaves an ordinary
-  # ready-for-review pull request and `approvals: required` is what keeps somebody
-  # else in the path; re-registering it as either of the rows above is how a direct
-  # merge happens where a review was intended.
+  # The team repositories on this host, every one of them owned by `petsinc`.
+  # `change-open` leaves an ordinary ready-for-review pull request and
+  # `approvals: required` is what keeps somebody else in the path; re-registering one
+  # of them as either of the rows above is how a direct merge happens where a review
+  # was intended.
+  - match: {host: github.com, owner: petsinc, name: cd-chat-tool-call-challenge}
+    publication: change-open
+    approvals: required
+
   - match: {host: github.com, owner: petsinc, name: org-apps}
+    publication: change-open
+    approvals: required
+
+  - match: {host: github.com, owner: petsinc, name: referral-app}
     publication: change-open
     approvals: required
 

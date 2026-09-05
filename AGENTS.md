@@ -762,8 +762,8 @@ and all three were driven on this host's installed binaries rather than read off
 change request. **What changed under this adoption is the other half of that
 sentence**, and it changed without anybody configuring anything here: onevcs 0.16.x
 reads a target from the **repository's own** `release-targets.toml` as well as from the
-host's document, and seven of the seventeen repositories registered here have since landed
-one — `oneagentgraph` (3 targets), `oneharness` (6), `onejudge` (3), `onepipeline` (3),
+host's document, and seven of the twenty-one repositories registered here have since
+landed one — `oneagentgraph` (3 targets), `oneharness` (6), `onejudge` (3), `onepipeline` (3),
 `onepipeline-ui` (4), `onetaskgraph` (5), and `onevcs` (4). So a dependency landing in one
 of *those* now has a release to await. That set is not a thing this host decides and it
 moves without warning: `onetaskgraph` joined it after the six above were counted, and what
@@ -837,7 +837,7 @@ repository, because two nodes in one repository can legitimately want different
 targets — and its `src/release.rs` is where the chain is implemented. A repository
 that declares **no** release targets releases nothing, so a dependency landing there
 earns no reference row and no hold whatever mode its dependents resolve to; that is
-`ai-orchestrator` and nine of the other repositories registered here, and it is why
+`ai-orchestrator` and thirteen of the other repositories registered here, and it is why
 a plan of this repository naming neither field gets exactly the run it gets today.
 
 **The adoption instruction a worker follows is the producer's, and the framework

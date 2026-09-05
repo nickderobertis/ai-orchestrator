@@ -46,6 +46,15 @@
       "note": "A local-direct identity opens no change request, so its merge path declares no required checks at all. What verifies this repository instead is its own executable `pre-push` hook, which `onevcs` reaches through the lender's `core.hooksPath` in the clone a publication works in.",
       "checks": {}
     },
+    "github.com/nickderobertis/allowlister-remote": {
+      "branch": "main",
+      "checks": {
+        "check": "tree-verdict",
+        "install-smoke": "published-artifact",
+        "pr-title": "pull-request",
+        "visual-docs / capture (x86_64)": "visual-baseline"
+      }
+    },
     "github.com/nickderobertis/crozier": {
       "branch": "main",
       "checks": {
@@ -60,6 +69,12 @@
         "check": "tree-verdict",
         "commitlint": "pull-request",
         "llmlint": "tree-verdict"
+      }
+    },
+    "github.com/nickderobertis/ev-trip-planner": {
+      "branch": "main",
+      "checks": {
+        "check": "tree-verdict"
       }
     },
     "github.com/nickderobertis/llmlint": {
@@ -236,12 +251,26 @@
       "note": "A local-direct identity opens no change request, so its merge path declares no required checks at all. Verification must instead come from an executable `pre-push` hook, but this repository has none today, so the coverage audit truthfully reports no merge-path coverage.",
       "checks": {}
     },
+    "github.com/petsinc/cd-chat-tool-call-challenge": {
+      "branch": "main",
+      "note": "Its base branch declares no protection and no ruleset, so nothing GitHub runs can refuse a merge here. What is left is this identity's publication policy: `change-open` opens an ordinary ready-for-review change request and `approvals: required` keeps a reviewer in the path, so the approval is the whole of what can refuse a change.",
+      "checks": {}
+    },
     "github.com/petsinc/org-apps": {
       "branch": "main",
       "checks": {
         "gate": "tree-verdict",
         "pr-title": "pull-request",
         "preview": "judged-remotely"
+      }
+    },
+    "github.com/petsinc/referral-app": {
+      "branch": "main",
+      "checks": {
+        "browser": "judged-remotely",
+        "check": "tree-verdict",
+        "preview": "judged-remotely",
+        "staging-e2e": "judged-remotely"
       }
     }
   }
