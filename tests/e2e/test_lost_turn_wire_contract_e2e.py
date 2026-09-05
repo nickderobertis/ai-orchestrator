@@ -19,8 +19,9 @@ They differ in the one thing the filter branches on. The first transcript record
 refusal that ended the turn, so the failure is *provable* and the surface names its cause
 and identity. The second is the same real transcript with those frames removed — the
 shape all 26 of this host's oversized surfaces had, `status: completed` and `error: null`
-— where nothing is provable, and what has to arrive is a bounded line naming the identity,
-the size, and where the full text is read.
+— where nothing is provable, and what has to arrive is **nothing at all**: the monitor's
+prose raises no surface now, so an unprovable transcript is content like any other, the
+member is answered and lives, and the channel is never opened.
 
 Whether the *shape* the filter reads is still the shape the producer writes is a
 different question, asked of a declaration rather than of a journey, and
@@ -43,10 +44,7 @@ from typing import Any, TypedDict, cast
 import lost_turn_producer
 import pytest
 from lost_turn_producer import PRODUCER, LostTurn
-from test_orchestrate_launch_e2e import (
-    SURFACE_KIND_OF_A_LOST_TURN,
-    SURFACE_KIND_OF_A_TRANSCRIPT,
-)
+from test_orchestrate_launch_e2e import SURFACE_KIND_OF_A_LOST_TURN
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -61,12 +59,18 @@ CHANNEL_SERVE = REPO_ROOT / "scripts" / "channel-serve.py"
 #: planner. Cleared rather than set: the published channel is the point of the journey.
 ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
-#: The run each surface is raised on, which the filter reads out of the composed task and
-#: renders back into the command it points a planner at. One per journey, because the
+#: The run each journey works against, which the filter reads out of the composed task
+#: and renders back into the command it points a planner at. One per journey, because the
 #: published verb creates a durable channel under the run and two journeys queueing into
 #: one would each read the other's surface.
 RUN = "wire-contract-e2e"
 RUN_OF_AN_UNPROVEN_TRANSCRIPT = "wire-contract-unproven-e2e"
+
+#: How long the filter may take to answer an unprovable transcript on its own. It opens
+#: no channel at all for one, so what this really bounds is the regression: a filter that
+#: raised a surface instead would sit inside `channel serve` waiting out its whole reply
+#: window, and that wait is what the failure would look like.
+UNRAISED_SECONDS = 30
 
 
 @pytest.fixture(scope="session")
@@ -179,6 +183,43 @@ def _raised_to_a_real_channel(tmp_path: Path, run: str, said: str) -> QueuedSurf
     return cast(QueuedSurface, queued[0])
 
 
+def _answered_without_the_channel(
+    runs: Path, run: str, said: str
+) -> subprocess.CompletedProcess[str]:
+    """Put one frame to the real filter and wait for it to answer without a channel.
+
+    For the case that raises nothing: the filter is expected to decide and exit without
+    ever opening `channel serve`. A `TimeoutExpired` here is therefore a finding rather
+    than a flake — it says the filter went to the channel and is waiting out a reply
+    window nobody will answer — so it is re-raised as that.
+    """
+    environment = dict(os.environ)
+    environment["ONEPIPELINE_RUNS_DIR"] = str(runs)
+    environment.pop(ONEPIPELINE_BIN, None)
+    frame = {
+        "op": "supervisor",
+        "task": f"onepipeline run `{run}`.\n\nGoal: prove an unprovable transcript raises none",
+        "messages": [{"role": "assistant", "content": said}],
+    }
+    try:
+        return subprocess.run(
+            [str(CHANNEL_SERVE)],
+            cwd=REPO_ROOT,
+            env=environment,
+            input=json.dumps(frame),
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(UNRAISED_SECONDS),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as waited:
+        raise AssertionError(
+            f"the filter did not answer run {run} on its own within the wait, which is "
+            "what raising a surface looks like from here: `channel serve` queues it and "
+            "then blocks for a planner who is not coming"
+        ) from waited
+
+
 def test_the_channel_filter_raises_a_real_lost_turn_to_a_real_planner_channel(
     tmp_path: Path, lost_turn: LostTurn
 ) -> None:
@@ -205,36 +246,44 @@ def test_the_channel_filter_raises_a_real_lost_turn_to_a_real_planner_channel(
     ), raised["message"]
 
 
-def test_the_channel_filter_bounds_a_real_transcript_that_proves_no_failure(
+def test_the_channel_filter_raises_nothing_for_a_real_transcript_that_proves_no_failure(
     tmp_path: Path, lost_turn: LostTurn
 ) -> None:
-    """A real transcript nothing can be proven inside is bounded too, under its own kind.
+    """A real transcript nothing can be proven inside raises no surface at all.
 
     This is the shape that actually filled this channel: all 26 of the oversized surfaces
     measured on this host were `status: completed` with `error: null`, so `lost_turn_error`
     proved nothing about any of them and every one was republished as the monitor's own
-    words — 176.1 MB of protocol carrying zero model-authored characters. What has to
-    arrive instead is a line naming the three things that keep a withheld observation one
-    command away rather than lost: whose output it was, how much of it there was, and the
-    command that reads all of it.
+    words — 176.1 MB of protocol carrying zero model-authored characters. The bounded
+    `monitor-transcript` line that used to stand in its place existed only to keep that
+    republication readable, and it went with the republication: prose raises no surface,
+    so an unprovable transcript is content the member produced. What must happen is that
+    the channel is never opened, the member is answered with a ruling onejudge can act
+    on, and nothing at all is queued for a planner to read.
 
     The transcript is the real producer's own bytes with the two frames that record the
     refusal removed, which is the whole of the difference between the two shapes — a turn
-    that completes needs a reachable provider, which this cannot have offline.
+    that completes needs a reachable provider, which this cannot have offline. So the
+    journey above and this one differ in exactly what the filter branches on.
     """
     unproven = lost_turn_producer.without_the_frames_that_prove_the_loss(lost_turn.transcript)
     assert unproven != lost_turn.transcript, "the real transcript proved no failure to remove"
+    runs = tmp_path / "runs"
+    queue = runs / RUN_OF_AN_UNPROVEN_TRANSCRIPT / "channel" / "queue.json"
+    (runs / RUN_OF_AN_UNPROVEN_TRANSCRIPT).mkdir(parents=True)
 
-    raised = _raised_to_a_real_channel(tmp_path, RUN_OF_AN_UNPROVEN_TRANSCRIPT, unproven)
+    answered = _answered_without_the_channel(runs, RUN_OF_AN_UNPROVEN_TRANSCRIPT, unproven)
 
-    assert raised["kind"] == SURFACE_KIND_OF_A_TRANSCRIPT, raised
-    assert raised["blocking"] is False, raised
-    assert raised["message"] == (
-        f"monitor answered with a machine transcript rather than an observation: "
-        f"{len(unproven)} characters from {PRODUCER}, and nothing in it says the turn "
-        f"failed. It is not repeated here — read it with "
-        f"`just monitor {RUN_OF_AN_UNPROVEN_TRANSCRIPT} --filter monitor`."
-    ), raised["message"]
-    # The bound is the point, and it is a bound on the *message* rather than on any part
-    # of it: the transcript is two orders of magnitude larger than the line replacing it.
-    assert len(raised["message"]) < len(unproven) / 10, raised["message"]
+    assert answered.returncode == 0, answered.stderr
+    assert not queue.exists(), (
+        "an unprovable machine transcript still reached the planner's queue: "
+        f"{queue.read_text(encoding='utf-8')}"
+    )
+    ruling = json.loads(answered.stdout)
+    assert ruling["completion"] is False, (
+        f"an unprovable transcript answered onejudge with a completion, which settles a "
+        f"watch nobody ruled on: {ruling}"
+    )
+    assert unproven not in ruling["message"], (
+        f"the transcript came back to the monitor inside its own ruling: {ruling}"
+    )

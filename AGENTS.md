@@ -2035,22 +2035,24 @@ worker's blocking question sat unread behind that pile for fifteen minutes with 
 frontier stopped. So read an absence of surfaces as an absence of findings, and read the
 run's own state for whether anything is watching.
 
-**The monitor says its silence rather than performing it**, and the difference is the
-whole supervisory tier. A turn with no finding in it replies with exactly `NOTHING TO
-REPORT` and nothing else; `scripts/channel-serve.py` raises no surface for that, queues
-nothing for anybody to read, and answers onejudge with a non-completion the member goes
-on watching after. Producing **no** output at all is a different answer and still fails,
-because from outside it is indistinguishable from a turn the agent side lost, which is a
-real provider defect worth reporting — its refusal names the sentinel so the two are
-told apart at the point of refusal rather than by reading this file. Until the filter
-learned that difference the documented correct behaviour was fatal on the **first**
-quiet turn, which for a healthy run is usually the first turn:
-`spanish-language-tutor-upgrade` lost its observer five minutes in and ran roughly two
-hours at `OBSERVER DEAD` while every other indicator stayed green, because a run with no
-observer still reports plain `ACTIVE` and the loss announces itself nowhere.
-`personas/orchestrator.yaml` states the sentinel in the same paragraph that tells the
-monitor to stay quiet, so the instruction and the contract cannot drift apart, and
-`tests/e2e/test_monitor_quiet_turn_e2e.py` drives all three answers through the real
+**The monitor has exactly one way to report, and the prose of its turns is not it.** A
+finding reaches you as the `finding` op in a reply envelope; nothing raises a surface
+for what a monitor's turn *says*. So read an absence of surfaces as an absence of
+findings, exactly as before, and read a monitor that wrote its observation out as prose
+as an observation reported to nobody — which is its *supervisor's* to send back, since
+there is no longer a path by which that prose reaches you anyway. What made the deletion
+worth it is one run's queue: 8 of `root-causes-94-plan`'s 27 monitor-authored surfaces
+were duplicates of a finding three to thirty-five seconds older, because the monitor was
+given a choice with no right answer and scored on the one it made.
+
+A monitor turn that produced anything at all is a turn taken, and one that produced
+nothing is still the provider defect it looks like — which is what
+`spanish-language-tutor-upgrade` cost when the two were conflated: it lost its observer
+five minutes in and ran roughly two hours at `OBSERVER DEAD` while every other indicator
+stayed green, because a run with no observer still reports plain `ACTIVE` and the loss
+announces itself nowhere. The filter's own account of the answers it gives is
+[in the orchestration doc](docs/orchestration.md#a-monitor-reports-through-the-finding-op),
+and `tests/e2e/test_monitor_quiet_turn_e2e.py` drives each of them through the real
 filter onto a real published channel.
 
 **That monitor is a conversation because a conversation is what keeps the observer graph
@@ -2061,9 +2063,12 @@ completion bar is scored against — leaves no member outside the schedules, and
 refusal offers instead loads and then settles the whole observer graph after one turn
 per member, with nothing relaunching it. So **the pacemaker does not survive because of
 its kind**: it survives because it fires inside the monitor's conversation, and a run
-whose monitor has settled gets no pacemaker update either. What ends that conversation
-is onejudge settling a repeated no-op exchange, which a quiet `NOTHING TO REPORT`
-satisfies by construction — the same sentinel that stopped the flooding. The evidence is
+whose monitor has settled gets no pacemaker update either. Two things end that
+conversation: onejudge settling a repeated no-op exchange, which one fixed short reply
+satisfies by construction — the reason the quiet-turn sentinel that stopped the flooding
+also ended the watch, and the reason there is no sentinel now — and the member's own
+`max_turns`, which on this host was what actually fired and is now derived from the
+recorded corpus where it is declared. The evidence is
 this host's own 89 recorded pacemaker settlements, and they split 50/39. The fifty taken
 under a two-member observer document — the shipped `graphs/dag-scope.yaml`, and the older
 revision spelling the same member `orchestrator` — each fired while that conversation was

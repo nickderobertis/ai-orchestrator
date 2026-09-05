@@ -107,13 +107,15 @@ INLINE_OPTION_PROHIBITION = "reach for the inline `--message`"
 #: substituting form as a simplification without first contradicting it.
 SUBSTITUTION_REASON = "command substitution"
 
-#: The monitor's discipline on what a turn is allowed to say. Both halves are read: a
-#: turn with no finding must raise no surface, and it must SAY so with the sentinel —
-#: a prompt telling it only to fall silent kills the member, because a turn producing
-#: nothing at all is what a lost turn looks like and its judge side refuses that.
-#: `tests/e2e/test_monitor_quiet_turn_e2e.py` drives what the sentinel then does.
-NARRATION_BAN = "never narrate what you are about to do"
-FOUND_NOTHING_SENTINEL = "NOTHING TO REPORT"
+#: The monitor's discipline on what a turn is allowed to say. Three halves now, because
+#: the reporting route and the liveness rule are separate claims and each has its own
+#: failure: prose reaches nobody, so a monitor told only to stop narrating would still
+#: think a written-out observation had been reported; and a turn producing nothing at all
+#: is what a lost turn looks like, so a prompt telling it to fall silent kills the member
+#: on its first correct turn. `tests/e2e/test_monitor_quiet_turn_e2e.py` drives both.
+NARRATION_BAN = "Never narrate what you are about to do"
+PROSE_REACHES_NOBODY = "The prose of your reply reaches nobody"
+ALWAYS_SOME_OUTPUT = "**Always produce some output, on every turn"
 
 #: The pacemaker's discipline on what it may call a hang. Both halves, because the three
 #: false escalations in one session split evenly between them: an elapsed time read
@@ -633,22 +635,28 @@ def test_the_monitor_is_told_to_report_findings_rather_than_narrate_intent(
     planner update(s) waiting`, the one line a planner may never filter, said only that
     there were twenty-eight.
 
-    Both halves are read, because the instruction to be quiet without the sentinel to be
-    quiet *with* is the shape that killed monitors: a turn producing nothing at all is
-    refused by the judge side as a lost turn, and the member dies for having obeyed its
-    own persona.
+    All three are read, because each covers a different failure. A monitor not told that
+    prose reaches nobody writes its observation out and believes it reported it — the
+    prose safety net is gone, so that observation reaches no planner at all. A monitor
+    not told to stop narrating spends turns on what it is about to read. And a monitor
+    told to be quiet without being told to produce *something* emits nothing, which its
+    judge side refuses as a lost turn, killing the member on its first correct turn.
     """
     flat = _flat(monitor_prompt)
 
-    assert NARRATION_BAN in flat, (
-        "the monitor is no longer told to stop narrating what it is about to do, so "
-        f"every turn it takes can still cost the planner a surface:\n{monitor_prompt}"
+    assert PROSE_REACHES_NOBODY in flat, (
+        "the monitor is no longer told that the prose of its reply raises no planner "
+        "surface, so an observation it writes out instead of filing as a `finding` op "
+        f"reads to it like a report and reaches nobody:\n{monitor_prompt}"
     )
-    assert FOUND_NOTHING_SENTINEL in flat, (
-        f"the monitor is no longer told to answer a turn with no finding in it with "
-        f"`{FOUND_NOTHING_SENTINEL}`, so the only way it has left to be quiet is to emit "
-        "nothing — which its judge side refuses as a lost turn, killing the member on "
-        f"its first correct turn:\n{monitor_prompt}"
+    assert NARRATION_BAN in flat, (
+        "the monitor is no longer told to stop narrating what it is about to do, so it "
+        f"can still spend turns on what it has not read yet:\n{monitor_prompt}"
+    )
+    assert ALWAYS_SOME_OUTPUT in flat, (
+        "the monitor is no longer told to produce some output on every turn, so the only "
+        "way it has left to be quiet is to emit nothing — which its judge side refuses "
+        f"as a lost turn, killing the member on its first correct turn:\n{monitor_prompt}"
     )
 
 

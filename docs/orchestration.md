@@ -609,17 +609,29 @@ readings of this host's accumulated journals rather than claims about a release,
 nothing re-takes them; what the gate below holds is the behaviour underneath them.
 
 **What settles the monitor is a different thing, and worth not confusing with this
-one.** onejudge names it in the member's own report: *the agent and the supervisor
-repeated 2 no-op exchanges (no tool activity, and the same agent reply each time);
-settled on the work already done*. A quiet monitor answering exactly `NOTHING TO REPORT`
-satisfies that signature by construction, which is why the sentinel that stopped the
-monitor flooding the planner's queue is also what ends its conversation. onejudge
-declares a field for exactly this contract — `user.settle_on_noop`, documented in
-`onejudge` 0.7.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out for "an
-observer instructed to answer with one fixed short sentence while it finds nothing",
-with `max_turns` left as the bound. Nothing here sets it today; that is a change to
-`personas/orchestrator.yaml` and a decision for a manager, not something this section
-claims is in force.
+one.** Two things end that conversation. onejudge names the first in the member's own
+report: *the agent and the supervisor repeated 2 no-op exchanges (no tool activity, and
+the same agent reply each time); settled on the work already done*. A monitor answering
+one fixed short sentence while it finds nothing satisfies that signature by
+construction, which is why the quiet-turn sentinel that stopped it flooding the
+planner's queue was also what ended its watch — and why there is no sentinel any more:
+`personas/orchestrator.yaml` asks a quiet turn for words about what it read rather than
+for a formula, so a healthy watch no longer walks into that signature on purpose.
+onejudge declares a field for the contract that remains — `user.settle_on_noop`,
+documented in `onejudge` 0.7.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out
+for "an observer instructed to answer with one fixed short sentence while it finds
+nothing", with `max_turns` left as the bound. Nothing here sets it today; that is a
+change to `personas/orchestrator.yaml` and a decision for a manager, not something this
+section claims is in force.
+
+The second is the bound itself, and on this host it was overwhelmingly the one that
+fired: in `root-causes-94-plan` the monitor settled five times and every one of those
+five is the turn immediately after its fiftieth. That ceiling is now 4500, derived from
+this host's own recorded runs — the corpus, the eligibility rule, the exclusions, the
+turn rate and the arithmetic are all written where the value is declared, in
+`personas/orchestrator.yaml`. It stays finite deliberately: it is what bounds a wedged
+or looping supervisory conversation, and the sibling `check-in` member keeps a finite
+deadline for the same reason.
 
 **Two upstream changes would lift the constraint, and neither belongs to this
 repository.** Either alone is enough:
@@ -687,9 +699,8 @@ clock through `oneagentgraph reset-timer RUN check-in` — and `finding` is some
 a watcher saw and decided the planner should know, raised deliberately rather than
 as the side effect of a turn having happened. That is the CLI's own restriction and
 not the queue's: `kind` on a queued surface is a free-form string, which is how
-`scripts/channel-serve.py` raises `monitor`, `monitor-failed`, `monitor-transcript`
-and `monitor-completion`, and how the engine raises `monitor-edit` and
-`edit-rejected`.
+`scripts/channel-serve.py` raises `monitor-failed` and `monitor-completion`, and how
+the engine raises `monitor-edit` and `edit-rejected`.
 
 The planner reads it with `just channel-next RUN`, which hands out each queued
 surface once, along with the events it was raised against:
@@ -779,17 +790,19 @@ needs, both out of the frame itself:
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
-- **the surface message**, from the last thing the monitor said — unless the turn
-  failed, in which case that is not something the monitor said at all.
+- **whether the monitor took its turn at all**, from the last thing it said. What it
+  said is not read beyond that, because prose raises no surface — see [A monitor
+  reports through the `finding` op](#a-monitor-reports-through-the-finding-op) below.
+  The one thing still read out of that message is a turn the monitor did *not* take.
 
-A turn the agent side lost writes the harness's own machine transcript into that
-message: measured off this host's `runs/rc-fixes-brief` channel, fifteen JSON-RPC
-frames and 21,531 characters, most of it the prompt echoed back, ending in a
-`method: error` frame and a `turn/completed` whose `status` is `failed`. Twenty of
-them queued unread on one run. The planner may not filter the unread-surface line —
-a blocking surface produces no other signal until it is read — so raising one of
-those verbatim is unreadable and undroppable at once. The filter recognises a lost
-turn and raises it as a named failure instead, under its own kind:
+A turn the agent side lost does not always arrive empty: the harness writes its own
+machine transcript into that message instead — measured off this host's
+`runs/rc-fixes-brief` channel, fifteen JSON-RPC frames and 21,531 characters, most of
+it the prompt echoed back, ending in a `method: error` frame and a `turn/completed`
+whose `status` is `failed`. Twenty of them queued unread on one run. That is the same
+provider defect as an empty turn wearing content, and reading it as content would let
+a monitor whose agent side is failing look healthy for the rest of the run. So the
+filter recognises a lost turn and raises it as a named failure, under its own kind:
 
 | | |
 | --- | --- |
@@ -804,37 +817,23 @@ terminal turn status of `failed`, or an error frame. That vocabulary is delibera
 never widened, because widening it is how the next harness's fourth shape outruns the
 classifier and a planner is sent to the wrong quota.
 
-**A transcript no failure can be proven inside is bounded all the same**, and it is by
-far the commoner shape. Measured on 2026-08-24: 26 oversized surfaces on this host, every
-one `status: completed` with `error: null`, so nothing was provable about any of them and
-all 26 were raised as the monitor's own words — 176.1 MB of protocol carrying zero
-model-authored characters, a 3.6 GB journal holding one 699 MB event line, and a
-read-only `just runs` that needed 5.7 GB of RSS. So the bound is placed on what *is*
-provable: what tells a transcript from prose is that every non-blank line of it parses as
-a JSON object, which is the same test with no harness's vocabulary in it, and both
-answers it identifies are bounded:
+**A transcript no failure can be proven inside raises nothing**, and it used to raise a
+bounded `monitor-transcript` line of its own. That kind is gone with the prose path it
+was compensating for. It existed because prose was republished verbatim: measured on
+2026-08-24, 26 oversized surfaces on this host, every one `status: completed` with
+`error: null`, so nothing was provable about any of them and all 26 were raised as the
+monitor's own words — 176.1 MB of protocol carrying zero model-authored characters, a
+3.6 GB journal holding one 699 MB event line, and a read-only `just runs` that needed
+5.7 GB of RSS. With nothing republished there is nothing to bound: an unprovable
+transcript is content the member produced, so the member is answered and lives, no
+surface is queued, and the run keeps the turn where `just monitor <run> --filter
+monitor` reads it. That date stamps this host's own accumulated journals rather than any
+release, and `tests/e2e/test_monitor_quiet_turn_e2e.py` drives what an unprovable
+transcript gets now.
 
-| | |
-| --- | --- |
-| kind | `monitor-transcript` |
-| message | ``monitor answered with a machine transcript rather than an observation: 4787 characters from codex, and nothing in it says the turn failed. It is not repeated here — read it with `just monitor rc-fixes-brief --filter monitor`.`` |
-
-It claims nothing about *why*, because nothing here proves a failure and a guessed cause
-is worse than none. What it does name is the three things that keep a withheld
-observation one command away rather than lost: whose output it was, how much of it
-arrived, and where the full text is read. There is no size floor and no `jsonrpc` or
-`method` check — a 300-character transcript published as the monitor's prose is the same
-category error as a 1.87 MB one, just cheaper, and enumerating one known protocol is
-exactly what the next harness's shape would outrun. The cost is accepted: a monitor
-answer that genuinely consists only of JSON object lines is bounded too, and is readable
-at the command the line names.
-
-**An observation written as prose is untouched** and still raised verbatim under
-`monitor`, including one that quotes protocol frames inside it — a prose line does not
-parse as a JSON object. `tests/e2e/test_lost_turn_wire_contract_e2e.py` drives both
-bounded surfaces onto a real published channel with the real `codex` transcript behind
-them, and reads each back out of `runs/<run-id>/channel/queue.json` where a manager reads
-one.
+`tests/e2e/test_lost_turn_wire_contract_e2e.py` drives the surviving surface onto a real
+published channel with the real `codex` transcript behind it, and reads it back out of
+`runs/<run-id>/channel/queue.json` where a manager reads one.
 
 It raises the surface **non-blocking**. A blocking one would hold the run at
 `awaiting-planner` on every monitor turn — ending the attached launch's
@@ -849,34 +848,67 @@ verdict there would continue or settle a run nobody ruled on.
 `tests/e2e/test_orchestrate_launch_e2e.py` drives the whole round trip on a real
 launch, and each refusal through the real script.
 
-#### A monitor that found nothing, and a monitor that said nothing
+#### A monitor reports through the `finding` op
 
-These are two different turns and the filter used to have one answer for both, which
-cost this host its whole supervisory tier for hours at a time.
-[`personas/orchestrator.yaml`](../personas/orchestrator.yaml) tells the monitor to spend
-no planner surface on a turn with no finding in it — a queue of throat-clearing buries
-the blocking questions sharing it — and until the filter learned the difference, obeying
-that instruction was fatal on the **first** quiet turn, which for a healthy run is
-usually the first turn. A frame carrying no assistant content was refused as a protocol
-failure, `oneagentgraph` recorded `member-died
+A monitor has exactly one way to tell the planner something, and it is the `finding` op
+in an `onepipeline reply` envelope. The prose a turn ends in raises **no** planner
+surface, whatever it says.
+
+That is a deletion rather than a filter, and the measurement behind it is one run's own
+queue. While prose was raised automatically, a monitor with a finding to file had three
+moves and none of them was clean: the prose alone, which loses the operation's node
+attribution and its structured kind; the operation *and* prose, which is two surfaces
+for one finding; or the operation and a quiet-turn sentinel, which is one surface and a
+false statement its own judge then scores against a bar about surfacing everything
+observed. It chose the middle every time. Of `root-causes-94-plan`'s 54 surfaces, 19 are
+findings and 8 are `monitor` prose, and all 8 duplicate the finding immediately before
+them, raised three to thirty-five seconds later, six byte-identical and two
+restatements — 30% of the monitor-authored surfaces carrying nothing the operator had
+not been handed seconds earlier, against a
+[`personas/orchestrator.yaml`](../personas/orchestrator.yaml) that promises a finding
+arrives once. The one line a planner may never filter is the unread-surface count that
+[`AGENTS.md`](../AGENTS.md) owns the rule about, and it is worth nothing when part of
+that count is a repeat — a blocking surface produces no other signal until it is read,
+so every duplicate degrades the one indicator that discipline exists to protect.
+
+Suppressing prose that merely *resembles* a recent finding was the obvious alternative
+and the same measurement rules it out: two of those eight were restatements at very low
+token overlap, so content matching catches at most six of eight while risking the
+suppression of a genuine follow-up. Removing the path removes the choice instead.
+
+**What a turn's content is still read for is liveness, and nothing else.** A monitor
+that found nothing and a monitor that said nothing are two different turns, and the
+filter used to have one answer for both — which cost this host its whole supervisory
+tier for hours at a time. A frame carrying no assistant content was refused as a
+protocol failure, `oneagentgraph` recorded `member-died
 {"rule":"provider-failure","cause":"protocol"}`, and the run carried on reporting
 `ACTIVE` with nothing watching it. Observed on `spanish-language-tutor-upgrade`, which
 lost its observer five minutes in and ran roughly two hours that way while every other
 indicator stayed green.
 
-So a monitor **says** its silence, and there are three answers rather than two:
-
 | The turn's last message | What happens |
 | --- | --- |
-| exactly `NOTHING TO REPORT` | no surface is raised and nothing is queued; onejudge is answered `{"completion": false}` with a message telling the monitor to keep watching, so the member lives |
-| anything else the monitor said | raised as the surface it always was — `monitor`, `monitor-failed`, or `monitor-transcript`, per the sections above |
-| no assistant content at all | still refused, naming the sentinel: an empty turn is a real provider defect and is what the sentinel exists to stop being mistaken for |
+| any assistant content at all | no surface is raised and nothing is queued; onejudge is answered `{"completion": false}` with a message telling the monitor its report goes as a `finding`, so the member lives and keeps watching |
+| a machine transcript a failure can be *proven* inside | the one surface left on this path: a bounded `monitor-failed` line, per the section above — this is the filter reporting on the member, not the monitor reporting on the run |
+| no assistant content at all | refused: an empty turn is a real provider defect and is what a lost turn looks like from here |
 
-Only decoration is forgiven around the sentinel — surrounding whitespace, a full stop,
-bold markers, backticks — and case with it. It is matched against the **whole** message
-and never searched for inside one: a turn that raised a finding and also wrote the
-sentinel has raised a finding, and swallowing it would lose the observation the member
-exists to produce.
+There is deliberately no fixed string anywhere on this path and nothing to compare a
+message against. A sentinel is a vocabulary, a vocabulary can be got wrong, and the
+monitor was being scored on getting it wrong.
+
+**What covers a monitor that observes something and does not file it** is its
+supervisor, not this filter: prose is the safety net no longer, so the monitor's own
+`user.persona` requires such a turn be sent back until the finding is on the channel.
+The cost is stated plainly because it is real — a monitor that notices something, writes
+it as prose, and is not sent back has reported it to nobody.
+
+**The periodic `check-in` member is untouched by all of this.** It is a single-sided
+`kind: oneharness` member with no judge side at all, so it never reaches
+`scripts/channel-serve.py`: it raises its own surface with `onepipeline surface --kind
+check-in` and its report reaches the queue under its own kind and source.
+`tests/e2e/test_monitor_quiet_turn_e2e.py` proves that on a real launch rather than
+asserting it, by reading the pacemaker's surface off the queue in the same run whose
+monitor prose raises none.
 
 Structured output would be the heavier way to draw the same line, and one constraint
 rules it out: oneharness validates a structured answer against the complete response, so
@@ -884,8 +916,8 @@ rules it out: oneharness validates a structured answer against the complete resp
 run's long-lived watcher would trade away the per-turn visibility a manager supervises
 with.
 
-`tests/e2e/test_monitor_quiet_turn_e2e.py` drives all three through the real filter onto
-a real published channel, and reads what was and was not queued out of
+`tests/e2e/test_monitor_quiet_turn_e2e.py` drives each of those answers through the real
+filter onto a real published channel, and reads what was and was not queued out of
 `runs/<run-id>/channel/queue.json`.
 
 #### The completion bar is scored by the planner too

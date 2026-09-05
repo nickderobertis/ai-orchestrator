@@ -33,55 +33,78 @@ out of what the frame itself carries:
   contract this filter already validates, so the task stays the source. The export
   is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where
   this file stands and re-takes the measurement rather than trusting this paragraph.
-* **What to surface.** The last assistant message of the conversation is what the
-  monitor just said, which is the thing the planner is being asked to answer —
-  **unless it is a machine transcript**, because then it is not something the
-  monitor said at all. A turn the agent side lost writes its harness's own stream
-  into that message: measured off this host's `runs/rc-fixes-brief` channel,
-  fifteen JSON-RPC frames and 21,531 characters, most of it the prompt echoed back,
-  ending in `method: error` and a `turn/completed` whose `status` is `failed`.
-  Twenty of those queued unread on one run. A planner may not filter the
-  unread-surface line — a blocking surface produces no other signal until it is
-  read — so a transcript raised verbatim is simultaneously unreadable and
-  undroppable.
+* **What to surface.** Almost nothing, which is the whole of this filter's reporting
+  policy: a monitor's report reaches the planner through the `finding` op it issues
+  itself, and never through the prose a turn happened to end in. The one thing raised
+  from a turn is a turn the monitor did not take — see below.
 
-  **A transcript no failure can be proven inside is the same defect and arrives far
-  more often.** Measured across this host's 26 oversized surfaces on 2026-08-24:
-  every one `status: completed` with `error: null`, so `lost_turn_error` proved
-  nothing about any of them and all 26 were republished as the monitor's own words —
-  176.1 MB of protocol, carrying zero model-authored characters. The bound is
-  therefore placed on what is *provable*: `transcript_frames` already tells a machine
-  transcript from prose without guessing at any harness's vocabulary, and both
-  answers it identifies are surfaced as a bounded line under a kind of their own,
-  with the transcript left where the run already keeps it. What that costs is
-  accepted deliberately — a monitor answer that genuinely consists only of JSON
-  object lines is bounded too, and is one command away rather than lost, because the
-  line names where the full text is read.
+**A monitor reports through the `finding` op, and this filter raises no surface for
+what it says.** That is a deletion rather than a filter, and the vocabulary went with
+it. While prose was raised automatically, a monitor with a finding to file had three
+moves and none was clean: prose alone, which loses the operation's node attribution and
+its structured kind; the operation *and* prose, which is two surfaces for one finding;
+or the operation and a quiet-turn sentinel, which is one surface and a false statement
+its own judge then scores against a bar about surfacing everything observed. It chose
+the middle every time — of `root-causes-94-plan`'s 54 surfaces, 19 are findings and 8
+are `monitor` prose, and all 8 duplicate the finding immediately before them, raised
+three to thirty-five seconds later, six of them byte-identical. That is 30% of the
+monitor-authored surfaces carrying nothing the operator had not been handed seconds
+earlier, against a `personas/orchestrator.yaml` that promises a finding arrives once.
+A planner may not filter the unread-surface line — a blocking surface produces no
+other signal until it is read — so every duplicate degrades the one indicator that
+discipline exists to protect.
+
+Suppressing prose that merely *resembles* a recent finding was the obvious alternative
+and the same measurement rules it out: two of those eight were restatements at very low
+token overlap, so content matching would catch at most six of eight while risking the
+suppression of a genuine follow-up. Removing the path removes the choice instead.
 
 **A monitor that looked and found nothing is not a monitor that failed**, and
 conflating the two removed this host's whole supervisory tier for two hours at a time.
-`personas/orchestrator.yaml` tells the monitor to spend no planner surface on a turn
-with no finding in it, because a queue of throat-clearing buries the blocking questions
-that share it. Until this filter learned the difference, obeying that instruction was
-fatal on the **first** quiet turn — which for a healthy run is usually the first turn:
-a frame carrying no assistant content was refused as a protocol failure, `oneagentgraph`
-recorded `member-died {"rule":"provider-failure","cause":"protocol"}`, and the run went
-on reporting `ACTIVE` with nothing watching it and nothing announcing the loss. Observed
-on `spanish-language-tutor-upgrade`, which lost its observer five minutes in and ran
+Until this filter learned the difference, a frame carrying no assistant content was
+refused as a protocol failure, `oneagentgraph` recorded `member-died
+{"rule":"provider-failure","cause":"protocol"}`, and the run went on reporting `ACTIVE`
+with nothing watching it and nothing announcing the loss. Observed on
+`spanish-language-tutor-upgrade`, which lost its observer five minutes in and ran
 roughly two hours that way while every other indicator stayed green.
 
-So the two are made distinguishable rather than left conflated, and there are three
-things a turn can end in rather than two:
+So liveness is now the whole question a turn's content is asked, and there are two
+answers rather than three:
 
-* **the sentinel** — the monitor says `NOTHING TO REPORT` and nothing else, which is a
-  report that it looked and found nothing. No surface is raised, nothing is queued for
-  anybody to read, and onejudge is answered with a non-completion it can act on, so the
-  member lives and keeps watching;
-* **prose** — anything else the monitor said, raised as the surface it always was;
-* **no assistant content at all** — still a failure, because that is a real provider
-  defect, and it is precisely the case the sentinel exists to stop being mistaken for.
-  Its refusal names the sentinel, so the difference between the two is readable from the
-  refusal rather than inferable from this file.
+* **any assistant content at all** — the monitor took its turn. No surface is raised,
+  nothing is queued for anybody to read, and onejudge is answered with a non-completion
+  it can act on, so the member lives and keeps watching. What the monitor *meant* to
+  report is on the channel already if it filed a `finding`, and is nowhere if it did
+  not — which is its supervisor's to catch, not this filter's;
+* **no assistant content at all** — a failure, because that is a real provider defect
+  and it is what a turn the agent side lost looks like from here.
+
+There is deliberately no third answer and no fixed string anywhere on this path. A
+sentinel is a vocabulary, a vocabulary can be got wrong, and the monitor was scored on
+getting it wrong.
+
+**One thing is still read out of the content, and it is the opposite of a report.** A
+turn the agent side lost does not always arrive empty: the harness writes its own
+stream into the last assistant message instead — measured off this host's
+`runs/rc-fixes-brief` channel, fifteen JSON-RPC frames and 21,531 characters, most of
+it the prompt echoed back, ending in `method: error` and a `turn/completed` whose
+`status` is `failed`. That is the same provider defect as an empty turn wearing
+different clothes, and reading it as content would let a monitor whose agent side is
+failing look healthy for the rest of the run. So `transcript_frames` and
+`lost_turn_error` stay, and a transcript that **proves** the turn was lost is raised as
+a bounded `monitor-failed` line naming the cause and the identity. That surface is this
+filter reporting on the member, not the monitor reporting on the run, which is why it
+survives a change that took away every other raise.
+
+**What went with the prose path is the transcript machinery that was compensating for
+it.** A machine transcript no failure can be proven inside used to get a bounded
+`monitor-transcript` surface of its own, and that existed for exactly one reason: prose
+was republished verbatim, so 26 oversized surfaces measured on this host — every one
+`status: completed` with `error: null` — put 176.1 MB of protocol on the channel as the
+monitor's own words. With nothing republished there is nothing to bound. An unprovable
+transcript is now content like any other: it raises no surface, the member is answered
+and lives, and the run already keeps the turn where `just monitor <run> --filter
+monitor` reads it.
 
 Structured output is the heavier alternative and one constraint rules it out: oneharness
 validates a structured answer against the complete response, so `stream = true` and
@@ -208,44 +231,25 @@ RUN_IN_COMPOSED_TASK = re.compile(r"onepipeline run `([^`]+)`")
 #: be `..`, or a NUL or other control character would name something other than the run.
 SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 
-#: What the monitor says when it looked and found nothing. Stated to the model in the
-#: same paragraph of `personas/orchestrator.yaml` that tells it to stay quiet, so the
-#: instruction and this contract cannot drift apart.
-FOUND_NOTHING = "NOTHING TO REPORT"
-
-#: What is stripped from either end of a message before it is compared against that
-#: sentinel: a model asked for one bare line writes it in bold, in backticks, or with a
-#: full stop. Nothing beyond decoration, since any other word means the monitor spoke.
-DECORATION_AROUND_THE_SENTINEL = " \t\r\n.*`_"
-
-#: What the monitor is told when it reported that sentinel. The sentinel is quoted back
-#: so a monitor whose message was *nearly* it can see which reading it got.
-FOUND_NOTHING_ACKNOWLEDGED = (
-    "You reported `{sentinel}`, so no planner surface was raised and nothing was queued "
-    "for anybody to read. That is the right turn to take when you have no finding. Keep "
-    "reading the detailed stream and raise the next thing you do find."
+#: What the monitor is told when its turn produced content. Nothing in it is compared
+#: against anything the monitor wrote — this is the answer to *every* turn that was
+#: taken — and it says where a report goes, because the `finding` op is now the only
+#: route and a monitor that wrote its observation as prose has reported it to nobody.
+TURN_TAKEN_ACKNOWLEDGED = (
+    "Your turn was taken and no planner surface was raised for it: prose reaches "
+    "nobody. A report reaches the planner only as a `finding` op in an "
+    "`onepipeline reply` envelope, which arrives once and carries the node it is "
+    "about. Keep reading the detailed stream and file the next thing you find."
 )
 
 #: And why that ruling is a non-completion, for the reader who meets it in a transcript.
-FOUND_NOTHING_REASON = "the monitor reported no finding, so no surface was raised"
+TURN_TAKEN_REASON = "the monitor took its turn; a report reaches the planner as a finding"
 
-#: The surface kind a monitor's supervisor boundary is raised under. `channel
-#: serve` takes a free-form kind here, unlike `onepipeline surface --kind`, so this
-#: names what the surface *is* rather than borrowing the pacemaker's word for it.
-SURFACE_KIND = "monitor"
-
-#: And the kind a turn that failed instead of speaking is raised under. Its own kind
+#: The kind a turn that failed instead of speaking is raised under. Its own kind
 #: rather than a differently worded `monitor`, because the planner-facing views name
 #: the kinds a run has queued: it is what an operator who may not filter that line can
 #: read off it without opening one.
 SURFACE_KIND_OF_A_FAILED_TURN = "monitor-failed"
-
-#: And the kind a machine transcript carrying no provable failure is raised under. A
-#: third kind rather than either of the other two, for the same reason `monitor-failed`
-#: is not a worded `monitor`: an operator reading the kinds a run has queued is being
-#: told two different things — a turn that was lost, and a turn that produced protocol
-#: where its words go without saying it failed — and only one of them names a quota.
-SURFACE_KIND_OF_A_TRANSCRIPT = "monitor-transcript"
 
 #: How much of a failure's cause may reach the surface message. The cause is the one
 #: part of the line copied out of somebody else's transcript, so it is the one part
@@ -456,19 +460,18 @@ class ObserverFrame(TypedDict):
     blocking: bool
 
 
-class FoundNothing(NamedTuple):
-    """The monitor's own report that it looked and found nothing worth raising.
+class TurnTaken(NamedTuple):
+    """A turn the monitor produced content on, which raises nothing and asks nobody.
 
-    Its own type rather than a `None`, because a turn ends in one of three things and
-    only one of them is an absence: this one is a *report*, a lost turn is a failure, and
-    anything else the monitor said is a surface. Naming it is what stops the branch that
-    answers it from being read as the branch that handles a missing value — and what
-    stops the next reader from folding it back into the refusal it was folded into
-    before, which is the whole defect.
+    Its own type rather than a `None`, because it is not an absence: it is the answer
+    to the ordinary turn, and it is what most turns of a healthy run get. Naming it is
+    what stops the branch that answers it from being read as the branch that handles a
+    missing value — and what stops the next reader from folding it back into the
+    refusal it was folded into before, which is the whole defect.
 
-    Carries nothing, deliberately: what the monitor wrote is the sentinel and the ruling
-    quotes the constant rather than the message, so a message that arrived with stray
-    decoration cannot put that decoration back in front of a planner.
+    Carries nothing, deliberately. Nothing the monitor wrote is read, compared, or
+    quoted back: the ruling is composed from this file's own words, so no prose of the
+    monitor's can reach a planner by riding out on this path.
     """
 
 
@@ -620,9 +623,9 @@ def lost_turn_error(frames: list[TranscriptFrame]) -> TurnError | None:
     Recognising only a failure — never "this looks like a transcript" — is deliberate
     and unchanged: widening this vocabulary is how the next harness's fourth shape
     outruns the classifier, and a cause guessed at sends a planner to the wrong quota.
-    What a transcript it cannot prove was lost gets is not a guess and not a republished
-    dump either — see `machine_transcript_surface`, which bounds it without claiming
-    anything about why it arrived.
+    A transcript it cannot prove was lost gets no surface at all now: it is content the
+    member produced, so the member is answered and lives, and the run keeps the turn
+    where `just monitor <run> --filter monitor` reads it. Nothing here guesses.
     """
     for frame in reversed(frames):
         match frame:
@@ -703,48 +706,8 @@ def failed_turn_surface(
     )
 
 
-def machine_transcript_surface(
-    frames: list[TranscriptFrame], spoken: str, run: RunId
-) -> ObserverFrame:
-    """One machine transcript, named rather than transcribed, claiming no failure.
-
-    The sibling of `failed_turn_surface` for the answer `lost_turn_error` could not
-    prove anything about, and the same three things a planner acts on: which identity's
-    output this was, how much of it arrived, and the one command that reads all of it.
-    What it deliberately does *not* say is why — nothing here proves the turn failed, so
-    naming a cause would be a guess, and the transcript's own frames are one command
-    away for whoever wants one.
-
-    Composed rather than copied, exactly like the failure line: every part of it is this
-    filter's own words, a count, an identity out of a fixed vocabulary, or the run id
-    `SAFE_RUN_ID` already checked, so nothing on the far side of the boundary decides
-    how long it is.
-    """
-    return ObserverFrame(
-        kind=SURFACE_KIND_OF_A_TRANSCRIPT,
-        message=(
-            f"monitor answered with a machine transcript rather than an observation: "
-            f"{len(spoken)} characters from {identity_in(frames)}, and nothing in it "
-            f"says the turn failed. It is not repeated here — read it with "
-            f"`just monitor {run} --filter monitor`."
-        ),
-        blocking=False,
-    )
-
-
-def found_nothing(said: str) -> bool:
-    """Whether this message is the monitor reporting that it found nothing.
-
-    Equality against the whole message rather than a search inside it. A turn that
-    raised a finding *and* wrote the sentinel has raised a finding, and swallowing it
-    would lose the observation this member exists to produce — so only decoration is
-    forgiven, and case with it, and everything else is prose to surface.
-    """
-    return said.strip(DECORATION_AROUND_THE_SENTINEL).casefold() == FOUND_NOTHING.casefold()
-
-
-def ruling_for_a_quiet_turn() -> SupervisorResponse:
-    """Answer a monitor that found nothing, without asking the planner anything.
+def ruling_for_a_turn_taken() -> SupervisorResponse:
+    """Answer a monitor that took its turn, without asking the planner anything.
 
     Composed here rather than served, because there is nothing to serve: no surface was
     raised, so no planner was asked and there is no ruling of theirs to relay. That is
@@ -756,26 +719,27 @@ def ruling_for_a_quiet_turn() -> SupervisorResponse:
     """
     return SupervisorResponse(
         completion=False,
-        message=FOUND_NOTHING_ACKNOWLEDGED.format(sentinel=FOUND_NOTHING),
-        reason=FOUND_NOTHING_REASON,
+        message=TURN_TAKEN_ACKNOWLEDGED,
+        reason=TURN_TAKEN_REASON,
     )
 
 
-def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | FoundNothing | int:
-    """Turn one supervisor frame into the surface the planner is asked to answer.
+def answer_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | TurnTaken | int:
+    """What one supervisor frame gets: a surface, a bare acknowledgement, or a refusal.
 
-    Or into `FoundNothing`, which is a turn with no surface in it: the monitor reported
-    the sentinel, so there is nothing to ask the planner and nothing is queued. It is
-    read before anything else is made of the message, because it is the answer a healthy
-    run gives most often — and because conflating it with the refusal above, which is
-    what a turn carrying no assistant content gets, is what killed this host's monitors.
+    `TurnTaken` is the ordinary answer and the one a healthy run gets on nearly every
+    turn: the monitor produced content, so it is alive, and nothing is raised — its
+    report, if it had one, is already on the channel as a `finding` op it issued itself.
+    Nothing about what it said is read beyond that it said something, which is the whole
+    of the reporting policy this file now has.
 
-    Everything else is a surface, and `transcript_frames` draws the line between the
-    three of them: a turn the monitor spoke in is prose, and is raised verbatim, as the
-    planner's question is the monitor's own words. Anything that is a machine transcript
-    is bounded, because republishing one is what put 176.1 MB of protocol on this
-    channel — as a named failure where `lost_turn_error` can prove the turn was lost,
-    and as a named transcript where it cannot.
+    The two exceptions are both about a turn the monitor did not take. A frame with no
+    assistant content at all is refused, because that is a real provider defect. And a
+    last message that `transcript_frames` reads as the harness's own stream, with a
+    failure `lost_turn_error` can *prove* inside it, is the same defect wearing content:
+    it raises the one surface left on this path. A transcript nothing can be proven
+    about is left alone as content, because the bound that used to be put on it existed
+    only to keep republished prose off the channel and there is no republished prose.
     """
     messages = frame.get("messages")
     if not isinstance(messages, list):
@@ -795,21 +759,18 @@ def surface_for(frame: SupervisorFrame, run: RunId) -> ObserverFrame | FoundNoth
         return fail(
             f"the monitor said nothing at all for run {run} — no assistant message — "
             "which is a turn its agent side lost rather than a turn that found nothing; "
-            f"a monitor with no finding reports `{FOUND_NOTHING}` and is answered "
-            "without a surface",
+            "a monitor with no finding still takes its turn and says something, and is "
+            "answered without a surface",
             f"read its turns with `just monitor {run} --filter monitor` to see why the "
             "turn produced no message",
         )
     said = spoken[-1]
-    if found_nothing(said):
-        return FoundNothing()
     frames = transcript_frames(said)
-    if frames is None:
-        return ObserverFrame(kind=SURFACE_KIND, message=said, blocking=False)
-    lost = lost_turn_error(frames)
-    if lost is None:
-        return machine_transcript_surface(frames, said, run)
-    return failed_turn_surface(lost, frames, said, run)
+    if frames is not None:
+        lost = lost_turn_error(frames)
+        if lost is not None:
+            return failed_turn_surface(lost, frames, said, run)
+    return TurnTaken()
 
 
 def ruling_from(answer: str, run: RunId) -> SupervisorResponse | int:
@@ -1050,19 +1011,18 @@ def main() -> int:
         print(json.dumps(score, ensure_ascii=False))
         return 0
 
-    surface = surface_for(frame, run)
-    match surface:
+    answer = answer_for(frame, run)
+    match answer:
         case int():
-            return surface
-        # A quiet turn is answered here and the channel is never opened, which is the
-        # half that matters as much as the member surviving: raising a surface saying
-        # "nothing to report" would cost the planner exactly the update the persona's
-        # silence rule exists to spare them, and bury the blocking questions sharing
-        # that queue behind it.
-        case FoundNothing():
-            print(json.dumps(ruling_for_a_quiet_turn(), ensure_ascii=False))
+            return answer
+        # An ordinary turn is answered here and the channel is never opened, which is
+        # the half that matters as much as the member surviving: raising the monitor's
+        # prose as a surface is what queued eight duplicate updates behind nineteen
+        # findings on one run, burying the blocking questions sharing that queue.
+        case TurnTaken():
+            print(json.dumps(ruling_for_a_turn_taken(), ensure_ascii=False))
             return 0
-    ruling = served_by_the_planner(surface, run, binary)
+    ruling = served_by_the_planner(answer, run, binary)
     if isinstance(ruling, int):
         return ruling
     # Re-serialized from the ruling this validated rather than echoed through, so

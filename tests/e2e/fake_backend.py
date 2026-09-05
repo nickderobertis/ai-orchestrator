@@ -99,6 +99,13 @@ MOCK_STDOUT_ENV = "MOCK_STDOUT"
 #: the command line at all.
 JUDGE_CONFIG_NAME = "oneharness.judge.toml"
 
+#: What this stand-in answers for a single-sided member — one with no judge config
+#: beside it, which on this host is `graphs/dag-scope.yaml`'s `check-in` pacemaker.
+#: Named rather than inlined because a journey asserting that member's surface still
+#: reaches the planner's queue has to recognise it, and two copies of the sentence
+#: would let that assertion pass against a report nothing produced.
+PACEMAKER_REPORT = "the stand-in pacemaker reported"
+
 #: The task `onepipeline` composes for the dag-scope graph. Since onepipeline 0.2.0 it
 #: says what the run *is* — its id and its goal — and no longer what to do with it;
 #: before that it opened `Drive run <RUN> to settlement`, and every member that took a
@@ -166,10 +173,10 @@ MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 #:
 #: Opt-in and unset everywhere else, so every other journey reads the same monitor turn
 #: it always did. It exists for one thing a fixed answer cannot reach: the monitor's
-#: reply is what its judge side is handed, and one particular reply — the persona's
-#: found-nothing sentinel — is the turn that used to KILL the member. Proving it no
-#: longer does means a real launch whose monitor really says it, and the monitor's words
-#: are the paid model's, which is the one thing doubled here.
+#: reply is what its judge side is handed, and a reply carrying no finding is the turn
+#: that used to KILL the member. Proving it no longer does means a real launch whose
+#: monitor really takes one, and the monitor's words are the paid model's, which is the
+#: one thing doubled here.
 OBSERVER_ANSWER_ENV = "FAKE_BACKEND_OBSERVER_ANSWER"
 OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 
@@ -449,15 +456,21 @@ def main(argv: list[str]) -> int:
         return _answer(
             argv, json.dumps({"completion": True, "reason": "the stand-in accepts the work"})
         )
+    # Before the single-sided branch below, and that ordering is the whole of what makes
+    # this seam reach the member it names. `graphs/dag-scope.yaml`'s monitor is two-party
+    # but its JUDGE side is a `command` — `scripts/channel-serve.py` — so `oneagentgraph`
+    # writes no judge harness config beside its agent one, and the "no judge sibling"
+    # test below reads that member as single-sided. Answered there, every scripted
+    # monitor answer was replaced by the pacemaker's report while the prompt log went on
+    # recording the script, so a journey asserting on the log passed while the model said
+    # something else entirely.
+    if scripted_answer is not None:
+        return _answer(argv, scripted_answer)
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
-        return _answer(argv, "the stand-in pacemaker reported")
+        return _answer(argv, PACEMAKER_REPORT)
     _ask_manager(config)
     _author_plan(config)
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
-    if scripted_answer is not None:
-        # Before the delay, not after: the delay exists to hold a dispatched WORKER's
-        # turn open so a run stays live, and slowing the watch is what it must not do.
-        return _answer(argv, scripted_answer)
     if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
     return _answer(argv, "the stand-in worker reported without changing anything")

@@ -60,8 +60,8 @@ from test_orchestrate_launch_e2e import (
     DAG_SCOPE_STREAM,
     MONITOR_MEMBER,
     PACEMAKER_INTERVAL_SECONDS,
-    SUPERVISOR_FRAME,
     _environment,
+    _frame_of_a_lost_turn,
     _just,
 )
 from waits import timeout as e2e_timeout
@@ -816,6 +816,10 @@ def _supervised(
     The turn boundary rather than the score boundary, because what a claimed reply is
     turned into is decided there and only *reported* here — and every branch below is
     about an answer the published channel cannot be made to give on demand.
+
+    The frame ends in a turn the agent side lost rather than in prose, because prose
+    raises no surface: the filter answers it itself and never opens the channel, so
+    there would be no claimed reply to turn into anything.
     """
     environment = _environment(tmp_path, oneharness_bin)
     # llmlint: ignore[e2e_not_mocked] The published channel cannot make these answers.
@@ -824,7 +828,7 @@ def _supervised(
         [str(REPO_ROOT / "scripts" / "channel-serve.py")],
         cwd=REPO_ROOT,
         env=environment,
-        input=json.dumps(SUPERVISOR_FRAME),
+        input=_frame_of_a_lost_turn(),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
