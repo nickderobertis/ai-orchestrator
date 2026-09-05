@@ -38,12 +38,13 @@ for this recipe that is `tests/e2e/test_sweep_e2e.py`.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import pytest
 
@@ -751,6 +752,15 @@ def test_a_reply_that_cannot_be_judged_is_named_rather_than_sent_unjudged(
 
     assert result.returncode != 0, f"an unjudged reply was sent anyway:\n{result.stdout}"
     assert "could not be judged" in result.stderr, result.stderr
+    # An interpreter that dies with a status of its own can collide with a refusal's, and
+    # every refusal names itself on stdout while a dead one names nothing — which is what
+    # the recipe reads to tell them apart. This interpreter exits with exactly such a
+    # status, so a recipe that stopped checking would refuse an unjudged reply in its own
+    # voice with an empty reason where the explanation belongs.
+    assert "with nothing to say for it" in result.stderr, (
+        f"the recipe read a dead interpreter's exit status as one of its own refusals, "
+        f"so a reply nothing judged was refused as though it had been:\n{result.stderr}"
+    )
     assert "just bootstrap" in result.stderr, result.stderr
     assert not trace.exists(), f"the reply reached the verb unjudged:\n{trace.read_text()}"
 
@@ -1361,3 +1371,391 @@ def test_the_channel_surface_recipe_refuses_an_invocation_it_cannot_act_on(
     assert result.returncode == 2, result.stdout
     assert "usage: planner-surface.sh <run-id> [text]" in result.stderr
     assert not trace.exists()
+
+
+#: A `uv` that accepts the reply and appends whatever the journey told it to. It stands
+#: where the published verb stands, which is the only place a journey can present a
+#: second `delivery` word: the engine writes `live` only by interrupting a dispatch's own
+#: control socket, and this suite's stand-in provider has no turn to interrupt.
+JOURNALLING_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+if [ ! -t 0 ]; then cat >/dev/null; fi
+if [ -n "${JOURNAL_APPEND:-}" ]; then cat -- "$JOURNAL_APPEND" >>"$JOURNAL_FILE"; fi
+printf '%s\\n' '{"reply":0,"state":"applied"}'
+"""
+
+#: The run every row below replies to, and where its journal lives under the checkout.
+JOURNALLED_RUN = "run-1"
+
+#: The node the notes are addressed to, and the two notes themselves. The earlier one is
+#: what a recipe reading the journal by recency would answer with.
+NOTED_NODE = "api"
+EARLIER_NOTE = {"op": "context", "id": NOTED_NODE, "note": "the note sent before this one"}
+THIS_NOTE = {"op": "context", "id": NOTED_NODE, "note": "the note this reply carries"}
+
+#: What the earlier note's outcome is recorded as, so a row whose own outcome differs
+#: fails loudly if the wrong one is read.
+EARLIER_DELIVERY = "deferred"
+
+
+def _committed_record(command: dict[str, object], delivery: str | None) -> str:
+    """One `edit-committed` line, in the shape a real run's journal is read to carry.
+
+    Not a second source for that shape: the ask-seam journey named above drives the same
+    reader over a journal the real engine wrote, so a wire change fails there while this
+    stays self-consistent. What this file adds is the cases that engine cannot be made to
+    produce — a second delivery word, and a journal missing this note's outcome while
+    carrying an earlier one's.
+
+    `delivery` of `None` is the edit committed with no `context-added` operation at all,
+    which is the other way a correlated read comes up empty, and it must read as "not
+    recorded" rather than fall through to somebody else's outcome.
+    """
+    operations = (
+        []
+        if delivery is None
+        else [
+            {
+                "kind": "context-added",
+                "node": command["id"],
+                "note": command["note"],
+                "delivery": delivery,
+            }
+        ]
+    )
+    return json.dumps(
+        {
+            "v": 1,
+            "ts": "2026-09-04T12:00:00.000Z",
+            "stream": "U-TEST-1",
+            "seq": 0,
+            "source": "pipeline",
+            "kind": "edit-committed",
+            "labels": {"run_id": JOURNALLED_RUN},
+            "payload": {"author": "planner", "command": command, "operations": operations},
+        }
+    )
+
+
+#: The field the verb's answer carries the note outcomes in, and what an unreadable
+#: journal is said in instead. `notes_unread` is its own field because nobody having
+#: looked and nothing having been decided are opposite states.
+NOTES_FIELD = "notes"
+NOTES_UNREAD_FIELD = "notes_unread"
+
+
+def _verb_answer(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    """The one line a successful reply prints, which is the verb's answer and nothing else."""
+    printed = result.stdout.strip().splitlines()
+    assert len(printed) == 1, (
+        f"a successful reply printed {len(printed)} line(s) where the verb's own answer "
+        f"is the whole of the success output:\n{result.stdout}"
+    )
+    # `cast` rather than a validating read: each journey asserts the shape it is about.
+    return cast(dict[str, object], json.loads(printed[0]))
+
+
+#: What the recipe is driven over, and the property it is driven for: it reports the word
+#: it finds rather than a word it knows. So the rows are deliberately not this engine's
+#: `Delivery` vocabulary — restating an enum a doubled journal cannot reconcile would be a
+#: second source for it — but a pair that differ, plus one no release has ever written.
+#: Passing that third row is what says a value added upstream reaches the manager instead
+#: of being dropped for not being on a list. The last row is the note whose outcome is not
+#: journalled when the recipe looks, which reads back as `None` rather than as an earlier
+#: note's word.
+#: `tests/ask_seam/test_channel_reply_e2e.py` is where the shape itself is reconciled: it
+#: drives the same reader over an `edit-committed` the real engine wrote on a real run, so
+#: a wire change fails there rather than passing here.
+NOTE_DELIVERIES = ("live", "deferred", "sideways", None)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("delivery", NOTE_DELIVERIES, ids=lambda row: str(row))
+def test_the_reply_recipe_reports_this_notes_own_delivery_and_never_an_earlier_ones(
+    tmp_path: Path, delivery: str | None
+) -> None:
+    """The correlation, driven against a journal that already carries an earlier outcome.
+
+    `onepipeline reply` answers `delivered` whatever the envelope carried, and what became
+    of the note is written only to the run's journal — so the recipe reads it back. What
+    it must never do is read it by recency: the journal here already holds an earlier
+    note's outcome, and answering with that would tell a manager their note reached a
+    dispatch when nothing had yet decided that it did.
+
+    Every row sends the same envelope through the real recipe against the same journal,
+    and only what is journalled for *this* note differs. The last row journals nothing for
+    it, which is the case a recipe reading the newest outcome, the last, or the only one
+    gets wrong.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(JOURNALLING_UV)
+    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    appended = tmp_path / "appended.jsonl"
+    appended.write_text(
+        "" if delivery is None else _committed_record(THIS_NOTE, delivery) + "\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        checkout,
+        trace,
+        "channel-reply",
+        JOURNALLED_RUN,
+        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+        env={
+            "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
+            "JOURNAL_APPEND": str(appended),
+            "JOURNAL_FILE": str(journal),
+        },
+    )
+
+    assert result.returncode == 0, f"{result.stdout}{result.stderr}"
+    answer = _verb_answer(result)
+    assert answer["state"] == "applied", (
+        f"the verb's own answer did not survive the merge:\n{result.stdout}"
+    )
+    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "delivery": delivery}], (
+        f"a note the engine journalled as {delivery!r} was not answered that way against "
+        f"its own node. A `delivery` where this row journalled none is the EARLIER note's, "
+        f"which is what reading this journal by recency, by its last entry, or by its only "
+        f"entry does — and what a manager would then act on:\n{result.stdout}"
+    )
+    assert "channel-reply:" not in result.stderr, (
+        f"the recipe printed a status line of its own beside the verb's answer:\n{result.stderr}"
+    )
+
+
+#: The second note an envelope carries, addressed to a node of its own so the two lines
+#: the report joins are told apart by what they name rather than by their order.
+OTHER_NODE = "worker"
+OTHER_NOTE = {"op": "context", "id": OTHER_NODE, "note": "the second note this reply carries"}
+
+
+@pytest.mark.reads_recipes
+def test_the_reply_recipe_reports_every_note_one_envelope_carried(tmp_path: Path) -> None:
+    """Two notes in one envelope read back as two, correlated one for one.
+
+    A manager sends several notes in one reply, and each has its own fate: the engine
+    commits them separately and journals an outcome per note. So the report has to carry
+    both, matched to the note each belongs to rather than to the order they were
+    journalled in — here the second note's outcome is written first, and the earlier
+    reply's outcome sits above them both.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(JOURNALLING_UV)
+    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    appended = tmp_path / "appended.jsonl"
+    # The second note's outcome first, so a reader that paired them by position would
+    # report each under the other's node.
+    appended.write_text(
+        _committed_record(OTHER_NOTE, "live") + "\n" + _committed_record(THIS_NOTE, "next") + "\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        checkout,
+        trace,
+        "channel-reply",
+        JOURNALLED_RUN,
+        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE, OTHER_NOTE]}),
+        env={
+            "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
+            "JOURNAL_APPEND": str(appended),
+            "JOURNAL_FILE": str(journal),
+        },
+    )
+
+    assert result.returncode == 0, f"{result.stdout}{result.stderr}"
+    assert _verb_answer(result)[NOTES_FIELD] == [
+        {"node": NOTED_NODE, "delivery": "next"},
+        {"node": OTHER_NODE, "delivery": "live"},
+    ], (
+        f"a two-note reply did not answer each note its own outcome against its own node, "
+        f"in the order the envelope sent them. Pairing them by the order they were "
+        f"journalled would report each under the other's node, and the earlier reply's "
+        f"{EARLIER_DELIVERY!r} appearing at all is that outcome claimed by one of "
+        f"them:\n{result.stdout}"
+    )
+
+
+#: A `uv` that accepts the reply and answers something that is not a JSON object, which
+#: is the one shape the note outcomes cannot be merged into.
+UNPARSEABLE_RECEIPT_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+if [ ! -t 0 ]; then cat >/dev/null; fi
+printf '%s\\n' 'accepted'
+"""
+
+
+@pytest.mark.reads_recipes
+def test_a_receipt_with_nowhere_to_carry_the_outcome_is_handed_back_alone(
+    tmp_path: Path,
+) -> None:
+    """Success is one line or none, including where there is nothing to merge into.
+
+    The outcomes ride inside the verb's own answer, so an answer that is not a JSON object
+    has nowhere to carry them. What must not happen is the recipe making up the difference
+    with a second line of its own: the verb keeps its answer whole, the recipe adds
+    nothing, and the reply still succeeds.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(UNPARSEABLE_RECEIPT_UV)
+    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+
+    result = _run(
+        checkout,
+        trace,
+        "channel-reply",
+        JOURNALLED_RUN,
+        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+        env={"ONEPIPELINE_RUNS_DIR": str(checkout / "runs")},
+    )
+
+    assert result.returncode == 0, (
+        f"an answer this could not merge into failed the reply, which was already sent:"
+        f"\n{result.stdout}{result.stderr}"
+    )
+    assert result.stdout.splitlines() == ["accepted"], (
+        f"the verb's own answer did not reach the caller whole:\n{result.stdout}"
+    )
+    assert "channel-reply:" not in result.stderr, (
+        f"the recipe added a line of its own beside an answer it could not merge into, so "
+        f"success is two lines where it is one or none:\n{result.stderr}"
+    )
+
+
+#: A `uv` that accepts the reply and then takes the journal away, which is the one thing
+#: that can happen between the offset being taken and the outcome being read.
+UNREADABLE_JOURNAL_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+if [ ! -t 0 ]; then cat >/dev/null; fi
+chmod 000 -- "$JOURNAL_FILE"
+printf '%s\\n' '{"reply":0,"state":"applied"}'
+"""
+
+
+@pytest.mark.reads_recipes
+def test_a_journal_the_recipe_cannot_read_is_said_rather_than_read_as_no_outcome(
+    tmp_path: Path,
+) -> None:
+    """A broken read and an undecided note are opposite states, and must not share a word.
+
+    The reply is accepted and the journal is then unreadable, so the recipe has nothing
+    to correlate against. Reporting that as "no outcome recorded yet" would tell a manager
+    the engine had not decided the note's fate when the truth is that nobody looked — the
+    same silence this whole report exists to end, one layer further in.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(UNREADABLE_JOURNAL_UV)
+    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+
+    try:
+        result = _run(
+            checkout,
+            trace,
+            "channel-reply",
+            JOURNALLED_RUN,
+            stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+            env={
+                "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
+                "JOURNAL_FILE": str(journal),
+            },
+        )
+    finally:
+        # Restored so the temporary tree can be cleaned up by whoever owns it.
+        journal.chmod(0o644)
+
+    assert result.returncode == 0, (
+        f"an unreadable journal failed the reply itself, which was already sent:"
+        f"\n{result.stdout}{result.stderr}"
+    )
+    answer = _verb_answer(result)
+    assert "could not be read" in str(answer.get(NOTES_UNREAD_FIELD)), (
+        f"the answer does not say the journal was unreadable, so a note nobody could look "
+        f"up is indistinguishable from one whose fate nothing had decided — which are "
+        f"opposite states:\n{result.stdout}"
+    )
+    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "delivery": None}], (
+        f"the note this reply sent was not answered, or was answered with the earlier "
+        f"reply's {EARLIER_DELIVERY!r}:\n{result.stdout}"
+    )
+
+
+#: A `python3` that answers the guard and refuses the outcome read. The two are told
+#: apart by how many arguments each is given — the guard is handed a queue path and a
+#: token prefix, the reporter a journal, an offset and the verb's answer — so the
+#: envelope is judged and sent exactly as it would be, and only the read back fails.
+#: It stands on PATH in a checkout with no pinned interpreter beside it, which is what a
+#: half-restored checkout is.
+HALF_BROKEN_INTERPRETER = """#!/usr/bin/env bash
+if [ "$#" -eq 4 ]; then exit 0; fi
+exit 4
+"""
+
+
+@pytest.mark.reads_recipes
+def test_an_outcome_read_that_could_not_run_is_named_rather_than_passed_off_as_none(
+    tmp_path: Path,
+) -> None:
+    """A read that never happened must not look like a note with nothing to report.
+
+    The reply is sent and accepted, and the helper that reads each note's fate back then
+    cannot run at all. Swallowing that hands the manager the bare transport receipt —
+    which is byte for byte what a reply carrying no note at all answers with — so the one
+    thing they would conclude is that there was no outcome to report. That is this
+    recipe's own defect worn one layer in, and the whole reason it reads the journal.
+
+    So it is named, with where the outcome can still be read. Not refused: the envelope
+    is already on the channel, so the verb's own answer and exit status stay the
+    caller's, and stdout carries that answer and nothing else.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(JOURNALLING_UV)
+    # llmlint: ignore[e2e_not_mocked] The recipe is real; a half-broken interpreter is the input.
+    broken = checkout / "bin" / "python3"
+    broken.write_text(HALF_BROKEN_INTERPRETER)
+    broken.chmod(0o755)
+    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+
+    result = _run(
+        checkout,
+        trace,
+        "channel-reply",
+        JOURNALLED_RUN,
+        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+        env={"ONEPIPELINE_RUNS_DIR": str(checkout / "runs")},
+    )
+
+    assert result.returncode == 0, (
+        f"a failed outcome read failed the reply itself, which was already sent:"
+        f"\n{result.stdout}{result.stderr}"
+    )
+    assert result.stdout.strip().splitlines() == ['{"reply":0,"state":"applied"}'], (
+        f"the verb's own answer did not reach the caller whole and alone:\n{result.stdout}"
+    )
+    assert "could not be read back" in result.stderr, (
+        f"the recipe swallowed a failed outcome read, so the manager holds a receipt with "
+        f"no note outcome in it and nothing saying why — which is what a reply carrying no "
+        f"note at all answers with:\n{result.stderr}"
+    )
+    assert "the reply itself was sent" in result.stderr, (
+        f"the diagnostic does not say the envelope reached the channel, so a manager "
+        f"reading it cannot tell whether to send it again:\n{result.stderr}"
+    )
+    assert f"just monitor {JOURNALLED_RUN}" in result.stderr, (
+        f"the diagnostic names no way to read the outcome that was recorded anyway, so "
+        f"the manager is told their read failed and nothing else:\n{result.stderr}"
+    )

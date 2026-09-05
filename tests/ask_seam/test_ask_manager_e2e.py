@@ -33,7 +33,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple, NewType, Protocol, TypedDict, cast
+from typing import Any, NamedTuple, NewType, Protocol, TypedDict, cast
 
 import pytest
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
@@ -846,10 +846,6 @@ UNUSABLE_REPLIES = (
     ("a completion that is a string", json.dumps({"version": 1, "completion": "true"})),
 )
 
-#: The same decision, spelled as a ruling. What separates the two is the one field the
-#: refusal has to name.
-REQUIRED_FIELD = "completion"
-
 #: A live edit, which carries no `completion` by design and which the adopted release
 #: routes to the command path rather than to the waiting reader. It must still be sent
 #: while a question is pending: that is precisely when a manager most needs to steer,
@@ -862,6 +858,41 @@ LIVE_EDIT = json.dumps(
         "commands": [{"op": "context", "id": WORK_NODE, "note": "the base moved under you"}],
     }
 )
+
+
+def _waited_for_a_queued_question(
+    asked: Asked, carrying: str, *, seconds: float = MANAGER_PATIENCE_SECONDS
+) -> str:
+    """The text of a blocking question carrying `carrying`, while it is still unread.
+
+    Read off the queue rather than through `just channel-next`, because handing the
+    surface out is the very thing these journeys must not do: the refusal they are about
+    fires for a question whose rendezvous is not open, and reading one opens it.
+    """
+    limit = deadline(seconds)
+    while True:
+        # llmlint: ignore[tests_mirror_real_usage] Reading a surface through the verb hands it out.
+        queue = (
+            Path(asked.environment["ONEPIPELINE_RUNS_DIR"]) / asked.run / "channel" / "queue.json"
+        )
+        if queue.is_file():
+            # `onepipeline` owns this file's schema; `waiting` is the list of surfaces
+            # nobody has read, and each entry is checked by what is asserted of it.
+            held = cast(dict[str, Any], json.loads(queue.read_text(encoding="utf-8")))
+            waiting = held.get("waiting")
+            for surface in waiting if isinstance(waiting, list) else []:
+                if not isinstance(surface, dict) or surface.get("blocking") is not True:
+                    # Checked rather than assumed. What these journeys are about is a
+                    # rendezvous that is not open, and only a blocking surface has one:
+                    # a non-blocking surface carrying the same text would satisfy the
+                    # search while proving nothing about the state under test.
+                    continue
+                if carrying in (surface.get("message") or ""):
+                    return cast(str, surface["message"])
+        assert time.monotonic() < limit, (
+            f"no blocking question carrying {carrying!r} was ever queued on run {asked.run}"
+        )
+        time.sleep(0.2)
 
 
 def _pending(asked: Asked) -> dict[str, object] | None:
@@ -881,19 +912,30 @@ def _pending(asked: Asked) -> dict[str, object] | None:
     return cast(dict[str, object] | None, json.loads(queue.read_text(encoding="utf-8"))["pending"])
 
 
-def test_an_envelope_the_pending_question_cannot_use_is_refused_where_it_is_sent(
-    asked: Asked, tmp_path: Path
+def test_an_envelope_the_pending_question_cannot_use_reaches_the_channel_unrefused(
+    asked: Asked,
 ) -> None:
-    """A reply the asking wrapper would discard fails loudly at the point it is sent.
+    """The refusal this used to hold is withdrawn, and the wrapper is what closes the silence.
 
-    `delivered` is a transport receipt and was read as a receipt that somebody could act
-    on it. This is the whole round trip of the defect and its repair, against the real
-    channel: a real question is pending, an envelope that cannot answer it is sent
-    through the real `just channel-reply`, and it must be refused — naming the field
-    that is missing — with the question still pending afterwards, so the manager's next
-    try still has something to answer. The usable reply that follows is what proves the
-    refusal is a guard rather than a wall: the same wrapper, the same question, and an
-    answer that arrives.
+    `just channel-reply` refused these while a question was pending: none carries a
+    boolean `completion`, so the waiting wrapper discards them without a word. The
+    withdrawal is a measurement rather than a preference — the monitor's own score is a
+    `completion` carrying no correlation token, so from the queue it and a manager's
+    token-less answer are the same bytes. Keyed on what the queue holds, the guard
+    refused both, which takes the supervisory tier's answer path away for as long as any
+    agent is waiting.
+
+    So the recipe refuses only what an envelope says about *itself* — that it names a
+    blocking question the run has not handed out — and everything here goes through, to
+    be discarded by `scripts/ask-manager.sh` exactly as it always was.
+    `test_a_ruling_carrying_the_token_but_no_decision_is_refused` is that discard, and it
+    is what now stands between an agent and an envelope it cannot act on.
+
+    The round trip the journey this replaces ended on is gone with the refusal: these
+    envelopes now reach the channel, and the engine answers the pending surface with the
+    first of them that it reads as a verdict. That a refusal leaves the question
+    answerable is a property only a refusal can have, and the journeys in
+    `tests/ask_seam/test_channel_reply_e2e.py` are where the surviving one is held to it.
     """
     asking = _ask(asked, "Should the test key cover docs?", window=ANSWERED_WINDOW_SECONDS)
     # Handing the blocking surface out is what opens the reply rendezvous at all, so a
@@ -902,42 +944,24 @@ def test_an_envelope_the_pending_question_cannot_use_is_refused_where_it_is_sent
     token = TOKEN.search(question)
     assert token is not None, f"the question carried no correlation token:\n{question}"
 
-    # Every unusable shape against the same question, in turn. That is the assertion
-    # rather than an economy: each refusal has to leave the question answerable, so a
-    # guard that consumed it would fail on the next shape rather than pass unnoticed.
     for what, envelope in UNUSABLE_REPLIES:
-        refused = reply(asked.run, asked.environment, envelope)
+        sent = reply(asked.run, asked.environment, envelope)
 
-        assert refused.returncode != 0, (
-            f"an envelope with {what}, which the waiting question cannot use, was "
-            f"accepted — so it was reported delivered and read by nobody:"
-            f"\n{refused.stdout}{refused.stderr}"
+        # The recipe's own refusals are the only thing this journey owns. Two of these
+        # shapes are malformed as far as `onepipeline reply` is concerned and it refuses
+        # them itself, which is its surface to own rather than a guard here.
+        assert "channel-reply:" not in sent.stderr, (
+            f"an envelope with {what} was refused by this recipe. It carries no "
+            f"correlation token, and neither does a monitor score — so a guard refusing "
+            f"this refuses every score raised while an agent waits:\n{sent.stderr}"
         )
-        assert REQUIRED_FIELD in refused.stderr, (
-            f"the refusal of an envelope with {what} does not name the field the "
-            f"question needs, so the manager is told only that something was wrong:"
-            f"\n{refused.stderr}"
-        )
-        still_waiting = _pending(asked)
-        assert still_waiting is not None and still_waiting.get("blocking") is True, (
-            f"refusing an envelope with {what} consumed the pending question, so "
-            f"nothing is left for a usable reply to answer: {still_waiting}"
+        assert sent.returncode == 0 or "onepipeline: refused" in sent.stderr, (
+            f"an envelope with {what} ended non-zero without the published verb saying "
+            f"why, so something between the two refused it silently:"
+            f"\n{sent.stdout}{sent.stderr}"
         )
 
-    # Through a file rather than on stdin, which is the other published shape and the
-    # one that keeps the caller's own arguments: the verb reads the file itself, so what
-    # it acts on is what is on disk rather than anything that passed through the guard.
-    written = tmp_path / "ruling.json"
-    written.write_text(ruling(f"{ANSWER} {token.group(0)}"), encoding="utf-8")
-    answered = _just("channel-reply", asked.run, str(written), environment=asked.environment)
-    assert answered.returncode == 0, (
-        f"the same question then refused a usable ruling, so this is a wall rather than "
-        f"a guard:\n{answered.stdout}{answered.stderr}"
-    )
-
-    status, out, err = _finish(asking)
-    assert status == 0, f"the wrapper never received the ruling that was accepted:\n{err}"
-    assert TOKEN.sub("", out).strip() == ANSWER, out
+    _reaped(asking)
 
 
 #: What `just channel-reply` exits with when it refuses an envelope. Asserted exactly
@@ -995,67 +1019,51 @@ def _unechoing_rulings(token: str) -> tuple[UnechoingRuling, ...]:
 REPLY_ROUTES = ("on stdin", "from a file")
 
 
-def test_a_ruling_that_does_not_echo_the_pending_questions_token_is_refused_where_it_is_sent(
+def test_a_ruling_that_echoes_no_token_reaches_the_channel_unrefused(
     asked: Asked, tmp_path: Path
 ) -> None:
-    """Being a ruling is half of being an answer; carrying the token is the other half.
+    """A well-formed decision naming no question is the shape a monitor score also has.
 
-    The shape check and this one close the same silence through different doors, and
-    this is the door a well-formed reply comes through: a manager writes a real decision,
-    the channel accepts it, the engine reports it delivered, and the wrapper waiting on
-    the question discards it as another reader's because nothing in it says which
-    question it answers. So it is refused where it is sent — naming the token to echo,
-    because that is the whole of the repair — with the question still pending, and the
-    same envelope with that token added is then the answer the agent receives.
+    It carries a boolean `completion` and no correlation token, which is exactly what
+    `scripts/channel-serve.py` asks a manager for when it scores a monitor turn. Nothing
+    on the queue tells the two apart, so refusing it refused every score raised while an
+    agent's question sat pending — and this holds the withdrawal of that refusal, by both
+    published ways of handing an envelope over.
 
-    Every unechoing shape against the same question, by both ways of handing one over.
-    That is the assertion rather than an economy: each refusal has to leave the question
-    answerable, so a guard that consumed it would fail on the next shape rather than pass
-    unnoticed.
+    One send per route rather than a table of shapes, because each of these *is* a valid
+    verdict once it is accepted: the channel claims it and the rendezvous closes, so the
+    second route waits for the wrapper's own re-ask to open another.
+
+    What the agent still owes is unchanged: the wrapper discards a ruling it cannot match
+    to its own question, which is what
+    `test_a_ruling_addressed_to_another_reader_is_re_asked_rather_than_returned` holds.
+    The refusal this recipe keeps is for a ruling that names a question the run has NOT
+    handed out — a fact about the envelope rather than about the queue — and
+    `tests/ask_seam/test_channel_reply_e2e.py` is where that one is driven.
     """
     asking = _ask(asked, "Should the test key cover docs?", window=ANSWERED_WINDOW_SECONDS)
-    # Handing the blocking surface out is what opens the reply rendezvous at all, so a
-    # reply sent before it is refused for a reason that has nothing to do with this.
-    question = _waited_for_question(asked, asking)
-    token = TOKEN.search(question)
-    assert token is not None, f"the question carried no correlation token:\n{question}"
+    written = tmp_path / "unechoing.json"
+    written.write_text(ruling(ANSWER), encoding="utf-8")
 
-    for index, (what, envelope) in enumerate(_unechoing_rulings(token.group(0))):
-        written = tmp_path / f"ruling-{index}.json"
-        written.write_text(envelope, encoding="utf-8")
-        for route in REPLY_ROUTES:
-            refused = (
-                reply(asked.run, asked.environment, envelope)
-                if route == "on stdin"
-                else _just("channel-reply", asked.run, str(written), environment=asked.environment)
-            )
+    for route in REPLY_ROUTES:
+        _waited_for_question(asked, asking, named=f"the question answered {route}")
+        sent = (
+            reply(asked.run, asked.environment, ruling(ANSWER))
+            if route == "on stdin"
+            else _just("channel-reply", asked.run, str(written), environment=asked.environment)
+        )
 
-            assert refused.returncode == REPLY_REFUSED, (
-                f"{what}, sent {route}, exited {refused.returncode} where a refusal is "
-                f"{REPLY_REFUSED} — accepted, so it was reported delivered and the agent "
-                f"waiting on the question discarded it:"
-                f"\n{refused.stdout}{refused.stderr}"
-            )
-            assert token.group(0) in refused.stderr, (
-                f"the refusal of {what} sent {route} does not name the token the reply "
-                f"has to echo, so the manager is told their answer was wrong without "
-                f"being told how to make it right:\n{refused.stderr}"
-            )
-            still_waiting = _pending(asked)
-            assert still_waiting is not None and still_waiting.get("blocking") is True, (
-                f"refusing {what} sent {route} consumed the pending question, so nothing "
-                f"is left for a usable reply to answer: {still_waiting}"
-            )
+        assert "channel-reply:" not in sent.stderr, (
+            f"a decision naming no token, sent {route}, was refused by this recipe — and "
+            f"a monitor score is the same envelope from the queue's point of view, so "
+            f"this refuses every score raised while an agent waits:\n{sent.stderr}"
+        )
+        assert sent.returncode == 0, (
+            f"a decision naming no token, sent {route}, did not reach the channel:"
+            f"\n{sent.stdout}{sent.stderr}"
+        )
 
-    answered = reply(asked.run, asked.environment, ruling(f"{ANSWER} {token.group(0)}"))
-    assert answered.returncode == 0, (
-        f"the same question then refused a ruling echoing its own token, so this is a "
-        f"wall rather than a guard:\n{answered.stdout}{answered.stderr}"
-    )
-
-    status, out, err = _finish(asking)
-    assert status == 0, f"the wrapper never received the ruling that was accepted:\n{err}"
-    assert TOKEN.sub("", out).strip() == ANSWER, out
+    _reaped(asking)
 
 
 def test_a_live_edit_still_reaches_the_graph_while_a_question_is_pending(
@@ -1102,18 +1110,19 @@ QUOTED_TOKEN = f"ask-manager-token:{'b' * 24}"
 def test_the_token_a_reply_must_echo_is_the_one_at_the_head_of_the_surface(
     asked: Asked,
 ) -> None:
-    """A question body quoting an older token does not get to say what an answer echoes.
+    """A question body quoting an older token does not get to say which question it is.
 
-    The guard reads a pending surface's token off the first line carrying the prefix, and
-    the wrapper states its protocol at the head so that line is the protocol's. Reading
-    any other one would let the agent's own prose decide: the question here quotes the
-    token it was asked under last time, which nobody is waiting on, and a manager would
-    be refused until they echoed *that* — while the answer the waiting wrapper could
-    actually claim was the one being refused.
+    The rule reads a surface's token off the first line carrying the prefix, and the
+    wrapper states its protocol at the head so that line is the protocol's. Reading any
+    other one would let the agent's own prose decide which question a reply names: the
+    question here quotes the token it was asked under last time, which nobody is waiting
+    on.
 
-    So the reply echoing the quoted token is refused and the refusal names the minted
-    one, with the question still pending; the reply echoing the minted one is accepted
-    and is what the agent reads back.
+    Driven while the question is still queued, because that is where the surviving
+    refusal lives. A ruling echoing the *minted* token is refused — which it could only
+    be if the head line is the one that was read, since a guard reading the quoted line
+    would find nothing in this envelope to match. Handing the question out then makes the
+    same ruling its answer.
     """
     asking = _ask(
         asked,
@@ -1121,36 +1130,39 @@ def test_the_token_a_reply_must_echo_is_the_one_at_the_head_of_the_surface(
         f"{QUOTED_TOKEN}",
         window=ANSWERED_WINDOW_SECONDS,
     )
-    question = _waited_for_question(asked, asking)
-    # The first match, which is the wrapper's own: its protocol leads and the quoted one
-    # is below the separator, which is what this journey is about.
-    minted = TOKEN.search(question)
-    assert minted is not None, f"the question carried no correlation token:\n{question}"
-    assert QUOTED_TOKEN in question and minted.group(0) != QUOTED_TOKEN, (
-        f"the surface does not carry both tokens, so nothing here says which one the "
-        f"guard read:\n{question}"
+    queued_message = _waited_for_a_queued_question(asked, QUOTED_TOKEN)
+    assert _pending(asked) is None, (
+        f"the question was handed out, so it is not the queued case this is about: "
+        f"{_pending(asked)}"
     )
 
-    refused = reply(asked.run, asked.environment, ruling(f"{ANSWER} {QUOTED_TOKEN}"))
-
-    assert refused.returncode != 0, (
-        f"a reply echoing the token the question body quotes was accepted, so the agent "
-        f"waiting on this question discarded it:\n{refused.stdout}{refused.stderr}"
-    )
-    assert minted.group(0) in refused.stderr and QUOTED_TOKEN not in refused.stderr, (
-        f"the refusal names a token other than the one the question asks for, so a "
-        f"manager following it would be refused again:\n{refused.stderr}"
-    )
-    still_waiting = _pending(asked)
-    assert still_waiting is not None and still_waiting.get("blocking") is True, (
-        f"refusing that reply consumed the pending question, so nothing is left for a "
-        f"usable one to answer: {still_waiting}"
+    # The wrapper's own token leads the surface and the quoted one sits below the
+    # separator, so the first match is the head line's — which is the line the rule reads.
+    found = TOKEN.search(queued_message)
+    assert found is not None, f"the queued question carried no minted token:\n{queued_message}"
+    minted = found.group(0)
+    assert minted != QUOTED_TOKEN, (
+        f"the wrapper minted the token its own question quotes, so nothing here says "
+        f"which line the rule read: {minted}"
     )
 
-    answered = reply(asked.run, asked.environment, ruling(f"{ANSWER} {minted.group(0)}"))
+    refused = reply(asked.run, asked.environment, ruling(f"{ANSWER} {minted}"))
+
+    assert refused.returncode == REPLY_REFUSED, (
+        f"a ruling naming the question at the head of this surface was accepted while "
+        f"that question was still queued, so it was reported delivered and the agent "
+        f"went on waiting:\n{refused.stdout}{refused.stderr}"
+    )
+    assert minted in refused.stderr and QUOTED_TOKEN not in refused.stderr, (
+        f"the refusal names a token other than the one at the head of the surface, so "
+        f"the rule read the agent's own prose instead:\n{refused.stderr}"
+    )
+
+    _waited_for_question(asked, asking)
+    answered = reply(asked.run, asked.environment, ruling(f"{ANSWER} {minted}"))
     assert answered.returncode == 0, (
-        f"the same question then refused a reply echoing its own token, so this is a "
-        f"wall rather than a guard:\n{answered.stdout}{answered.stderr}"
+        f"the same ruling was refused once its question was pending, so this is a wall "
+        f"rather than a guard:\n{answered.stdout}{answered.stderr}"
     )
 
     status, out, err = _finish(asking)
@@ -1217,52 +1229,45 @@ def test_a_question_whose_token_this_checkout_could_not_mint_is_still_guarded(
 ) -> None:
     """The prefix says a reader is waiting; the shape after it is the asker's to choose.
 
-    The rule reads a pending surface's token as whatever follows the prefix, and this is
-    the surface that makes the difference: a question raised by an asker minting a shape
-    this checkout does not. Held to today's shape, the guard would find no token here,
-    wave every reply through, and hand the waiting reader an answer it discards in
-    silence — the defect the guard was added for, restored for exactly the asker it
-    cannot recognise.
+    The rule reads a surface's token as whatever follows the prefix, and this is the
+    surface that makes the difference: a question raised by an asker minting a shape this
+    checkout does not. Held to today's shape, the guard would find no token here and let a
+    manager address a question nobody has handed out — reported delivered, read by the
+    reader that is waiting, and discarded.
 
-    So the same round trip as for a question this wrapper minted: a ruling that does not
-    echo it is refused naming the token to echo, the question is still pending
-    afterwards, and the ruling that does echo it is accepted and reaches the reader
-    waiting on the other side.
+    Driven while the question is still queued, which is where the surviving refusal lives:
+    a ruling naming it is refused, the question is still queued afterwards, and once it is
+    handed out the same ruling is accepted and reaches the reader waiting for it.
     """
     serving = _asked_by_another_minter(
         asked, f"Which cache key should this tier use?\n{UNMINTABLE_TOKEN}"
     )
-    reached = _waited_for_question(asked, serving)
-    assert UNMINTABLE_TOKEN in reached, (
-        f"the question did not reach the channel carrying the token this journey is "
-        f"about:\n{reached}"
-    )
+    reached = _waited_for_a_queued_question(asked, UNMINTABLE_TOKEN)
     assert TOKEN.search(reached) is None, (
         f"this token matches the shape this checkout mints after all, so nothing here "
-        f"says the guard read one it does not recognise:\n{reached}"
+        f"says the rule read one it does not recognise:\n{reached}"
     )
 
-    refused = reply(asked.run, asked.environment, ruling(ANSWER))
+    refused = reply(asked.run, asked.environment, ruling(f"{ANSWER} {UNMINTABLE_TOKEN}"))
 
-    assert refused.returncode != 0, (
-        f"a reply echoing no token was accepted against a question carrying one this "
-        f"checkout could not mint, so it was reported delivered and the reader waiting "
-        f"on it discarded it:\n{refused.stdout}{refused.stderr}"
+    assert refused.returncode == REPLY_REFUSED, (
+        f"a ruling naming a queued question was accepted because the token it names is "
+        f"a shape this checkout does not mint, so it was reported delivered and the "
+        f"reader waiting on that question went on waiting:\n{refused.stdout}{refused.stderr}"
     )
     assert UNMINTABLE_TOKEN in refused.stderr, (
-        f"the refusal does not name the token to echo, so a manager is told their reply "
-        f"was wrong without being told how to make it right:\n{refused.stderr}"
+        f"the refusal does not name the question it is about, so a manager is told their "
+        f"reply was wrong without being told which one to read:\n{refused.stderr}"
     )
-    still_waiting = _pending(asked)
-    assert still_waiting is not None and still_waiting.get("blocking") is True, (
-        f"refusing that reply consumed the question, so nothing is left for a usable "
-        f"one to answer: {still_waiting}"
+    assert UNMINTABLE_TOKEN in _waited_for_a_queued_question(asked, UNMINTABLE_TOKEN), (
+        "refusing that reply consumed the question, so nothing is left to hand out"
     )
 
+    _waited_for_question(asked, serving)
     answered = reply(asked.run, asked.environment, ruling(f"{ANSWER} {UNMINTABLE_TOKEN}"))
     assert answered.returncode == 0, (
-        f"the same question then refused a reply echoing its own token, so this is a "
-        f"wall rather than a guard:\n{answered.stdout}{answered.stderr}"
+        f"the same ruling was refused once its question was pending, so this is a wall "
+        f"rather than a guard:\n{answered.stdout}{answered.stderr}"
     )
 
     status, out, err = _finish(serving)

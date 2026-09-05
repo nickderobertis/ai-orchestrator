@@ -1878,14 +1878,56 @@ arrived is a different question, and the reader that cannot is
 `scripts/ask-manager.sh` — a dispatched agent's blocking question, which acts only on a
 JSON object carrying a boolean `completion` **and** echoing the correlation token its
 question minted, and discards anything else with nothing on the channel to say so. So
-that pair is checked in the replying recipe, before the envelope is sent, where you are
-still there to write another: an envelope that cannot be a ruling, and a ruling that
-echoes no token, are each refused naming what is missing, with the pending question left
-pending. An envelope carrying `commands` is a graph edit rather than an answer and goes
-through untouched, because a manager most needs to steer exactly while a question is
-unanswered. Reaching `onepipeline reply` directly bypasses all of that and gets the
-transport receipt alone — which is what one question asked four times and answered four
-times, every reply reporting success, looks like from a manager's terminal.
+that pair is what the wrapper enforces at its own end, and reaching `onepipeline reply`
+directly gets the transport receipt alone — which is what one question asked four times
+and answered four times, every reply reporting success, looks like from a manager's
+terminal.
+
+**A blocking question opens its rendezvous only once you have handed it out, and that is
+the one thing `just channel-reply` refuses.** A well-formed ruling carrying the right
+token, sent while its question is still `waiting` rather than pending, is accepted and
+reaches nobody: measured on a live run, `{"reply":2,"state":"delivered"}` at exit 0 with
+the agent still blocked — which cost a dispatched planner about twenty-eight minutes here
+before it reverted two correct changes it had decided were unauthorised. So an envelope
+whose `completion` echoes the token of a question this run has not handed out is refused,
+naming that question and telling you to read the queue first; `just channel-next` is the
+repair, and the queue is left exactly as it was.
+
+**Nothing else is refused, and the reason is the sharpest thing on this page about the
+channel.** "Nothing is pending" does not mean "no reader will take this", and neither does
+"this reply names no question". Measured on the same live run: `just channel-next`
+*consumes* a non-blocking surface rather than making it pending, so the queue reads
+`waiting: [], pending: null` afterwards — and a `completion` sent in exactly that state is
+claimed by the monitor's waiting `channel serve`, which receives the envelope verbatim.
+That is `scripts/channel-serve.py` raising what it still raises as **non-blocking**
+surfaces with you as that member's judge side — the monitor's own completion bar once its
+conversation has ended, where your ruling *is* the score, and a turn its agent side lost.
+**A monitor score is a `completion` carrying no correlation token**, so from the queue it
+and a manager's token-less answer to a pending question are the same bytes. A guard keyed
+on an empty queue refuses every score on an idle run; one keyed on the pending question's
+token refuses every score raised while an agent waits. Both were tried here and both were
+wrong. What is left is the refusal an envelope's own bytes decide, since only
+`scripts/ask-manager.sh` mints one of these tokens.
+
+**So a reply that omits the token is now your mistake to catch**, not the recipe's: the
+wrapper discards it, and you learn from the agent asking again rather than from a refusal.
+Echo the token.
+
+**An envelope carrying `commands` and no `completion` is a graph edit rather than an
+answer and goes through untouched**, whatever the queue holds, because a manager most
+needs to steer exactly while a question is unanswered. One carrying **both** a verdict
+that names a queued question and edits is refused whole rather than half-applied, with
+re-sending the commands on their own still applying them — which is what the refusal says.
+
+**What the reply then did with each note it carried is read back and printed to you**,
+because `delivered` does not say that either. A `context` note goes into the running turn
+or into the node's next dispatch, the engine records which on the run's journal, and the
+recipe reports that outcome per note — correlated to the reply that produced it, never
+read off the end of the file, so a note nothing has decided the fate of yet is reported
+as exactly that rather than as an earlier note's. Across two runs here those recorded
+outcomes were live, deferred, live, live, deferred, live, and the two deferred ones were
+the notes whose absence caused the incidents above; the manager was told `delivered` six
+times and nothing else.
 
 - **Steer a running dispatch with a `context` edit, never with `oneagentgraph
   interrupt` by hand.** These are not alternatives: a `context` edit *is* an
