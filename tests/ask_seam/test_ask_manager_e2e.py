@@ -652,7 +652,13 @@ def test_the_round_trip_survives_a_differently_pinned_tool_at_the_once_shared_pa
     through whichever copy the search path reaches first.
     """
     decoy = Path(asked.environment["HOME"]) / ".local" / "bin" / "onetaskgraph"
-    reported = subprocess.run([str(decoy)], text=True, capture_output=True, check=False)
+    reported = subprocess.run(
+        [str(decoy)],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
     assert reported.stdout.strip() == f"onetaskgraph {DECOY_PIN}", (
         f"the decoy at {decoy} reports {reported.stdout.strip()!r}; this journey is "
         "about a wrong-pinned copy being passed over, so there has to be one"
@@ -1364,11 +1370,29 @@ def test_a_reply_with_no_blocking_question_pending_behaves_as_it_did_before(
     _compare_both_routes(asked, "a non-blocking surface pending")
 
 
+#: How long a drain may go on handing surfaces out before it is a run producing them
+#: rather than a queue emptying. Generous against the handful these journeys queue and
+#: against a `just channel-next` on a loaded host, and short enough that a run raising
+#: surfaces faster than they are read is reported rather than read forever.
+DRAIN_SECONDS = 120
+
+
 def _drained(asked: Asked) -> list[Surface]:
-    """Every surface still queued, read the way a manager reads one, until none is left."""
+    """Every surface still queued, read the way a manager reads one, until none is left.
+
+    Bounded, because "until none is left" is not a bound: a run that raises surfaces as
+    fast as they are consumed empties nothing, and a loop with only the good exit is
+    how a tier comes to sit silently instead of failing.
+    """
     rest: list[Surface] = []
+    limit = deadline(DRAIN_SECONDS)
     while (surface := next_surface_record(asked.run, asked.environment)) is not None:
         rest.append(surface)
+        assert time.monotonic() < limit, (
+            f"run {asked.run}'s channel was still handing surfaces out after "
+            f"{DRAIN_SECONDS}s, so it is raising them rather than running out: "
+            f"{len(rest)} read, the last {surface['message'][:200]!r}"
+        )
     return rest
 
 

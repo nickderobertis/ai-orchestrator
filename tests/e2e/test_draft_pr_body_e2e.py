@@ -20,8 +20,14 @@ scratch registry and the repository is a throwaway checkout of a throwaway bare 
 so nothing this host has registered is read and no remote of its own is reachable.
 """
 
+# The finding these answer is about which Nx project owns this file, so it is the file
+# that is suppressed and a project split that would resolve it.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -1209,7 +1215,13 @@ def test_a_signalled_drafter_leaves_the_checkout_as_it_found_it(
     finally:
         if drafting.poll() is None:  # pragma: no cover - only on a drafter that ignored it
             drafting.kill()
-            drafting.communicate()
+            # Bounded, because a killed process is not a process whose pipes are
+            # closed: anything it spawned inherited them and can hold them open, and
+            # an undrained `communicate()` then waits on that grandchild for as long
+            # as this tier is left running. Expiry is not a failure here — this is
+            # cleanup, and raising would mask whatever the journey was reporting.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                drafting.communicate(timeout=e2e_timeout(60))
 
     assert drafting.returncode == expected, (
         f"the drafter signalled with {sent.name} exited {drafting.returncode}; {expected} is "
@@ -1431,7 +1443,13 @@ def test_a_drafter_that_cannot_tidy_up_reports_it_and_still_answers(tmp_path: Pa
     finally:
         if drafting.poll() is None:  # pragma: no cover - only on a drafter that hung
             drafting.kill()
-            drafting.communicate()
+            # Bounded, because a killed process is not a process whose pipes are
+            # closed: anything it spawned inherited them and can hold them open, and
+            # an undrained `communicate()` then waits on that grandchild for as long
+            # as this tier is left running. Expiry is not a failure here — this is
+            # cleanup, and raising would mask whatever the journey was reporting.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                drafting.communicate(timeout=e2e_timeout(60))
         if held is not None:
             held.chmod(stat.S_IRWXU)
         if worktree is not None:
@@ -1458,3 +1476,7 @@ def test_a_drafter_that_cannot_tidy_up_reports_it_and_still_answers(tmp_path: Pa
     assert f"the scratch directory {scratch} could not be removed" in reported, (
         f"the scratch directory holding the drafted prose was never reported:\n{reported}"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

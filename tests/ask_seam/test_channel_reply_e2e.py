@@ -29,7 +29,7 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypeVar, cast
 
@@ -718,6 +718,45 @@ def _tokens(replying: Replying, how_many: int) -> list[str]:
     return _waited_for(f"{how_many} blocking questions carrying tokens", looked)
 
 
+def _one_of_them_handed_out(replying: Replying, among: Sequence[str]) -> str:
+    """Read surfaces the way a manager does until one of `among` is handed out.
+
+    *Which* one is not asserted, and that is the point. `channel-next` hands a blocking
+    surface out ahead of every other kind, but nothing published says which of two
+    blocking surfaces it takes first — so a journey that named one in advance would be
+    asserting an order the engine never promised, on top of the refusal it is actually
+    about. What it needs is one of the two pending and the other still waiting, and
+    either way round is that state.
+
+    Only the token it carried is handed back: what a caller does with it is compare it
+    against the pair, and being blocking is asserted here because it is a precondition
+    of this read rather than something the caller decides.
+    """
+
+    def looked() -> str | None:
+        handed = _just("channel-next", replying.run, environment=replying.environment, seconds=60)
+        assert handed.returncode == 0, f"reading this run's surfaces failed:\n{handed.stderr}"
+        if not handed.stdout.strip():
+            return None
+        # `cast` rather than a validating read: `onepipeline next` owns this schema and
+        # what a manager consumes off it is one surface.
+        read = cast(dict[str, Any], json.loads(handed.stdout)).get("surface")
+        if not isinstance(read, dict):
+            return None
+        carried = read.get("message") or ""
+        for token in among:
+            if token in carried:
+                assert read.get("blocking") is True, (
+                    f"the surface carrying {token} was handed out as a non-blocking one, "
+                    f"so nothing is pending and the refusal below would be about some "
+                    f"other state of the queue: {read}"
+                )
+                return token
+        return None
+
+    return _waited_for(f"a surface carrying one of {list(among)!r}", looked)
+
+
 def test_a_verdict_carrying_no_token_is_not_refused_while_a_question_is_pending(
     replying: Replying,
 ) -> None:
@@ -770,9 +809,9 @@ def test_a_ruling_for_an_unread_question_is_refused_while_another_question_is_pe
 ) -> None:
     """The same refusal in its other shape: the manager answered the wrong one of two.
 
-    Two agents ask at once, the manager reads one and answers the *other*. That ruling
-    binds to the question that is pending rather than the one it names, and both agents
-    are worse off.
+    Two agents ask, the manager reads one and answers the *other*. That ruling binds to
+    the question that is pending rather than the one it names, and both agents are worse
+    off.
 
     So it is refused, naming the unread question and what is pending instead — and
     deliberately *not* as a missing token, which is the other refusal this envelope would
@@ -783,15 +822,36 @@ def test_a_ruling_for_an_unread_question_is_refused_while_another_question_is_pe
     live askers are two readers of one queue and a reply is claimed by whichever reaches
     it next, so asserting which of them takes an accepted ruling would be asserting that
     race.
+
+    **The two questions are raised one after the other, and that ordering is what this
+    journey used to fail for want of.** Two `onepipeline channel serve` sessions that
+    register on one run at the same instant lose one of the two surfaces: both reach
+    `channel/surfaces.jsonl` carrying `"id": 0` and the same `queued_at` millisecond
+    while `channel/queue.json` keeps only one, so the second agent's question exists
+    nowhere a manager can read it. That is an engine defect rather than this journey's,
+    and it is not what this journey is about: the refusal needs two blocking questions
+    on the queue, not two askers racing to put them there. So the first is waited onto
+    the queue before the second is asked — a synchronisation point rather than a retry,
+    since every register then happens with no other register in flight.
+
+    Nor is the order they are then handed out in assumed. `channel-next` takes a
+    blocking surface ahead of every other kind and says no more than that, so the
+    pending one is whichever it answered with and the unread one is the other.
     """
     first = _asked(replying, "Should the test key cover docs?")
     second = None
     try:
+        # One at a time, for the reason above: the first question is on the queue before
+        # the second session exists, so the two never register at once.
+        (already,) = _tokens(replying, 1)
         second = _asked(replying, "Which cursor shape should the route take?")
         both = _tokens(replying, 2)
-        answered_first = _handed_out(replying, both[0])
-        assert answered_first.get("blocking") is True, answered_first
-        unread = both[1]
+        assert already in both, (
+            f"the question queued first is no longer on the queue beside the second, so "
+            f"this journey is not in the two-question state it is about: {both}"
+        )
+        pending = _one_of_them_handed_out(replying, both)
+        (unread,) = [token for token in both if token != pending]
 
         refused = _reply(replying, _ruling(f"{ANSWER} {unread}"))
 
@@ -810,7 +870,7 @@ def test_a_ruling_for_an_unread_question_is_refused_while_another_question_is_pe
             f"\n{refused.stderr}"
         )
         still = _queue(replying)
-        assert isinstance(still.pending, dict) and both[0] in (
+        assert isinstance(still.pending, dict) and pending in (
             still.pending.get("message") or ""
         ), f"refusing the ruling moved what was pending: {still.pending}"
         assert any(unread in (surface.get("message") or "") for surface in still.waiting), (

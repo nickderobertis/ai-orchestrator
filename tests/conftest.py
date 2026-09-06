@@ -38,8 +38,20 @@ from nx_inputs import (
     repository_relative,
 )
 from registered_checkouts import listed_checkout_paths
+from waits import install_default_bounds
 
 from orchestrator.root import REPO_ROOT
+
+# Every blocking call this suite makes gets a finite bound here, at import, and the one
+# it gets says what was awaited and where that got to when it expires. `tests/e2e/waits.py`
+# holds the policy and the reasoning for the ceiling; this is only where it is switched on.
+#
+# At import rather than in an autouse fixture, because a fixture of any scope is set up
+# after the wider-scoped ones that already spend real launches — a module-scoped fixture
+# would run unbounded and a session-scoped one would too, which is most of what there is
+# to bound here. A call that states its own `timeout` is untouched, so nothing that
+# already chose a bound, or that catches `TimeoutExpired` on purpose, changes behaviour.
+install_default_bounds()
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The directories under this checkout that git ignores and Nx therefore never hashes.

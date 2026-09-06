@@ -20,8 +20,14 @@ publication runs it and believes its exit status, which is what makes the red ca
 refusal rather than a slower merge.
 """
 
+# The finding these answer is about which Nx project owns this file, so it is the file
+# that is suppressed and a project split that would resolve it.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -1187,7 +1193,13 @@ def test_a_signalled_landing_leaves_no_drafted_body_behind(
     finally:
         if landing.poll() is None:  # pragma: no cover - only on a wrapper that ignored it
             landing.kill()
-            landing.communicate()
+            # Bounded, because a killed process is not a process whose pipes are
+            # closed: anything it spawned inherited them and can hold them open, and
+            # an undrained `communicate()` then waits on that grandchild for as long
+            # as this tier is left running. Expiry is not a failure here — this is
+            # cleanup, and raising would mask whatever the journey was reporting.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                landing.communicate(timeout=e2e_timeout(60))
 
     assert landing.returncode == expected, (
         f"the landing signalled with {sent.name} exited {landing.returncode}; {expected} is "
@@ -1497,7 +1509,13 @@ def test_a_landing_that_cannot_remove_the_drafted_body_reports_it_and_still_land
     finally:
         if landing.poll() is None:  # pragma: no cover - only on a landing that hung
             landing.kill()
-            landing.communicate()
+            # Bounded, because a killed process is not a process whose pipes are
+            # closed: anything it spawned inherited them and can hold them open, and
+            # an undrained `communicate()` then waits on that grandchild for as long
+            # as this tier is left running. Expiry is not a failure here — this is
+            # cleanup, and raising would mask whatever the journey was reporting.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                landing.communicate(timeout=e2e_timeout(60))
         if held is not None:
             held.chmod(stat.S_IRWXU)
         shutil.rmtree(scratch_root, ignore_errors=True)
@@ -1515,3 +1533,7 @@ def test_a_landing_that_cannot_remove_the_drafted_body_reports_it_and_still_land
         f"the change request opened with {opened[0].body!r}; a cleanup the wrapper could "
         f"not finish must not change what a reviewer reads"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

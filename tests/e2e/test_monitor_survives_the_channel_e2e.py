@@ -37,13 +37,17 @@ and was not handed, the edits the engine got, and the graph's own record of how 
 member ended.
 """
 
+# The finding these answer is about which Nx project owns this file, so it is the file
+# that is suppressed and a project split that would resolve it.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
 import threading
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -65,6 +69,7 @@ from test_orchestrate_launch_e2e import (
     _just,
 )
 from waits import timeout as e2e_timeout
+from waits import until
 
 from orchestrator.root import REPO_ROOT
 
@@ -77,6 +82,30 @@ pytestmark = pytest.mark.xdist_group("monitor-survives-the-channel")
 RUN = "monitor-survives-the-channel"
 HELD_NODE = "held"
 HELD_SECONDS = 90
+
+#: The hang guard on each of this journey's waits, and never its stopping condition —
+#: `SustainedEditing` below is that. Above what a healthy run costs, which is
+#: `HELD_SECONDS` plus the seconds around it, and below what reads as a wedged tier.
+SUPERVISED_SECONDS = 300
+
+#: What has to have happened before this journey stops editing, and why these two.
+#:
+#: **One mis-routed envelope is all it takes.** The failure guarded here kills the
+#: member the first time its judge side is handed a manager's reply, and the filter
+#: names that envelope in the prompt it answers with. So the question is never how many
+#: draws make a sound sample — it is whether there were draws at all: an edit sent while
+#: the monitor's judge side is a live reader at the queue. An edit sent to a monitor
+#: that had already stopped taking turns is not a draw, and monitor turns taken while
+#: nothing was being sent are not draws either, which is why neither half stands alone.
+#:
+#: 40 accepted edits, spanning at least 20 further monitor turns, is roughly half a
+#: minute of continuous editing against a demonstrably live watcher — two orders of
+#: margin over the one mis-route it takes. Both are counts of **work done** rather than
+#: of elapsed time, deliberately: a loaded host reaches them later rather than reaching
+#: them with less of the claim tested, which is the property the fixed window this
+#: journey moved away from did not have.
+EDITS_TO_FALSIFY = 40
+MONITOR_TURNS_ALONGSIDE = 20
 
 #: How the filter opens the ruling it gives a monitor whose surface was answered with a
 #: live edit. Read out of `scripts/channel-serve.py` rather than quoted, because this is
@@ -168,6 +197,95 @@ class Watched(NamedTuple):
     graph_events: list[dict[str, Any]]
     #: How the attached launch ended, and what it printed on the way.
     settlement: str
+
+
+class SustainedEditing:
+    """Whether this run has given "the monitor survived sustained editing" a chance to fail.
+
+    This is the journey's stopping condition, and it is answerable from the claim rather
+    than from a clock or from the run's own lifetime. That last one is not a stylistic
+    preference: the manager adds a node every half second, so the graph stays exactly one
+    node short of complete and a run edited "for as long as there is a run to edit" can
+    never settle — which is why the loop that waited on that launch could only hang.
+
+    Stopping is therefore also what lets the run settle: the held node finishes, nothing
+    is adding more, and the graph completes. The settlement the last case asserts
+    survival to exists because of this.
+
+    Turns are counted from the first **accepted** edit rather than from the launch,
+    because turns taken before anything was sent say nothing about what happens when
+    something is.
+    """
+
+    def __init__(self, manager: EditingManager, prompt_log: Path) -> None:
+        self._manager = manager
+        self._prompt_log = prompt_log
+        self._turns_when_editing_began: int | None = None
+
+    def _accepted(self) -> int:
+        """Edits the reply verb took. A refused send reached no reader and is no draw."""
+        return sum(1 for answered in self._manager.answers if answered.returncode == 0)
+
+    def observe(self) -> bool:
+        """Take a reading, and answer whether both halves have happened yet.
+
+        A reading rather than a predicate, and named for it: the first one that finds an
+        accepted edit is what fixes the baseline the monitor turns are counted from, so
+        calling this is what makes the second half measurable at all.
+        """
+        accepted, turns = self._accepted(), len(_monitor_prompts(self._prompt_log))
+        if accepted and self._turns_when_editing_began is None:
+            self._turns_when_editing_began = turns
+        if self._turns_when_editing_began is None:
+            return False
+        return (
+            accepted >= EDITS_TO_FALSIFY
+            and turns - self._turns_when_editing_began >= MONITOR_TURNS_ALONGSIDE
+        )
+
+    def so_far(self) -> str:
+        """Both counts against what they have to reach, for a wait that gave up."""
+        turns = len(_monitor_prompts(self._prompt_log))
+        alongside = (
+            "none yet — nothing has been accepted"
+            if self._turns_when_editing_began is None
+            else f"{turns - self._turns_when_editing_began}/{MONITOR_TURNS_ALONGSIDE}"
+        )
+        return (
+            f"{self._accepted()}/{EDITS_TO_FALSIFY} edit(s) accepted and {alongside} "
+            f"monitor turn(s) taken alongside them"
+        )
+
+
+def _routed_ruling_reached(prompt_log: Path) -> bool:
+    """Whether the monitor has been given the filter's ruling for a live edit yet."""
+    return any(ROUTED_RULING in prompt for prompt in _monitor_prompts(prompt_log))
+
+
+def _supervision_state(
+    launch: subprocess.Popen[str],
+    prompt_log: Path,
+    manager: EditingManager,
+    editing: SustainedEditing | None = None,
+) -> str:
+    """What the run had got to, for a wait that gave up on it.
+
+    Every party of the round trip, because which one stopped is the whole diagnosis and
+    from a bare timeout none of them is visible: the launch that should have ended, the
+    member that should have been given the ruling, and the manager that should have been
+    sending the edits that produce one.
+    """
+    ended = launch.poll()
+    prompts = _monitor_prompts(prompt_log)
+    answers = manager.answers
+    last = f"exited {answers[-1].returncode}" if answers else "sent nothing"
+    covered = "" if editing is None else f"; {editing.so_far()}"
+    return (
+        f"the launch is {'still running' if ended is None else f'over, exit {ended}'}; "
+        f"the `{MONITOR_MEMBER}` member has been given {len(prompts)} prompt(s), none "
+        f"carrying {ROUTED_RULING!r}; the manager sent {len(answers)} live edit(s) and "
+        f"the last {last}{covered}"
+    )
 
 
 def _monitor_prompts(prompt_log: Path) -> list[str]:
@@ -360,19 +478,35 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             stderr=subprocess.STDOUT,
         )
         manager = EditingManager(environment)
+        editing = SustainedEditing(manager, prompt_log)
         try:
-            # Edits for the whole life of the run, and stops when the run does. The
-            # window used to be a fixed one because reaching the filter was a race the
-            # manager had to win; now it must never be won, and "for as long as there
-            # was a run to edit" is both the stronger window and the one that does not
-            # spend twenty minutes proving a negative after the run has settled.
-            reached = False
-            while launch.poll() is None and not reached:
-                reached = any(ROUTED_RULING in prompt for prompt in _monitor_prompts(prompt_log))
-                if not reached:
-                    time.sleep(0.5)
+            # Edit until the claim has been tested rather than until the run ends:
+            # this manager's own edits keep the graph one node short of complete, so a
+            # window measured by the run never closes. The other two exits are the claim
+            # failing and the run ending underneath, and neither is swallowed — each
+            # leaves `reached` for the cases below to judge.
+            until(
+                "the monitor to keep taking turns through sustained live editing",
+                lambda: (
+                    editing.observe()
+                    or _routed_ruling_reached(prompt_log)
+                    or launch.poll() is not None
+                ),
+                seconds=SUPERVISED_SECONDS,
+                state=lambda: _supervision_state(launch, prompt_log, manager, editing),
+            )
+            reached = _routed_ruling_reached(prompt_log)
+            # Stopping is what lets the graph complete: nothing else here ever stops
+            # adding nodes to it, and the settlement the last case asserts survival to
+            # does not exist until this happens.
             manager.stop()
-            launch.wait(timeout=e2e_timeout(300))
+            until(
+                "the run to settle once nothing was adding nodes to its graph",
+                lambda: launch.poll() is not None,
+                seconds=SUPERVISED_SECONDS,
+                state=lambda: _supervision_state(launch, prompt_log, manager, editing),
+            )
+            launch.wait(timeout=e2e_timeout(60))
             composed = sorted(scratch.glob(f"dag-scope-*/members/{MONITOR_MEMBER}/onejudge.yaml"))
             yield Watched(
                 monitor_config=composed[0] if composed else scratch / "no-effective-config",
@@ -910,3 +1044,7 @@ def test_a_score_the_planner_gave_no_reason_for_still_says_who_decided_it(
         f"the score carries no rationale at all, so its transcript says nothing about who "
         f"decided it: {scored}"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

@@ -35,6 +35,7 @@ from plan_store_pin import (
 from published_tools import ONETASKGRAPH_BIN
 from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
+from waits import timeout as e2e_timeout
 
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -838,7 +839,21 @@ def _serving_board(refusal: _Refusal | None = None) -> Iterator[dict[str, str]]:
         }
     finally:
         server.shutdown()
-        thread.join()
+        # The finding the two directives answer is about which Nx project owns this
+        # file, so it is scoped to the lines that drew it; the file scopes one of the
+        # two itself further down, and a second open block for one rule is refused.
+        # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
+        # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+        # Bounded like every other wait here: `shutdown` asks the serving loop to stop
+        # and this waits for it, so a handler wedged mid-request would otherwise hold
+        # the tier rather than fail it.
+        thread.join(timeout=e2e_timeout(60))
+        assert not thread.is_alive(), (
+            "the fixture's GitHub stand-in was still serving after it was asked to stop, "
+            "so a request handler is wedged and this journey's server outlives it"
+        )
+        # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+        # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
         server.server_close()
         _GitHubFixture.refusal = None
 
