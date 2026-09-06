@@ -1,18 +1,47 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "The verdict a plan-review turn answers with",
-  "description": "The structured answer `oneharness.plan-review.toml` validates every review turn against, and the whole contract between the reviewer and `orchestrator/plan_review.py`, which records a pass only when `passes` is true and records nothing at all otherwise. Two required fields and nothing beside them: a reviewer that answered with its own commentary, a severity, or a rewritten task would have that extra silently ignored, so the schema refuses it here — where oneharness re-prompts — rather than downstream where nothing is watching. This file is hashed into every review key, so editing it invalidates every record made under the previous version.",
+  "description": "The structured answer `oneharness.plan-review.toml` validates every review turn against, and the whole contract between the reviewer and `orchestrator/plan_review.py`, which records a pass only when `passes` is true and records nothing at all otherwise. A finding *is* a refused criterion, so the outcome and the findings are one statement and this schema admits them only where they agree: a refusal carries at least one finding, so a reviewer can never refuse a task while naming nothing to correct, and a pass carries none, so a verdict can never clear a task while reporting criteria it refuses. Nothing beside those two fields: a reviewer that answered with its own commentary, a severity, or a rewritten task would have that extra silently ignored, so the schema refuses it here — where oneharness re-prompts — rather than downstream where nothing is watching. This file is hashed into every review key, so editing it invalidates every record made under the previous version; `just review-plan <source:project>` is what re-reviews an invalidated task, at one judged turn apiece.",
   "type": "object",
   "properties": {
     "passes": {
       "type": "boolean",
       "description": "Whether this task's authored content may be dispatched. False records nothing, so the task stays refused by `just check-plan` until its content changes and is reviewed again."
     },
-    "reason": {
-      "type": "string",
-      "description": "One sentence saying why. On a refusal it is what the operator is shown and the only thing that says what to correct, so it names the criterion rather than the impression."
+    "findings": {
+      "type": "array",
+      "description": "One entry per criterion this verdict refuses, and the only thing that says what to correct. Every entry is shown to the operator on its own line, so a task with three refused criteria is reported as three lines rather than as one — which is the whole reason a verdict carries a list. Empty on a pass.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "The criterion this finding is about, quoted or named closely enough that its author can find it without re-reading the whole task. It has to carry a non-whitespace character, because a finding naming nothing leaves its reader exactly where a refusal carrying no finding at all does — and a run of spaces names nothing while satisfying a length. `minLength` and `pattern` are both declared so this file states that rule at the same strength `orchestrator/plan_review.py` reads it back at."
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Why that criterion is refused. It names the criterion's own defect rather than an impression of the task, and carries a non-whitespace character for the reason `criterion` does."
+          }
+        },
+        "required": ["criterion", "why"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["passes", "reason"],
-  "additionalProperties": false
+  "required": ["passes", "findings"],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "passes": { "const": true } }, "required": ["passes"] },
+      "then": { "properties": { "findings": { "maxItems": 0 } } }
+    },
+    {
+      "if": { "properties": { "passes": { "const": false } }, "required": ["passes"] },
+      "then": { "properties": { "findings": { "minItems": 1 } } }
+    }
+  ]
 }

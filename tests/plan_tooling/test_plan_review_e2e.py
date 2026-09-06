@@ -152,8 +152,25 @@ def _just(
     )
 
 
-PASSES = {"passes": True, "reason": "the criteria prove the route and are satisfiable here"}
-REFUSES = {"passes": False, "reason": "criterion 2 names a release number rather than a property"}
+PASSES = {"passes": True, "findings": []}
+
+#: A refusal carrying **two** findings, because one is the shape this contract was
+#: widened away from: a reviewer that saw two defects and could report one sent its
+#: author back for a second judged turn to be told the second. A fixture carrying one
+#: finding would pass under either contract and prove nothing.
+REFUSES = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "the lockfile resolves the sibling to 1.2.3",
+            "why": "it names a release number rather than the property that number stands for",
+        },
+        {
+            "criterion": "the branch publishes",
+            "why": "publication happens after the worker settles, so no dispatch reaches it",
+        },
+    ],
+}
 
 
 def test_an_unreviewed_plan_is_refused_and_a_reviewed_one_is_accepted(tmp_path: Path) -> None:
@@ -203,13 +220,96 @@ def test_an_unreviewed_plan_is_refused_and_a_reviewed_one_is_accepted(tmp_path: 
     assert _launches(tmp_path) == 1, "a recorded pass was re-judged rather than replayed"
 
 
-def test_a_refused_review_records_nothing_and_leaves_the_plan_refused(tmp_path: Path) -> None:
-    """Only a pass is recorded, so no failed review can be replayed as one."""
+def test_a_refused_review_shows_every_finding_and_records_nothing(tmp_path: Path) -> None:
+    """Only a pass is recorded — and everything the one verdict found is shown.
+
+    Both halves through the real recipe, the real review module, the real `oneharness
+    run` and the real verdict schema, with the paid provider the only thing stood in
+    for: the reviewer answers one verdict carrying two findings, and both reach the
+    operator on their own lines, so the author corrects both before paying for another
+    turn.
+    """
     project = _project("review-refused")
 
     review = _just("review-plan", project, environment=_reviewing(tmp_path, REFUSES))
     assert review.returncode == 1, review.stdout + review.stderr
-    assert "names a release number" in review.stderr, review.stderr
+    for finding in REFUSES["findings"]:
+        line = f"route: {finding['criterion']} — {finding['why']}"
+        assert line in review.stderr, review.stderr
+    assert "2 criterion(s) across 1 task(s)" in review.stderr, review.stderr
+    assert "nothing was recorded" in review.stderr, review.stderr
+    assert _launches(tmp_path) == 1, "two findings cost two turns"
+
+    still = _just("check-plan", project)
+    assert still.returncode == 1, still.stdout + still.stderr
+    assert "no review record" in still.stderr, still.stderr
+
+
+#: The two answers the verdict schema exists to refuse, and the reason it is one schema
+#: rather than two fields nobody compares: a finding **is** a refused criterion, so a
+#: refusal naming none stops this content while saying nothing an author can correct,
+#: and a pass carrying one would clear a task whose own reviewer refused criteria of it.
+DISAGREES_WITH_ITSELF = (
+    pytest.param({"passes": False, "findings": []}, id="refuses-nothing"),
+    pytest.param(
+        {"passes": True, "findings": [{"criterion": "the route works", "why": "it is vague"}]},
+        id="passes-with-a-finding",
+    ),
+    pytest.param(
+        {"passes": True, "findings": [], "reason": "and some commentary besides"},
+        id="undeclared-field",
+    ),
+    pytest.param(
+        {"passes": False, "findings": [{"criterion": "", "why": "it is vague"}]},
+        id="finding-naming-nothing",
+    ),
+    pytest.param(
+        {"passes": False, "findings": [{"criterion": "   ", "why": "it is vague"}]},
+        id="finding-named-in-whitespace",
+    ),
+    pytest.param(
+        {"passes": False, "findings": [{"criterion": "the route works", "why": " \t "}]},
+        id="reason-given-in-whitespace",
+    ),
+    pytest.param(
+        {
+            "passes": False,
+            "findings": [{"criterion": "the route works", "why": "vague", "severity": "high"}],
+        },
+        id="undeclared-field-inside-a-finding",
+    ),
+    pytest.param(
+        {"passes": False, "findings": ["it is vague"]}, id="finding-that-is-not-an-object"
+    ),
+    pytest.param(
+        {"passes": False, "findings": [{"criterion": "the route works"}]},
+        id="finding-without-a-why",
+    ),
+    pytest.param(
+        {"passes": False, "findings": [{"criterion": "the route works", "why": 7}]},
+        id="finding-whose-why-is-not-a-string",
+    ),
+    pytest.param({"passes": False, "findings": "it is vague"}, id="findings-that-is-not-a-list"),
+    pytest.param({"passes": "no", "findings": []}, id="outcome-that-is-not-a-boolean"),
+    pytest.param({"findings": []}, id="no-outcome-at-all"),
+)
+
+
+@pytest.mark.parametrize("answer", DISAGREES_WITH_ITSELF)
+def test_an_answer_the_schema_does_not_admit_records_nothing(
+    tmp_path: Path, answer: dict[str, object]
+) -> None:
+    """Driven through the real oneharness, which is what enforces the schema.
+
+    The failure direction is always "not reviewed", never "reviewed and passed": the
+    turn is re-prompted, no candidate answers a verdict the schema admits, the command
+    says so and exits non-zero, and the task stays refused for carrying no record.
+    """
+    project = _project("review-disagrees")
+
+    review = _just("review-plan", project, environment=_reviewing(tmp_path, answer))
+    assert review.returncode == 2, review.stdout + review.stderr
+    assert "no candidate answered the review with a verdict" in review.stderr, review.stderr
     assert "nothing was recorded" in review.stderr, review.stderr
 
     still = _just("check-plan", project)
@@ -1142,7 +1242,12 @@ DECORATIVE = (
 #: What a judge refusing on the falsifiability question answers.
 REFUSES_AS_DECORATIVE = {
     "passes": False,
-    "reason": "criterion 1 names no repository state that could make it fail",
+    "findings": [
+        {
+            "criterion": "the implementation is of good quality and fits the codebase",
+            "why": "it names no repository state that could make it fail",
+        }
+    ],
 }
 
 
@@ -1235,5 +1340,6 @@ def test_the_reviewer_is_asked_what_state_would_falsify_each_criterion(
     assert "Refuse a criterion you cannot falsify that way" in prompt, prompt
     assert "it can never be what stops bad work" in prompt, prompt
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert REFUSES_AS_DECORATIVE["reason"] in refused.stderr, refused.stderr
+    (finding,) = REFUSES_AS_DECORATIVE["findings"]
+    assert f"{finding['criterion']} — {finding['why']}" in refused.stderr, refused.stderr
     assert _record_of(project, "route") is None, "a refusal recorded a pass"

@@ -33,11 +33,18 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from criteria_examples import (
+    PUBLICATION_COPULAS,
+    PUBLICATION_IN_PROSE,
+    PUBLISHED_WITH_A_WORD_IN_THE_WAY,
+    RED_BEFORE_GREEN,
+    STATES_THE_PROPERTY_INSTEAD,
+)
 from project_fixtures import project_from_plan, reviewed
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
-from orchestrator.criteria_guard import APPENDIX, OUT_OF_DISPATCH
+from orchestrator.criteria_guard import APPENDIX, OUT_OF_DISPATCH, OutOfDispatch
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`, rather than a marker tier of the
@@ -543,23 +550,86 @@ def test_a_demand_the_shipped_role_makes_is_refused_against_that_role(tmp_path: 
     assert "State it as a criterion" in reported, reported
 
 
-@pytest.mark.parametrize("phrase", OUT_OF_DISPATCH)
+@pytest.mark.parametrize("entry", OUT_OF_DISPATCH, ids=[one.example for one in OUT_OF_DISPATCH])
 def test_a_criterion_resting_on_work_the_dispatch_cannot_do_is_refused(
-    tmp_path: Path, phrase: str
+    tmp_path: Path, entry: OutOfDispatch
 ) -> None:
-    """Every phrase naming state that only exists after the worker settles.
+    """Every entry naming state that only exists after the worker settles.
 
-    Parametrized over the guard's own list rather than over a copy of it, so a phrase
+    Parametrized over the guard's own list rather than over a copy of it, so an entry
     added there is a case here — otherwise the one that goes unexercised is exactly
-    the one nobody thought to write down twice. A node was failed against `The branch
-    publishes.` with its branch finished and waiting: publication is the lifecycle's,
-    and no worker can reach it from inside its own dispatch.
+    the one nobody thought to write down twice. Each entry carries an example its own
+    pattern matches whole, which is what keeps that true now the list is patterns: a
+    pattern with no example to drive would be the unexercised case wearing a new shape.
+    A node was failed against `The branch publishes.` with its branch finished and
+    waiting: publication is the lifecycle's, and no worker can reach it from inside its
+    own dispatch.
     """
-    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n- {phrase.capitalize()}."))
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n- {entry.example.capitalize()}."))
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert phrase in refused.stderr, refused.stderr
+    assert entry.example in refused.stderr, refused.stderr
     assert "the dispatch cannot do" in refused.stderr, refused.stderr
+
+
+@pytest.mark.parametrize("criterion", RED_BEFORE_GREEN, ids=range(len(RED_BEFORE_GREEN)))
+def test_every_red_before_green_form_is_refused_through_the_recipe(
+    tmp_path: Path, criterion: str
+) -> None:
+    """The widening's own evidence, through the command surface an operator meets it at.
+
+    Parametrized over `tests/criteria_examples.py` rather than over a selection from it,
+    for the reason the out-of-dispatch journey above is parametrized over the guard's own
+    list: a branch driven only by a unit test is the one that goes unexercised where it is
+    actually reached, and it is reached here. Every entry is taken from
+    `docs/plan-review-refusals.json`, where it cost a real judged review turn to refuse.
+    """
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}"))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "red-before-green" in refused.stderr, refused.stderr
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    (*PUBLISHED_WITH_A_WORD_IN_THE_WAY, *PUBLICATION_COPULAS),
+    ids=range(len(PUBLISHED_WITH_A_WORD_IN_THE_WAY) + len(PUBLICATION_COPULAS)),
+)
+def test_every_publication_through_a_word_is_refused_through_the_recipe(
+    tmp_path: Path, criterion: str
+) -> None:
+    """Every copula the matcher carries and every gap it steps over, at the surface.
+
+    A publication is a publication whatever copula carries it and whatever stands
+    between that copula and the participle, so each branch is driven where a refusal is
+    actually paid rather than only where the pattern is read.
+    """
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}"))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "the dispatch cannot do" in refused.stderr, refused.stderr
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    (*STATES_THE_PROPERTY_INSTEAD, *PUBLICATION_IN_PROSE),
+    ids=range(len(STATES_THE_PROPERTY_INSTEAD) + len(PUBLICATION_IN_PROSE)),
+)
+def test_the_sound_criteria_of_both_widened_shapes_still_reach_a_dispatch(
+    tmp_path: Path, criterion: str
+) -> None:
+    """The bound each widening is bought under, at the surface the refusal is paid at.
+
+    A widening refuses a plan outright, so what it costs is measured by the criteria of
+    its own shape that must keep passing: the property a red-before-green demand stood in
+    for, and a publication named in prose rather than rested on. Both are refused by
+    nothing here, and a widening that started refusing either would be refusing the very
+    correction its own refusal recommends.
+    """
+    accepted = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}"))
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
 @pytest.mark.parametrize(

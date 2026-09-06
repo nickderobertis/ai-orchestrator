@@ -19,10 +19,11 @@ argument, option, or environment variable that writes a record without a pass.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TypedDict, get_type_hints
+from typing import Any, TypedDict, get_type_hints
 
 import pytest
 
@@ -33,9 +34,23 @@ from orchestrator.root import REPO_ROOT
 BAR = "bar-fingerprint"
 
 #: The two verdicts a review turn can answer with, in the shape the response schema
-#: declares and `orchestrator/plan_review.py` reads.
-PASSES = plan_review.Verdict(passes=True, reason="it proves the route")
-REFUSES = plan_review.Verdict(passes=False, reason="criterion 2 names a release number")
+#: declares and `orchestrator/plan_review.py` reads. The refusal carries two findings
+#: rather than one, because reporting only the first is the defect this contract was
+#: widened to end: a fixture carrying one would pass either way.
+PASSES = plan_review.Verdict(passes=True, findings=[])
+REFUSES = plan_review.Verdict(
+    passes=False,
+    findings=[
+        plan_review.Finding(
+            criterion="the lockfile resolves the sibling to 1.2.3",
+            why="it names a release number rather than the property that number stands for",
+        ),
+        plan_review.Finding(
+            criterion="the branch publishes",
+            why="publication happens after the worker settles, so no dispatch can reach it",
+        ),
+    ],
+)
 
 
 def _task(
@@ -285,10 +300,22 @@ def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path) -> None:
     assert plan_review.bar_fingerprint(moved) != plan_review.bar_fingerprint(original)
 
 
-#: How each JSON Schema scalar the verdict declares is spelled in Python. Two entries
-#: because the contract is two fields; a third type appearing in the schema fails the
-#: gate below on the lookup rather than being guessed at.
-SCHEMA_TYPES = {"boolean": bool, "string": str}
+#: How each JSON Schema type the verdict declares is spelled in Python. A type appearing
+#: in the schema and not here fails the gate below on the lookup rather than being
+#: guessed at, which is what made the array this contract grew a failing check rather
+#: than a silently unreconciled field.
+SCHEMA_TYPES = {
+    "boolean": bool,
+    "string": str,
+    "array": list[plan_review.Finding],
+}
+
+
+def _verdict_schema() -> dict[str, Any]:
+    """The response schema, decoded. `Any` because JSON Schema is recursive and this
+    reads a different depth of it per assertion — a narrower type here would be a second,
+    weaker restatement of the very file these tests exist to reconcile against."""
+    return json.loads((REPO_ROOT / plan_review.BAR_FILES[1]).read_text(encoding="utf-8"))
 
 
 def test_the_verdict_type_matches_the_schema_it_is_validated_against() -> None:
@@ -296,22 +323,95 @@ def test_the_verdict_type_matches_the_schema_it_is_validated_against() -> None:
 
     oneharness validates a review turn against `config/plan-review-verdict.schema.json`
     and this package reads what comes back through `plan_review.Verdict`. The two
-    declare the same two fields in different files and nothing compared them, so a
-    field renamed or retyped on one side was caught only by whichever journey happened
-    to trip over it — which is the drift this repository gates everywhere else it
-    restates somebody's contract.
+    declare the same fields in different files and nothing compared them, so a field
+    renamed or retyped on one side was caught only by whichever journey happened to trip
+    over it — which is the drift this repository gates everywhere else it restates
+    somebody's contract.
 
     Both directions are held, because they fail differently and both fail quietly: a
     field the schema requires and `Verdict` omits is read as absent, and one `Verdict`
-    declares while the schema forbids it never arrives at all.
+    declares while the schema forbids it never arrives at all. `Finding` is reconciled
+    against the array's own item schema for the same reason and in the same two
+    directions — a finding is where everything an operator is shown now lives.
     """
-    schema = json.loads((REPO_ROOT / plan_review.BAR_FILES[1]).read_text(encoding="utf-8"))
+    schema = _verdict_schema()
     declared = get_type_hints(plan_review.Verdict)
 
     assert schema["additionalProperties"] is False, schema
     assert set(schema["required"]) == set(schema["properties"]) == set(declared), schema
     for name, described in schema["properties"].items():
-        assert SCHEMA_TYPES[described["type"]] is declared[name], name
+        assert SCHEMA_TYPES[described["type"]] == declared[name], name
+
+    item = schema["properties"]["findings"]["items"]
+    finding = get_type_hints(plan_review.Finding)
+    assert item["additionalProperties"] is False, item
+    assert set(item["required"]) == set(item["properties"]) == set(finding), item
+    for name, described in item["properties"].items():
+        assert SCHEMA_TYPES[described["type"]] == finding[name], name
+
+
+def test_the_schema_admits_a_verdict_only_where_its_outcome_and_findings_agree() -> None:
+    """A finding is a refused criterion, so the two halves are one statement.
+
+    Read off the schema rather than driven, because oneharness is what enforces it and
+    `tests/plan_tooling/test_plan_review_e2e.py` is where a real turn meets that
+    validator. What this holds is that the file still *says* it: a refusal admitting no
+    finding would let a reviewer stop this content with nothing naming what to correct,
+    and a pass admitting one would clear a task whose own reviewer refused criteria of
+    it — which is the failure that ends `_answered`'s narrowing too.
+    """
+    conditions = {
+        found["if"]["properties"]["passes"]["const"]: found["then"]["properties"]["findings"]
+        for found in _verdict_schema()["allOf"]
+    }
+
+    assert conditions[True] == {"maxItems": 0}, conditions
+    assert conditions[False] == {"minItems": 1}, conditions
+
+    # And a finding that names nothing is refused for the same reason a refusal naming
+    # no finding is: it leaves its reader exactly where the other one does. Both
+    # keywords are held, at the strength `_answered` reads them back at: `minLength`
+    # alone admits a run of spaces, which names nothing while satisfying a length, and
+    # a schema that admitted one would send a reviewer an answer oneharness validates
+    # and this package then discards with nothing said about why.
+    item = _verdict_schema()["properties"]["findings"]["items"]["properties"]
+    assert {name: field["minLength"] for name, field in item.items()} == {
+        "criterion": 1,
+        "why": 1,
+    }, item
+    assert {name: field["pattern"] for name, field in item.items()} == {
+        "criterion": r"\S",
+        "why": r"\S",
+    }, item
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t", "   \n  "], ids=range(4))
+@pytest.mark.parametrize("field", ["criterion", "why"], ids=["criterion", "why"])
+def test_the_schema_and_the_fallback_reader_refuse_the_same_empty_finding(
+    blank: str, field: str
+) -> None:
+    """One rule, restated in two files, so the restatement is what is gated.
+
+    `config/plan-review-verdict.schema.json` is the authority oneharness validates
+    against and `_answered` reads the same answer back, so a string one accepts and the
+    other discards is a divergence that fails silently in the worst direction: the turn
+    is validated, the verdict is thrown away, and the task stays unreviewed with the
+    reviewer told nothing. Every string either refuses is required to be refused by
+    both, checked against the schema's own keywords rather than against a copy of them.
+    """
+    item = _verdict_schema()["properties"]["findings"]["items"]["properties"][field]
+    # `get` rather than indexing, so a keyword dropped from the schema fails on the
+    # divergence it causes — an empty pattern admits everything — rather than on a
+    # missing key, which reads like a broken test instead of a broken contract.
+    admitted = len(blank) >= item["minLength"] and (
+        re.search(item.get("pattern", ""), blank) is not None
+    )
+
+    finding = {"criterion": "the route works", "why": "it is vague"} | {field: blank}
+    read = plan_review._answered({"passes": False, "findings": [finding]})
+
+    assert admitted is False, item
+    assert read is None, read
 
 
 def test_the_bar_fingerprint_covers_the_question_it_asks(
@@ -458,10 +558,15 @@ def test_a_passing_review_records_the_key_the_check_will_read(
     assert "Add the route." in prompts[0]
 
 
-def test_a_refused_review_records_nothing_at_all(
+def test_a_refused_review_records_nothing_and_shows_every_finding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A failed review leaves nothing behind that a later run could replay as a pass."""
+    """A failed review leaves nothing behind, and reports all of what it found.
+
+    Both findings reach stderr on their own lines, and the summary counts criteria and
+    tasks separately, because a reader acts on the first number and schedules on the
+    second.
+    """
     store = _Store(tmp_path / "store", [_task()])
     store.install(monkeypatch)
     _verdicts(monkeypatch, REFUSES)
@@ -469,19 +574,94 @@ def test_a_refused_review_records_nothing_at_all(
     assert plan_review.main(["demo:plan"]) == 1
     assert store.written("plan/route") is None
     reported = capsys.readouterr().err
-    assert "criterion 2 names a release number" in reported
-    assert "nothing was recorded" in reported
+    for finding in REFUSES["findings"]:
+        assert f"route: {finding['criterion']} — {finding['why']}" in reported, reported
+    assert "2 criterion(s) across 1 task(s)" in reported, reported
+    assert "nothing was recorded" in reported, reported
 
 
-def test_a_refusal_without_a_readable_reason_still_names_the_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "structured",
+    [
+        {"passes": False, "findings": []},
+        {"passes": True, "findings": [{"criterion": "c", "why": "w"}]},
+        {"passes": False, "findings": ["not an object"]},
+        {"passes": False, "findings": [{"criterion": "", "why": "w"}]},
+        {"passes": False, "findings": [{"criterion": "c", "why": "   "}]},
+        {"passes": False, "findings": [{"criterion": "c"}]},
+        {"passes": False, "findings": [{"criterion": "c", "why": 7}]},
+        {"passes": False, "findings": "not a list"},
+        {"passes": "no", "findings": []},
+        {"findings": []},
+        {"passes": True, "findings": [], "reason": "and some commentary besides"},
+        {"passes": False, "findings": [{"criterion": "c", "why": "w", "severity": "high"}]},
+    ],
+    ids=[
+        "refuses-nothing",
+        "passes-with-a-finding",
+        "unobject-finding",
+        "nameless-criterion",
+        "blank-why",
+        "finding-without-why",
+        "unstring-why",
+        "unlist-findings",
+        "unbool-passes",
+        "no-outcome",
+        "undeclared-verdict-field",
+        "undeclared-finding-field",
+    ],
+)
+def test_an_answer_the_schema_would_not_admit_is_not_a_verdict(structured: object) -> None:
+    """The failure direction stays "not reviewed", for both halves of the agreement.
+
+    oneharness validates the schema and re-prompts, so this narrowing is the second
+    reading of the same rule — the one that holds when the validator was skipped,
+    misconfigured, or stood in for. The two that matter are the first pair: a refusal
+    naming no criterion stops the content while saying nothing an author can correct,
+    and a pass carrying a finding would record a pass over criteria its own reviewer
+    refused. The last pair is the other half of the schema, `additionalProperties:
+    false` at each of its two levels: an answer carrying more than the declared shape
+    was written to a contract this does not have, and the field it carries is one
+    nothing here would read.
+    """
+    assert plan_review._answered(structured) is None
+
+
+@pytest.mark.parametrize(
+    "structured",
+    [
+        {"passes": True, "findings": []},
+        {"passes": False, "findings": [{"criterion": "c", "why": "w"}]},
+        {
+            "passes": False,
+            "findings": [{"criterion": "c", "why": "w"}, {"criterion": "d", "why": "x"}],
+        },
+    ],
+    ids=["passes", "one-finding", "several-findings"],
+)
+def test_an_answer_whose_outcome_and_findings_agree_is_the_verdict_it_states(
+    # `Any` because the subject is what the harness *might* answer: a typed parameter
+    # would be a shape this narrowing had already accepted, which is not what it decides.
+    structured: dict[str, Any],
 ) -> None:
-    store = _Store(tmp_path / "store", [_task()])
-    store.install(monkeypatch)
-    _verdicts(monkeypatch, plan_review.Verdict(passes=False, reason=""))
+    """And it arrives whole: nothing between the harness report and the operator drops one."""
+    answered = plan_review._answered(structured)
 
-    assert plan_review.main(["demo:plan"]) == 1
-    assert "route: refused" in capsys.readouterr().err
+    assert answered == structured, answered
+
+
+def test_the_prompt_asks_for_every_criterion_the_reviewer_would_refuse() -> None:
+    """The question and the schema are one contract, so the question has to ask for it.
+
+    A schema that admits several findings under a prompt asking for one sentence buys
+    nothing: the reviewer answers the question it was asked. `bar_fingerprint` covers
+    both, so this is about what the wording *says* rather than about it having moved.
+    """
+    asked = plan_review.REVIEW_PROMPT
+
+    assert "every criterion you would refuse" in asked, asked
+    assert "not the first one, and not the worst one" in asked, asked
+    assert "no findings at all" in asked, asked
 
 
 def test_a_task_already_carrying_a_record_spends_no_judged_turn(
@@ -619,22 +799,23 @@ def test_the_judged_turn_reads_its_verdict_out_of_the_harness_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Only a candidate whose answer the schema validated is read as the verdict."""
+    sound = {"passes": False, "findings": [{"criterion": "criterion 2", "why": "it perishes"}]}
     _harness(
         monkeypatch,
         json.dumps(
             {
                 "results": [
                     "not an object",
-                    {"schema_valid": False, "structured": {"passes": True, "reason": "stale"}},
+                    {"schema_valid": False, "structured": {"passes": True, "findings": []}},
                     {"schema_valid": True, "structured": None},
-                    {"schema_valid": True, "structured": {"passes": "yes", "reason": "wrong"}},
-                    {"schema_valid": True, "structured": {"passes": True, "reason": 7}},
-                    {"schema_valid": True, "structured": {"passes": True, "reason": "sound"}},
+                    {"schema_valid": True, "structured": {"passes": "yes", "findings": []}},
+                    {"schema_valid": True, "structured": {"passes": False, "findings": []}},
+                    {"schema_valid": True, "structured": sound},
                 ]
             }
         ),
     )
-    assert plan_review._verdict("prompt") == {"passes": True, "reason": "sound"}
+    assert plan_review._verdict("prompt") == sound
 
 
 @pytest.mark.parametrize(

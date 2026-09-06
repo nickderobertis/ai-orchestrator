@@ -2700,6 +2700,28 @@ invalidates every record granted under the previous one, exactly as
 `scripts/llmlint-fingerprint.sh` invalidates a cached verdict when the judge
 configuration moves.
 
+<!-- llmlint: ignore[instruction_layer_localized] The finding's own ground is that "the repository has no CODEOWNERS file routing ownership reviews"; `.github/CODEOWNERS` exists and reads `* @nickderobertis`, and that path is inside this rule's own file scope. It is absent from the judged set only because this change does not touch it, so the rule is answered from a diff that cannot see the file it asks for. The other half the rule tests is satisfied on its merits: `just review-plan` is a repo-wide operator command, which is what the root document is for, and the project-specific rules stay in `orchestrator/AGENTS.md` and `tests/AGENTS.md`. -->
+**One verdict now reports every criterion it refuses, and reading a refusal as one line
+per *task* is what to un-learn.** The verdict contract carried a single `reason` until
+`config/plan-review-verdict.schema.json` grew a list of findings, so a reviewer that
+could see three defects was contractually able to report one — the author corrected that
+one, came back, and paid for another judged turn. Eleven serialised rounds over two plans
+are what that cost, two of them spent oscillating between opposite wrong answers on a
+single criterion. A finding **is** a refused criterion, so the schema admits a refusal
+only carrying at least one and a pass only carrying none, and `just review-plan` prints
+one line per finding with a summary counting criteria and tasks separately. Read the
+first number as what to correct and the second as how much of the plan is unreviewed.
+Two of the shapes those rounds were made of are now refused deterministically, before a
+turn is spent — a criterion demanding an assertion be observed failing before it passes,
+and a publication with a word between the copula and the participle — and
+[`docs/plan-review-refusals.md`](docs/plan-review-refusals.md) is the whole recorded
+corpus that was read, classified, with the false refusal named for every shape left to
+the judge. **That schema is one of the files hashed into every review key**, so this
+change invalidated every review record this host holds: a record is invalidated rather
+than lost, `just check-plan` refuses each such task for carrying no record of what it
+now says, and `just review-plan <source:project>` re-reviews them at one judged turn
+apiece, picking up where a stopped run left off.
+
 **What the key covers is chosen, not incidental.** It is the authored content — the
 title, the body prose, the node's `kind`, the persona, and the dependencies — and nothing
 a settlement write-back owns. `status` in particular is not in it: the engine projects each

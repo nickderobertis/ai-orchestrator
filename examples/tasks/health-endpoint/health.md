@@ -18,5 +18,5 @@ Operators currently learn a deploy is unhealthy from user reports, because nothi
 ## Acceptance criteria
 - `GET /health` returns the build metadata contract.
 - Real request tests prove the happy path and one failure path.
-- Each new test is observed failing for the intended reason before it passes.
+- Each new test's subject is the behaviour this change adds, so removing that behaviour fails it.
 - The change opens no coverage gap.

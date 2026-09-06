@@ -59,8 +59,10 @@ _FAKE_CODEX = helper("fake_codex.py")
 _PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
 #: What the scripted reviewer answers. One passing verdict, repeated for every task:
-#: `tests/e2e/fake_codex.py` reuses its last scripted answer once the list runs out.
-_PASSING_VERDICT = json.dumps({"passes": True, "reason": "the criteria prove this node"})
+#: `tests/e2e/fake_codex.py` reuses its last scripted answer once the list runs out. It
+#: carries no findings because a finding *is* a refused criterion, and the verdict schema
+#: admits a pass only where it names none.
+_PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
 
 #: Where the review turns this fixture spends keep their harness history, so they do not
 #: land in the host's. One directory per test process, created on first use.

@@ -159,9 +159,29 @@ person could read it and know exactly what to do. Refusing it for having no acce
 criteria refuses the shape itself, which is the one refusal that can never be corrected.
 
 Do not rewrite the task and do not judge it on style. Answer with the JSON object the
-response schema declares: whether it passes, and one sentence saying why. A refusal is
-what stops this content reaching a dispatch, so refuse only what you can name.
+response schema declares: whether it passes, and one finding for **every** criterion
+you would refuse — not the first one, and not the worst one. Each finding names the
+criterion it is about and why that criterion is refused. A verdict that passes carries
+no findings at all, and a verdict that refuses carries one for each criterion it
+refuses; the schema admits no other pair, because a refusal naming nothing to correct
+and a pass reporting criteria it refuses are both answers its reader cannot act on.
+Report every criterion you would refuse in this one answer: this task's author corrects
+what you name and comes back, so a criterion you saw and left out costs another whole
+round. A refusal is what stops this content reaching a dispatch, so refuse only what
+you can name.
 """
+
+
+class Finding(TypedDict):
+    """One criterion a verdict refuses, and why.
+
+    A finding *is* a refused criterion rather than a note beside one, which is what
+    lets the schema hold a verdict's outcome and its findings to each other: a
+    refusal carries at least one and a pass carries none.
+    """
+
+    criterion: str
+    why: str
 
 
 class Verdict(TypedDict):
@@ -171,10 +191,34 @@ class Verdict(TypedDict):
     schema is what oneharness validates and this is what decides whether a record is
     written: the two have to agree, and `tests/plan_tooling/test_plan_review_e2e.py` drives a
     real turn through both.
+
+    `findings` is a list because a reviewer that can see three defects and report one
+    tells its reader that one thing is wrong; `docs/plan-review-refusals.md` is what the
+    single-finding contract this replaced cost.
     """
 
     passes: bool
-    reason: str
+    findings: list[Finding]
+
+
+class Refusal(NamedTuple):
+    """One task this run refused, carrying every finding its verdict named.
+
+    The findings are kept as the verdict answered them rather than collapsed into a
+    line here, because the count of *tasks* and the count of *findings* are different
+    numbers an operator reads differently — one says how much of the plan is unreviewed
+    and the other says how much there is to correct.
+    """
+
+    node_id: str
+    findings: list[Finding]
+
+    def lines(self) -> list[str]:
+        """This refusal as the operator reads it: one line per finding, never per task."""
+        return [
+            f"{self.node_id}: {finding['criterion']} — {finding['why']}"
+            for finding in self.findings
+        ]
 
 
 class Reviewed(NamedTuple):
@@ -184,9 +228,10 @@ class Reviewed(NamedTuple):
     recorded: int
     #: Tasks that already carried a record for their current content, so cost nothing.
     held: int
-    #: One line per refusal, naming the task and the reason. Nothing was recorded for
-    #: any of them, which is why this is a list rather than a count.
-    refused: list[str]
+    #: One entry per refused task, each carrying every criterion its verdict refused.
+    #: Nothing was recorded for any of them, which is why this is a list rather than a
+    #: count.
+    refused: list[Refusal]
     #: Why the run stopped early, when it did. A review is per task and each pass is
     #: recorded as it is granted, so a plan whose fourth task cannot be reviewed keeps
     #: the three records already written — and a diagnostic claiming nothing was
@@ -339,6 +384,60 @@ def write_record(project: str, task: StoreTask, key: ReviewKey, by: By) -> Path:
     return document
 
 
+#: Every field the verdict schema declares, at each of its two levels. The schema sets
+#: `additionalProperties: false` at both, so a verdict carrying anything else is one its
+#: reviewer wrote to a contract this does not have — and reading it as a verdict anyway
+#: would record a pass from an answer nobody agreed the shape of. `_answered` is the
+#: fallback validator for a harness whose own was skipped, misconfigured, or stood in
+#: for, so it refuses the same two shapes rather than a subset of them.
+VERDICT_FIELDS = frozenset({"passes", "findings"})
+FINDING_FIELDS = frozenset({"criterion", "why"})
+
+
+def _declared(mapping: object, fields: frozenset[str]) -> bool:
+    """Whether ``mapping`` is a mapping carrying exactly ``fields`` and nothing else."""
+    return isinstance(mapping, dict) and mapping.keys() == fields
+
+
+def _answered(structured: object) -> Verdict | None:
+    """``structured`` as a verdict, or ``None`` when it is not one this may act on.
+
+    The schema is enforced by oneharness, and this narrowing is enforced again here for
+    the two properties a record is written from. **The outcome and the findings have to
+    agree**: a refusal naming no criterion says nothing an author can correct, and a
+    pass carrying findings would clear a task whose own reviewer refused criteria of it
+    — so neither is a verdict, and a report carrying only those leaves the task
+    unreviewed rather than recorded either way. And **the shape has to be the declared
+    one**, at both its levels, because the schema sets `additionalProperties: false` and
+    an answer carrying more than that was written to a contract this does not have.
+    Reading both here as well as in the schema is what makes them true of a harness
+    whose validator was skipped, misconfigured, or stood in for.
+    """
+    match structured:
+        case {"passes": bool(passes), "findings": list(raw)} if _declared(
+            structured, VERDICT_FIELDS
+        ):
+            findings = [
+                Finding(criterion=criterion, why=why)
+                for finding in raw
+                if _declared(finding, FINDING_FIELDS)
+                for criterion in [finding["criterion"]]
+                for why in [finding["why"]]
+                if isinstance(criterion, str) and isinstance(why, str)
+                if criterion.strip() and why.strip()
+            ]
+            # A finding this could not read is not a finding dropped: it would make a
+            # two-finding refusal report one, which is the whole defect this contract
+            # was widened away from. A blank `criterion` or `why` is unreadable in the
+            # sense that matters — it leaves its reader where a refusal carrying no
+            # finding leaves them — so the schema and this narrowing both refuse it.
+            if len(findings) != len(raw) or passes is bool(findings):
+                return None
+            return Verdict(passes=passes, findings=findings)
+        case _:
+            return None
+
+
 def _verdict(prompt: str) -> Verdict:
     """Spend one judged turn on ``prompt`` and return the structured verdict it answered.
 
@@ -377,13 +476,9 @@ def _verdict(prompt: str) -> Verdict:
     for result in results if isinstance(results, list) else []:
         if not isinstance(result, dict) or result.get("schema_valid") is not True:
             continue
-        structured = result.get("structured")
-        if (
-            isinstance(structured, dict)
-            and isinstance(structured.get("passes"), bool)
-            and isinstance(structured.get("reason"), str)
-        ):
-            return Verdict(passes=structured["passes"], reason=structured["reason"])
+        answered = _answered(result.get("structured"))
+        if answered is not None:
+            return answered
     raise OSError(
         f"no candidate answered the review with a verdict matching {BAR_FILES[1]}; "
         f"{completed.stderr.strip() or 'the harness reported no reason'}. Check the "
@@ -478,7 +573,7 @@ def review(project: str) -> Reviewed:
     bar = bar_fingerprint()
     pending = unreviewed(records, bar)
     plan_name = plan_store.read_plan(project, records).get("name", project)
-    refused: list[str] = []
+    refused: list[Refusal] = []
     recorded = 0
     for index, task in enumerate(pending):
         try:
@@ -500,7 +595,7 @@ def review(project: str) -> Reviewed:
                 f"{exc}. {remaining} task(s) were left unreviewed, beginning at {task.node_id}",
             )
         if not verdict["passes"]:
-            refused.append(f"{task.node_id}: {verdict['reason'] or 'refused'}")
+            refused.append(Refusal(task.node_id, verdict["findings"]))
     return Reviewed(recorded, len(records) - len(pending), refused)
 
 
@@ -529,12 +624,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     if answered.refused:
+        # One line per finding rather than per task: a task whose reviewer refused three
+        # criteria has three things to correct, and printing one of them is the defect
+        # the verdict contract was widened to end.
+        findings = 0
         for refusal in answered.refused:
-            print(f"review-plan: {refusal}", file=sys.stderr)
+            for line in refusal.lines():
+                findings += 1
+                print(f"review-plan: {line}", file=sys.stderr)
         print(
-            f"review-plan: {len(answered.refused)} task(s) were refused and nothing was "
-            f"recorded for them; correct the criteria each refusal names in the plan's own "
-            f"task record, then run this command again",
+            f"review-plan: {findings} criterion(s) across {len(answered.refused)} task(s) "
+            f"were refused and nothing was recorded for them; correct every criterion named "
+            f"above in the plan's own task record, then run this command again",
             file=sys.stderr,
         )
         return 1

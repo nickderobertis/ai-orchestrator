@@ -29,6 +29,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from criteria_examples import (
+    PUBLICATION_COPULAS,
+    PUBLICATION_IN_PROSE,
+    PUBLISHED_WITH_A_WORD_IN_THE_WAY,
+    RED_BEFORE_GREEN,
+    STATES_THE_PROPERTY_INSTEAD,
+)
 
 from orchestrator import criteria_guard, plan_check, plan_review, plan_store
 from orchestrator.criteria_guard import (
@@ -1010,6 +1017,52 @@ def test_a_criterion_naming_the_property_instead_is_accepted(criterion: str) -> 
     far more often than it is a release, and a false refusal here blocks correct work
     and gets worked around — which is worse than the gap.
     """
+    check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
+@pytest.mark.parametrize("criterion", RED_BEFORE_GREEN, ids=range(len(RED_BEFORE_GREEN)))
+def test_a_criterion_prescribing_red_before_green_is_refused(criterion: str) -> None:
+    """The step is good practice and a bad criterion.
+
+    What a criterion can ask for instead is the property the step produces, which the
+    finished tree carries; what it asks for as written is a development step nothing in
+    the tree records. `docs/plan-review-refusals.md` is where that trade is argued.
+    """
+    with pytest.raises(CriteriaError, match="red-before-green"):
+        check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
+@pytest.mark.parametrize(
+    "criterion", STATES_THE_PROPERTY_INSTEAD, ids=range(len(STATES_THE_PROPERTY_INSTEAD))
+)
+def test_the_property_a_red_before_green_demand_stood_in_for_is_accepted(criterion: str) -> None:
+    """Including the two that name the demand in prose rather than making it.
+
+    This check refuses a plan outright, so it is written to miss a criterion that names
+    its subject rather than to refuse a sound one: the node whose job is to document
+    that demand has to be able to say the words.
+    """
+    check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    (*PUBLISHED_WITH_A_WORD_IN_THE_WAY, *PUBLICATION_COPULAS),
+    ids=range(len(PUBLISHED_WITH_A_WORD_IN_THE_WAY) + len(PUBLICATION_COPULAS)),
+)
+def test_a_publication_the_dispatch_cannot_reach_is_refused_through_a_word_in_the_way(
+    criterion: str,
+) -> None:
+    """A publication is a publication whatever copula carries it and whatever stands
+    between that copula and the participle."""
+    with pytest.raises(CriteriaError, match="the dispatch cannot do"):
+        check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
+@pytest.mark.parametrize("criterion", PUBLICATION_IN_PROSE, ids=range(len(PUBLICATION_IN_PROSE)))
+def test_a_criterion_naming_a_publication_without_resting_on_one_is_accepted(
+    criterion: str,
+) -> None:
     check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
 
 

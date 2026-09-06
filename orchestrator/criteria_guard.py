@@ -429,26 +429,58 @@ def _joined(*parts: str | None) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-# Work the dispatch cannot perform: it happens after the worker settles.
+class OutOfDispatch(NamedTuple):
+    """One way a criterion rests on state the worker's own dispatch does not reach."""
+
+    pattern: re.Pattern[str]
+    #: A criterion fragment this matches whole, so the journey that drives every entry
+    #: has one to drive and the refusal it reads quotes exactly this.
+    example: str
+
+
+# Work the dispatch cannot perform: it happens after the worker settles. Patterns rather
+# than phrases, because the forms `docs/plan-review-refusals.md` caught this list missing
+# differ from the phrase beside them only by a word.
 OUT_OF_DISPATCH = (
-    "branch publishes",
-    "is published",
-    "pr is merged",
-    "pull request is merged",
-    "lands on master",
-    "lands on main",
-    "deploy",
+    OutOfDispatch(re.compile(r"branch publishes"), "branch publishes"),
+    # Bounded at two intervening words, because a longer run stops being one clause; and
+    # no negation may be one of them, because "a release is not published for it" states
+    # the precondition this refusal exists to ask for, and the bare phrase never matched
+    # a negation either.
+    OutOfDispatch(
+        re.compile(r"\b(?:is|are|was|were|be|been)(?: (?!not\b|never\b|no\b)\w+){0,2} published\b"),
+        "is published",
+    ),
+    OutOfDispatch(re.compile(r"pr is merged"), "pr is merged"),
+    OutOfDispatch(re.compile(r"pull request is merged"), "pull request is merged"),
+    OutOfDispatch(re.compile(r"lands on master"), "lands on master"),
+    OutOfDispatch(re.compile(r"lands on main"), "lands on main"),
+    OutOfDispatch(re.compile(r"deploy"), "deploy"),
+)
+
+
+#: What a criterion naming an invocation is told to do instead. Kept as the default
+#: rather than inlined at the raise, because the shape below it — a development step
+#: prescribed in place of the property that step produces — is not a command anybody
+#: can move into `## Additional info` unchanged.
+RUN_IT_ELSEWHERE = (
+    "Criteria state properties; put the command in '## Additional info' and say that "
+    "running the pieces separately is fine."
 )
 
 
 class Procedure(NamedTuple):
-    """One way a criterion names an invocation, and what may follow it anyway."""
+    """One way a criterion prescribes a procedure in place of a property, and its remedy."""
 
     pattern: re.Pattern[str]
     why: str
     #: What may stand immediately after a match without the criterion being a demand
     #: to run anything. ``None`` where nothing may.
     exempt: re.Pattern[str] | None = None
+    #: What the criterion's author is told to write instead. Per entry, because the
+    #: correction differs by shape: an invocation moves to the operational notes, while
+    #: a prescribed development step is replaced by the property it produces.
+    remedy: str = RUN_IT_ELSEWHERE
 
 
 #: This repository's own plan-reading recipes, which a criterion **about** the plan
@@ -467,6 +499,26 @@ PROCEDURE = (
     Procedure(re.compile(r"`[^`]*\bjust\s"), "names a `just` invocation", PLAN_TOOLING),
     Procedure(re.compile(r"&&"), "names a chained shell command"),
     Procedure(re.compile(r"`[^`]*\b(npm|pnpm|nx|cargo|pytest|git)\s"), "names a shell invocation"),
+    # Red before green. A worker is told to do it in `config/dispatch-appendix.md`; as a
+    # *criterion* it asks for a development step the finished tree cannot carry, so a
+    # judge can only take the worker's word for it. `docs/plan-review-refusals.md` is
+    # what the two spellings below are drawn from.
+    Procedure(
+        re.compile(
+            r"\b(?:observ\w+|seen|demonstrated|shown)\s+(?:to\s+)?fail\w*\b[^.]{0,160}?"
+            r"\bbefore it passes\b"
+            r"|\bfail(?:s|ing)?\s+(?:for|against)\s+(?:the|its)\s+intended reason\b"
+            r"[^.]{0,120}?\bbefore\b",
+            re.I,
+        ),
+        "prescribe a red-before-green development step",
+        remedy=(
+            "Criteria state properties of the finished tree; ask for the property that "
+            "step produces — an assertion whose subject is the behaviour this change "
+            "adds, so removing that behaviour fails it — and put the step itself in "
+            "'## Additional info'."
+        ),
+    ),
 )
 
 # A criterion with no content of its own. Deferring to prose elsewhere gives the
@@ -599,19 +651,23 @@ def criteria_items(block: str) -> Iterator[str]:
         yield "\n".join(current)
 
 
-def _invocation(block: str) -> tuple[re.Match[str], str] | tuple[None, None]:
-    """The first invocation ``block`` names that is a demand to run it, and why.
+def _prescribed(block: str) -> tuple[re.Match[str], Procedure] | tuple[None, None]:
+    """The first procedure ``block`` prescribes in place of a property, and which one.
 
     Every match is read against its own exemption before it is reported, so a
     criterion naming this repository's plan tooling is passed over and scanning
     continues — one criterion may name `just check-plan` and the next `just gate`,
     and stopping at the first match would report neither or the wrong one.
+
+    The entry is returned rather than its `why` alone because the correction differs by
+    shape: a command moves into the operational notes, where a prescribed development
+    step has to be replaced by the property it produces.
     """
     for procedure in PROCEDURE:
         for named in procedure.pattern.finditer(block):
             if procedure.exempt is not None and procedure.exempt.match(block, named.end()):
                 continue
-            return named, procedure.why
+            return named, procedure
     return None, None
 
 
@@ -766,12 +822,13 @@ def check(task: str, node_id: str, bar: Bar) -> None:
 
     check_backticks_pair(block, node_id)
     lowered = block.lower()
-    for phrase in OUT_OF_DISPATCH:
-        if phrase in lowered:
+    for entry in OUT_OF_DISPATCH:
+        rests_on = entry.pattern.search(lowered)
+        if rests_on is not None:
             raise CriteriaError(
-                f"{node_id}: criteria name '{phrase}' — that is work the dispatch cannot "
-                f"do, so finished work fails against it. State the worker-side "
-                f"precondition instead."
+                f"{node_id}: criteria name '{rests_on.group(0)}' — that is work the "
+                f"dispatch cannot do, so finished work fails against it. State the "
+                f"worker-side precondition instead."
             )
     deferred = DEFERRAL.search(block)
     if deferred:
@@ -795,12 +852,11 @@ def check(task: str, node_id: str, bar: Bar) -> None:
             f"dispatched makes finished work fail against it. State the property that "
             f"version stands in for instead."
         )
-    named, why = _invocation(block)
-    if named is not None:
+    named, procedure = _prescribed(block)
+    if named is not None and procedure is not None:
         raise CriteriaError(
-            f"{node_id}: criteria {why} ({named.group(0)!r}). Criteria state properties; "
-            f"put the command in '## Additional info' and say that running the pieces "
-            f"separately is fine."
+            f"{node_id}: criteria {procedure.why} ({_condensed(named.group(0))!r}). "
+            f"{procedure.remedy}"
         )
     check_changes_allowed(block, node_id, bar)
     check_demands(prose, block, node_id, bar)
