@@ -86,19 +86,34 @@ for surface in queued if isinstance(queued, list) else []:
 sys.exit(0)
 '
 
-# Merges what the engine recorded it did with each `note` this envelope carried into the
-# verb's own answer, and writes that one line back out.
+# Merges which halves the staged envelope carried, and what the engine recorded it did
+# with each `note` in it, into the verb's own answer, and writes that one line back out.
 #
 # **One line, not two.** The verb's answer is the whole of this recipe's stdout, so the
-# outcome is carried inside it — `notes` beside `reply` and `state` — rather than printed
-# beside it. Per note: `reached` is the engine's own word for which party of the node's
-# conversation took it, `null` when nothing has decided it yet, and a `notes_unread`
-# beside them says the journal could not be read at all, which is a different state from
-# a note nothing has decided. An answer this cannot parse has nothing to merge into, so it
-# is handed back whole and nothing is added beside it: stdout is one line or none. This
-# program itself never fails; its caller says on stderr when it could not be run, because
-# a receipt with no outcome in it and no reason beside it reads as a reply that carried no
-# note.
+# outcome is carried inside it — `halves` and `notes` beside `reply` and `state` — rather
+# than printed beside it. Per note: `reached` is the engine's own word for which party of
+# the node's conversation took it, `null` when nothing has decided it yet, and a
+# `notes_unread` beside them says the journal could not be read at all, which is a
+# different state from a note nothing has decided. An answer this cannot parse has nothing
+# to merge into, so it is handed back whole and nothing is added beside it: stdout is one
+# line or none. This program itself never fails; its caller says on stderr when it could
+# not be run, because a receipt with no outcome in it and no reason beside it reads as a
+# reply that carried no note.
+#
+# **`halves` is what this envelope carried, and it is read off the staged bytes alone.**
+# The engine answers one `state` word for the whole envelope, and an envelope may carry a
+# verdict, edits, or both — so that word describes one half at most, and a manager who
+# sent both is told `applied` and cannot tell whether their ruling was queued beside the
+# edits or went nowhere. What this recipe can prove on its own is what it staged, so that
+# is what it reports: `verdict` says a verdict half was there, and `edits` counts the
+# commands beside it. It is deliberately not a second implementation of what the engine
+# records — nothing here claims either half *landed*, only that the envelope carried it,
+# and the day the engine answers per half that receipt is the engine's to give.
+#
+# **Presence rather than truth for the verdict half.** `completion: false` is a
+# non-completion, which this channel routes exactly as it routes a completion — it is the
+# shape `scripts/channel-serve.py` sends most — so a receipt keyed on the value would
+# report the commonest verdict there is as no verdict at all.
 #
 # **`reached` is what the outcome is called, and it is the engine's word rather than this
 # recipe's.** A note that reached a live turn and one carried to the node's next dispatch
@@ -134,68 +149,82 @@ try:
 except ValueError:
     sent = None
 commands = sent.get("commands") if isinstance(sent, dict) else None
+edits = commands if isinstance(commands, list) else []
 notes = [
     command
-    for command in (commands if isinstance(commands, list) else [])
+    for command in edits
     if isinstance(command, dict) and command.get("op") == "note"
 ]
-if not notes:
-    handed_back(answered)
-    sys.exit(0)
-unread = None
-appended = ""
-try:
-    with open(journal_path, "rb") as handle:
-        handle.seek(offset)
-        appended = handle.read().decode("utf-8", "replace")
-except OSError as unreadable:
-    # A journal this could not open and a journal carrying no outcome yet are opposite
-    # states — one is a broken read, the other a note nothing has decided the fate of —
-    # so this is said in a field of its own rather than folded into an empty read.
-    unread = "%s could not be read (%s)" % (journal_path, unreadable)
-committed = []
-for line in appended.splitlines():
+
+carried = {}
+if isinstance(sent, dict):
+    # Read off the staged bytes and nothing else, so this answers whether or not there is
+    # a journal to read afterwards. An envelope that is not a JSON object at all is one
+    # the verb refuses, so nothing is guessed at here: it simply goes unreported.
+    carried["halves"] = {"verdict": "completion" in sent, "edits": len(edits)}
+
+
+def dispositions():
+    """What the engine recorded it did with each note, in the order they were sent."""
+    unread = None
+    appended = ""
     try:
-        event = json.loads(line)
-    except ValueError:
-        continue
-    if not isinstance(event, dict) or event.get("kind") != "edit-committed":
-        continue
-    payload = event.get("payload")
-    if isinstance(payload, dict):
-        committed.append(payload)
-reported = []
-for note in notes:
-    node = note.get("id")
-    recorded = None
-    for at, payload in enumerate(committed):
-        if payload.get("command") != note:
+        with open(journal_path, "rb") as handle:
+            handle.seek(offset)
+            appended = handle.read().decode("utf-8", "replace")
+    except OSError as unreadable:
+        # A journal this could not open and a journal carrying no outcome yet are opposite
+        # states — one is a broken read, the other a note nothing has decided the fate of —
+        # so this is said in a field of its own rather than folded into an empty read.
+        unread = "%s could not be read (%s)" % (journal_path, unreadable)
+    committed = []
+    for line in appended.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
             continue
-        operations = payload.get("operations")
-        for operation in operations if isinstance(operations, list) else []:
-            if isinstance(operation, dict) and operation.get("kind") == "note-delivered":
-                recorded = operation.get("reached")
-                break
-        del committed[at]
-        break
-    reported.append(
-        {
-            "node": node if isinstance(node, str) else None,
-            "reached": recorded if isinstance(recorded, str) else None,
-        }
-    )
-carried = {"notes": reported}
-if unread is not None:
-    carried["notes_unread"] = unread
+        if not isinstance(event, dict) or event.get("kind") != "edit-committed":
+            continue
+        payload = event.get("payload")
+        if isinstance(payload, dict):
+            committed.append(payload)
+    reported = []
+    for note in notes:
+        node = note.get("id")
+        recorded = None
+        for at, payload in enumerate(committed):
+            if payload.get("command") != note:
+                continue
+            operations = payload.get("operations")
+            for operation in operations if isinstance(operations, list) else []:
+                if isinstance(operation, dict) and operation.get("kind") == "note-delivered":
+                    recorded = operation.get("reached")
+                    break
+            del committed[at]
+            break
+        reported.append(
+            {
+                "node": node if isinstance(node, str) else None,
+                "reached": recorded if isinstance(recorded, str) else None,
+            }
+        )
+    return reported, unread
+
+
+if notes:
+    reported, unread = dispositions()
+    carried["notes"] = reported
+    if unread is not None:
+        carried["notes_unread"] = unread
 try:
     receipt = json.loads(answered)
 except ValueError:
     receipt = None
-if not isinstance(receipt, dict):
-    # Nothing to merge into, so the verb keeps its answer whole and this adds nothing
-    # beside it: success is one line or none. The pinned engine answers a JSON object on
-    # both statuses this runs for, so what is given up here is an outcome on a path that
-    # release does not take, and the run journal still carries it.
+if not carried or not isinstance(receipt, dict):
+    # Nothing to add, or nothing to add it to, so the verb keeps its answer whole and this
+    # adds nothing beside it: success is one line or none. The pinned engine answers a JSON
+    # object on both statuses this runs for, so what is given up on the second path is an
+    # outcome on a path that release does not take, and the run journal still carries it.
     handed_back(answered)
     sys.exit(0)
 receipt.update(carried)
@@ -348,9 +377,16 @@ delegated=$("$delegate" reply "$run" <"$staged") || status=$?
 
 # Merged for an envelope the verb accepted — exit 0, applied, and exit 1, accepted and
 # durable but not reconciled in time — and for neither of those is the receipt alone an
-# answer about the note. A refusal sent nothing, so there is nothing to merge and nothing
-# extra is printed.
-if [ -n "$journal" ] && { [ "$status" -eq 0 ] || [ "$status" -eq 1 ]; }; then
+# answer about which halves went out or about the note. A refusal sent nothing, so there
+# is nothing to merge and nothing extra is printed.
+#
+# The journal path is passed however it resolved, empty included: which halves the
+# envelope carried is read off the staged bytes and needs no journal, so a run reference
+# this could not compose a path from still gets that half of the answer. An empty path
+# then reaches the same read a missing journal reaches and is reported the same way, as
+# `notes_unread` — rather than through a branch of its own, which would be one more
+# state to answer for and one no run reference this recipe accepts can reach.
+if [ "$status" -eq 0 ] || [ "$status" -eq 1 ]; then
     report_status=0
     reported=$("$python" -c "$REPORT_PROGRAM" "$journal" "$journal_end" "$delegated" \
         <"$staged") || report_status=$?
@@ -364,8 +400,9 @@ if [ -n "$journal" ] && { [ "$status" -eq 0 ] || [ "$status" -eq 1 ]; }; then
         # read failed would be told nothing and conclude their note had no fate to
         # report — this recipe's own defect, worn one layer in. Named on stderr, with
         # where the outcome can still be read.
+        # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned interpreter this line has already run the guard through fails on the second program; driving it means corrupting the toolchain the suite itself runs on, and what the branch does — leave the verb's answer and exit status alone, and say on stderr where the outcome can still be read — is unchanged. Only the sentence moved, to name the half this reply now also reports.
         printf 'channel-reply: %s\n' \
-            "what this reply did with its note(s) could not be read back: $python exited $report_status; the reply itself was sent, and the engine still recorded each note's fate on run $run's own journal — read it with 'just monitor $run'" >&2
+            "what this reply carried, and what it did with its note(s), could not be read back: $python exited $report_status; the reply itself was sent, and the engine still recorded each note's fate on run $run's own journal — read it with 'just monitor $run'" >&2
     fi
 fi
 [ -z "$delegated" ] || printf '%s\n' "$delegated"

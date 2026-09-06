@@ -353,6 +353,13 @@ channel-next *args:
 # and not a receipt that anybody could read the reply — three envelopes omitting
 # `completion` were each reported delivered and each discarded by the asking
 # wrapper, leaving a planner blocked for thirty-five minutes with nothing to say so.
+#
+# The verb's one-line answer therefore comes back carrying `halves` — whether the
+# staged envelope held a verdict, and how many edits rode with it — beside `notes`,
+# the disposition the engine recorded for each one. The engine answers a single
+# `state` word for the whole envelope, so one carrying both halves reports `applied`
+# and says nothing about the verdict; `halves` is what this recipe can prove from the
+# bytes it staged, and it names what was sent rather than claiming what landed.
 # llmlint: ignore[tool_output_is_signal] channel-reply validates the reply and names transport/rendezvous failures so the planner can reattach and retry.
 channel-reply *args:
     @./scripts/channel-reply.sh "$@"
@@ -718,6 +725,14 @@ lint-llm-validate *args:
 # "green" means green *against that commit*: a gate run and the publication rebuild
 # that judge different base commits are answering different questions.
 #
+# A base its **own origin ref has moved past** is refused before any of that, naming
+# both refs and both commits — `scripts/base-freshness.sh` decides it. A stale name
+# resolves silently and keys the cache perfectly well, so nothing downstream can see
+# the disagreement: what comes back is a valid verdict over the wrong range, and a
+# worker inside a session clone naming `main` gets one by default. Only strictly
+# behind is refused; a base with no origin ref of its own, one level with it, one
+# ahead of it, and one that has diverged from it are all judged as before.
+#
 # Only a clean run is cached, because Nx caches successful tasks only. Findings
 # (llmlint exit 1) and a toolchain that never reached a verdict (exit >= 2) both
 # re-judge on the next invocation. That is the deliberate trade for deleting the
@@ -746,4 +761,4 @@ lint-llm-validate *args:
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @# llmlint: ignore[tool_output_is_signal] The judge's per-rule report and its one-line provenance are this tier's product; a quiet success here would delete the tier's result and leave a replayed run saying less than a fresh one. `@#` so the directive itself stays out of that report.
-    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; report=$(mktemp) || { echo "lint-llm-diff: could not open temporary storage for the judge report; free disk space and retry" >&2; exit 1; }; trap 'rm -f "$report"' EXIT; status=0; LLMLINT_DIFF_BASE_SHA="$base_sha" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >"$report" 2>&1 || status=$?; cat "$report"; if grep -qE '^Nx read the output from the cache instead of running the command|^> nx run workspace:lint-llm-diff +\[(local cache|remote cache|existing outputs match the cache)' "$report"; then echo "lint-llm-diff: replayed the recorded verdict for base $base_sha (Nx cache hit)" >&2; else echo "lint-llm-diff: judged this diff against base $base_sha (Nx cache miss)" >&2; fi; exit "$status"
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; behind=$(./scripts/base-freshness.sh "{{base}}") || { echo "lint-llm-diff: whether '{{base}}' still matches its own origin ref could not be decided; run 'scripts/base-freshness.sh {{base}}' to see why" >&2; exit 1; }; if [[ -n "$behind" ]]; then echo "lint-llm-diff: $behind, so judging it would judge commits this branch does not carry; fetch and fast-forward '{{base}}', or name the origin ref as the base" >&2; exit 1; fi; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; report=$(mktemp) || { echo "lint-llm-diff: could not open temporary storage for the judge report; free disk space and retry" >&2; exit 1; }; trap 'rm -f "$report"' EXIT; status=0; LLMLINT_DIFF_BASE_SHA="$base_sha" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >"$report" 2>&1 || status=$?; cat "$report"; if grep -qE '^Nx read the output from the cache instead of running the command|^> nx run workspace:lint-llm-diff +\[(local cache|remote cache|existing outputs match the cache)' "$report"; then echo "lint-llm-diff: replayed the recorded verdict for base $base_sha (Nx cache hit)" >&2; else echo "lint-llm-diff: judged this diff against base $base_sha (Nx cache miss)" >&2; fi; exit "$status"

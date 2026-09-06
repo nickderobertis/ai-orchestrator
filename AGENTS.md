@@ -1902,8 +1902,26 @@ detail:
   pending at that instant, not to the surface you just read. What it binds to is
   decided by the halves it carries: a verdict answers the pending surface, a
   commands-only envelope answers nothing and leaves it standing, and one carrying
-  both does both. So an edit issued while a question is waiting no longer consumes
-  that question — and no longer kills the monitor either.
+  both is queued as a verdict beside the edits it applies. So an edit issued while a
+  question is waiting no longer consumes that question — and no longer kills the
+  monitor either.
+
+  **What the pinned engine does not do is tell you which half became what.** The
+  routing above is the queueing, and it is real; the receipt is one `state` word for
+  the whole envelope, and it is the same word — `applied` — for an envelope carrying
+  edits alone and for one carrying a ruling beside them. So a manager who answered and
+  steered in one send is told nothing about the answering half, which is why `just
+  channel-reply` reports `halves` beside that word: whether the envelope it staged
+  carried a verdict, and how many edits rode with it, read off those bytes. That is
+  what the envelope *carried*, never a claim about what landed — nothing here is a
+  second implementation of a receipt the engine does not give.
+  `tests/ask_seam/test_channel_reply_e2e.py` drives the installed engine and holds this
+  paragraph to it, so an engine that starts answering per half fails there rather than
+  leaving this describing the one before it. Two gaps behind that word are being closed
+  in the engine rather than here, and until they are, read a both-halves send
+  accordingly: the verdict riding beside commands is **not** held to its author's
+  completion allowlist, and it is journalled **nowhere** — so the run's own record of
+  itself carries the edits and not the ruling.
 - **A blocking surface may have nobody waiting on it, and the adopted engine says
   which.** Through onepipeline 0.21.x a `channel serve` that ended left its surface
   standing, so `awaiting-planner` did not prove anybody was still waiting for the
@@ -3523,6 +3541,20 @@ a retry continuing a preserved branch, and a stopped-run resumption are all judg
 on the branch's whole diff from its publication base. The measured session shapes,
 their evidence, and the onevcs change required before that can be narrowed soundly
 are recorded in that section.
+
+**A base its own origin ref has moved past is refused rather than judged**, naming both
+refs and both commits, and `scripts/base-freshness.sh` is what decides it. That is not
+the unresolvable-base refusal beside it and is easy to confuse with one: a stale name
+*does* resolve, and everything below the recipe then behaves perfectly — the commit keys
+the cache, the judge reads the range it was handed, and what comes back is a valid
+verdict over commits the branch does not carry. Inside a session clone that is the
+ordinary case rather than an odd one, since the local branch is cut once and the origin
+moves on; a worker naming `main` there judged twelve commits where its branch had five,
+seven of them already landed. Fetch and fast-forward the base, or name its origin ref.
+Only strictly behind is refused: a base with no origin ref of its own, one level with
+it, one ahead of it, and one that has diverged from it are each judged over their own
+diff, because a ref that has not moved *past* a base has taken nothing away from it —
+and a refusal reaching a rebased base would refuse a verdict the worker still wants.
 
 Every cached Nx target replays a recorded answer, so one rule governs the test tier
 too: a memo may stand in for a verdict on this tree only when its key covers

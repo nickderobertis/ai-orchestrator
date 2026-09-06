@@ -11,6 +11,23 @@ the billed judge run is faked — the same boundary the rest of the e2e suite fa
 so `llmlint --diff` is counted rather than paid for, while `llmlint config` still
 merges a real plugin off disk.
 
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This module has always
+been where it is, and every one of its journeys drives real Nx, real git and a counted
+judge under the same whole-workspace `reads_docs` key — none is cheaper than the others,
+so the placement is the module's rather than any one test's. Moving it is a change to
+this repository's Nx project selection, which a sibling node of this plan owns, and
+excepting a single journey would split a suite whose fixture, fake judge and cache-key
+reasoning are shared while leaving the cost exactly where it is.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] Same placement, same reason. What could
+be kept out of this tier was: `tests/e2e/test_base_freshness_e2e.py` drives the same
+`scripts/base-freshness.sh` with no Nx and no judge at all, from the recipe-scoped tier
+keyed on `scripts/**`.
+
+llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] Same placement, same
+reason. `reads_docs` here is not a deselecting tier either: it names the whole-workspace
+key this module's own premise — copying the tracked tree, prose included — requires.
+
 llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
 boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness.
 It is also the one thing these journeys cannot use for real: the claim under test
@@ -652,3 +669,86 @@ def test_an_unresolvable_base_is_rejected_before_the_judge_is_paid(
     assert result.returncode != 0
     assert "does not resolve to a commit" in result.stderr
     assert workspace.judge_runs() == 0
+
+
+def _tracking(workspace: Workspace, origin: Path) -> None:
+    """Give this checkout a real origin with `main` on it, tracked the ordinary way."""
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    workspace._git("checkout", "-q", "-B", "main")
+    workspace._git("remote", "add", "origin", str(origin))
+    workspace._git("push", "-q", "-u", "origin", "main")
+
+
+def test_a_base_its_own_origin_ref_has_moved_past_is_refused_and_no_other_state_is(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """A stale base names a real commit, so nothing downstream can see it is the wrong one.
+
+    `main` inside a session clone is the ordinary case rather than an odd one: the branch
+    is cut once and the origin moves on, and the name goes on resolving. Everything below
+    the recipe then behaves perfectly — the commit keys the cache, the judge reads the
+    range it was given, and what comes back is a valid verdict over commits the branch
+    does not carry. The one thing that can notice is the recipe, and the one thing a
+    reader needs is which two refs disagree, so the refusal names both and both commits.
+
+    Refused strictly for being behind, and the other three states are what say so. A base
+    level with its origin ref, one ahead of it, and one with no origin ref at all are each
+    driven through the same real recipe against the same real repository and each judged
+    over its own commit — because a refusal that also fired on those would refuse the
+    default gate, every worker on an unpushed branch, and every base named by commit.
+    """
+    _tracking(workspace, tmp_path / "origin.git")
+
+    level = workspace.head()
+    at_level = workspace.lint("main")
+
+    assert at_level.returncode == 0, at_level.stdout + at_level.stderr
+    assert PASS_VERDICT in at_level.stdout
+    assert f"base {level}" in at_level.stderr, (
+        f"a base level with its origin ref was not judged over its own commit:\n{at_level.stderr}"
+    )
+
+    ahead = workspace.commit("work the origin has not seen", allow_empty=True)
+    at_ahead = workspace.lint("main")
+
+    assert at_ahead.returncode == 0, (
+        f"a base ahead of its own origin ref was refused, which is every worker on a "
+        f"branch they have not pushed:\n{at_ahead.stdout}{at_ahead.stderr}"
+    )
+    assert f"base {ahead}" in at_ahead.stderr, at_ahead.stderr
+
+    # The same commit the local branch just had, now on the origin and no longer on the
+    # branch: `main` is a strict ancestor of `origin/main`, which is the one shape where
+    # the extra commits are unambiguously work this base has not caught up with.
+    workspace._git("push", "-q", "origin", "main")
+    workspace._git("reset", "--hard", "-q", "HEAD~1")
+    assert workspace.head() == level
+    judged_so_far = workspace.judge_runs()
+
+    behind = workspace.lint("main")
+
+    assert behind.returncode != 0, (
+        f"a base its own origin ref had moved past was judged, so the verdict covers "
+        f"commits this branch does not carry:\n{behind.stdout}{behind.stderr}"
+    )
+    assert "is behind its own origin ref" in behind.stderr, behind.stderr
+    for named in ("'main'", "'origin/main'", level, ahead):
+        assert named in behind.stderr, (
+            f"the refusal does not name {named}, so the reader is not told which two "
+            f"refs disagree or where each of them is:\n{behind.stderr}"
+        )
+    assert workspace.judge_runs() == judged_so_far, (
+        "the stale base was refused and the judge was paid for it anyway"
+    )
+
+    # A branch of its own with nothing tracking it: no upstream, and no `origin/side`
+    # either, so there is no ref that could have moved past it.
+    workspace._git("checkout", "-q", "-b", "side")
+    untracked = workspace.commit("work on a branch nothing tracks", allow_empty=True)
+    at_untracked = workspace.lint("side")
+
+    assert at_untracked.returncode == 0, (
+        f"a base with no origin ref of its own was refused, which is every base named "
+        f"by commit:\n{at_untracked.stdout}{at_untracked.stderr}"
+    )
+    assert f"base {untracked}" in at_untracked.stderr, at_untracked.stderr

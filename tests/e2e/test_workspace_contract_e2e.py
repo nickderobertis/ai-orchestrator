@@ -201,7 +201,12 @@ def _recipe_run(
 def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
     checkout, trace = _recipe_checkout(tmp_path)
-    shutil.copy2(ROOT / "scripts/comparison-base.sh", checkout / "scripts/comparison-base.sh")
+    # Both of the real things `just gate` and `just lint-llm-diff` decide about a base
+    # before they hand the tier over: which remote and branch to judge against, and
+    # whether that base's own origin ref has moved past it. Doubling either would let a
+    # recipe that stopped consulting it pass here.
+    for name in ("comparison-base.sh", "base-freshness.sh"):
+        shutil.copy2(ROOT / "scripts" / name, checkout / "scripts" / name)
     # The recipe only checks that llmlint is installed before handing the tier to
     # Nx; the traced `scripts/nx.sh` double above is what stands in for the run.
     llmlint = checkout / "bin/llmlint"

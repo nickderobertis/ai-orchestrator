@@ -31,7 +31,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, NamedTuple, NewType, TypeVar, cast
+from typing import Any, NamedTuple, NewType, TypedDict, TypeVar, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV
@@ -894,6 +894,27 @@ def test_a_ruling_for_an_unread_question_is_refused_while_another_question_is_pe
 #: gets. `reached` is the engine's own word, or `None` where nothing has decided it yet.
 NOTES_FIELD = "notes"
 
+#: The field it carries which halves the staged envelope held: `verdict` for the answering
+#: half and `edits` for how many commands rode beside it. Read off the staged bytes, so it
+#: says what was sent rather than what became of it.
+HALVES_FIELD = "halves"
+
+
+class Halves(TypedDict):
+    """What that field says one envelope carried: an answering half, and how many edits."""
+
+    #: Whether a verdict half was there at all — its presence, never its value, because a
+    #: `completion: false` is a non-completion and this channel routes it as a verdict.
+    verdict: bool
+    #: How many commands rode beside it.
+    edits: int
+
+
+#: Everything `scripts/channel-reply.sh` merges into the verb's own answer. Subtracted
+#: before the engine's own receipt is read, because what that receipt does *not* say is
+#: the whole reason the fields above exist.
+RECIPE_FIELDS = frozenset({HALVES_FIELD, NOTES_FIELD, "notes_unread"})
+
 
 def _verb_answer(sent: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     """The verb's answer, which on success is the whole of what this recipe prints.
@@ -952,6 +973,169 @@ def test_the_recipe_reports_what_the_engine_recorded_it_did_with_the_note(
     assert "channel-reply:" not in sent.stderr, (
         f"the recipe printed a second status line of its own beside the verb's answer, "
         f"which is the noise the one-line answer replaced:\n{sent.stderr}"
+    )
+
+
+def _engine_receipt(sent: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """The verb's own answer with everything this recipe merged into it taken back out.
+
+    `Any` because this one is deliberately unmodelled: the whole subject of the journey
+    below is which fields the engine puts here, so a type that named them would be this
+    suite asserting the answer it is supposed to be reading.
+    """
+    return {
+        field: value for field, value in _verb_answer(sent).items() if field not in RECIPE_FIELDS
+    }
+
+
+def _halves(sent: subprocess.CompletedProcess[str]) -> Halves:
+    """What that answer says the envelope this recipe staged carried."""
+    carried = _verb_answer(sent).get(HALVES_FIELD)
+    assert isinstance(carried, dict), (
+        f"the answer does not say which halves the envelope carried, so a manager who "
+        f"answered and steered in one send has one {'state'!r} word for both:\n{sent.stdout}"
+    )
+    # `cast` because this is a deserialization boundary — JSON off another process's
+    # stdout — and the two fields it must hold are what the journeys below compare it by.
+    return cast(Halves, carried)
+
+
+def test_the_answer_names_which_halves_the_envelope_it_staged_carried(
+    replying: Replying,
+) -> None:
+    """One `state` word cannot describe two halves, so the receipt says which were sent.
+
+    An envelope may carry a verdict, edits, or both, and the engine answers one word for
+    the whole of it — `applied` for edits alone and `applied` again for a ruling sent
+    beside them. So the manager who most needs to know whether their ruling went out is
+    the one told least: the word they get back is the commands half's.
+
+    What this recipe can prove on its own is the envelope it staged, so that is what it
+    reports and all it reports. `verdict` says an answering half was there and `edits`
+    counts the commands beside it; neither claims either half landed, which is the
+    engine's to say and the reason nothing here waits on it.
+
+    All three shapes through the real recipe against one live run, because the field is
+    only worth anything if it parts them: a receipt that said the same thing for a
+    verdict-only and a commands-only envelope would be exactly the word it replaces. The
+    third of them carries `completion: false`, which is the case the field reports on
+    presence rather than value for: a non-completion is the shape
+    `scripts/channel-serve.py` sends most, and a receipt keyed on the value would report
+    the commonest verdict there is as no verdict at all.
+    """
+    edits_only = _reply(replying, {"version": 2, "commands": [_note(WORK_NODE, "the base moved")]})
+
+    assert edits_only.returncode == 0, f"the edit was refused:\n{edits_only.stderr}"
+    assert _halves(edits_only) == {"verdict": False, "edits": 1}, (
+        f"a commands-only envelope is reported as carrying an answering half, or as "
+        f"carrying no edits:\n{edits_only.stdout}"
+    )
+    # The verb's own answer is still the whole of what a reader knowing only the fields
+    # before this one looks for, which is what makes the field additive rather than a
+    # replacement.
+    assert _engine_receipt(edits_only)["state"] == "applied", (
+        f"the verb's own answer did not survive the merge:\n{edits_only.stdout}"
+    )
+
+    asking = _asked(replying, "Should the cursor be opaque?")
+    try:
+        token = _minted(replying)
+        _handed_out(replying, token)
+        verdict_only = _reply(replying, _ruling(f"{ANSWER} {token}"))
+    finally:
+        _reaped(asking)
+
+    assert verdict_only.returncode == 0, f"the ruling was refused:\n{verdict_only.stderr}"
+    assert _halves(verdict_only) == {"verdict": True, "edits": 0}, (
+        f"a verdict-only envelope is reported as carrying edits, or as carrying no "
+        f"answering half:\n{verdict_only.stdout}"
+    )
+
+    riding = [_note(WORK_NODE, "a note riding beside a ruling"), _note(WORK_NODE, "and another")]
+    answering = _asked(replying, "Should the test key cover docs?")
+    try:
+        second = _minted(replying)
+        _handed_out(replying, second)
+        both = _reply(
+            replying,
+            {
+                "version": 2,
+                "completion": False,
+                "message": f"{ANSWER} {second}",
+                "commands": riding,
+            },
+        )
+    finally:
+        _reaped(answering)
+
+    assert both.returncode == 0, f"the envelope carrying both was refused:\n{both.stderr}"
+    assert _halves(both) == {"verdict": True, "edits": 2}, (
+        f"an envelope carrying both halves is reported as one of them, which is the "
+        f"state the engine's own word already leaves a manager in:\n{both.stdout}"
+    )
+    assert _engine_receipt(both)["state"] == "applied", both.stdout
+
+
+def test_the_engines_own_receipt_for_both_halves_says_nothing_about_either(
+    replying: Replying,
+) -> None:
+    """This repository's account of the installed engine, driven against it.
+
+    AGENTS.md, under "Answering on the channel", says an envelope carrying both halves is
+    queued as a verdict beside the edits it applies, and that the caller is not told which
+    half became what. Both clauses are asserted here rather than believed, because the
+    first is the reason a manager sends that shape and the second is the reason this
+    recipe reports the halves at all — and a paragraph that was true when it was written
+    is exactly the kind that goes on reading true after the engine has moved.
+
+    The queueing: the agent that asked reads the ruling back, and the run's own journal
+    records the edit. The silence: the engine's receipt for that envelope is the same two
+    fields, carrying the same `state` word, as its receipt for an envelope carrying edits
+    alone — so nothing in it can be telling the caller what became of the verdict.
+    """
+    edits_only = _reply(replying, {"version": 2, "commands": [_note(WORK_NODE, "the base moved")]})
+    assert edits_only.returncode == 0, f"the edit was refused:\n{edits_only.stderr}"
+
+    riding = _note(WORK_NODE, "a note riding beside a ruling")
+    asking = _asked(replying, "Should the cursor be opaque?")
+    try:
+        token = _minted(replying)
+        _handed_out(replying, token)
+        both = _reply(
+            replying,
+            {
+                "version": 2,
+                "completion": True,
+                "message": f"{ANSWER} {token}",
+                "commands": [riding],
+            },
+        )
+        assert both.returncode == 0, f"the envelope carrying both was refused:\n{both.stderr}"
+        status, out, err = _answered(asking)
+    finally:
+        _reaped(asking)
+
+    assert TOKEN.sub("", out).strip() == ANSWER, (
+        f"the verdict half of an envelope carrying commands beside it reached nobody, so "
+        f"it is no longer queued beside them (exit {status}):\n{err}{out}"
+    )
+    assert riding in _committed(replying), (
+        "the commands half of that same envelope did not reach the graph"
+    )
+
+    receipt, alone = _engine_receipt(both), _engine_receipt(edits_only)
+
+    assert set(receipt) == set(alone) == {"reply", "state"}, (
+        f"the engine's own receipt has grown a field beside `reply` and `state`. If it "
+        f"now says what became of each half, that is better than what this recipe merges "
+        f"in — read it, and correct the account under 'Answering on the channel' in "
+        f"AGENTS.md to match: {receipt} against {alone}"
+    )
+    assert receipt["state"] == alone["state"] == "applied", (
+        f"the engine answers a different word for an envelope carrying a verdict beside "
+        f"its edits than for one carrying edits alone, so it is telling the caller which "
+        f"half became what after all and AGENTS.md's account of it is stale: "
+        f"{receipt} against {alone}"
     )
 
 
@@ -1088,6 +1272,13 @@ def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlie
     assert queued.returncode == REPLY_QUEUED and QUEUED in queued.stdout, (
         f"the second note was reconciled after all, so this journey never reached the "
         f"window it is about:\n{queued.stdout}{queued.stderr}"
+    )
+    # Accepted and durable is still accepted, so what the envelope carried is as true
+    # here as on the reconciled path — and this is the one state where the note's own
+    # outcome cannot be given, which is exactly when a manager falls back on it.
+    assert _halves(queued) == {"verdict": False, "edits": 1}, (
+        f"an accepted-but-unreconciled reply does not say which halves it carried, so "
+        f"the receipt is thinnest in the window it is least able to answer:\n{queued.stdout}"
     )
     assert _note_outcomes(queued) == [{"node": WORK_NODE, "reached": None}], (
         f"this note's outcome is not on the journal yet, so `None` against its own node "
