@@ -132,3 +132,72 @@ a record is an entry of the task's own Markdown document and a board has none �
 board plan is re-reviewed by drafting it in the `authoring` source and copying it over. And the invalidation is the mechanism working:
 it is the same rule that invalidates a record when `personas/planner.yaml` moves, and it
 is why this node was sequenced after every other change to this repository in its plan.
+
+## The shape this document had no answer for, and now does
+
+The corpus above classifies `outside-dispatch` as a shape left to the judge, because what a
+criterion rests on "is a live external service, a nondeterministic tier, or another node's
+landing, and none of those is lexically distinct from a property of the finished tree." That
+is right about detection. What it did not record is that for one class of node the judge had
+**no acceptable answer to give**, and refused every wording in turn.
+
+The class is a node whose deliverable *is itself* an assertion about something outside the
+tree: an inventory of another system's settings, a pinned copy of a published contract, a
+fixture mirroring a service's shape. `config/merge-path-checks.json` — this repository's own
+inventory of the checks each merge path requires — is exactly one.
+
+Asked for criteria over such a node, the reviewer refused all three available shapes:
+
+| shape | the refusal |
+| --- | --- |
+| consult the outside source during the dispatch | *"depends on a live GitHub response that the dispatch does not control and that may be unavailable or change during the work"* |
+| capture and report that consultation | *"requires a particular evidence-gathering and reporting procedure ('read', 'quoted', and 'reports') in place of a dispatch-controlled property"* |
+| describe only the finished file | *"can be satisfied with an invented, obsolete, or incomplete check set, so it does not prove the task's stated goal"* |
+
+Those three are mutually exclusive and exhaustive. Each is individually defensible; together
+they admit nothing. Four planner dispatches and thirteen judged review turns went into one
+plan before it was recognised as a trap rather than as bad wording — and rounds three and
+four contradicted each other outright, the third asking for "proof anchored to captured
+authoritative evidence" and the fourth refusing that capture as a procedure.
+
+The bar has since been given a **corresponding-content** shape that this class of node can
+satisfy. What it requires is stated once, where the bar is stated; this record is about the
+refusals that made it necessary.
+
+### The second half of the same trap
+
+The same reviewer refused *"the checks that exercise this change are green over the finished
+tree … and the judged lint over this diff"*, for making *"a nondeterministic paid external
+judge part of the node's acceptance bar."*
+
+That contradicted the very bar it was applying, which requires a node that changes code to
+show the lint over its diff green — and it contradicted the section above, which records
+`the judged lint over this diff is green` as "a criterion this repository's own nodes state
+and pass review with". Every node that changes code was exposed to it. The bar has since
+been corrected on that point too.
+
+### How this change was landed, and why that is recorded here
+
+Not through a dispatched plan. The plan written to make this repair was refused by the bar it
+was repairing — three criteria, then one, in three shapes, ending with the reviewer asking
+for "dispatch-controlled contract-level proof of the review behavior" after having refused
+exactly that. A plan whose subject is the reviewer needs criteria about reviewer behaviour,
+and no criterion about reviewer behaviour passed. With no escape hatch by design, and tracked
+files reachable only through a dispatched plan, this host could not plan a change to its own
+review bar.
+
+The operator waived the self-dispatch rule for this one change. It was authored in an
+isolated worktree, never the canonical checkout, and published through the ordinary merge
+path so the `pre-push` gate verified it like anything else. **The waiver records a deadlock
+rather than setting a precedent**: what it set aside is that every tracked change is reviewed
+at plan level, and what made it safe to set aside once is that the change is small, its
+wording was specified in an approved design document beforehand, and the merge path verified
+it unchanged.
+
+**What is deliberately not claimed here.** Nothing above asserts how the reviewer behaves
+*after* this change. That is a live judged tier, and the honest way to learn it is to run
+`just review-plan` against a plan carrying the corresponding-content shape and read what
+comes back. The open questions about the reviewer's demandingness — whether it contradicts
+itself across rounds, whether the loop should have a convergence bound, and whether its
+judgment agrees with the two documents above when tested directly — are untouched by this
+change and remain follow-up work.

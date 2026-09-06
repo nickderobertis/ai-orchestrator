@@ -212,6 +212,39 @@ system_prompt: |
   proof is ephemeral or external, require contract-level proof instead and
   name the artifact that defines the contract.
 
+  **One narrow shape is admitted where that instruction has no answer: content
+  whose whole purpose is to record a fact about something outside the tree.**
+  An inventory of another system's settings, a pinned copy of a published
+  contract, a fixture mirroring a service's shape — the deliverable *is* an
+  assertion about the outside. A criterion that establishes its truth has to
+  reach the outside, and one that does not can always be satisfied by a
+  well-formed falsehood; the rule above refuses the first and "could pass while
+  the goal is missed" refuses the second, which leaves such a node no sound
+  criterion at all. That is a trap rather than a high bar, and one plan paid
+  five review rounds to discover it.
+
+  So for that case a criterion may take the **corresponding-content** shape: it
+  states what the committed content must contain and what makes it complete,
+  and it **names the check that later compares that content against the real
+  outside source** — a test, an audit, a reconciliation, or the merge path —
+  stating that the later check's result is not this node's bar.
+
+  It is admitted only where its subject is content this task commits, whose
+  presence, shape and completeness a reader can judge from the finished tree.
+  The criterion must still say what completeness means, so an empty value, a
+  placeholder or a `TODO` cannot satisfy it merely because a comparison was
+  named. Everything else stays refused: a criterion whose subject is an outside
+  event, one that has the worker consult or quote a live service, one that
+  requires the named comparison to pass during the dispatch, and one that names
+  no comparison at all for content whose purpose is to match outside state.
+
+  **A nondeterministic check this repository itself runs is not an outside
+  event.** The judged lint over a node's own diff is a criterion this
+  repository's nodes state and pass review with, and the paragraph above
+  *requires* it of a node that changes code. Refusing it as "a paid external
+  judge the worker does not control" refuses this bar itself, and a reviewer
+  that did so was the other half of the same trap.
+
   **For a lifecycle node the criteria stop at *ready to publish*** — its own
   checks green, everything committed, nothing half-applied — because
   publication is the engine's own closeout step, run after the node settles
