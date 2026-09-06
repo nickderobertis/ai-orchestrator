@@ -485,6 +485,19 @@ def _wire_spelling(variant: str, rename_all: str | None) -> str:
 
 
 CONSTANTS = (
+    # The reply envelope's own version, which is a serialized contract rather than a
+    # number in prose: the engine bumped it to 2 when it removed `context` and left one
+    # manager-note op, and a document still telling a manager to send version 1 is
+    # describing the envelope before that break. Held against the crate constant so the
+    # next bump comes due here rather than after somebody sends the old shape.
+    Constant(
+        "reply envelope version",
+        ONEPIPELINE,
+        "channel.rs",
+        re.compile(r"pub const REPLY_ENVELOPE_VERSION: u32 = (\d+);"),
+        ORCHESTRATION,
+        '"version":{value}',
+    ),
     Constant(
         "transcript tool-output ceiling",
         ONEPIPELINE,

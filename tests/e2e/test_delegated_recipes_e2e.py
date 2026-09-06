@@ -777,7 +777,7 @@ def test_the_reply_recipe_forwards_a_piped_envelope_untouched(tmp_path: Path) ->
     channel whenever the ledger is somewhere it cannot see.
     """
     checkout, trace = _checkout(tmp_path)
-    envelope = '{"version":1,"author":"planner","commands":[{"op":"cancel","id":"api"}]}'
+    envelope = '{"version":2,"author":"planner","commands":[{"op":"cancel","id":"api"}]}'
 
     result = _run(checkout, trace, "channel-reply", "run-1", stdin=f"{envelope}\n")
 
@@ -1375,8 +1375,8 @@ def test_the_channel_surface_recipe_refuses_an_invocation_it_cannot_act_on(
 
 #: A `uv` that accepts the reply and appends whatever the journey told it to. It stands
 #: where the published verb stands, which is the only place a journey can present a
-#: second `delivery` word: the engine writes `live` only by interrupting a dispatch's own
-#: control socket, and this suite's stand-in provider has no turn to interrupt.
+#: second `reached` word: the engine writes `worker` or `supervisor` only by reaching a
+#: live two-party conversation, and this suite's stand-in provider runs none.
 JOURNALLING_UV = """#!/usr/bin/env bash
 set -euo pipefail
 printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
@@ -1391,36 +1391,47 @@ JOURNALLED_RUN = "run-1"
 #: The node the notes are addressed to, and the two notes themselves. The earlier one is
 #: what a recipe reading the journal by recency would answer with.
 NOTED_NODE = "api"
-EARLIER_NOTE = {"op": "context", "id": NOTED_NODE, "note": "the note sent before this one"}
-THIS_NOTE = {"op": "context", "id": NOTED_NODE, "note": "the note this reply carries"}
+EARLIER_NOTE = {
+    "op": "note",
+    "id": NOTED_NODE,
+    "addressee": "worker",
+    "text": "the note sent before this one",
+}
+THIS_NOTE = {
+    "op": "note",
+    "id": NOTED_NODE,
+    "addressee": "worker",
+    "text": "the note this reply carries",
+}
 
 #: What the earlier note's outcome is recorded as, so a row whose own outcome differs
 #: fails loudly if the wrong one is read.
-EARLIER_DELIVERY = "deferred"
+EARLIER_REACHED = "carried"
 
 
-def _committed_record(command: dict[str, object], delivery: str | None) -> str:
+def _committed_record(command: dict[str, object], reached: str | None) -> str:
     """One `edit-committed` line, in the shape a real run's journal is read to carry.
 
     Not a second source for that shape: the ask-seam journey named above drives the same
     reader over a journal the real engine wrote, so a wire change fails there while this
     stays self-consistent. What this file adds is the cases that engine cannot be made to
-    produce — a second delivery word, and a journal missing this note's outcome while
+    produce — a second disposition word, and a journal missing this note's outcome while
     carrying an earlier one's.
 
-    `delivery` of `None` is the edit committed with no `context-added` operation at all,
+    `reached` of `None` is the edit committed with no `note-delivered` operation at all,
     which is the other way a correlated read comes up empty, and it must read as "not
     recorded" rather than fall through to somebody else's outcome.
     """
     operations = (
         []
-        if delivery is None
+        if reached is None
         else [
             {
-                "kind": "context-added",
+                "kind": "note-delivered",
                 "node": command["id"],
-                "note": command["note"],
-                "delivery": delivery,
+                "addressee": command["addressee"],
+                "text": command["text"],
+                "reached": reached,
             }
         ]
     )
@@ -1458,7 +1469,7 @@ def _verb_answer(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
 
 #: What the recipe is driven over, and the property it is driven for: it reports the word
 #: it finds rather than a word it knows. So the rows are deliberately not this engine's
-#: `Delivery` vocabulary — restating an enum a doubled journal cannot reconcile would be a
+#: `Reached` vocabulary — restating an enum a doubled journal cannot reconcile would be a
 #: second source for it — but a pair that differ, plus one no release has ever written.
 #: Passing that third row is what says a value added upstream reaches the manager instead
 #: of being dropped for not being on a list. The last row is the note whose outcome is not
@@ -1467,13 +1478,13 @@ def _verb_answer(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
 #: `tests/ask_seam/test_channel_reply_e2e.py` is where the shape itself is reconciled: it
 #: drives the same reader over an `edit-committed` the real engine wrote on a real run, so
 #: a wire change fails there rather than passing here.
-NOTE_DELIVERIES = ("live", "deferred", "sideways", None)
+NOTE_DISPOSITIONS = ("worker", "carried", "sideways", None)
 
 
 @pytest.mark.reads_recipes
-@pytest.mark.parametrize("delivery", NOTE_DELIVERIES, ids=lambda row: str(row))
-def test_the_reply_recipe_reports_this_notes_own_delivery_and_never_an_earlier_ones(
-    tmp_path: Path, delivery: str | None
+@pytest.mark.parametrize("reached", NOTE_DISPOSITIONS, ids=lambda row: str(row))
+def test_the_reply_recipe_reports_this_notes_own_disposition_and_never_an_earlier_ones(
+    tmp_path: Path, reached: str | None
 ) -> None:
     """The correlation, driven against a journal that already carries an earlier outcome.
 
@@ -1492,10 +1503,10 @@ def test_the_reply_recipe_reports_this_notes_own_delivery_and_never_an_earlier_o
     (checkout / "bin/uv").write_text(JOURNALLING_UV)
     journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
     journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
     appended = tmp_path / "appended.jsonl"
     appended.write_text(
-        "" if delivery is None else _committed_record(THIS_NOTE, delivery) + "\n",
+        "" if reached is None else _committed_record(THIS_NOTE, reached) + "\n",
         encoding="utf-8",
     )
 
@@ -1504,7 +1515,7 @@ def test_the_reply_recipe_reports_this_notes_own_delivery_and_never_an_earlier_o
         trace,
         "channel-reply",
         JOURNALLED_RUN,
-        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
         env={
             "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
             "JOURNAL_APPEND": str(appended),
@@ -1517,9 +1528,9 @@ def test_the_reply_recipe_reports_this_notes_own_delivery_and_never_an_earlier_o
     assert answer["state"] == "applied", (
         f"the verb's own answer did not survive the merge:\n{result.stdout}"
     )
-    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "delivery": delivery}], (
-        f"a note the engine journalled as {delivery!r} was not answered that way against "
-        f"its own node. A `delivery` where this row journalled none is the EARLIER note's, "
+    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "reached": reached}], (
+        f"a note the engine journalled as {reached!r} was not answered that way against "
+        f"its own node. A `reached` where this row journalled none is the EARLIER note's, "
         f"which is what reading this journal by recency, by its last entry, or by its only "
         f"entry does — and what a manager would then act on:\n{result.stdout}"
     )
@@ -1531,7 +1542,12 @@ def test_the_reply_recipe_reports_this_notes_own_delivery_and_never_an_earlier_o
 #: The second note an envelope carries, addressed to a node of its own so the two lines
 #: the report joins are told apart by what they name rather than by their order.
 OTHER_NODE = "worker"
-OTHER_NOTE = {"op": "context", "id": OTHER_NODE, "note": "the second note this reply carries"}
+OTHER_NOTE = {
+    "op": "note",
+    "id": OTHER_NODE,
+    "addressee": "supervisor",
+    "text": "the second note this reply carries",
+}
 
 
 @pytest.mark.reads_recipes
@@ -1548,12 +1564,15 @@ def test_the_reply_recipe_reports_every_note_one_envelope_carried(tmp_path: Path
     (checkout / "bin/uv").write_text(JOURNALLING_UV)
     journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
     journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
     appended = tmp_path / "appended.jsonl"
     # The second note's outcome first, so a reader that paired them by position would
     # report each under the other's node.
     appended.write_text(
-        _committed_record(OTHER_NOTE, "live") + "\n" + _committed_record(THIS_NOTE, "next") + "\n",
+        _committed_record(OTHER_NOTE, "supervisor")
+        + "\n"
+        + _committed_record(THIS_NOTE, "carried")
+        + "\n",
         encoding="utf-8",
     )
 
@@ -1562,7 +1581,7 @@ def test_the_reply_recipe_reports_every_note_one_envelope_carried(tmp_path: Path
         trace,
         "channel-reply",
         JOURNALLED_RUN,
-        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE, OTHER_NOTE]}),
+        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE, OTHER_NOTE]}),
         env={
             "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
             "JOURNAL_APPEND": str(appended),
@@ -1572,13 +1591,13 @@ def test_the_reply_recipe_reports_every_note_one_envelope_carried(tmp_path: Path
 
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
     assert _verb_answer(result)[NOTES_FIELD] == [
-        {"node": NOTED_NODE, "delivery": "next"},
-        {"node": OTHER_NODE, "delivery": "live"},
+        {"node": NOTED_NODE, "reached": "carried"},
+        {"node": OTHER_NODE, "reached": "supervisor"},
     ], (
         f"a two-note reply did not answer each note its own outcome against its own node, "
         f"in the order the envelope sent them. Pairing them by the order they were "
         f"journalled would report each under the other's node, and the earlier reply's "
-        f"{EARLIER_DELIVERY!r} appearing at all is that outcome claimed by one of "
+        f"{EARLIER_REACHED!r} appearing at all is that outcome claimed by one of "
         f"them:\n{result.stdout}"
     )
 
@@ -1608,14 +1627,14 @@ def test_a_receipt_with_nowhere_to_carry_the_outcome_is_handed_back_alone(
     (checkout / "bin/uv").write_text(UNPARSEABLE_RECEIPT_UV)
     journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
     journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
 
     result = _run(
         checkout,
         trace,
         "channel-reply",
         JOURNALLED_RUN,
-        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
         env={"ONEPIPELINE_RUNS_DIR": str(checkout / "runs")},
     )
 
@@ -1658,7 +1677,7 @@ def test_a_journal_the_recipe_cannot_read_is_said_rather_than_read_as_no_outcome
     (checkout / "bin/uv").write_text(UNREADABLE_JOURNAL_UV)
     journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
     journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
 
     try:
         result = _run(
@@ -1666,7 +1685,7 @@ def test_a_journal_the_recipe_cannot_read_is_said_rather_than_read_as_no_outcome
             trace,
             "channel-reply",
             JOURNALLED_RUN,
-            stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+            stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
             env={
                 "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
                 "JOURNAL_FILE": str(journal),
@@ -1686,9 +1705,9 @@ def test_a_journal_the_recipe_cannot_read_is_said_rather_than_read_as_no_outcome
         f"up is indistinguishable from one whose fate nothing had decided — which are "
         f"opposite states:\n{result.stdout}"
     )
-    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "delivery": None}], (
+    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "reached": None}], (
         f"the note this reply sent was not answered, or was answered with the earlier "
-        f"reply's {EARLIER_DELIVERY!r}:\n{result.stdout}"
+        f"reply's {EARLIER_REACHED!r}:\n{result.stdout}"
     )
 
 
@@ -1728,14 +1747,14 @@ def test_an_outcome_read_that_could_not_run_is_named_rather_than_passed_off_as_n
     broken.chmod(0o755)
     journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
     journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_DELIVERY) + "\n", encoding="utf-8")
+    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
 
     result = _run(
         checkout,
         trace,
         "channel-reply",
         JOURNALLED_RUN,
-        stdin=json.dumps({"version": 1, "commands": [THIS_NOTE]}),
+        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
         env={"ONEPIPELINE_RUNS_DIR": str(checkout / "runs")},
     )
 

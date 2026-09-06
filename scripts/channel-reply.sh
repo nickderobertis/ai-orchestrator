@@ -22,8 +22,8 @@ QUEUE_PATH="channel/queue.json"
 
 #: The run's own journal, where the engine records what it did with each edit it
 #: committed. An `edit-committed` event carries the submitted `command` and the
-#: compiled `operations`, and a `context` note's operation carries the `delivery` this
-#: recipe reads back.
+#: compiled `operations`, and a `note`'s operation carries the `reached` this recipe
+#: reads back.
 JOURNAL_PATH="events.jsonl"
 
 # Decides whether the envelope on stdin is a verdict for a question this run has not
@@ -86,18 +86,26 @@ for surface in queued if isinstance(queued, list) else []:
 sys.exit(0)
 '
 
-# Merges what the engine recorded it did with each `context` note this envelope carried
-# into the verb's own answer, and writes that one line back out.
+# Merges what the engine recorded it did with each `note` this envelope carried into the
+# verb's own answer, and writes that one line back out.
 #
 # **One line, not two.** The verb's answer is the whole of this recipe's stdout, so the
 # outcome is carried inside it — `notes` beside `reply` and `state` — rather than printed
-# beside it. Per note: `delivery` is the engine's own word, `null` when nothing has
-# decided it yet, and a `notes_unread` beside them says the journal could not be read at
-# all, which is a different state from a note nothing has decided. An answer this cannot
-# parse has nothing to merge into, so it is handed back whole and nothing is added beside
-# it: stdout is one line or none. This program itself never fails; its caller says on
-# stderr when it could not be run, because a receipt with no outcome in it and no reason
-# beside it reads as a reply that carried no note.
+# beside it. Per note: `reached` is the engine's own word for which party of the node's
+# conversation took it, `null` when nothing has decided it yet, and a `notes_unread`
+# beside them says the journal could not be read at all, which is a different state from
+# a note nothing has decided. An answer this cannot parse has nothing to merge into, so it
+# is handed back whole and nothing is added beside it: stdout is one line or none. This
+# program itself never fails; its caller says on stderr when it could not be run, because
+# a receipt with no outcome in it and no reason beside it reads as a reply that carried no
+# note.
+#
+# **`reached` is what the outcome is called, and it is the engine's word rather than this
+# recipe's.** A note that reached a live turn and one carried to the node's next dispatch
+# are the two ways an accepted note succeeds under the default, and they are materially
+# different to whoever sent it: `worker`, `supervisor`, `judged-with` and `queued` say a
+# conversation read it, and `carried` says the next dispatch will. A receipt that could
+# not tell those apart is the incident this whole op was collapsed from.
 #
 # **Correlated rather than read by recency.** An `edit-committed` event is this reply's
 # when it was appended after this reply was submitted *and* its command is one this
@@ -129,7 +137,7 @@ commands = sent.get("commands") if isinstance(sent, dict) else None
 notes = [
     command
     for command in (commands if isinstance(commands, list) else [])
-    if isinstance(command, dict) and command.get("op") == "context"
+    if isinstance(command, dict) and command.get("op") == "note"
 ]
 if not notes:
     handed_back(answered)
@@ -165,15 +173,15 @@ for note in notes:
             continue
         operations = payload.get("operations")
         for operation in operations if isinstance(operations, list) else []:
-            if isinstance(operation, dict) and operation.get("kind") == "context-added":
-                recorded = operation.get("delivery")
+            if isinstance(operation, dict) and operation.get("kind") == "note-delivered":
+                recorded = operation.get("reached")
                 break
         del committed[at]
         break
     reported.append(
         {
             "node": node if isinstance(node, str) else None,
-            "delivery": recorded if isinstance(recorded, str) else None,
+            "reached": recorded if isinstance(recorded, str) else None,
         }
     )
 carried = {"notes": reported}

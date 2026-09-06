@@ -205,7 +205,7 @@ def _live_edit(sequence: int) -> str:
     """
     return json.dumps(
         {
-            "version": 1,
+            "version": 2,
             "author": "planner",
             "commands": [
                 {
@@ -701,7 +701,8 @@ def test_a_live_edit_claimed_at_the_score_boundary_does_not_end_the_member_eithe
     edited = _scored(
         tmp_path,
         oneharness_bin,
-        '{"version":1,"commands":[{"op":"context","id":"held","note":"the fixture moved"}]}',
+        '{"version":2,"commands":[{"op":"note","id":"held","addressee":"worker",'
+        '"text":"the fixture moved"}]}',
     )
 
     assert edited.returncode == 0, edited.stderr
@@ -851,8 +852,8 @@ def test_a_reply_carrying_both_a_verdict_and_edits_is_still_relayed_as_a_ruling(
     both = _supervised(
         tmp_path,
         oneharness_bin,
-        '{"version":1,"completion":true,"reason":"the watch is finished",'
-        '"commands":[{"op":"context","id":"held","note":"n"}]}',
+        '{"version":2,"completion":true,"reason":"the watch is finished",'
+        '"commands":[{"op":"note","id":"held","addressee":"worker","text":"n"}]}',
     )
 
     assert both.returncode == 0, both.stderr
@@ -876,15 +877,15 @@ def test_a_claimed_edit_is_named_back_to_the_monitor_with_whatever_the_planner_s
     claimed = _supervised(
         tmp_path,
         oneharness_bin,
-        '{"version":1,"commands":[{"op":"context","id":"held","note":"n"},'
-        '{"op":"cancel","id":"stale"},{"note":"no op at all"}],'
+        '{"version":2,"commands":[{"op":"note","id":"held","addressee":"worker","text":"n"},'
+        '{"op":"cancel","id":"stale"},{"text":"no op at all"}],'
         '"message":"stop working on the stale node"}',
     )
 
     assert claimed.returncode == 0, claimed.stderr
     told = json.loads(claimed.stdout)
     assert told["completion"] is False, told
-    assert "context held" in told["message"], told["message"]
+    assert "note held" in told["message"], told["message"]
     assert "cancel stale" in told["message"], told["message"]
     assert "an unnamed edit" in told["message"], told["message"]
     assert "stop working on the stale node" in told["message"], told["message"]

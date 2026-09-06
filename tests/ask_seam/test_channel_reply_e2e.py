@@ -8,7 +8,7 @@ Three behaviours, driven against a live run:
   beside such a ruling is refused whole; one carrying commands alone is never refused;
 * an envelope echoing no such token is never refused, whatever the queue holds. A monitor
   score is exactly that shape and is claimed by a reader at `pending: null`;
-* the verb's answer carries, per `context` note the envelope sent, the delivery the engine
+* the verb's answer carries, per `note` the envelope sent, the disposition the engine
   recorded for that note — correlated to the note rather than read off the journal's end,
   and `null` where nothing has decided it yet.
 
@@ -64,6 +64,12 @@ INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_LAUNCHER",
     "ONEPIPELINE_LAUNCHER_SESSION",
     "ONEPIPELINE_RUN_ID",
+    # The enclosing dispatch's asker. An engine that composes one puts it in every
+    # dispatch's environment, so a journey that kept it would measure the *outer*
+    # dispatch's name — and a launch of its own would hand that same name to the
+    # dispatch it makes, where a gate over the engine composing one would then pass
+    # on a value the engine never composed.
+    "ONEPIPELINE_CHANNEL_ASKER",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -76,7 +82,7 @@ INHERITED_ENVIRONMENT = (
 SUITE = hashlib.sha256(f"{REPO_ROOT}\0{os.getpid()}".encode()).hexdigest()[:8]
 
 #: The agent node every plan below carries, and the human gate that holds it. Nothing is
-#: ever dispatched from the gated plan — the node exists so a `context` note has a real
+#: ever dispatched from the gated plan — the node exists so a `note` has a real
 #: node to be addressed to.
 WORK_NODE = "work"
 GATE_NODE = "gate"
@@ -408,9 +414,14 @@ def _ruling(message: str) -> dict[str, Any]:
     return {"version": 1, "completion": True, "message": message}
 
 
-def _note(node: str, note: str) -> dict[str, Any]:
-    """One `context` command, which is the lever a planner note reaches a node by."""
-    return {"op": "context", "id": node, "note": note}
+def _note(node: str, text: str) -> dict[str, Any]:
+    """One `note` command, which is the one lever a manager's note reaches a node by.
+
+    `addressee` is spelled here because the op requires it and never infers it, and the
+    two optional axes are left at their defaults — `deliver: live` with `persist: true`
+    — which is the shape a manager who says nothing else gets.
+    """
+    return {"op": "note", "id": node, "addressee": "worker", "text": text}
 
 
 ANSWER = "Key it on the whole workspace; the narrower key would replay a stale verdict."
@@ -492,7 +503,7 @@ def test_a_commands_only_envelope_still_reaches_the_graph_with_nothing_pending(
     as long as a run had nothing queued, which is most of a run.
     """
     assert _queue(replying).pending is None, "the premise is a run with nothing pending"
-    edit = {"version": 1, "author": "planner", "commands": [_note(WORK_NODE, "the base moved")]}
+    edit = {"version": 2, "author": "planner", "commands": [_note(WORK_NODE, "the base moved")]}
 
     edited = _reply(replying, edit)
 
@@ -505,6 +516,49 @@ def test_a_commands_only_envelope_still_reaches_the_graph_with_nothing_pending(
     )
     assert _note(WORK_NODE, "the base moved") in _committed(replying), (
         "the verb reported the edit applied and the run's own journal does not record it"
+    )
+
+
+#: The op the engine removed when it collapsed the two manager-note ops into one, in
+#: the shape a manager who had not moved with the adoption would still be sending it.
+#: Spelled here rather than derived, because the whole point is that it is *not* a shape
+#: anything in this repository composes any more: nothing could derive it, and a
+#: constant nobody reads would be no evidence that the wire refuses it.
+REMOVED_NOTE_OP = {"op": "context", "id": WORK_NODE, "note": "the base moved"}
+
+
+def test_the_removed_manager_note_op_is_refused_by_name_at_the_wire(
+    replying: Replying,
+) -> None:
+    """The intended failure of the adoption, driven on a real run rather than assumed.
+
+    `context` was removed outright rather than aliased onto the op that replaced it, and
+    the reply envelope refuses unknown fields — so a caller still sending it is refused
+    by that name instead of having its note silently dropped. That refusal is what makes
+    the wrong lever unavailable rather than merely discouraged, and it is the half of
+    this adoption a reader of the prose cannot otherwise check: an alias would look
+    identical from every document in this repository.
+
+    Asserted beside the journey above, which sends the survivor through the same recipe
+    against the same run and has it applied. One without the other proves nothing: an
+    engine that refused both would pass this alone, and one that accepted both would
+    pass that alone.
+    """
+    refused = _reply(replying, {"version": 2, "commands": [REMOVED_NOTE_OP]})
+
+    assert refused.returncode != 0, (
+        f"an envelope carrying the removed `context` op was accepted, so this host is "
+        f"running an engine that still has it — or has aliased it onto `note`, which is "
+        f"what the collapse deliberately did not do:\n{refused.stdout}{refused.stderr}"
+    )
+    reported = refused.stderr + refused.stdout
+    assert "context" in reported, (
+        f"the refusal does not name the op it refused, so a manager sending the lever "
+        f"this repository documented until the adoption is told their envelope was bad "
+        f"and not which part of it was:\n{reported}"
+    )
+    assert not any(command.get("op") == "context" for command in _committed(replying)), (
+        "the refused envelope reached the graph anyway"
     )
 
 
@@ -526,7 +580,7 @@ def test_an_envelope_carrying_both_halves_is_refused_whole_rather_than_half_appl
         token = _minted(replying)
         riding = _note(WORK_NODE, "a note riding beside a verdict")
         both = {
-            "version": 1,
+            "version": 2,
             "completion": True,
             "message": f"{ANSWER} {token}",
             "commands": [riding],
@@ -549,7 +603,7 @@ def test_an_envelope_carrying_both_halves_is_refused_whole_rather_than_half_appl
             "refusal half-applied what it declined to send"
         )
 
-        edited = _reply(replying, {"version": 1, "commands": [riding]})
+        edited = _reply(replying, {"version": 2, "commands": [riding]})
 
         assert edited.returncode == 0, (
             f"the refusal said re-sending the commands alone would apply them, and it "
@@ -580,7 +634,7 @@ def test_an_envelope_carrying_both_halves_lands_both_while_its_question_is_pendi
         answered = _reply(
             replying,
             {
-                "version": 1,
+                "version": 2,
                 "completion": True,
                 "message": f"{ANSWER} {token}",
                 "commands": [riding],
@@ -777,7 +831,7 @@ def test_a_ruling_for_an_unread_question_is_refused_while_another_question_is_pe
 
 
 #: The field the verb's own answer carries the note outcomes in, and the entry each note
-#: gets. `delivery` is the engine's own word, or `None` where nothing has decided it yet.
+#: gets. `reached` is the engine's own word, or `None` where nothing has decided it yet.
 NOTES_FIELD = "notes"
 
 
@@ -797,7 +851,7 @@ def _verb_answer(sent: subprocess.CompletedProcess[str]) -> dict[str, Any]:
 
 
 def _note_outcomes(sent: subprocess.CompletedProcess[str]) -> list[dict[str, Any]]:
-    """What that answer says became of each `context` note the envelope carried."""
+    """What that answer says became of each `note` the envelope carried."""
     carried = _verb_answer(sent).get(NOTES_FIELD)
     assert isinstance(carried, list), (
         f"the answer carries no {NOTES_FIELD!r}, so the manager has only the transport "
@@ -811,16 +865,18 @@ def test_the_recipe_reports_what_the_engine_recorded_it_did_with_the_note(
 ) -> None:
     """`delivered` says the engine took the envelope; it says nothing about the note.
 
-    A `context` note goes either into the running turn or into the node's next dispatch,
-    and the engine records which the moment it commits the edit — on the run's journal,
-    where a manager reading their own terminal never sees it.
+    A `note` is taken by a turn of the node's conversation or carried to that node's
+    next dispatch, and the engine records which party took it the moment it commits the
+    edit — on the run's journal, where a manager reading their own terminal never sees
+    it.
 
     So the recipe reads that outcome back and carries it in the verb's own answer. This
-    run's `work` node has never been dispatched, so there is no turn to interrupt and the
-    engine records `deferred`; what is asserted is that the manager is told the node and
-    the engine's own word for it, from the command they typed and in one line.
+    run's `work` node has never been dispatched, so no turn of it can take the note and
+    the default `persist: true` carries it forward, which the engine records as
+    `carried`; what is asserted is that the manager is told the node and the engine's own
+    word for it, from the command they typed and in one line.
     """
-    sent = _reply(replying, {"version": 1, "commands": [_note(WORK_NODE, "the base moved")]})
+    sent = _reply(replying, {"version": 2, "commands": [_note(WORK_NODE, "the base moved")]})
 
     assert sent.returncode == 0, f"the note was refused:\n{sent.stdout}{sent.stderr}"
     answer = _verb_answer(sent)
@@ -828,8 +884,8 @@ def test_the_recipe_reports_what_the_engine_recorded_it_did_with_the_note(
         f"the verb's own answer did not survive the merge, so a caller reading the "
         f"receipt is worse off than before:\n{sent.stdout}"
     )
-    assert answer[NOTES_FIELD] == [{"node": WORK_NODE, "delivery": "deferred"}], (
-        f"this note reached a node with no dispatch to interrupt, so `deferred` against "
+    assert answer[NOTES_FIELD] == [{"node": WORK_NODE, "reached": "carried"}], (
+        f"this note reached a node with no turn to take it, so `carried` against "
         f"its own node is what the engine recorded and what the answer has to "
         f"carry:\n{sent.stdout}"
     )
@@ -926,7 +982,7 @@ def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlie
     sent with the run's own driver suspended, so the engine accepts it, makes it durable,
     and answers `{"reply":1,"state":"queued"}` — the published exit-1 state, and the whole
     of the window in which an outcome is not yet there. The journal then holds exactly one
-    delivery outcome, and it is the *first* note's.
+    note disposition, and it is the *first* note's.
 
     A recipe reading the newest outcome, the last, or the only one reports that one and
     tells the manager their second note reached a dispatch. This one has to report that
@@ -938,16 +994,17 @@ def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlie
     _dispatched(dispatching)
     replying = _replying(dispatching)
     first = _note(WORK_NODE, "the first note, whose outcome is recorded")
-    # `deliver: next` rather than the default: a note to a node whose turn is in flight
-    # is delivered by interrupting that turn's control socket, and this suite's stand-in
-    # provider has no turn to interrupt — so the default would be an edit the engine
-    # rejects rather than a note whose outcome it records.
+    # `deliver: next` rather than the default: the default attempts the node's running
+    # turn through the two-party delivery seam, and this suite's stand-in provider runs no
+    # conversation that seam can reach — so the default would be an edit the engine
+    # refuses rather than a note whose disposition it records. `persist` is left at its
+    # default, so the note is carried to the node's next dispatch.
     first["deliver"] = "next"
 
-    recorded = _reply(replying, {"version": 1, "commands": [first]})
+    recorded = _reply(replying, {"version": 2, "commands": [first]})
 
     assert recorded.returncode == 0, f"the first note was refused:\n{recorded.stderr}"
-    assert _note_outcomes(recorded) == [{"node": WORK_NODE, "delivery": "deferred"}], (
+    assert _note_outcomes(recorded) == [{"node": WORK_NODE, "reached": "carried"}], (
         f"the first note's outcome was not reported, so there is nothing on this "
         f"journal for the second note to be confused with:\n{recorded.stdout}"
     )
@@ -964,7 +1021,7 @@ def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlie
         second = _note(WORK_NODE, "the second note, whose outcome nothing has decided")
         second["deliver"] = "next"
 
-        queued = _reply(replying, {"version": 1, "commands": [second]}, seconds=180)
+        queued = _reply(replying, {"version": 2, "commands": [second]}, seconds=180)
     finally:
         os.killpg(os.getpgid(dispatching.launch.pid), signal.SIGCONT)
 
@@ -972,9 +1029,9 @@ def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlie
         f"the second note was reconciled after all, so this journey never reached the "
         f"window it is about:\n{queued.stdout}{queued.stderr}"
     )
-    assert _note_outcomes(queued) == [{"node": WORK_NODE, "delivery": None}], (
+    assert _note_outcomes(queued) == [{"node": WORK_NODE, "reached": None}], (
         f"this note's outcome is not on the journal yet, so `None` against its own node "
-        f"is what the answer has to carry. A `delivery` here at all is the FIRST note's, "
+        f"is what the answer has to carry. A `reached` here at all is the FIRST note's, "
         f"which is what reading the journal by recency, by its last entry, or by its "
         f"only entry does — and what the manager would act on:\n{queued.stdout}"
     )

@@ -80,6 +80,12 @@ INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_LAUNCHER",
     "ONEPIPELINE_LAUNCHER_SESSION",
     "ONEPIPELINE_RUN_ID",
+    # The enclosing dispatch's asker. An engine that composes one puts it in every
+    # dispatch's environment, so a journey that kept it would measure the *outer*
+    # dispatch's name — and a launch of its own would hand that same name to the
+    # dispatch it makes, where a gate over the engine composing one would then pass
+    # on a value the engine never composed.
+    "ONEPIPELINE_CHANNEL_ASKER",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -120,6 +126,12 @@ MISROUTED_EDIT_WINDOW_SECONDS = int(e2e_timeout(60))
 #: is built out of: what makes a string a run id is where it came from.
 RunId = NewType("RunId", str)
 
+#: Who a `channel serve` session listens on behalf of. An opaque word rather than
+#: prose: it is compared for equality and never parsed, and what makes a string one is
+#: that a dispatch or the wrapper chose it as an identity — so it is distinguished from
+#: the message text and the run id it sits beside on the same surface.
+Asker = NewType("Asker", str)
+
 #: How many times `scripts/ask-manager.sh` puts one question to the channel before it
 #: gives up. Restated from the wrapper rather than imported, because it is shell. The
 #: journey that drives it to exhaustion reads the number back out of the refusal the
@@ -137,7 +149,7 @@ ADOPTED_ONETASKGRAPH = (
 )
 
 #: The agent node every plan below carries. It is never dispatched — it depends on the
-#: human gate, which nobody attests — and it exists so a `context` live edit has a
+#: human gate, which nobody attests — and it exists so a manager-note live edit has a
 #: node to be addressed to, which is how the misrouted-edit journey gets a real one.
 WORK_NODE = "work"
 
@@ -699,8 +711,10 @@ def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
     0.8.x the channel was a durable queue whose replies were claimed by whichever reader
     reached one next, so a manager's live edit —
     `{"version":1,"author":"monitor","commands":[{"op":"context",...}]}`, measured on a
-    real re-ask — arrived at the asking call by arrival order alone, and the wrapper had
-    to refuse it naming a cause of its own.
+    real re-ask against the manager-note op of that day — arrived at the asking call by
+    arrival order alone, and the wrapper had to refuse it naming a cause of its own. That
+    op is gone: the engine collapsed it into `note` and removed it from the envelope, so
+    what is sent below is the survivor.
 
     **The adopted release routes a reply by the halves it carries**, so a commands-only
     envelope belongs to the command path and the verdict rendezvous this call waits on
@@ -722,9 +736,20 @@ def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
     )
     edit = json.dumps(
         {
-            "version": 1,
-            "author": "monitor",
-            "commands": [{"op": "context", "id": WORK_NODE, "note": "the base moved under you"}],
+            "version": 2,
+            "commands": [
+                {
+                    "op": "note",
+                    "id": WORK_NODE,
+                    "addressee": "worker",
+                    "text": "the base moved under you",
+                    # No live delivery is attempted, and `persist` is left at its default,
+                    # so this node's next dispatch is what the note is carried to. The
+                    # default would reach for a running turn this never-dispatched node
+                    # has none of.
+                    "deliver": "next",
+                }
+            ],
         }
     )
     manager = Manager(asked.run, asked.environment, [lambda _token: edit])
@@ -853,9 +878,17 @@ UNUSABLE_REPLIES = (
 #: unanswered.
 LIVE_EDIT = json.dumps(
     {
-        "version": 1,
+        "version": 2,
         "author": "planner",
-        "commands": [{"op": "context", "id": WORK_NODE, "note": "the base moved under you"}],
+        "commands": [
+            {
+                "op": "note",
+                "id": WORK_NODE,
+                "addressee": "worker",
+                "text": "the base moved under you",
+                "deliver": "next",
+            }
+        ],
     }
 )
 
@@ -1438,6 +1471,139 @@ def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arm
     assert not buried, (
         f"these surfaces state their token below the body rather than above it, where a "
         f"reader that truncates loses the one thing that binds an answer back: {buried}"
+    )
+
+
+#: The variable a `channel serve` session names its asker in, and the prefix
+#: `scripts/ask-manager.sh` mints one under. Both are the wrapper's own, read here as
+#: the two literals a surface is asserted against rather than recomputed: what the
+#: journeys below are about is that the wrapper puts *this* name on the wire.
+ASKER_ENV = "ONEPIPELINE_CHANNEL_ASKER"
+ASKER_PREFIX = "ask-manager-"
+
+
+class QueuedSurface(TypedDict, total=False):
+    """One surface as the channel's own queue records it, narrowed to what is read here.
+
+    `asker` is `onepipeline`'s own key and is absent on a surface no session named one
+    for — which is exactly the state that made a re-armed question unanswerable, so it
+    is read as optional rather than required.
+    """
+
+    message: str
+    blocking: bool
+    asker: Asker
+
+
+class QueuedChannel(TypedDict, total=False):
+    """The channel queue document, narrowed to the list these journeys read."""
+
+    waiting: list[QueuedSurface]
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] The public read is `just channel-next`,
+# and it *hands the surface out* — which is the state these journeys must not reach: the
+# question has to stay unread while the wrapper's own listeners are replaced, since that
+# is what is being measured. So the whole helper reads the queue the two siblings above
+# it read for the same reason, and every journey using it asserts what the wrapper wrote
+# rather than what a manager would see.
+def _queued_asker(asked: Asked, carrying: str) -> Asker | None:
+    """The asker of the blocking question carrying `carrying`, while it is still unread.
+
+    Read off the queue rather than through `just channel-next`, for
+    `_waited_for_a_queued_question`'s reason: handing the surface out is a thing done
+    *to* the queue, and these journeys are about what the wrapper wrote into it.
+    """
+    _waited_for_a_queued_question(asked, carrying)
+    queue = Path(asked.environment["ONEPIPELINE_RUNS_DIR"]) / asked.run / "channel" / "queue.json"
+    # `cast` rather than a validating read, as `_pending` does the same file:
+    # `onepipeline` owns this schema, and what each journey reads off it is asserted.
+    held = cast(QueuedChannel, json.loads(queue.read_text(encoding="utf-8")))
+    for surface in held.get("waiting", []):
+        if carrying in surface.get("message", ""):
+            return surface.get("asker")
+    raise AssertionError(f"no queued surface carried {carrying!r} on run {asked.run}")
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+def test_an_ask_outside_a_dispatch_still_names_an_asker_of_its_own(asked: Asked) -> None:
+    """A wrapper nothing handed an asker names itself, so its own re-arms find its question.
+
+    The engine takes a question back over for the next listener of the *same* asker and
+    for nobody else, so a session naming none is a listener that adopts nothing: the
+    question it raised is withdrawn the moment that session ends and the succession
+    below it never sees the question again. That is not a hypothetical — it is the state
+    `test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arms`
+    drives, where the ask blocked for its whole reply window and was killed with nothing
+    on either pipe.
+
+    Asserted here is the half that journey cannot separate out: that the name on the
+    wire is the wrapper's own rather than absent, so an ask made anywhere — a manager's
+    terminal, a launch shape that hands out no asker — is answerable across a re-arm and
+    not only a dispatch is.
+    """
+    question = "Which base does the narrower key describe?"
+    asking = _ask(asked, question, window=ANSWERED_WINDOW_SECONDS)
+    try:
+        named = _queued_asker(asked, question)
+    finally:
+        _reaped(asking)
+
+    assert named is not None, (
+        "the wrapper raised its question through a session naming no asker, so nothing "
+        "takes that question back over when the listener is replaced and a re-arm loses "
+        "it silently"
+    )
+    assert named.startswith(ASKER_PREFIX), (
+        f"the asker on the wire is {named!r}, which is not one this wrapper minted — a "
+        f"name it did not choose is one it cannot keep constant across its own re-arms"
+    )
+    assert named != ASKER_PREFIX, (
+        "the minted asker is its bare prefix, which every ask would share: one asker "
+        "would then take over questions belonging to asks it has never heard of"
+    )
+
+
+def test_a_dispatchs_own_asker_is_what_the_ask_inside_it_asks_as(asked: Asked) -> None:
+    """The engine hands each dispatch an asker, and the wrapper asks as that rather than itself.
+
+    The asker is the *dispatch*, not one invocation of this wrapper: a question an
+    earlier ask of the same dispatch left outstanding is still owed while that dispatch
+    works, and it is the engine that decides so. A wrapper that minted over the given
+    name would cut every ask of a dispatch off from the ones before it, so what is
+    asserted is that an inherited name reaches the wire unchanged.
+
+    A blank one is the other half, and it is not an identity: `channel serve` refuses
+    it, because a name every session matches would take over questions belonging to
+    askers it has never heard of — and that refusal reaches a caller as a channel that
+    would not accept its question. So the wrapper reads a blank one as none given and
+    names itself.
+    """
+    given = Asker("dispatch-scratch-for-this-journey")
+    inherited = "Which store does the inherited name reach?"
+    asking = _ask(asked, inherited, window=ANSWERED_WINDOW_SECONDS, overrides={ASKER_ENV: given})
+    try:
+        named = _queued_asker(asked, inherited)
+    finally:
+        _reaped(asking)
+    assert named == given, (
+        f"the ask asked as {named!r} rather than as the {given!r} its dispatch was "
+        f"given, so a question an earlier ask of that dispatch left outstanding is one "
+        f"this ask can no longer take back over"
+    )
+
+    blank = "Which store does a blank name reach?"
+    asking = _ask(asked, blank, window=ANSWERED_WINDOW_SECONDS, overrides={ASKER_ENV: "   "})
+    try:
+        blanked = _queued_asker(asked, blank)
+    finally:
+        _reaped(asking)
+    assert blanked is not None and blanked.startswith(ASKER_PREFIX), (
+        f"a blank inherited asker reached the channel as {blanked!r} rather than being "
+        f"read as none given, so the ask is refused by a verb that will not take a name "
+        f"every session matches"
     )
 
 

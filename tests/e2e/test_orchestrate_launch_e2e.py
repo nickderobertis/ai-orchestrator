@@ -1320,13 +1320,10 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
 
 #: Every op the monitor may issue, and what an already-settled graph answers each with.
 #: The refusal is the graph's, not an authority verdict, which is the distinction under
-#: test: these four are refused for what the node is, and the four below for who asked.
-#: `add` and `finding` are the two of the six that still apply to a settled graph, so
-#: each is exercised on a run of its own rather than against this settled one.
+#: test: these three are refused for what the node is, and the five below for who asked.
+#: `add` and `finding` are the two of the five allowed ops that still apply to a settled
+#: graph, so each is exercised on a run of its own rather than against this settled one.
 MONITOR_OPS_ON_A_SETTLED_GRAPH = (
-    RefusedOnTheGraph(
-        {"op": "context", "id": "research", "note": "n"}, "nothing will read the note"
-    ),
     RefusedOnTheGraph({"op": "cancel", "id": "research"}, "not pending or running"),
     RefusedOnTheGraph(
         {
@@ -1340,11 +1337,19 @@ MONITOR_OPS_ON_A_SETTLED_GRAPH = (
 )
 
 #: Every op the monitor may not issue, whatever the graph looks like.
+#:
+#: `note` is the fifth and the one worth naming: it is the single manager-note op the
+#: engine collapsed the weaker `context` into, and where `context` *was* on this
+#: allowlist, `note` is deliberately not — a note may carry a criterion the node's judge
+#: decides against, which is the decision `amend` makes and the one the observer's own
+#: persona reserves to the planner. So the op that replaced an allowed one is refused,
+#: and a monitor that wants a node told something raises a `finding` instead.
 OPS_THE_MONITOR_MAY_NOT_ISSUE: tuple[EditCommand, ...] = (
     {"op": "drop", "id": "research", "dependents": "drop"},
     {"op": "reparent", "id": "research", "deps": []},
     {"op": "attest", "ref": "research"},
     {"op": "complete", "reason": "verified"},
+    {"op": "note", "id": "research", "addressee": "worker", "text": "the fixture moved"},
 )
 
 
@@ -1370,13 +1375,14 @@ def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
     """`personas/orchestrator.yaml` states the allowlist; the engine is what enforces it.
 
     A persona is a prompt, so a bound stated only there is a bound a model may cross.
-    These four are the ones whose crossing costs the planner a decision it never made —
-    removing work, rewiring dependencies, attesting a human action nobody took, and
-    declaring the run finished — so what is held here is that the published engine
-    refuses them for *who asked*, ahead of any question about the graph's state. Sent
-    through the real recipe, against the run this journey already launched.
+    These five are the ones whose crossing costs the planner a decision it never made —
+    removing work, rewiring dependencies, attesting a human action nobody took,
+    declaring the run finished, and binding what a node's judge decides against — so
+    what is held here is that the published engine refuses them for *who asked*, ahead
+    of any question about the graph's state. Sent through the real recipe, against the
+    run this journey already launched.
     """
-    refused = _monitor_reply(launched, {"version": 1, "author": "monitor", "commands": [command]})
+    refused = _monitor_reply(launched, {"version": 2, "author": "monitor", "commands": [command]})
 
     assert refused.returncode != 0, refused.stdout
     reported = refused.stderr + refused.stdout
@@ -1393,18 +1399,18 @@ def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
 def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_author(
     launched: Launched, refused_on_the_graph: RefusedOnTheGraph
 ) -> None:
-    """The five allowed ops reach the graph, and are answered by what the graph is.
+    """The allowed ops reach the graph, and are answered by what the graph is.
 
     The other half of the allowlist, and the half a refusal-only test would leave
     unproven: an in-allowlist op must not be refused for *who asked*. This run has
-    settled, so each of these four is refused for what the node now is — and the
+    settled, so each of these three is refused for what the node now is — and the
     refusal wording is the distinction, because an authority refusal and a state
     refusal read alike to a monitor that only checks the exit status. `add` and
     `finding` are exercised separately below, since they are the two that still apply.
     """
     refused = _monitor_reply(
         launched,
-        {"version": 1, "author": "monitor", "commands": [refused_on_the_graph.command]},
+        {"version": 2, "author": "monitor", "commands": [refused_on_the_graph.command]},
     )
 
     assert refused.returncode != 0, refused.stdout
@@ -1450,7 +1456,7 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
             env=environment,
             input=json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "author": "monitor",
                     "commands": [
                         {
@@ -1625,7 +1631,7 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
             refused = _reply(
                 environment,
                 run,
-                {"version": 1, "author": "monitor", "commands": [refused_finding.command]},
+                {"version": 2, "author": "monitor", "commands": [refused_finding.command]},
             )
             assert refused.returncode != 0, refused.stdout
             reported = refused.stderr + refused.stdout
@@ -1640,7 +1646,7 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
             environment,
             run,
             {
-                "version": 1,
+                "version": 2,
                 "author": "monitor",
                 "commands": [{"op": "finding", "message": said, "id": "only"}],
             },
@@ -1715,7 +1721,7 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
                 environment,
                 run,
                 {
-                    "version": 1,
+                    "version": 2,
                     "author": "monitor",
                     "commands": [{"op": "finding", "message": message, "blocking": blocking}],
                 },
@@ -3640,7 +3646,7 @@ def test_a_graph_edit_is_accepted_while_a_node_is_still_running(live_run: LiveRu
         "expects_no_diff": True,
     }
     add: EditCommand = {"op": "add", "node": settles_without_dispatch}
-    added: ReplyEnvelope = {"version": 1, "commands": [add]}
+    added: ReplyEnvelope = {"version": 2, "commands": [add]}
     applied = subprocess.run(
         ["just", "channel-reply", live_run.run],
         cwd=REPO_ROOT,
@@ -3896,7 +3902,7 @@ def stopping_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
 
 def _replied(live: LiveRun, command: EditCommand) -> subprocess.CompletedProcess[str]:
     """Send one live edit through the recipe an operator types."""
-    envelope: ReplyEnvelope = {"version": 1, "commands": [command]}
+    envelope: ReplyEnvelope = {"version": 2, "commands": [command]}
     return subprocess.run(
         ["just", "channel-reply", live.run],
         cwd=REPO_ROOT,

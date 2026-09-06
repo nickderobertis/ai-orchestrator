@@ -13,18 +13,18 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.21.0**
+that source on every `just check` rather than restated: **`onepipeline` v0.22.2**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.19.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.19.2** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.19.0** as well at
+the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.19.2** as well at
 this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.21.0
-and 0.19.0. The habit that ambiguity taught is worth keeping rather than retiring
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.22.2
+and 0.19.2. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -561,7 +561,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.21.0 and is refused **by its own name**, at every schema version and on a live
+v0.22.2 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -792,7 +792,7 @@ failed.
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
 2026-08-27 against the installed onepipeline 0.16.3 binary (which its SBOM and
 embedded crate paths both identified as linking onevcs 0.15.4) and re-read against the
-adopted onepipeline 0.21.0 / onevcs 0.19.0 pair, every follow-up shape
+adopted onepipeline 0.22.2 / onevcs 0.19.2 pair, every follow-up shape
 keeps the workstream's publication base:
 
 | Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
@@ -1337,7 +1337,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.21.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.22.2.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1413,8 +1413,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.19.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.21.0 settles the node that
+`onevcs` 0.19.2 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.22.2 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached only once the last step has settled and the publication
 starts, and reached then only because a release the node adopted early has not happened
@@ -1498,7 +1498,7 @@ a continuation cannot use, and `just work-status <branch>` says so in as many wo
 
 The DAG is never static and there is no interval between adaptations: the
 reconciler converges the live desired graph continuously, so an accepted edit —
-`retry`, `add`, `drop`, `reparent`, `cancel`, `requeue`, `context`, `attest` — is
+`retry`, `add`, `drop`, `reparent`, `cancel`, `requeue`, `note`, `attest` — is
 applied on its next pass. Completed nodes landed on root leave the frontier as
 satisfied. A same-identity dependency whose change has not reached the root base is
 that repository's **publication anchor**: `drop` refuses to remove the last
@@ -1558,7 +1558,7 @@ arrives; nothing has to be waited for:
 ```
 just runs
 just channel-reply <run-id> <<'JSON'
-{"version":1,"commands":[{"op":"attest","ref":"<node-id>/<step-id>"}]}
+{"version":2,"commands":[{"op":"attest","ref":"<node-id>/<step-id>"}]}
 JSON
 ```
 
@@ -1614,12 +1614,18 @@ row's own verb.
 `just work-status <ref>` answers the question the landing verbs raise afterwards:
 what became of one piece of work, given a change request's URL, a session token, a
 branch name, or a commit — read in that order, and refused by name, listing all
-four, when the reference names nothing this host knows. It is the **only** re-read
-there is. A run records a node's landing as its own settlement observed it and
-nothing looks again, so `just results` and `just status` say *as of settlement* and
-mean it; a change that merged an hour later still reads there as not landed. Ask
-this verb instead of inferring the answer from a run, and read `--json` when
-something other than a person is going to act on it.
+four, when the reference names nothing this host knows. It is no longer the **only**
+re-read there is, and that is what the adopted `onepipeline` changed: a run recorded a
+node's landing as its own settlement observed it and nothing looked again, so `just
+results` and `just status` said *as of settlement* and meant it, and a change that
+merged an hour later still read there as not landed — which had an adoption node
+dispatched three times against work already on its base. From onepipeline 0.22.0 the
+node line, the summary count and the `status` line each take a fresh landing read when
+they render, for every node they report on except one the run already recorded as
+landed, and a read that cannot decide is reported **undecided** rather than as not
+landed. What this verb still owns is one piece of work asked about by name, with the
+evidence behind the answer; ask it when the question is about a branch rather than a
+run, and read `--json` when something other than a person is going to act on it.
 
 #### What `decided by:` can reach, per workflow
 
@@ -1644,12 +1650,16 @@ merged, asked on a host whose session record for it is gone, answers `landed: un
 by `content comparison` and comes back into `just recoverable` under `— may have landed`
 with a `publish-branch` command beside it. Read that as *no record*, confirm against the
 change request, and do not run the command. A `local-direct` branch in the same state
-still answers from its trailer. Both halves were measured on 2026-08-27 against the
-pinned `onevcs`, over one landing of each workflow — `onevcs/s-42dae8f0b0f5`, which this
-repository's `local-direct` identity landed as `ed8c396`, and `onevcs/s-a221fd101a0f`,
-which `onetaskgraph`'s `change-auto` identity merged as change request 51 — each asked
-once in this host's state root, where both answer `a recorded landing`, and once in a
-throwaway one holding no session record for either, where they part.
+still answers from its trailer. Both halves are measured rather than reasoned, over one
+landing of each workflow asked twice — once in this host's state root, where both answer
+`a recorded landing`, and once in a throwaway one holding no session record for either,
+where they part. That measurement lives in exactly one place and is re-taken there each
+time the pin moves, because the pair it is taken over has to be re-chosen each time as
+well: a ref stops answering here within a cycle or two of landing, and the two this
+passage used to name are gone from every registered checkout.
+`tests/test_phase_and_landing_guidance.py` is what holds it — the refs, the condition and
+both quoted answers — to the release this checkout pins, so a stale copy of it here would
+be a second measurement nothing re-takes.
 
 The distinction that matters most is the middle two. `repo-recover` is the only
 verb that knows how to attest an incomplete-step marker, so a branch carrying one
@@ -2025,7 +2035,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.21.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.22.2 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

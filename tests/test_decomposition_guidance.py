@@ -77,8 +77,9 @@ OWNED_STATEMENTS = (
     Owned(MANAGER.document, "A foreground attach alone is not an armed watch"),
     Owned(MANAGER.document, "planner update(s) waiting"),
     Owned(MANAGER.document, "confirm the `pending` surface is the one being answered"),
-    Owned(MANAGER.document, "A blocking surface may have no asker"),
-    Owned(MANAGER.document, "An interrupt is not journalled"),
+    Owned(MANAGER.document, "A blocking surface may have nobody waiting on it"),
+    Owned(MANAGER.document, "The mark says nobody is listening *now*"),
+    Owned(MANAGER.document, "A raw interrupt reaches the worker's turn alone and is"),
     # How a node says it depends on another repository's *release* rather than on the
     # work. The split is the same one and for the same reason: choosing a node's
     # adoption mode and writing its task around the references the framework appends

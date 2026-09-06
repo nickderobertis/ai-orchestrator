@@ -113,7 +113,15 @@ REQUIRED_CLAIMS = (
     ),
     Claim("the framework renders it at both sites", "at both places a consumer meets one"),
     Claim("the block is one of the two", "`## Cross-repository references` block appended"),
-    Claim("the arrival note", "sent one `context` note naming the versions"),
+    # The op that used to carry this is gone — the engine collapsed it into `note` and
+    # removed it — and the arrival note was never that op anyway: it is the engine's own,
+    # delivered by the interrupt the engine keeps for exactly this. So the claim names it
+    # by what it is rather than by the manager lever it used to be spelled with.
+    Claim("the arrival note", "sent one **arrival note** naming the"),
+    Claim(
+        "the arrival note is the engine's rather than a manager's",
+        "It is the\nengine's own note rather than a manager's",
+    ),
     Claim("a producer that declares none", "falls back to\nthe engine's own default sentence"),
     Claim("the block reaches a published node too", "rendered\nfor a `published` node too"),
     Claim(

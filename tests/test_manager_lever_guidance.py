@@ -6,10 +6,13 @@ reading a run:
 
 * **which lever binds a node's judge.** A manager ruled a change out of scope mid-run,
   the worker complied and re-ran its complete gate green, and seven minutes later that
-  node's own judge instructed it to restore what had been ruled out — because a `context`
-  note reaches the worker and never the task the judge reviews against. `AGENTS.md` said
-  both that an amended `task` is how a bar is amended and that `context` is the lever for
-  steering a running dispatch, and said nothing about the gap between them.
+  node's own judge instructed it to restore what had been ruled out — because the note op
+  of the day reached the worker and never the task the judge reviews against. `AGENTS.md`
+  said both that an amended `task` is how a bar is amended and that the weaker note op was
+  the lever for steering a running dispatch, and said nothing about the gap between them.
+  The engine has since collapsed that op into `note` and removed it, so what the passage
+  owes now is the *new* split: `note` binds the conversation it is delivered into, `amend`
+  binds the node's stored bar, and only the second survives a re-dispatch.
 * **that a mid-run amendment is criteria.** `adopt-oneharness-cli-2` settled
   `task-failed` on a *green* complete gate: the amendment named a mechanism — assert the
   wrapper *refuses* an invalid inherited label — where the implementation drops the
@@ -76,7 +79,7 @@ OP_TABLE = re.compile(
 OP_NAME = re.compile(r"^\| `([a-z]+)` \|", re.MULTILINE)
 
 #: The levers the passage names, each of which has to be an op that table declares.
-NAMED_LEVERS = ("retry", "cancel", "requeue", "context", "amend")
+NAMED_LEVERS = ("retry", "cancel", "requeue", "note", "amend")
 
 
 class Claim(NamedTuple):
@@ -96,7 +99,8 @@ REQUIRED_CLAIMS = (
     Claim(
         "the task is what changes the bar",
         LOOP_SECTION,
-        'the only text that changes what "done" means for it is the\n   `task`',
+        'the only text that changes what "done" means for a *later*\n   dispatch of it is the\n'
+        "   `task`",
     ),
     Claim(
         "which binding edit reaches a task mid-run",
@@ -113,7 +117,27 @@ REQUIRED_CLAIMS = (
         LOOP_SECTION,
         "`amend` does not interrupt a dispatch already running",
     ),
-    Claim("a note binds nothing", LOOP_SECTION, "the other lever and it binds nothing"),
+    # The claim this replaces was "a note binds nothing", which the collapse made false:
+    # the surviving op may carry a `criterion`, and a delivered one enters the bar the
+    # conversation's judge decides against. What a manager now has to be told is not that
+    # a note binds nothing but *what* it binds — a conversation rather than the node — and
+    # that only `amend` outlives a re-dispatch.
+    Claim(
+        "what a note binds",
+        LOOP_SECTION,
+        "enters the acceptance criteria **that conversation's judge decides against**",
+    ),
+    Claim(
+        "and what it does not bind",
+        LOOP_SECTION,
+        "they are **the conversation** and\n   **the stored bar**, and only `amend` survives "
+        "a re-dispatch",
+    ),
+    Claim(
+        "a note carrying no criterion touches no criterion",
+        LOOP_SECTION,
+        "A note carrying no\n   `criterion` is observational and touches no acceptance criterion",
+    ),
     Claim("where a carried note is rendered", LOOP_SECTION, "under `## Planner context`"),
     Claim(
         "what that rendering declares the note to be",
@@ -121,25 +145,28 @@ REQUIRED_CLAIMS = (
         "This reports observed state and adds no acceptance criteria.",
     ),
     Claim(
-        "a live note is stored nowhere",
+        "a note is spent by whoever reads it",
         LOOP_SECTION,
-        "an interrupt against the running turn that is stored\n   nowhere",
+        "A note is spent by the turn that reads it, and a carried one is spent by the "
+        "dispatch that takes it",
     ),
     Claim(
-        "so it reaches neither judge nor next dispatch",
+        "reaching the turn and binding the next dispatch is not one op",
         LOOP_SECTION,
-        "it reaches neither that node's judge nor its next dispatch",
+        "Reaching the live turn *and* binding the next dispatch is\n   deliberately not on "
+        "offer from one op: send the note and amend the node",
     ),
     Claim(
         "when to amend",
         LOOP_SECTION,
-        "Amend\n   whenever the correction changes what the finished tree must contain or what"
-        ' "done"\n   means',
+        "Amend\n   whenever the correction has to hold however many times the node is "
+        "dispatched\n   again",
     ),
     Claim(
         "when to send a note instead",
         LOOP_SECTION,
-        "send a note for anything the judge has no opinion\n   about",
+        "send a note — with a `criterion` where the correction changes what the\n   "
+        "finished tree must contain, without one where the judge has no opinion",
     ),
     Claim("what getting it backwards cost", LOOP_SECTION, "15:50:23Z"),
     Claim("what the judge then instructed", LOOP_SECTION, "15:57:19Z"),

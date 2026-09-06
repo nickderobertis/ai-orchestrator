@@ -1506,7 +1506,7 @@ def test_run_settlements_and_live_edits_reach_the_plan_store(
     assert launched.returncode == 0, launched.stdout + launched.stderr
 
     live_edit: _LiveEditEnvelope = {
-        "version": 1,
+        "version": 2,
         "commands": [
             {
                 "op": "add",

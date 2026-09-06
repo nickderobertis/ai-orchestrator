@@ -78,6 +78,12 @@ INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_LAUNCHER",
     "ONEPIPELINE_LAUNCHER_SESSION",
     "ONEPIPELINE_RUN_ID",
+    # The enclosing dispatch's asker. An engine that composes one puts it in every
+    # dispatch's environment, so a journey that kept it would measure the *outer*
+    # dispatch's name — and a launch of its own would hand that same name to the
+    # dispatch it makes, where a gate over the engine composing one would then pass
+    # on a value the engine never composed.
+    "ONEPIPELINE_CHANNEL_ASKER",
     "ORCHESTRATOR_ASK_MANAGER",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
@@ -136,6 +142,17 @@ NODE_SCRATCH = Input(
     "ONEPIPELINE_NODE_SCRATCH_DIR",
     "the one thing a dispatch carries that names its own run's directory, which "
     "`scripts/ask-manager.sh` walks up to find the runs root from a worktree",
+)
+
+#: Not required either, and for a sharper reason than the one above: the wrapper names
+#: itself when nothing gives it one, so drift here degrades rather than breaks. What it
+#: costs is the difference between an asker that is the *dispatch* and one that is a
+#: single invocation of the wrapper — so a question an earlier ask of a dispatch left
+#: outstanding stops being taken back over, silently, with every ask still working.
+CHANNEL_ASKER = Input(
+    "ONEPIPELINE_CHANNEL_ASKER",
+    "who a dispatch's `channel serve` sessions listen on behalf of, which is what lets "
+    "one still-pending question outlive the listener that raised it",
 )
 
 
@@ -355,7 +372,12 @@ def _environment(
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
     environment[PROMPT_LOG_ENV] = str(turns)
     environment[ENVIRONMENT_KEYS_ENV] = ",".join(
-        [*(required.name for required in REQUIRED_INPUTS), NODE_SCRATCH.name, CREDENTIAL_NAME]
+        [
+            *(required.name for required in REQUIRED_INPUTS),
+            NODE_SCRATCH.name,
+            CHANNEL_ASKER.name,
+            CREDENTIAL_NAME,
+        ]
     )
     if record is not None:
         environment[ASK_QUESTION_ENV] = ASK_QUESTION
@@ -878,6 +900,52 @@ def test_every_launch_gives_its_dispatch_a_scratch_directory_under_its_own_run(
     assert (own / "launch.json").is_file(), (
         f"run {dispatch.run} has no launch record at {own / 'launch.json'}; that file is "
         "what the walk stops at, so a run without one cannot be found from a worktree"
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "orchestrate_attached",
+        "orchestrate_detached",
+        "orchestrate_adopted",
+        "plan_attached",
+        "plan_detached",
+    ],
+)
+def test_every_launch_gives_its_dispatch_an_asker_to_ask_as(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """The drift gate over the name that keeps one question alive across a re-arm.
+
+    `onepipeline channel serve` is a listener an asker rents rather than the asker
+    itself, so `scripts/ask-manager.sh` waits through a succession of them over one
+    still-pending question. A session that ends leaves what it raised owed to nobody,
+    and only a later session of the **same** asker takes it back — so a dispatch that
+    was given none has an ask whose asker is one invocation of the wrapper rather than
+    the dispatch, and a question an earlier ask left outstanding is quietly stranded.
+
+    Measured against a real dispatch of every launch shape because that degrade is
+    silent in both directions: the wrapper mints its own when nothing gives it one, so
+    every ask still returns an answer and nothing anywhere reports the narrowing. What
+    the engine composes it *as* is deliberately not asserted — it is opaque and compared
+    for equality — only that a dispatch is given one that names somebody.
+    """
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    given = _given(dispatch, CHANNEL_ASKER)
+    assert given.strip(), (
+        f"a dispatch of run {dispatch.run} was given a blank {CHANNEL_ASKER.name}, which "
+        f"is not an identity: `channel serve` refuses one, because a name every session "
+        f"matches would take over questions belonging to askers it has never heard of"
+    )
+    # The dispatch's own, never whatever the launcher happened to be running under. This
+    # is what makes `INHERITED_ENVIRONMENT` dropping the name load-bearing rather than
+    # tidy: a journey that kept it would read the enclosing dispatch's asker back and
+    # call it the engine's doing, and that reads exactly like a passing gate.
+    assert given != dispatch.environment.get(CHANNEL_ASKER.name), (
+        f"a dispatch of run {dispatch.run} was given the same {CHANNEL_ASKER.name} its "
+        f"launch ran under, so this measures what leaked in rather than what the engine "
+        f"composed, and an engine that stopped composing one would still pass"
     )
 
 

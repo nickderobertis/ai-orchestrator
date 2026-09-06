@@ -135,7 +135,7 @@ SQUASH_HALF_CLAIMS = (
     # naming the blob at the pinned release rather than to asserting one blob throughout.
     Claim(
         "the deciding module's identity is named",
-        "`23b7489c` at the pinned v0.19.0",
+        "`23b7489c` at the pinned v0.19.2",
     ),
     Claim(
         "the last tier can never say yes",
@@ -176,7 +176,7 @@ LANDING_RETRY_HALF_CLAIMS = (
 #: same date for a different measurement. A stamp is only evidence where it is
 #: attached to the claim it stamps.
 LANDING_MEASUREMENT_STAMP = "Re-measured {date} on the pinned onevcs {release}:"
-LANDING_MEASUREMENT_DATE = "2026-09-03"
+LANDING_MEASUREMENT_DATE = "2026-09-05"
 #: The ref the verb was actually asked about, so a later reader re-takes exactly the
 #: measurement rather than a similar one. Each adoption has needed a fresh one: a ref
 #: stops answering here within a cycle or two of landing, and a measurement nobody can
@@ -534,7 +534,7 @@ RECOVERABLE_SPLIT_CLAIMS = (
 #: reports one ref, this one reports a pair — so the two paragraphs cannot satisfy
 #: each other's gate.
 SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, over two landings"
-SPLIT_MEASUREMENT_DATE = "2026-09-03"
+SPLIT_MEASUREMENT_DATE = "2026-09-05"
 #: Both refs, because the whole measurement is a comparison: either alone is an
 #: anecdote about one workflow rather than evidence that the workflow is what decides.
 #:

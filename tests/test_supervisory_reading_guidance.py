@@ -144,7 +144,12 @@ REQUIRED_CLAIMS = (
     Claim("how long the manager held the information", DECLINED, "Forty minutes later"),
     Claim("how the node settled", DECLINED, "`task-failed` on a green complete"),
     Claim("what its judge recorded", DECLINED, "every acceptance"),
-    Claim("which lever cannot fix it", DECLINED, "A `context` note cannot reach that"),
+    Claim(
+        "which lever cannot fix it",
+        DECLINED,
+        "its `criterion` binds the turn it is delivered into, so it is the lever while the\n"
+        "   dispatch is live and not one that survives it",
+    ),
     Claim("which ones can", DECLINED, "a `cancel` plus a `requeue` carrying an `amend`"),
     Claim("and what to do about it", DECLINED, "answer it before the judge does"),
 )

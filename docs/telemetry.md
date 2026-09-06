@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.21.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.22.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -238,9 +238,15 @@ served them.
    --adopt` is the way back from the two that mean nothing is driving the run
    (`DRIVER DEAD` and `PARKED`). The **observer** verdict is separate and prints
    beside it: `OBSERVER DEAD` when the launch named an observer graph whose run has
-   ended, `NO OBSERVER` when it named none, and nothing at all while it is
+   ended, `OBSERVER NOT RESTARTED` when it named one, that graph run is over, and the
+   driver has stopped starting another, `NO OBSERVER` when it named none,
+   and nothing at all while it is
    watching. A run can read `ACTIVE  OBSERVER DEAD` — driving fine, unwatched — and
-   that is a different fix from a dead driver.
+   that is a different fix from a dead driver. **The first two are not the same
+   state.** `OBSERVER DEAD` is the window between an observer's graph run ending and
+   the driver starting another, so it may clear on its own; `OBSERVER NOT RESTARTED`
+   is the driver having given up, with the record saying why, and nothing is going to
+   watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
    **`onepipeline-api` 0.7.2**, the release `config/onepipeline-ui.version` pins —

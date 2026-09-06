@@ -32,7 +32,10 @@
 # That was measured on a live run under onepipeline 0.8.x: a re-ask returned
 # `{"version":1,"author":"monitor","commands":[{"op":"context",...}]}` — a live graph
 # edit the monitor addressed to the engine, delivered here because this call happened
-# to be the next reader. The adopted release routes a reply by the halves it carries,
+# to be the next reader. That op no longer exists; the engine collapsed it into `note`
+# and removed it from the envelope, and the envelope it would arrive in today carries
+# `note` instead. The shape is quoted as it was measured, because what this paragraph
+# records is the routing rather than the op. The adopted release routes a reply by the halves it carries,
 # so that envelope now stays on the command path and never reaches this rendezvous;
 # `tests/ask_seam/test_ask_manager_e2e.py` measures that from the reply verb's own answer.
 # Both checks below are kept anyway, and are what an agent has left if a release
@@ -70,6 +73,13 @@
 # killed while waiting leaves its manager's answer with nobody to claim it; the next ask
 # draws that stale ruling and queues a second blocking copy; the manager answers both,
 # and the copy nobody claimed is the stale ruling the ask after it draws.
+#
+# **A re-arm is a new listener, so the question survives one only while the sessions
+# share a name.** The engine gives a session what an earlier one left outstanding only
+# when both carry the same non-blank `ONEPIPELINE_CHANNEL_ASKER`; a session naming none
+# is given nothing back. An inherited name therefore wins — the asker is the *dispatch*
+# — and with nothing inherited this wrapper names itself from the token it minted,
+# which is already constant across this invocation's re-arms.
 #
 # **The reply window is set here rather than by the caller.** `serve`'s own default is
 # ~30 seconds (29.8s measured), which is a supervisor's cadence and not a manager's:
@@ -159,6 +169,16 @@ TOKEN_PATTERN="${ASK_MANAGER_TOKEN_PREFIX}[0-9a-f]{24}(?![0-9a-f])"
 #: cannot drift from the minting; `tests/test_planner_seam_contracts.py` holds
 #: `TOKEN_PATTERN`'s own digit count to that same source.
 TOKEN_SHAPE="^[0-9a-f]{$((TOKEN_BYTES * 2))}\$"
+
+#: The variable a `channel serve` session names its asker in. Two sessions carrying the
+#: same value are one asker; one carrying none adopts nothing and nothing adopts what it
+#: raised. `onepipeline`'s `channel::ASKER_ENV` is the declaration.
+ASKER_ENV="ONEPIPELINE_CHANNEL_ASKER"
+
+#: What this wrapper calls itself when nothing else named its asker, joined to the token
+#: below. Prefixed rather than bare so an asker minted here is legible as this wrapper's
+#: in a queue that also holds the engine's own.
+ASKER_PREFIX="ask-manager-"
 
 # Builds both lines `channel serve` reads, in one call: the blocking question on
 # stdin, then the non-blocking re-arm note from `argv[1]`. Compact separators are
@@ -355,6 +375,14 @@ minted=$(od -An -N"$TOKEN_BYTES" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') ||
     "the correlation token minted here is '$minted', which is not the $((TOKEN_BYTES * 2)) lowercase hex digits a reply is matched against" \
     "check that the 'od' and 'tr' first on this PATH behave as coreutils' do, then ask again"
 token="$ASK_MANAGER_TOKEN_PREFIX$minted"
+
+# Exported rather than set on the `serve` command below: an assignment prefix takes a
+# literal name, so writing it out there would be a second source for one variable.
+asker="${!ASKER_ENV-}"
+if [ -z "${asker//[[:space:]]/}" ]; then
+    asker="$ASKER_PREFIX$minted"
+fi
+export "$ASKER_ENV=$asker"
 
 # The protocol leads and the question follows, which is deliberate and is the half of
 # this surface a truncating reader must keep. Appended after the body it was the first

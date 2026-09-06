@@ -192,19 +192,19 @@ GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
 REVIEW_SIDE = "\nuser:\n"
 
 #: The monitor's edit allowlist and the pacemaker's prohibition on issuing an edit at
-#: all, asserted from the same effective prompts. The allowlist moved with the adopted
-#: engine — `finding` joined it — so what is held here is that the six the engine
-#: really accepts are the six the model is offered, and that the four it refuses are
-#: still named as refusals.
+#: all, asserted from the same effective prompts. The allowlist moves with the adopted
+#: engine — `finding` joined it, and the weaker manager-note op left it when the engine
+#: collapsed that op into `note` and kept `note` off the list — so what is held here is
+#: that the five the engine really accepts are the five the model is offered, and that
+#: what it refuses is still named as refusals.
 MONITOR_ALLOWLISTED_OPS = (
-    "`context`",
     "`retry`",
     "`cancel`",
     "`requeue`",
     "`add`",
     "`finding`",
 )
-MONITOR_ALLOWLIST_CLAUSE = "You may issue exactly these six ops"
+MONITOR_ALLOWLIST_CLAUSE = "You may issue exactly these five ops"
 PACEMAKER_EDIT_PROHIBITION = "Never send `onepipeline reply`"
 
 
