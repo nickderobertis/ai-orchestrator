@@ -77,6 +77,17 @@
         "check": "tree-verdict"
       }
     },
+    "github.com/nickderobertis/github-graphql-node-count": {
+      "branch": "main",
+      "checks": {
+        "check": "tree-verdict",
+        "commitlint": "pull-request",
+        "deps": "network-advisory",
+        "install": "published-artifact",
+        "llmlint": "tree-verdict",
+        "msrv": "judged-remotely"
+      }
+    },
     "github.com/nickderobertis/llmlint": {
       "branch": "main",
       "note": "Runs an llmlint job on every pull request but has never required it, so it is not a check that can refuse the merge and is not inventoried here.",

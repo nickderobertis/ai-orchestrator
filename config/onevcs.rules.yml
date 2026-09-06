@@ -100,6 +100,10 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: github-graphql-node-count}
+    publication: change-auto
+    approvals: none
+
   # Its base branch is `master`, which is why `config/merge-path-checks.json`
   # records that branch for it: the required checks an audit reports are the ones
   # declared on the branch a change here actually merges into.
