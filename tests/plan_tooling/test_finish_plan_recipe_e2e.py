@@ -715,6 +715,15 @@ def test_the_opt_out_copies_nothing_and_reports_no_location(
 
     assert stopped.returncode == OK, f"{stopped.stdout}{stopped.stderr}"
     assert "nothing was copied" in stopped.stderr, stopped.stderr
+    # And it says it reviewed nothing, which is what it did: the review a `just plan`
+    # leaves behind is that launch's own closeout, and this command run on its own with
+    # the opt-out reaches no step at all. A caller reading this as "reviewed and stopped"
+    # would take a plan nothing has read to be cleared.
+    assert "no plan was reviewed or checked" in stopped.stderr, stopped.stderr
+    (task,) = plan_store.read_tasks(drafted.qualified)
+    assert plan_review.RECORD_KEY not in task.metadata, (
+        "the opt-out spent a judged review turn on a plan it then did nothing with"
+    )
     assert not (bench.runs / f"{named}{DESIGN_RUN_SUFFIX}").exists(), stopped.stderr
     assert _records(bench.destination) == [], "the opt-out still reached the destination"
     assert "holds the plan at" not in stopped.stdout, stopped.stdout

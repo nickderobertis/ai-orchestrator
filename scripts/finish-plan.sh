@@ -283,8 +283,9 @@ if [ "$PLAN_OPT_DESIGN_DOC" -eq 0 ]; then
     # on the destination with nothing for a person to approve it as can never be
     # approved, and a plan that cannot be approved is one no launch will start. So there
     # is nothing to copy and nothing to report, and saying so is the whole of what this
-    # ending owes a caller.
-    echo "finish-plan: --no-design-doc, so the flow stops after the plan and its review: no design document was launched, nothing was copied into a destination, and there is no location to report" >&2
+    # ending owes a caller — including that it reviewed nothing, because a caller who read
+    # this as "reviewed and stopped" would take a plan nothing has read to be cleared.
+    echo "finish-plan: --no-design-doc, so this did nothing: no plan was reviewed or checked, no design document was launched, nothing was copied into a destination, and there is no location to report" >&2
     exit 0
 fi
 

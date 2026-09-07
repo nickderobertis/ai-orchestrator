@@ -1057,6 +1057,15 @@ REFUSALS = (
         ("--direct", "--repo", "elsewhere"),
         "a node carries both or neither",
     ),
+    # A destination for a flow that stops before there is anything to copy. Refused
+    # rather than ignored, because the two readings of it are opposite: one caller means
+    # "finish this plan into that source" and the other means "launch the planner alone",
+    # and silently taking the second discards a destination somebody typed.
+    Refusal(
+        "a destination and no document to copy",
+        ("--to", "elsewhere", "--no-design-doc"),
+        "--to names the destination the tail copies this plan into",
+    ),
 )
 
 
@@ -1156,6 +1165,57 @@ def test_a_brief_filename_is_sanitized_into_the_run_id_the_engine_would_mint(
     finally:
         _just("stop", "cursor-shape", environment=environment, seconds=60)
         _remove_project("cursor-shape")
+
+
+#: The run the handover journey below launches under, kept apart from every other launch
+#: in this module so the plan it writes is unambiguously its own.
+DETACHED_RUN = RunId("plan-recipe-detached")
+
+
+def test_a_detached_launch_hands_the_rest_of_the_flow_back_on_its_own_receipt(
+    tmp_path: Path,
+) -> None:
+    """`--detach` hands back before the plan exists, so the tail is the operator's to run.
+
+    Every step after the planner is about the plan the planner writes, and a detached
+    launch returns the moment the run is recorded — so running them here would review a
+    project nothing has authored. What this owes instead is the command that finishes the
+    plan once the planner has settled, and it owes it **on the one receipt it already
+    prints**: a second success line is noise the next reader learns to skip, and this one
+    is known before the launch is even made.
+
+    The placement is in that command rather than left to its defaults, because a caller
+    who re-ran it bare would finish the plan against a different pair of checkouts than
+    the one that planned it.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    environment = _environment(tmp_path)
+
+    launch = _just("plan", str(brief), "--name", DETACHED_RUN, "--detach", environment=environment)
+    try:
+        assert launch.returncode == 0, f"the detached launch failed:\n{launch.stderr}"
+        reported = launch.stdout + launch.stderr
+        assert f"just finish-plan {brief}" in reported, (
+            f"a detached launch never said how to finish the plan it started:\n{reported}"
+        )
+        assert f"--name {DETACHED_RUN}" in reported, (
+            f"the handover drops the name this flow's runs are derived from:\n{reported}"
+        )
+        assert f"--repo {PUBLICATION_ALIAS} --execution-checkout {EXECUTION_ALIAS}" in reported, (
+            f"the handover drops the placement this launch resolved:\n{reported}"
+        )
+        # One line, and this is it: the handover rides on the receipt the recipe already
+        # owns rather than being printed after the launch.
+        owned = [line for line in reported.splitlines() if line.startswith("plan: ")]
+        assert len(owned) == 1, (
+            f"a successful launch printed {len(owned)} of its own lines: {owned}"
+        )
+    finally:
+        _just("stop", DETACHED_RUN, environment=environment, seconds=60)
+        _remove_project(DETACHED_RUN)
 
 
 @pytest.mark.parametrize(

@@ -105,10 +105,12 @@ judge is the repair loop and it has already run — so a refusal hands every ref
 criterion back and stops.
 
 `--to` names the destination and defaults to `plans`; `--no-design-doc` stops the flow
-after the planner and its review, copying nothing and reporting no location, because a
-plan on the board with no document can never be approved and so can never be launched. A
-`--detach`ed `just plan` hands back before the plan exists, so it keeps the planner alone
-and prints the `just finish-plan` command that finishes it.
+after the planner, copying nothing and reporting no location, because a plan on the board
+with no document can never be approved and so can never be launched — the review a plan
+still gets under it is `just plan`'s own closeout, and `just finish-plan --no-design-doc`
+reaches no step at all and says so. A `--detach`ed `just plan` hands back before the plan
+exists, so it keeps the planner alone and its one receipt line carries the `just
+finish-plan` command that finishes it.
 
 **That order is forced rather than preferred, and the reason is where a review record
 lives.** A record is one entry of the task's *own Markdown document*, so

@@ -2683,8 +2683,10 @@ repository and the qualified project id the plan must create — made enforceabl
 than remembered, and it is refused where a brief missing a required section is, before the
 planner is dispatched rather than an hour later. Nothing else in a brief is parsed.
 `--no-design-doc` is the opt-out and it drops the requirement with the tail: it stops
-after the planner and its review, copying nothing and reporting no location, because a
-plan on the board with no document can never be approved and so can never be launched.
+after the planner, copying nothing and reporting no location, because a plan on the board
+with no document can never be approved and so can never be launched. The review such a
+plan still gets is `just plan`'s own closeout; `just finish-plan --no-design-doc` reaches
+no step at all, and says so rather than letting a caller read it as a plan it cleared.
 `--to` names the destination and defaults to the `plans` board; a `--detach`ed launch
 hands back before the plan exists, so it keeps the planner alone and prints the `just
 finish-plan` command that finishes it.
