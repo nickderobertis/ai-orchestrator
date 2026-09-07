@@ -262,6 +262,13 @@
       "note": "A local-direct identity opens no change request, so its merge path declares no required checks at all. Verification must instead come from an executable `pre-push` hook, but this repository has none today, so the coverage audit truthfully reports no merge-path coverage.",
       "checks": {}
     },
+    "github.com/nickderobertis/vibe-stl": {
+      "branch": "main",
+      "checks": {
+        "design review (printability)": "tree-verdict",
+        "just check": "tree-verdict"
+      }
+    },
     "github.com/petsinc/cd-chat-tool-call-challenge": {
       "branch": "main",
       "note": "Its base branch declares no protection and no ruleset, so nothing GitHub runs can refuse a merge here. What is left is this identity's publication policy: `change-open` opens an ordinary ready-for-review change request and `approvals: required` keeps a reviewer in the path, so the approval is the whole of what can refuse a change.",

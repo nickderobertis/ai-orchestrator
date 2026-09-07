@@ -159,6 +159,10 @@ rules:
     publication: local-direct
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: vibe-stl}
+    publication: change-auto
+    approvals: none
+
   # The team repositories on this host, every one of them owned by `petsinc`.
   # `change-open` leaves an ordinary ready-for-review pull request and
   # `approvals: required` is what keeps somebody else in the path; re-registering one
