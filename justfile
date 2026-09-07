@@ -362,10 +362,10 @@ channel-next *args:
 #
 # The verb's one-line answer therefore comes back carrying `halves` — whether the
 # staged envelope held a verdict, and how many edits rode with it — beside `notes`,
-# the disposition the engine recorded for each one. The engine answers a single
-# `state` word for the whole envelope, so one carrying both halves reports `applied`
-# and says nothing about the verdict; `halves` is what this recipe can prove from the
-# bytes it staged, and it names what was sent rather than claiming what landed.
+# the disposition the engine recorded for each one. The engine's own `state` is still
+# one word for the whole envelope, and the adopted release adds a key per carried half
+# beside it saying what that half then did; `halves` answers the other question, from
+# the bytes this recipe staged, and it names what was sent rather than what landed.
 # llmlint: ignore[tool_output_is_signal] channel-reply validates the reply and names transport/rendezvous failures so the planner can reattach and retry.
 channel-reply *args:
     @./scripts/channel-reply.sh "$@"

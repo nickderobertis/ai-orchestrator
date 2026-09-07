@@ -101,14 +101,14 @@ sys.exit(0)
 # reply that carried no note.
 #
 # **`halves` is what this envelope carried, and it is read off the staged bytes alone.**
-# The engine answers one `state` word for the whole envelope, and an envelope may carry a
-# verdict, edits, or both — so that word describes one half at most, and a manager who
-# sent both is told `applied` and cannot tell whether their ruling was queued beside the
-# edits or went nowhere. What this recipe can prove on its own is what it staged, so that
-# is what it reports: `verdict` says a verdict half was there, and `edits` counts the
-# commands beside it. It is deliberately not a second implementation of what the engine
-# records — nothing here claims either half *landed*, only that the envelope carried it,
-# and the day the engine answers per half that receipt is the engine's to give.
+# The engine's own `state` is one word for the whole envelope, and an envelope may carry a
+# verdict, edits, or both — so that word describes one half at most. The adopted release
+# adds a key per carried half beside it, saying what that half then did, which is the
+# receipt this recipe always said was the engine's to give. What this one reports is the
+# other question and is unchanged: `verdict` says a verdict half was there, and `edits`
+# counts the commands beside it, off the bytes staged here. It is deliberately not a
+# second implementation of what the engine records — nothing here claims either half
+# *landed*, only that the envelope carried it.
 #
 # **Presence rather than truth for the verdict half.** `completion: false` is a
 # non-completion, which this channel routes exactly as it routes a completion — it is the
