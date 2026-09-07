@@ -238,6 +238,21 @@ fail() {
     exit "$UNRUNNABLE"
 }
 
+# Run one of this repository's own recipes, from wherever this script was invoked.
+#
+# Through `just` rather than through the command each recipe wraps, because the recipe is
+# where that step is defined: `just copy-plan` heals this checkout's plan-store CLI before
+# it copies, and a caller that reached past it to the copy alone would be a second
+# definition of what copying a plan does — which agrees on the day it is written and
+# stops agreeing the first time either moves.
+#
+# The justfile and the working directory are named rather than discovered, because `just`
+# finds a justfile by walking up from the *caller's* directory and this script is run from
+# wherever an operator happened to be.
+recipe() {
+    just --justfile "$script_dir/../justfile" --working-directory "$script_dir/.." "$@"
+}
+
 usage() {
     echo "usage: just finish-plan <brief.md> [--to SOURCE] [--name NAME] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
 }
@@ -315,7 +330,9 @@ fi
 # The store CLI this checkout pins, healed into its own `.venv/bin` before anything asks
 # the store a question: session setup runs on a `SessionStart` hook that a fresh worktree
 # and a publication clone never fire, so a run there resolves whatever copy another
-# checkout left on `PATH`, or nothing at all.
+# checkout left on `PATH`, or nothing at all. It is here for the steps that read the store
+# and heal nothing themselves — the review and the check; `just copy-plan` performs its
+# own, which is why this is not that one repeated.
 "$script_dir/onetaskgraph-install.sh" || fail "this checkout's plan store CLI could not be provisioned" \
     "the diagnostic above names the failing step, and 'just session-setup' performs the same install"
 
@@ -324,7 +341,7 @@ fi
 # every refused criterion, which this flow ends on rather than repairing — the planner's
 # own judge is the repair loop and it has already run.
 review_status=0
-"$script_dir/review-plan.sh" "$plan_project" || review_status=$?
+recipe review-plan "$plan_project" || review_status=$?
 if [ "$review_status" -ne 0 ]; then
     if [ "$review_status" -eq 1 ]; then
         echo "finish-plan: the review above refused $plan_project, so no design document was launched and nothing was copied; correct every criterion it named in the plan's own task record, then run 'just finish-plan $brief' again" >&2
@@ -337,7 +354,7 @@ fi
 # 2. The plan its own launch will read, refused here rather than after a document
 # dispatch has been paid for.
 check_status=0
-uv run orchestrator-check-plan "$plan_project" || check_status=$?
+recipe check-plan "$plan_project" || check_status=$?
 if [ "$check_status" -ne 0 ]; then
     if [ "$check_status" -eq 1 ]; then
         echo "finish-plan: the check above refused $plan_project, so no design document was launched and nothing was copied; a plan that would not launch is not one to write a document about — correct each node the check named in the plan's own task record, read it back with 'just check-plan $plan_project', and run this command again" >&2
@@ -351,6 +368,7 @@ fi
 # a caller's `--dag-graph` — either spelling, and including their own `off` — reaches
 # `onepipeline start` as they typed it, and this adds one only when they named neither.
 observer=("$DAG_GRAPH_FLAG" "$DEFAULT_DAG_GRAPH")
+# llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the idiom for expanding a possibly-empty array under `set -u`, and only its `+` alternate-value part is unquoted — the value it expands to is `"${a[@]}"`, so every element stays one argument. Measured: an array of `one two`, `*` and the empty string expands to exactly those three arguments, and an empty array expands to none. shellcheck, which this repository's `lint` target runs over every script, accepts it.
 for argument in ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"}; do
     case "$argument" in
         "$DAG_GRAPH_FLAG" | "$DAG_GRAPH_FLAG"=*)
@@ -414,7 +432,7 @@ echo "finish-plan: launching run $design_run to write the design document for $p
 # directly, because that is where this launch's identity is established: a run launched
 # without it records `unknown`, and `just runs --mine` and `just stop` then disown it.
 launch_status=0
-# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; and this is an attached launch, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are its own.
+# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is an attached launch, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are its own; and the two array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
 "$script_dir/onepipeline.sh" start "$PLAN_SOURCE:$design_run" \
     ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} || launch_status=$?
 if [ "$launch_status" -ne 0 ]; then
@@ -425,7 +443,7 @@ fi
 # 4. The copy, which is the step the whole ordering above exists to make safe: what lands
 # on the destination is a plan something reviewed and a document written from it.
 copy_status=0
-uv run orchestrator-copy-plan "$plan_project" --to "$destination" || copy_status=$?
+recipe copy-plan "$plan_project" --to "$destination" || copy_status=$?
 if [ "$copy_status" -ne 0 ]; then
     if [ "$copy_status" -eq 3 ]; then
         echo "finish-plan: '$destination' refused the copy of $plan_project, and reported why above; the plan and its document are unchanged where they were drafted, and running this command again resumes a copy that partly landed" >&2

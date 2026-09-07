@@ -34,20 +34,31 @@ TAIL = REPO_ROOT / "scripts" / "finish-plan.sh"
 #: accepted by one entry point and refused by the other is the same drift one step earlier.
 GRAMMAR = REPO_ROOT / "scripts" / "plan-brief.sh"
 
-#: The commands each step of the tail runs, named as the launcher would have to name them.
-#: A step is *implemented* by whoever spawns its command, so these are what says which file
-#: a step lives in — and a `just plan` naming any of them would be a second copy of that
-#: step reachable from an entry point that is supposed to delegate.
+#: The steps of the tail, named as the launcher would have to name them to run one. Three
+#: are this repository's own recipes and the fourth is the command behind the one step no
+#: recipe wraps, which is where each is *implemented* — so a `just plan` naming any of them
+#: would be a second copy of that step, reachable only from one of the two entry points.
 TAIL_STEPS = (
-    "review-plan.sh",
-    "orchestrator-check-plan",
-    "orchestrator-copy-plan",
+    "review-plan",
+    "check-plan",
+    "copy-plan",
     "orchestrator-plan-locations",
 )
 
 
-def _source(script: Path) -> str:
-    return script.read_text(encoding="utf-8")
+def _commands(script: Path) -> str:
+    """``script`` with its comment lines dropped, so this reads what it runs.
+
+    Both launchers explain the flow at length in prose, and every step of the tail is
+    named in `scripts/plan.sh`'s own header — as an account of what happens after it hands
+    over, which is exactly what a reader of that file needs. Reading the prose as an
+    implementation would make this gate refuse the documentation it wants.
+    """
+    return "\n".join(
+        line
+        for line in script.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 def test_the_planner_launcher_implements_no_step_of_the_tail() -> None:
@@ -59,7 +70,7 @@ def test_the_planner_launcher_implements_no_step_of_the_tail() -> None:
     moved — and which of the two an operator met would depend on whether they had typed
     `just plan` or `just finish-plan`.
     """
-    launcher = _source(PLANNER)
+    launcher = _commands(PLANNER)
     named = [step for step in TAIL_STEPS if step in launcher]
     assert not named, (
         f"{PLANNER.name} names {named}, which are steps {TAIL.name} implements; a launcher "
@@ -70,7 +81,7 @@ def test_the_planner_launcher_implements_no_step_of_the_tail() -> None:
 
 def test_the_planner_launcher_reaches_the_tail_by_running_it() -> None:
     """The handover is a call to the one implementation rather than a repetition of it."""
-    assert TAIL.name in _source(PLANNER), (
+    assert TAIL.name in _commands(PLANNER), (
         f"{PLANNER.name} never runs {TAIL.name}, so a `just plan` stops at the planner and "
         f"the rest of the flow is nobody's"
     )
@@ -83,7 +94,7 @@ def test_every_step_of_the_tail_is_implemented_in_the_tail() -> None:
     nothing unless something does, and a step that had moved out of both files would pass
     that test while the flow no longer performed it at all.
     """
-    tail = _source(TAIL)
+    tail = _commands(TAIL)
     missing = [step for step in TAIL_STEPS if step not in tail]
     assert not missing, (
         f"{TAIL.name} names none of {missing}, so those steps of the flow are implemented "
@@ -100,7 +111,7 @@ def test_both_entry_points_read_a_brief_through_the_one_grammar() -> None:
     sourced helper for that reason, and this is what says both still source it.
     """
     for launcher in (PLANNER, TAIL):
-        source = _source(launcher)
+        source = _commands(launcher)
         assert GRAMMAR.name in source, (
             f"{launcher.name} does not source {GRAMMAR.name}, so it reads a brief and its "
             f"options by a grammar of its own"

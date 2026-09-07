@@ -294,6 +294,7 @@ name=$(plan_run_name plan "$PLAN_OPT_NAME" "$brief") || exit 2
 # the tail can run at all.
 observer=("$DAG_GRAPH_FLAG" "$DEFAULT_DAG_GRAPH")
 detached=0
+# llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the idiom for expanding a possibly-empty array under `set -u`, and only its `+` alternate-value part is unquoted — the value it expands to is `"${a[@]}"`, so every element stays one argument. Measured: an array of `one two`, `*` and the empty string expands to exactly those three arguments, and an empty array expands to none. shellcheck, which this repository's `lint` target runs over every script, accepts it.
 for argument in ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"}; do
     case "$argument" in
         "$DAG_GRAPH_FLAG" | "$DAG_GRAPH_FLAG"=*) observer=() ;;
@@ -454,7 +455,7 @@ trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could no
 # an unsettled one recording nothing — in tests/e2e/test_plan_review_e2e.py.
 status=0
 # One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
-# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; and this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the one line this script owns, the plan it wrote and the command that answers the planner, is printed above.
+# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the one line this script owns, the plan it wrote and the command that answers the planner, is printed above; and the two array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
 "$script_dir/onepipeline.sh" start "$project" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} || status=$?
 if [ "$status" -eq 0 ]; then
     # llmlint: ignore[changed_behavior_has_e2e] The one ending left is a settled run whose closeout then fails outright, which now takes an unreadable snapshot or an unreadable review bar rather than any plan on disk; a project it cannot record is passed over instead, which `tests/test_plan_review.py` drives.
