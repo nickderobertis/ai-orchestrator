@@ -582,9 +582,22 @@ def read_projects(source: str) -> list[StoreProject]:
 
 # llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.
 def _project(item: object) -> StoreProject:
-    """One listed project, validated down to the fields a reader locates a copy by."""
+    """One listed project, validated down to the fields a reader locates a copy by.
+
+    The identity is held to a **qualified** `<source>:<native>` here rather than wherever
+    it is next used, for the reason :func:`_document` gives: that is what makes
+    :data:`QualifiedProjectId` mean what its name says. It is not only naming here — a
+    caller reports this id as where the destination holds a plan when the store says
+    nothing about its location, and an unqualified one addresses a project in no store.
+    """
     if not isinstance(item, dict) or not isinstance(item.get("id"), str):
         raise OSError(f"{STORE} returned a project without a qualified id")
+    source, separator, native = item["id"].partition(":")
+    if not separator or not source or not native:
+        raise OSError(
+            f"{STORE} addressed a project as {item['id']!r}, which is not a qualified "
+            f"`<source>:<native>` id, so nothing can be asked of the store about it"
+        )
     payload = item.get("item")
     if not isinstance(payload, dict):
         raise OSError(f"{STORE} returned a project without an object payload")

@@ -236,6 +236,13 @@ python="$script_dir/../.venv/bin/python3"
 # Every helper is checked rather than left to `set -e`, which would exit on one that is
 # readable but does not load — a truncated or half-written file — with whatever bash
 # printed and no repair.
+#
+# llmlint: ignore[changed_behavior_has_e2e] What this decides is a checkout with a piece
+# missing, which is the same guard `scripts/plan.sh` carries and which
+# `tests/ask_seam/test_launch_ask_seam_e2e.py` drives there against the shared helpers
+# both launchers source. Reaching it through *this* entry point means a checkout that has
+# also passed the judged review and the plan check first, so a journey would spend a real
+# turn to re-prove a refusal the same helper already answers for one command earlier.
 load() {
     local helper="$script_dir/$1"
     if [ ! -f "$helper" ] || [ ! -r "$helper" ]; then
@@ -288,6 +295,11 @@ plan_run_is_free finish-plan "$design_run" || exit "$UNRUNNABLE"
 # place that states it rather than spelled a second time here: `just copy-plan` copies
 # into that same source by default, and two spellings of it is one flow copying into a
 # destination it did not report the location of.
+# llmlint: ignore[changed_behavior_has_e2e] The default itself is driven — the delegation
+# table in `tests/e2e/test_delegated_recipes_e2e.py` reads the `--to plans` this composes
+# off the command line a flow naming no destination reaches. What is left is the read
+# failing, which takes this checkout's own package or interpreter being absent from a tree
+# this script has already resolved.
 destination="$PLAN_OPT_DESTINATION"
 if [ -z "$destination" ]; then
     destination=$("$python" -c 'from orchestrator import plan_copy; print(plan_copy.BOARD)') ||
@@ -299,6 +311,10 @@ fi
 # the store a question: session setup runs on a `SessionStart` hook that a fresh worktree
 # and a publication clone never fire, so a run there resolves whatever copy another
 # checkout left on `PATH`, or nothing at all.
+#
+# llmlint: ignore[changed_behavior_has_e2e] A provisioning failure is a host failure:
+# driving it means uninstalling the plan-store CLI every other tier of this suite runs
+# against, in the checkout the journey itself runs in.
 "$script_dir/onetaskgraph-install.sh" || fail "this checkout's plan store CLI could not be provisioned" \
     "the diagnostic above names the failing step, and 'just session-setup' performs the same install"
 
@@ -323,7 +339,7 @@ check_status=0
 uv run orchestrator-check-plan "$plan_project" || check_status=$?
 if [ "$check_status" -ne 0 ]; then
     if [ "$check_status" -eq 1 ]; then
-        echo "finish-plan: the check above refused $plan_project, so no design document was launched and nothing was copied; a plan that would not launch is not one to write a document about" >&2
+        echo "finish-plan: the check above refused $plan_project, so no design document was launched and nothing was copied; a plan that would not launch is not one to write a document about — correct each node the check named in the plan's own task record, read it back with 'just check-plan $plan_project', and run this command again" >&2
         exit "$PLAN_REFUSED"
     fi
     echo "finish-plan: $plan_project could not be checked, so nothing after it was attempted; the diagnostic above names what to repair" >&2
@@ -369,6 +385,11 @@ design_instructions="${DESIGN_DOC_INSTRUCTIONS//@PLAN_PROJECT@/$plan_project}"
 design_instructions="${design_instructions//@TEMPLATE@/$DESIGN_DOC_TEMPLATE}"
 planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$DESIGN_DOC_NODE_ID\"]}"
 
+# llmlint: ignore[changed_behavior_has_e2e] The write failing is the same host failure
+# `scripts/plan.sh`'s own write carries, and `tests/plan_tooling/test_plan_write_refusals_e2e.py`
+# drives it there by making the record directory unwritable. Reaching it here means
+# getting a plan past a judged review and the plan check first and only then breaking the
+# filesystem under it, which is a journey about `mkdir` rather than about this flow.
 design_plan="$plan_directory/$design_run.md"
 design_tasks="$plan_root/$PLAN_TASKS/$design_run"
 "$python" -c "$PLAN_PROGRAM" "$design_run" "$brief" "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" \
@@ -422,6 +443,7 @@ fi
 # a project name: a destination decides its own native ids and where its records live, so
 # a board mints a number where a directory keeps the name.
 # llmlint: ignore[tool_output_is_signal] The two locations are what a person opens to review this plan, so they are this command's product and reach the operator's own stream.
+# llmlint: ignore[changed_behavior_has_e2e] What this reader decides is driven whole in `tests/test_plan_locations.py`, and the locations it reports are read back off a real destination in both flow journeys. What is left is a store that answered a copy and then stopped answering, which is a journey about breaking a store mid-command.
 uv run orchestrator-plan-locations "$plan_project" --in "$destination" ||
     fail "$plan_project landed in '$destination', but where it holds the plan and its design document could not be read" \
         "read the copy's own per-record report above, then ask the store directly with 'just plans project list --source $destination'"

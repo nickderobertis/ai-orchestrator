@@ -389,6 +389,15 @@ if [ -n "$PLAN_OPT_REPO" ]; then
 else
     placement="--direct dispatches it into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
 fi
+# What a detached launch owes beside the receipt, folded into that one line rather than
+# printed after the launch: `--detach` hands back before the plan exists, so the tail
+# cannot run and the operator has to run it themselves once the planner has settled. It is
+# known here, before anything is launched, and a second success line is noise the next
+# reader learns to skip.
+handover=""
+if [ "$detached" -eq 1 ] && [ "${#tail_arguments[@]}" -ne 0 ]; then
+    handover="; $DETACH_FLAG hands back before the planner has written anything, so once run $name has settled, finish the plan with: just finish-plan $brief ${tail_arguments[*]}"
+fi
 project="$PLAN_SOURCE:$name"
 # Named relative to the directory this launch was made from when the plan is under it,
 # which for an ordinary `just plan` is this checkout and the line a manager already
@@ -399,7 +408,7 @@ case "$plan" in
     "$PWD"/*) written=${plan#"$PWD"/} ;;
     *) written=$plan ;;
 esac
-echo "plan: wrote $project at $written; $placement; answer this planner's questions with: just channel-next $name" >&2
+echo "plan: wrote $project at $written; $placement; answer this planner's questions with: just channel-next $name$handover" >&2
 
 # The snapshot `record_projects_new_since` is taken against; its docstring says what
 # the window does and does not cover. Placed after the brief project is written, and
@@ -460,8 +469,13 @@ fi
 # the plan the planner wrote: reviewing a project nothing has written, or writing a
 # document about one, is not a cheaper version of this — it is a refusal an hour after
 # the manager stopped watching.
-if [ "$detached" -eq 1 ]; then
-    echo "plan: $DETACH_FLAG, so this hands back before the planner has written anything and the rest of the flow is yours to run; once run $name has settled, finish it with: just finish-plan $brief ${tail_arguments[*]}" >&2
-    exit 0
-fi
+# A detached launch has already been told how to finish the plan, on the one receipt line
+# above: the tail is about the plan the planner writes, and this hands back before there
+# is one.
+[ "$detached" -eq 0 ] || exit 0
+# The tail's own lines are its product rather than a second success report of this one:
+# it is a second launch, and the run id it prints is the only place that run's channel is
+# named — a supervisor holding this output has to be able to reach both. The two locations
+# it ends with are what a person opens to review the plan.
+# llmlint: ignore[tool_output_is_signal] see the note above this line
 exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"

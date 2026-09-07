@@ -116,6 +116,7 @@ OK = 0
 REVIEW_REFUSED = 1
 UNRUNNABLE = 2
 PLAN_REFUSED = 3
+LAUNCH_FAILED = 4
 COPY_REFUSED = 5
 
 #: Criteria that answer every demand the tracked appendix and the shipped `engineer` bar
@@ -814,4 +815,102 @@ def test_a_tail_run_id_something_has_already_taken_is_refused_before_anything_is
     (task,) = plan_store.read_tasks(drafted.qualified)
     assert plan_review.RECORD_KEY not in task.metadata, (
         "a flow refused for a taken run id had already spent a judged review turn"
+    )
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_a_plan_the_review_could_not_read_at_all_is_not_a_refused_review(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """Nothing was judged, so this is not the status that means a reviewer refused it.
+
+    A brief naming a plan in a source this host does not have is the ordinary way to reach
+    it — a typo in the one line of a brief anything parses. The review answers that it
+    could not read the project, and folding that into the refusal beside it would send an
+    operator to correct criteria no reviewer ever read.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    named = RunId("finish-plan-e2e-unreadable-plan")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(
+        "## What\nDecide the cursor's shape.\n\n"
+        "Plan project: no-such-source:cursor-shape\n\n"
+        "## Why\nThe view cannot deep-link until it is settled.\n\n"
+        "## Acceptance criteria\n- The cursor's shape and its type are stated.\n",
+        encoding="utf-8",
+    )
+
+    refused = _just(
+        "finish-plan",
+        str(brief),
+        "--name",
+        named,
+        "--to",
+        DESTINATION,
+        environment=bench.environment,
+        seconds=180,
+    )
+
+    assert refused.returncode == UNRUNNABLE, (
+        f"a plan the review could not read exited {refused.returncode}:\n"
+        f"{refused.stdout}{refused.stderr}"
+    )
+    assert "could not be reviewed" in refused.stderr, refused.stderr
+    assert not (bench.runs / f"{named}{DESIGN_RUN_SUFFIX}").exists(), refused.stderr
+    assert _records(bench.destination) == [], "a flow that judged nothing reached the destination"
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_a_design_document_launch_that_does_not_settle_ends_the_flow_at_its_own_status(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The document was not written, so nothing is copied and the status says which step.
+
+    Reached the way an operator reaches it: a plan store whose configured sources do not
+    include the one this flow writes its own generated project into, so the engine reads
+    that project and finds no node in it. The plan and its document are unchanged where
+    they were drafted, the destination is untouched, and the message names the run to read
+    and says to run the command again once the document exists — because everything before
+    this step is already recorded and repeating it costs no second judged turn.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    # The source `scripts/finish-plan.sh` writes its own one-node project into, dropped
+    # from what the store answers about: the record is written, and the launch then reads
+    # a project with nothing in it.
+    bench.environment["ONETASKGRAPH_DEFAULT_SOURCES"] = f"{FIXTURE_SOURCE},{DESTINATION}"
+    drafted = _draft("finish-plan-unlaunchable-document")
+    named = RunId("finish-plan-e2e-launch-failed")
+
+    try:
+        refused = _just(
+            "finish-plan",
+            str(_brief(tmp_path, drafted)),
+            "--name",
+            named,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+    finally:
+        # The flow wrote its own generated project into this checkout's plan-authoring
+        # root before the launch refused it, so it is taken back here rather than left
+        # for the next launch of that name to read.
+        _stop(bench, f"{named}{DESIGN_RUN_SUFFIX}")
+
+    assert refused.returncode == LAUNCH_FAILED, (
+        f"a design-document launch that did not settle exited {refused.returncode}:\n"
+        f"{refused.stdout}{refused.stderr}"
+    )
+    assert f"run {named}{DESIGN_RUN_SUFFIX} did not settle" in refused.stderr, refused.stderr
+    assert _records(bench.destination) == [], "a flow whose document was never written copied"
+    # And the review it did spend stands, so running the command again once the launch can
+    # settle costs no second judged turn.
+    (task,) = plan_store.read_tasks(drafted.qualified)
+    assert plan_review.RECORD_KEY in task.metadata, (
+        "the review this flow spent was not recorded, so repeating the command would "
+        "spend a second judged turn on content something has already read"
     )

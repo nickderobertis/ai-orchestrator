@@ -654,6 +654,11 @@ def test_every_page_of_a_sources_projects_is_read(monkeypatch: pytest.MonkeyPatc
             {"items": [{"id": "board:42", "item": {"title": "t", "location": "here"}}]},
             "location that is not an object",
         ),
+        # Held to a qualified id here rather than wherever it is next used, for the
+        # reason a document's is: a caller reports this id as where a destination holds
+        # a plan when the store says nothing about its location, and an unqualified one
+        # addresses a project in no store.
+        ({"items": [{"id": "42", "item": {"title": "t"}}]}, "not a qualified"),
     ],
 )
 def test_a_project_listing_this_cannot_account_for_is_refused(
