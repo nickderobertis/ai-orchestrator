@@ -9,7 +9,7 @@ environment must carry, and the journeys that prove a launch builds it hold thei
 list of those names.
 
 Every copy fails quietly if it drifts, which is why they are gated here rather than
-reviewed. A `REQUIRED_SECTIONS` that no longer matches the template lets a brief
+reviewed. A `PLAN_REQUIRED_SECTIONS` that no longer matches the template lets a brief
 through that is not a task, or refuses one that is. A `SAFE_REFERENCE` that no longer
 matches the grammar lets the two ends of the same channel disagree about what a run id
 is, so a value one of them passes to `onepipeline` is one the other would have refused.
@@ -25,12 +25,15 @@ from typing import NamedTuple
 
 from orchestrator.root import REPO_ROOT
 
-#: The recipe that turns a manager's brief into a dispatched task, and the prose that
-#: says what a task is written in. That template is the **planner's** half of the
-#: decomposition doctrine, so it lives in the persona that travels with the dispatch
-#: rather than in `AGENTS.md`, which stays in this checkout;
+#: The grammar both planning entry points read a manager's brief through, and the prose
+#: that says what a task is written in. `just plan` and `just finish-plan` are two
+#: launches of one flow and each is given the same brief, so what a brief has to be is
+#: stated once, in the helper they both source — a second copy in either script is a
+#: launch path that could accept a brief the other refuses. That template is the
+#: **planner's** half of the decomposition doctrine, so it lives in the persona that
+#: travels with the dispatch rather than in `AGENTS.md`, which stays in this checkout;
 #: `tests/test_decomposition_guidance.py` is what keeps it in exactly one of them.
-PLAN_SCRIPT = REPO_ROOT / "scripts" / "plan.sh"
+PLAN_SCRIPT = REPO_ROOT / "scripts" / "plan-brief.sh"
 TASK_TEMPLATE = REPO_ROOT / "personas" / "planner.yaml"
 
 #: The two ends of the planner channel that each check a reference before passing it
@@ -90,9 +93,9 @@ CHECKED_INPUT = re.compile(r'Input\(\s*"([A-Z0-9_]+)"')
 #: from.
 REQUIRED_INPUT = re.compile(r"^#\s+([A-Z0-9_]+)\s+\(required\)", re.MULTILINE)
 
-#: `REQUIRED_SECTIONS=("## What" "## Why" "## Acceptance criteria")`, read out of the
-#: script rather than restated, so this gate compares the shell's own list.
-DECLARED_SECTIONS = re.compile(r"REQUIRED_SECTIONS=\(([^)]*)\)")
+#: `PLAN_REQUIRED_SECTIONS=("## What" "## Why" "## Acceptance criteria")`, read out of
+#: the helper rather than restated, so this gate compares the shell's own list.
+DECLARED_SECTIONS = re.compile(r"PLAN_REQUIRED_SECTIONS=\(([^)]*)\)")
 
 #: How `personas/planner.yaml` names the same three, in the list that requires them of
 #: every task: "Write every node's task — and every step's task — with these headings,
@@ -160,7 +163,7 @@ def test_the_brief_template_the_plan_recipe_requires_is_the_one_the_doctrine_sta
     conditional, is on neither side of this comparison.
     """
     declared = DECLARED_SECTIONS.search(PLAN_SCRIPT.read_text(encoding="utf-8"))
-    assert declared is not None, f"{PLAN_SCRIPT.name} declares no REQUIRED_SECTIONS"
+    assert declared is not None, f"{PLAN_SCRIPT.name} declares no PLAN_REQUIRED_SECTIONS"
     required = tuple(re.findall(r'"([^"]+)"', declared.group(1)))
     assert required, f"{PLAN_SCRIPT.name} requires no section at all"
 

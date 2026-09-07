@@ -985,7 +985,11 @@ def _planned(
     brief.write_text(BRIEF, encoding="utf-8")
     generated = PLAN_DIRECTORY / f"{run}.plan.json"
 
-    recipe = ["just", "plan", str(brief), "--name", run, *detached]
+    # `--no-design-doc`, so this launch is the planner and nothing after it. What these
+    # journeys read is the environment a launch establishes and the run it establishes it
+    # for; the tail is a second launch about the plan the planner writes, and running it
+    # here would copy a fixture's plan into whatever destination the flow defaults to.
+    recipe = ["just", "plan", str(brief), "--name", run, "--no-design-doc", *detached]
     try:
         with _attached(recipe, environment, tmp_path / "launch.log") as streamed:
             dispatched = _await_dispatch(turns)
@@ -1705,6 +1709,12 @@ def test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assumin
 #: establish it at all, which is a different missing piece from a helper that is there
 #: but broken, and one that would otherwise surface as a shell error naming a file the
 #: operator never asked about.
+#: The grammar `scripts/plan.sh` reads its brief and its options through, which is not an
+#: environment helper and so is not one of the cases below: it is sourced before any of
+#: them, so a checkout without it never reaches the refusal each of these journeys is
+#: about. Kept present in every one of them for that reason.
+BRIEF_GRAMMAR = "plan-brief.sh"
+
 LAUNCH_ENVIRONMENT_HELPERS = ("credentials-env.sh", "ask-manager-env.sh", "plan-root-env.sh")
 
 
@@ -1727,7 +1737,7 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
     # `ask-manager.sh` beside them, because it is what the ask-manager helper resolves
     # and refuses over: without it every case past that helper reports its absence
     # instead of the one this case removed.
-    kept = {*LAUNCH_ENVIRONMENT_HELPERS, "ask-manager.sh"} - {missing}
+    kept = {*LAUNCH_ENVIRONMENT_HELPERS, "ask-manager.sh", BRIEF_GRAMMAR} - {missing}
     for present in sorted(kept):
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
@@ -1781,7 +1791,7 @@ def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(
     alone = scripts / "plan.sh"
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
-    intact = {*SOURCED_HELPERS, "ask-manager.sh"} - {corrupted}
+    intact = {*SOURCED_HELPERS, "ask-manager.sh", BRIEF_GRAMMAR} - {corrupted}
     for present in sorted(intact):
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
@@ -1844,6 +1854,7 @@ def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
     for present in (
+        BRIEF_GRAMMAR,
         "credentials-env.sh",
         "ask-manager-env.sh",
         "ask-manager.sh",

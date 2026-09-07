@@ -91,6 +91,9 @@ def _detached_recipe(tmp_path: Path) -> Path:
     scripts.mkdir(parents=True)
     for name in (
         "plan.sh",
+        # The grammar `scripts/plan.sh` reads its brief and its options through: a
+        # checkout without it cannot get as far as the refusal these journeys are about.
+        "plan-brief.sh",
         "credentials-env.sh",
         "ask-manager-env.sh",
         "ask-manager.sh",

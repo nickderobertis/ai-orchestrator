@@ -69,6 +69,13 @@ WRAPPER_SCRIPTS = (
     # with. Every launch takes that seam, `onepipeline.sh` included, so the helper that
     # establishes it and the wrapper it names are both part of a runnable checkout.
     "plan.sh",
+    # `just plan` hands over to this one once its planner has settled, and `just
+    # finish-plan` is it directly: review the plan, check it, launch the document, copy
+    # both up, report where they landed. The third is the grammar both of them read a
+    # brief and their shared options through, and the fourth is the review step itself.
+    "finish-plan.sh",
+    "plan-brief.sh",
+    "review-plan.sh",
     # A launch reads its plan through the standalone CLI this repository installs into
     # the checkout's own `.venv/bin`, so `onepipeline.sh` heals a checkout that carries
     # none before it launches. The checkout here declares no adopted release, which is
@@ -117,6 +124,39 @@ WRAPPER_SCRIPTS = (
 #: `_checkout`. Its filename is what the recipe derives an unnamed run from, so it is
 #: the other half of the published line the first `plan` row asserts.
 BRIEF = "briefs/cursor-shape.md"
+
+
+#: The plan `just plan` writes and every step after it is about, in this checkout.
+PLAN_PROJECT = "authoring:cursor-shape"
+
+#: The run the design-document launch is made under, derived from the flow's own name.
+DESIGN_PROJECT = "authoring:cursor-shape-design"
+
+#: The source `just finish-plan` copies into when the caller names none, which is the
+#: board this repository plans against. A literal here for the reason
+#: `tests/plan_tooling/test_copy_plan_recipe_e2e.py` spells it as one: importing the
+#: constant would make this table assert that it equals itself.
+THE_BOARD = "plans"
+
+
+def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[str, ...]:
+    """Every command line the tail of the planning flow reaches, in order.
+
+    Stated once because it is one sequence: `just plan` hands over to `just finish-plan`
+    rather than repeating its steps, so a row that reached a different set of verbs here
+    would be the two entry points having drifted apart. The order is the whole contract —
+    the review is before the check, the check is before the launch that writes the
+    document, and the copy is after both — because a document written from unreviewed
+    content is the failure this ordering exists to prevent.
+    """
+    return (
+        f"uv run orchestrator-review-plan {project}",
+        f"uv run orchestrator-check-plan {project}",
+        f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
+        f"uv run onepipeline start {DESIGN_PROJECT} --dag-graph off",
+        f"uv run orchestrator-copy-plan {project} --to {destination}",
+        f"uv run orchestrator-plan-locations {project} --in {destination}",
+    )
 
 
 class Delegation(NamedTuple):
@@ -209,11 +249,19 @@ DELEGATIONS = (
     # ownership row, the surfaces and the DAG UI place are all that verb's own, and an
     # observer would only add a monitor comparing the run against the plan it has not
     # written yet.
+    #
+    # What follows that launch is the tail, and every row of it is `just finish-plan`'s
+    # own: this recipe hands over rather than repeating those steps, which is what keeps
+    # the two entry points one sequence.
     Delegation(
         "plan",
         (BRIEF,),
         "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        then=_tail(),
     ),
+    # `--detach` hands back before the planner has written anything, so there is no plan
+    # for the tail to be about and the launch prints the command that finishes it later.
+    # That is the one shape where `just plan` reaches a single verb.
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
@@ -227,6 +275,14 @@ DELEGATIONS = (
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
         "uv run onepipeline start authoring:listing-api --detach --dag-graph off",
     ),
+    # `--no-design-doc` stops the flow after the planner, so the tail is absent here for
+    # a different reason than it is absent above: there is nothing to write a document
+    # about copying, rather than nothing written yet.
+    Delegation(
+        "plan",
+        (BRIEF, "--no-design-doc"),
+        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+    ),
     # The three flags that decide where the planner works are absorbed here too, in
     # both spellings: they go into the node this recipe writes, and a copy of one
     # reaching `onepipeline start` would be refused as an unknown argument. Which node
@@ -235,24 +291,53 @@ DELEGATIONS = (
         "plan",
         (BRIEF, "--repo", "other", "--execution-checkout", "other-isolated"),
         "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        then=_tail(),
     ),
     Delegation(
         "plan",
         (BRIEF, "--repo=other", "--execution-checkout=other-isolated", "--direct"),
         "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        then=_tail(),
+    ),
+    # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
+    # destination decides nothing about the planner, and everything about where the plan
+    # a person reviews ends up.
+    Delegation(
+        "plan",
+        (BRIEF, "--to", "elsewhere"),
+        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        then=_tail(destination="elsewhere"),
     ),
     # A caller who names an observer keeps it, in either spelling and including their
     # own `off`: the flag refuses to be given twice, so the default is added only when
-    # neither spelling was typed.
+    # neither spelling was typed. It is the *planner's* observer: the tail is a separate
+    # launch of one node that reads a finished plan, so it keeps its own default.
     Delegation(
         "plan",
         (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
         "uv run onepipeline start authoring:cursor-shape --dag-graph graphs/dag-scope.yaml",
+        then=_tail(),
     ),
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
         "uv run onepipeline start authoring:cursor-shape --dag-graph=graphs/other.yaml --detach",
+    ),
+    # The tail on its own, which is how a plan edited after it was authored is finished:
+    # the same six verbs in the same order, reached without a planner being launched at
+    # all. Its published line is the design-document launch, because that is the one verb
+    # of the six that starts a run.
+    Delegation(
+        "finish-plan",
+        (BRIEF, "--to", "elsewhere"),
+        "uv run orchestrator-review-plan authoring:cursor-shape",
+        then=(
+            "uv run orchestrator-check-plan authoring:cursor-shape",
+            "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
+            "uv run onepipeline start authoring:cursor-shape-design --dag-graph off",
+            "uv run orchestrator-copy-plan authoring:cursor-shape --to elsewhere",
+            "uv run orchestrator-plan-locations authoring:cursor-shape --in elsewhere",
+        ),
     ),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and
@@ -581,10 +666,14 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     ]
 
 
-#: The two task records `just plan` writes under the local authoring source: the planner
-#: node, and the `design-doc` node that reads the plan it produces and writes the document
-#: a person reviews that plan as.
-GENERATED_TASKS = (".plans/tasks/cursor-shape/plan.md", ".plans/tasks/cursor-shape/design-doc.md")
+#: The two task records a whole `just plan` writes under the local authoring source, one
+#: per launch: the planner node in the project the recipe generates, and the `design-doc`
+#: node in the project its tail generates — which reads the finished plan and writes the
+#: document a person reviews it as.
+GENERATED_TASKS = (
+    ".plans/tasks/cursor-shape/plan.md",
+    ".plans/tasks/cursor-shape-design/design-doc.md",
+)
 
 
 class NodeShape(NamedTuple):
@@ -642,10 +731,11 @@ def test_the_plan_recipe_writes_the_node_shape_it_was_asked_for(
     planner is dispatched to prove a field. The direct shape must carry **neither**
     field: `execution_checkout` without a `repo` names a clone nothing is cut from.
 
-    Both nodes are read, because the placement is a property of the launch rather than of
-    one node: the `design-doc` node takes whatever the planner node takes, so a shape that
-    placed one of them somewhere else would put half a planning run in the shared
-    canonical checkout this repository forbids authoring in.
+    Both nodes are read, because the placement is a property of the *flow* rather than of
+    one launch: `just plan` hands its own placement to the tail, so a shape that placed
+    one of them somewhere else would put half a planning flow in the shared canonical
+    checkout this repository forbids authoring in — and the two are written by two
+    launches now, which is exactly the seam a placement can be dropped at.
     """
     checkout, trace = _checkout(tmp_path)
 

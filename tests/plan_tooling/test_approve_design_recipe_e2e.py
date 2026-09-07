@@ -61,7 +61,7 @@ BOARD = "board"
 #: The source each design document is drafted in before it is stored. A design-doc
 #: dispatch writes the prose in a directory of its own and then puts it into the plan's
 #: store with the store's own `document copy` — the write
-#: `tests/plan_tooling/test_design_doc_launch_e2e.py` scripts that dispatch to make, and
+#: `tests/plan_tooling/test_plan_flow_e2e.py` scripts that dispatch to make, and
 #: the only way a document reaches a plan store at all. Named on the copy's own command
 #: line rather than in the environment, so no launch below sees a source it would never
 #: see in production.

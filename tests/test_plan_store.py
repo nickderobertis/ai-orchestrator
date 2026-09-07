@@ -591,6 +591,85 @@ def test_a_repeated_page_token_is_refused_rather_than_followed(
         plan_store.read_documents("demo:demo")
 
 
+#: One project record as the store lists it, in the fields a reader locates a copy by.
+#: Its own constant rather than a reuse of the document above: a project carries no
+#: content and no labels, and what a reader asks it — where it is, and what it was copied
+#: from — is a different set of fields.
+PROJECT = {
+    "id": "board:42",
+    "item": {
+        "id": "42",
+        "title": "Deliver the checkout route",
+        "location": {"url": "https://example.invalid/board/42"},
+        "metadata": {"onetaskgraph.origin": "authoring:checkout-route"},
+    },
+}
+
+
+def _projects(*pages: object) -> Callable[[Sequence[str]], dict[str, object]]:
+    """Answer one `project list` page per call, in order."""
+    remaining = list(pages)
+
+    def read(arguments: Sequence[str]) -> dict[str, object]:
+        assert list(arguments)[:4] == ["project", "list", "--source", "board"]
+        answer = remaining.pop(0)
+        assert isinstance(answer, dict)
+        return answer
+
+    return read
+
+
+def test_every_page_of_a_sources_projects_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Paging is a contract this reader depends on, exactly as it is for tasks.
+
+    A destination holding more projects than one page is the ordinary case for the board
+    this repository copies into, and the record a copy landed on may be any of them — so a
+    reader that stopped at the first page would report a landed plan as one the
+    destination does not hold.
+    """
+    second = {"id": "board:88", "item": dict(PROJECT["item"], id="88")}
+    monkeypatch.setattr(
+        plan_store,
+        "store_json",
+        _projects({"items": [PROJECT], "next": "page-2"}, {"items": [second], "next": None}),
+    )
+    projects = plan_store.read_projects("board")
+    assert [project.qualified_id for project in projects] == ["board:42", "board:88"]
+    assert projects[0].title == "Deliver the checkout route"
+    assert projects[0].location == {"url": "https://example.invalid/board/42"}
+    assert projects[0].metadata == {plan_store.ORIGIN_KEY: "authoring:checkout-route"}
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ({"items": ["not an object"]}, "without a qualified id"),
+        ({"items": [{"id": "board:42"}]}, "without an object payload"),
+        ({"items": [{"id": "board:42", "item": {"title": 1}}]}, "no string title"),
+        (
+            {"items": [{"id": "board:42", "item": {"title": "t", "metadata": []}}]},
+            "metadata that is not an object",
+        ),
+        (
+            {"items": [{"id": "board:42", "item": {"title": "t", "location": "here"}}]},
+            "location that is not an object",
+        ),
+    ],
+)
+def test_a_project_listing_this_cannot_account_for_is_refused(
+    answer: dict[str, object], expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another program's records, narrowed at the boundary rather than trusted past it.
+
+    The metadata is the one that decides something: it is where the origin stamp lives,
+    and a reader that took a non-object for it would answer that a destination holds no
+    copy of a plan it is holding.
+    """
+    monkeypatch.setattr(plan_store, "store_json", _projects(answer))
+    with pytest.raises(OSError, match=expected):
+        plan_store.read_projects("board")
+
+
 def _document(
     *,
     project: str | None = "demo",

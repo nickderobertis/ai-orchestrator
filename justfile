@@ -211,15 +211,45 @@ orchestrate *args:
 # planning run is a monitor watching it for drift from the plan it is what writes. A
 # caller who names one keeps it, exactly as `just orchestrate` keeps a caller's own.
 #
-# The project has a **second** node, `design-doc`, which depends on the planner node and
-# writes the one short document a person reviews that plan as. It is why a brief carries a
-# `Plan project: <source>:<project>` line naming the plan the planner writes — nothing
-# hands one node's output to a later node — and a brief without one is refused where a
-# brief missing a required section is. `--no-design-doc` drops the node and that
-# requirement together, for the launch that wants the planner alone.
-[doc('Launch a planner on a manager-written brief as a local project, under a run id this launch guarantees is its own.')]
+# **The plan it writes is one node, and the rest of the flow is `just finish-plan`.** The
+# document a person reviews the plan as has to be written from *reviewed* content, and a
+# run cannot interject a review between its own nodes — a review record is written by this
+# repository's own code and never by a dispatched agent. So when the planner has settled
+# and this launch's closeout has recorded what it authored, `just plan` hands over to
+# `scripts/finish-plan.sh`: review, check, launch the document, copy both into the
+# destination, report where that destination holds them. `--to` names that destination and
+# reaches the tail; `--no-design-doc` stops after the planner, and drops with it the
+# `Plan project: <source>:<project>` line the tail needs to find the plan at all. A
+# `--detach`ed launch keeps the planner alone and prints the command that finishes it,
+# because it hands back before the plan exists.
+[doc('Launch a planner on a manager-written brief, then review, document, copy and report the plan it writes.')]
 plan *args:
     @./scripts/plan.sh "$@"
+
+# Finish a plan a planner has already authored: `just finish-plan <brief.md> [--to SOURCE]
+# [--name NAME] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc]
+# [<onepipeline start flags>]`.
+#
+# This is the tail of the planning flow and its one implementation — `just plan` runs the
+# planner and then delegates to exactly this, so the two entry points cannot drift. Run it
+# on its own when a plan was edited after it was authored: the edit leaves that task
+# unreviewed, so the review below spends a real judged turn on it and the document is then
+# written from content something has read.
+#
+# Five steps, in the order the tooling enforces rather than the order an operator
+# remembers: review the plan, check it the way its own launch will, launch the
+# design-document node as its own one-node project, copy the plan and its documents into
+# the destination, and report where that destination holds the project and the document —
+# read back out of the store, because a destination decides its own ids and where its
+# records live.
+#
+# The refusals are told apart by exit status, because a builder that could not tell them
+# apart would retry one as the other: 1 is the review refusing the plan's criteria, 3 is
+# the pre-launch check refusing the plan, 4 is the document launch not settling, 5 is the
+# destination refusing the copy, and 2 is a flow that could not run at all.
+[doc("Review a plan, write the design document a person reads it as, copy both up, and report where they landed.")]
+finish-plan *args:
+    @./scripts/finish-plan.sh "$@"
 
 # Read a qualified plan project against the bar each of its nodes will actually be
 # judged against, and against the engine's own plan loader: `just check-plan

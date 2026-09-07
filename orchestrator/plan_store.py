@@ -132,6 +132,19 @@ QualifiedTaskId = NewType("QualifiedTaskId", str)
 #: records, so the two are never interchanged even though both are strings.
 QualifiedDocumentId = NewType("QualifiedDocumentId", str)
 
+#: A project's address in the store, `<source>:<native-id>`. Its own namespace for the
+#: reason the two above are: a project, a task and a document of one plan may wear the
+#: same native id, and a copy gives the destination's project an id of the destination's
+#: own choosing — a board mints a number where a directory keeps the name.
+QualifiedProjectId = NewType("QualifiedProjectId", str)
+
+#: What the store stamps on a record it created by copying, naming what it was copied
+#: from. It is the store's own bookkeeping rather than anything this repository writes,
+#: and it is the only thing that ties a landed record back to the one it came from: a
+#: destination decides its own native id, so nothing about the source's name survives
+#: the copy for a reader to compose an address out of.
+ORIGIN_KEY = "onetaskgraph.origin"
+
 #: The source name the write below stages a document under, which exists only for the
 #: length of one copy. Deliberately unlike anything `onetaskgraph.yaml` configures: it is
 #: added to the configuration of that one invocation, and a name a real source already
@@ -252,31 +265,45 @@ def qualified(project: str) -> tuple[str, str]:
     return source, native
 
 
-def read_tasks(project: str) -> list[StoreTask]:
-    """Every task of ``project``, validated, and each carrying the node ids it depends on."""
-    source, native = qualified(project)
+def paged(arguments: Sequence[str], kind: str) -> list[Any]:
+    """Every item the store lists for ``arguments``, following its own paging to the end.
+
+    One walk for every listing this module makes rather than one per record kind: the
+    paging contract — a `next` token that is a non-empty string, is not one already
+    followed, and is absent on the last page — is the store's, and a second copy of it
+    would be a second reading of somebody else's protocol. ``kind`` names the records for
+    the refusals, which is the only thing that differs between callers.
+
+    A repeated token is refused rather than followed, because a source that hands back a
+    cursor that does not advance is one this would otherwise walk forever.
+    """
     listed: list[Any] = []
     page: str | None = None
     seen_pages: set[str] = set()
     while True:
-        arguments = ["task", "list", "--source", source, "--project", native]
-        arguments += ["--limit", str(PAGE_SIZE)]
+        asked = [*arguments, "--limit", str(PAGE_SIZE)]
         if page is not None:
-            arguments.extend(["--page", page])
-        answer = store_json(arguments)
+            asked.extend(["--page", page])
+        answer = store_json(asked)
         items = answer.get("items")
         if not isinstance(items, list):
-            raise OSError(f"{STORE} returned a task listing that is not a list")
+            raise OSError(f"{STORE} returned a {kind} listing that is not a list")
         listed.extend(items)
         following = answer.get("next")
         if following is None:
-            break
+            return listed
         if not isinstance(following, str) or not following:
             raise OSError(f"{STORE} returned an invalid next-page token")
         if following in seen_pages:
             raise OSError(f"{STORE} returned a repeated next-page token")
         seen_pages.add(following)
         page = following
+
+
+def read_tasks(project: str) -> list[StoreTask]:
+    """Every task of ``project``, validated, and each carrying the node ids it depends on."""
+    source, native = qualified(project)
+    listed = paged(["task", "list", "--source", source, "--project", native], "task")
     return _with_dependencies([_record(item) for item in listed])
 
 
@@ -443,27 +470,7 @@ def read_documents(project: str) -> list[StoreDocument]:
     second source holding a project of the same name would answer for it.
     """
     qualified(project)
-    listed: list[Any] = []
-    page: str | None = None
-    seen_pages: set[str] = set()
-    while True:
-        arguments = ["document", "list", "--project", project, "--limit", str(PAGE_SIZE)]
-        if page is not None:
-            arguments.extend(["--page", page])
-        answer = store_json(arguments)
-        items = answer.get("items")
-        if not isinstance(items, list):
-            raise OSError(f"{STORE} returned a document listing that is not a list")
-        listed.extend(items)
-        following = answer.get("next")
-        if following is None:
-            break
-        if not isinstance(following, str) or not following:
-            raise OSError(f"{STORE} returned an invalid next-page token")
-        if following in seen_pages:
-            raise OSError(f"{STORE} returned a repeated next-page token")
-        seen_pages.add(following)
-        page = following
+    listed = paged(["document", "list", "--project", project], "document")
     return [_document(item) for item in listed]
 
 
@@ -517,6 +524,82 @@ def _document(item: object) -> StoreDocument:
         project=project,
         labels=labels,
         repositories=repositories,
+        metadata=metadata,
+        location=location,
+    )
+
+
+def located(location: Mapping[str, Any] | None, fallback: str) -> str:
+    """Where the store says a record is, in the form the store reports it.
+
+    A link where the store puts it on a website, a path where it puts it in a file on
+    this machine, and ``fallback`` — the record's own qualified id — when the store
+    reports neither. **Never a location composed here**, which is the same rule the
+    design document's own planned-tasks table follows: a destination decides where its
+    records live, and a path or a URL assembled from a project name is one that names
+    nothing the moment the destination is a board rather than a directory.
+
+    One renderer for every record kind, because the question is the store's answer
+    rather than the record's: a project, a task and a document are all reported with the
+    same `location` object, and a second reading of it would answer differently the day
+    the store grows a third form.
+    """
+    held = location or {}
+    for form in ("url", "path"):
+        answered = held.get(form)
+        if isinstance(answered, str) and answered:
+            return answered
+    return fallback
+
+
+@dataclass(frozen=True)
+class StoreProject:
+    """A validated project record returned by onetaskgraph.
+
+    Narrower than :class:`StoreDocument` deliberately: nothing writes a project record
+    back, so this carries only what a reader asks a project — where it is, and what it
+    was copied from.
+    """
+
+    #: `<source>:<native>`, held to that shape where the store's answer is read.
+    qualified_id: QualifiedProjectId
+    title: str
+    metadata: Mapping[str, object]
+    #: Where the store says this record is, reported back rather than composed. `None`
+    #: when the store reports none.
+    location: Mapping[str, Any] | None
+
+
+def read_projects(source: str) -> list[StoreProject]:
+    """Every project ``source`` holds, validated, in the order the store lists them.
+
+    Narrowed to one source rather than asked of every configured one, because the caller
+    is asking which record a copy landed on in a named destination — and a second source
+    holding a project copied from the same origin would answer for it.
+    """
+    return [_project(item) for item in paged(["project", "list", "--source", source], "project")]
+
+
+# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.
+def _project(item: object) -> StoreProject:
+    """One listed project, validated down to the fields a reader locates a copy by."""
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+        raise OSError(f"{STORE} returned a project without a qualified id")
+    payload = item.get("item")
+    if not isinstance(payload, dict):
+        raise OSError(f"{STORE} returned a project without an object payload")
+    title = payload.get("title")
+    metadata = payload.get("metadata", {})
+    location = payload.get("location")
+    if not isinstance(title, str):
+        raise OSError(f"project {item['id']} has no string title")
+    if not isinstance(metadata, dict):
+        raise OSError(f"project {item['id']} has metadata that is not an object")
+    if location is not None and not isinstance(location, dict):
+        raise OSError(f"project {item['id']} has a location that is not an object")
+    return StoreProject(
+        qualified_id=QualifiedProjectId(item["id"]),
+        title=title,
         metadata=metadata,
         location=location,
     )

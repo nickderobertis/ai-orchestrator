@@ -1120,12 +1120,17 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     # llmlint: ignore[tests_mirror_real_usage] see the note above this line
     environment["FAKE_BACKEND_AUTHOR_PLAN"] = str(instruction)
 
+    # `--no-design-doc`, so this launch is the planner and its closeout and nothing after
+    # them. The tail is about the plan the planner writes, and what it would do first is
+    # review the project the *brief* names — which this stand-in does not author, because
+    # what is under test here is which projects the closeout speaks for.
     planned = _just(
         "plan",
         str(brief),
         "--name",
         run,
         "--direct",
+        "--no-design-doc",
         environment=environment,
         seconds=600,
         cwd=checkout,
@@ -1188,12 +1193,17 @@ def test_a_planning_run_that_did_not_settle_records_nothing(
     # cannot deliver the turn, so the node fails and the run does not settle.
     environment.pop("REAL_ONEHARNESS_BIN", None)
 
+    # `--no-design-doc`, so this launch is the planner and its closeout and nothing after
+    # them. The tail is about the plan the planner writes, and what it would do first is
+    # review the project the *brief* names — which this stand-in does not author, because
+    # what is under test here is which projects the closeout speaks for.
     planned = _just(
         "plan",
         str(brief),
         "--name",
         run,
         "--direct",
+        "--no-design-doc",
         environment=environment,
         seconds=600,
         cwd=checkout,

@@ -229,16 +229,11 @@ def recorded(document: StoreDocument) -> ApprovalKey | None:
 def located(document: StoreDocument) -> str:
     """Where the store says ``document`` is, in the form the store reports it.
 
-    A link where the store puts it on a website, a path where it puts it in a file on this
-    machine, and the qualified id itself when the store reports neither — never a location
-    composed here, which is the same rule the document's own planned-tasks table follows.
+    :func:`~orchestrator.plan_store.located` is the one reading of a store's `location`
+    answer, and this names the fallback that reading takes when the store reports none:
+    the document's own qualified id, which addresses it even where nothing can open it.
     """
-    location = document.location or {}
-    for form in ("url", "path"):
-        held = location.get(form)
-        if isinstance(held, str) and held:
-            return held
-    return str(document.qualified_id)
+    return plan_store.located(document.location, str(document.qualified_id))
 
 
 def design_document(project: str) -> StoreDocument:

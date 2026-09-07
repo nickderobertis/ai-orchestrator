@@ -1,22 +1,30 @@
-"""A planning run produces the design document as well as the plan, and stores it.
+"""`just plan` drives the whole planning flow, in the order the tooling enforces.
 
-`just plan` writes two nodes now: the planner, and a `design-doc` node depending on it
-that reads the finished plan and writes the one short document a person reviews the plan
-as. What that arrangement is worth is entirely in three things happening in order, and
-none of them can be read off the plan document the recipe writes:
+One launch writes the plan; the tail after it reviews that plan, checks it, launches the
+one short document a person reviews the plan as, copies both into the destination, and
+reports where that destination holds them. What that arrangement is worth is entirely in
+those things happening in that order, and none of it can be read off the plan documents
+the recipe writes:
 
-* the second node is dispatched **after** the first has settled, so what it reads is a
-  finished plan rather than a half-written one;
+* the plan is **reviewed before** the dispatch that writes the document starts, so the
+  document is never written about content nothing had read. That is why the document is a
+  second *launch* rather than a second node: a run cannot interject a review between its
+  own nodes, because a review record is written by this repository's own code and never
+  by a dispatched agent;
 * the dispatch is really given the plan's qualified id, which is the only way it can find
-  the plan at all — nothing hands one node's output to a later node, and a plan written
-  to an ignored path in the planner's own worktree does not outlive the run;
+  the plan at all — nothing hands one launch's output to the next, and a plan written to
+  an ignored path in the planner's own worktree does not outlive the run;
 * what that dispatch stores is afterwards **readable back out of the plan store as a
-  document of that project**, with the store reporting where it is, which is what puts
-  the document beside the plan rather than in a directory only the dispatch knew about.
+  document of that project**, with the store reporting where it is;
+* and both of them land on the **destination**, whose own locations are what the flow
+  reports — read back out of that store rather than composed from a project name, because
+  a destination decides its own ids.
 
-So the whole launch runs for real: the real `just plan`, the real `scripts/plan.sh`, the
+So the whole flow runs for real: the real `just plan`, the real `scripts/plan.sh` and
+`scripts/finish-plan.sh`, the real `just review-plan` and its `oneharness` turn, the real
+`orchestrator-check-plan`, `orchestrator-copy-plan` and `orchestrator-plan-locations`, the
 real `onepipeline` driver, the real `graphs/design-doc.yaml`, a real registered identity,
-and the real `onetaskgraph` reading the store afterwards through `just plans`.
+and the real `onetaskgraph` at both ends.
 
 **What is stood in for is the paid model's answer, and nothing downstream of it.** A
 design-doc dispatch does two things: it writes the document's prose, and it stores that
@@ -27,6 +35,10 @@ the turn runs the store's own command line, in its own working directory, agains
 store its own repository's tracked configuration names. So the record this journey reads
 back is one the store created — its origin metadata says so, and nothing here composes it
 — rather than a file a test planted where the store would have put one.
+
+**The destination is a second local store and never the live board.** A journey that wrote
+to the real `plans` board would be its own rate-limit burst and would leave a project
+behind on the store every other run of this repository reads.
 """
 
 from __future__ import annotations
@@ -35,6 +47,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
@@ -52,15 +65,17 @@ from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import GIT_IDENTITY, Identity, seeded
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_review, plan_store
+from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: This journey is its own Nx project's, `plan-tooling`, rather than a marker tier of the
-#: orchestrator project: it launches a whole real orchestration run — the installed
-#: `onepipeline`, two dispatched lifecycle nodes, a real `oneharness run` per turn — which
-#: is a different cost from the Python suite beside it and is answered by a different set
-#: of files. `tests/plan_tooling/project.json` names that set as `planToolingWorkspace`,
-#: and `tests/conftest.py` holds these tests to it.
+#: orchestrator project: it drives a whole real planning flow — the installed
+#: `onepipeline`, two real launches, a dispatched lifecycle node, a judged review turn and
+#: a real store copy — which is a different cost from the Python suite beside it and is
+#: answered by a different set of files. `tests/plan_tooling/project.json` names that set
+#: as `planToolingWorkspace`, and `tests/conftest.py` holds these tests to it.
 
 #: The stand-in for the paid model, and the provider binary beneath it. Reached through
 #: `helper` rather than from this module's own directory, because a stand-in named at a
@@ -69,9 +84,20 @@ from orchestrator.root import REPO_ROOT
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 
+#: The guard covering the identities `ONEHARNESS_BIN_*` cannot reach. `just review-plan`
+#: runs inside this flow and spawns a real `oneharness run`, so without it a chain that
+#: fell past codex would reach a paid identity and this journey would spend real turns
+#: while passing.
+PAID_PROVIDER_GUARD = helper("no-paid-provider")
+
+#: What the scripted reviewer answers, once, for every task it is given: a pass carrying
+#: no findings, because a finding *is* a refused criterion and the verdict schema admits a
+#: pass only where it names none. `tests/e2e/fake_codex.py` repeats its last answer.
+PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
+
 #: A launching session this journey states rather than inherits, and everything else an
 #: enclosing dispatch would otherwise decide for it.
-LAUNCHING_SESSION = "e2e-design-doc-launch"
+LAUNCHING_SESSION = "e2e-plan-flow"
 INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_LAUNCHER",
     "ONEPIPELINE_LAUNCHER_SESSION",
@@ -93,9 +119,25 @@ EXECUTION_ALIAS = "ai-orchestrator-isolated"
 #: and `just plans` reads the document back out of.
 FIXTURE_SOURCE = "test-fixtures"
 
-#: The two nodes a planning launch writes.
+#: The source both launches of a planning flow write their own generated project into,
+#: which is where `onepipeline` then reads the plan it launches from.
+AUTHORING_SOURCE = "authoring"
+
+#: The one node `just plan` writes, and the one node its tail writes in a launch of its
+#: own. Two projects and two runs, because the review between them is written by this
+#: repository's own code and a run cannot interject one between its own nodes.
 PLANNER_NODE = "plan"
 DESIGN_NODE = "design-doc"
+
+#: What the tail's own run and project are called, derived from the flow's name. Spelled
+#: here as the suffix a supervisor reads off the launch rather than imported from the
+#: shell that composes it: what this asserts is the id an operator is handed.
+DESIGN_RUN_SUFFIX = "-design"
+
+#: The second local Markdown store this flow copies into, standing in for the `plans`
+#: board. A plain lowercase name because it is spelled into the store's own
+#: `ONETASKGRAPH_SOURCES__…` environment layer as well as onto a command line.
+DESTINATION = "destination"
 
 #: The `graphs/*.yaml` member a dispatched node runs as, either side of it.
 WORKER_MEMBER = "worker"
@@ -125,8 +167,14 @@ RunId = NewType("RunId", str)
 
 
 class JournalEvent(TypedDict):
-    """One record the run appended, in the three fields this journey reads."""
+    """One record the run appended, in the fields this journey reads.
 
+    `ts` is the record's own stamp rather than anything inside its payload: the ordering
+    this journey asserts spans two writers — the review record in the plan's task document
+    and the dispatch in the run's journal — so what is compared is when each was written.
+    """
+
+    ts: str
     kind: str
     labels: dict[str, str]
     payload: dict[str, str]
@@ -148,9 +196,16 @@ class StandInGoal(TypedDict):
 
 
 class StandInNode(TypedDict):
-    """One node the planner stand-in authors, in the fields it states."""
+    """One node the planner stand-in authors, in the fields it states.
+
+    It carries a `persona` and criteria answering every demand the tracked appendix and
+    the shipped `engineer` bar make, because the flow this journey drives *checks* this
+    plan before it writes a document about it: a stand-in plan that could not pass `just
+    check-plan` would end the flow at that refusal rather than at anything under test.
+    """
 
     id: str
+    persona: str
     title: str
     task: str
 
@@ -185,12 +240,21 @@ class Stored(NamedTuple):
 
 
 class Planned(NamedTuple):
-    """One whole `just plan` launch, and everything read back off it."""
+    """One whole `just plan` flow, and everything read back off it."""
 
     launch: subprocess.CompletedProcess[str]
+    #: The planner run's journal, and the design run's, which are two runs now: the
+    #: review between them is written by this repository's own code, so the document is
+    #: a second launch rather than a second node.
     journal: list[JournalEvent]
+    design_journal: list[JournalEvent]
     turns: list[TurnRecord]
     stored: Stored
+    #: The destination's root, so a journey can read what the copy left there.
+    destination: Path
+    #: The environment the flow ran in, so a read afterwards answers about the same
+    #: store configuration the copy wrote through.
+    environment: dict[str, str]
 
 
 def _plan_records(stored: Stored) -> dict[str, str]:
@@ -207,11 +271,18 @@ def _plan_records(stored: Stored) -> dict[str, str]:
         "tasks": [
             {
                 "id": "decide-the-cursor",
+                "persona": "engineer",
                 "title": stored.task_title,
                 "task": (
-                    "## What\nDecide the cursor's shape.\n\n"
-                    "## Why\nThe view cannot deep-link until it is settled.\n\n"
-                    "## Acceptance criteria\n- The cursor's shape and its type are stated.\n"
+                    "## What\n\nAdd the paginated listing and the test that drives it.\n\n"
+                    "## Why\n\nAn operator cannot see past the first screen of nodes.\n\n"
+                    "## Acceptance criteria\n\n"
+                    "- The route accepts a valid request and rejects an invalid one.\n"
+                    "- A request-level test drives the route end to end and covers both "
+                    "paths.\n"
+                    "- Every claim the dispatch makes about the finished work is true of "
+                    "the tree as it finally stands.\n\n"
+                    f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
                 ),
             }
         ],
@@ -280,8 +351,8 @@ def _tracks_the_store(identity: Identity) -> None:
     git("pull", "-q", "--ff-only", cwd=identity.publication)
 
 
-def _environment(tmp_path: Path, stored: Stored) -> dict[str, str]:
-    """The environment this launch runs in, against a registry and a runs root of its own."""
+def _environment(tmp_path: Path, stored: Stored, destination: Path) -> dict[str, str]:
+    """The environment this flow runs in, against a registry, a runs root and a board of its own."""
     identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
     _tracks_the_store(identity)
     environment = dict(os.environ)
@@ -294,7 +365,22 @@ def _environment(tmp_path: Path, stored: Stored) -> dict[str, str]:
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # And the identities that seam cannot reach; see `tests/e2e/no_paid_provider.py`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps([PASSING_VERDICT])
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    # The destination the flow copies into, added through the store's own environment
+    # layer rather than through a `--set` flag: that layer is the one every part of the
+    # flow sees — the copy, the location read after it, and this journey's own reads —
+    # so all of them answer about one configuration.
+    environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN"] = "local-md"
+    environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT"] = str(destination)
+    # `authoring` is in this list because both launches of this flow read their plan out
+    # of it: a run whose plan store cannot see that source reads a project with no tasks.
+    environment["ONETASKGRAPH_DEFAULT_SOURCES"] = (
+        f"{AUTHORING_SOURCE},{FIXTURE_SOURCE},{DESTINATION}"
+    )
 
     authored = tmp_path / "authored-plan.json"
     authored.write_text(json.dumps(_plan_records(stored)), encoding="utf-8")
@@ -342,22 +428,25 @@ def _just(
 
 
 #: The run this module launches under, named once so its plan and its records are
-#: unambiguously its own.
-RUN = RunId("design-doc-launch-e2e")
+#: unambiguously its own. The tail's own run is derived from it, which is what lets a
+#: supervisor holding only this launch's output reach either channel.
+RUN = RunId("plan-flow-e2e")
+DESIGN_RUN = RunId(f"{RUN}{DESIGN_RUN_SUFFIX}")
 
 
 @pytest.fixture(scope="module")
 def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Planned:
-    """Launch one whole planning run, attached, and hand every question its record.
+    """Drive one whole planning flow, attached, and hand every question its record.
 
-    One launch for every claim here rather than one each: the ordering, the task the
-    second dispatch was given, and the document it left in the store are three readings of
-    one run, and a fixture per claim would pay for two whole dispatches to re-prove them.
+    One flow for every claim here rather than one each: the ordering, the task the second
+    launch's dispatch was given, the document it left in the store, and what the copy put
+    on the destination are four readings of one act, and a fixture per claim would pay for
+    two whole launches to re-prove them.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    tmp_path = tmp_path_factory.mktemp("design-doc-launch")
-    unique = f"test-{os.getpid()}-design-doc-launch"
+    tmp_path = tmp_path_factory.mktemp("plan-flow")
+    unique = f"test-{os.getpid()}-plan-flow"
     stored = Stored(
         project=unique,
         qualified=f"{FIXTURE_SOURCE}:{unique}",
@@ -366,7 +455,12 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         document_qualified=f"{FIXTURE_SOURCE}:{unique}-document",
         document_path=FIXTURE_ROOT / "documents" / f"{unique}-document.md",
     )
-    environment = _environment(tmp_path, stored)
+    destination = tmp_path / "board"
+    # Created rather than left to the first write: a `local-md` source canonicalizes its
+    # root when it is built, so an absent one is refused as a broken source rather than
+    # populated — which would report a sound copy as a destination that refused it.
+    destination.mkdir(parents=True)
+    environment = _environment(tmp_path, stored, destination)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     turns = tmp_path / "turns.jsonl"
     environment[PROMPT_LOG_ENV] = str(turns)
@@ -379,11 +473,19 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         encoding="utf-8",
     )
     try:
-        launch = _just("plan", str(brief), "--name", RUN, environment=environment)
-        assert launch.returncode == 0, f"the launch failed:\n{launch.stdout}\n{launch.stderr}"
-        journal = Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN / "events.jsonl"
+        launch = _just(
+            "plan", str(brief), "--name", RUN, "--to", DESTINATION, environment=environment
+        )
+        assert launch.returncode == 0, f"the flow failed:\n{launch.stdout}\n{launch.stderr}"
+        runs = Path(environment["ONEPIPELINE_RUNS_DIR"])
+        journal = runs / RUN / "events.jsonl"
+        design_journal = runs / DESIGN_RUN / "events.jsonl"
         assert journal.is_file(), f"the launch recorded no journal at {journal}"
-        assert turns.is_file(), f"the launch reached no harness turn, so {turns} is absent"
+        assert design_journal.is_file(), (
+            f"the tail recorded no journal at {design_journal}, so the flow never reached "
+            f"the launch that writes the document"
+        )
+        assert turns.is_file(), f"the flow reached no harness turn, so {turns} is absent"
         return Planned(
             launch=launch,
             # `cast` rather than a validating read: `onepipeline` owns the journal's
@@ -393,20 +495,27 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
                 cast(JournalEvent, json.loads(line))
                 for line in journal.read_text(encoding="utf-8").splitlines()
             ],
+            design_journal=[
+                cast(JournalEvent, json.loads(line))
+                for line in design_journal.read_text(encoding="utf-8").splitlines()
+            ],
             turns=[
                 cast(TurnRecord, json.loads(line))
                 for line in turns.read_text(encoding="utf-8").splitlines()
             ],
             stored=stored,
+            destination=destination,
+            environment=environment,
         )
     finally:
-        _just("stop", RUN, environment=environment, seconds=60)
-        (REPO_ROOT / ".plans" / "projects" / f"{RUN}.md").unlink(missing_ok=True)
-        tasks = REPO_ROOT / ".plans" / "tasks" / RUN
-        if tasks.is_dir():
-            for record in tasks.iterdir():
-                record.unlink(missing_ok=True)
-            tasks.rmdir()
+        for ended in (RUN, DESIGN_RUN):
+            _just("stop", ended, environment=environment, seconds=60)
+            (REPO_ROOT / ".plans" / "projects" / f"{ended}.md").unlink(missing_ok=True)
+            tasks = REPO_ROOT / ".plans" / "tasks" / ended
+            if tasks.is_dir():
+                for record in tasks.iterdir():
+                    record.unlink(missing_ok=True)
+                tasks.rmdir()
 
 
 def _member(turn: TurnRecord) -> str | None:
@@ -419,45 +528,89 @@ def _member(turn: TurnRecord) -> str | None:
     return None if named is None else named.group(1)
 
 
-def _positions(planned: Planned, kind: str, node: str) -> list[int]:
-    """Where in the journal a run recorded ``kind`` for ``node``, in order."""
+def _timestamps(journal: list[JournalEvent], kind: str, node: str) -> list[datetime]:
+    """When a run recorded ``kind`` for ``node``, in the order it recorded them.
+
+    The journal's own stamps rather than positions, because the two halves of the
+    ordering this journey asserts are recorded by two different writers into two
+    different files: the review record goes into the plan's own task document and the
+    dispatch goes into the run's journal, so an index in one says nothing about the
+    other.
+
+    Parsed rather than compared as text, because the two writers spell an instant
+    differently — one ends `Z` and the other `+00:00` — and a string comparison of those
+    would answer about the spelling rather than about the order.
+    """
     return [
-        index
-        for index, event in enumerate(planned.journal)
+        datetime.fromisoformat(event["ts"])
+        for event in journal
         if event.get("kind") == kind and event.get("labels", {}).get(NODE_LABEL) == node
     ]
 
 
-@pytest.mark.xdist_group("design-doc-launch")
-def test_the_design_doc_node_is_dispatched_only_once_the_planner_node_has_settled(
+@pytest.mark.xdist_group("plan-flow")
+def test_the_plan_is_reviewed_before_the_dispatch_that_writes_its_document_starts(
     planned: Planned,
 ) -> None:
-    """The dependency is what makes the document a reading of a *finished* plan.
+    """The ordering the flow exists for, read off the two records that carry it.
 
-    Without it the two nodes are siblings and the document writer races the planner: it
-    would open a project that is half-written, or not written at all, and report a
-    document nobody could act on. Read from the run's own journal rather than from the
-    plan, because the plan can only say the edge was declared — what the engine did with
-    it is the claim.
+    A design document describes a plan, so a document written before anything reviewed
+    that plan describes content nobody read — which is the failure the review gate one
+    step earlier exists to prevent. It is a *launch* ordering rather than a node
+    dependency because it has to be: a review record is written by this repository's own
+    code and never by a dispatched agent, so no arrangement of nodes inside one run can
+    put one between them.
+
+    Read from the review record's own timestamp against the design run's own dispatch
+    record, which are written by the two parties in question. A tree in which the design
+    dispatch could start first and be reviewed afterwards fails here, because that
+    ordering is the assertion rather than a side effect of it.
     """
-    settled = _positions(planned, NODE_SETTLED, PLANNER_NODE)
-    dispatched = _positions(planned, NODE_DISPATCHED, DESIGN_NODE)
-    assert settled, "the run never settled the planner node"
+    (task,) = plan_store.read_tasks(planned.stored.qualified)
+    record = task.metadata.get(plan_review.RECORD_KEY)
+    assert isinstance(record, dict), (
+        f"the flow copied a plan whose task carries no review record at all: {task.metadata}"
+    )
+    stamped = record.get("reviewed_at")
+    assert isinstance(stamped, str), record
+    reviewed_at = datetime.fromisoformat(stamped)
+
+    dispatched = _timestamps(planned.design_journal, NODE_DISPATCHED, DESIGN_NODE)
     assert dispatched, (
-        "the run never dispatched the design-doc node, so the planning launch produced "
-        "the plan and no document"
+        "the design run never dispatched its node, so the flow produced the plan and no document"
     )
-    assert settled[-1] < dispatched[0], (
-        f"the design-doc node was dispatched at journal record {dispatched[0]} and the "
-        f"planner node settled at {settled[-1]}, so the document was written from a plan "
-        "that was not finished"
+    assert reviewed_at < dispatched[0], (
+        f"the plan was reviewed at {reviewed_at} and the dispatch that writes the document "
+        f"about it started at {dispatched[0]}, so the document describes content the "
+        f"review had not yet read"
     )
-    assert _positions(planned, NODE_SETTLED, DESIGN_NODE), (
-        "the design-doc node never settled, so the run did not carry it to an end"
+    assert _timestamps(planned.design_journal, NODE_SETTLED, DESIGN_NODE), (
+        "the design-doc node never settled, so the flow did not carry it to an end"
     )
 
 
-@pytest.mark.xdist_group("design-doc-launch")
+@pytest.mark.xdist_group("plan-flow")
+def test_the_tail_runs_under_a_run_of_its_own_whose_channel_the_launch_names(
+    planned: Planned,
+) -> None:
+    """Two launches means two channels, and a supervisor is handed both.
+
+    Each run's questions are answered on that run's own channel, so a flow that printed
+    one id and used another would leave a blocking question queued where nobody is
+    watching. Both lines are read off this flow's own output, which is all a supervisor
+    has.
+    """
+    reported = planned.launch.stdout + planned.launch.stderr
+    assert f"just channel-next {RUN}" in reported, (
+        f"the flow never named the command that answers the planner's questions:\n{reported}"
+    )
+    assert f"just channel-next {DESIGN_RUN}" in reported, (
+        f"the flow never named the command that answers the document dispatch's "
+        f"questions, so its channel is one a supervisor has to compose:\n{reported}"
+    )
+
+
+@pytest.mark.xdist_group("plan-flow")
 def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Planned) -> None:
     """The one thing that dispatch cannot derive reaches it in its own effective prompt.
 
@@ -488,7 +641,7 @@ def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Plan
     )
 
 
-@pytest.mark.xdist_group("design-doc-launch")
+@pytest.mark.xdist_group("plan-flow")
 def test_the_stored_document_reads_back_as_a_document_of_the_plans_own_project(
     planned: Planned,
 ) -> None:
@@ -545,4 +698,92 @@ def test_the_stored_document_reads_back_as_a_document_of_the_plans_own_project(
         f"the store records this document's origin as {item['metadata'].get(ORIGIN_KEY)!r} "
         f"rather than the draft the dispatch copied, so the record in the plan store was "
         "not written by the store's own copy of that draft"
+    )
+
+
+@pytest.mark.xdist_group("plan-flow")
+def test_the_flow_leaves_the_plan_and_its_one_document_on_the_destination_it_was_given(
+    planned: Planned,
+) -> None:
+    """What a person opens is on the destination, both halves of it.
+
+    The plan alone is not reviewable — a person reads the document, and their approval of
+    it is what gates the dispatch — so a flow that copied the project and left the
+    document where it was drafted would put a plan on the board that can never be
+    approved, and so one that can never be launched. Read as the records the destination
+    holds rather than as a report of them, because the report is what is under test in the
+    sibling below.
+    """
+    landed = sorted(
+        str(one.relative_to(planned.destination)) for one in planned.destination.rglob("*.md")
+    )
+    project = planned.stored.project
+    assert landed == [
+        f"documents/{planned.stored.document}.md",
+        f"projects/{project}.md",
+        f"tasks/{project}/decide-the-cursor.md",
+    ], f"the flow left {landed} on the destination"
+
+
+@pytest.mark.xdist_group("plan-flow")
+def test_the_flow_reports_where_the_destination_holds_the_project_and_the_document(
+    planned: Planned,
+) -> None:
+    """The two locations a reviewer opens, and they are the store's own answers.
+
+    Composing them is what this must not do: a destination decides its own native ids and
+    where its records live — a board mints a number where a directory keeps the name — so
+    a location assembled from a project name is one that names nothing on the destination
+    this repository actually copies into. What is asserted is therefore that each reported
+    location is the one the store reports for the record that landed, read back out of the
+    destination through the store's own surface.
+    """
+    reported = planned.launch.stdout + planned.launch.stderr
+    listed = _just(
+        "plans",
+        "project",
+        "list",
+        "--source",
+        DESTINATION,
+        "--json",
+        environment=planned.environment,
+        seconds=120,
+    )
+    assert listed.returncode == 0, f"the destination could not be read:\n{listed.stderr}"
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
+    # fields read below are narrowed at each subscript.
+    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
+    landed = [
+        one
+        for one in projects
+        if one["item"]["metadata"].get(ORIGIN_KEY) == planned.stored.qualified
+    ]
+    assert landed, (
+        f"the destination holds no project the store records as copied from "
+        f"{planned.stored.qualified}; it holds {[one['id'] for one in projects]}"
+    )
+    where = landed[0]["item"]["location"]["path"]
+    assert f"holds the plan at {where}" in reported, (
+        f"the flow never reported {where}, which is where the store says the destination "
+        f"holds this plan:\n{reported}"
+    )
+
+    documents = _just(
+        "plans",
+        "document",
+        "list",
+        "--project",
+        landed[0]["id"],
+        "--json",
+        environment=planned.environment,
+        seconds=120,
+    )
+    assert documents.returncode == 0, f"the destination could not be read:\n{documents.stderr}"
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
+    # fields read below are narrowed at each subscript.
+    held = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    assert len(held) == 1, f"the destination holds {len(held)} documents of this plan: {held}"
+    assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
+        f"the flow never reported where the destination holds the document a person "
+        f"reviews this plan as:\n{reported}"
     )

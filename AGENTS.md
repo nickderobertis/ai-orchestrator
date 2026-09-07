@@ -1213,16 +1213,29 @@ plans:<project>`.
 **But it is not authored there, and the order it reaches the board in is the one thing
 about this store an author most needs.** A plan is **drafted** in the `authoring` source —
 the gitignored `.plans/` root `just plan` writes into and the one every planner is briefed
-to write into — **cleared** there by `just review-plan`, **approved** there by `just
-approve-design`, **copied** onto the board by `just
-copy-plan`, **checked** with `just check-plan plans:<project>`, and launched from the
-board. `just copy-plan` refuses to copy a plan any of whose tasks carries
-no review record for what it currently says, so the ordering is enforced by a command rather
-than remembered; the commands, their exit statuses, and what reaches the store's own copy
-verb are in [How a plan gets onto that
-board](docs/orchestration.md#how-a-plan-gets-onto-that-board). Both records are ordinary
-entries of a record's own metadata map, so both travel with the copy: a plan cleared and
-approved where it was drafted is still cleared and approved once it reaches the board.
+to write into — **cleared** there by `just review-plan`, **documented** there by a second
+launch, **copied** onto the board with its documents, **approved** on the board by `just
+approve-design`, and launched from it. **That whole sequence after the planner is one
+command**: `just plan` runs it, and `just finish-plan <brief>` is the same tail on its own
+for a plan an operator edited after it was authored. The order is enforced by a script
+rather than remembered, and each of its refusals has an exit status of its own; the
+commands, those statuses, and what reaches the store's own copy verb are in [How a plan
+gets onto that board](docs/orchestration.md#how-a-plan-gets-onto-that-board). Both records
+are ordinary entries of a record's own metadata map, so both travel with the copy: a plan
+cleared where it was drafted is still cleared once it reaches the board, and a document
+approved on the board stays approved wherever it goes next.
+
+**The review is before the document, and that is the whole reason the document is a second
+launch.** A design document describes a plan, so one written before anything reviewed that
+plan describes content nobody read — which is exactly what the review gate one step
+earlier exists to prevent. A run cannot interject a review between its own nodes: a review
+record is written by this repository's own code and never by a dispatched agent, because a
+worker runs in a worktree and nothing it writes below the plan root is tracked; and a
+`kind: human` node is reserved for an action an external person performs rather than for a
+manager's own validation. So the design-document node is a **launch of its own**, of a
+one-node project whose planning stamp names that one node — which keeps its exemption from
+the design-approval gate bounded to the launch that writes a document, while the plan
+project itself stays gated like any other.
 
 **No other order works, and the refusal that says so is correct rather than a defect to
 route around.** A review record is one entry of the task's *own Markdown document*, so a
@@ -1461,16 +1474,17 @@ and is never a command.
    every node's `## Why` is written from. Name the repository and the qualified
    project id the plan must create — that id goes on its own `Plan project:
    <source>:<project>` line, which `just plan` reads and refuses a brief without,
-   because it is the only way the run's `design-doc` node can find the plan to write
-   the document from — and **brief every planner to write into the
+   because it is the only way the launch that writes the design document can find the
+   plan to write it from — and **brief every planner to write into the
    `authoring` source** — the gitignored `.plans/` root `just plan` writes — whatever
-   repository the plan is of. What then happens to it differs by repository and is
-   yours rather than the planner's: a plan of **this** repository is cleared there with
-   `just review-plan`, copied onto the `plans` board with `just copy-plan`, and launched
-   from the board, for the reasons in [Where a plan of this repository
-   lives](#where-a-plan-of-this-repository-lives); a plan of any other repository stays
-   local and is launched from there, since a local project and task record is launchable
-   in place. Do not hand
+   repository the plan is of. What then happens to it is the flow's rather than the
+   planner's: for a plan of **this** repository `just plan` itself reviews it, documents
+   it, copies it onto the `plans` board and reports where that board holds it, and you
+   record the user's approval there before launching, for the reasons in [Where a plan of
+   this repository lives](#where-a-plan-of-this-repository-lives). A plan of any other
+   repository stays local and is launched from there, since a local project and task
+   record is launchable in place — name that source as the destination with `--to`, or
+   pass `--no-design-doc` for a planner alone. Do not hand
    it contracts, acceptance criteria, or a node
    breakdown: researching the code and producing those is the dispatch you are
    paying for.
@@ -2597,10 +2611,10 @@ command: one
 subtask is a one-task project (`examples:scheduler-research`,
 `examples:health-endpoint`), so no running work falls outside the
 run ledger and the views built on it.
-`just plan <brief.md>` is that same launch for one shape of work: it writes the
-project a manager-written brief becomes
-(`examples/planner-brief.example.md` → `authoring:<generated-project>`)
-and launches it. The brief is the dispatched task verbatim, so it is written in
+`just plan <brief.md>` is that same launch for one shape of work, and then the whole
+flow after it: it writes the project a manager-written brief becomes
+(`examples/planner-brief.example.md` → `authoring:<generated-project>`), launches it, and
+hands over to `just finish-plan` for everything the plan then needs. The brief is the dispatched task verbatim, so it is written in
 the `## What` / `## Why` / `## Acceptance criteria` template and refused when it is
 not. Two things about that launch are the reason the recipe makes it rather than a
 manager: the persona is the **path** `../personas/planner.yaml`, because the bare
@@ -2619,31 +2633,61 @@ the ownership row, the surfaces and the DAG UI place are `onepipeline start`'s o
 and arrive either way. A caller who names a graph keeps it, exactly as `just
 orchestrate` keeps a caller's own.
 
-**That project has two nodes, and by default every planning run writes both.** The
-second is `design-doc`: it depends on the planner node, is dispatched under
-`graphs/design-doc.yaml` with `../personas/design-doc.yaml` — a path, for the reason the
-planner's is one — takes the same publication repository and execution checkout the
-planner node takes, and carries the brief unchanged followed by its own instructions and
-its own acceptance criteria. What it produces is the one short document a person reviews
-the plan as, instead of reading it node by node: what is being built and why, the
-architecture, the contracts, the acceptance criteria, and the planned work as a table of
-links. It reads the finished plan out of the store, writes the document to
-`config/design-doc-template.md` — the one statement of that document's shape and of every
-property it is judged on — stores it as a document of that same project, and reports
-where the store says the document is. `--max-turns` stays the planner node's alone; the
-design-doc node takes its persona's own budget.
+**That project is one node, and the rest of the flow is a second launch.** When the
+planner has settled and this launch's closeout has recorded what it authored, `just plan`
+hands over to **`scripts/finish-plan.sh`** — which `just finish-plan <brief>` is directly,
+for a plan an operator edited after it was authored. That script is the one implementation
+of every step after the plan exists, so both entry points run one sequence rather than two
+that could drift: **review** the plan, **check** it the way its own launch will, **launch**
+the design-document node, **copy** the plan and its documents into the destination, and
+**report** where that destination holds the project and the document.
 
-**So a brief now names the plan's qualified project id, and is refused without one.**
-Nothing hands one node's output to a later node, and a plan written to an ignored path in
-the planner's own worktree does not outlive the run, so a `Plan project:
-<source>:<project>` line is the only way the second node can find the plan it is writing
-about. That is the same instruction [Your loop as manager](#your-loop-as-manager)
-already gives — name the repository and the qualified project id the plan must create —
-made enforceable rather than remembered, and it is refused at the exit status a brief
-missing a required section is refused at. Nothing else in a brief is parsed.
-`--no-design-doc` is the opt-out and it drops the requirement with the node: with nothing
-that reads the plan there is nothing that needs its id, so a brief naming none is
-accepted and the launch writes exactly the one-node project it wrote before.
+**The review is why the document is a second launch rather than a second node.** A design
+document written before anything reviewed the plan describes content nobody read, and a
+run cannot interject a review between its own nodes: a review record is written by this
+repository's own code and never by a dispatched agent. After a `just plan` that review is
+free and silent — the launch's own closeout already recorded what its planner authored —
+and after a manager's edit it is a real judged turn, which is the case the ordering exists
+for.
+
+The design-document launch writes a **one-node project of its own**, whose planning stamp
+names that one node, so its exemption from the design-approval gate covers the launch that
+writes a document and nothing else. The node is dispatched under `graphs/design-doc.yaml`
+with `../personas/design-doc.yaml` — a path, for the reason the planner's is one — takes
+the publication repository and execution checkout the flow was given, and carries the
+brief unchanged followed by its own instructions and its own acceptance criteria. What it
+produces is the one short document a person reviews the plan as, instead of reading it
+node by node: what is being built and why, the architecture, the contracts, the acceptance
+criteria, and the planned work as a table of links. It reads the finished plan out of the
+store, writes the document to `config/design-doc-template.md` — the one statement of that
+document's shape and of every property it is judged on — stores it as a document of that
+same project, and reports where the store says the document is. `--max-turns` stays the
+planner's alone and `just finish-plan` refuses it by name; the design-doc node takes its
+persona's own budget.
+
+**Both of this flow's run ids are decided before either launch is made.** The tail's run
+is the flow's own name plus `-design`, and `just plan` refuses it as taken before it
+dispatches a planner — an hour of planning must not end at a name collision. Each id is
+printed beside the `just channel-next <id>` that answers that run's questions. And each
+refusal has an exit status of its own, because each names a different thing to correct:
+**1** the review refusing the plan's criteria, **3** the pre-launch check refusing the
+plan, **4** the document launch not settling, **5** the destination refusing the copy, and
+**2** a flow that could not run at all.
+
+**So a brief names the plan's qualified project id, and is refused without one.** Nothing
+hands one launch's output to the next, and a plan written to an ignored path in the
+planner's own worktree does not outlive the run, so a `Plan project: <source>:<project>`
+line is the only way the tail can find the plan it is finishing. That is the same
+instruction [Your loop as manager](#your-loop-as-manager) already gives — name the
+repository and the qualified project id the plan must create — made enforceable rather
+than remembered, and it is refused where a brief missing a required section is, before the
+planner is dispatched rather than an hour later. Nothing else in a brief is parsed.
+`--no-design-doc` is the opt-out and it drops the requirement with the tail: it stops
+after the planner and its review, copying nothing and reporting no location, because a
+plan on the board with no document can never be approved and so can never be launched.
+`--to` names the destination and defaults to the `plans` board; a `--detach`ed launch
+hands back before the plan exists, so it keeps the planner alone and prints the `just
+finish-plan` command that finishes it.
 
 **`--direct` is the one flag that changes the dispatched task**, and it is the one
 exception to "the brief is the dispatched task verbatim" above. A `--direct` launch
@@ -2854,9 +2898,11 @@ which is what makes it readable from a board as well as from a directory, and it
 `project copy` carries none, and a plan copied without its design document arrives on
 the board with nothing to approve. One exemption exists and it is the only one: a
 **planning launch**, whose own output is the plan and whose design document does not exist
-until the run has produced one. It is exempt because `scripts/plan.sh` stamps that project
-as the planning project it is, rather than because anything recognises its shape — so a
-hand-written two-node project is not quietly exempt.
+until the run has produced one. Both launches of the planning flow are that — the planner
+that writes the plan, and the one-node launch that writes the document — and each is
+exempt because `scripts/plan.sh` and `scripts/finish-plan.sh` stamp the project they
+generate as the planning project it is, rather than because anything recognises its shape,
+so a hand-written project of the same shape is not quietly exempt.
 
 **Read that as a launch and never as a project, because it was a project once and that was
 a hole.** The stamp alone decided it until the exemption was bounded, so a project that
@@ -2865,7 +2911,7 @@ planner writes is stored in the planning project the launch created, which is wh
 host's own convention asks for. The plan's own nodes therefore sat in an exempt project, and launching them would
 have dispatched work across four repositories with nobody having approved the design
 document, silently. The exemption is now bounded by both halves of what it was written for:
-the project holds exactly the nodes that launch dispatches — `scripts/plan.sh` names
+the project holds exactly the nodes that launch dispatches — each launcher names
 them on the stamp itself — **and** it holds no design document, because once one exists
 there is something a person can read. Either half ending ends the exemption, and the
 refusal says which. *Exactly* is read in both directions: a task the stamp does not claim
@@ -2882,7 +2928,8 @@ way to tell a plan somebody had read from a plan nobody had to.
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking
 question to its manager over the run's own channel instead of guessing at a
-decision fork: `just orchestrate` attached, detached, and adopted, and `just plan`.
+decision fork: `just orchestrate` attached, detached, and adopted, `just plan`, and the
+`just finish-plan` its tail is.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
 dispatch of a run carries it as of onepipeline 0.22.2**, composed where the dispatch

@@ -60,20 +60,55 @@ repository the credential cannot reach refuses the copy before anything is creat
 
 ### How a plan gets onto that board
 
-**A plan is drafted locally, cleared locally, copied up, checked, and launched from the
-board** — five commands in that order and no other:
+**A plan is drafted locally, cleared locally, documented, copied up, approved and
+launched from the board** — and `just plan` performs everything down to the approval:
 
 ```sh
-just plan brief.md                       # a planner authors into `authoring` and a
-                                         # design-doc node writes the document that plan
-                                         # is reviewed as; a settled run's closeout
-                                         # records the tasks it wrote
-just review-plan authoring:<project>     # the judged turn, for anything nothing has read
-just approve-design authoring:<project>  # the user's approval of that document
-just copy-plan authoring:<project>       # onto `plans`; `--to` names another destination
-just check-plan plans:<project>
+just plan brief.md                       # the planner authors into `authoring`, its
+                                         # closeout records what it wrote, and the tail
+                                         # then reviews the plan, checks it, launches the
+                                         # design document, copies both onto `plans`, and
+                                         # reports where that board holds them
+just approve-design plans:<project>      # the user's approval of that document
 just orchestrate plans:<project>
 ```
+
+**`just finish-plan brief.md` is that tail on its own**, and is what an operator runs
+after editing a plan the planner authored: the edit leaves that task carrying no review
+record for what it now says, so the review spends a real judged turn on it before anything
+else happens. It is the same five steps in the same order, because `just plan` reaches
+them by running that script rather than by repeating them.
+
+**The ordering is the point, and the second launch is what buys it.** A design document
+describes a plan, so one written before anything reviewed that plan describes content
+nobody read — which is the failure the review gate exists to prevent one step earlier.
+A run cannot interject a review between its own nodes: a review record is written by this
+repository's own code and never by a dispatched agent, because a worker runs in a worktree
+and nothing it writes below the plan root is tracked; and a `kind: human` node is reserved
+for an action an external person performs rather than for a manager's own validation. So
+the document is a **second launch**, of a one-node project whose planning stamp names that
+one node — which is what keeps its own exemption from the design-approval gate bounded to
+the launch that writes a document rather than granted to the plan.
+
+**Both of this flow's run ids are decided before either launch is made.** The tail's run
+is the flow's own name plus `-design`, and `just plan` refuses it as taken before it
+dispatches a planner: an hour of planning must not end at a name collision. Each id is
+printed beside `just channel-next <id>`, so a supervisor holding only that output can
+reach either run's channel.
+
+**Its refusals are told apart by exit status**, because each names a different thing to
+correct and a caller scripting the flow branches on the status: **1** is the review
+refusing the plan's own criteria, **3** is the pre-launch check refusing the plan, **4** is
+the document launch not settling, **5** is the destination refusing the copy, and **2** is
+a flow that could not run at all. There is no repair loop between them — the planner's own
+judge is the repair loop and it has already run — so a refusal hands every refused
+criterion back and stops.
+
+`--to` names the destination and defaults to `plans`; `--no-design-doc` stops the flow
+after the planner and its review, copying nothing and reporting no location, because a
+plan on the board with no document can never be approved and so can never be launched. A
+`--detach`ed `just plan` hands back before the plan exists, so it keeps the planner alone
+and prints the `just finish-plan` command that finishes it.
 
 **That order is forced rather than preferred, and the reason is where a review record
 lives.** A record is one entry of the task's *own Markdown document*, so
@@ -121,10 +156,20 @@ landed accepts it and spends no second judged turn. So does the design approval 
 for the same reason and one record further out — which is why the copy carries the plan's
 **documents** as well as its tasks: the store's own `project copy` carries none, and a
 plan copied without its design document arrives on the board with nothing to approve.
-`tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the whole flow for real —
+`tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the copy itself for real —
 drafting, clearing, a trial run that writes nothing, the copy, the record read back off
 what landed, and the check over it — against a second local store rather than the live
-board.
+board. `tests/plan_tooling/test_plan_flow_e2e.py` drives the whole of `just plan` the same
+way, and `tests/plan_tooling/test_finish_plan_recipe_e2e.py` drives the tail on its own
+together with each of the refusals above.
+
+**Where the destination holds what landed is read back out of it rather than composed.** A
+destination decides its own native ids and where its records live — a board mints a number
+where a directory keeps the name — so the two locations the flow reports are found through
+the origin stamp the store writes onto every record it creates by copying, and rendered
+from the `location` that store answers with. `orchestrator/plan_locations.py` is that
+read, and it refuses rather than guessing where a destination holds no copy of the plan,
+holds two, or holds anything other than exactly one design document for it.
 
 ### Approving the design document a plan is read as
 

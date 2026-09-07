@@ -153,28 +153,12 @@ RUN = RunId("plan-recipe-e2e")
 #: The planner node's own id, which every launch writes and the second node depends on.
 PLANNER_NODE = "plan"
 
-#: The second node every planning launch writes, and the three refs that decide what it
-#: runs as. The persona is a PATH for the reason the planner's is: a bare `design-doc`
-#: resolves against the roles compiled into `oneagentgraph`, which has none by that name.
-#: The graph is relative to the launch directory, and the loader resolves it against that
-#: directory — which is why `agent_graph` is read back relative below wherever a run's own
-#: record is what is being read.
-DESIGN_NODE = "design-doc"
-DESIGN_PERSONA_REF = "../personas/design-doc.yaml"
-DESIGN_GRAPH_REF = "graphs/design-doc.yaml"
+#: The field a per-node agent graph is named in, which the loader resolves against the
+#: directory a run was launched from before it records the plan. Nothing this module
+#: launches carries one — the node that does is written by the tail, in a launch of its
+#: own — so the only place it is read here is where a shipped example is compared against
+#: what the recipe would write.
 AGENT_GRAPH_FIELD = "agent_graph"
-
-#: The one statement of the document this repository ships, which the design-doc node's
-#: task has to name — a worker in a worktree cannot be sent to a file by memory.
-DESIGN_TEMPLATE = "config/design-doc-template.md"
-
-#: The sentence that disowns the plan's own acceptance criteria for the design-doc node.
-#: It is the load-bearing half of that task: the brief above it states what the PLAN has
-#: to satisfy, and a judge holds a dispatch to every criterion it finds in its task.
-DESIGN_DISOWNS_THE_BRIEF = (
-    "Everything above is the brief a planner was given, and none of it is this "
-    "dispatch's acceptance criteria."
-)
 
 #: The turn budget this launch states, so the flag that carries it is proven to reach
 #: the generated node rather than only to be accepted.
@@ -324,6 +308,13 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
             RUN,
             "--max-turns",
             str(TURN_BUDGET),
+            # The planner and nothing after it. What this fixture is about is the launch
+            # a brief becomes, and the tail after it is about the plan a planner writes —
+            # which a stand-in provider does not write, so every step of it would be a
+            # refusal about a project nothing authored. `just finish-plan` is driven whole
+            # in tests/plan_tooling/test_finish_plan_recipe_e2e.py, where a stand-in does
+            # author one.
+            "--no-design-doc",
             environment=environment,
         )
         assert launch.returncode == 0, f"the launch failed:\n{launch.stdout}\n{launch.stderr}"
@@ -414,15 +405,18 @@ def _node(plan: PlanDocument, node_id: str) -> PlanNode:
 
 
 @pytest.mark.xdist_group("plan-recipe")
-def test_the_generated_plan_is_two_nodes_and_its_planner_is_isolated_and_carries_the_brief(
+def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
     planned: Planned,
 ) -> None:
-    """The plan is the planner node and the design-doc node, and this reads the first.
+    """The plan this launch writes is the planner node and nothing else.
 
     Which nodes exist is asserted here because it is what everything else is read
-    against: the sibling below reads the second node, and a plan that grew a third — or
-    lost one — would leave both of them passing over a document nobody had looked at
-    whole. The planner node's own fields are the rest, and every one of them is one a
+    against, and because the count is the load-bearing half of this change: the document
+    a person reviews the plan as has to be written from *reviewed* content, and a run
+    cannot interject a review between its own nodes — so the design-doc node is not one
+    of this run's, it is `just finish-plan`'s own launch after the review has passed.
+    A plan that grew it back would be a document written from content nobody had read.
+    The planner node's own fields are the rest, and every one of them is one a
     manager would otherwise have to remember. The brief
     reaching the node **verbatim** is the load-bearing one: it is the manager's own
     words, in the template every task this repository dispatches is written in, and a
@@ -442,12 +436,7 @@ def test_the_generated_plan_is_two_nodes_and_its_planner_is_isolated_and_carries
     assert plan["schema_version"] == 3, plan
     assert plan["name"] == RUN, plan
     assert plan["goal"]["text"].strip(), "the plan states no goal"
-    # Sorted, because the order a plan's nodes are recorded in is the loader's rather
-    # than the recipe's: what the recipe decides is which nodes exist and what each one
-    # carries, and the dependency below is what decides which of them runs first.
-    assert sorted(node.get("id", "") for node in plan["tasks"]) == sorted(
-        [PLANNER_NODE, DESIGN_NODE]
-    ), plan["tasks"]
+    assert [node.get("id", "") for node in plan["tasks"]] == [PLANNER_NODE], plan["tasks"]
 
     node = _node(plan, PLANNER_NODE)
     assert node["task"] == BRIEF.rstrip(), (
@@ -468,94 +457,6 @@ def test_the_generated_plan_is_two_nodes_and_its_planner_is_isolated_and_carries
         f"checkout, so its worktree is not cut from the safety clone: {node}"
     )
     assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
-
-
-@pytest.mark.xdist_group("plan-recipe")
-def test_the_generated_plan_carries_a_design_doc_node_depending_on_the_planner(
-    planned: Planned,
-) -> None:
-    """The second node is what makes a planning run produce the document a person reviews.
-
-    A person cannot usefully review a plan node by node, so the run that writes the plan
-    writes the one short document the plan is read as. Every field here decides whether
-    that happens at all. The dependency is what makes it read a *finished* plan rather
-    than a half-written one. The persona is a **path**: a bare `design-doc` resolves
-    against the roles compiled into `oneagentgraph`, which ships none by that name, so
-    nothing here would be read. The agent graph is the reason this node is not the shipped
-    node-scope member — this role pairs its two sides the other way round from every
-    other dispatch on this host, and that reversal is a property of the node. And the
-    placement pair is the planner node's own, so the document is written in an isolated
-    worktree by a lifecycle node like every other rather than in the shared checkout.
-
-    `agent_graph` is read back relative to this checkout, because the loader resolves it
-    against the directory the run was launched from before it records the plan.
-    """
-    plan = planned.plan
-    node = _node(plan, DESIGN_NODE)
-    planner = _node(plan, PLANNER_NODE)
-
-    assert node.get("deps") == [PLANNER_NODE], (
-        f"the design-doc node depends on {node.get('deps')!r}; without the planner node "
-        "it would be dispatched beside the plan it is supposed to be written from"
-    )
-    assert node["persona"] == DESIGN_PERSONA_REF, (
-        f"the design-doc node names the persona {node['persona']!r}; a bare name resolves "
-        "to a role compiled into the tool, and there is no built-in role of this name"
-    )
-    named = node.get(AGENT_GRAPH_FIELD)
-    assert named is not None and str(Path(named).relative_to(REPO_ROOT)) == DESIGN_GRAPH_REF, (
-        f"the design-doc node is dispatched under {named!r} rather than {DESIGN_GRAPH_REF}, "
-        "so its two sides are paired the way every other dispatch on this host is"
-    )
-    assert (node.get("repo"), node.get("execution_checkout")) == (
-        planner.get("repo"),
-        planner.get("execution_checkout"),
-    ), (
-        f"the design-doc node is placed at {node.get('repo')!r} / "
-        f"{node.get('execution_checkout')!r} where the planner node is placed at "
-        f"{planner.get('repo')!r} / {planner.get('execution_checkout')!r}"
-    )
-    assert node.get("title", "").startswith("feat(plan): "), (
-        f"the design-doc node's subject is {node.get('title')!r}; `.githooks/commit-msg` "
-        "refuses a subject whose type this repository does not release from"
-    )
-    assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
-
-
-@pytest.mark.xdist_group("plan-recipe")
-def test_the_design_doc_nodes_task_carries_the_brief_the_plan_and_the_template(
-    planned: Planned,
-) -> None:
-    """Its task is the brief, then the three things a writer cannot recover without it.
-
-    The brief is there because the document opens with what is being built and why, and
-    the manager's own words are where both come from — so it reaches this node verbatim
-    exactly as it reaches the planner. What follows it is everything the node cannot
-    derive: **which plan** to read, since nothing hands one node's output to a later one
-    and a plan written to an ignored path in the planner's worktree does not outlive the
-    run; **where the template is**, since a worker in a worktree cannot be sent to a file
-    by memory; and that the criteria above it are the *plan's* and not its own, which is
-    the sentence that stops a judge holding this dispatch to a bar producing the plan was
-    somebody else's node.
-    """
-    task = _node(planned.plan, DESIGN_NODE)["task"]
-
-    assert task.startswith(BRIEF.rstrip()), (
-        "the brief did not reach the design-doc node verbatim, or something precedes it; "
-        f"the manager's words are the whole of what opens this task:\n{task!r}"
-    )
-    assert PLAN_PROJECT in task[len(BRIEF.rstrip()) :], (
-        f"the design-doc node's own instructions never name the plan {PLAN_PROJECT}, so "
-        f"the dispatch has no way to find what it is writing about:\n{task!r}"
-    )
-    assert DESIGN_TEMPLATE in task, (
-        f"the design-doc node's task never names {DESIGN_TEMPLATE}, which is the only "
-        f"statement of the document's shape and of what it is judged on:\n{task!r}"
-    )
-    assert _flattened(DESIGN_DISOWNS_THE_BRIEF) in _flattened(task), (
-        "the design-doc node's task never says the criteria above it are the plan's "
-        f"rather than this dispatch's, so its judge holds it to both:\n{task!r}"
-    )
 
 
 @pytest.mark.xdist_group("plan-recipe")
@@ -1053,7 +954,19 @@ def test_a_direct_launch_states_its_commit_exemption_in_the_task_it_dispatches(
     environment[PROMPT_LOG_ENV] = str(recorded)
     # llmlint: ignore-end[e2e_not_mocked]
 
-    launch = _just("plan", str(brief), "--name", DIRECT_RUN, "--direct", environment=environment)
+    # `--no-design-doc`, for the reason the module fixture carries it: what is under test
+    # is the task this launch dispatches, and the tail after it is about a plan a stand-in
+    # planner does not write — so every step of it would be a refusal about a project
+    # nothing authored.
+    launch = _just(
+        "plan",
+        str(brief),
+        "--name",
+        DIRECT_RUN,
+        "--direct",
+        "--no-design-doc",
+        environment=environment,
+    )
     try:
         assert launch.returncode == 0, f"`just plan --direct` failed:\n{launch.stderr}"
         assert "--direct dispatches it into this checkout" in launch.stderr, (
@@ -1435,20 +1348,20 @@ def test_a_brief_declaring_a_plan_project_it_cannot_use_is_refused_as_a_bad_valu
 NO_DESIGN_DOC_RUN = RunId("plan-recipe-no-design-doc")
 
 
-def test_the_opt_out_writes_the_one_node_project_and_forwards_no_flag_to_the_engine(
+def test_the_opt_out_drops_the_tail_and_the_brief_requirement_the_tail_is_the_reason_for(
     tmp_path: Path,
 ) -> None:
-    """`--no-design-doc` drops the node, its brief requirement, and nothing else.
+    """`--no-design-doc` drops the whole tail, its brief requirement, and nothing else.
 
     The document is produced by default because it is what a person approves before a plan
-    is dispatched, so opting out has to be explicit — and it has to opt out of the *whole*
-    of the node, requirement included: with nothing to read the plan there is nothing that
-    needs a project id, and demanding one would refuse a launch that has no use for the
-    answer.
+    is dispatched, so opting out has to be explicit — and it has to opt out of the
+    *requirement* with it: the `Plan project:` line exists so the tail can find the plan
+    it is finishing, and demanding one would refuse a launch that has no use for the
+    answer. This brief names none, so the launch succeeding is the assertion.
 
-    The flag is consumed here rather than forwarded, and the launch succeeding is what
-    says so: `onepipeline start` is closed over its own surface and refuses a flag it does
-    not know, so a run recorded under this name is a run the flag never reached.
+    The flag is consumed here rather than forwarded, and the launch succeeding says that
+    too: `onepipeline start` is closed over its own surface and refuses a flag it does not
+    know, so a run recorded under this name is a run the flag never reached.
 
     `--detach`, because what is under test is the document this writes and the launch it
     makes, not the dispatches that follow.
@@ -1486,9 +1399,15 @@ def test_the_opt_out_writes_the_one_node_project_and_forwards_no_flag_to_the_eng
             f"`--no-design-doc` still wrote {[node.get('id') for node in plan['tasks']]}"
         )
         assert plan["tasks"][0]["task"] == BRIEF_NAMING_NO_PLAN.rstrip(), (
-            "the one node's task is not the brief verbatim; opting out of the second node "
-            f"changes nothing about the first:\n{plan['tasks'][0]['task']!r}"
+            "the one node's task is not the brief verbatim; opting out of the tail "
+            f"changes nothing about the planner:\n{plan['tasks'][0]['task']!r}"
         )
+        # And nothing after the planner ran: the tail's own run is named from this one,
+        # so a ledger holding it would be the opt-out having been read as an opt-out of
+        # the node alone.
+        assert not (
+            Path(environment["ONEPIPELINE_RUNS_DIR"]) / f"{NO_DESIGN_DOC_RUN}-design"
+        ).exists(), "`--no-design-doc` launched the design document anyway"
     finally:
         _just("stop", NO_DESIGN_DOC_RUN, environment=environment, seconds=60)
         _remove_project(NO_DESIGN_DOC_RUN)
@@ -1507,7 +1426,7 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
     """
     detached = tmp_path / "checkout" / "scripts"
     detached.mkdir(parents=True)
-    for name in ("plan.sh", "credentials-env.sh", "ask-manager-env.sh"):
+    for name in ("plan.sh", "plan-brief.sh", "credentials-env.sh", "ask-manager-env.sh"):
         copied = detached / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)
