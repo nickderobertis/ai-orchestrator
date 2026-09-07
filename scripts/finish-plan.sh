@@ -364,13 +364,13 @@ export "$PLAN_RUN_ID_ENV=$design_run"
 
 # shellcheck source=scripts/credentials-env.sh
 load credentials-env.sh
-export_host_credentials finish-plan || exit $?
+export_host_credentials finish-plan || exit "$?"
 # shellcheck source=scripts/ask-manager-env.sh
 load ask-manager-env.sh
-export_ask_manager finish-plan || exit $?
+export_ask_manager finish-plan || exit "$?"
 # shellcheck source=scripts/plan-root-env.sh
 load plan-root-env.sh
-export_plan_authoring_root finish-plan || exit $?
+export_plan_authoring_root finish-plan || exit "$?"
 
 # The root the helper above resolved, which is where this launch writes its project and
 # where `onepipeline start` then looks for it. It replaces a `.plans` relative to

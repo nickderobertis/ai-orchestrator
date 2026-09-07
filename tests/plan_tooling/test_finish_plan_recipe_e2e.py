@@ -923,3 +923,71 @@ def test_a_design_document_launch_that_does_not_settle_ends_the_flow_at_its_own_
         "the review this flow spent was not recorded, so repeating the command would "
         "spend a second judged turn on content something has already read"
     )
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """`--detach` hands back before the plan exists, so the tail is the operator's to run.
+
+    Every step here is about the plan the planner writes, and a detached launch returns
+    the moment its run is recorded — so running them there would review a project nothing
+    has authored. What `just plan` owes instead is the command that finishes the plan once
+    the planner has settled, and it owes it **on the one receipt it already prints**: a
+    second success line is noise the next reader learns to skip, and this one is known
+    before the launch is even made.
+
+    The name and the placement are in that command rather than left to their defaults,
+    because a caller who re-ran it bare would finish the plan under a different run id and
+    against a different pair of checkouts than the one that planned it.
+
+    It lives beside the tail rather than beside the planner's own journeys because that is
+    what it is about, and because a real launch belongs behind this project's own edge.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    drafted = _draft("finish-plan-handover")
+    named = RunId("finish-plan-e2e-detached")
+    brief = _brief(tmp_path, drafted)
+
+    launch = _just(
+        "plan",
+        str(brief),
+        "--name",
+        named,
+        "--to",
+        DESTINATION,
+        "--detach",
+        environment=bench.environment,
+        seconds=180,
+    )
+    try:
+        assert launch.returncode == OK, f"the detached launch failed:\n{launch.stderr}"
+        reported = launch.stdout + launch.stderr
+        assert f"just finish-plan {brief}" in reported, (
+            f"a detached launch never said how to finish the plan it started:\n{reported}"
+        )
+        assert f"--name {named}" in reported, (
+            f"the handover drops the name this flow's runs are derived from:\n{reported}"
+        )
+        assert f"--repo {PUBLICATION_ALIAS} --execution-checkout {EXECUTION_ALIAS}" in reported, (
+            f"the handover drops the placement this launch resolved:\n{reported}"
+        )
+        assert f"--to {DESTINATION}" in reported, (
+            f"the handover drops the destination this launch was given:\n{reported}"
+        )
+        # One line, and this is it: the handover rides on the receipt the recipe already
+        # owns rather than being printed after the launch.
+        owned = [line for line in reported.splitlines() if line.startswith("plan: ")]
+        assert len(owned) == 1, (
+            f"a successful launch printed {len(owned)} of its own lines: {owned}"
+        )
+        # And it stopped there: the tail's own run is named from this one, so a ledger
+        # holding it would be a detached launch having run steps about a plan that does
+        # not exist yet.
+        assert not (bench.runs / f"{named}{DESIGN_RUN_SUFFIX}").exists(), reported
+        assert _records(bench.destination) == [], "a detached launch reached the destination"
+    finally:
+        _stop(bench, named)

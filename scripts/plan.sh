@@ -331,13 +331,13 @@ export "$PLAN_RUN_ID_ENV=$name"
 
 # shellcheck source=scripts/credentials-env.sh
 load credentials-env.sh
-export_host_credentials plan || exit $?
+export_host_credentials plan || exit "$?"
 # shellcheck source=scripts/ask-manager-env.sh
 load ask-manager-env.sh
-export_ask_manager plan || exit $?
+export_ask_manager plan || exit "$?"
 # shellcheck source=scripts/plan-root-env.sh
 load plan-root-env.sh
-export_plan_authoring_root plan || exit $?
+export_plan_authoring_root plan || exit "$?"
 
 # The root the helper above resolved, which is where this launch writes its project and
 # where everything downstream of it then looks: `onepipeline start` below, the review
