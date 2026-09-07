@@ -171,7 +171,14 @@ def installed_binary(repo: Path) -> Path:
     return repo / ".venv" / "bin" / "onetaskgraph"
 
 
-def fetch_double(root: Path, archive: Path | None) -> Path:
+def fetch_double(
+    root: Path,
+    archive: Path | None,
+    *,
+    name: str = "fetch-double",
+    delay: float = 0.0,
+    trace: Path | None = None,
+) -> Path:
     """A directory holding a `curl` that serves ``archive``, for the front of `PATH`.
 
     The same double `FETCH_DOUBLE` is, at the boundary rather than as a shell function:
@@ -182,13 +189,24 @@ def fetch_double(root: Path, archive: Path | None) -> Path:
     ``archive`` of ``None`` is a `curl` that always fails, which is how a journey proves
     a second run of the self-heal reaches no network at all: with that on `PATH`, an
     install that tried to fetch could not succeed.
+
+    ``delay`` is how long each fetch takes, which is what a concurrency journey needs:
+    a real network crossing is the slow part of an install, and holding one open is how
+    a second caller is certainly still waiting while the first provisions. ``trace``
+    records one line per fetch, so a journey can say how many callers crossed the
+    boundary rather than inspecting the lock they crossed it under. ``name`` keeps two
+    doubles in one journey from being written to the same directory.
     """
-    directory = root / "fetch-double"
+    directory = root / name
     directory.mkdir(parents=True, exist_ok=True)
     curl = directory / "curl"
+    trace_command = f'printf "%s\\n" "$destination" >>{shlex.quote(str(trace))}\n' if trace else ""
+    delay_command = f"sleep {delay}\n" if delay else ""
     if archive is None:
         curl.write_text(
             "#!/usr/bin/env bash\n"
+            'destination="${@: -1}"\n'
+            f"{trace_command}{delay_command}"
             "echo 'curl: this journey serves no archive; nothing here may fetch' >&2\n"
             "exit 1\n",
             encoding="utf-8",
@@ -198,9 +216,36 @@ def fetch_double(root: Path, archive: Path | None) -> Path:
             "#!/usr/bin/env bash\n"
             'destination="${@: -1}"\n'
             f"source={shlex.quote(str(archive))}\n"
+            f"{trace_command}{delay_command}"
             'if [[ "$destination" == *.sha256 ]]; then source="$source.sha256"; fi\n'
             'cp "$source" "$destination"\n',
             encoding="utf-8",
         )
     curl.chmod(0o755)
+    return directory
+
+
+def path_without(root: Path, tool: str, *, name: str = "no-tool") -> Path:
+    """A whole `PATH` holding every executable this one has, except ``tool``.
+
+    A stand-in for a platform that does not ship a program, which is how the installer's
+    `flock` fallback is reached: `command -v` searches `PATH`, so nothing put *in front*
+    of one can hide a tool that is behind it. Symlinked mechanically rather than from a
+    list, because the wrapper and the helper it sources reach a lot of ordinary tools and
+    a list of them would be a second thing to keep current.
+    """
+    directory = root / name
+    directory.mkdir(parents=True, exist_ok=True)
+    for entry in os.environ["PATH"].split(os.pathsep):
+        source = Path(entry)
+        if not source.is_dir():
+            continue
+        for candidate in sorted(source.iterdir()):
+            destination = directory / candidate.name
+            # `is_symlink` as well as `exists`, because a `PATH` entry that is itself a
+            # dangling link makes one here that `exists` reports False for — and then
+            # the same name from a later entry fails rather than being skipped.
+            if candidate.name == tool or destination.is_symlink() or destination.exists():
+                continue
+            destination.symlink_to(candidate)
     return directory

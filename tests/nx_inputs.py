@@ -35,6 +35,12 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: import — named one by one rather than as a directory, so a journey added beside them
 #: does not silently start invalidating this tier.
 ASK_SEAM_WORKSPACE = "askSeamWorkspace"
+#: The key `plan-store-install:test` is memoized on: what the host-tool journeys over
+#: this checkout's own plan-store provisioning drive and read. Named file by file rather
+#: than as `scripts/**/*` or `config/**/*`: these journeys race real processes for a real
+#: lock and install a real release archive over and over, so every glob wider than the
+#: two scripts and the one pin they actually read makes an unrelated edit pay for that.
+PLAN_STORE_INSTALL_WORKSPACE = "planStoreInstallWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
 #: `just telemetry-server` drive and read — those two recipes and the scripts they
 #: reach, the address both resolve each other through, the pins that decide which
@@ -117,6 +123,21 @@ DAG_UI_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 DAG_UI_ROOT = "tests/dag_ui"
+
+#: The project whose test target owns the host-tool journeys over this checkout's own
+#: plan-store provisioning — the real `scripts/onetaskgraph-install.sh`, the real
+#: `install_onetaskgraph` it sources, and the lock they serialize on. A project of its
+#: own for the reason `plan-tooling` and `ask-seam` are: a concurrency journey races four
+#: real processes and each of them installs a real release archive, which is a cost
+#: `nx affected` can only keep off an unrelated edit where it is a separate project. It
+#: declares no Python distribution either, for the same reason.
+PLAN_STORE_INSTALL_PROJECT = "plan-store-install"
+#: That project's one test target. One rather than two, as `ask-seam` has one: nothing
+#: here reads this repository's prose.
+PLAN_STORE_INSTALL_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore. Path-selected, as
+#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+PLAN_STORE_INSTALL_ROOT = "tests/plan_store_install"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:
