@@ -12,11 +12,14 @@ the tracked template that says what a design document is, so a passing test here
 claim about both: editing the document loses its approval, and moving the template
 invalidates every approval granted under the previous one. A key over the content alone
 would leave a standing approval after the bar it was granted under had moved, which is the
-same defect the plan-review key exists to prevent one document further up.
+same defect the plan-review key exists to prevent one document further up. The other
+direction is the one a copied plan pays for: nothing the store the document sits in owns is
+in the key, so a record that travels arrives matching what the destination computes.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -34,8 +37,55 @@ from orchestrator.plan_store import QualifiedDocumentId, StoreDocument
 #: rather than about what the template currently says.
 STATED = design_approval.TemplateFingerprint("a stated design-document template")
 
+#: That same bar after somebody edited `config/design-doc-template.md`. Distinct from
+#: :data:`STATED` and meaningless beyond being distinct: what an approval turns on is
+#: whether the fingerprint in force is the one it was granted under.
+MOVED = design_approval.TemplateFingerprint("a template that has moved")
+
+#: The two things a person reads when they approve a design document, and what
+#: :func:`_document` states them as. Named so a test can hold one still while it moves
+#: the other, which is what tells the two invalidation paths apart.
+APPROVED_TITLE = "Design: demo"
+APPROVED_PROSE = "## What\n\nA paginated listing.\n"
+
 #: Where the store says the document below is, when a test does not say otherwise.
 LOCATED = {"path": "/test/documents/demo-design.md"}
+
+#: The plan as the store it was drafted in addresses it, and as the board it was copied
+#: onto addresses it. The second is opaque because a board mints its own identifiers,
+#: which is the whole reason an approval may not be keyed on one.
+SOURCE_PROJECT = "authoring:demo"
+BOARD_PROJECT = "plans:PVT_kwHOAA"
+
+#: The fields of a store document the key is composed of. The other half of the partition
+#: is :data:`EXCLUDED`, and the two are asserted in both directions below, so this pair is
+#: a claim this file makes about :func:`~orchestrator.design_approval.approval_key` rather
+#: than a note about it: a field moved from one side to the other fails one of them.
+COVERED = ("title", "content")
+
+#: Every other field of a store document, taken from :class:`StoreDocument` rather than
+#: listed here. Derived because the list is not this file's to keep: a field added to that
+#: record tomorrow is outside the key by the same silence that puts these outside it, and
+#: a hand-written list would go on passing while saying nothing about it.
+EXCLUDED = tuple(
+    field.name for field in dataclasses.fields(StoreDocument) if field.name not in COVERED
+)
+
+#: A second, different value for each field of a store document. Stated per field because
+#: a second value has to be one of that field's own type, and *only* per field: which
+#: fields must appear here is :data:`EXCLUDED` and :data:`COVERED`'s to say, and
+#: :func:`_otherwise` refuses a field this mapping has no second value for — so a field
+#: added to that record fails this module rather than passing through it unexamined.
+OTHERWISE: Mapping[str, object] = {
+    "qualified_id": QualifiedDocumentId("plans:PVTI_lAHOAA"),
+    "title": "Design: something else",
+    "content": "## What\n\nSomething else.\n",
+    "project": "PVT_kwHOAA",
+    "labels": ["design"],
+    "repositories": ["nickderobertis/ai-orchestrator"],
+    "metadata": {"the destination's own bookkeeping": "authoring:demo-design"},
+    "location": {"url": "https://github.invalid/users/x/projects/2?pane=issue&itemId=7"},
+}
 
 
 @pytest.fixture
@@ -48,9 +98,11 @@ def template(monkeypatch: pytest.MonkeyPatch) -> design_approval.TemplateFingerp
 def _document(
     *,
     qualified_id: str = "authoring:demo-design",
-    title: str = "Design: demo",
-    content: str = "## What\n\nA paginated listing.\n",
+    title: str = APPROVED_TITLE,
+    content: str = APPROVED_PROSE,
     project: str | None = "demo",
+    labels: list[str] | None = None,
+    repositories: list[str] | None = None,
     metadata: Mapping[str, object] | None = None,
     location: Mapping[str, object] | None = LOCATED,
 ) -> StoreDocument:
@@ -65,8 +117,8 @@ def _document(
         title=title,
         content=content,
         project=project,
-        labels=[],
-        repositories=[],
+        labels=labels or [],
+        repositories=repositories or [],
         metadata=metadata or {},
         location=location,
     )
@@ -84,6 +136,39 @@ def _approved(document: StoreDocument | None = None) -> StoreDocument:
     )
 
 
+def _otherwise(document: StoreDocument, field: str) -> StoreDocument:
+    """``document`` with ``field`` holding a different value of that field's own type."""
+    if field not in OTHERWISE:
+        raise AssertionError(
+            f"{field!r} is a field of a store document that this module states no second "
+            f"value for, so nothing here says whether the approval key covers it"
+        )
+    return dataclasses.replace(document, **{field: OTHERWISE[field]})
+
+
+def _elsewhere(document: StoreDocument) -> StoreDocument:
+    """``document`` as a *different* store addresses it: every excluded field rewritten.
+
+    Deliberately not a model of what `just copy-plan` does. Which fields a real copy
+    rewrites and which it holds is that command's own contract, and it is gated where a
+    real copy can be watched — `tests/plan_tooling/test_approve_design_recipe_e2e.py`
+    compares a real source record against its real copy field by field. What is stated
+    here is only this module's own subject, that the key excludes these, so the document
+    below is the hardest case that property has to survive rather than a second statement
+    of somebody else's interface. Derived from :data:`EXCLUDED`, so it stays the hardest
+    case as that record grows.
+    """
+    elsewhere = document
+    for field in EXCLUDED:
+        elsewhere = _otherwise(elsewhere, field)
+    # The record travels *in* the metadata map, so a destination writes its bookkeeping
+    # beside it rather than over it — the one thing rewriting that field wholesale above
+    # would not leave true.
+    return dataclasses.replace(
+        elsewhere, metadata=dict(elsewhere.metadata) | dict(document.metadata)
+    )
+
+
 def _holds(monkeypatch: pytest.MonkeyPatch, *documents: StoreDocument) -> None:
     monkeypatch.setattr(plan_store, "read_documents", lambda _project: list(documents))
 
@@ -92,17 +177,129 @@ def _project(monkeypatch: pytest.MonkeyPatch, metadata: object) -> None:
     monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": metadata})
 
 
-def test_the_key_covers_the_documents_content_and_the_template_it_was_read_against() -> None:
-    """Both halves, because an approval is of one document under one statement of the shape."""
+@pytest.mark.parametrize("field", COVERED)
+def test_the_key_covers_what_a_person_read(field: str) -> None:
+    """Half the partition: move one of these and the approval is of something else."""
     base = design_approval.approval_key(_document(), STATED)
-    for moved in (
-        _document(content="## What\n\nSomething else.\n"),
-        _document(title="Design: something else"),
-        _document(project="other"),
-    ):
-        assert design_approval.approval_key(moved, STATED) != base
-    other = design_approval.TemplateFingerprint("a template that has moved")
-    assert design_approval.approval_key(_document(), other) != base
+    assert design_approval.approval_key(_otherwise(_document(), field), STATED) != base
+
+
+def test_the_key_covers_the_template_the_document_was_read_against() -> None:
+    """And the bar, because an approval is of one document under one statement of the shape."""
+    assert design_approval.approval_key(_document(), MOVED) != design_approval.approval_key(
+        _document(), STATED
+    )
+
+
+@pytest.mark.parametrize("field", EXCLUDED)
+def test_the_key_covers_no_field_but_those(field: str) -> None:
+    """The other half, and what lets a record travel between stores at all.
+
+    Every field of a store document that is not what a person read is varied here — the
+    set taken from that record rather than listed, so this is a claim about all of them
+    and not about the ones somebody remembered. A copy is defined to rewrite the ones the
+    destination owns, and a key covering any of them would arrive intact and no longer
+    match what the destination computes.
+
+    ``project`` is the one that cost a plan: the same document is a document of
+    `some-plan` where it was drafted and of an opaque board identifier once it is copied,
+    so a key over it refused every copied plan for want of the approval it was carrying.
+    """
+    assert design_approval.approval_key(
+        _otherwise(_document(), field), STATED
+    ) == design_approval.approval_key(_document(), STATED)
+
+
+def test_an_approval_survives_a_document_addressed_wholly_by_another_store() -> None:
+    """Every excluded field rewritten at once, which is the state a copied record is in."""
+    drafted = _document(
+        metadata={design_approval.RECORD_KEY: {"key": "recorded where it was drafted"}}
+    )
+    assert design_approval.approval_key(
+        _elsewhere(drafted), STATED
+    ) == design_approval.approval_key(_document(), STATED)
+
+
+def _recorded_by_approving(
+    monkeypatch: pytest.MonkeyPatch, document: StoreDocument
+) -> StoreDocument:
+    """``document`` carrying the record `just approve-design` writes for it.
+
+    Written by :func:`~orchestrator.design_approval.approve` rather than composed here, so
+    what travels below is the record the command actually produces rather than one this
+    file knows how to spell — which is the half a hand-built record cannot speak to.
+    """
+    written: list[object] = []
+
+    def write(_target: StoreDocument, key: str, value: object) -> None:
+        assert key == design_approval.RECORD_KEY
+        written.append(value)
+
+    monkeypatch.setattr(plan_store, "write_document_metadata", write)
+    _holds(monkeypatch, document)
+    assert design_approval.approve(SOURCE_PROJECT).held is False
+    (record,) = written
+    return _document(
+        qualified_id=str(document.qualified_id),
+        title=document.title,
+        content=document.content,
+        project=document.project,
+        metadata=dict(document.metadata) | {design_approval.RECORD_KEY: record},
+    )
+
+
+@pytest.mark.parametrize(
+    ("moved", "title", "prose", "in_force"),
+    [
+        ("its title", "Design: something else", APPROVED_PROSE, STATED),
+        ("its prose", APPROVED_TITLE, "## What\n\nSomething else.\n", STATED),
+        ("the template it is read against", APPROVED_TITLE, APPROVED_PROSE, MOVED),
+    ],
+    ids=["title", "prose", "template"],
+)
+def test_a_travelled_document_is_unapproved_again_once_what_was_approved_moves(
+    moved: str,
+    title: str,
+    prose: str,
+    in_force: design_approval.TemplateFingerprint,
+    monkeypatch: pytest.MonkeyPatch,
+    template: design_approval.TemplateFingerprint,
+) -> None:
+    """Surviving a copy is not the same as surviving anything, and this is the other half.
+
+    The key stopped covering what the destination owns so that a record could travel. A
+    record that then stood over content nobody had read would be worse than the refusal
+    that behaviour replaced — so all three invalidating moves are driven here on the
+    **travelled** document rather than on the drafted one: it carries an approval recorded
+    against the source while every field the key excludes is the destination's.
+
+    Asked through :func:`~orchestrator.design_approval.refusal`, which is the question a
+    launch asks, rather than through the digest, which is only how it answers. A pair of
+    keys that differ says nothing about whether a launch would be refused; this does.
+    """
+    approved = _recorded_by_approving(monkeypatch, _document())
+    landed = _elsewhere(approved)
+
+    _project(monkeypatch, {})
+    _holds(monkeypatch, landed)
+    assert design_approval.refusal(BOARD_PROJECT) is None, (
+        "the approval recorded where the document was drafted did not survive the copy, "
+        "so what follows would be a refusal this test could not attribute"
+    )
+
+    monkeypatch.setattr(design_approval, "template_fingerprint", lambda *_arguments: in_force)
+    _holds(
+        monkeypatch,
+        _elsewhere(_document(title=title, content=prose, metadata=approved.metadata)),
+    )
+    reason = design_approval.refusal(BOARD_PROJECT)
+    assert reason is not None, f"the copy is still approved after {moved} moved"
+    assert "carries no approval for what it currently says" in reason
+    assert design_approval.RECIPE in reason
+    assert "https://github.invalid" in reason, (
+        f"the refusal does not say where the travelled document is, so the person who has "
+        f"to read it again is sent to wherever it was drafted instead: {reason}"
+    )
 
 
 def test_a_moved_template_gives_every_document_a_different_key(tmp_path: Path) -> None:
@@ -283,6 +480,35 @@ def test_the_recipe_refuses_a_project_with_nothing_to_approve(
     _holds(monkeypatch)
     assert design_approval.main(["authoring:demo"]) == 1
     assert "holds no design document" in capsys.readouterr().err
+
+
+def test_the_recipe_refuses_an_argument_that_names_a_project_in_no_store(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one thing asked of the argument, asked before anything is asked of the store.
+
+    Proven by making every store read this command could make an error: the refusal has
+    to come from the shape of the argument, because reaching the store at all would fail
+    the test rather than answer it. That is the boundary the check is for — a bare project
+    name is text somebody typed, and it reaches a subprocess and a store otherwise.
+    """
+
+    def never(project: str) -> list[StoreDocument]:
+        raise AssertionError(f"an unqualified argument {project!r} reached the plan store")
+
+    monkeypatch.setattr(plan_store, "read_documents", never)
+    for argument in ("demo", "authoring:", ":demo", "authoring:a demo", "authoring/demo"):
+        assert design_approval.main([argument]) == 1, argument
+        refused = capsys.readouterr().err
+        assert repr(argument) in refused, refused
+        assert "is not a qualified project id" in refused, refused
+        assert "`<source>:<project>`" in refused, refused
+
+
+@pytest.mark.parametrize("argument", [SOURCE_PROJECT, BOARD_PROJECT, "a.source_name-1:x/y"])
+def test_a_qualified_id_is_handed_on_as_it_was_typed(argument: str) -> None:
+    """The other half: the check refuses a shape and never rewrites one it accepts."""
+    assert design_approval.qualified(argument) == argument
 
 
 def test_the_recipe_takes_no_flag_that_would_get_a_plan_past_the_gate() -> None:

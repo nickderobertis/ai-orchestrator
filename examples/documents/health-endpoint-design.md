@@ -2,10 +2,10 @@
 title: 'Design: health-endpoint'
 project: health-endpoint
 metadata:
-  onetaskgraph.origin: orchestrator-record-staging:health-endpoint-design
+  onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
   orchestrator.design-approval:
-    approved_at: 2026-09-01T15:56:31.253222+00:00
-    key: 0ae41e5572671f2910beb98772403fbdaaa1a2f7255dbb7fe6db62a1521b2e33
+    approved_at: 2026-09-06T10:33:49.179824+00:00
+    key: 39fc71de845c6a2a67b50840b3dfa79f2fa6c2f4369ac4ab9695ab96502efafd
 ---
 ## What
 

@@ -2,10 +2,10 @@
 title: 'Design: plan-example'
 project: plan-example
 metadata:
-  onetaskgraph.origin: orchestrator-record-staging:plan-example-design
+  onetaskgraph.origin: orchestrator-record-staging:7543864a301acea3a06b63a9cda7d47b585511926f55b6d379566db4530ee0a8
   orchestrator.design-approval:
-    approved_at: 2026-09-01T15:56:31.492184+00:00
-    key: c21421a65964a4ffa7aef39b094a055f3c849da97fd02913a46ee188efb8ce4c
+    approved_at: 2026-09-06T10:33:49.259244+00:00
+    key: 1cce286b97f57f673f71914c1100fffe7b8823e73d39de8fde5b7580a2370ec9
 ---
 ## What
 

@@ -17,17 +17,21 @@ defends for the plan-review gate beside this one:
   second opinion on identical content is how one plan comes to carry two verdicts.
 * **There is no escape hatch** — no flag, no option, no environment variable. An escape
   here is reached under exactly the time pressure that makes skipping this a mistake.
-* **The key covers the bar as well as the content.** It is a digest of the document's own
-  authored content *and* of the tracked template that says what a design document is, so
-  editing the document loses its approval and moving the template invalidates every
-  approval granted under the previous one.
+* **The key covers the bar as well as the content, and nothing else.** It is a digest of
+  the document's own authored content *and* of the tracked template that says what a design
+  document is, so editing the document loses its approval and moving the template
+  invalidates every approval granted under the previous one — while nothing the store the
+  document sits in owns is in it at all.
 
 **The record goes onto the document itself**, in the open metadata map every store carries,
 rather than into a file beside the plan. That is what makes it readable from whichever
 store the plan is held in: it travels with the document through `just copy-plan` exactly as
 a review record travels with a task, so a plan cleared where it was drafted is still cleared
 once it reaches the board. `orchestrator/plan_store.py` owns the write and states what it
-costs.
+costs. **Carrying the record is only half of travelling**, and the other half is that
+last clause of the bullet above: a copy is defined to change where a record sits, so a key
+covering any part of that would arrive intact and no longer match — see :func:`approval_key`
+for the identifier that did exactly that.
 
 **One exemption exists and it is the only one.** The project a planning launch itself writes
 is exempt, because that run's *output* is the plan and its design document does not exist
@@ -84,10 +88,13 @@ PLANNING = "planning"
 #: The recipe that records an approval, named in every refusal that wants one.
 RECIPE = "just approve-design"
 
-#: What a qualified id looks like before anything is asked of the store. The launch gate
-#: reads a command line it deliberately does not parse — see :func:`gate_main` — so this is
-#: what tells a project id from a flag value, and it is narrow on the source half because a
-#: source is a configured name rather than arbitrary text.
+#: What a qualified id looks like before anything is asked of the store, read by both
+#: entry points here and meaning something different to each. The launch gate reads a
+#: command line it deliberately does not parse — see :func:`gate_main` — so there this is
+#: what tells a project id from a flag value; :func:`qualified` refuses what does not match
+#: it, because `just approve-design` is handed one argument and it is a project id or it is
+#: nothing. It is narrow on the source half because a source is a configured name rather
+#: than arbitrary text.
 QUALIFIED = re.compile(r"[A-Za-z0-9_.-]+:[^\s]+\Z")
 
 
@@ -124,16 +131,28 @@ def template_fingerprint(root: Path = REPO_ROOT) -> TemplateFingerprint:
 def approval_key(document: StoreDocument, template: TemplateFingerprint) -> ApprovalKey:
     """The digest ``document``'s content hashes to, approved under ``template``.
 
-    **Exactly the authored content, and the bar.** The title, the project it is a document
-    of, and the prose — the three things a person read when they approved it. Nothing the
-    store owns is here: the record itself lives in the metadata map, and
-    `onetaskgraph.origin` is rewritten by the very copy that writes the record, so a key
-    over the metadata would invalidate the approval in the act of granting it. The labels
-    are out for the weaker reason that nobody approves a label.
+    **Exactly the authored content, and the bar.** The title, the prose, and the template
+    that says what a design document is — the two things a person read when they approved
+    it, and the shape they read them under. **Nothing the destination store owns is here**,
+    and that is the whole of what makes the record travel: a copy is *defined* to change
+    where a record sits, so a key covering any of that would invalidate the approval in the
+    act of moving it. `project` in particular is not: it is the store's own local
+    identifier for the plan the document belongs to, and the same document is a document of
+    `some-plan` where it was drafted and of an opaque board identifier once it is copied —
+    so a key over it refused every copied plan for want of the approval it was carrying,
+    and both ways past that were wrong: recording an approval against a copy nobody had
+    read, or launching from the drafting store and projecting every settlement into a
+    gitignored local directory. `onetaskgraph.origin` and the record itself are outside it
+    for the same reason one step further: both are metadata the copy writes. The labels are
+    out for the weaker reason that nobody approves a label.
+
+    One thing that costs is worth knowing rather than discovering, and it is the same one
+    `orchestrator/plan_review.py`'s `review_key` names: a document **moved to another
+    plan** after its approval keeps that approval. What a person approved is the document,
+    and it is unchanged.
     """
     authored = {
         "content": document.content,
-        "project": document.project,
         "template": template,
         "title": document.title,
     }
@@ -244,6 +263,29 @@ def refusal(project: str) -> str | None:
     )
 
 
+def qualified(project: str) -> str:
+    """``project`` itself when it is a qualified id, or ``ValueError`` saying what one is.
+
+    The one thing asked of the argument before anything is asked of the store, and it is
+    asked here because this is where text somebody typed crosses into this repository.
+    :data:`QUALIFIED` is the same shape :func:`gate_main` holds every argument it inspects
+    to — there to tell a project id from a flag value, and here to refuse one — so the
+    recipe that *records* an approval and the gate that *reads* one agree on what a
+    project id is rather than each having its own idea.
+
+    The source half is checked for shape and not for existence: whether this checkout
+    configures a source of that name is the store's answer to give, and asking it costs a
+    store read that this refusal exists to happen before.
+    """
+    if QUALIFIED.fullmatch(project):
+        return project
+    raise ValueError(
+        f"{project!r} is not a qualified project id, so it names a project in no store "
+        f"and nothing was read; pass the `<source>:<project>` id you would hand `just "
+        f"check-plan`, whose source half is a source this checkout configures"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Record the user's approval of one plan's design document, from `just approve-design`."""
     parser = argparse.ArgumentParser(
@@ -253,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("project", metavar="SOURCE:PROJECT")
     args = parser.parse_args(argv)
     try:
-        answered = approve(args.project)
+        answered = approve(qualified(args.project))
     except (OSError, ValueError) as exc:
         print(f"approve-design: {exc}", file=sys.stderr)
         return 1

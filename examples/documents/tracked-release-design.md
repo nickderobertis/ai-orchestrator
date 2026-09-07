@@ -2,10 +2,10 @@
 title: 'Design: tracked-release'
 project: tracked-release
 metadata:
-  onetaskgraph.origin: orchestrator-record-staging:tracked-release-design
+  onetaskgraph.origin: orchestrator-record-staging:f9a181fad4a495bf5f9042f736a807665321e8f64d5e8eb0eceae56c9c56a6a8
   orchestrator.design-approval:
-    approved_at: 2026-09-01T15:56:32.392806+00:00
-    key: 16b60a4ce2eb25b977c9cf0873e615813c5fa166d2660d5b7321674df61fa235
+    approved_at: 2026-09-06T10:33:49.582708+00:00
+    key: d8561eead44d96ae5b86034dd874026bdeb7da288518cfd49b6ae46fe1f9b4a3
 ---
 ## What
 

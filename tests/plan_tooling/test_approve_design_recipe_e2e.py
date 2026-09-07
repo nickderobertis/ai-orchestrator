@@ -21,18 +21,21 @@ record.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
-from project_fixtures import helper
+from project_fixtures import helper, reviewed
 from waits import timeout as e2e_timeout
 
-from orchestrator.design_approval import PLAN_KIND, PLANNING
+from orchestrator.design_approval import PLAN_KIND, PLANNING, RECORD_KEY
+from orchestrator.plan_store import StoreDocument
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -43,6 +46,10 @@ from orchestrator.root import REPO_ROOT
 #: module docstring gives. A plain lowercase name because it is spelled into the store's
 #: own `ONETASKGRAPH_SOURCES__…` environment layer as well as onto a command line.
 SOURCE = "drafting"
+
+#: The source a cleared plan is copied into here, standing in for the `plans` board this
+#: repository launches from. A plain lowercase name for the reason :data:`SOURCE` is one.
+BOARD = "board"
 
 #: The guard covering every paid identity `ONEHARNESS_BIN_*` cannot reach. Nothing here
 #: should dispatch at all, which is exactly why it is worth proving rather than assuming:
@@ -136,6 +143,27 @@ class Store:
         )
         return record
 
+    def standing_project(self, native: str, *, titled: str) -> Path:
+        """One project this store already holds, under an identifier of its own.
+
+        What a copy onto the board this repository launches from produces is the plan
+        under an id the *destination* minted, and a local store copied onto keeps the
+        drafted plan's own native id — so the destination's record is stood up here first
+        and the copy matched onto it by title, which is the one way a pair of local stores
+        reaches the state the board reaches by itself.
+        """
+        projects = self.root / "projects"
+        projects.mkdir(parents=True, exist_ok=True)
+        record = projects / f"{native}.md"
+        record.write_text(
+            frontmatter(
+                {"title": titled, "status": "todo", "metadata": {}},
+                f"This store's own record of {titled}.",
+            ),
+            encoding="utf-8",
+        )
+        return record
+
 
 @pytest.fixture
 def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Store]:
@@ -151,6 +179,24 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Store]:
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__PLUGIN", "local-md")
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__CONFIG__ROOT", str(root))
     monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", SOURCE)
+    yield Store(root)
+
+
+@pytest.fixture
+def board(store: Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[Store]:
+    """A second local Markdown source, standing in for the board a cleared plan is copied to.
+
+    Configured after ``store`` and beside it, which is what widens
+    `ONETASKGRAPH_DEFAULT_SOURCES` to the two sources in play: the copy reads the drafting
+    one and the launch reads this one, and the live `plans` board stays out of both.
+    """
+    root = store.root.parent / "board"
+    # A `local-md` source canonicalizes its root when it is built, so an absent one is a
+    # broken source rather than an empty store.
+    root.mkdir(parents=True)
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN", "local-md")
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT", str(root))
+    monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", f"{SOURCE},{BOARD}")
     yield Store(root)
 
 
@@ -279,6 +325,30 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
     relaunched = _launch(project, runs)
     assert relaunched.returncode == 0, relaunched.stdout + relaunched.stderr
     assert _settled(relaunched) == "complete", relaunched.stdout
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_the_recipe_refuses_an_argument_that_names_a_project_in_no_store(
+    store: Store, runs: Path
+) -> None:
+    """What a plain project name gets from the real recipe, before any store is read.
+
+    Driven through the recipe rather than the function because that is where the argument
+    is untrusted: `just approve-design` is a command line an operator types, and until it
+    is held to a shape a bare name reaches `onetaskgraph` as a project id. This journey
+    writes no plan at all, so the store has nothing this argument could have named — and
+    the refusal still says what a project id is rather than what the store did not find,
+    which is the whole of what makes it early.
+    """
+    refused = _just("approve-design", "approve-design-flow", runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "is not a qualified project id" in refused.stderr, refused.stderr
+    assert "`<source>:<project>`" in refused.stderr, refused.stderr
+    assert "holds no design document" not in refused.stderr, (
+        f"the argument reached the store, so the shape is checked after the read rather "
+        f"than before it:\n{refused.stderr}"
+    )
+    assert not list(store.root.iterdir()), f"a refused approval wrote into the store:\n{store.root}"
 
 
 @pytest.mark.xdist_group("approve-design")
@@ -431,3 +501,178 @@ def test_two_plans_in_one_store_each_keep_their_own_approval(store: Store, runs:
         launched = _launch(project, runs)
         assert launched.returncode == 0, launched.stdout + launched.stderr
         assert _settled(launched) == "complete", launched.stdout
+
+
+#: The one field of :class:`StoreDocument` the listing answers outside the item payload:
+#: a document is addressed by `id` on the envelope and the payload repeats no part of it.
+#: Every other field is read from that payload under its own name.
+ADDRESSED_AS = {"qualified_id": "id"}
+
+#: What the destination mints for itself rather than taking from the source. Each is
+#: asserted below to *differ* across a real copy: a destination that left one alone would
+#: make the launch at the end of that journey pass whether or not the approval key
+#: excluded it, which is the one way this journey could assert nothing.
+MINTED = ("qualified_id", "project", "location")
+
+#: The field compared by whether it carries an approval record at all rather than whole.
+#: The destination's own bookkeeping legitimately sits in the metadata map beside the
+#: record, and what the record *says* is the launch gate's to decide — which the launch at
+#: the end of that journey is what decides.
+BY_ITS_APPROVAL_RECORD = ("metadata",)
+
+#: Everything else a store reports about a document — what a copy is defined to leave
+#: alone — taken from :class:`StoreDocument` rather than listed here. Derived because the
+#: list is not this module's to keep: a hand-written model of the payload beside that
+#: record would go on passing while saying nothing about a field added to it, which is
+#: exactly what a journey claiming to compare *every* field must not do. An added field
+#: lands here, under the strict reading, so it comes due rather than passing unexamined.
+CARRIED = tuple(
+    field.name
+    for field in dataclasses.fields(StoreDocument)
+    if field.name not in MINTED + BY_ITS_APPROVAL_RECORD
+)
+
+#: Every field of that record, in the three groups the comparison below reads them in.
+COMPARED = (*CARRIED, *MINTED, *BY_ITS_APPROVAL_RECORD)
+
+
+def test_every_field_of_a_stored_document_is_classified_by_the_copy_comparison() -> None:
+    """:data:`MINTED` and :data:`BY_ITS_APPROVAL_RECORD` name fields that exist.
+
+    Exhaustiveness holds by construction — :data:`CARRIED` is the complement — so what
+    this adds is the other half of the partition: a name in either hand-written group
+    that is not a field of :class:`StoreDocument`, a typo or a field since renamed, would
+    move a real field into :data:`CARRIED` and go on passing while the group it was meant
+    to be in silently emptied.
+    """
+    record = {field.name for field in dataclasses.fields(StoreDocument)}
+    classified = MINTED + BY_ITS_APPROVAL_RECORD
+    assert set(classified) <= record, (
+        f"{sorted(set(classified) - record)} is classified here and is not a field of "
+        f"{StoreDocument.__name__}, whose fields are {sorted(record)}"
+    )
+    assert len(set(classified)) == len(classified), classified
+
+
+def _documents(project: str, runs: Path) -> list[dict[str, Any]]:
+    """Every document of ``project``, read through `just plans` — the operator's own surface.
+
+    Deliberately not this repository's own reader: what a journey asserts about a stored
+    record should be what somebody looking at the store would see, and
+    :func:`~orchestrator.plan_store.read_documents` is a party to the copy — `just
+    copy-plan` carries a plan's documents over through it — rather than a witness of it.
+    What *is* taken from that module is which fields to read, so that this journey and the
+    record it is comparing are one model of the payload rather than two.
+    """
+    listed = _just("plans", "document", "list", "--project", project, "--json", runs=runs)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    return [_held(one) for one in json.loads(listed.stdout)["items"]]
+
+
+def _held(one: Mapping[str, Any]) -> dict[str, Any]:
+    """One listed document as :data:`COMPARED` reads it, refusing a payload short of it.
+
+    Indexed rather than defaulted: a field of :class:`StoreDocument` the store does not
+    answer under that name would otherwise read as absent from both sides of the copy and
+    compare equal, which is the silence deriving these names exists to end.
+    """
+    payload = one["item"]
+    missing = sorted(name for name in COMPARED if name not in ADDRESSED_AS and name not in payload)
+    assert not missing, (
+        f"the store answered document {one['id']} without {missing}, which "
+        f"{StoreDocument.__name__} declares, so this journey cannot say what a copy did "
+        f"to those fields: {payload}"
+    )
+    return {
+        name: one[ADDRESSED_AS[name]] if name in ADDRESSED_AS else payload[name]
+        for name in COMPARED
+    }
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_an_approval_travels_with_the_document_onto_the_store_the_plan_is_launched_from(
+    store: Store, board: Store, runs: Path
+) -> None:
+    """A plan approved where it was drafted is still approved once it has been copied.
+
+    That is the order this repository's own plans go in — drafted locally, cleared there,
+    approved there, copied onto the board, launched from the board — and the approval is
+    written into the document's own metadata map precisely so that it survives the middle
+    step. Carrying the record is only half of surviving: the destination recomputes the key
+    over what arrived, so a key covering anything the destination owns arrives intact and
+    no longer matches. It did, and the two ways past it were both wrong — re-running the
+    approval against the copy, which records an approval nobody gave, or launching from the
+    drafting store, which projects every settlement into a gitignored local directory.
+
+    So the launch at the end is the assertion, and everything before it is the state: the
+    copy is real, both stores are real, and the launch is the same real `just orchestrate`
+    every refusal above is taken from.
+    """
+    native = "approve-design-copied"
+    drafted = store.plan(native)
+    store.document(native)
+
+    # `just copy-plan` refuses a plan no review record covers, so a cleared plan is state
+    # this journey has to reach rather than anything it is about. `reviewed` reaches it the
+    # way an operator does — the real recipe, the real script, the real `oneharness` CLI
+    # and its response schema — and substitutes the paid provider process alone.
+    # llmlint: ignore[e2e_not_mocked] see the note above this line
+    reviewed(drafted)
+
+    approved = _just("approve-design", drafted, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+
+    # The source record as its own store reports it, read before the copy so that what a
+    # copy did to each field is a comparison of two real stores rather than a constant.
+    (before,) = _documents(drafted, runs)
+
+    landed_native = f"{native}-on-the-board"
+    # The destination holding this plan under an identifier of its own is the *precondition*
+    # rather than the interface under test — the copy below and the launch at the end are
+    # both the real commands — and no command reaches it here: the board this repository
+    # launches from mints that identifier itself, a local store copied onto keeps the
+    # drafted plan's native id whatever flags the copy is given, and `project copy` has no
+    # rename. Without it the journey would assert nothing, because the two ids would agree
+    # and the key would match either way.
+    # llmlint: ignore[tests_mirror_real_usage] see the note above this line
+    board.standing_project(landed_native, titled=native)
+    copied = _just("copy-plan", drafted, "--to", BOARD, "--match-by", "title", runs=runs)
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+
+    landed = f"{BOARD}:{landed_native}"
+    (after,) = _documents(landed, runs)
+
+    # The condition the whole journey turns on, asserted rather than assumed: the record
+    # travelled, and it travelled onto a document of an identifier the destination owns
+    # rather than of the plan it was drafted under. A copy that left that identifier alone
+    # would make the launch below pass whatever the key covers.
+    assert RECORD_KEY in after["metadata"], (
+        f"the approval did not travel with the document: {after}"
+    )
+    assert after["project"] == landed_native, after
+    assert after["project"] != native, after
+
+    # What the approval key may be composed of is a claim about which fields a copy holds
+    # and which it rewrites, and this is the one place both halves can be read off a real
+    # copy of a real record. `tests/test_design_approval.py` argues the key from exactly
+    # this partition and states no copy contract of its own, so a copy that began holding
+    # an identifier or rewriting the prose fails here — where a copy can be watched —
+    # rather than passing there against a model nothing reconciles.
+    for name in CARRIED:
+        assert after[name] == before[name], (
+            f"the copy rewrote {name}, which a key covering it could not survive:\n"
+            f"  drafted: {before[name]!r}\n"
+            f"  copied:  {after[name]!r}"
+        )
+    for name in MINTED:
+        assert before[name] != after[name], (
+            f"the destination did not mint a {name} of its own ({before[name]!r}), so "
+            f"this journey would pass whether or not the approval key excluded it"
+        )
+
+    launched = _launch(landed, runs)
+    assert launched.returncode == 0, (
+        f"the copied plan carries the approval recorded where it was drafted and its "
+        f"launch was refused anyway:\n{launched.stdout}\n{launched.stderr}"
+    )
+    assert _settled(launched) == "complete", launched.stdout

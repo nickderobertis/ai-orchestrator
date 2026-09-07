@@ -2,10 +2,10 @@
 title: 'Design: planner-brief-example'
 project: planner-brief-example
 metadata:
-  onetaskgraph.origin: orchestrator-record-staging:planner-brief-example-design
+  onetaskgraph.origin: orchestrator-record-staging:d9fc7226a615c542a1db86abed3a13c8e513ea11e9a287dac35edcbf8a94fa54
   orchestrator.design-approval:
-    approved_at: 2026-09-01T15:56:31.716241+00:00
-    key: c00342beeb5b7488685e2291905059e2877d5637f2692e0bc302670e268a36b4
+    approved_at: 2026-09-06T10:33:49.334335+00:00
+    key: 3990dd2efb6be4ccc4dc8dac328477f0c8cfe02cdfb9d505e3dd1497e26c4d49
 ---
 ## What
 

@@ -2,10 +2,10 @@
 title: 'Design: repo-plan-example'
 project: repo-plan-example
 metadata:
-  onetaskgraph.origin: orchestrator-record-staging:repo-plan-example-design
+  onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
   orchestrator.design-approval:
-    approved_at: 2026-09-01T15:56:31.951721+00:00
-    key: cb7c1f97a111840983ef3cdb209a56e259f2d62c25427626cb1158753bb7128c
+    approved_at: 2026-09-06T10:33:49.417017+00:00
+    key: ec17e5a55f69d09f61f6982c6da7bde2ddb68c6955ee212ac232095ecf16550d
 ---
 ## What
 

@@ -151,13 +151,25 @@ because that key is its own bookkeeping of the last copy; and the write replaces
 record whole, so it stages every field the store just reported rather than the ones this
 repository cares about.
 
-*What invalidates one.* The digest covers the document's own authored content — its
-title, the project it belongs to, and its prose — **and** the tracked template that says
-what a design document is. So editing the document after it was approved leaves it
-unapproved, and changing `config/design-doc-template.md` leaves every previously approved
-document unapproved, exactly as moving the plan-review bar invalidates every review record
-granted under the previous one. Nothing the store owns is in the digest, which is why the
-origin rewrite above does not invalidate the record in the act of writing it.
+*What invalidates one.* The digest covers the document's own authored content — its title
+and its prose — **and** the tracked template that says what a design document is. So
+editing the document after it was approved leaves it unapproved, and changing
+`config/design-doc-template.md` leaves every previously approved document unapproved,
+exactly as moving the plan-review bar invalidates every review record granted under the
+previous one.
+
+**Nothing the store the document sits in owns is in the digest**, and that is what makes
+the travel above real rather than only carried. The origin rewrite is the obvious one: it
+is the store's own bookkeeping, so it does not invalidate the record in the act of writing
+it. The one that cost a plan is less obvious, and it is **which project the document
+belongs to** — the store's own local identifier for the plan, which is exactly what a copy
+changes. The same document is a document of `some-plan` where it was drafted and of an
+opaque board identifier once it is on the board, so while the digest covered it the record
+travelled intact and then no longer matched what the destination computed: a copied plan
+was refused for want of an approval it was carrying. What that costs, and it is the same
+thing `just review-plan`'s own key costs one record up, is that a document **moved to
+another plan** after its approval keeps that approval — what a person approved is the
+document, and it is unchanged.
 
 *What the launch refuses, and how it says which.* Two refusals, told apart because they
 owe different next actions: a project holding **no** design document is waiting on the

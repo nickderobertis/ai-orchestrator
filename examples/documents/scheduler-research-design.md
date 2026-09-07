@@ -2,10 +2,10 @@
 title: 'Design: scheduler-research'
 project: scheduler-research
 metadata:
-  onetaskgraph.origin: orchestrator-record-staging:scheduler-research-design
+  onetaskgraph.origin: orchestrator-record-staging:511628c22c97dd8b34beb643fd9f28514f5fb04c6aed6e0bbd4c9267edd81f53
   orchestrator.design-approval:
-    approved_at: 2026-09-01T15:56:32.164397+00:00
-    key: 782633532bc3b035ced0493fef97853c25cbc6f3c5a37333bae64205da9735d1
+    approved_at: 2026-09-06T10:33:49.500182+00:00
+    key: dabcf2b6633676ab7c42446d442acce7d3785aa312902271ae766304f9263473
 ---
 ## What
 
