@@ -576,8 +576,24 @@ def read_projects(source: str) -> list[StoreProject]:
     Narrowed to one source rather than asked of every configured one, because the caller
     is asking which record a copy landed on in a named destination — and a second source
     holding a project copied from the same origin would answer for it.
+
+    That narrowing is **checked** rather than assumed, because it is the whole of what
+    this answer means: the caller reports one of these records as where a named
+    destination holds a plan, so a listing carrying a record of some other source would
+    send a reviewer to a project that destination does not hold. It is another program's
+    answer to a query this one wrote, and a query is not a guarantee.
     """
-    return [_project(item) for item in paged(["project", "list", "--source", source], "project")]
+    listed = paged(["project", "list", "--source", source], "project")
+    projects = [_project(item) for item in listed]
+    strayed = [held for held in projects if not str(held.qualified_id).startswith(f"{source}:")]
+    if strayed:
+        named = ", ".join(str(held.qualified_id) for held in strayed)
+        raise OSError(
+            f"{STORE} answered a listing of source {source!r} with {len(strayed)} record(s) "
+            f"of another source ({named}), so what it holds cannot be told from what it "
+            f"does not"
+        )
+    return projects
 
 
 # llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.

@@ -58,6 +58,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         landed = copied(args.project, args.destination)
         document = design_approval.design_document(str(landed.qualified_id))
+    # Every way this cannot answer is driven in `tests/test_plan_locations.py`, and the
+    # answer it gives is read back off a real destination in both flow journeys. What no
+    # journey can reach is the pairing itself: this runs after a copy the same command
+    # just made, so a destination holding no copy of the plan, holding two, or refusing to
+    # be read at all is a store that answered that copy and then stopped answering — which
+    # a journey would produce by breaking a store between two commands of one script.
+    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
     except OSError as exc:
         print(f"plan-locations: {exc}", file=sys.stderr)
         print(

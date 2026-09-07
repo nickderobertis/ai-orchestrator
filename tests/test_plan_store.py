@@ -675,6 +675,22 @@ def test_a_project_listing_this_cannot_account_for_is_refused(
         plan_store.read_projects("board")
 
 
+def test_a_listing_of_one_source_carrying_another_sources_record_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The narrowing is the whole of what this answer means, so it is checked.
+
+    A caller reports one of these records as where a named destination holds a plan, and a
+    record of some other source sends a reviewer to a project that destination does not
+    hold. The query asked for one source; another program answering it is not a guarantee
+    that it did.
+    """
+    strayed = {"id": "elsewhere:42", "item": dict(PROJECT["item"])}
+    monkeypatch.setattr(plan_store, "store_json", _projects({"items": [PROJECT, strayed]}))
+    with pytest.raises(OSError, match="record.s. of another source"):
+        plan_store.read_projects("board")
+
+
 def _document(
     *,
     project: str | None = "demo",
