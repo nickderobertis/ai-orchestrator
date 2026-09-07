@@ -622,8 +622,49 @@ def source_root(source: str) -> Path:
         )
     if not isinstance(root, str) or not root:
         raise OSError(f"source {source!r} names no root directory")
+    # Refused here rather than left to the first syscall that touches it: a NUL is the
+    # one character `Path` accepts and every filesystem call then rejects with
+    # `ValueError`, which is outside the `OSError` every caller of this reads — so a
+    # launcher would report a traceback where it promised a sentence.
+    if "\0" in root:
+        raise OSError(
+            f"source {source!r} names a root containing a NUL character, which no "
+            f"filesystem path can hold"
+        )
     held = Path(root)
     return held if held.is_absolute() else REPO_ROOT / held
+
+
+def ensure_writable_source_root(source: str) -> Path:
+    """:func:`source_root`, made into a directory records can actually be written into.
+
+    `source_root` answers what the configuration *says*; this answers whether a plan
+    could be authored there, and is what a planning launch resolves before it writes
+    anything. A root that does not exist yet is the ordinary state of a host that has
+    never planned — the first launch makes one — so it is created rather than refused,
+    and what is refused is a path that is not a directory, one that cannot be made, and
+    one this process may not write into.
+
+    Every refusal names the source and the path, because the caller is a launcher whose
+    operator has to repair one of the two.
+    """
+    root = source_root(source)
+    if root.exists() and not root.is_dir():
+        raise OSError(
+            f"source {source!r} is rooted at {root}, which is not a directory, so no plan "
+            f"can be stored there"
+        )
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OSError(
+            f"source {source!r} is rooted at {root}, which could not be created: {exc}"
+        ) from exc
+    if not os.access(root, os.W_OK | os.X_OK):
+        raise OSError(
+            f"source {source!r} is rooted at {root}, which this process may not write into"
+        )
+    return root
 
 
 def task_document(source: str, native_task_id: str) -> Path:

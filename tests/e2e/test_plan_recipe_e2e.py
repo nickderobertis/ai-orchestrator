@@ -35,6 +35,7 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict, cast
 
+import plan_root_variable
 import pytest
 from fake_backend import (
     DISPATCHED_MEMBER,
@@ -63,6 +64,11 @@ INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_LAUNCHER",
     "ONEPIPELINE_LAUNCHER_SESSION",
     "ONEPIPELINE_RUN_ID",
+    # The plan-authoring root a *planning* launch exports, read from the one place that
+    # composes it. This suite runs inside a dispatch and launches planners of its own, so
+    # a journey that kept it would write and read through whatever directory some
+    # enclosing launch chose rather than through the one these launches resolve.
+    plan_root_variable.name(),
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -1522,95 +1528,3 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
     assert refused.returncode != 0, refused.stdout
     assert "ask-manager wrapper is not an executable file" in refused.stderr, refused.stderr
     assert not (tmp_path / "scratch").exists(), "a plan was written for a launch that cannot ask"
-
-
-#: A `python3` that cannot write a plan. Stands in where the recipe resolves an
-#: interpreter, which is a checkout's own `.venv` first and PATH only without one.
-BROKEN_INTERPRETER = "#!/usr/bin/env bash\necho 'half a plan'\nexit 1\n"
-
-
-def _detached_recipe(tmp_path: Path) -> Path:
-    """A copy of the recipe's script and the seam it requires, outside this checkout.
-
-    All three, because the recipe refuses to launch a planner that could not ask
-    questions before it writes anything — the helper that establishes the seam, and the
-    wrapper that helper insists on — so a copy carrying only itself would be refused for
-    the wrong reason.
-    """
-    scripts = tmp_path / "checkout" / "scripts"
-    scripts.mkdir(parents=True)
-    for name in ("plan.sh", "credentials-env.sh", "ask-manager-env.sh", "ask-manager.sh"):
-        copied = scripts / name
-        copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
-        copied.chmod(0o755)
-    return scripts / "plan.sh"
-
-
-def test_a_plan_directory_that_cannot_be_created_is_refused_before_the_launch(
-    tmp_path: Path,
-) -> None:
-    """A checkout that cannot be written to is said out loud rather than exited through.
-
-    The recipe writes its plan under the working directory, so a read-only one is a real
-    state — and the failure it produces without a guard is `mkdir`'s own message and an
-    exit status, which names neither what was being attempted nor what to do. Driven by
-    running the real script from a directory nothing may be created in.
-    """
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    read_only = tmp_path / "read-only"
-    read_only.mkdir(mode=0o500)
-
-    refused = subprocess.run(  # noqa: S603 - the real script, in a directory it cannot write
-        [str(_detached_recipe(tmp_path)), str(brief)],
-        cwd=read_only,
-        env=_environment(tmp_path),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode != 0, refused.stdout
-    assert "could not be created" in refused.stderr, refused.stderr
-
-
-def test_a_plan_that_could_not_be_written_leaves_no_half_written_file_behind(
-    tmp_path: Path,
-) -> None:
-    """A partial plan is removed, because the next launch would otherwise read it.
-
-    The plan is written by redirecting an interpreter's output into the file the launch
-    then names, so an interpreter that fails midway leaves a truncated document at
-    exactly the path a rerun — or a manager relaunching it with `just orchestrate` —
-    would pick up. The refusal has to take it with it.
-    """
-    recipe = _detached_recipe(tmp_path)
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    interpreters = tmp_path / "bin"
-    interpreters.mkdir()
-    broken = interpreters / "python3"
-    # llmlint: ignore[e2e_not_mocked] The recipe is real; a dying interpreter is the input.
-    broken.write_text(BROKEN_INTERPRETER, encoding="utf-8")
-    broken.chmod(0o755)
-    working = tmp_path / "working"
-    working.mkdir()
-    environment = _environment(tmp_path)
-    environment["PATH"] = f"{interpreters}{os.pathsep}{environment['PATH']}"
-
-    refused = subprocess.run(  # noqa: S603 - the real script, with an interpreter that fails
-        [str(recipe), str(brief), "--name", "half-written"],
-        cwd=working,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode != 0, refused.stdout
-    assert "could not be written" in refused.stderr, refused.stderr
-    assert not (working / "scratch" / "plans" / "half-written.plan.json").exists(), (
-        "a half-written plan was left where the next launch would read it"
-    )

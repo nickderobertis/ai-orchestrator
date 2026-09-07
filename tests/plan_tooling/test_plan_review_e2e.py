@@ -32,6 +32,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+import plan_root_variable
 import pytest
 from nx_workspace import copy_working_tree
 from project_fixtures import helper, local_project
@@ -985,13 +986,6 @@ FAKE_BACKEND = helper("fake_backend.py")
 #: says why the two closeout journeys give it a root of their own.
 AUTHORING = "authoring"
 
-#: How `onetaskgraph` names one source's root at its environment layer. The dotted path
-#: its configuration document and its `--set` flag use, `__` between segments and the
-#: source upper-cased — read off the CLI's own `config show`, which reports the layer
-#: and the variable each value came from. It points *this* process's reads at the
-#: planning checkout's store; the launch resolves the same directory from its own tree.
-AUTHORING_ROOT_VARIABLE = "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT"
-
 #: Everything an enclosing dispatch would otherwise decide for this launch.
 INHERITED = (
     "ONEPIPELINE_LAUNCHER",
@@ -1082,7 +1076,11 @@ def _a_checkout_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     }
     for root in roots.values():
         root.mkdir(exist_ok=True)
-    monkeypatch.setenv(AUTHORING_ROOT_VARIABLE, str(roots[AUTHORING]))
+    # The name a planning launch itself exports this root under, read from the one
+    # place that composes it rather than spelled again here: it points *this*
+    # process's reads at the planning checkout's store, and the launch below resolves
+    # the same directory from its own tree and leaves this value alone.
+    monkeypatch.setenv(plan_root_variable.name(), str(roots[AUTHORING]))
     monkeypatch.setenv("UV_NO_SYNC", "1")
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(REPO_ROOT / ".venv"))
     return checkout

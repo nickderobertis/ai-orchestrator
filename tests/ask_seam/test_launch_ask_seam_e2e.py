@@ -37,30 +37,38 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple, NewType, TypedDict, cast
+from typing import NamedTuple, NewType, NotRequired, TypedDict, cast
 
+import plan_root_variable
 import pytest
+from conftest import git
 from fake_backend import (
     ASK_QUESTION_ENV,
     ASK_RECORD_ENV,
+    AUTHOR_PLAN_ENV,
     DISPATCHED_MEMBER,
     ENVIRONMENT_KEYS_ENV,
     MEMBER_OF_CONFIG,
     PROMPT_LOG_ENV,
+    RUN_ON_MARKER_ENV,
 )
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import PersistentManager, just, ruling
 from project_fixtures import helper, project_from_plan
-from scratch_identity import seeded
+from published_tools import ONETASKGRAPH_BIN
+from scratch_identity import GIT_IDENTITY, seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_store
+from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, and the provider binary beneath it — the second is
@@ -85,6 +93,11 @@ INHERITED_ENVIRONMENT = (
     # on a value the engine never composed.
     "ONEPIPELINE_CHANNEL_ASKER",
     "ORCHESTRATOR_ASK_MANAGER",
+    # The plan-authoring root a *planning* launch exports. Read from the one place that
+    # composes it rather than spelled here. A journey that kept the enclosing dispatch's
+    # would measure a directory some outer launch chose, and a launch that stopped
+    # exporting one at all would go on passing.
+    plan_root_variable.name(),
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -154,6 +167,33 @@ CHANNEL_ASKER = Input(
     "who a dispatch's `channel serve` sessions listen on behalf of, which is what lets "
     "one still-pending question outlive the listener that raised it",
 )
+
+#: Not required of every launch either — only of a *planning* one, which is the launch
+#: that dispatches an agent whose whole deliverable is a plan. `onetaskgraph.yaml` roots
+#: the `authoring` source relatively and a planner works in a worktree of its own, so
+#: without this the plan it authors lands in that worktree's own copy of the directory:
+#: nothing outside the worktree reads it, and the worktree is reclaimed with the run.
+PLAN_ROOT = Input(
+    plan_root_variable.name(),
+    "the directory a dispatched planner authors its plan into; a relative source root "
+    "resolves against each process's own working directory, so an unset one is a plan "
+    "written where the launching checkout never looks",
+)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def this_checkouts_own_plan_root() -> Iterator[None]:
+    """Read this checkout's own plan store here, whatever launch this suite runs inside.
+
+    This module both launches planning runs and asks what its own checkout resolves the
+    `authoring` source to. A planning launch exports that root into every dispatch it
+    makes and this suite runs inside a dispatch, so an enclosing one would otherwise make
+    `plan_store.source_root` here answer about *its* checkout — and every expectation
+    below would be measured against a directory this launch had nothing to do with.
+    """
+    with pytest.MonkeyPatch.context() as patched:
+        patched.delenv(plan_root_variable.name(), raising=False)
+        yield
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -254,6 +294,11 @@ pytestmark = pytest.mark.xdist_group(LAUNCH_GROUP)
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
+#: The plan source `scripts/plan.sh` writes its own project into and a dispatched planner
+#: authors into. Named here because the store reports one setting per source and this is
+#: the source these journeys read back.
+AUTHORING = "authoring"
+
 #: The brief a `just plan` launch is made from. Written to a temporary directory rather
 #: than taken from `examples/`, so these journeys read none of this repository's prose
 #: and stay in the code-only test tier.
@@ -274,6 +319,100 @@ The browser view cannot deep-link to a page until that is settled.
 ## Acceptance criteria
 - The cursor's shape and its type are stated.
 """
+
+
+class SettingOrigin(TypedDict):
+    """Which layer the plan store says one setting's value came from.
+
+    `variable` is present only for the environment layer, which is the whole reason this
+    is read: a root that came from a launch and one that came from the worktree's own
+    tracked document are the same directory string wearing two different origins.
+    """
+
+    layer: str
+    variable: NotRequired[str]
+
+
+class StoreSetting(TypedDict):
+    """One setting of the store's own `config show` answer, in the fields read here.
+
+    `value` stays `object` because that answer carries every setting the store resolves —
+    numbers, lists, and strings — and only the one this module asks about is a path. It
+    is narrowed where it is read rather than asserted of the whole answer.
+    """
+
+    key: str
+    value: object
+    origin: SettingOrigin
+
+
+class StoreConfiguration(TypedDict):
+    """What a dispatch's own `onetaskgraph config show --json` answers with."""
+
+    settings: list[StoreSetting]
+
+
+#: What `tests/e2e/fake_backend.py` reads out of the file `RUN_ON_MARKER_ENV` names: each
+#: marker, against the argument vectors a turn whose prompt carries it runs in order. An
+#: alias rather than a model, because the key is open by construction — it is whatever
+#: prose the journey keys on — and the contract is the shape of the value.
+RunOnMarker = dict[str, list[list[str]]]
+
+#: The fragment of that brief a dispatched turn's commands are keyed on. It is prose
+#: every dispatch of a planning launch carries, which is the point: both nodes a planning
+#: launch writes take the brief, both are given the same plan-authoring root, and both
+#: answering with that root is the claim rather than a collision.
+STORE_MARKER = "Plan project: authoring:cursor-shape"
+
+
+#: The plan a dispatched planner authors, in the one action a stand-in for the paid model
+#: can perform that anything downstream observes. Its content is beside the point — what
+#: is read back afterwards is that the launching checkout finds it at all, which is the
+#: whole of what an authoring root is for.
+AUTHORED_TASK = (
+    "## What\n\nAdd the route and the test that drives it.\n\n"
+    "## Why\n\nThe user cannot complete a purchase without it.\n\n"
+    "## Acceptance criteria\n\n- The route accepts a valid request and rejects an invalid one.\n"
+)
+
+
+def _authored_records(root: Path, native: str) -> dict[str, str]:
+    """The records a dispatched planner writes into ``root``, as absolute paths."""
+    rendered = render_plan_project(
+        {
+            "schema_version": 3,
+            "name": native,
+            "goal": {"text": "Deliver the checkout route"},
+            "tasks": [
+                {
+                    "id": "route",
+                    "persona": "engineer",
+                    "title": "feat: add the checkout route",
+                    "task": AUTHORED_TASK,
+                }
+            ],
+        },
+        native_id=native,
+    )
+    return {str(root / relative): content for relative, content in rendered.items()}
+
+
+def _reading_the_plan_store(destination: Path) -> list[str]:
+    """The command a dispatched turn runs to report what its own plan store resolves.
+
+    `ONETASKGRAPH_BIN` is unset first because `onepipeline` composes it for every
+    dispatch and `onetaskgraph` reads every `ONETASKGRAPH_` name as a *setting* — so a
+    process that inherits it refuses `bin` as an unknown field and answers nothing at
+    all. `orchestrator/plan_store.py` strips it for the same reason; a dispatched agent
+    reaching the CLI directly has to do it too.
+    """
+    return [
+        "/bin/sh",
+        "-c",
+        f"unset ONETASKGRAPH_BIN; {shlex.quote(str(ONETASKGRAPH_BIN))} config show --json "
+        f"> {shlex.quote(str(destination))}",
+    ]
+
 
 #: What the two `just orchestrate` journeys that only read an environment launch without.
 #: The observer graph watches a run for its whole life, and every turn it takes is
@@ -349,6 +488,12 @@ class Dispatch(NamedTuple):
     #: ledger it wrote into is what makes its run id one another launch would collide
     #: with, and a journey that built its own would collide with nothing.
     environment: dict[str, str]
+    #: Where the dispatch wrote its own plan store's `config show`, for the launches
+    #: that asked it to; `None` for every launch that did not.
+    store: Path | None = None
+    #: What the launch itself printed, for the one claim only the launcher can make:
+    #: where it says it wrote its project. `None` for a launch nothing read the stream of.
+    reported: str | None = None
 
 
 def _environment(
@@ -376,6 +521,7 @@ def _environment(
             *(required.name for required in REQUIRED_INPUTS),
             NODE_SCRATCH.name,
             CHANNEL_ASKER.name,
+            PLAN_ROOT.name,
             CREDENTIAL_NAME,
         ]
     )
@@ -536,6 +682,46 @@ def _answering(run: RunId, environment: dict[str, str]) -> PersistentManager:
         environment,
         lambda token: ruling(f"{ANSWER} {token}"),
         seconds=MANAGER_SECONDS,
+    )
+
+
+def _await_store_answer(reported: Path, *, seconds: float = MANAGER_SECONDS) -> None:
+    """Wait for the dispatch to report what its own plan store resolved.
+
+    Its own wait rather than the ask's, because the two do not finish together: the
+    stand-in serving a dispatch asks first and runs the turn's commands afterwards, so a
+    journey that returned when the answer landed would stop the run before the store had
+    been read — and read an absent file as a dispatch that resolved nothing.
+    """
+    limit = deadline(seconds)
+    while time.monotonic() < limit:
+        if reported.is_file() and reported.stat().st_size:
+            return
+        time.sleep(0.5)
+    raise AssertionError(
+        f"the dispatch never reported its own plan store at {reported} within {seconds}s"
+    )
+
+
+def _await_authored_plan(records: Mapping[str, str], *, seconds: float = MANAGER_SECONDS) -> None:
+    """Wait for the records a dispatched planner authors to be on disk.
+
+    The records rather than the instruction that asks for them, because the stand-in
+    claims that instruction by removing it *before* it writes anything: an absent
+    instruction says the authoring was reached and nothing about whether it finished, so
+    waiting on it would let this journey stop the run mid-write and then read back a
+    store that is missing exactly what it came to read.
+    """
+    pending = [Path(destination) for destination in records]
+    limit = deadline(seconds)
+    missing = pending
+    while time.monotonic() < limit:
+        missing = [path for path in pending if not path.exists()]
+        if not missing:
+            return
+        time.sleep(0.5)
+    raise AssertionError(
+        f"the dispatch authored no plan within {seconds}s; it never wrote {missing}"
     )
 
 
@@ -716,13 +902,50 @@ def _attest(
     raise AssertionError(f"run {run}'s '{reference}' never became attestable:\n{refusal}")
 
 
-def _planned(tmp_path: Path, oneharness_bin: str, run: RunId, *detached: str) -> Dispatch:
+def _carrying_the_plan_store_configuration(execution: Path) -> None:
+    """Give the checkout a planner's worktree is cut from this repository's store document.
+
+    A real planning launch executes in a clone of this repository, so the worktree its
+    planner works in carries `onetaskgraph.yaml` — which is what declares the `authoring`
+    source's plugin, the half of that source a launch does not establish. The seeded
+    identity beside this is a bare repository holding a README, so without it the store
+    inside a dispatch would refuse a configuration naming a root for a source no document
+    defines, and the one thing the launch *did* establish would be unreadable from the
+    only place it was established for.
+
+    Committed and pushed, because the session that cuts the worktree clones this checkout
+    and takes its base from the origin they share.
+    """
+    (execution / "onetaskgraph.yaml").write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
+    git("add", "-A", cwd=execution)
+    git(*GIT_IDENTITY, "commit", "-qm", "chore: carry the plan store configuration", cwd=execution)
+    git("push", "-q", "origin", "main", cwd=execution)
+
+
+def _planned(
+    tmp_path: Path,
+    oneharness_bin: str,
+    run: RunId,
+    *detached: str,
+    resolved: Path | None = None,
+    root: Path | None = None,
+    authored: str | None = None,
+) -> Dispatch:
     """Launch `just plan` on a brief, have its dispatch ask, and hand back both.
 
     Attached and detached differ by one flag and by nothing else here, so they are one
     function: what they are being compared on is the environment each leaves behind, and
     a second copy of the launch would be a second chance for the two to differ for a
     reason that is not the flag.
+
+    `resolved` names where the dispatch is to write the plan store's own answer about the
+    `authoring` source, which is the other half of what a launch establishes: a variable
+    in a dispatch's environment is not the claim that matters, and the store resolving it
+    to the launching checkout's directory is. `root` states a plan-authoring root the
+    caller has already chosen, so that a launch which resolves one of its own can be told
+    apart from one that leaves a caller's alone. `authored` names a project the dispatched
+    planner is to write into whichever root is in force, which is the last link: a root
+    both sides agree on is worth nothing until a plan written through it comes back.
     """
     turns, record = tmp_path / "turns.jsonl", tmp_path / "asked.json"
     environment = _environment(tmp_path, oneharness_bin, turns, record=record)
@@ -731,9 +954,33 @@ def _planned(tmp_path: Path, oneharness_bin: str, run: RunId, *detached: str) ->
     # this host's, whose registry a session reclaims run roots under. Seeded under those
     # two alias names rather than overridden per launch: what these journeys drive is
     # the recipe as an operator types it, and a `--repo` here would be proving a flag.
-    environment["ONEVCS_HOME"] = str(
-        seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS).home
-    )
+    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
+    _carrying_the_plan_store_configuration(identity.execution)
+    environment["ONEVCS_HOME"] = str(identity.home)
+    if root is not None:
+        environment[PLAN_ROOT.name] = str(root)
+    # Held rather than only written, because the wait below is on these very paths: the
+    # stand-in claims the instruction file before it writes them, so the instruction is
+    # gone by the time there is anything to read and only the records say authoring is done.
+    records: Mapping[str, str] | None = None
+    if authored is not None:
+        records = _authored_records(root or plan_store.source_root(AUTHORING), authored)
+        written = tmp_path / "authored-plan.json"
+        written.write_text(json.dumps(records), encoding="utf-8")
+        # The stand-in for the paid model performs the one action a real planner performs
+        # — it writes its plan into the store — because a stand-in that only reported
+        # would leave nothing for the launching checkout to read back. Everything above
+        # the provider stays real.
+        # llmlint: ignore[tests_mirror_real_usage] see the note above this line
+        environment[AUTHOR_PLAN_ENV] = str(written)
+    if resolved is not None:
+        instruction = tmp_path / "run-on-marker.json"
+        keyed: RunOnMarker = {STORE_MARKER: [_reading_the_plan_store(resolved)]}
+        instruction.write_text(json.dumps(keyed), encoding="utf-8")
+        # llmlint: ignore[tests_mirror_real_usage] The stand-in for the paid model runs
+        # the real store CLI in the dispatch's own worktree, which is what a dispatched
+        # planner does and the only thing about a turn anything downstream can observe.
+        environment[RUN_ON_MARKER_ENV] = str(instruction)
     brief = tmp_path / f"{run}.md"
     brief.write_text(BRIEF, encoding="utf-8")
     generated = PLAN_DIRECTORY / f"{run}.plan.json"
@@ -744,12 +991,23 @@ def _planned(tmp_path: Path, oneharness_bin: str, run: RunId, *detached: str) ->
             dispatched = _await_dispatch(turns)
             manager = _answering(run, environment)
             answered = _await_answer(record, manager)
+            if records is not None:
+                _await_authored_plan(records)
+            if resolved is not None:
+                _await_store_answer(resolved)
             _reaped(manager, answered)
             assert (Path(environment["ONEPIPELINE_RUNS_DIR"]) / run).is_dir(), (
                 f"`just plan` printed and exported run '{run}', which is not a run this "
                 f"launch created:\n{streamed.read_text(encoding='utf-8')}"
             )
-            return Dispatch(run=run, worker=dispatched, asked=answered, environment=environment)
+            return Dispatch(
+                run=run,
+                worker=dispatched,
+                asked=answered,
+                environment=environment,
+                store=resolved,
+                reported=streamed.read_text(encoding="utf-8"),
+            )
     finally:
         just("stop", run, environment=environment, seconds=60)
         generated.unlink(missing_ok=True)
@@ -757,12 +1015,71 @@ def _planned(tmp_path: Path, oneharness_bin: str, run: RunId, *detached: str) ->
 
 @pytest.fixture(scope="module")
 def plan_attached(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Dispatch:
-    """Launch `just plan` attached — the one shape this host had ever proven."""
+    """Launch `just plan` attached — the one shape this host had ever proven.
+
+    This is the shape that also reports what its dispatch's own plan store resolves, so
+    the two halves of the plan-authoring root — the value a launch exports, and the
+    directory the store inside a dispatch then answers with — are read off one launch
+    rather than paid for twice.
+    """
     _requires_just()
+    tmp_path = tmp_path_factory.mktemp("plan-attached")
     return _planned(
-        tmp_path_factory.mktemp("plan-attached"),
+        tmp_path,
         oneharness_bin,
         RunId("launch-seam-plan-attached"),
+        resolved=tmp_path / "dispatch-config.json",
+    )
+
+
+@pytest.fixture(scope="module")
+def plan_root_already_chosen(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A plan-authoring root a caller points this launch at before it starts.
+
+    A genuinely separate writable directory, nowhere near this checkout's own — which is
+    the only shape that measures anything. A path merely spelled differently would prove
+    the value survived and nothing about where the launch then writes, and a directory
+    the checkout would have resolved anyway cannot tell a launch that honoured the
+    override from one that ignored it.
+    """
+    chosen = tmp_path_factory.mktemp("plan-root-already-chosen") / "somebody-elses-plans"
+    chosen.mkdir()
+    return chosen
+
+
+#: The project a dispatched planner authors under whichever root is in force. Distinct
+#: from the run's own name, because the launch writes a project of that name too and the
+#: point of reading this one back is that it is the *planner's* output.
+AUTHORED_PROJECT = "launch-seam-chosen-root-authored"
+
+
+@pytest.fixture(scope="module")
+def plan_over_a_chosen_root(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, plan_root_already_chosen: Path
+) -> Dispatch:
+    """Launch `just plan` over a root the caller chose, and read the whole path back.
+
+    Its own launch rather than a flag on one above, because what is being measured is a
+    launch's *starting environment*: the recipe resolves this checkout's own root
+    unconditionally, and only reading the value back out of a dispatch says whether the
+    one the caller chose survived that.
+
+    Attached rather than detached, because this journey reads what the dispatch wrote and
+    an attached launch is the shape that holds the run open while it does. It carries all
+    three halves of the override — the project the launch writes, the root the dispatch's
+    own store resolves, and the plan that dispatch authors — off one launch, because they
+    are one claim and three launches would be three chances for them to disagree for a
+    reason that is not the root.
+    """
+    _requires_just()
+    tmp_path = tmp_path_factory.mktemp("plan-chosen-root")
+    return _planned(
+        tmp_path,
+        oneharness_bin,
+        RunId("launch-seam-plan-chosen-root"),
+        root=plan_root_already_chosen,
+        resolved=tmp_path / "dispatch-config.json",
+        authored=AUTHORED_PROJECT,
     )
 
 
@@ -978,6 +1295,186 @@ def test_every_launch_exports_repository_credentials_onto_its_dispatch(
     assert carried == {CREDENTIAL_VALUE}, (
         f"the dispatch of {dispatch.run} read {carried!r} for {CREDENTIAL_NAME}, rather "
         "than the value loaded by its launcher from this checkout's .env"
+    )
+
+
+@pytest.mark.parametrize("shape", ["plan_attached", "plan_detached"])
+def test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_checkout(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """A planning launch's dispatch reads the launching checkout's own plan-authoring root.
+
+    `onetaskgraph.yaml` roots the `authoring` source at the relative `.plans`, and a
+    planning launch dispatches its planner into a worktree of its own — so left alone,
+    every process resolves that source somewhere different and the plan the planner
+    authors lands where the launching checkout never looks. Read back out of the
+    dispatch's own turn rather than off the launcher, for the reason the credential
+    journey above reads a credential that way: a launcher that exported a name and a
+    dispatch that received it are two different facts.
+
+    `cast` because the shape is parametrized: `getfixturevalue` resolves the fixture by
+    name at run time, which no static type can follow back to what it returns.
+    """
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    assert Path(_given(dispatch, PLAN_ROOT)) == plan_store.source_root(AUTHORING), (
+        f"the dispatch of {dispatch.run} was given a plan-authoring root that is not the "
+        "directory this checkout's plan store resolves the `authoring` source to"
+    )
+
+
+def test_a_dispatch_of_a_plan_launch_resolves_the_authoring_source_to_that_root(
+    plan_attached: Dispatch,
+) -> None:
+    """The store *inside* a dispatch answers with the launching checkout's directory.
+
+    A variable in an environment is not the claim that matters: what a dispatched
+    planner authors into is whatever its own plan store resolves the `authoring` source
+    to, from inside a worktree whose tracked configuration roots that source relatively.
+    So the process serving the dispatch runs the real store CLI where the dispatch runs
+    and reports what it answered, and this reads that answer back.
+
+    Both halves are asserted, because only the pair means anything: the root, and that
+    the store attributes it to the *environment* — a launch that stopped exporting one
+    would leave the worktree's own relative root answering, which is a different
+    directory reported the same way.
+    """
+    assert plan_attached.store is not None, "this launch was not asked to report a store"
+    assert plan_attached.store.is_file(), (
+        f"the dispatch of {plan_attached.run} never reported its own plan store; the "
+        "commands a turn runs are reported on the stand-in's stderr"
+    )
+    # `cast` because this is another program's answer arriving as JSON: the shape is
+    # declared above and each field is narrowed as it is read rather than trusted.
+    answered = cast(StoreConfiguration, json.loads(plan_attached.store.read_text(encoding="utf-8")))
+    key = f"sources.{AUTHORING}.config.root"
+    named = [setting for setting in answered["settings"] if setting["key"] == key]
+    assert len(named) == 1, (
+        f"the store inside a dispatch of {plan_attached.run} reported {len(named)} values "
+        f"for {key}, so there is no one root a dispatched planner would author into"
+    )
+    resolved = named[0]
+    root = resolved["value"]
+    assert isinstance(root, str), f"the store answered {key} with {root!r} rather than a path"
+
+    assert Path(root) == plan_store.source_root(AUTHORING), (
+        f"a dispatch of {plan_attached.run} resolves the {AUTHORING!r} source to {root}, "
+        "which is not the directory the launching checkout reads"
+    )
+    assert resolved["origin"] == {"layer": "environment", "variable": PLAN_ROOT.name}, (
+        f"the root a dispatch resolves came from {resolved['origin']} rather than from "
+        "the launch, so it is the worktree's own relative root answering"
+    )
+
+
+def test_a_plan_launch_keeps_a_plan_authoring_root_its_caller_already_chose(
+    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
+) -> None:
+    """A root already in the environment is the root the dispatch reads.
+
+    The launch resolves this checkout's own unconditionally — that resolution is also
+    what refuses a root no plan could be authored into — so the only thing that says the
+    caller's choice survived it is reading the value back out of a dispatch.
+    """
+    assert Path(_given(plan_over_a_chosen_root, PLAN_ROOT)) == plan_root_already_chosen, (
+        f"the dispatch of {plan_over_a_chosen_root.run} was given a plan-authoring root "
+        "its launch resolved, rather than the one its caller had already chosen"
+    )
+
+
+def test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose(
+    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
+) -> None:
+    """The launch's own project is written where the store will then look for it.
+
+    This is the half a launch cannot survive getting wrong, and the one it used to get
+    wrong: the recipe wrote its project to a `.plans` relative to the tree it ran in
+    while `onepipeline start` resolved the configured root, so a caller who pointed that
+    root anywhere else had their plan refused by the launch gate — `no project with that
+    id` — moments after the launch reported writing it. The fixture reaching a dispatch
+    at all is the other half of the proof, since nothing is dispatched until the gate has
+    read this project.
+    """
+    written = plan_root_already_chosen / "projects" / f"{plan_over_a_chosen_root.run}.md"
+
+    assert written.is_file(), (
+        f"the launch of {plan_over_a_chosen_root.run} wrote no project under the root its "
+        f"caller chose; {plan_root_already_chosen} holds "
+        f"{sorted(path.name for path in plan_root_already_chosen.iterdir())}"
+    )
+    # And said so, which is the half a file on disk cannot answer: these journeys reuse
+    # their run ids, so this checkout's own plan root holds a record of this name from
+    # every earlier run of the suite, and a reader that only looked there could not tell
+    # a launch that wrote to the wrong place from one that wrote to the right one beside
+    # residue. What the launch reports is about this launch alone.
+    assert plan_over_a_chosen_root.reported is not None, "this launch's stream was not read"
+    assert f"wrote {AUTHORING}:{plan_over_a_chosen_root.run} at {written}" in (
+        plan_over_a_chosen_root.reported
+    ), (
+        "the launch did not report writing its project under the root its caller chose:\n"
+        f"{plan_over_a_chosen_root.reported}"
+    )
+
+
+def test_a_dispatch_over_a_chosen_root_resolves_its_store_to_that_root(
+    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
+) -> None:
+    """Inside the dispatch, the store answers with the directory the caller chose.
+
+    The environment value reaching a dispatch and the dispatch's own store resolving it
+    are two facts, and only the second is what a planner authors through. Both halves are
+    asserted for the same reason the default-root journey asserts both: a root reported
+    from the *file* layer would be the worktree's own relative `.plans`, which is a
+    different directory read back the same way.
+    """
+    assert plan_over_a_chosen_root.store is not None, "this launch reported no store"
+    assert plan_over_a_chosen_root.store.is_file(), (
+        f"the dispatch of {plan_over_a_chosen_root.run} never reported its own plan store"
+    )
+    # `cast` for the reason the default-root journey casts: this is another program's
+    # answer arriving as JSON, the shape is declared above, and each field is narrowed as
+    # it is read rather than trusted.
+    answered = cast(
+        StoreConfiguration, json.loads(plan_over_a_chosen_root.store.read_text(encoding="utf-8"))
+    )
+    key = f"sources.{AUTHORING}.config.root"
+    named = [setting for setting in answered["settings"] if setting["key"] == key]
+    assert len(named) == 1, f"the store reported {len(named)} values for {key}"
+    root = named[0]["value"]
+    assert isinstance(root, str), f"the store answered {key} with {root!r} rather than a path"
+
+    assert Path(root) == plan_root_already_chosen, (
+        f"a dispatch of {plan_over_a_chosen_root.run} resolves the {AUTHORING!r} source to "
+        f"{root}, which is not the root its caller chose"
+    )
+    assert named[0]["origin"] == {"layer": "environment", "variable": PLAN_ROOT.name}, (
+        f"the root the dispatch resolved came from {named[0]['origin']} rather than from "
+        "the launch, so it is the worktree's own relative root answering"
+    )
+
+
+def test_the_launching_checkout_reads_the_plan_its_dispatch_authored(
+    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
+) -> None:
+    """The last link: a plan written through that root comes back to the checkout.
+
+    A root both sides agree on is worth nothing until this holds, and it is the whole
+    reason the root is configured rather than guessed — the review, the design document
+    and the copy onto the board all read the plan the planner authored, and each of them
+    reads it from the launching checkout after the dispatch is gone.
+
+    Read through the store rather than off the filesystem, and with this process pointed
+    at the same root the launch pointed its dispatch at, because that is what an operator
+    who chose the root has: the value is theirs, exported, and every command they then
+    run resolves through it.
+    """
+    project = f"{AUTHORING}:{AUTHORED_PROJECT}"
+    with pytest.MonkeyPatch.context() as reading:
+        reading.setenv(PLAN_ROOT.name, str(plan_root_already_chosen))
+        tasks = plan_store.read_tasks(project)
+
+    assert [task.node_id for task in tasks] == ["route"], (
+        f"the launching checkout could not read {project} back out of the root its "
+        f"dispatch authored into: {tasks}"
     )
 
 
@@ -1202,12 +1699,13 @@ def test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assumin
 
 #: The helpers `scripts/plan.sh` sources before it writes anything. Each establishes
 #: environment a dispatch cannot be launched without — the seam an agent puts a question
-#: to its manager over, and this checkout's own credentials — and `plan.sh` reads both
-#: out of their helper rather than resolving either itself. So a checkout missing one is
-#: a launch that cannot establish it at all, which is a different missing piece from a
-#: helper that is there but broken, and one that would otherwise surface as a shell
-#: error naming a file the operator never asked about.
-LAUNCH_ENVIRONMENT_HELPERS = ("credentials-env.sh", "ask-manager-env.sh")
+#: to its manager over, this checkout's own credentials, and the plan-authoring root a
+#: dispatched planner writes into — and `plan.sh` reads each out of its helper rather
+#: than resolving any of them itself. So a checkout missing one is a launch that cannot
+#: establish it at all, which is a different missing piece from a helper that is there
+#: but broken, and one that would otherwise surface as a shell error naming a file the
+#: operator never asked about.
+LAUNCH_ENVIRONMENT_HELPERS = ("credentials-env.sh", "ask-manager-env.sh", "plan-root-env.sh")
 
 
 @pytest.mark.parametrize("missing", LAUNCH_ENVIRONMENT_HELPERS)
@@ -1226,8 +1724,14 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
     alone = scripts / "plan.sh"
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
-    for present in (named for named in LAUNCH_ENVIRONMENT_HELPERS if named != missing):
-        (scripts / present).write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
+    # `ask-manager.sh` beside them, because it is what the ask-manager helper resolves
+    # and refuses over: without it every case past that helper reports its absence
+    # instead of the one this case removed.
+    kept = {*LAUNCH_ENVIRONMENT_HELPERS, "ask-manager.sh"} - {missing}
+    for present in sorted(kept):
+        copied = scripts / present
+        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
+        copied.chmod(0o755)
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")
     working = tmp_path / "working"
@@ -1253,11 +1757,11 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
 
 #: Every helper `scripts/plan.sh` sources, so each one's load failure is driven rather
 #: than the first one's standing in for the rest. They are sourced in sequence and each
-#: establishes a different half of the dispatch environment, so a reader cannot infer one
-#: refusal from the other: the pair went out of step exactly once, when the ask-manager
-#: source was left to strict mode while the credentials source three lines above it was
-#: not, and nothing here noticed because only the credentials half had a journey.
-SOURCED_HELPERS = ("credentials-env.sh", "ask-manager-env.sh")
+#: establishes a different part of the dispatch environment, so a reader cannot infer one
+#: refusal from another: they went out of step exactly once, when the ask-manager source
+#: was left to strict mode while the credentials source three lines above it was not, and
+#: nothing here noticed because only the credentials half had a journey.
+SOURCED_HELPERS = ("credentials-env.sh", "ask-manager-env.sh", "plan-root-env.sh")
 
 
 @pytest.mark.parametrize("corrupted", SOURCED_HELPERS)
@@ -1339,7 +1843,12 @@ def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
     alone = scripts / "plan.sh"
     alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
     alone.chmod(0o755)
-    for present in ("credentials-env.sh", "ask-manager-env.sh", "ask-manager.sh"):
+    for present in (
+        "credentials-env.sh",
+        "ask-manager-env.sh",
+        "ask-manager.sh",
+        "plan-root-env.sh",
+    ):
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
         copied.chmod(0o755)
@@ -1367,4 +1876,63 @@ def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
     assert expected in refused.stderr, refused.stderr
     assert not (working / "scratch").exists(), (
         "a plan was written for a launch whose credentials file the loader refused"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "make"),
+    [
+        ("a file", lambda root: root.write_text("not a plan store\n", encoding="utf-8")),
+        ("a read-only directory", lambda root: root.mkdir(mode=0o500)),
+    ],
+)
+def test_a_plan_launch_over_an_unusable_plan_authoring_root_writes_nothing(
+    label: str, make: Callable[[Path], object], tmp_path: Path
+) -> None:
+    """A root no plan could be authored into stops the launch before it writes or dispatches.
+
+    The alternative is the failure this whole seam exists to prevent, one step later: the
+    launch writes its project, opens a session, dispatches a planner, and that planner
+    authors its plan into a directory nothing can write — or worse, into whatever it
+    resolves for itself. Refusing costs one line and nothing else has happened yet.
+
+    Driven through the real recipe in this checkout, so the resolution refusing is this
+    repository's own rather than one a copied tree could only approximate; what the
+    journey supplies is the root, which is the launch's own starting environment.
+    """
+    root = tmp_path / "plans"
+    make(root)
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    working = tmp_path / "working"
+    working.mkdir()
+    runs = tmp_path / "runs"
+    run = f"launch-seam-unusable-root-{label.replace(' ', '-')}"
+
+    try:
+        refused = subprocess.run(  # noqa: S603 - the real recipe, over a root it must refuse
+            [str(REPO_ROOT / "scripts" / "plan.sh"), str(brief), "--name", run],
+            cwd=working,
+            env={
+                **dict(os.environ),
+                PLAN_ROOT.name: str(root),
+                "ONEPIPELINE_RUNS_DIR": str(runs),
+            },
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(120),
+            check=False,
+        )
+    finally:
+        if root.is_dir():
+            root.chmod(0o700)
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert str(root) in refused.stderr, refused.stderr
+    assert PLAN_ROOT.name in refused.stderr, refused.stderr
+    assert not (working / ".plans").exists(), (
+        "a plan was written for a launch whose plan-authoring root cannot hold one"
+    )
+    assert not (runs / run).exists(), (
+        "a run was started for a launch whose plan-authoring root cannot hold a plan"
     )

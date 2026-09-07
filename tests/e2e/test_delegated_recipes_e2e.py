@@ -46,6 +46,7 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple, cast
 
+import plan_root_variable
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,6 +77,11 @@ WRAPPER_SCRIPTS = (
     "credentials-env.sh",
     "ask-manager-env.sh",
     "ask-manager.sh",
+    # `just plan` writes its project under the plan-authoring root this one resolves, so
+    # a checkout without it cannot reach a verb at all. The root itself is stated in the
+    # environment below rather than discovered, which keeps that resolution — and the
+    # project the launch writes — inside this throwaway checkout.
+    "plan-root-env.sh",
     # `just channel-reply` goes through this one, which forwards the caller's own
     # arguments and refuses only an envelope the run's pending blocking question
     # cannot use; the rule it judges by is the wrapper's own, in the helper beside it.
@@ -506,6 +512,16 @@ def _run(
     scratch = checkout / "scratch-root"
     scratch.mkdir(exist_ok=True)
     environment["TMPDIR"] = str(scratch)
+    # The plan-authoring root `just plan` writes its project under. Stated rather than
+    # left to be discovered, and inside this checkout: discovery reads the configuration
+    # and the package of whichever tree answers, which for a checkout carrying neither is
+    # the one this suite runs in — so an unstated root would put these rows' projects into
+    # the real plan store and make their verdict depend on a tree they do not copy.
+    # Named as the layout this repository configures — a `.plans` at the checkout's own
+    # root — so a journey reading back what the recipe wrote reads the path it always did.
+    plans = checkout / ".plans"
+    plans.mkdir(exist_ok=True)
+    environment[plan_root_variable.name()] = str(plans)
     environment.pop("ONEPIPELINE_RUNS_DIR", None)
     # This suite is itself run from inside a dispatch, whose real status directory and
     # history store would otherwise reach the recipe under test. Each journey states

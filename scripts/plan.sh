@@ -25,6 +25,20 @@
 #     Established through `scripts/ask-manager-env.sh`, which every launch path shares,
 #     and taken here before anything is written so a checkout that cannot ask is
 #     refused rather than left holding a plan.
+#   * **The plan-authoring root is resolved once and exported**, so every dispatch of
+#     this launch reads the same directory rather than resolving a relative source root
+#     against whatever working directory it happens to have. `onetaskgraph.yaml` roots
+#     the `authoring` source at the relative `.plans`, and the planner below works in a
+#     worktree of its own — so without this the plan it authors lands in that worktree's
+#     own copy of the directory, which nothing outside the worktree reads and which is
+#     reclaimed with the worktree. Established through `scripts/plan-root-env.sh`, which
+#     is the one place that variable's name and value are composed, and taken here
+#     before anything is written so a checkout whose authoring source is not a writable
+#     root is refused rather than left holding a plan nothing will find. **The project
+#     this recipe generates is written under that same resolved root**, rather than
+#     under a `.plans` relative to the directory the recipe was invoked from: those name
+#     one directory for an ordinary launch and two the moment a caller points the root
+#     elsewhere, and the launch gate then refuses the plan the launch has just written.
 #   * **The watch command is printed**, so arming it is one copy-paste rather than
 #     something composed under time pressure. `just channel-next` and not `just
 #     monitor`: rendering a surface is not reading it, and only `channel-next`
@@ -142,10 +156,15 @@ set -euo pipefail
 #: `just plan` journey catches, since each one launches for real and the gate runs on it.
 PLANNING_PROJECT_METADATA='{"orchestrator.plan-kind": {"kind": "planning", "nodes": @NODES@}}'
 
-#: Where a generated project's record is written under the gitignored local-md root.
-#: Kept in the repository because it is the project the launch is judged against and
-#: its qualified id remains directly relaunchable with `just orchestrate`.
-PLAN_DIRECTORY=".plans/projects"
+#: Where a generated project's record sits *under* the plan-authoring root: the
+#: `projects/` directory a local Markdown source keeps them in, beside the `tasks/` one.
+#: The root itself is not named here — it is resolved at launch, below, because it is
+#: the store's own answer rather than this script's, and a second spelling of it here is
+#: exactly what used to send the write and the read to two different directories.
+PLAN_RECORDS="projects"
+#: Where a project's task records sit under that same root, which the cleanup below
+#: reaches when a write fails partway.
+PLAN_TASKS="tasks"
 PLAN_SOURCE="authoring"
 
 #: The persona ref the planner node carries. A path, deliberately — see the header.
@@ -641,21 +660,54 @@ if ! . "$ask_manager_helper"; then
 fi
 export_ask_manager plan || exit $?
 
+plan_root_helper="$script_dir/plan-root-env.sh"
+if [ ! -f "$plan_root_helper" ] || [ ! -r "$plan_root_helper" ]; then
+    fail "required helper is not a readable regular file: $plan_root_helper" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+# shellcheck source=scripts/plan-root-env.sh
+if ! . "$plan_root_helper"; then
+    fail "the plan-root helper at $plan_root_helper is readable but could not be loaded" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+export_plan_authoring_root plan || exit $?
+
+# The root the helper above resolved, which is where this launch writes its project and
+# where everything downstream of it then looks: `onepipeline start` below, the review
+# snapshot beside it, and the closeout that reads what the run authored all resolve the
+# `authoring` source through the store, and the store answers with this directory
+# because this launch put it in the environment.
+#
+# It replaces a `.plans` relative to whatever directory the recipe was invoked from.
+# Those are the same directory for an ordinary launch — the resolved root is this
+# checkout's own `.plans` — and they parted exactly when a caller had pointed the root
+# elsewhere: the launch wrote its project to the relative path and `onepipeline start`
+# then looked for it under the configured one, so the launch gate refused a plan that
+# had just been written and nothing was dispatched.
+plan_root=${!PLAN_AUTHORING_ROOT_ENV}
+plan_directory="$plan_root/$PLAN_RECORDS"
+
 # Both checked rather than left to `set -e`, which would exit with whatever the
 # helper printed and no repair — and, for the write, would leave a half-written project
 # behind for the next launch to pick up.
-mkdir -p "$PLAN_DIRECTORY" || fail "the plan directory $PLAN_DIRECTORY could not be created" \
-    "check that this checkout is writable, then retry"
-plan="$PLAN_DIRECTORY/$name.md"
+mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not be created" \
+    "check that the plan-authoring root is a directory this launch may write into, then retry"
+plan="$plan_directory/$name.md"
 "$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$max_turns" \
     "$repo" "$execution" "$TITLE_PREFIX$name" "$DIRECT_PLACEMENT_NOTE" \
     "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" "$DESIGN_DOC_GRAPH" "$DESIGN_TITLE_PREFIX$name" \
     "$design_instructions" \
-    | "$python" -m orchestrator.project_store .plans "$planning_metadata" >/dev/null || {
-    # `|| :` so a removal that fails cannot replace the diagnostic below with its own
-    # exit; the partial plan is then named by that diagnostic rather than silently kept.
-    rm -f "$plan" ".plans/tasks/$name"/*.md || :
-    rmdir ".plans/tasks/$name" 2>/dev/null || :
+    | "$python" -m orchestrator.project_store "$plan_root" "$planning_metadata" >/dev/null || {
+    # Reported rather than swallowed, and reported without ending the launch here: what
+    # the operator has to act on is the write that failed, which the diagnostic below
+    # names, and a removal that failed on top of it leaves records the next launch would
+    # read — so it earns its own line naming them, and the refusal still comes last.
+    rm -f "$plan" "$plan_root/$PLAN_TASKS/$name"/*.md ||
+        echo "plan: part of the half-written plan could not be removed; delete $plan and $plan_root/$PLAN_TASKS/$name by hand, or the next launch of '$name' reads what this one left" >&2
+    # This one is *expected* to fail whenever the directory is absent or still holds a
+    # record the removal above could not take, and both are already reported by that
+    # line, so its own failure is not a second thing to tell anybody about.
+    rmdir "$plan_root/$PLAN_TASKS/$name" 2>/dev/null || :
     fail "the plan for '$brief' could not be written to $plan by $python" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 }
@@ -670,7 +722,16 @@ else
     placement="--direct dispatches it into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
 fi
 project="$PLAN_SOURCE:$name"
-echo "plan: wrote $project at $plan; $placement; answer this planner's questions with: just channel-next $name" >&2
+# Named relative to the directory this launch was made from when the plan is under it,
+# which for an ordinary `just plan` is this checkout and the line a manager already
+# reads, and absolute otherwise. Both halves are the same claim — where the plan is —
+# and a path spelled relative to a directory it is not under names nothing, which is
+# what a caller who has pointed the plan-authoring root elsewhere would be handed.
+case "$plan" in
+    "$PWD"/*) written=${plan#"$PWD"/} ;;
+    *) written=$plan ;;
+esac
+echo "plan: wrote $project at $written; $placement; answer this planner's questions with: just channel-next $name" >&2
 
 # The snapshot `record_projects_new_since` is taken against; its docstring says what
 # the window does and does not cover. Placed after the brief project is written, and

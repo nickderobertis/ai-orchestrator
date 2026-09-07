@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NewType, TypedDict
 
+import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV
 from nx_workspace import shares_workspace_install
@@ -1284,7 +1285,7 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
     launched_environment.update(
         {
             "ONETASKGRAPH_SECRETS_FILE": environment["ONETASKGRAPH_SECRETS_FILE"],
-            "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT": str(tmp_path),
+            plan_root_variable.name(): str(tmp_path),
             PROMPT_LOG_ENV: str(tmp_path / "turns.jsonl"),
         }
     )

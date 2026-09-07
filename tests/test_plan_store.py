@@ -124,6 +124,10 @@ def test_a_relative_root_resolves_against_this_checkout(monkeypatch: pytest.Monk
             _settings(**{"sources.demo.plugin": "local-md", "sources.demo.config.root": ""}),
             "names no root",
         ),
+        (
+            _settings(**{"sources.demo.plugin": "local-md", "sources.demo.config.root": "pl\0ans"}),
+            "NUL character",
+        ),
     ],
 )
 def test_a_source_this_may_not_write_is_refused_by_name(
@@ -152,6 +156,73 @@ def test_a_setting_without_a_string_key_is_passed_over(monkeypatch: pytest.Monke
         ),
     )
     assert plan_store.source_root("demo") == Path("/tmp/demo")
+
+
+def test_a_root_that_does_not_exist_yet_is_created_rather_than_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host that has never planned has no root, and its first launch makes one."""
+    root = tmp_path / "never-planned"
+    _rooted(monkeypatch, root)
+
+    assert plan_store.ensure_writable_source_root("demo") == root
+    assert root.is_dir(), "the root a launch is about to author into was not created"
+
+
+def test_a_root_a_launch_can_already_write_into_is_answered_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordinary case: the directory is there, and nothing about it is disturbed."""
+    root = tmp_path / "store"
+    root.mkdir()
+    (root / "projects").mkdir()
+    _rooted(monkeypatch, root)
+
+    assert plan_store.ensure_writable_source_root("demo") == root
+    assert (root / "projects").is_dir(), "resolving the root disturbed what it already held"
+
+
+def test_a_root_that_is_not_a_directory_is_refused_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path holding a file is refused before a launch writes a plan into it."""
+    root = tmp_path / "store"
+    root.write_text("not a plan store\n", encoding="utf-8")
+    _rooted(monkeypatch, root)
+
+    with pytest.raises(OSError, match=f"{root}, which is not a directory"):
+        plan_store.ensure_writable_source_root("demo")
+
+
+def test_a_root_that_cannot_be_created_is_refused_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing root below a parent nothing may write into is the refusal, not a crash."""
+    parent = tmp_path / "sealed"
+    parent.mkdir(mode=0o500)
+    root = parent / "store"
+    _rooted(monkeypatch, root)
+
+    try:
+        with pytest.raises(OSError, match=f"{root}, which could not be created"):
+            plan_store.ensure_writable_source_root("demo")
+    finally:
+        parent.chmod(0o700)
+
+
+def test_a_root_this_process_may_not_write_into_is_refused_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing but read-only root is the case a `mkdir` alone would pass over."""
+    root = tmp_path / "store"
+    root.mkdir(mode=0o500)
+    _rooted(monkeypatch, root)
+
+    try:
+        with pytest.raises(OSError, match=f"{root}, which this process may not write into"):
+            plan_store.ensure_writable_source_root("demo")
+    finally:
+        root.chmod(0o700)
 
 
 def _written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str = RECORD) -> Path:
