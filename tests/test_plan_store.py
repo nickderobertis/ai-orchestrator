@@ -371,8 +371,26 @@ def test_the_written_entry_reads_back_as_the_value_it_was_given(
             '---\nmetadata:\n  "a": 1\n  - a list entry\n---\n\nbody\n',
             "cannot edit around",
         ),
+        (
+            '---\nmetadata:\n  "a": 1\n    stranded: 2\n---\n\nbody\n',
+            "cannot edit around",
+        ),
+        (
+            '---\nmetadata:\n  "a": 1\n\n  "b": 2\n---\n\nbody\n',
+            "blank line no entry above it accounts for",
+        ),
+        (
+            '---\nmetadata:\n    "a": 1\n  "b": 2\n---\n\nbody\n',
+            "cannot edit around",
+        ),
     ],
-    ids=["two blocks", "sequence"],
+    ids=[
+        "two blocks",
+        "sequence",
+        "deeper than a stated value",
+        "unaccounted blank line",
+        "shallower than the entries beside it",
+    ],
 )
 def test_a_metadata_block_this_cannot_account_for_is_refused(
     frontmatter: str, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -464,6 +482,142 @@ def test_a_plainly_rendered_entry_of_the_same_key_is_replaced_rather_than_duplic
     assert written.count("orchestrator.plan-review") == 1
     assert '{"key": "new"}' in written
     assert "  onepipeline.id: contracts" in written
+
+
+def test_a_nested_entry_the_write_back_projected_is_kept_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A settled plan holds entries whose value is a block, and they are somebody else's.
+
+    A settlement projects entries whose value is a block onto the task it ran. What those
+    entries are called and what they hold belongs to whoever writes them, so this asserts
+    only what this writer owes: an entry it did not write survives it whole, contents and
+    all. A writer that could not account for one refused every task of a settled plan.
+
+    The fixture is authored here rather than obtained from the producer, and deliberately:
+    what renders these is the engine's settlement write-back, which needs a launched run to
+    reach and is not this tier's to drive. The producer-backed gate over the rendering this
+    host can obtain — the store's own copy — is in the end-to-end tier beside it.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: route\n"
+        "  a.nested.entry:\n"
+        "    inner: value\n"
+        "  another.nested.entry:\n"
+        "    first: one\n"
+        "    second: two\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert "  a.nested.entry:\n    inner: value\n" in written
+    assert "  another.nested.entry:\n    first: one\n    second: two\n" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+def test_an_entry_whose_value_is_a_block_scalar_keeps_its_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other way an entry leaves its value to the lines beneath it.
+
+    A settlement records the detail of what a node reached as a block scalar, and the
+    indicator sits where a value would — so the shape reads as an ordinary valued entry
+    unless it is recognised, and the lines it owns are then refused as belonging to
+    nothing. An entry after it must still be seen as an entry.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: route\n"
+        "  detail: |-\n"
+        "    line one\n"
+        "    line two\n"
+        "  after: value\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert "  detail: |-\n    line one\n    line two\n" in written
+    assert "  after: value" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+def test_a_block_scalar_whose_content_has_a_paragraph_break_is_kept_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The blank line inside a block scalar is content of it rather than the end of the block.
+
+    A settlement records prose, and prose has paragraph breaks. Read as the end of the
+    metadata block, one puts the review record between two halves of somebody's sentence
+    and leaves the rest of the scalar stranded below it — a corrupted record rather than a
+    refusal, which is the failure this writer exists to avoid.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: route\n"
+        "  detail: |-\n"
+        "    line one\n"
+        "\n"
+        "    line three\n"
+        "  after: value\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert "  detail: |-\n    line one\n\n    line three\n  after: value\n" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+def test_a_blank_line_the_block_merely_ends_on_is_left_where_it_stands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of scanning over blank lines: one after the last entry is not in it.
+
+    Reading a trailing blank line as part of the block would write the record after it,
+    putting the entry among whatever the blank line was separating the block from rather
+    than at the end of the block it belongs to.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        '---\nmetadata:\n  "a": 1\n\nstatus: "todo"\n---\n\nbody\n',
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert '  "a": 1\n  "orchestrator.plan-review": {"key": "abc"}\n\nstatus: "todo"\n' in written
+
+
+def test_a_standing_record_rendered_as_a_block_is_replaced_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replacing an entry takes the lines it owns with it, or its remains outlive it.
+
+    A record the store re-rendered as a nested mapping is still one entry, so writing over
+    it must remove every line beneath it too — otherwise the old value's contents are left
+    stranded under the new one, which reads back as neither.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: route\n"
+        "  orchestrator.plan-review:\n"
+        "    key: stale\n"
+        "    by: review-plan\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "fresh"})
+    written = document.read_text(encoding="utf-8")
+    assert "stale" not in written
+    assert "by: review-plan" not in written
+    assert '  "orchestrator.plan-review": {"key": "fresh"}' in written
+    assert "  onepipeline.id: route" in written
 
 
 def test_an_entry_further_down_the_block_is_replaced_rather_than_duplicated(

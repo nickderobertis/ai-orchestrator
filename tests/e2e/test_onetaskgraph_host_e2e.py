@@ -8,7 +8,7 @@ import re
 import subprocess
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -2040,7 +2040,28 @@ def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:
     assert ignored.returncode == 0
 
 
-# llmlint: ignore-end[shell_test_tiers_stay_split]
+def _read_back(destination: Path, qualified: str) -> Mapping[str, object]:
+    """The metadata the real store reads out of an edited record.
+
+    Asserting on the bytes says the edit looks right; asserting on this says the store can
+    still read what was written, which is the property that matters — a record the writer
+    left unparseable fails the walk over every task beside it, not only its own.
+    """
+    read = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("--set", "sources.destination.plugin=local-md"),
+            *("--set", f"sources.destination.config.root={destination}"),
+            *("task", "show", f"destination:{qualified}", "--json"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert read.returncode == 0, read.stderr
+    metadata = json.loads(read.stdout)["items"][0]["item"]["metadata"]
+    assert isinstance(metadata, dict)
+    return metadata
 
 
 def test_the_plain_rendering_the_store_copies_into_is_one_this_host_can_still_edit(
@@ -2086,6 +2107,9 @@ def test_the_plain_rendering_the_store_copies_into_is_one_this_host_can_still_ed
 
     record = next((destination / "tasks").rglob("*.md"))
     rendered = record.read_text(encoding="utf-8")
+    assert "  onetaskgraph.origin: " in rendered, (
+        f"the copy no longer records its origin as a plain entry:\n{rendered}"
+    )
     assert "  onepipeline.id: route" in rendered, (
         f"the store no longer renders a plain metadata key; this gate exists to catch "
         f"that, and `plan_store` reads what it renders:\n{rendered}"
@@ -2095,3 +2119,134 @@ def test_the_plain_rendering_the_store_copies_into_is_one_this_host_can_still_ed
     written = record.read_text(encoding="utf-8")
     assert '  "orchestrator.plan-review": {"key": "abc"}' in written
     assert "  onepipeline.id: route" in written
+    read_back = _read_back(destination, "drift/route")
+    assert read_back["orchestrator.plan-review"] == {"key": "abc"}
+    assert read_back["onepipeline.id"] == "route"
+
+
+def test_a_nested_entry_the_store_renders_is_one_this_host_can_still_edit(
+    tmp_path: Path,
+) -> None:
+    """The drift gate over the other rendering: an entry whose value is a block.
+
+    A settlement projects entries whose values are mappings onto the task it ran, and they
+    come back rendered as a key with its contents on the lines beneath. `plan_store` has to
+    edit around one without disturbing it.
+
+    Nothing here writes that shape by hand. `plan_store` writes the value as the JSON it
+    renders, the real store re-renders it as a block when it copies the record, and the
+    writer is then asked to add a record beside it — so the nested rendering under test is
+    the store's own, and a store that stopped producing it fails here rather than leaving
+    the parser describing a format nobody emits.
+    """
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    destination.mkdir()
+    write_plan_project(
+        source,
+        {
+            "name": "nested",
+            "tasks": [
+                {"id": "route", "title": "feat: route", "task": "body", "persona": "engineer"}
+            ],
+        },
+    )
+    authored = next((source / "tasks").rglob("*.md"))
+    plan_store.write_metadata(authored, "a.settled.entry", {"inner": "value"})
+
+    copied = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("--set", "sources.source.plugin=local-md"),
+            *("--set", f"sources.source.config.root={source}"),
+            *("--set", "sources.destination.plugin=local-md"),
+            *("--set", f"sources.destination.config.root={destination}"),
+            *("task", "copy", "source:nested/route", "--to", "destination"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert copied.returncode == 0, copied.stderr
+
+    record = next((destination / "tasks").rglob("*.md"))
+    rendered = record.read_text(encoding="utf-8")
+    assert "  a.settled.entry:\n    inner: value" in rendered, (
+        f"the store no longer renders a mapping value as a block; this gate exists to catch "
+        f"that, and `plan_store` edits around what it renders:\n{rendered}"
+    )
+
+    plan_store.write_metadata(record, "orchestrator.plan-review", {"key": "abc"})
+    written = record.read_text(encoding="utf-8")
+    assert "  a.settled.entry:\n    inner: value" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+    read_back = _read_back(destination, "nested/route")
+    assert read_back["a.settled.entry"] == {"inner": "value"}
+    assert read_back["orchestrator.plan-review"] == {"key": "abc"}
+
+
+def test_a_block_scalar_the_store_renders_is_one_this_host_can_still_edit(
+    tmp_path: Path,
+) -> None:
+    """The drift gate over the third rendering: a value carried on the lines beneath it.
+
+    A settlement records its detail as prose spanning several lines, and the store renders a
+    value of that shape as a block scalar — a key stating only the indicator, with the text
+    itself more deeply indented below. `plan_store` has to leave one whole and go on reading
+    the entries after it. The prose carries a paragraph break, because a blank line read as
+    the end of the metadata block is what puts a review record inside somebody's sentence.
+
+    Nothing here writes that shape by hand either. `plan_store` writes the value as the JSON
+    string it is, the real store re-renders it as a block scalar when it copies the record,
+    and the writer is then asked to add a record beside it.
+    """
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    destination.mkdir()
+    write_plan_project(
+        source,
+        {
+            "name": "scalar",
+            "tasks": [
+                {"id": "route", "title": "feat: route", "task": "body", "persona": "engineer"}
+            ],
+        },
+    )
+    authored = next((source / "tasks").rglob("*.md"))
+    plan_store.write_metadata(authored, "a.settled.detail", "first line\n\nthird line\n")
+
+    copied = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("--set", "sources.source.plugin=local-md"),
+            *("--set", f"sources.source.config.root={source}"),
+            *("--set", "sources.destination.plugin=local-md"),
+            *("--set", f"sources.destination.config.root={destination}"),
+            *("task", "copy", "source:scalar/route", "--to", "destination"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert copied.returncode == 0, copied.stderr
+
+    record = next((destination / "tasks").rglob("*.md"))
+    rendered = record.read_text(encoding="utf-8")
+    assert "  a.settled.detail: |\n    first line\n\n    third line\n" in rendered, (
+        f"the store no longer renders a multi-line value as a block scalar; this gate exists "
+        f"to catch that, and `plan_store` edits around what it renders:\n{rendered}"
+    )
+    assert "  onepipeline.id: route" in rendered, (
+        f"the entry after the block scalar is what proves the writer resumed reading past "
+        f"it; the store no longer renders one:\n{rendered}"
+    )
+
+    plan_store.write_metadata(record, "orchestrator.plan-review", {"key": "abc"})
+    written = record.read_text(encoding="utf-8")
+    assert "  a.settled.detail: |\n    first line\n\n    third line\n" in written
+    assert "  onepipeline.id: route" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+    read_back = _read_back(destination, "scalar/route")
+    assert read_back["a.settled.detail"] == "first line\n\nthird line\n"
+    assert read_back["orchestrator.plan-review"] == {"key": "abc"}
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
