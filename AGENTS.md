@@ -3158,10 +3158,38 @@ operational
 syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
-The root quality recipes delegate project selection and caching to Nx:
-`check`/`test` use the full uniform target set through `run-many`, while
-`lint`/`typecheck`/`format` use affected selection. The language-native tools
-inside each project target remain authoritative, and `format-check` remains a
+The root quality recipes delegate project selection and caching to Nx: `test` uses
+the full uniform target set through `run-many`, `lint`/`typecheck`/`format` use
+affected selection, and `check` does both — **which half a tier is in is the whole
+of what makes narrowing the deterministic gate sound.** A project Nx leaves out is
+one no changed file matched an input of, so every target of it would have replayed a
+memo for that exact tree, and skipping a replay checks nothing less than replaying it
+does. That holds only for memoized tiers, so the two uncached ones — `test-checkouts`,
+whose subject lives outside this workspace, and `coverage`, the floor read — sit
+outside the selection and run over every project every time, as
+`workspace:check-nx-cache` always has. `scripts/nx-selection.sh` decides the base, and parts the two ways there can be none: a checkout with no base to offer — a fresh copy, no remote, nothing unique to discover — selects every project and says nothing, while a comparison identity naming a base this checkout does not have **refuses**, since that is the value `just gate` already refuses and a full run over a base nobody has would read as the fresh copy it is not.
+
+**What decides that a project was left out is not which project owns the changed
+file**, and reading it that way is what would make this narrowing unsafe: on that
+reading a diff of `AGENTS.md` — a path no project root contains — selects nothing that
+reads prose, and the gate stops checking the only thing that changed. Nx answers with
+two locators at once, and their union is the selection: one picks the project whose
+root contains a changed path, and one walks every target's declared `inputs`, resolves
+each named input, and picks the project for a changed file matching any
+`{workspaceRoot}` fileset among them. Two consequences carry the rest of this design.
+`nx.json` is treated as reaching **every** project, which is what re-runs a tier whose
+key that edit just moved. And a `!` fileset is never extracted at all, so an exclusion
+narrows what a tier is *keyed* on and never what selects its project: `orchestrator:test`
+is selected by a documentation-only diff and then replays, which is a saving forgone
+rather than a check skipped — so do not expect a `!` entry to buy wall-clock, and do not
+read one as a tier the gate might drop. None of that is promised by any Nx contract, so
+it is measured rather than argued. `tests/e2e/test_nx_cache_scope_e2e.py` plants a change
+at **every fileset** each diff-selected tier is keyed on, the excluded ones included, and
+requires the real selector to pick every tier that reads it; beside it, that file drives
+each diff shape this repository sees end to end and names the tiers a documentation-only
+push stops running. `tests/test_nx_cache_scope.py` holds the other half, which no
+selector can answer: an unmemoized tier may not be on the selected side at all. The language-native
+tools inside each project target remain authoritative, and `format-check` remains a
 format-only verification. Session provisioning and the initial locked Bun
 install precede Nx because they make Nx available; bootstrap then delegates
 project setup through uniform Nx `bootstrap` targets.

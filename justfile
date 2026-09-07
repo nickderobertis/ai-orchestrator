@@ -42,9 +42,15 @@ bootstrap:
 # (owner-only, credential values redacted, truncated per run). That log survives the
 # process, so a failure is still readable afterwards and a *running* recipe can be
 # followed with `tail -f .logs/check.log` instead of through /proc.
+#
+# Two Nx invocations because two questions: what the diff reaches, and what no diff
+# can speak for. `test-checkouts` reads other repositories and `coverage` reads what
+# the tier beside it just measured, so both stay out of the selection — as
+# `workspace:check-nx-cache` always has. AGENTS.md carries why skipping the rest
+# checks nothing less, and `tests/nx_inputs.py` declares which tier is in which half.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage && ./scripts/nx.sh run workspace:check-nx-cache; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; { ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes && ./scripts/nx.sh run-many -t test-checkouts,coverage && ./scripts/nx.sh run workspace:check-nx-cache; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #

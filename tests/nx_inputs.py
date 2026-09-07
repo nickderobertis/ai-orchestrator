@@ -123,36 +123,64 @@ DAG_UI_ROOT = "tests/dag_ui"
 #: it is seconds of work, and a floor that always runs is one no replay can skip.
 COVERAGE_SCOPED = "coverage"
 
+#: The deterministic tier's targets `just check` lets the diff select, in the order the
+#: recipe names them. Every one is memoized, which is what makes skipping an unselected
+#: project equivalent to replaying it; `tests/test_nx_cache_scope.py` refuses one that
+#: is not.
+SELECTED_TARGETS = (
+    "format-check",
+    "lint",
+    "typecheck",
+    CODE_SCOPED,
+    DOCS_SCOPED,
+    RECIPE_SCOPED,
+)
+#: The deterministic tier's targets no diff can select, so `just check` runs them over
+#: every project every time: their subjects are what lives outside this workspace, and
+#: what the tiers beside them just measured. Both are uncached for those same reasons,
+#: so the two lists partition along the line the memo argument draws.
+UNCONDITIONAL_TARGETS = (CHECKOUT_SCOPED, COVERAGE_SCOPED)
+
 
 def nx_config() -> dict:
     return json.loads((REPO_ROOT / "nx.json").read_text(encoding="utf-8"))
 
 
-def named_input_globs(name: str, *, project_root: str = "") -> list[str]:
-    """Expand one named input into repository-relative globs.
+def resolve_input_globs(entries: list, named: dict[str, list]) -> list[str]:
+    """Expand a target's declared inputs into the file globs Nx will hash.
 
     Named inputs may reference other named inputs, and non-file entries (an `env`
     or `runtime` input) contribute no file coverage at all, so they are dropped
-    rather than treated as paths.
+    rather than treated as paths. The globs come back in Nx's own spelling —
+    `{workspaceRoot}`, `{projectRoot}`, and a leading `!` — because which of those a
+    glob wears is what decides whether a change to it selects the project.
     """
-    named = nx_config()["namedInputs"]
+    globs: list[str] = []
+    for entry in entries:
+        match entry:
+            case dict():
+                pass  # an env or runtime input contributes no file coverage
+            case _ if entry in named:
+                globs.extend(resolve_input_globs(named[entry], named))
+            case _:
+                globs.append(entry)
+    return globs
 
-    def resolve(entries: list) -> list[str]:
-        globs: list[str] = []
-        for entry in entries:
-            match entry:
-                case dict():
-                    pass  # an env or runtime input contributes no file coverage
-                case _ if entry in named:
-                    globs.extend(resolve(named[entry]))
-                case _:
-                    globs.append(entry)
-        return globs
 
+def repository_relative_globs(globs: list[str], *, project_root: str = "") -> list[str]:
+    """Rewrite Nx's own glob spelling into paths relative to the repository root."""
     return [
         glob.replace("{workspaceRoot}/", "").replace("{projectRoot}/", f"{project_root}/")
-        for glob in resolve(named[name])
+        for glob in globs
     ]
+
+
+def named_input_globs(name: str, *, project_root: str = "") -> list[str]:
+    """Expand one named input into repository-relative globs."""
+    named = nx_config()["namedInputs"]
+    return repository_relative_globs(
+        resolve_input_globs(named[name], named), project_root=project_root
+    )
 
 
 def matches(glob: str, relative: str) -> bool:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,30 @@ from pathlib import Path
 from conftest import git
 
 ROOT = Path(__file__).parents[2]
+
+#: The status `scripts/comparison-base.sh` refuses a base that was named and cannot be
+#: used with, read from that script rather than restated here. The hook runs the helper
+#: and lets `set -e` carry its status out, so what these journeys hold is that the
+#: refusal reaches the pusher intact — a literal would be a second source of the number
+#: and would pass while the two drifted apart.
+NAMED_BASE_UNUSABLE = int(
+    re.search(
+        r"^readonly NAMED_BASE_UNUSABLE=(\d+)$",
+        (ROOT / "scripts/comparison-base.sh").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ).group(1)
+)
+#: Its sibling: the status for a tree that has no base to offer at all, which
+#: `scripts/nx-selection.sh` answers by selecting every project. Read from the same
+#: script, so the journey below holds the two apart rather than holding either to a
+#: number written here.
+NO_BASE_AVAILABLE = int(
+    re.search(
+        r"^readonly NO_BASE_AVAILABLE=(\d+)$",
+        (ROOT / "scripts/comparison-base.sh").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ).group(1)
+)
 
 
 def _resolve(
@@ -50,6 +75,55 @@ def test_comparison_base_uses_upstream_without_remote_head(tmp_path, bare_origin
     assert resolved.stdout.strip() == "origin/main"
 
 
+def test_comparison_base_parts_a_remote_it_was_given_from_an_origin_it_has_none_of(
+    tmp_path, bare_origin
+) -> None:
+    """Both are "no remote", and only one of them is somebody's mistake.
+
+    A checkout with no `origin` is the state a fresh copy of a tree is in, and
+    `scripts/nx-selection.sh` answers it by checking every project. A remote that was
+    named — by an operator, or by the identity a lifecycle exports into this gate —
+    and is not configured here is a value to repair, and answering it the same way
+    would hide it behind a green run over a base nobody chose.
+    """
+    clone = tmp_path / "clone"
+    git("clone", str(bare_origin(branch="main")), str(clone))
+    bare = tmp_path / "bare"
+    git("init", "-q", "-b", "main", str(bare))
+
+    named = _resolve(clone, "nosuch", "main")
+    absent = _resolve(bare)
+
+    assert named.returncode == NAMED_BASE_UNUSABLE
+    assert "comparison-base: remote 'nosuch' does not exist" in named.stderr
+    assert "just gate <remote> <branch>" in named.stderr
+    assert absent.returncode == NO_BASE_AVAILABLE, (
+        "a checkout with no origin has no base to offer, which is a state and not a typo"
+    )
+    assert "this checkout has no 'origin' to compare against" in absent.stderr
+
+
+def test_comparison_base_refuses_a_remote_name_no_ref_can_be_built_from(
+    tmp_path, bare_origin
+) -> None:
+    """A remote nothing could name is the caller's to repair, and is not a tree with no base.
+
+    `scripts/nx-selection.sh` answers "this tree has no base to offer" by selecting every
+    project in silence, which is right for a fresh copy. A mistyped remote reaching that
+    same branch would come back as a green full run rather than as the typo it is.
+    """
+    clone = tmp_path / "clone"
+    git("clone", str(bare_origin(branch="main")), str(clone))
+
+    refused = _resolve(clone, "bad//remote", "main")
+
+    assert refused.returncode == NAMED_BASE_UNUSABLE
+    assert "comparison-base: 'bad//remote' is not a valid remote name" in refused.stderr
+    assert "just gate <remote> <branch>" in refused.stderr, (
+        "a refused name has to say what a usable one would be"
+    )
+
+
 def test_comparison_base_requires_explicit_base_when_ambiguous(tmp_path, bare_origin) -> None:
     origin = bare_origin(branch="main")
     clone = tmp_path / "clone"
@@ -83,7 +157,7 @@ def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) 
         text=True,
         capture_output=True,
     )
-    assert proc.returncode == 2
+    assert proc.returncode == NAMED_BASE_UNUSABLE
     assert "comparison remote=upstream base=invalid..base" in proc.stderr
     assert "comparison-base: 'invalid..base' is not a valid branch name" in proc.stderr
 
@@ -191,6 +265,6 @@ def test_the_pre_push_hook_reads_the_base_the_lifecycle_exported(tmp_path) -> No
         text=True,
         capture_output=True,
     )
-    assert proc.returncode == 2
+    assert proc.returncode == NAMED_BASE_UNUSABLE
     # It reached the resolver as the base, rather than being discarded for discovery.
     assert "comparison remote=upstream base=invalid..base" in proc.stderr

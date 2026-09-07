@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from nx_workspace import copy_checkout, copy_working_tree, shares_workspace_install
 from waits import timeout as e2e_timeout
 
@@ -34,13 +35,39 @@ from waits import timeout as e2e_timeout
 # declares what it actually reads, and `tests/conftest.py` fails one that declares
 # wrong.
 ROOT = Path(__file__).resolve().parents[2]
-#: The Nx target lists the root quality recipes route through, restated here
+#: The two selections `just check` makes, spelled as Nx receives them. Which tiers
+#: belong to each is declared once in `tests/nx_inputs.py`, and
+#: `tests/test_nx_cache_scope.py` holds the recipe to that split; what these journeys
+#: add is that the recipe really hands Nx two invocations rather than one.
+CHECK_SELECTED = ",".join(SELECTED_TARGETS)
+CHECK_UNCONDITIONAL = ",".join(UNCONDITIONAL_TARGETS)
+#: The Nx target lists the other root quality recipes route through, restated here
 #: rather than read from the `justfile` — this suite exists to catch one of them
 #: drifting. `coverage` is last in each: it waits on the measuring tier and enforces
 #: the floor on what that tier wrote.
-CHECK_TARGETS = "format-check,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage"
 TEST_TARGETS = "test,test-docs,test-recipes,test-checkouts,coverage"
 UPGRADE_TARGETS = "build,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage"
+
+
+#: The status `scripts/nx-selection.sh` reads as "nothing to narrow against", taken from
+#: that script rather than restated, so the journey below reconciles the selector's own
+#: constant against what `scripts/comparison-base.sh` really exits with.
+NO_BASE_AVAILABLE = int(
+    re.search(
+        r"^readonly NO_BASE_AVAILABLE=(\d+)$",
+        (ROOT / "scripts/nx-selection.sh").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ).group(1)
+)
+
+
+def _check_trace(selection: str) -> list[str]:
+    """What `just check` hands Nx: the projects a diff chose, then the tiers it cannot."""
+    return [
+        f"nx.sh {selection} -t {CHECK_SELECTED}",
+        f"nx.sh run-many -t {CHECK_UNCONDITIONAL}",
+        "nx.sh run workspace:check-nx-cache",
+    ]
 
 
 def _run(
@@ -60,10 +87,6 @@ def _run(
     ("recipe", "target"),
     [
         ("bootstrap", "run-many -t bootstrap"),
-        (
-            "check",
-            f"run-many -t {CHECK_TARGETS}",
-        ),
         ("test", f"run-many -t {TEST_TARGETS}"),
         ("lint", "affected -t lint"),
         ("typecheck", "affected -t typecheck"),
@@ -172,7 +195,19 @@ fi
     session_setup.chmod(0o755)
     # The log preservation, coverage readout, and workspace provisioning under test
     # are the real ones; only the checkers and package managers they wrap are doubled.
-    for name in ("preserved-log.sh", "coverage-total.sh", "workspace-install.sh"):
+    for name in (
+        "preserved-log.sh",
+        "coverage-total.sh",
+        "workspace-install.sh",
+        # The two that decide which projects `just check` runs over: real, because
+        # deciding that is the behaviour these journeys are about.
+        "nx-selection.sh",
+        "comparison-base.sh",
+        # Beside the base a tier is judged against, whether that base's own origin ref
+        # has moved past it: doubling either would let a recipe that stopped consulting
+        # it pass here.
+        "base-freshness.sh",
+    ):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     return checkout, trace
 
@@ -201,12 +236,6 @@ def _recipe_run(
 def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
     checkout, trace = _recipe_checkout(tmp_path)
-    # Both of the real things `just gate` and `just lint-llm-diff` decide about a base
-    # before they hand the tier over: which remote and branch to judge against, and
-    # whether that base's own origin ref has moved past it. Doubling either would let a
-    # recipe that stopped consulting it pass here.
-    for name in ("comparison-base.sh", "base-freshness.sh"):
-        shutil.copy2(ROOT / "scripts" / name, checkout / "scripts" / name)
     # The recipe only checks that llmlint is installed before handing the tier to
     # Nx; the traced `scripts/nx.sh` double above is what stands in for the run.
     llmlint = checkout / "bin/llmlint"
@@ -331,19 +360,173 @@ def test_bootstrap_recipe_leaves_the_failing_workspace_install_readable(
 
 
 @pytest.mark.reads_recipes
-def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
+def test_check_recipe_runs_every_project_when_no_comparison_base_resolves(
     tmp_path: Path,
 ) -> None:
+    """No base is not an empty diff, so a checkout with none narrows nothing.
+
+    This is the state a fresh copy of the tree is in, and the direction a selector
+    that cannot prove what changed has to fail in.
+    """
     checkout, trace = _recipe_checkout(tmp_path)
 
     result = _recipe_run(checkout, trace, "check")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "check: all deterministic checks passed\n"
-    assert trace.read_text().splitlines() == [
-        f"nx.sh run-many -t {CHECK_TARGETS}",
-        "nx.sh run workspace:check-nx-cache",
-    ]
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: run-many\n"
+    )
+    assert trace.read_text().splitlines() == _check_trace("run-many")
+
+
+@pytest.mark.reads_recipes
+def test_check_recipe_narrows_to_the_diff_the_gate_judges(tmp_path: Path) -> None:
+    """The base the judged tier and the publishing push use is the base this narrows on.
+
+    Nx's own default base is the local branch, which in a publication clone is the
+    commit being pushed — an empty diff, and a gate that would select nothing at the
+    one moment it decides whether work reaches a remote.
+    """
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: affected --base origin/main\n"
+    )
+    assert trace.read_text().splitlines() == _check_trace("affected --base origin/main")
+
+
+@pytest.mark.reads_recipes
+def test_check_recipe_says_what_failed_when_it_cannot_decide_the_selection(
+    tmp_path: Path,
+) -> None:
+    """The selection is resolved before the log opens, so it needs its own diagnostic.
+
+    A gate that died on the shell's own error here would say nothing about what it was
+    doing, and would leave a reader looking for a failure among the checks — where
+    nothing had run yet.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / "scripts/nx-selection.sh").chmod(0o644)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode != 0
+    assert "check: could not decide which projects to run over" in result.stderr
+    assert not trace.exists(), "nothing may reach Nx before the selection is decided"
+
+
+@pytest.mark.reads_recipes
+def test_the_selector_falls_back_only_on_the_status_the_base_helper_refuses_with(
+    tmp_path: Path,
+) -> None:
+    """The status that parts the two branches is a contract between two scripts.
+
+    It parts them in both directions. A refusal for the state this fixture is in —
+    nothing to narrow against — that started exiting with anything else would be read as
+    the helper having failed to run, and `just check` would stop where it should run
+    every project. A refusal about a base somebody named that collapsed back onto it
+    would be answered by that same silent fallback, which is how a misconfigured
+    comparison identity comes to look like a fresh copy of the tree.
+    """
+    checkout, _ = _recipe_checkout(tmp_path)
+    named = _gate_checkout(tmp_path / "named")[0]
+
+    refused = _run(str(checkout / "scripts/comparison-base.sh"), cwd=checkout)
+    unusable = _run(str(named / "scripts/comparison-base.sh"), "origin", "absent-base", cwd=named)
+
+    assert refused.returncode == NO_BASE_AVAILABLE
+    assert "comparison-base:" in refused.stderr
+    assert unusable.returncode not in (0, NO_BASE_AVAILABLE), (
+        "a base that was named and is not there must not reach the fallback branch, "
+        "which selects every project and says nothing"
+    )
+    assert "comparison-base:" in unusable.stderr
+
+
+@pytest.mark.reads_recipes
+def test_the_selector_selects_every_project_without_explaining_itself(
+    tmp_path: Path,
+) -> None:
+    """The tree having no base is the ordinary state, and a state needs no report.
+
+    `just check` already prints the selection it made, so a line here would only add a
+    second account of a run that went right — which is the noise that hides the one the
+    journey below prints when something actually has to be repaired.
+    """
+    checkout, _ = _recipe_checkout(tmp_path)
+
+    result = _run(str(checkout / "scripts/nx-selection.sh"), cwd=checkout)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "run-many\n"
+    assert result.stderr == "", "a selection that went as designed says nothing of its own"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("base", "cause"),
+    [
+        (
+            "absent-base",
+            "'origin/absent-base' is missing; fetch 'origin' or choose an existing base",
+        ),
+        ("invalid..base", "'invalid..base' is not a valid branch name"),
+    ],
+)
+def test_the_selector_refuses_a_base_that_was_named_and_cannot_be_used(
+    tmp_path: Path, base: str, cause: str
+) -> None:
+    """A named base nothing can resolve is not the fresh-copy state and must not read as it.
+
+    The comparison identity a lifecycle exports here is the one `just gate` resolves and
+    the publishing push judges against, and the gate already refuses this value outright.
+    Selecting every project instead would answer a misconfiguration with a green run over
+    a base nobody has, with the helper's report — which names the repair — dropped.
+    """
+    checkout, _ = _gate_checkout(tmp_path)
+    env = os.environ | {
+        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+        "ORCHESTRATOR_COMPARISON_BASE": base,
+    }
+
+    result = _run(str(checkout / "scripts/nx-selection.sh"), cwd=checkout, env=env)
+
+    assert result.returncode != 0
+    assert result.stdout == "", "nothing may reach Nx as a selection here"
+    assert f"comparison-base: {cause}" in result.stderr, (
+        "the helper's own report is the only account of which base was refused and how to repair it"
+    )
+    assert (
+        "nx-selection: scripts/comparison-base.sh named no base to narrow against" in result.stderr
+    )
+
+
+@pytest.mark.reads_recipes
+def test_check_recipe_parts_an_unresolvable_base_from_a_helper_that_could_not_run(
+    tmp_path: Path,
+) -> None:
+    """A base nothing can resolve is ordinary; a helper that cannot run decides nothing.
+
+    Collapsing the two would answer a broken checkout with a green gate over every
+    project, which reads as the deliberate fallback rather than as the failure it is.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / "scripts/comparison-base.sh").unlink()
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode != 0
+    assert "comparison-base.sh: No such file or directory" in result.stderr, (
+        "the helper's own report is the only account of why nothing was decided"
+    )
+    assert (
+        "nx-selection: scripts/comparison-base.sh named no base to narrow against" in result.stderr
+    )
+    assert "check: could not decide which projects to run over" in result.stderr
+    assert not trace.exists(), "a selection nothing decided may not reach Nx"
 
 
 @pytest.mark.reads_recipes
@@ -355,7 +538,7 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "nx.sh: captured failure detail" in result.stderr
     assert "check: deterministic checks failed" in result.stderr
-    assert trace.read_text().splitlines() == [f"nx.sh run-many -t {CHECK_TARGETS}"]
+    assert trace.read_text().splitlines() == [f"nx.sh run-many -t {CHECK_SELECTED}"]
 
 
 @pytest.mark.reads_recipes
@@ -1725,7 +1908,10 @@ def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> 
     result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="96.42")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "check: all deterministic checks passed (line coverage 96.42%)\n"
+    assert result.stdout == (
+        "check: all deterministic checks passed (line coverage 96.42%); "
+        "project selection: run-many\n"
+    )
 
 
 @pytest.mark.reads_recipes
@@ -1736,7 +1922,9 @@ def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Pat
     result = _recipe_run(checkout, trace, "check")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "check: all deterministic checks passed\n"
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: run-many\n"
+    )
     assert not (checkout / ".coverage").exists()
 
 
@@ -1749,7 +1937,9 @@ def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: 
     result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="No data to report.")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "check: all deterministic checks passed\n"
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: run-many\n"
+    )
     assert "uv run coverage report --format=total" in trace.read_text()
 
 
@@ -1771,7 +1961,10 @@ def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "check: all deterministic checks passed (line coverage 94.13%)\n"
+    assert result.stdout == (
+        "check: all deterministic checks passed (line coverage 94.13%); "
+        "project selection: run-many\n"
+    )
 
 
 @pytest.mark.reads_recipes

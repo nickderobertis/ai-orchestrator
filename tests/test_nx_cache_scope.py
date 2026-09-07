@@ -59,8 +59,12 @@ from nx_inputs import (
     PLAN_TOOLING_SCOPED,
     RECIPE_SCOPED,
     RECIPE_WORKSPACE,
+    SELECTED_TARGETS,
+    UNCONDITIONAL_TARGETS,
     covers,
     named_input_globs,
+    repository_relative_globs,
+    resolve_input_globs,
 )
 
 from orchestrator.root import REPO_ROOT
@@ -102,20 +106,6 @@ def _nx_config() -> dict:
     return json.loads((REPO_ROOT / "nx.json").read_text(encoding="utf-8"))
 
 
-def _resolve(entries: list, named: dict[str, list]) -> list[str]:
-    """Expand named inputs into the concrete file globs Nx will hash."""
-    globs: list[str] = []
-    for entry in entries:
-        match entry:
-            case dict():
-                pass  # an env or runtime input contributes no file coverage
-            case _ if entry in named:
-                globs.extend(_resolve(named[entry], named))
-            case _:
-                globs.append(entry)
-    return globs
-
-
 def _effective_inputs(project_root: str, target: str) -> list[str]:
     config = _nx_config()
     project_file = REPO_ROOT / project_root / "project.json" if project_root else None
@@ -123,11 +113,9 @@ def _effective_inputs(project_root: str, target: str) -> list[str]:
     declared = (
         project["targets"][target].get("inputs") or config["targetDefaults"][target]["inputs"]
     )
-    resolved = _resolve(declared, config["namedInputs"])
-    return [
-        glob.replace("{workspaceRoot}/", "").replace("{projectRoot}/", f"{project_root}/")
-        for glob in resolved
-    ]
+    return repository_relative_globs(
+        resolve_input_globs(declared, config["namedInputs"]), project_root=project_root
+    )
 
 
 def _named_repository_paths(text: str, tracked: frozenset[str]) -> set[str]:
@@ -183,6 +171,113 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
     llmlint = _nx_config()["targetDefaults"]["lint-llm-diff"]["inputs"]
     assert llmlint[0] == WHOLE_WORKSPACE, (
         "the llmlint tier judges the whole workspace diff and shares this one key"
+    )
+
+
+#: The recipe whose project selection the two lists above partition.
+DETERMINISTIC_RECIPE = "check"
+#: How that recipe hands Nx the selection `scripts/nx-selection.sh` decided, and how it
+#: names the tiers it never lets a diff decide. Matched literally, because what makes
+#: the narrowing sound is which of the two invocations a target is named by.
+SELECTED_INVOCATION = './scripts/nx.sh "${selected[@]}" -t '
+UNCONDITIONAL_INVOCATION = "./scripts/nx.sh run-many -t "
+#: Where that recipe takes its selection from. One source, so the base a narrowed gate
+#: judges against cannot be decided in two places.
+SELECTION_SOURCE = "selection=$(./scripts/nx-selection.sh)"
+
+
+def _project_declarations() -> dict[str, dict]:
+    """Every project Nx knows here, keyed by the root its declaration sits at.
+
+    Derived from what git tracks rather than listed, so a project added, moved, or
+    dropped reaches these guards by existing.
+    """
+    declarations: dict[str, dict] = {}
+    for tracked in sorted(_tracked()):
+        if Path(tracked).name == "project.json":
+            parent = str(Path(tracked).parent)
+            declarations[parent if parent != "." else ""] = json.loads(
+                (REPO_ROOT / tracked).read_text(encoding="utf-8")
+            )
+    return declarations
+
+
+def _memoizes(target: str, declaration: dict) -> bool:
+    """Whether Nx would replay ``target`` rather than run it, defaults included.
+
+    A `targetDefaults` entry that names no `cache` is Nx's own default, which is not
+    to cache — so a target nothing declares is read as unmemoized rather than assumed
+    memoized, because that is the direction in which a wrong answer here is safe.
+    """
+    declared = declaration["targets"][target]
+    if "cache" in declared:
+        return bool(declared["cache"])
+    return bool(_nx_config()["targetDefaults"].get(target, {}).get("cache", False))
+
+
+def _owners(target: str) -> list[tuple[str, dict]]:
+    return [
+        (root, declaration)
+        for root, declaration in _project_declarations().items()
+        if target in declaration["targets"]
+    ]
+
+
+def _deterministic_recipe_body() -> str:
+    lines = (REPO_ROOT / "justfile").read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"{DETERMINISTIC_RECIPE}:") + 1
+    body: list[str] = []
+    for line in lines[start:]:
+        if line and not line.startswith((" ", "\t")):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def test_every_tier_a_diff_can_deselect_is_one_a_memo_would_have_answered() -> None:
+    """Narrowing is only sound where skipping a tier and replaying it are the same thing.
+
+    Nx leaves a project out when no changed file matched an input of any of its
+    targets, which is exactly the condition under which each of those targets would
+    have replayed a memo recorded for this tree. That equivalence is what licenses the
+    deterministic tier to run over fewer projects than it has — and it is an argument
+    about *cached* targets only. An unmemoized tier reached by a diff-driven selection
+    is not replayed when its project is left out; it simply does not run, and the gate
+    quietly stops checking what it checks.
+    """
+    for target in SELECTED_TARGETS:
+        owners = _owners(target)
+        assert owners, f"the deterministic tier selects {target}, which no project declares"
+        for root, declaration in owners:
+            assert _memoizes(target, declaration), (
+                f"{root or 'workspace'}:{target} is a tier a diff can deselect, so a "
+                "project Nx leaves out has to be one this target would have replayed "
+                "for; an unmemoized tier belongs in UNCONDITIONAL_TARGETS instead"
+            )
+
+    for target in UNCONDITIONAL_TARGETS:
+        owners = _owners(target)
+        assert owners, f"the deterministic tier always runs {target}, which no project declares"
+        for root, declaration in owners:
+            assert not _memoizes(target, declaration), (
+                f"{root or 'workspace'}:{target} is memoized, so the diff could decide it "
+                "and it no longer earns a place among the tiers that always run"
+            )
+
+
+def test_the_deterministic_recipe_splits_its_tiers_along_that_same_line() -> None:
+    """The recipe is the selection; these two lists only describe it if it says so."""
+    body = _deterministic_recipe_body()
+    assert set(SELECTED_TARGETS).isdisjoint(UNCONDITIONAL_TARGETS)
+    assert SELECTION_SOURCE in body, (
+        "the base a narrowed gate judges against comes from scripts/nx-selection.sh"
+    )
+    assert f"{SELECTED_INVOCATION}{','.join(SELECTED_TARGETS)}" in body
+    assert f"{UNCONDITIONAL_INVOCATION}{','.join(UNCONDITIONAL_TARGETS)}" in body
+    named = [target for group in re.findall(r"-t ([\w,-]+)", body) for target in group.split(",")]
+    assert sorted(named) == sorted([*SELECTED_TARGETS, *UNCONDITIONAL_TARGETS]), (
+        "every target the deterministic tier runs is either one a diff may deselect or "
+        "one it never may, and which of the two decides whether skipping it is sound"
     )
 
 
@@ -870,9 +965,9 @@ def test_the_e2e_witnesses_still_name_paths_outside_the_project_roots() -> None:
     do: the prose witness proves the whole-workspace tier notices documentation,
     and the code witness proves the narrowed tier still notices everything else.
     """
-    project_scoped = _resolve(["default"], _nx_config()["namedInputs"])
-    globs = [glob.replace("{workspaceRoot}/", "") for glob in project_scoped]
-    globs = [glob.replace("{projectRoot}/", "orchestrator/") for glob in globs]
+    globs = repository_relative_globs(
+        resolve_input_globs(["default"], _nx_config()["namedInputs"]), project_root="orchestrator"
+    )
     for witness in ("AGENTS.md", "justfile"):
         assert not covers(globs, witness)
         assert (REPO_ROOT / witness).exists()
