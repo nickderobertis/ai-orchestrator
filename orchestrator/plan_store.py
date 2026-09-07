@@ -663,7 +663,13 @@ RECORD_COMPONENT = re.compile(r"(?!\.+$)[\w.@+-]+")
 
 _FENCE = "---"
 _METADATA_OPEN = re.compile(r"^metadata:\s*$")
-_METADATA_ENTRY = re.compile(r'^\s+"(?P<key>[^"]*)": \S')
+#: One entry of a `metadata` block, in either rendering this host produces. This
+#: module and `orchestrator/project_store.py` write a JSON-quoted key; the plan
+#: store's own renderer, and the settlement write-back that goes through it, write
+#: a plain YAML key. Both parse to the same key, so a record written by one has to
+#: be editable by the other — a writer that refused the store's own rendering left
+#: every review record unwritable after a run settled onto the plan it launched from.
+_METADATA_ENTRY = re.compile(r'^\s+(?:"(?P<quoted>[^"]*)"|(?P<plain>[A-Za-z_][A-Za-z0-9_.-]*)): \S')
 _INDENTED = re.compile(r"^\s+\S")
 
 
@@ -725,7 +731,8 @@ def _entry_key(line: str) -> str:
     """The metadata key ``line`` states, which the caller has already matched."""
     matched = _METADATA_ENTRY.match(line)
     assert matched is not None
-    return matched["key"]
+    quoted = matched["quoted"]
+    return quoted if quoted is not None else matched["plain"]
 
 
 def _replace(document: Path, content: str) -> None:

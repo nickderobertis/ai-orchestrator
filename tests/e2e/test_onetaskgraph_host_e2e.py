@@ -37,6 +37,7 @@ from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_store
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -2039,3 +2040,57 @@ def test_adopted_archive_binary_and_authoring_ignore_are_in_force() -> None:
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+def test_the_plain_rendering_the_store_copies_into_is_one_this_host_can_still_edit(
+    tmp_path: Path,
+) -> None:
+    """The drift gate over the metadata rendering `plan_store.write_metadata` edits.
+
+    Two producers write the records this host reads. `orchestrator/project_store.py`
+    renders a JSON-quoted metadata key; the plan store's own copy — the path a settlement
+    write-back takes back onto the plan a run was launched from — renders a plain YAML
+    key. `plan_store` reads both, and a reader that restates a format the other module
+    owns drifts from it in silence, so the plain fixture here is produced by running the
+    real store rather than hand-authored from what it is believed to emit.
+
+    A copy whose rendering this host can no longer edit fails here, where the cause is
+    named, rather than at the next review record with only a refusal to go on.
+    """
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    destination.mkdir()
+    write_plan_project(
+        source,
+        {
+            "name": "drift",
+            "tasks": [
+                {"id": "route", "title": "feat: route", "task": "body", "persona": "engineer"}
+            ],
+        },
+    )
+    copied = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("--set", "sources.source.plugin=local-md"),
+            *("--set", f"sources.source.config.root={source}"),
+            *("--set", "sources.destination.plugin=local-md"),
+            *("--set", f"sources.destination.config.root={destination}"),
+            *("task", "copy", "source:drift/route", "--to", "destination"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert copied.returncode == 0, copied.stderr
+
+    record = next((destination / "tasks").rglob("*.md"))
+    rendered = record.read_text(encoding="utf-8")
+    assert "  onepipeline.id: route" in rendered, (
+        f"the store no longer renders a plain metadata key; this gate exists to catch "
+        f"that, and `plan_store` reads what it renders:\n{rendered}"
+    )
+
+    plan_store.write_metadata(record, "orchestrator.plan-review", {"key": "abc"})
+    written = record.read_text(encoding="utf-8")
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+    assert "  onepipeline.id: route" in written

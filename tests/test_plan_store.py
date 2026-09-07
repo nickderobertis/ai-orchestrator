@@ -23,7 +23,7 @@ from typing import TypedDict
 import plan_fixture_root
 import pytest
 
-from orchestrator import plan_store
+from orchestrator import plan_store, project_store
 
 #: The source `onetaskgraph.yaml` roots at `plan_fixture_root.ROOT`, which
 #: `tests/test_plan_source_roots.py` holds that configuration to. Spelled here so the
@@ -297,15 +297,11 @@ def test_the_written_entry_reads_back_as_the_value_it_was_given(
             "opens `metadata` 2 times",
         ),
         (
-            '---\nmetadata:\n  "a": 1\n  unquoted: 2\n---\n\nbody\n',
-            "cannot edit around",
-        ),
-        (
             '---\nmetadata:\n  "a": 1\n  - a list entry\n---\n\nbody\n',
             "cannot edit around",
         ),
     ],
-    ids=["two blocks", "unquoted entry", "sequence"],
+    ids=["two blocks", "sequence"],
 )
 def test_a_metadata_block_this_cannot_account_for_is_refused(
     frontmatter: str, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -321,6 +317,82 @@ def test_a_metadata_block_this_cannot_account_for_is_refused(
     with pytest.raises(OSError, match=expected):
         plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
     assert document.read_text(encoding="utf-8") == before
+
+
+def test_the_rendering_this_host_produces_is_one_this_writer_can_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reconciled against the producer rather than a replica of it.
+
+    `orchestrator/project_store.py` renders the records `just plan` writes, and this
+    module edits them. Two modules independently describing one file format is how the
+    two drift apart in silence, so the fixture here is that producer's own output rather
+    than a hand-authored copy of what it is believed to emit: a rendering change that
+    this writer could not edit fails here rather than at the next review record.
+    """
+    root = tmp_path / "store"
+    project_store.write_plan_project(
+        root,
+        {
+            "name": "drift",
+            "tasks": [
+                {"id": "route", "title": "feat: route", "task": "body", "persona": "engineer"}
+            ],
+        },
+    )
+    document = next((root / "tasks").rglob("*.md"))
+    monkeypatch.chdir(tmp_path)
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+    assert "onepipeline.id" in written
+
+
+def test_a_block_the_plan_store_rendered_itself_is_editable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain YAML key is the rendering the store itself writes, so it is not foreign.
+
+    The settlement write-back re-renders every task of the plan a run was launched from,
+    and it renders each metadata key plain rather than JSON-quoted. A writer that refused
+    that shape would leave every review record unwritable the moment a run settled.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: contracts\n"
+        "  onepipeline.persona: engineer\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert "  onepipeline.id: contracts" in written
+    assert "  onepipeline.persona: engineer" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+def test_a_plainly_rendered_entry_of_the_same_key_is_replaced_rather_than_duplicated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reading the key of a plain entry is what keeps a re-review from duplicating it.
+
+    Two entries for one key is a record a reader resolves silently and differently from
+    the writer, so the key a plain entry states has to be read as readily as a quoted one.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: contracts\n"
+        '  orchestrator.plan-review: {"key": "old"}\n'
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "new"})
+    written = document.read_text(encoding="utf-8")
+    assert written.count("orchestrator.plan-review") == 1
+    assert '{"key": "new"}' in written
+    assert "  onepipeline.id: contracts" in written
 
 
 def test_an_entry_further_down_the_block_is_replaced_rather_than_duplicated(

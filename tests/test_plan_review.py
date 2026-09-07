@@ -1071,10 +1071,14 @@ def test_a_project_a_closeout_cannot_record_is_left_alone_rather_than_failing_th
         "read_tasks",
         lambda project: [authored] if project == "demo:authored" else [neighbour],
     )
-    # The write-back's own rendering: a plain YAML line where this writes `"<key>": <json>`.
+    # A line no rendering of this host produces, so no writer can account for it: a
+    # sequence entry inside the mapping. A plain YAML key is *not* such a line — that is
+    # the plan store's own rendering, and `plan_store.write_metadata` edits around it.
     document = tmp_path / "store" / "tasks" / "neighbour" / "route.md"
     document.write_text(
-        document.read_text(encoding="utf-8").replace('  "onepipeline.id": "route"', "  id: route"),
+        document.read_text(encoding="utf-8").replace(
+            '  "onepipeline.id": "route"', '  "onepipeline.id": "route"\n  - a list entry'
+        ),
         encoding="utf-8",
     )
 
