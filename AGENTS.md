@@ -598,7 +598,7 @@ destination already held, which is what put that synthetic source on a settled p
 the first place; it is
 https://github.com/nickderobertis/onetaskgraph/issues/266, and the repair is
 https://github.com/nickderobertis/onetaskgraph/pull/252, carried by the adopted
-onetaskgraph 0.2.23. `orchestrator/plan_store.py` still recognises a record left under
+onetaskgraph 0.2.26. `orchestrator/plan_store.py` still recognises a record left under
 that source and says which engine wrote it, because a plan carried here from a host that
 ran one of those engines still carries the rewrite; the recogniser is about records, not
 about this host's pin.
@@ -638,24 +638,54 @@ the release archive of a program this host spawns. It answers which standalone p
 CLI is installed here; it says nothing about libraries compiled into the engine, and the
 engine wheel's bill of materials has no onetaskgraph entry to compare it with.
 
-**What the pin's own value buys this host is a bound on the copy path**, and it is named
-here because nothing beside a bare version string can say what a bump was for.
-onetaskgraph 0.2.23 is the first release carrying
-https://github.com/nickderobertis/onetaskgraph/pull/397, which refuses a copy whose source
-hands back a cursor that does not advance, or a page larger than the one that was asked
-for. That change request is the evidence, and the release below the adopted one carries
-none of it: the pull request merged after that release was cut and `v0.2.23` is the next
-tag past it. `just copy-plan` is the one board command here that walks that path — it is
+**What the pin's own value buys this host is what a board read costs**, and it is named
+here because nothing beside a bare version string can say what a bump was for. The
+adopted onetaskgraph 0.2.26 carries three landings that cut it, and each is named by the
+change request that carried it rather than by whichever release happens to sit beside
+this one — a phrase of that shape is true only until the next bump, and every claim in
+this section was once written that way.
+https://github.com/nickderobertis/onetaskgraph/pull/590 stops every document selecting the
+board's own built-in `Labels` field value; GitHub derives that field from the item's
+content, so an issue's labels arrive from the `labels` connection the same document
+already selects and nothing is given up.
+https://github.com/nickderobertis/onetaskgraph/pull/670 makes a board entry sitting past
+the first page of an issue's memberships recoverable — which used to be refused, because
+an unreached entry could not be told from an issue this board does not hold — and, with a
+miss recoverable, shrinks that page from ten entries to three.
+https://github.com/nickderobertis/onetaskgraph/pull/723 pins what each document costs
+GitHub's hourly allowance and reconciles that figure against GitHub's own
+`rateLimit(dryRun: true)` answer, so a shared fragment that gives a reduction back moves a
+number somebody has to change rather than going unnoticed.
+
+**What those three are worth is measured in the adopted release's own source rather than
+here**, in `crates/onetaskgraph-github-projects/session-cost.md` at tag `v0.2.26`, which
+is where the figures are re-taken and where its
+`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` holds a session
+to them: one session's worst-case node count falls from 1,757,301 to 222,516 — the record
+that file keeps beside it, `tests/fixtures/session-cost.txt`, now reads 100 requests and
+222,516 nodes — and the estimate the affordability gate is sized from falls from 1955
+points to 934. Read that file's own frame before quoting either: it measures requests and
+worst-case nodes, both computed offline, and it says outright that neither is a
+measurement of rate-limit points; what observes points is the accounting, from the
+`x-ratelimit-*` headers a credentialed session's own responses carry. Every board command
+here — `just plans`, `just check-plan`, `just copy-plan` — sends those documents, so the
+reduction is spent on every read this host makes rather than only by that repository's own
+credentialed lane.
+
+**Two earlier landings sit beneath this pin and go on being spent**, named the same way and
+for the same reason. https://github.com/nickderobertis/onetaskgraph/pull/397 refuses a copy
+whose source hands back a cursor that does not advance, or a page larger than the one that
+was asked for: `just copy-plan` is the one board command here that walks that path — it is
 the only write this host makes to the plan store — so a board that answered a copy with a
 repeating cursor used to run until somebody noticed a process that had outlived its
 caller, and now ends in a refusal naming what the source did. A successful multi-page copy
 is unchanged, which is why nothing about `just copy-plan`'s own behaviour is re-measured
-under this bump. What the release below the adopted one bought is still bought, and is
-not restated as this one's: the `github-projects` source's usage accounting against
-GitHub's own `x-ratelimit-*` headers, the reduction in what one session of it spends, and
-the budget gate in front of a live run all sit beneath this pin and go on being spent by
-every board command here. The gate and the accounting themselves govern that repository's
-own live session, described where this document reads that lane's source.
+under a bump. https://github.com/nickderobertis/onetaskgraph/pull/280 is the
+`github-projects` source's usage accounting against GitHub's own `x-ratelimit-*` headers,
+the first reduction in what one session of it spends, and the budget gate in front of a
+live run; it is also what stopped that lane being opt-in and put its nomination under
+GitHub's own grammar. The gate and the accounting themselves govern that repository's own
+live session, described where this document reads that lane's source.
 
 **One fix this host depends on is carried by no release archive at all, and that is correct
 rather than a pin somebody left behind.** onetaskgraph's shell scripts are inside its own project
@@ -665,12 +695,15 @@ and that change touches no crate source: every path in it is CI configuration, t
 `AGENTS.md`. release-plz cut no release for it and correctly cannot, because there is no
 versioned artifact to bump. **A later release has since swept that commit into its own
 history without carrying anything of it, and telling those two apart is the whole of this
-paragraph.** `7bcac9fa` landed after `v0.2.21` and is an ancestor of `v0.2.23` — the tag this
+paragraph.** `7bcac9fa` landed after `v0.2.21` and is an ancestor of `v0.2.26` — the tag this
 pin now names — so `git tag --contains` answers that the fix is *in* the adopted release,
 while the archive that release publishes is the compiled CLI, which holds no CI
 configuration, no `justfile`, nothing under `scripts/` and no `project.json`, and so carries
-nothing the change made. Nothing on that repository's `main` sits past `v0.2.23`, and no
-release change request is open behind it. So the fix
+nothing the change made. **No later release can change that half either**, whatever that
+repository has cut since and whatever is open on it now: the archive is the compiled CLI at
+every release, so there is no version of it that could carry a `justfile` or a
+`project.json`, and reading that repository's live state to decide the question would be
+reading the wrong thing. So the fix
 **is in force**, by merging, in the only place it was ever going to take effect: that
 repository's build graph and check selection. The reason no pin carries it is the paragraph
 above — `config/onetaskgraph.version` names the release archive of the plan-store CLI this
@@ -1289,7 +1322,7 @@ own records, and the adopted onepipeline 0.22.2 is past the 0.20.0 that carries 
 `onetaskgraph`'s own half — a copy coming back to a destination no longer overwriting
 that destination's `onetaskgraph.origin`,
 https://github.com/nickderobertis/onetaskgraph/pull/252 — is carried by the adopted
-onetaskgraph 0.2.23. The two journeys that were exempt while the engine could not read
+onetaskgraph 0.2.26. The two journeys that were exempt while the engine could not read
 this store now run for real and pass, projecting a real settlement onto a real plan and
 reading it back afterwards. **What has not changed is that a green run proves nothing
 about the board**: the write-back is still best-effort and off the reconcile loop —
@@ -1332,7 +1365,7 @@ breakage above cheap while it lasts, which is why that breakage is worth accepti
 than waiting out.
 
 *The store half.* onetaskgraph https://github.com/nickderobertis/onetaskgraph/pull/173,
-carried by the adopted onetaskgraph 0.2.23: it reads GitHub's own limiter vocabulary out of
+carried by the adopted onetaskgraph 0.2.26: it reads GitHub's own limiter vocabulary out of
 a refusal's `message` rather than off its status, and it spaces a copy's content-creating
 mutations at 60000/80 ms — the fastest rate that cannot exceed GitHub's published
 per-minute ceiling. Before it, every release answered both refusals with one sentence —
@@ -2931,9 +2964,9 @@ which holds that lane's own fixtures, and number 2 *"AI Orchestrator"*, the plan
 updated ProjectV2 and wrote to whatever came back — so the moment the plans board became
 the more recently updated of the two, a credentialed write lane retargeted itself onto
 it with nothing said, and left a draft item there on 2026-08-27. **The adopted
-onetaskgraph 0.2.23 no longer discovers anything**, and it wants a third name: read from
+onetaskgraph 0.2.26 discovers nothing**, and it wants a third name: read from
 that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
-at tag `v0.2.23`, and the `tests/lane/mod.rs` beside it that file's `live_lane` decision
+at tag `v0.2.26`, and the `tests/lane/mod.rs` beside it that file's `live_lane` decision
 lives in — the board comes from
 `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
 comes from `GH_PROJECTS_REPOSITORY`, and an absent one of those **skips** the lane
@@ -2941,42 +2974,51 @@ with its reason printed, exactly as an absent `GH_PROJECTS_TOKEN` does — unles
 `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns every one of those skips into a failure naming
 the variable. The first two name one board *together*, so read a half-nomination as the
 different answer it is: both absent is the skip, and one absent is a misconfiguration that
-fails whether or not the lane was required. Those four names are the four the release below the adopted one wanted too,
-so **this host's `.env` needs no new name**. What has moved is everything around them, in
-four ways an operator meets rather than reads about.
+fails whether or not the lane was required. Those four names are the four
+https://github.com/nickderobertis/onetaskgraph/pull/280 introduced, and no release since has
+asked for a fifth, so **this host's `.env` needs no new name**. What that change request
+moved around them is four things an operator meets rather than reads about, and each is
+stated below against the adopted release's own source rather than against whichever release
+happens to precede this pin — a comparison of that shape reads as current and is false the
+moment the pin moves again.
 <!-- dated-claim: incident the date stamps when a superseded release's board discovery
 wrote to the wrong project; what the adopted release does instead is cited above to its
 own source at its own tag rather than to a reading taken here -->
 
-*The lane is no longer opt-in.* At the release below the adopted one that test carried
-an `#[ignore]` whose reason sent the reader to that repository's own `test-live` recipe
-for `onetaskgraph-github-projects`, and a `live.yml` of its own under its
-`.github/workflows/`. At `v0.2.23`
-the attribute is gone, that
-workflow is deleted, and `crates/onetaskgraph-live/src/lib.rs`'s own header says every
+*The lane is no longer opt-in.* That test used to carry an `#[ignore]` whose reason sent
+the reader to that repository's own `test-live` recipe for `onetaskgraph-github-projects`,
+and a `live.yml` of its own under its `.github/workflows/`; that change request removed the
+attribute and deleted the workflow. At `v0.2.26` neither is there,
+and `crates/onetaskgraph-live/src/lib.rs`'s own header says every
 live journey in that workspace is *"an ordinary test in an ordinary `test` target,
 selected by the ordinary affected selection"*. So an ordinary test run of that repository
-now reaches this lane where before it took a verb that named it, which is what makes the
+reaches this lane where before it took a verb that named it, which is what makes the
 nomination matter more than it did rather than less.
 
-*A nomination that reaches a URL is now held to GitHub's own grammar.* The release below
-the adopted one accepted any `GH_PROJECTS_REPOSITORY` whose two halves were non-empty and
-whose name held no second `/`. At `v0.2.23` `is_login` and `is_repository_name` hold the
+*A nomination that reaches a URL is held to GitHub's own grammar.* Before that same change
+request the lane accepted any `GH_PROJECTS_REPOSITORY` whose two halves were non-empty and
+whose name held no second `/`. At `v0.2.26` `is_login` and `is_repository_name` in that
+`tests/lane/mod.rs` hold the
 owner to letters, digits and single inner hyphens within 39 characters, and the name to
 letters, digits, hyphens, underscores and dots within 100, refusing `.` and `..` outright
 — before anything is sent, because both halves are filled into that lane's own REST
-endpoint templates. A value the older release accepted and this one refuses is a
+endpoint templates. A value that grammar refuses is a
 **misconfiguration** rather than a skip: it fails whether or not the lane was required,
 and `ONETASKGRAPH_LIVE_REQUIRED` does not reach it.
 
-*There is a third answer now, and it is not a pass.* A nomination that clears the above no
-longer means the session runs. `tests/live.rs` hands the credential to
+*There is a third answer, and it is not a pass.* A nomination that clears the above does
+not mean the session runs. `tests/live.rs` hands the credential to
 `onetaskgraph_live::Session::open`, and a session that crate **declines** panics — failing
 the test and the required check that runs it — rather than skipping green, because it
-tested nothing. Two things decline one: another instance already holding the seat for that
-session's name, which is a correctness bound rather than a cost one since both live
-journeys sweep residue by title and would delete a concurrent run's in-flight items; and
-unaffordability.
+tested nothing. **What can decline this lane is the budget precondition and nothing else**,
+which is a narrowing rather than a detail: the crate offers two exclusivities and this lane
+opens `Exclusivity::Shared`, so it takes no seat and no concurrent instance can decline it.
+That is https://github.com/nickderobertis/onetaskgraph/pull/538, and the reason `live.rs`
+gives is that the lane's artifacts are run-scoped and its cleanup removes another run's only
+once the kernel has reported that run over — so two sessions cannot reach each other's work,
+and a seat, being a file on one machine, never excluded the two hosted runners it was
+guarding against anyway. A reader carrying the older reading looks for a stale seat file
+when a decline is really the account's allowance.
 
 *The budget gate retains a fifth of every allowance, and an unread allowance affords
 nothing.* Before the session does any of the work it exists to do it makes one
@@ -2988,8 +3030,14 @@ draws on, the remaining allowance minus that session's estimated cost is still a
 `Fraction::new(20, 100)` — two integers rather than a float, so the share is the number the
 crate says it is on each budget's own scale — and a budget whose allowance could not be
 read never affords anything. That is the half of this release this host consumes without
-running it: the same source's own measurement puts one session at 120 requests before the
-reduction and 98 after, 99 with the gate's own read.
+running it. What one session costs is `session-cost.md`'s to state and it is restated
+nowhere here: at `v0.2.26` its checked-in record `tests/fixtures/session-cost.txt` reads
+**100 requests** and a worst-case node count of **222,516**, the gate's own `GET
+/rate_limit` counted inside that rather than outside it, and the estimate the gate is sized
+from is **934 points** against the GraphQL budget and **5 requests** against the REST one.
+Read the file's own frame with the figures: requests and worst-case nodes are computed
+offline and neither is a measurement of rate-limit points, and the estimate is deliberately
+high because its job is to refuse a run rather than to describe one.
 
 That is cited to the files
 and the tag rather than stamped with a date, because **nothing here re-takes it**: under
@@ -3013,7 +3061,7 @@ against the lane's own source, and it is corrected.** A launch here exports
 this paragraph asks for, which was right throughout — beside
 `GH_PROJECTS_REPOSITORY=nickderobertis/onetaskgraph`, the lane's own repository, which now
 matches what `ci.yml` in that repository's own `.github/workflows/` gives its
-credentialed run at `v0.2.23`. It
+credentialed run at `v0.2.26`. It
 read `nickderobertis/ai-orchestrator` — **this** repository — and that third name is where
 the lane creates its artifact as a real issue and deletes it again, so a lane run in this
 environment would have filed and swept issues here instead of there. It is worth recording

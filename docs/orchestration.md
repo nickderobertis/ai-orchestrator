@@ -49,8 +49,10 @@ own, so that source names one — `repository: nickderobertis/ai-orchestrator` i
 `onetaskgraph.yaml`, spelled GitHub's own `owner/name` way — and it is where every
 project and task issue a copy or a write-back creates is filed. A write with no
 repository named is refused naming the field, so the field and
-`config/onetaskgraph.version` move together: the release below the adopted one refuses
-the field as unknown, and the adopted one refuses the write without it. Reads never need
+`config/onetaskgraph.version` move together: this source has named its repository since
+https://github.com/nickderobertis/onetaskgraph/pull/56, which is the change request that
+made a board a container of projects, and a release before it refuses that field as
+unknown while every release since refuses the write without it. Reads never need
 it, which is why a board can still be listed by a checkout that names none.
 `tests/e2e/test_onetaskgraph_host_e2e.py` drives both halves against a board fixture —
 a copy of a local project files its issues in the configured repository, and a
