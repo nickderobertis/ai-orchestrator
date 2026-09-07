@@ -26,7 +26,13 @@ from pathlib import Path
 import pytest
 
 from orchestrator import design_approval, plan_store
-from orchestrator.plan_store import QualifiedDocumentId, StoreDocument
+from orchestrator.plan_store import (
+    NodeId,
+    QualifiedDocumentId,
+    QualifiedTaskId,
+    StoreDocument,
+    StoreTask,
+)
 
 #: The bar a document is approved under, stated here rather than read off this
 #: checkout's own `config/design-doc-template.md`. Every test below that is not *about*
@@ -177,6 +183,36 @@ def _project(monkeypatch: pytest.MonkeyPatch, metadata: object) -> None:
     monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": metadata})
 
 
+def _stamp(*nodes: str) -> Mapping[str, object]:
+    """The metadata `scripts/plan.sh` writes onto the project a planning launch makes."""
+    return {
+        design_approval.PLAN_KIND: {
+            design_approval.STAMP_KIND: design_approval.PLANNING,
+            design_approval.STAMP_NODES: list(nodes),
+        }
+    }
+
+
+def _tasks(monkeypatch: pytest.MonkeyPatch, *node_ids: str) -> None:
+    """Answer the project's task listing with one record per ``node_ids`` entry."""
+    monkeypatch.setattr(
+        plan_store,
+        "read_tasks",
+        lambda _project: [
+            StoreTask(
+                qualified_id=QualifiedTaskId(f"authoring:demo-{node_id}"),
+                node_id=NodeId(node_id),
+                title=node_id,
+                content=None,
+                metadata={},
+                repositories=[],
+                deps=(),
+            )
+            for node_id in node_ids
+        ],
+    )
+
+
 @pytest.mark.parametrize("field", COVERED)
 def test_the_key_covers_what_a_person_read(field: str) -> None:
     """Half the partition: move one of these and the approval is of something else."""
@@ -282,7 +318,7 @@ def test_a_travelled_document_is_unapproved_again_once_what_was_approved_moves(
 
     _project(monkeypatch, {})
     _holds(monkeypatch, landed)
-    assert design_approval.refusal(BOARD_PROJECT) is None, (
+    assert design_approval.assess(BOARD_PROJECT).refusal is None, (
         "the approval recorded where the document was drafted did not survive the copy, "
         "so what follows would be a refusal this test could not attribute"
     )
@@ -292,7 +328,7 @@ def test_a_travelled_document_is_unapproved_again_once_what_was_approved_moves(
         monkeypatch,
         _elsewhere(_document(title=title, content=prose, metadata=approved.metadata)),
     )
-    reason = design_approval.refusal(BOARD_PROJECT)
+    reason = design_approval.assess(BOARD_PROJECT).refusal
     assert reason is not None, f"the copy is still approved after {moved} moved"
     assert "carries no approval for what it currently says" in reason
     assert design_approval.RECIPE in reason
@@ -374,19 +410,51 @@ def test_a_project_holding_several_documents_is_refused_rather_than_guessed_at(
 @pytest.mark.parametrize(
     ("metadata", "expected"),
     [
-        ({design_approval.PLAN_KIND: design_approval.PLANNING}, True),
-        ({design_approval.PLAN_KIND: "something else"}, False),
-        ({}, False),
-        ("not an object", False),
+        (_stamp("plan", "design-doc"), frozenset({"plan", "design-doc"})),
+        (_stamp(), None),
+        ({design_approval.PLAN_KIND: {"kind": "something else", "nodes": ["plan"]}}, None),
+        ({design_approval.PLAN_KIND: {"kind": "planning"}}, None),
+        ({design_approval.PLAN_KIND: {"kind": "planning", "nodes": "plan"}}, None),
+        ({design_approval.PLAN_KIND: {"kind": "planning", "nodes": [7]}}, None),
+        ({design_approval.PLAN_KIND: {"kind": "planning", "nodes": ["plan", "plan"]}}, None),
+        ({design_approval.PLAN_KIND: design_approval.PLANNING}, None),
+        ({}, None),
+        ("not an object", None),
     ],
-    ids=["planning", "another kind", "says nothing", "unreadable"],
+    ids=[
+        "the two nodes a planning launch writes",
+        "a launch that named no node",
+        "another kind",
+        "no nodes named",
+        "nodes that are not a list",
+        "a node that is not a string",
+        "a node claimed twice",
+        "the bare marker the exemption used to be granted on",
+        "says nothing",
+        "unreadable",
+    ],
 )
-def test_only_a_project_that_says_it_is_a_planning_project_is_exempt(
-    metadata: object, expected: bool, monkeypatch: pytest.MonkeyPatch
+def test_the_nodes_a_planning_launch_dispatches_are_read_off_the_project_itself(
+    metadata: object, expected: frozenset[str] | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Recognised from what the project states, never from its shape."""
+    """Recognised from what the project states, never from its shape.
+
+    A stamp this cannot read claims no exemption, and a stamp naming **no** node is
+    answered with those rather than as an exemption over an empty project: it bounds the
+    exemption to nothing, and a launch this cannot bound is one it must not exempt.
+
+    A node claimed twice is in that list for a reason of its own: a launch dispatches each
+    of its nodes once, so a repeated id is not a set of ids any launch wrote. Collapsing it
+    would make the exemption report a launch the stamp does not describe, and counting it
+    would let a repeated claim stand in for a node the project holds and the stamp does not.
+
+    The bare `"planning"` string is in that list for the one reason worth stating — it is
+    the shape the stamp had while the exemption was scoped to the project, so a project
+    stamped by an older `just plan` names no nodes and is gated like any other rather than
+    keeping an exemption nothing can bound.
+    """
     _project(monkeypatch, metadata)
-    assert design_approval.exempt("authoring:demo") is expected
+    assert design_approval.planning_launch("authoring:demo") == expected
 
 
 def test_approving_records_the_key_and_repeating_it_writes_nothing(
@@ -423,27 +491,173 @@ def test_the_launch_is_refused_until_the_document_it_holds_is_the_one_approved(
     """Approved, then edited, then unapproved again — the whole point of keying on content."""
     _project(monkeypatch, {})
     _holds(monkeypatch, _approved())
-    assert design_approval.refusal("authoring:demo") is None
+    assert design_approval.assess("authoring:demo").refusal is None
 
     edited = _approved()
     _holds(monkeypatch, _document(metadata=edited.metadata, content="## What\n\nMore.\n"))
-    reason = design_approval.refusal("authoring:demo")
+    reason = design_approval.assess("authoring:demo").refusal
     assert reason is not None
     assert "carries no approval for what it currently says" in reason
     assert design_approval.RECIPE in reason
 
 
-def test_a_planning_project_is_exempt_before_its_documents_are_even_looked_for(
+def test_a_planning_launch_is_exempt_and_the_gate_says_so_rather_than_passing_it_over(
     monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
 ) -> None:
-    """Its output is the plan, so the document it is reviewed as does not exist yet."""
+    """Its output is the plan, so the document it is reviewed as does not exist yet.
 
-    def never(_project: str) -> list[StoreDocument]:
-        raise AssertionError("a planning project was asked for a design document")
+    The exemption is *reported* rather than answered with the same silence an approval
+    gets. That silence is what let an exemption scoped to a project stand unnoticed: from
+    the launch's side, dispatching because somebody had read the design document and
+    dispatching because nobody had to were the same answer.
+    """
+    _project(monkeypatch, _stamp("plan", "design-doc"))
+    _tasks(monkeypatch, "plan", "design-doc")
+    _holds(monkeypatch)
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.refusal is None
+    assert assessed.exemption is not None
+    assert "the plan a planning launch is writing" in assessed.exemption
+    assert "design-doc, plan" in assessed.exemption
 
+
+def test_a_planning_project_holding_work_to_be_executed_is_not_exempt(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """The plan a planner writes into the planning project is not that launch any more.
+
+    This is the whole defect the bound exists for: the exemption was granted to the
+    *project*, and a plan stored in the project the planning launch created inherited it —
+    so seven nodes of real work across four repositories would have dispatched with the
+    design document approved by nobody, and the gate would have said nothing.
+    """
+    _project(monkeypatch, _stamp("plan", "design-doc"))
+    _tasks(monkeypatch, "plan", "design-doc", "adopt-the-release", "close-the-gap")
+
+    # The tasks alone end it, before there is any document in the project to read: the
+    # plan's nodes arrive first and the design-doc node writes the document afterwards,
+    # so this is the state the project passes through on its way to the one below.
+    _holds(monkeypatch)
+    strayed = design_approval.assess("authoring:demo")
+    assert strayed.exemption is None
+    assert strayed.refusal is not None
+    assert "holds no design document" in strayed.refusal
+    assert "2 task(s) that launch never wrote" in strayed.refusal
+    assert "adopt-the-release, close-the-gap" in strayed.refusal
+
+    _holds(monkeypatch, _document())
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "carries no approval for what it currently says" in assessed.refusal
+    assert "2 task(s) that launch never wrote" in assessed.refusal
+
+
+def test_a_stamp_claiming_more_than_the_project_holds_does_not_bound_the_exemption(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """The other direction of the agreement, and the one a covering check lets through.
+
+    A stamp naming nodes the project does not hold is bounded to a launch nothing here can
+    see — and the bound is checked against what the project holds *now*, so a project that
+    is a strict subset of its own stamp goes on being exempt as it grows into those claims.
+    That is the same unbounded exemption the tasks half closes, reached from the other end.
+    """
+    _project(monkeypatch, _stamp("plan", "design-doc", "adopt-the-release"))
+    _tasks(monkeypatch, "plan", "design-doc")
+    _holds(monkeypatch)
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.exemption is None, (
+        "a stamp claiming a node the project does not hold still bought the exemption, so "
+        "the bound is a covering rather than an agreement"
+    )
+    assert assessed.refusal is not None
+    assert "holds no design document" in assessed.refusal
+    assert "claims 1 node(s) the project does not hold" in assessed.refusal
+    assert "adopt-the-release" in assessed.refusal
+    assert "task(s) that launch never wrote" not in assessed.refusal, (
+        "the lapse reports the direction that did not end the exemption"
+    )
+
+
+def test_both_directions_of_the_disagreement_are_reported_at_once(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """A stamp that overlaps the project's tasks without agreeing with them.
+
+    Said apart because they read differently: one is a project that has grown past the
+    launch that wrote it, and the other a stamp describing a launch this project is not.
+    """
+    _project(monkeypatch, _stamp("plan", "adopt-the-release"))
+    _tasks(monkeypatch, "plan", "close-the-gap")
+    _holds(monkeypatch)
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "1 task(s) that launch never wrote (close-the-gap)" in assessed.refusal
+    assert "claims 1 node(s) the project does not hold (adopt-the-release)" in assessed.refusal
+
+
+def test_a_claim_repeated_cannot_stand_in_for_a_node_the_project_holds(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """A stamp of the right length, naming one of the project's two tasks twice.
+
+    The shape a check that counted claims rather than reading them would accept, and the
+    one a charitable collapse would answer with an exemption bounded to a launch the stamp
+    does not describe. It is read as no claim to the exemption at all, so the project is
+    gated like any other rather than reported as a planning launch whose bound has ended.
+    """
+    _project(monkeypatch, _stamp("plan", "plan"))
+    _tasks(monkeypatch, "plan", "design-doc")
+    _holds(monkeypatch)
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "holds no design document" in assessed.refusal
+    assert "is stamped as the plan a planning launch writes" not in assessed.refusal
+
+
+def test_a_planning_project_stops_being_exempt_once_it_holds_a_document_to_read(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """The other half of the bound: the exemption is for a launch with nothing to approve.
+
+    Once the design-doc node has written one there is something a person can read, so the
+    exemption has nothing left to stand on and the ordinary refusal applies — and the
+    approval that answers it is one command.
+    """
+    _project(monkeypatch, _stamp("plan", "design-doc"))
+    _tasks(monkeypatch, "plan", "design-doc")
+    _holds(monkeypatch, _document())
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "1 design document(s), so there is something to read" in assessed.refusal
+
+    _holds(monkeypatch, _approved())
+    approved = design_approval.assess("authoring:demo")
+    assert approved.refusal is None, approved.refusal
+    assert approved.exemption is None, (
+        "an approved planning project was let through on the exemption rather than on the "
+        "approval, so the two are still one answer"
+    )
+
+
+def test_a_project_stamped_by_an_older_planning_launch_is_gated_like_any_other(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """A stamp naming no nodes bounds nothing, so it exempts nothing.
+
+    The safe direction: an exemption this cannot bound to a launch is refused rather than
+    granted for the life of the project, which is exactly what it was.
+    """
     _project(monkeypatch, {design_approval.PLAN_KIND: design_approval.PLANNING})
-    monkeypatch.setattr(plan_store, "read_documents", never)
-    assert design_approval.refusal("authoring:demo") is None
+    _holds(monkeypatch)
+    assessed = design_approval.assess("authoring:demo")
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "holds no design document" in assessed.refusal
 
 
 def test_a_project_with_no_document_is_refused_as_that_rather_than_as_unapproved(
@@ -452,7 +666,7 @@ def test_a_project_with_no_document_is_refused_as_that_rather_than_as_unapproved
     """The two refusals owe different next actions, so they are told apart in the text."""
     _project(monkeypatch, {})
     _holds(monkeypatch)
-    reason = design_approval.refusal("authoring:demo")
+    reason = design_approval.assess("authoring:demo").refusal
     assert reason is not None
     assert "holds no design document" in reason
 
@@ -555,16 +769,18 @@ def test_a_configuration_without_a_settings_list_is_refused(
 
 def _gated(
     monkeypatch: pytest.MonkeyPatch,
-    refusals: Mapping[str, str | None] | Callable[[str], str | None],
+    assessments: (
+        Mapping[str, design_approval.Assessment] | Callable[[str], design_approval.Assessment]
+    ),
 ) -> None:
     """Configure the gate with `authoring` and `plans` as sources and a canned verdict."""
     monkeypatch.setattr(
         design_approval, "configured_sources", lambda: frozenset({"authoring", "plans"})
     )
-    if callable(refusals):
-        monkeypatch.setattr(design_approval, "refusal", refusals)
+    if callable(assessments):
+        monkeypatch.setattr(design_approval, "assess", assessments)
     else:
-        monkeypatch.setattr(design_approval, "refusal", lambda project: refusals[project])
+        monkeypatch.setattr(design_approval, "assess", lambda project: assessments[project])
 
 
 def test_the_gate_asks_about_the_project_a_launch_names_wherever_it_sits(
@@ -573,9 +789,9 @@ def test_the_gate_asks_about_the_project_a_launch_names_wherever_it_sits(
     """The launch's flag grammar is not restated here, so position decides nothing."""
     asked: list[str] = []
 
-    def answer(project: str) -> str | None:
+    def answer(project: str) -> design_approval.Assessment:
         asked.append(project)
-        return None
+        return design_approval.Assessment()
 
     _gated(monkeypatch, answer)
     assert (
@@ -597,7 +813,7 @@ def test_the_gate_asks_nothing_about_an_argument_that_names_no_configured_projec
 ) -> None:
     """A flag value that is not a project is not a project any source answers for."""
 
-    def never(project: str) -> str | None:
+    def never(project: str) -> design_approval.Assessment:
         raise AssertionError(f"the gate asked the store about {project!r}")
 
     _gated(monkeypatch, never)
@@ -607,11 +823,38 @@ def test_the_gate_asks_nothing_about_an_argument_that_names_no_configured_projec
 def test_the_gate_refuses_an_unapproved_project_and_says_nothing_was_dispatched(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _gated(monkeypatch, {"authoring:demo": "authoring:demo has no approval"})
+    _gated(
+        monkeypatch,
+        {"authoring:demo": design_approval.Assessment(refusal="authoring:demo has no approval")},
+    )
     assert design_approval.gate_main(["authoring:demo"]) == 1
     reported = capsys.readouterr().err
     assert "authoring:demo has no approval" in reported
     assert "nothing was dispatched" in reported
+
+
+def test_the_gate_reports_the_exemption_it_dispatched_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An approval and an exemption are two answers, so the launch does not give them one.
+
+    Reported even beside a refusal, because the two projects on one command line are two
+    plans: one of them dispatching with nobody having approved anything is worth saying
+    whatever happened to the other.
+    """
+    _gated(
+        monkeypatch,
+        {
+            "authoring:planning": design_approval.Assessment(
+                exemption="authoring:planning is the plan a planning launch is writing"
+            ),
+            "plans:work": design_approval.Assessment(refusal="plans:work has no approval"),
+        },
+    )
+    assert design_approval.gate_main(["authoring:planning", "plans:work"]) == 1
+    reported = capsys.readouterr().err
+    assert "is the plan a planning launch is writing" in reported
+    assert "plans:work has no approval" in reported
 
 
 def test_a_project_the_store_cannot_answer_for_is_refused_rather_than_skipped(
@@ -619,7 +862,7 @@ def test_a_project_the_store_cannot_answer_for_is_refused_rather_than_skipped(
 ) -> None:
     """The engine reads the same project through the same store, so this loses no launch."""
 
-    def unreadable(_project: str) -> str | None:
+    def unreadable(_project: str) -> design_approval.Assessment:
         raise OSError("onetaskgraph exited 1")
 
     _gated(monkeypatch, unreadable)
@@ -644,7 +887,7 @@ def test_the_gate_reads_the_command_line_it_was_given_when_it_is_handed_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`orchestrator-launch-gate` is spawned by `scripts/onepipeline.sh`, which passes argv."""
-    _gated(monkeypatch, {"authoring:demo": None})
+    _gated(monkeypatch, {"authoring:demo": design_approval.Assessment()})
     monkeypatch.setattr("sys.argv", ["orchestrator-launch-gate", "authoring:demo"])
     assert design_approval.gate_main() == 0
 
@@ -668,7 +911,9 @@ def test_every_shipped_example_project_carries_an_approved_design_document() -> 
     projects = plan_store.local_projects(EXAMPLES)
     assert projects, f"the {EXAMPLES!r} source ships no project, so this proves nothing"
     unapproved = [
-        reason for reason in (design_approval.refusal(project) for project in projects) if reason
+        assessed.refusal
+        for assessed in (design_approval.assess(project) for project in projects)
+        if assessed.refusal
     ]
     assert not unapproved, (
         "shipped example projects this repository documents as launchable would be refused "

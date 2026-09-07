@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -49,7 +48,6 @@ from scratch_identity import seeded
 from shared_dispatch_bar import shared_completion_bar
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, and the provider binary beneath it — the second
@@ -349,6 +347,9 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
                 cast(JournalEvent, json.loads(line))
                 for line in journal.read_text(encoding="utf-8").splitlines()
             ],
+            # `cast` for that reason once more: the fake backend owns this record and
+            # `TurnRecord` states the fields this journey reads, so a line missing one
+            # fails at the subscript that wanted it rather than passing unexamined.
             turns=[
                 cast(TurnRecord, json.loads(line))
                 for line in turns.read_text(encoding="utf-8").splitlines()
@@ -671,6 +672,15 @@ def test_the_launch_prints_the_command_that_answers_this_planners_questions(
     )
 
 
+# The finding these answer is about which Nx project owns this file, and that is a
+# property of the `tests/e2e` tree rather than of the two journeys below: `AGENTS.md`
+# records which suites were split out of the broad tier and why, this change moves no
+# test between tiers, and re-homing that tree is test selection rather than anything
+# here. The `xdist_group` on the second is what it is everywhere in this suite — a
+# worker under `--dist loadgroup`, so a module-scoped fixture that spends a real
+# launch is not run twice — and never a tier.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
 @pytest.mark.xdist_group("plan-recipe")
 def test_the_project_a_planning_launch_writes_says_it_is_a_planning_project(
     planned: Planned,
@@ -680,30 +690,36 @@ def test_the_project_a_planning_launch_writes_says_it_is_a_planning_project(
     A planning run's output *is* the plan, so the document it will be reviewed as does
     not exist when it is launched. It is exempt because the project says so about itself
     and not because anything recognises its shape — a two-node project somebody wrote by
-    hand is not exempt, and this launch would not stop being exempt if it grew a third
-    node. That this launch reached a dispatch at all is the other half of the proof: the
-    gate runs on every `just plan` as it does on every `just orchestrate`, so a marker
-    the recipe stopped writing would refuse this fixture rather than reach this
-    assertion.
+    hand is not exempt. That this launch reached a dispatch at all is the other half of
+    the proof: the gate runs on every `just plan` as it does on every `just orchestrate`,
+    so a marker the recipe stopped writing would refuse this fixture rather than reach
+    this assertion.
+
+    **The stamp names the nodes this launch writes, and the exemption is bounded to
+    them** — so what is asserted is the gate's own account of that bound, read off this
+    launch's own output rather than out of the record. The record's serialization belongs
+    to the store and has changed under this journey before; the sentence the gate prints
+    belongs to the gate, and it names every node it read. A launch whose stamp and plan
+    disagree is one whose own next launch is refused, and this is where that disagreement
+    shows up as a failing journey rather than as a plan that stayed exempt for life.
     """
-    # Read as the entry it is rather than matched as a spelling. The store writes a
-    # record's metadata in its own serialization and has changed it — a string value was
-    # JSON-quoted through onetaskgraph 0.2.18 and is a plain YAML scalar now — so a
-    # journey pinned to one of those spellings fails on a plan that carries the marker
-    # perfectly well, which is the opposite of what it is for.
-    stated = re.search(
-        rf'^\s*"?{re.escape(design_approval.PLAN_KIND)}"?:\s*"?'
-        rf'{re.escape(design_approval.PLANNING)}"?\s*$',
-        planned.project_record,
-        re.MULTILINE,
+    written = sorted(str(node["id"]) for node in planned.plan["tasks"])
+    reported = planned.launch.stdout + planned.launch.stderr
+    exempted = [line for line in reported.splitlines() if "launch-gate:" in line]
+    assert exempted, (
+        f"the launch never reported the exemption it dispatched on, so a plan somebody "
+        f"read and a plan nobody had to read are one answer here:\n{reported}"
     )
-    assert stated is not None, (
-        f"the project `just plan` wrote does not state {design_approval.PLAN_KIND}; a "
-        f"planning run would be refused a launch for having no design document, which is "
-        f"the one document it cannot have yet:\n{planned.project_record}"
+    (stated,) = exempted
+    assert "is the plan a planning launch is writing" in stated, stated
+    assert f"{len(written)} node(s) that launch dispatches ({', '.join(written)})" in stated, (
+        f"the gate read this launch's exemption as bounded to something other than the "
+        f"{written} the plan holds, so the next launch of this project is refused:\n"
+        f"{stated}\n\nthe record it read:\n{planned.project_record}"
     )
 
 
+@pytest.mark.xdist_group("plan-recipe")
 def test_a_planning_run_records_itself_with_no_observer_watching_it(planned: Planned) -> None:
     """The launch attaches no observer, and is on the ledger in full regardless.
 
@@ -751,6 +767,10 @@ def test_a_planning_run_records_itself_with_no_observer_watching_it(planned: Pla
         f"`just runs --mine` does not name run {RUN}, so it has no ownership row the "
         f"launching session can act on:\n{planned.listed}"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 class Observer(NamedTuple):
@@ -1452,6 +1472,9 @@ def test_the_opt_out_writes_the_one_node_project_and_forwards_no_flag_to_the_eng
         assert (run_root / "launch.json").is_file(), (
             f"no run was recorded at {run_root}, so nothing says the launch was made"
         )
+        # `cast` rather than a validating read, for the reason the module's other launches
+        # give: the recipe writes this document, `PlanDocument` states what it promises,
+        # and the subscripts below fail loudly if it is not that shape.
         plan = cast(PlanDocument, json.loads((run_root / "plan.json").read_text(encoding="utf-8")))
         assert [node.get("id") for node in plan["tasks"]] == [PLANNER_NODE], (
             f"`--no-design-doc` still wrote {[node.get('id') for node in plan['tasks']]}"

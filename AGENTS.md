@@ -2819,12 +2819,32 @@ The record goes onto the document in the plan store rather than into a file besi
 which is what makes it readable from a board as well as from a directory, and it is why
 `just copy-plan` carries a plan's documents over beside its tasks — the store's own
 `project copy` carries none, and a plan copied without its design document arrives on
-the board with nothing to approve. One exemption exists and it is the only one: the
-project a **planning** launch writes, whose own output is the plan and whose design
-document does not exist until the run has produced one. It is exempt because
-`scripts/plan.sh` stamps that project as the planning project it is, rather than because
-anything recognises its shape — so a hand-written two-node project is not quietly exempt
-and a planning launch that grows a third node does not quietly lose it.
+the board with nothing to approve. One exemption exists and it is the only one: a
+**planning launch**, whose own output is the plan and whose design document does not exist
+until the run has produced one. It is exempt because `scripts/plan.sh` stamps that project
+as the planning project it is, rather than because anything recognises its shape — so a
+hand-written two-node project is not quietly exempt.
+
+**Read that as a launch and never as a project, because it was a project once and that was
+a hole.** The stamp alone decided it until the exemption was bounded, so a project that
+had *ever* been a planning project was exempt for the rest of its life — and the plan a
+planner writes is stored in the planning project the launch created, which is what this
+host's own convention asks for. The plan's own nodes therefore sat in an exempt project, and launching them would
+have dispatched work across four repositories with nobody having approved the design
+document, silently. The exemption is now bounded by both halves of what it was written for:
+the project holds exactly the nodes that launch dispatches — `scripts/plan.sh` names
+them on the stamp itself — **and** it holds no design document, because once one exists
+there is something a person can read. Either half ending ends the exemption, and the
+refusal says which. *Exactly* is read in both directions: a task the stamp does not claim
+ends it, and so does a claim the project does not hold, which describes a launch this
+project is not and which the project would otherwise grow into while staying exempt. A project stamped by a `just plan` from before this names no nodes,
+bounds nothing, and is gated like any other.
+
+**Being exempt and being approved used to be the same silence, and are not now.** A launch
+that dispatched on the exemption says so on stderr, naming the nodes it is bounded to; a
+launch that dispatched on an approval says nothing, as it always did. That distinction is
+what made the hole invisible for as long as it stood — from the launch's side there was no
+way to tell a plan somebody had read from a plan nobody had to.
 
 **Every** launch this repository makes exports `ORCHESTRATOR_ASK_MANAGER`, the path
 of `scripts/ask-manager.sh`, which is how a dispatched agent puts one blocking

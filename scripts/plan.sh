@@ -123,9 +123,24 @@ set -euo pipefail
 #: run's output is the plan, and the document it is reviewed as does not exist until the
 #: run has written it. Stamped as a fact the project states rather than left to be
 #: recognised from its shape, so a two-node project somebody wrote by hand is not quietly
-#: exempt and a planning launch that grows a third node does not quietly lose it.
-#: `orchestrator/design_approval.py` is the one reader of this pair and states both names.
-PLANNING_PROJECT_METADATA='{"orchestrator.plan-kind": "planning"}'
+#: exempt. `orchestrator/design_approval.py` is the one reader and states every name here.
+#:
+#: **It names the nodes this launch writes, and that is what bounds the exemption to this
+#: launch.** The exemption was scoped to the *project* until it named them, so a project
+#: that had ever been a planning project stayed exempt for the rest of its life — and a
+#: plan a planner writes into this very project is executable work sitting in it. The
+#: reader compares this list against the tasks the project holds and requires the two to
+#: *agree*, so anything beyond them and anything named here the project does not hold both
+#: end the exemption. It also reads a node named twice as no claim at all, since no launch
+#: dispatches one of its nodes twice — the two ids below are distinct constants.
+#:
+#: `@NODES@` is substituted below with the node ids this launch actually wrote, from the
+#: same two variables the plan program branches on. Drift in either direction is safe: a
+#: node written and not named here is a task the stamp does not account for, and a node
+#: named here and not written is a claim the project does not hold, so the next launch of
+#: this project is *refused* rather than quietly exempted either way — which every real
+#: `just plan` journey catches, since each one launches for real and the gate runs on it.
+PLANNING_PROJECT_METADATA='{"orchestrator.plan-kind": {"kind": "planning", "nodes": @NODES@}}'
 
 #: Where a generated project's record is written under the gitignored local-md root.
 #: Kept in the repository because it is the project the launch is judged against and
@@ -573,6 +588,17 @@ if [ "$design_doc" -eq 1 ]; then
     design_instructions="${design_instructions//@TEMPLATE@/$DESIGN_DOC_TEMPLATE}"
 fi
 
+# The nodes this launch writes, named on the project's own stamp so the design-document
+# exemption is bounded to this launch rather than granted to the project forever. The
+# condition is `$design_instructions`, which is the same value the plan program branches
+# on to decide whether to write the second node at all.
+if [ -n "$design_instructions" ]; then
+    planning_nodes="[\"$NODE_ID\", \"$DESIGN_DOC_NODE_ID\"]"
+else
+    planning_nodes="[\"$NODE_ID\"]"
+fi
+planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/$planning_nodes}"
+
 # A run root that already exists is what makes `onepipeline` mint `<name>-2` instead,
 # so the name this recipe prints and exports would name a different — possibly live —
 # run belonging to another workstream, and a blocking question asked there would queue
@@ -625,7 +651,7 @@ plan="$PLAN_DIRECTORY/$name.md"
     "$repo" "$execution" "$TITLE_PREFIX$name" "$DIRECT_PLACEMENT_NOTE" \
     "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" "$DESIGN_DOC_GRAPH" "$DESIGN_TITLE_PREFIX$name" \
     "$design_instructions" \
-    | "$python" -m orchestrator.project_store .plans "$PLANNING_PROJECT_METADATA" >/dev/null || {
+    | "$python" -m orchestrator.project_store .plans "$planning_metadata" >/dev/null || {
     # `|| :` so a removal that fails cannot replace the diagnostic below with its own
     # exit; the partial plan is then named by that diagnostic rather than silently kept.
     rm -f "$plan" ".plans/tasks/$name"/*.md || :

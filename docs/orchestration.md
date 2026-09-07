@@ -179,12 +179,33 @@ names the document and where the store says it is, and both name `just approve-d
 A project holding more than one document is a third answer — which of them is the design
 document cannot be decided, so it is refused rather than guessed at.
 
-*The one exemption.* The project a **planning** launch writes is exempt, because its
-output *is* the plan and the document it will be reviewed as does not exist yet. It is
-exempt because `scripts/plan.sh` stamps that project as a planning project and the gate
-reads what the project says about itself — never because anything recognises its shape.
-A hand-written project that happens to carry a planner node and a design-doc node is not
-exempt, and a planning launch that grows a third node does not stop being.
+*The one exemption, and it is a **launch** rather than a project.* A planning launch is
+exempt, because its output *is* the plan and the document it will be reviewed as does not
+exist yet. It is exempt because `scripts/plan.sh` stamps that project as a planning
+project and the gate reads what the project says about itself — never because anything
+recognises its shape, so a hand-written project that happens to carry a planner node and
+a design-doc node is not exempt.
+
+That stamp alone decided it once, and it was a hole: the plan a planner writes is stored
+in the planning project the launch created, so the plan's own nodes inherited an exemption
+granted to the project for life, and launching them dispatched real work with the design
+document approved by nobody. So the exemption is bounded by both halves of what it was
+written for — **the project holds exactly the nodes that launch dispatches**, which
+`scripts/plan.sh` names on the stamp itself, **and it holds no design document**, since
+once one exists there is something a person can read. Either half ending ends it, and the
+refusal says which one did rather than reading as the gate mis-firing on a planning
+project. *Exactly* is an agreement rather than a covering, and both directions of it end
+the exemption: a task the stamp does not claim is a project that has grown past its
+launch, and a claim the project does not hold describes a launch this is not — a project
+that would otherwise grow into that claim while staying exempt. A stamp naming one node
+twice is read as no claim at all, since no launch dispatches a node twice. A project
+stamped by a `just plan` from before the stamp named its nodes bounds nothing and is
+gated like any other.
+
+*Being exempt is not the same silence as being approved.* A launch that dispatched on the
+exemption says so on stderr, naming the nodes it is bounded to; a launch that dispatched
+on an approval says nothing. They were one answer while the exemption was a property of
+the project, which is why the hole above was invisible from the launch's own side.
 
 *What it is not.* It is not `just check-plan` and not `just review-plan`, and neither of
 those changes for it. Those ask whether a node's acceptance criteria would fail its
@@ -194,8 +215,9 @@ plan nobody read past pass because a machine liked its wording.
 
 `tests/plan_tooling/test_approve_design_recipe_e2e.py` drives it end to end: a real
 launch refused for want of an approval, the real recipe recording one, the same launch
-then reaching the engine, an edit to the document refusing it again, and a planning
-project launching throughout.
+then reaching the engine, an edit to the document refusing it again, a planning launch
+reaching the engine with no document at all — and that same planning project refused once
+it holds the plan a planner wrote into it, or the document its design-doc node produced.
 
 ## What the write-back owns, and what a green run proves
 
