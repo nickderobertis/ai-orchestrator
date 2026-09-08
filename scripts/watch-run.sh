@@ -24,6 +24,19 @@ ENGINE_PIN="config/onepipeline.version"
 # mean either "the run settled" or "this watch could not tell" is worth nothing.
 EXIT_CANNOT_WATCH=2
 
+# The word a caller anchors the cursor on; AGENTS.md's watch rule says why the quoted
+# resume sentence below cannot be the only form, and
+# `tests/test_watch_and_release_reading_guidance.py` holds the two together. The local
+# invariant is that no producer can forge this line: the renderer's own open with
+# `event`, `heartbeat`, `terminal` or `record`, this file's with `watch:`, and no field
+# reaches either with its control characters intact.
+CURSOR_PREFIX="watch-cursor"
+
+# Every line here is written as it happens, which is half of what makes silence
+# readable: what a caller then sees is its own pipeline's to decide, and AGENTS.md's
+# watch rule carries the per-filter measurements. What this file owes is the half it
+# controls — nothing here may buffer its own lines, and the renderer flushes per record.
+#
 # Everything this reaches — the engine wrapper, the renderer — is named relative to this,
 # and its failure is refused here rather than left to `set -e`, so a checkout this cannot
 # resolve itself in says which command could not start rather than nothing at all.
@@ -56,13 +69,17 @@ WATCH_CONDITIONS=(
   "5:elapsed:the wait elapsed with the run still live"
 )
 
-# The gate's input rather than an operator's: one row per option and per status, read by
-# `tests/test_watch_surface_drift.py`. It is not a mode anybody watches a run with.
+# The gate's input rather than an operator's: one row per option and per status, and the
+# word the cursor is emitted under, read by `tests/test_watch_surface_drift.py` and
+# `tests/test_watch_and_release_reading_guidance.py`. Every row here is one of those
+# readers' rather than an operator's, and this is not a mode anybody watches a run with.
 # llmlint: ignore[tool_output_is_signal] a table of rows is what the reader of this asked for; one line could not carry it.
 print_surface() {
   local option entry
   echo "verb watch"
   echo "pin $ENGINE_PIN"
+  # llmlint: ignore[tool_output_is_signal] The same table and the same reason as the directive above this function, restated because a line-scoped directive does not reach the function body: this row is a gate's input rather than a line anybody watches a run with.
+  echo "cursor-prefix $CURSOR_PREFIX"
   for option in "${WATCH_OPTIONS[@]}"; do echo "option $option"; done
   for entry in "${WATCH_CONDITIONS[@]}"; do
     local rest=${entry#*:}
@@ -224,6 +241,11 @@ if [ -s "$cursor_file" ]; then
 fi
 resume=
 if [ -n "$cursor" ]; then
+  # Emitted whichever ending is about to be reported: a caller resuming after the
+  # engine's own queued or refused wants the cursor as much as one resuming after a
+  # terminal condition, and both re-read what the last watch showed without it.
+  # llmlint: ignore[tool_output_is_signal] This is the machine-readable half of what the command already reports, and it is the half a caller re-arming a watch reads; the sentence below carries it for a person and is a different reader.
+  printf '%s %s\n' "$CURSOR_PREFIX" "$cursor"
   resume=" — resume with 'just watch ${run:-<run-id>} --cursor $cursor'"
 fi
 

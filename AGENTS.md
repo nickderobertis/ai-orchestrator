@@ -1036,6 +1036,26 @@ answer** and is folded into neither: reported as an unanswered probe it would re
 a broken tool, where the truth is a healthy wait on a colleague; reported as "not
 released" it would claim a probe answered when none ran.
 
+**Whether a release exists is read from the registry, and from nothing else.** That is
+the one durable rule for answering this question by hand, wherever it comes up — a node
+held under published adoption, a pin waiting on a sibling's landing, a manager deciding
+whether to launch. The registry is what a consumer installs from — crates.io for a
+crate, PyPI for a wheel, npm for a bundle — so it is the only thing that answers the
+question a consumer is actually asking, and asking it costs one request. Two other
+readings look like answers and are not. The first is a **verification workflow's
+conclusion**, which reports one verdict over three different jobs of work — gate the
+release, publish the artifacts, verify them afterwards — so a genuine post-publish
+failure, a pre-publish gate failure and ordinary noise are indistinguishable in it, and
+a red badge over a release that published perfectly well is the ordinary case rather
+than the odd one. The second is a **comparison of a tag against a registry**, and it is
+the worse of the two because it answers confidently in the wrong direction: the tag
+exists from the moment the release is cut and the artifact appears when the publish
+finishes, so every publication is a window in which that comparison reads work still in
+flight as work that failed. It called three publications failures in one afternoon here
+— the last of them from a watcher written *after* this rule had already been recorded,
+which is the evidence that the wording rather than the reader was the problem. So ask
+the registry for the version, and where it is not there yet, wait and ask it again.
+
 **What carries each half, and what was measured of it.** Read each pair below as *the
 release that carried the capability* and *the pin this host runs*, which stop being one
 number the moment an adoption moves past the release that introduced something — as
@@ -1919,7 +1939,7 @@ and is never a command.
 This is the most critical rule of the arrangement. Dispatched work runs for hours
 after the turn that launched it; with nothing watching, the project runs
 unsupervised and the user is in the dark. **The rule names one command — `just
-watch` (4 below) — and the five numbered properties beside it are what watching
+watch` (4 below) — and the six numbered properties beside it are what watching
 means and what that recipe owes.** It was an invariant satisfied by whatever loop
 each supervisor invented for as long as nothing had a command behind it, and every
 loop invented here went silent differently: one missed four destructive edits
@@ -1950,6 +1970,49 @@ and one question was asked three times, with every other indicator green through
    `just --list` and the recipe's own comment; `scripts/watch-run.sh` restates
    them in one place and `tests/test_watch_surface_drift.py` reconciles that
    restatement against the installed engine.
+
+   **Invoke that verb directly, and write no loop around it.** It blocks on
+   purpose: the waiting is the verb's, so a supervisor's turn is one `just watch`
+   rather than a `while` / `sleep` / `grep` loop re-asking a view every few
+   seconds. Every loop written here is a fresh chance to lose the invariant in a
+   new way, and each one lost it differently — one matched only success and was
+   silent through a crashloop, one filtered the unread-surface line and stayed
+   quiet through twenty-six queued updates, one matched `quota` across the
+   boundary rule 6 is about and called a healthy dispatch dead eleven seconds in,
+   and one polled `pgrep -f` on a pattern its own shell matched and waited
+   forever. Four loops, four different defects, and no fifth loop inherits a fix
+   for any of them: the properties above hold by construction inside the command
+   and by somebody's memory anywhere else. Where a watch would have to end on
+   something the verb does not return on, that is a missing terminal condition
+   worth reporting rather than a loop worth writing.
+
+   **The cursor is emitted for a caller as well as printed for a reader.** A watch
+   that returns before the run is over hands back the cursor the next one resumes
+   from, and it reaches you twice: as the sentence `— resume with 'just watch
+   <run-id> --cursor <cursor>'`, which is what a person copies, and as a line of
+   its own carrying `watch-cursor <cursor>` and nothing else, which is what a
+   caller reads —
+   `cursor=$(sed -n 's/^watch-cursor //p' watch.log | tail -n 1)`. Re-arm from the
+   second. Extracting the token out of the sentence takes the closing quote along
+   with it, and a watch re-armed with `c-42'` is refused and ends at a status that
+   is none of the four — the watch stopping rather than continuing, which is the
+   ending a supervisor is least likely to notice, and which cost forty-five minutes
+   of silence on a live thirteen-node run here while its driver died of a full
+   disk. `scripts/watch-run.sh --print-surface` names that word, and
+   `tests/test_watch_and_release_reading_guidance.py` reconciles it against this
+   paragraph.
+
+   **What you pipe a watch into decides whether you see any of it.** Every line is
+   written as it happens, so a watch redirected to a file, or read on a terminal,
+   fills as the run goes. Put it through a filter that block-buffers and nothing
+   arrives until the watch exits: measured here against a watch emitting one line a
+   second, `sed` and `awk` delivered nothing at all where the same watch redirected
+   to a file had already written three lines, and `tail` shows nothing by
+   construction because it is holding out for the end. `cat` and GNU `grep` pass
+   each line through as it arrives. **A buffered watch reads from outside exactly
+   like a healthy quiet run and exactly like a dead one** — the one distinction
+   this whole rule exists to keep — so redirect it to a file and read the file, or
+   make the filter line-buffer (`stdbuf -oL`, `sed -u`, `grep --line-buffered`).
 
    **Exactly one exception, and it is the one this recipe cannot serve:**
    supervising several runs at once, which is a shape a per-run watch has no
@@ -1991,6 +2054,23 @@ and one question was asked three times, with every other indicator green through
    reported in, so the first firing spends the correct instinct on nothing and the
    second weakens it. Rule 5 survives the cut, because that block is the last thing
    the view prints and the unread-surface line is above it.
+7. **Monitoring is critical for every dispatch, and a planning run is a dispatch.**
+   There is no class of launch this rule exempts: a planner runs for hours, spends
+   real quota, asks blocking questions on the run's own channel, and produces the
+   plan every later dispatch is written from, so a planning run going unwatched
+   costs what any other one does. It is the launch most likely to be left
+   unwatched, because it is the one that watches least of itself: `just plan` names
+   `--dag-graph off` deliberately — a planning run's plan is its own output, so
+   there is nothing yet for a monitor to compare the run against — so it attaches
+   no observer at all, and no drift finding, no monitor surface and no pacemaker
+   update will ever arrive from it. **What a supervisor owes a launch that attaches
+   no monitor of its own is the same thing it owes every other one, and there it is
+   the only thing looking**: `just watch` armed on that run before turning to
+   anything else, read to the end, and re-armed from its cursor when it returns
+   short of settlement. The absence is easy to miss precisely because it is
+   deliberate — an unwatched planning run and a healthy quiet one look identical
+   from here, which is the indistinguishability rule 2 is about, arriving by a
+   different route.
 
 ### Answering on the channel
 

@@ -212,13 +212,20 @@ class TerminalCondition(NamedTuple):
         return all(word in spoken for word in self.name.split("-"))
 
 
-def _terminal_conditions() -> tuple[TerminalCondition, ...]:
-    """The four the wrapper branches on, read from the wrapper rather than restated here.
+class SurfaceRow(NamedTuple):
+    """One row of the wrapper's own account of itself: what kind of thing, and which."""
 
-    `scripts/watch-run.sh` is the one source of which status means which condition —
-    `tests/test_watch_surface_drift.py` reconciles that table against the installed
-    engine — so a copy of it here would be a copy that gate does not read, and would go
-    on asserting the old meanings after the wrapper's moved.
+    kind: str
+    rest: str
+
+
+def _surface_rows() -> tuple[SurfaceRow, ...]:
+    """That account, read from the wrapper rather than restated here.
+
+    `scripts/watch-run.sh` is the one source of which status means which condition and
+    of the word a caller anchors the cursor on, so a copy here would be a copy the drift
+    gate does not read and would go on asserting the old meanings after the wrapper's
+    moved.
     """
     reported = subprocess.run(
         [str(ROOT / "scripts" / "watch-run.sh"), "--print-surface"],
@@ -227,16 +234,32 @@ def _terminal_conditions() -> tuple[TerminalCondition, ...]:
         timeout=60,
         check=True,
     )
+    return tuple(
+        SurfaceRow(kind=kind, rest=rest)
+        for kind, _, rest in (line.partition(" ") for line in reported.stdout.splitlines())
+    )
+
+
+def _terminal_conditions() -> tuple[TerminalCondition, ...]:
+    """The four the wrapper branches on."""
     found = []
-    for line in reported.stdout.splitlines():
-        kind, _, rest = line.partition(" ")
-        if kind == "status":
-            code, _, name = rest.partition(" ")
+    for row in _surface_rows():
+        if row.kind == "status":
+            code, _, name = row.rest.partition(" ")
             found.append(TerminalCondition(int(code), name))
     return tuple(found)
 
 
+def _cursor_prefix() -> str:
+    """The word the cursor is emitted under, which is what a caller anchors on."""
+    for row in _surface_rows():
+        if row.kind == "cursor-prefix":
+            return row.rest
+    raise AssertionError("the wrapper's surface names no cursor prefix to anchor on")
+
+
 TERMINAL_CONDITIONS = _terminal_conditions()
+CURSOR_PREFIX = _cursor_prefix()
 
 
 @pytest.mark.reads_recipes
@@ -405,6 +428,114 @@ def test_a_resumed_watch_carries_the_cursor_the_first_one_printed(tmp_path: Path
     # The second watch emitted only what its own stream carried: a resumed watch that
     # replayed the first one's events would be a watch nobody can read.
     assert "node-settled" not in resumed.stdout
+
+
+#: How `AGENTS.md` tells a caller to read the cursor back: anchored on the word the
+#: wrapper emits it under, taking the token and nothing around it. Driven as the real
+#: `sed` an operator would type rather than reimplemented in Python, because what these
+#: journeys owe is that the *documented* extraction works — a Python equivalent of it
+#: could pass while the sentence a caller follows did not.
+def _extract_cursor(reported: str) -> str:
+    """The cursor a caller reads out of a finished watch, the documented way."""
+    read = subprocess.run(
+        ["sed", "-n", f"s/^{CURSOR_PREFIX} //p"],
+        input=reported,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=True,
+    )
+    return read.stdout.splitlines()[-1] if read.stdout.strip() else ""
+
+
+@pytest.mark.reads_recipes
+def test_the_cursor_is_emitted_where_a_caller_reads_it_back_without_parsing_prose(
+    tmp_path: Path,
+) -> None:
+    """A caller extracts the cursor, re-arms with it, and reaches a terminal condition.
+
+    The resume sentence prints the cursor inside a shell quotation, and a caller
+    extracting it from there takes the closing quote with the token: `--cursor c-42'` is
+    a cursor the verb refuses, and the watch that was meant to resume ends at a status
+    that is none of the four terminal conditions. That is a watch stopping rather than
+    continuing, and from a supervisor's seat it is the same silence as no watch at all.
+
+    So the whole round trip is driven: the emitted line, the documented `sed` over it,
+    the re-arm, what the engine was handed, and the ending the caller branched on.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    first = _watch(checkout, trace, RUN, stream=STREAM, exit_status=0)
+    assert first.returncode == 0, first.stderr
+    # The token alone, with nothing around it to strip — not `c-42'`.
+    assert f"{CURSOR_PREFIX} c-42" in first.stdout.splitlines()
+    cursor = _extract_cursor(first.stdout)
+    assert cursor == "c-42"
+
+    resumed = _watch(checkout, trace, RUN, "--cursor", cursor, stream=STREAM, exit_status=0)
+
+    assert resumed.returncode in {condition.status for condition in TERMINAL_CONDITIONS}
+    assert resumed.returncode == 0, resumed.stderr
+    assert f"uv run onepipeline watch {RUN} --cursor c-42" in trace.read_text().splitlines()
+
+
+@pytest.mark.reads_recipes
+def test_the_resume_sentence_a_reader_copies_is_emitted_beside_the_callers_line(
+    tmp_path: Path,
+) -> None:
+    """Two readers, two forms, and the machine one did not replace the human one.
+
+    A person reading a finished watch needs the command rather than the token, and a
+    caller re-arming one needs the token rather than the command. Emitting only the
+    first is what sent a caller into the quotation; emitting only the second would leave
+    a supervisor holding an opaque word with nothing saying what to do with it.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _watch(checkout, trace, RUN, stream=STREAM, exit_status=0)
+
+    assert result.returncode == 0, result.stderr
+    assert f"just watch {RUN} --cursor c-42" in result.stdout
+    assert f"{CURSOR_PREFIX} c-42" in result.stdout.splitlines()
+
+
+@pytest.mark.reads_recipes
+def test_a_caller_is_handed_the_cursor_after_an_ending_that_is_none_of_the_four(
+    tmp_path: Path,
+) -> None:
+    """The engine's own queued and refused are where a caller most needs to resume.
+
+    `1` and `2` belong to no terminal condition, and a watch that met one has still read
+    part of the stream — so withholding the cursor there would make the caller start
+    over and re-read everything the watch already showed, which is the repetition the
+    cursor exists to prevent.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _watch(checkout, trace, RUN, stream=STREAM, exit_status=1)
+
+    assert result.returncode == 1
+    assert _extract_cursor(result.stdout) == "c-42"
+
+
+@pytest.mark.reads_recipes
+def test_no_cursor_is_emitted_when_the_verb_named_none(tmp_path: Path) -> None:
+    """An absent cursor is an absent line, never an empty one.
+
+    A caller anchoring on the word gets nothing to extract and starts a fresh watch,
+    which is what a verb naming no cursor is asking for. A line carrying the word and no
+    token would be extracted as the empty string and re-armed as `--cursor ''`, which is
+    a refusal rather than a fresh watch.
+    """
+    checkout, trace = _checkout(tmp_path)
+    stream = _record("return", "T1", condition="settled", exit=0)
+
+    result = _watch(checkout, trace, RUN, stream=stream, exit_status=0)
+
+    assert result.returncode == 0, result.stderr
+    assert CURSOR_PREFIX not in result.stdout
+    assert "--cursor" not in result.stdout
+    assert "the run settled" in result.stdout
 
 
 #: A stream whose records this repository cannot read: one line that is not JSON at all,
