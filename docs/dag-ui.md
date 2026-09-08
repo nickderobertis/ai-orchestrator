@@ -123,13 +123,13 @@ accounting does not move, because the duplicate rows carried no usage: the per-t
 moved the reader's own linked `onepipeline`, which is what `/healthz` reports: 0.6.4
 answered `0.7.3` and 0.6.5 answers `0.18.3`, still not
 `config/onepipeline.version` and still not expected to be.
-`tests/dag_ui/test_dag_ui_serving_e2e.py` holds this in a browser: it opens one desktop
-viewport on the pair over a real recorded run and asserts that the page renders — the
-run's goal, its counters, its failed node — and that no release row is on it, in either
-view, with no span the read API serves carrying a release either. Read that as a check
-on the *bundle*, which must not draw a row from data that has none; the runs behind it
-are checked-in fixtures and cannot grow a release event. What fails the day a
-repository here declares a target is
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds this over the pair as an operator's
+browser reads them — over HTTP — including that no span the read API serves for a real
+recorded run carries a release. It renders nothing: that a bundle draws what the reader
+serves is `onepipeline-ui`'s own tier to hold, and
+`tests/dag_ui/test_no_browser_needed_e2e.py` holds this one to needing no browser. The
+runs behind all of it are checked-in fixtures and cannot grow a release event, so what
+fails the day a repository here declares a target is
 `tests/e2e/test_release_adoption_in_force_e2e.py`, which asks every registered
 identity — and that is when this page comes due.
 

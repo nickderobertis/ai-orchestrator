@@ -12,6 +12,13 @@ so what a proxied request returns is what the read API itself said, and the two
 recipes finding each other is part of what these journeys prove rather than
 something a stand-in arranged. Both are free to run: the read API serves a local
 run store and starts no agents.
+
+**What is deliberately absent is a rendered page.** That the bundle draws what the
+reader serves is `onepipeline-ui`'s own tier to hold, and a journey here that drove a
+browser put one on this repository's merge path, where nothing provisions it. So assert
+what the reader answers, which is the layer a rendered row could only ever be as true
+as; `tests/dag_ui/AGENTS.md` records what that cost, and
+`test_no_browser_needed_e2e.py` beside this file is what holds it.
 """
 
 from __future__ import annotations
@@ -145,50 +152,6 @@ TURN_USAGE_FIGURES = (
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
 TIMELINE_SCHEMA_VERSION = 8
-
-#: The word every one of the adopted view's release surfaces is built out of — its
-#: heading, all three wait states, and the row naming what a node adopted. Matched as
-#: the bare word rather than as the four rendered labels on purpose: mirroring upstream
-#: wording here would make this gate vacuous the day upstream reworded it, since the
-#: assertion is an *absence* and a label nobody renders any more is absent for the wrong
-#: reason. The word is broader than the labels and owned by nobody.
-RELEASE_ON_THE_PAGE = "release"
-#: One viewport, not the matrix `just dag-ui-screens` photographs at. The reflow
-#: defects that matrix exists to catch are a different question from whether the
-#: adopted bundle renders a runs root at all, and this is the second one — so it pays
-#: for one desktop render rather than five.
-RENDER_VIEWPORT = (1440, 900)
-#: What the app is waited on before its rendered text is read, per view. Waiting on a
-#: *rendered string* rather than on the network is the whole point: this bundle answers
-#: `networkidle` while it still says "Loading execution history…", so a journey that
-#: waited on the network would assert against a spinner and pass at any release.
-RENDER_SETTLED = {"overall": "WALL TIME", "graph": "task-failed"}
-#: The browser driver, kept in this module rather than in `scripts/` deliberately: it
-#: is test machinery for reading a rendered page, not a command this repository offers
-#: an operator, and a script under `scripts/` would owe a journey of its own.
-#:
-#: Playwright is the workspace's own devDependency and reports where it installed its
-#: browser, so nothing here hardcodes a cache path. It is required by an absolute path
-#: under the workspace root rather than by bare name, because `bun` resolves a bare
-#: `require` from the *script's* own directory and this script is written into a pytest
-#: temporary directory outside the workspace — so a bare name resolved to nothing, and
-#: `bun` silently installed the newest playwright from the registry instead of the one
-#: `bun.lock` pins. That stayed invisible while the two happened to agree and broke the
-#: moment they did not: the fetched release wanted a browser build the workspace's own
-#: install had never downloaded. A test that reaches the network for an unpinned
-#: dependency is not testing the workspace, so the path is explicit.
-RENDER_DRIVER = """
-const [root, url, width, height, settled] = process.argv.slice(2);
-const { chromium } = require(root + '/node_modules/playwright');
-const browser = await chromium.launch({ args: ['--no-sandbox'] });
-const page = await browser.newPage({
-  viewport: { width: Number(width), height: Number(height) },
-});
-await page.goto(url, { timeout: 30000 });
-await page.getByText(settled, { exact: false }).first().waitFor({ timeout: 30000 });
-process.stdout.write(await page.evaluate(() => document.body.innerText));
-await browser.close();
-"""
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -720,116 +683,32 @@ def test_the_served_bundle_is_the_adopted_release(served: Served) -> None:
     assert served.get("/")[1] == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
 
 
-def _rendered(served: Served, tmp_path: Path, run: RunId, view: str) -> str:
-    """The text a browser shows for one view of `run`, from the bundle this pair serves.
-
-    A real browser against the real proxy, because every cheaper stand-in answers a
-    different question: the served bytes say what was shipped, and only a rendered page
-    says what an operator is shown.
-    """
-    driver = tmp_path / "render.js"
-    driver.write_text(RENDER_DRIVER, encoding="utf-8")
-    width, height = RENDER_VIEWPORT
-    rendered = subprocess.run(
-        [
-            "bun",
-            str(driver),
-            str(REPO_ROOT),
-            f"{served.base}/?run={urllib.parse.quote(run)}&view={view}",
-            str(width),
-            str(height),
-            RENDER_SETTLED[view],
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(180),
-        check=False,
-    )
-    assert rendered.returncode == 0, rendered.stderr
-    return rendered.stdout
-
-
-def test_the_adopted_bundle_renders_a_real_runs_root_in_a_browser(
-    served_recorded: Served, tmp_path: Path
-) -> None:
-    """`just dag-ui` and `just telemetry-server`, opened the way an operator opens them.
-
-    Everything else here reads bytes off the wire, which cannot tell a bundle that
-    renders from one that throws on its first frame and leaves an empty root — a
-    failure that serves 200s the whole way down. So one desktop viewport is driven
-    through a real browser against a real recorded run, and what is asserted is the
-    text on the page: the run's own name and goal, the counters the Overall view is
-    read for, the liveness verdict the API reports for it, and, in the Graph view, the
-    node with the outcome that failed it.
-
-    **The verdict is read from the API rather than written down here.** A literal spelled
-    into this file is a claim about one bundle release, and it goes stale silently — it
-    fails only once something reinstalls, which is later than the bump that broke it.
-    Asking the API what it says and requiring the page to show *that* fails when the view
-    stops rendering the verdict and does not fail when the verdict is spelled differently.
-    """
-    overall = _rendered(served_recorded, tmp_path, RECORDED_RUN, "overall")
-
-    assert RECORDED_RUN in overall, overall
-    assert "Clear the three judged findings" in overall, overall
-    for counter in ("STATUS", "NODES", "WALL TIME", "TURNS"):
-        assert counter in overall, f"the Overall view rendered no {counter}: {overall}"
-
-    status, body, _ = served_recorded.get("/api/v2/runs")
-    assert status == 200, (status, body)
-    reported = {run["run_id"]: run["state"] for run in json.loads(body)["runs"]}
-    assert RECORDED_RUN in reported, (
-        f"the read API lists no {RECORDED_RUN}, so this journey has no verdict to hold "
-        f"the rendered page to: {sorted(reported)}"
-    )
-    assert reported[RECORDED_RUN] in overall, (
-        f"the read API reports {RECORDED_RUN} as {reported[RECORDED_RUN]!r} and the "
-        f"Overall view renders no such verdict. An operator is being shown a run whose "
-        f"liveness the page does not say: {overall}"
-    )
-
-    graph = _rendered(served_recorded, tmp_path, RECORDED_RUN, "graph")
-
-    assert "gate-fix-findings-2" in graph, graph
-    assert "task-failed" in graph, graph
-
-
 # llmlint: ignore[changed_behavior_has_e2e] no run on this host can carry a release event
-def test_a_run_carrying_no_release_event_renders_no_release_row(
-    served_recorded: Served, tmp_path: Path
-) -> None:
-    """The adopted view's release surface, on data that has nothing to put in it.
+def test_no_run_served_here_carries_a_release(served_recorded: Served) -> None:
+    """The release tier of the timeline, on data that has nothing to put in it.
 
-    `onepipeline-ui` 0.6.3 renders which release carried a landed node and what a held
-    node awaits. None of the recorded runs served here carries a release event, so the
-    correct rendering is no release row at all — and a bundle that drew one anyway,
-    from a field it had misread, would be showing an operator something untrue about
-    where their work is.
+    The adopted view renders which release carried a landed node and what a held node
+    awaits, and `AGENTS.md` records observing no release surface at all when these runs
+    are opened. This is the layer under that observation, and the half this repository
+    owns: what the reader serves. A view drawing a release row is `onepipeline-ui`'s
+    own tier to hold — but a row can only ever be as true as the span behind it, and a
+    reader that invented a `release` on a run that never had one would be telling an
+    operator something untrue about where their work is however faithfully the bundle
+    drew it.
 
     **This is a statement about these runs, not about this host.** They are checked-in
     fixtures and can never grow a release event, so declaring a release target here
     would not move it. The gate that fires on *that* is
-    `tests/e2e/test_release_adoption_in_force_e2e.py::test_nothing_on_this_host_declares_a_release_target`,
+    `tests/e2e/test_release_adoption_in_force_e2e.py::test_which_registered_repositories_declare_a_release_target`,
     which asks every registered identity rather than reading a frozen tree.
     """
-    for view in ("overall", "graph"):
-        rendered = _rendered(served_recorded, tmp_path, RECORDED_RUN, view)
-        assert RELEASE_ON_THE_PAGE not in rendered.lower(), (
-            f"the {view} view of {RECORDED_RUN} rendered {RELEASE_ON_THE_PAGE!r}, but "
-            "that run carries no release event, so there is nothing for a release "
-            f"surface to be about: {rendered}"
-        )
-
-    # And the layer under it, which a rendered page cannot distinguish: a view showing
-    # no release row because the data has none looks exactly like one that dropped it.
     for run in (RECORDED_RUN, SETTLED_RUN, MERGED_RUN, REPORTED_RUN):
         status, body, _ = served_recorded.get(f"/api/v2/runs/{run}/timeline?scope=run")
         assert status == 200, body
         carrying = [span for span in json.loads(body)["spans"] if span.get("release") is not None]
         assert not carrying, (
-            f"{run} serves {len(carrying)} span(s) carrying a release, so the premise "
-            "above is gone and the rendered assertion is measuring the wrong thing"
+            f"{run} serves {len(carrying)} span(s) carrying a release, and no run this "
+            "repository checks in has a release event for one to have come from"
         )
 
 
@@ -1188,7 +1067,7 @@ def test_a_named_bundle_directory_that_holds_none_names_the_variable(tmp_path: P
 # whether either script restates the address. Reading the source is the only thing that can
 # see either, which is why `tests/test_watch_surface_drift.py` and
 # `tests/test_lost_turn_wire_contract.py` read theirs. The journeys either side of this one
-# start both servers for real and drive them over HTTP and a browser.
+# start both servers for real and drive them over HTTP.
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
     """`just dag-ui` finds `just telemetry-server` only while they agree on it."""
     address = READ_API_ADDRESS.read_text(encoding="utf-8").strip()
