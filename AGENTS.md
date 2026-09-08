@@ -1113,8 +1113,12 @@ run's goal, its counters and its failed node — and **no release row**, in eith
 Overall or the Graph view, with no span those runs serve carrying a release either.
 That is a statement about those runs rather than about this host: they are checked-in
 fixtures and can never grow a release event. What fires the day this host declares a
-target is the journey that asks every registered identity, not the one that renders a
-frozen tree.
+target is the journey that asks every registered identity, rather than anything reading a
+frozen tree. **No check tier here renders in a browser any more**, so read that fifth
+drive as a record of what was driven rather than as a check that re-takes it: a browser
+inside a check tier is a browser on this repository's merge path, where nothing
+provisions one. What holds the release surface here now is what the reader answers,
+which is the layer a rendered row could only ever be as true as.
 `tests/e2e/test_release_adoption_in_force_e2e.py` is what re-takes all five, against the
 installed artifacts rather than against this paragraph: the CLI's verb group, what it
 answers for this repository, the `onevcs` the engine links, the loader's two refusals,

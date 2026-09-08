@@ -46,15 +46,15 @@ PLAN_STORE_INSTALL_WORKSPACE = "planStoreInstallWorkspace"
 #: reach, the address both resolve each other through, the pins that decide which
 #: published bundle and reader are installed, and the recorded runs they render.
 #: Named file by file rather than by directory, and deliberately not `config/**/*`,
-#: `scripts/**/*` or `orchestrator/**/*`: these are the only journeys here that launch
-#: a real browser, so every glob wider than what they actually open makes an unrelated
-#: edit pay for one. `orchestrator/root.py` is deliberately *not* in it, though the
+#: `scripts/**/*` or `orchestrator/**/*`: these journeys start two real servers per
+#: test, so every glob wider than what they actually open makes an unrelated edit pay
+#: for that. `orchestrator/root.py` is deliberately *not* in it, though the
 #: module imports `REPO_ROOT` from there: it is a path helper nearly everything imports,
-#: so covering it would start a browser for edits that cannot change what these journeys
-#: observe, and `codeWorkspace` already reruns the rest of the suite over it. Its own
-#: prose is excluded, as
+#: so covering it would start those servers for edits that cannot change what these
+#: journeys observe, and `codeWorkspace` already reruns the rest of the suite over it.
+#: Its own prose is excluded, as
 #: `codeWorkspace` excludes the workspace's: nothing here reads this project's
-#: `AGENTS.md`, so an instruction-only edit must not start a browser.
+#: `AGENTS.md`, so an instruction-only edit must not start them.
 DAG_UI_WORKSPACE = "dagUiWorkspace"
 #: The key `workspace:check-nx-cache` is memoized on: what that script reads.
 NX_CACHE_CHECK = "nxCacheCheck"
@@ -111,11 +111,14 @@ ASK_SEAM_SCOPED = "test"
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 ASK_SEAM_ROOT = "tests/ask_seam"
 
-#: The project whose test target owns the journeys that render the DAG Observatory in a
-#: real browser. A project of its own for the reason `plan-tooling` and `ask-seam` are:
-#: a real browser is a cost `nx affected` can only keep off an unrelated edit where it is
-#: a separate project, and while these journeys sat in the orchestrator project every
-#: change in the repository launched one. It declares no Python distribution either.
+#: The project whose test target owns the journeys over this repository's composition of
+#: the DAG Observatory — the two recipes, the proxy behind them, and what the published
+#: reader answers. A project of its own for the reason `plan-tooling` and `ask-seam` are:
+#: two real servers per test is a cost `nx affected` can only keep off an unrelated edit
+#: where it is a separate project, and while these journeys sat in the orchestrator
+#: project every change in the repository paid it. It declares no Python distribution
+#: either. Asserting that the *bundle* renders is not here and must not come back: this
+#: tier is inside the merge path, and nothing in this repository provisions a browser.
 DAG_UI_PROJECT = "dag-ui"
 #: That project's one test target. One rather than two, as `ask-seam` has one: nothing
 #: here reads this repository's prose.

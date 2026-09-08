@@ -834,7 +834,7 @@ def _collected(selection: list[str]) -> set[str]:
 #: journeys over the plan surface in two targets — one keyed on what they read, one on
 #: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
 #: owns the host-tool journeys over the ask seam in one, the `dag-ui` project owns the
-#: journeys that render the Observatory in a real browser in one, the
+#: journeys over this repository's composition of the Observatory in one, the
 #: `plan-store-install` project owns the journeys that race real installs for a real lock
 #: in one, and the orchestrator project owns the rest in four.
 SUITE_TIERS = (

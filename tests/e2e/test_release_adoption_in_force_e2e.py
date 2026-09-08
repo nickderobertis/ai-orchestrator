@@ -24,8 +24,10 @@ loader that reads a plan:
   and the one a claim about the view rests on.
 
 The view half is measured further in `tests/dag_ui/test_dag_ui_serving_e2e.py`, because
-what a view does is what it serves: that journey starts both recipes on one origin
-and reads the release surface out of the bundle a browser would have got.
+what a view does is what it serves: that journey starts both recipes on one origin and
+reads the release tier off what the reader answers, which is what a rendered row could
+only ever be as true as. That the *bundle* draws one is `onepipeline-ui`'s own tier to
+hold.
 
 The day the pins move under any of it, this journey fails and the section comes due.
 
