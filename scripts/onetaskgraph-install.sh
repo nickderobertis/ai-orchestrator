@@ -231,6 +231,12 @@ mutex_dir="$lock_dir/onetaskgraph-install.lock.d"
 LOCK_POLL_SECONDS=0.2
 LOCK_WAIT_SECONDS=120
 LOCK_POLLS=600
+#: How many polls in a row must find this path absent before an absence is read as a
+#: `mkdir` that cannot succeed rather than as a race this caller lost. One is not enough,
+#: because losing the race and the winner releasing before the loser looks is an ordinary
+#: interleaving rather than a fault; a `mkdir` that genuinely cannot create fails this way
+#: every time, so it reaches this bound in well under a second and still refuses.
+LOCK_ABSENCES=3
 if command -v flock >/dev/null 2>&1; then
     if ! flock 9; then
         echo "onetaskgraph-install: flock could not lock '$lock_file'; that is the lock itself refusing rather than another install holding it, so check that this checkout's .logs is on a filesystem supporting locks and retry" >&2
@@ -241,6 +247,7 @@ else
     # when its holder dies and this cannot, so a wait that never ended would inherit a
     # crashed install forever. The refusal names the directory to remove.
     polls=0
+    absences=0
     # llmlint: ignore[boundary_inputs_validated] The same demand as at the lock file above, and the same answer: binding this creation to the `$lock_dir` descriptor needs `mkdirat`, which portable shell has no spelling for, and the `/dev/fd/8/name` form that would stand in for one is Linux's alone. A mutex made in a directory swapped out from under this is refused by the binding below the acquisition rather than provisioned under, which `test_the_fallback_refuses_a_lock_directory_swapped_while_it_took_its_mutex` drives, and the shapes this path can meet at that name — a link, a non-directory, an absent one, one never released — each have their own refusal in the loop below.
     until mkdir "$mutex_dir" 2>/dev/null; do
         # Only a directory is an install holding this. Anything else there is something
@@ -252,9 +259,24 @@ else
             echo "onetaskgraph-install: '$mutex_dir' is where the install lock goes and it is not a directory, so no install is holding it and none can take it; move whatever is at that path aside and retry" >&2
             exit 1
         fi
+        # An absent path here is two states wearing one appearance, and only one of them
+        # is a fault. The `mkdir` above failed because a peer held this, and a peer that
+        # released it in the moment between that failure and this test leaves nothing
+        # behind to find — so an absent path is ordinarily the race being lost, and
+        # refusing on the first sight of one reports a permissions fault that does not
+        # exist. What parts them is whether it persists: a `mkdir` that cannot create
+        # this fails the same way on every poll and reaches the bound below in under a
+        # second, where a lost race is answered by the very next `mkdir`. The count is
+        # reset rather than accumulated, because an install taken and released while this
+        # waits is this loop working rather than evidence toward a refusal.
         if [[ ! -e "$mutex_dir" ]]; then
-            echo "onetaskgraph-install: cannot create the install lock '$mutex_dir', and nothing is holding it; repair the permissions of '$lock_dir' and retry" >&2
-            exit 1
+            absences=$((absences + 1))
+            if ((absences >= LOCK_ABSENCES)); then
+                echo "onetaskgraph-install: cannot create the install lock '$mutex_dir', and nothing is holding it; repair the permissions of '$lock_dir' and retry" >&2
+                exit 1
+            fi
+        else
+            absences=0
         fi
         if ((polls >= LOCK_POLLS)); then
             echo "onetaskgraph-install: waited ${LOCK_WAIT_SECONDS}s for the install lock '$mutex_dir' and it was never released; if no other install is running then one died holding it, so remove that directory and retry" >&2

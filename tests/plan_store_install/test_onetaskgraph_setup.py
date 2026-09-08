@@ -1426,6 +1426,70 @@ def test_the_fallback_parts_a_lock_it_could_not_make_from_one_being_held(
     )
 
 
+def test_the_fallback_retries_a_race_it_lost_to_a_peer_that_had_already_released(
+    tmp_path: Path,
+) -> None:
+    """A `mkdir` that failed with nothing at the path lost a race far more often than it faulted.
+
+    The winner releases the directory when its shell ends, so a loser that looks after
+    that release finds nothing there — the same appearance the journey above builds for a
+    `mkdir` that cannot create at all. Refusing on the first sight of it fails a caller
+    that had only to try again, which is what a loaded host turned into a gate failure
+    here: three of four racers took the lock and the fourth was told to repair permissions
+    nobody had broken. So an absence has to persist before it is read as a fault, and this
+    drives the transient one — the first attempt fails with the path absent, and the
+    caller provisions rather than refusing.
+    """
+    repo = checkout(tmp_path / "repo", version=ADOPTED)
+    front = fetch_double(tmp_path, release_fixture(tmp_path, ADOPTED), name="front-transient")
+    _sleepless(front)
+    real = shutil.which("mkdir")
+    assert real is not None, "this host has no mkdir to defer to"
+    lost = tmp_path / "lost-the-race-once"
+    double = front / "mkdir"
+    double.write_text(
+        "#!/usr/bin/env bash\n"
+        "for argument; do\n"
+        '  case "$argument" in\n'
+        "    *.lock.d)\n"
+        f"      if [ ! -e {shlex.quote(str(lost))} ]; then\n"
+        f"        : >{shlex.quote(str(lost))}\n"
+        '        echo "mkdir: cannot create directory: File exists" >&2\n'
+        "        exit 1\n"
+        "      fi\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        f'exec {shlex.quote(real)} "$@"\n',
+        encoding="utf-8",
+    )
+    double.chmod(0o755)
+
+    result = _wrapper(
+        repo,
+        tmp_path / "home",
+        PATH=os.pathsep.join((str(front), str(path_without(tmp_path, "flock")))),
+    )
+
+    # Asserted rather than assumed: a double that never refused would make this the
+    # ordinary acquisition wearing a second name, and it would pass for that reason.
+    assert lost.is_file(), (
+        "the double never refused a `.lock.d` creation, so nothing here drove the lost "
+        "race this journey is about"
+    )
+    assert result.returncode == 0, (
+        f"a caller whose first `mkdir` lost the race was refused rather than retrying:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+    assert "nothing is holding it" not in result.stderr, (
+        f"a lost race was reported as a lock that could not be created:\n{result.stderr}"
+    )
+    assert installed_binary(repo).is_file(), (
+        f"the caller took the lock on its retry and still provisioned nothing at "
+        f"{installed_binary(repo)}"
+    )
+
+
 #: What a lock directory somebody else left too open is found at, and what provisioning
 #: must leave it at. `chmod` is reached only from here — a directory this wrapper makes
 #: is 700 from `mkdir` — so this is the one journey that drives it at all.
